@@ -1,49 +1,85 @@
 # The `.zlint` language
 
-A `.zlint` file describes **layers** (what the text is made of) and
-**formatters** (what the text should look like). zlint parses every file into
-a tree of layers using only fast regex-style matching, then runs formatters
-on the nodes they target.
+A `.zlint` file describes **layers** (what the text is made of) and **rules**
+(what the text should look like). zlint parses every file into a tree of
+layers using only fast regex-style matching, then runs rules on the nodes
+they check.
 
 ```zlint
 import "std/rust"
 
-in rs_code match rs_fn = /\bfn[ \t]+/ name:ident
-format fn-snake-case on rs_fn.name "function names are snake_case" = snake_case(text)
+in rs_code match rs_fn /\bfn[ \t]+/ name:ident
+in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_case(text)
 ```
 
 - [Items](#items)
+- [Context blocks](#context-blocks)
 - [Layers](#layers)
 - [Patterns](#patterns)
-- [Formatters](#formatters)
+- [Rules](#rules)
 - [Expressions](#expressions)
 - [Configuring rules: `set`](#configuring-rules-set)
 - [Imports and macros](#imports-and-macros)
 - [Suppressing diagnostics](#suppressing-diagnostics)
+- [Performance](#performance)
 
 ## Items
 
 | item | meaning |
 |---|---|
-| `lang rust = "*.rs" \| "*.rs.in"` | a language: the root layer `.rust` for files matching the globs |
-| `match name = pattern` | a matcher (layer) that is only used where something references it |
-| `in A \| B match name = pattern` | a matcher searched inside layers `A` and `B` |
+| `lang rust "*.rs" or "*.rs.in"` | a language: the root layer `.rust` for files matching the globs |
+| `match name pattern` | a matcher (layer) that is only used where something references it |
+| `in A or B match name pattern` | a matcher searched inside layers `A` and `B` |
 | `in A match name` | attach an existing matcher to more parents |
-| `match name like base = pattern` | a specialisation of `base`, see [Layers](#layers) |
-| `over A match name = pattern` | an overlay: searched over `A`'s text without consuming it |
-| `group name = A \| B`, `group name += C` | a named, open set of layers, usable wherever a layer list is |
-| `in A \| B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
-| `format name on target ...` | a formatter, see [Formatters](#formatters) |
-| `set name.key = value` | configure an existing formatter |
-| `ignore "glob" \| "glob"` | never lint matching files |
+| `match name like base pattern` | a specialisation of `base`, see [Layers](#layers) |
+| `over A match name pattern` | an overlay: searched over `A`'s text without consuming it |
+| `group name A or B` | add layers to a named group, usable wherever a layer list is |
+| `in A or B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
+| `in A rule name ...` | a rule checking `A`'s nodes, see [Rules](#rules) |
+| `set name.option value`, `set name severity` | configure an existing rule |
+| `ignore "glob" or "glob"` | never lint matching files |
 | `import "path"` | paste another `.zlint` file here |
-| `macro name(args) { tokens }` | define a macro |
+| `macro name tokens`, `macro name(args) { lines }` | define a macro |
 
-`#` starts a comment. Items end at the end of the line (or `;`).
+`#` starts a comment. Items end at the end of the line, or at a `}` that
+closes their block.
 
 Globs without a `/` match any single path component (`*.rs`, `target`), and
 globs with a `/` match the path relative to the config file (`src/**/*.rs`,
 `tests/fixtures/**`).
+
+## Context blocks
+
+`in A`, `over A`, `match x ...` and `lang l ...` set a **context**: the layers
+the rest of the line is about. A `{` at the end of such a line opens a block,
+and every line inside it is in that context:
+
+| head | lines inside mean |
+|---|---|
+| `in A or B {` | `in A or B <line>` |
+| `over A {` | `over A <line>`: matchers are overlays |
+| `match x ... {` | `in x <line>` |
+| `lang l ... {` | `in .l <line>` |
+| `rule r ... {` | rule clauses, see [Rules](#rules) |
+
+In a context, `match` defines or attaches children, `rule` checks the
+context's layers themselves, and `indent` indents them. Blocks nest, so a
+layer, its children and its rules can live together:
+
+```zlint
+lang rust "*.rs" {
+  match brace /\{/ until /\}/ {
+    indent
+    match brace                                  # braces nest
+    match rs_string /"/ until /"/ {
+      match rs_escape /\\./
+      rule no-tabs warn "tab in a string" { when contains(text, "\t") }
+    }
+  }
+}
+```
+
+An explicit `in ...` line inside a block replaces the block's context.
 
 ## Layers
 
@@ -60,21 +96,23 @@ Every file is parsed into a tree:
     └── name: ident        fields: labelled parts of a match
 ```
 
-**Parents.** `in A | B match x` makes `x` a child of `A` and `B`. A parent is
-a matcher name, `.lang` (a language root) or `.*` (every language root).
+**Parents.** `in A or B match x` makes `x` a child of `A` and `B`. A parent
+is a matcher name, a group, `.lang` (a language root) or `.*` (every
+language root).
 
 **Searching.** A layer looks for its children across its text. Anything that
 no child matches is skipped, so you never have to describe a whole language,
 only the parts you care about. A language root does this over the whole file.
 
-**`*` (skip).** Inside a pattern, `*` lazily skips text until the rest of the
-pattern can match, and while skipping, the layer's children eat whole chunks:
+**`until` (skip).** Inside a pattern, `until` lazily skips text until the rest
+of the pattern can match, and while skipping, the layer's children eat whole
+chunks:
 
 ```zlint
-match paren = /\(/ * /\)/
-in paren match paren                   # nested parens are eaten whole
-in .rust | paren match rs_string = /"/ * /"/
-in rs_string match rs_escape = /\\./   # so `\"` never ends a string
+match paren /\(/ until /\)/
+in paren match paren                         # nested parens are eaten whole
+in .rust or paren match rs_string /"/ until /"/
+in rs_string match rs_escape /\\./           # so `\"` never ends a string
 ```
 
 `f(")", g(x))` is one `paren`: the `")"` is eaten by `rs_string`, and `(x)` by
@@ -82,71 +120,72 @@ the nested `paren`, so the outer `\)` only matches the real closing bracket.
 This is how brackets, quotes and escapes work without special support. They
 are just layers.
 
-A matcher without `*` searches for its children across its own text after it
-matches, skipping its fields, the same way a language root does.
+A matcher without `until` searches for its children across its own text
+after it matches, skipping its fields, the same way a language root does.
 
 **Ties.** When several children match at the same position, the longest match
 wins, and among equal lengths a specialisation beats its base, then the one
 attached first wins.
 
-**Specialisation (`like`).** `match js_object like brace = ...` is a kind of
+**Specialisation (`like`).** `match js_object like brace ...` is a kind of
 `brace`: it keeps every child and overlay of `brace`, wins ties against it,
-and counts as a `brace` for formatters (`on brace` sees it, with `layer` naming
-the specialisation) and for ancestor lookups (`brace` in an expression finds
-the closest one). Use it to tell kinds of one shape apart without
+and counts as a `brace` for rules (`in brace rule` sees it, with `layer`
+naming the specialisation) and for ancestor lookups (`brace` in an expression
+finds the closest one). Use it to tell kinds of one shape apart without
 re-describing them:
 
 ```zlint
-match js_object like brace = /(?<=[=(,]\s*)\{/ * /\}/
-in js_code match js_object
-format object-spacing on js_object "..." = ...   # plain braces are untouched
+match js_object like brace /(?<=[=(,]\s*)\{/ until /\}/
+in js_code match js_object {
+  rule object-spacing warn "..." fix ...         # plain braces are untouched
+}
 ```
 
-**Groups.** `group js_code = .js | paren | brace` names a set of layers, and
-`group js_code += js_stmt` adds to it from anywhere (another file, an
-importer). Groups are resolved after everything is loaded, so `in js_code
-match x` reaches layers added later too.
+**Groups.** `group js_code .js or paren or brace` names a set of layers, and
+every further `group js_code ...` line adds to it, from anywhere (another
+file, an importer). Groups are resolved after everything is loaded, so
+`in js_code match x` reaches layers added later too.
 
 **Language gating.** A matcher attached to a `.lang` only runs inside files
 of the languages it is attached to (or attached through `.*`). That lets
 shared layers like `paren` carry Rust strings in Rust files and JavaScript
 strings in JavaScript files.
 
-**Overlays.** `over A match x = ...` searches `A`'s text for `x` without
+**Overlays.** `over A match x ...` searches `A`'s text for `x` without
 taking that text away from `A`'s other children. Use overlays for
 line-oriented checks:
 
 ```zlint
-over .* match trailing_ws = /[ \t]+$/
+over .* match trailing_ws /[ \t]+$/
 ```
 
-**Indentation.** `in brace | paren | brack indent` declares that a layer's
-inside, the text its `*` skips, is indented: a line starting there belongs
-one level deeper than the line the layer opened on, and the line where its
-end pattern starts (`}`) sits at the opener's level. `in fn.body indent`
-does the same for one field. Measuring from the opener *line* means
+**Indentation.** `in brace or paren or brack indent` declares that a layer's
+inside, the text its `until` skips, is indented: a line starting there
+belongs one level deeper than the line the layer opened on, and the line
+where its end pattern starts (`}`) sits at the opener's level. `in fn.body
+indent` does the same for one field, and `indent` alone inside a matcher's
+block indents that matcher. Measuring from the opener *line* means
 `foo(Bar {` adds one level, not two. The engine works out which layer a line
-is in; formatters read it through `indented`, `indent_anchor`,
-`indent_closes`, `indent_hangs` and `indent_anchor_line` (see
-[Expressions](#expressions)) and decide the unit and any language-specific
-continuation rules:
+is in; rules read it through `indented`, `indent_anchor`, `indent_closes`,
+`indent_hangs` and `indent_anchor_line` (see [Expressions](#expressions)) and
+decide the unit and any language-specific continuation lines:
 
 ```zlint
-in paren | brack | brace indent
-over rs_code match line = /^[ \t]*\S/        # each code line, first char included
+in paren or brack or brace indent
+over rs_code match line /^[ \t]*\S/          # each code line, first char included
 
-macro level = (if !indented then "" else if indent_closes then indent_anchor else indent_anchor + "    ")
-format indent on line "Expected {len(level)} spaces of indentation." {
+macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor + "    ")
+in line rule indent warn "Expected {len(level)} spaces of indentation." {
   when slice(text, 0, -1) != level
-  level + slice(text, -1)
+  fix level + slice(text, -1)
 }
 ```
 
 **Fields.** Labelled pieces of a match become fields:
 
 ```zlint
-in .rust match call = name:ident args:paren   # call.name, call.args
-in .rust match call2 = ident :paren           # `:paren` is short for `paren:paren`
+in .rust match call name:ident args:paren     # call.name, call.args
+in .rust match call2 ident :paren             # `:paren` is short for `paren:paren`
 ```
 
 A label on a matcher reference makes that child node the field. A label on
@@ -160,8 +199,8 @@ consuming text (no left recursion). Both are reported when the config loads.
 
 ## Patterns
 
-A pattern is a sequence of items on one line. Newlines are allowed inside
-`( ... )`.
+A pattern is a sequence of items after the matcher's name, running to the end
+of the line or to a `{` block. Newlines are allowed inside `( ... )`.
 
 | item | meaning |
 |---|---|
@@ -170,8 +209,8 @@ A pattern is a sequence of items on one line. Newlines are allowed inside
 | `name` | another matcher, as a child node |
 | `label:item` | label an item as a field |
 | `:name` | `name:name` |
-| `*` | skip, see [Layers](#layers) |
-| `( a b \| c )` | grouping and alternation |
+| `until` | skip, see [Layers](#layers) |
+| `( a b or c )` | grouping and alternation |
 | `item?` `item*` `item+` | repetition, glued to the item; add `?` for lazy (`item*?`) |
 
 ### The regex subset
@@ -200,65 +239,69 @@ Lookarounds may hold any regex of this subset (lookbehinds can be unbounded,
 lookbehinds and lookaheads also speed matching up: they tell zlint which
 positions can start a match. Backreferences are not supported.
 
-## Formatters
+## Rules
 
 ```zlint
-format name on target "description" = shape
-format name on target "description" {
-  option max = 100 "what max means"
-  severity error
+in todo_note rule todo-comment info "{text} left in a comment"
+in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_case(text)
+
+in line rule line-length {
+  option max 100 "what max means"
+  error "line is {len(text)} long"
   files "src/**"
-  ignore "src/generated/**"
+  ignore "src/generated/**" or "vendor/**"
   when len(text) > max
-  message "line is {len(text)} long"
-  shape-expression
+  fix slice(text, 0, max)
 }
 ```
 
-**Targets.** `on m` targets every node of matcher `m` (and of its
-specialisations). `on m.field` targets a field of `m`. `on .lang` targets
-whole files of a language, and `on .*` targets whole files of every language.
-`on a | b.field` targets several; fields used in the body must exist on all of
-them.
+A rule is `rule name [severity [message]] [fix expr] [{ clauses }]` in a
+context (`in ...` or a block).
 
-**Names.** A formatter name may be `family:variant` (`semi:never`,
-`no-multiple-empty-lines:eof`): several formatters that make up one rule.
-`set semi:*.severity = off` reaches every variant, and suppressing `semi`
-suppresses the whole family.
+**Targets.** A rule checks every node of its context's layers: a matcher (and
+its specialisations), a field (`in m.field rule`), a group (every member),
+`.lang` (whole files of a language) or `.*` (whole files of every language).
+With several targets (`in a or b.field rule`), fields used in the body must
+exist on all of them.
 
-**Shape.** The bare expression in the body (or after `=`) says what the node
-*should* be. If its text differs from the node's text, the formatter reports
-the node and offers the shape as the fix. If they are equal, nothing happens.
-Shapes can be anything: reorder, rename, delete (`""`), add text.
+**Severity and message.** The severity keyword (`off`, `hint`, `info`, `warn`,
+`error`) comes first and the message follows it, on the rule's line or as a
+body line (`warn "..."`). The message can use everything an expression can
+(`"{text} left in a comment"`), or be a macro. Without one the rule is a
+`warn` and its message is its name. `zlint rules` shows messages with option
+values filled in and other holes left as written.
 
-A formatter without a shape reports every node that passes its `when`
-conditions.
+**Names.** A rule name may be `family:variant` (`semi:never`,
+`no-multiple-empty-lines:eof`): several rules that make up one. `set semi:*
+off` reaches every variant, and suppressing `semi` suppresses the whole
+family.
+
+**Fix.** `fix expr` says what the node *should* be. If its text differs from
+the node's text, the rule reports the node and offers the fix. If they are
+equal, nothing happens. Fixes can be anything: reorder, rename, delete
+(`""`), add text. A rule without a fix reports every node that passes its
+`when` conditions.
 
 **Body clauses.**
 
 | clause | meaning |
 |---|---|
-| `option name = value "description"` | a configurable value, see [`set`](#configuring-rules-set) |
-| `severity off\|hint\|info\|warn\|error` | default severity (`warn`) |
+| `off\|hint\|info\|warn\|error [message]` | severity (default `warn`) and message |
 | `when expr` | only nodes where `expr` is truthy; several `when`s must all hold |
-| `message expr` | the diagnostic message |
-| `files "glob" \| ...` | only these files |
-| `ignore "glob" \| ...` | not these files |
-| `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the shape changes, or the node's end |
+| `fix expr` | what the node should be |
+| `option name value "description"` | a configurable value, see [`set`](#configuring-rules-set) |
+| `files "glob" or ...` | only these files |
+| `ignore "glob" or ...` | not these files |
+| `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
 
-The description is the default message, and can use everything a message can:
-`"{text} left in a comment"`. It may also be a macro. `zlint rules` shows
-descriptions with option values filled in and other holes left as written.
+A macro at the start of a body line is pasted as clauses.
 
-Fixes are minimal: the common start and end of the node and its shape are
-left alone, so a formatter on a whole statement that only adds `;` edits one
-character. With `report change` the diagnostic points at that edit too.
-
-A macro at the start of a body line that expands to clauses (`when ...`,
-`option ...`) is pasted as clauses; otherwise it is the shape.
+Fixes are minimal: the common start and end of the node and its fix are left
+alone, so a rule on a whole statement that only adds `;` edits one character.
+With `report change` the diagnostic points at that edit too.
 
 Fixes that overlap are applied over several passes (re-linting in between),
-so nested formatters compose.
+so nested rules compose.
 
 ## Expressions
 
@@ -300,8 +343,7 @@ match is `null`, and a field that matched several times is a list. `null`,
 | `parent_indent`, `parent_line` | leading whitespace and whole text of the line the parent starts on |
 | `prev_sibling`, `prev_gap` | the previous node of the same layer in the same parent, and the text between |
 | `enclosing` | the innermost layer around the node's start, seeing through overlays (`"js_string"` inside a string) |
-
-| `indented` | the node's line starts inside a layer declared with `in ... indent` |
+| `indented` | the node's line starts inside a layer declared with `indent` |
 | `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
 | `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
 | `indent_hangs` | that layer's inside starts on its opener line (`f(a,⏎ b)`) |
@@ -321,13 +363,13 @@ for groups) and `re_escape(text)` to build patterns from text.
 ## Configuring rules: `set`
 
 ```zlint
-set max-line-length.max = 100
-set max-line-length.severity = error
-set style-*.severity = off           # `*` globs over formatter names
+set max-line-length.max 100
+set max-line-length error
+set style-* off                      # `*` globs over rule names
 ```
 
 Option values must be constants of the same type as the option's default.
-`severity` can be set on every formatter.
+Every rule's severity can be set.
 
 ## Imports and macros
 
@@ -346,18 +388,20 @@ library:
 Macros paste tokens: they generate zlint code, not text.
 
 ```zlint
-macro rs_code = .rust | paren | brack | brace       # one line, no arguments
+macro rs_code_layers .rust or paren or brack or brace      # one line
 
-macro forbid(name, pattern, why) {                  # block with arguments
-  in rs_code match name = pattern
-  format name on name why { severity error }
+macro forbid(name, pattern, why) {                          # lines, with arguments
+  in rs_code match name pattern {
+    rule name error why
+  }
 }
 forbid(no_dbg, /\bdbg!/, "remove dbg! before committing")
 ```
 
-An expansion behaves like a parenthesised group wherever it lands, so
-`macro digits = /\d/+` then `digits?` means `(/\d/+)?`. Macros cannot
-recurse.
+Arguments are glued to the name (`forbid(`); `macro nl (...)`, with a space,
+is a one-line macro whose body starts with `(`. An expansion behaves like a
+parenthesised group wherever it lands, so `macro digits /\d/+` then
+`digits?` means `(/\d/+)?`. Macros cannot recurse.
 
 ## Suppressing diagnostics
 
@@ -374,7 +418,7 @@ Write these inside any comment:
 ## Performance
 
 `zlint --stats` prints throughput, and `zlint --profile` lists the matchers
-that cost the most interpreter steps and the formatters that cost the most
-time. Matchers that compile to a DFA never show up there; slow ones are
-usually nullable, use fields, or have no leading literal or lookaround to
-tell zlint where they can start.
+that cost the most interpreter steps and the rules that cost the most time.
+Matchers that compile to a DFA never show up there; slow ones are usually
+nullable, use fields, or have no leading literal or lookaround to tell zlint
+where they can start.

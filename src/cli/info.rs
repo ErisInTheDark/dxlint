@@ -18,14 +18,14 @@ const DIM: Style = Style::new().dimmed();
 const CYAN: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
 
 pub fn rules(linter: &Linter) -> ExitCode {
-    let mut fs: Vec<_> = linter.formatters.iter().collect();
-    fs.sort_by(|a, b| a.name.cmp(&b.name));
-    for f in fs {
+    let mut rules: Vec<_> = linter.rules.iter().collect();
+    rules.sort_by(|a, b| a.name.cmp(&b.name));
+    for f in rules {
         let sev = render::severity_style(f.severity);
         let sev_text = if f.severity == Severity::Off { format!("{DIM}off{DIM:#}") } else { format!("{sev}{}{sev:#}", f.severity.as_str()) };
         let fix = if f.has_fix() { format!(" {DIM}fixable{DIM:#}") } else { String::new() };
-        println!("{BOLD}{}{BOLD:#} {sev_text} {DIM}on{DIM:#} {CYAN}{}{CYAN:#}{fix}", f.name, f.target_text);
-        if let Some(d) = f.description() {
+        println!("{BOLD}{}{BOLD:#} {sev_text} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}{fix}", f.name, f.target_text);
+        if let Some(d) = f.message_template() {
             println!("    {d}");
         }
         for o in &f.options {
@@ -106,16 +106,16 @@ fn is_noise(name: &str) -> bool {
     matches!(name, "paren" | "brack" | "brace") || name.ends_with("escape")
 }
 
-/// `--profile`: the most expensive matchers and formatters, on stderr.
+/// `--profile`: the most expensive matchers and rules, on stderr.
 pub fn profile(linter: &Linter) {
     use anstream::eprintln;
     use zoomie_lint::engine::Profile;
     let Some(p) = &linter.profile else { return };
     let ms = |nanos: u64| nanos as f64 / 1e6;
     eprintln!(
-        "{BOLD}profile{BOLD:#} {DIM}(summed over threads){DIM:#}\n  parsing {:.1} ms, formatters {:.1} ms",
+        "{BOLD}profile{BOLD:#} {DIM}(summed over threads){DIM:#}\n  parsing {:.1} ms, rules {:.1} ms",
         ms(Profile::get(&p.parse_nanos)),
-        ms(Profile::get(&p.format_nanos))
+        ms(Profile::get(&p.rules_nanos))
     );
     let mut matchers: Vec<(u64, u64, &str)> = linter
         .grammar
@@ -130,16 +130,16 @@ pub fn profile(linter: &Linter) {
     for (steps, runs, name) in matchers.iter().take(15) {
         eprintln!("  {steps:>14} steps {runs:>11} runs  {CYAN}{name}{CYAN:#}");
     }
-    let mut formatters: Vec<(u64, u64, &str)> = linter
-        .formatters
+    let mut rules: Vec<(u64, u64, &str)> = linter
+        .rules
         .iter()
         .enumerate()
-        .map(|(i, f)| (Profile::get(&p.formatter_nanos[i]), Profile::get(&p.formatter_evals[i]), f.name.as_str()))
+        .map(|(i, f)| (Profile::get(&p.rule_nanos[i]), Profile::get(&p.rule_evals[i]), f.name.as_str()))
         .filter(|(_, evals, _)| *evals > 0)
         .collect();
-    formatters.sort_by(|a, b| b.0.cmp(&a.0));
-    eprintln!("\n  {BOLD}formatters{BOLD:#} {DIM}by time{DIM:#}");
-    for (nanos, evals, name) in formatters.iter().take(15) {
+    rules.sort_by(|a, b| b.0.cmp(&a.0));
+    eprintln!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}");
+    for (nanos, evals, name) in rules.iter().take(15) {
         eprintln!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
     }
 }

@@ -98,6 +98,8 @@ pub struct Grammar {
     /// `in x indent` / `in x.field indent`: (matcher, field) pairs whose
     /// insides are indented.
     indents: Vec<(u32, Option<u16>)>,
+    /// Every group's final members.
+    groups: HashMap<String, Vec<Parent>>,
     views: Vec<View>,
     by_name: HashMap<String, u32>,
     /// Warm DFA caches, reused across files (building one is not cheap).
@@ -147,7 +149,7 @@ impl Grammar {
 
     /// For every matcher, which matchers can appear inside its nodes (via
     /// children, overlays or references), itself included. Lets the linter
-    /// skip overlay searches no active formatter could ever see.
+    /// skip overlay searches no active rule could ever see.
     pub fn reach(&self) -> Vec<Vec<bool>> {
         let n = self.matchers.len();
         let edges: Vec<Vec<u32>> = self
@@ -230,7 +232,7 @@ impl Grammar {
                 let prev_span = config.matchers.iter().filter(|d| d.pattern.is_some()).nth(prev as usize).map(|d| d.name.span);
                 let mut err = ConfigError::new(def.name.span, format!("matcher `{}` is defined twice", def.name.text));
                 if prev_span.is_some() {
-                    err = err.note("use `in parent match name` (no `=`) to attach an existing matcher to more parents");
+                    err = err.note("use `in parent match name` (no pattern) to attach an existing matcher to more parents");
                 }
                 errors.push(err);
                 continue;
@@ -386,7 +388,12 @@ impl Grammar {
         check_left_recursion(&matchers, &by_name, errors);
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
-        Grammar { matchers, langs, labels, indents, views, by_name, cache_pool: Mutex::new(Vec::new()) }
+        Grammar { matchers, langs, labels, indents, groups, views, by_name, cache_pool: Mutex::new(Vec::new()) }
+    }
+
+    /// A group's members (`group name a or .lang`), nested groups flattened.
+    pub fn group(&self, name: &str) -> Option<&[Parent]> {
+        self.groups.get(name).map(Vec::as_slice)
     }
 
     /// Is `node` (of `matcher`, labelled `label` inside a node of `owner`)
@@ -399,7 +406,7 @@ impl Grammar {
     }
 }
 
-/// `in a | b.field indent` targets, with groups expanded.
+/// `in a or b.field indent` targets, with groups expanded.
 fn resolve_indents(
     config: &Config,
     groups: &HashMap<String, Vec<Parent>>,
@@ -493,8 +500,9 @@ fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, 
     }
 }
 
-/// Final members of every `group`, with nested groups flattened. A group
-/// cannot share a name with a matcher.
+/// Final members of every `group`, with nested groups flattened. Every
+/// `group name ...` line adds members. A group cannot share a name with a
+/// matcher.
 fn resolve_groups(config: &Config, by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) -> HashMap<String, Vec<Parent>> {
     let mut raw: HashMap<String, Vec<Parent>> = HashMap::new();
     for g in &config.groups {
@@ -502,19 +510,7 @@ fn resolve_groups(config: &Config, by_name: &HashMap<String, u32>, errors: &mut 
             errors.push(ConfigError::new(g.name.span, format!("`{}` is already a matcher; groups need their own name", g.name.text)));
             continue;
         }
-        match raw.get_mut(&g.name.text) {
-            Some(list) if g.extend => list.extend(g.parents.iter().cloned()),
-            Some(_) => errors.push(
-                ConfigError::new(g.name.span, format!("group `{}` is defined twice", g.name.text)).note("extend a group with `group name += ...`"),
-            ),
-            None if g.extend => errors.push(
-                ConfigError::new(g.name.span, format!("unknown group `{}`", g.name.text))
-                    .note("define it with `group name = ...` before extending it"),
-            ),
-            None => {
-                raw.insert(g.name.text.clone(), g.parents.clone());
-            }
-        }
+        raw.entry(g.name.text.clone()).or_default().extend(g.parents.iter().cloned());
     }
     fn flatten(name: &str, raw: &HashMap<String, Vec<Parent>>, seen: &mut Vec<String>, out: &mut Vec<Parent>) {
         if seen.iter().any(|s| s == name) {

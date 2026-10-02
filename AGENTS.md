@@ -13,7 +13,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - `src/config`: lexer, token stream (imports + macros splice tokens), parser
 - `src/pattern`: `Pat`, regex subset parser, compiler, DFA bridge, prefilters
 - `src/grammar`: layers per language, `parse.rs` builds trees
-- `src/expr`: formatter expressions; functions registry in `functions.rs`
+- `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions; end-to-end tests in `engine/tests.rs`
 - `std/*.zlint`: embedded std library (`src/config/std_lib.rs` lists modules)
 

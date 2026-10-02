@@ -18,14 +18,33 @@ use super::stream::{MacroDef, Stream};
 use crate::pattern::class::CharClass;
 use crate::pattern::Pat;
 
-/// Words that start formatter body clauses.
-const FORMAT_CLAUSES: &[&str] = &["option", "severity", "when", "message", "files", "ignore", "report"];
-
-/// Words that start items or clauses and therefore cannot name macros.
+/// Words with a meaning in items, clauses or patterns; they cannot name
+/// macros or matchers.
 const RESERVED: &[&str] = &[
-    "import", "macro", "lang", "group", "match", "in", "over", "format", "on", "set", "ignore", "option", "severity", "when",
-    "message", "files", "report", "if", "then", "else", "true", "false", "null",
+    "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
+    "fix", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info", "warn",
+    "error",
 ];
+
+/// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
+/// are about: their parent layers, or what their rules check.
+#[derive(Clone)]
+struct Context {
+    /// Layers, languages or groups, each maybe narrowed to a field.
+    parents: Vec<(Parent, Option<Name>)>,
+    /// `over`: matchers defined here are overlays.
+    overlay: bool,
+}
+
+/// A rule target for one context parent.
+fn target_of((parent, field): &(Parent, Option<Name>)) -> Target {
+    match (parent, field) {
+        (Parent::Lang(name), _) => Target::Lang(name.clone()),
+        (Parent::AnyLang(span), _) => Target::Lang(Name { text: "*".into(), span: *span }),
+        (Parent::Matcher(name), None) => Target::Matcher(name.clone()),
+        (Parent::Matcher(name), Some(f)) => Target::Field(name.clone(), f.clone()),
+    }
+}
 
 pub struct Parser<'a> {
     ts: Stream,
@@ -129,15 +148,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn eat_kw(&mut self, kw: &str) -> bool {
-        if self.peek().is_some_and(|t| t.is_ident(kw)) {
-            self.bump();
-            true
-        } else {
-            false
-        }
-    }
-
     fn ident(&mut self, what: &str) -> Option<Name> {
         let t = self.expect(Tk::Ident, what)?;
         Some(Name { text: t.text.to_string(), span: t.span })
@@ -156,8 +166,8 @@ impl<'a> Parser<'a> {
         let mut span = first.span;
         let mut last = first;
         while let Some(next) = self.ts.peek_raw(0).cloned() {
-            // `family:variant` names group several formatters under one
-            // rule family (`set family:*.severity = off`).
+            // `family:variant` names group several rules under one family
+            // (`set family:* off`).
             let glues = matches!(next.kind, Tk::Ident | Tk::Minus | Tk::Num | Tk::Colon) || (allow_star && next.kind == Tk::Star);
             if !glues || !last.touches(&next) {
                 break;
@@ -188,20 +198,28 @@ impl<'a> Parser<'a> {
     }
 
     /// Skips to the end of the current line (outside brackets) after an error.
+    /// A `}` that closes an enclosing block is left for the block.
     fn recover(&mut self) {
         let mut depth = 0usize;
-        while let Some(t) = self.ts.next_raw() {
+        while let Some(t) = self.ts.peek_raw(0).cloned() {
             match t.kind {
+                Tk::RBrace if depth == 0 => return,
                 Tk::LParen | Tk::LBrace | Tk::LBrack => depth += 1,
-                Tk::RParen | Tk::RBrace | Tk::RBrack => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 && t.kind == Tk::RBrace {
+                Tk::RParen | Tk::RBrack => depth = depth.saturating_sub(1),
+                Tk::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.ts.next_raw();
                         return;
                     }
                 }
-                Tk::Newline if depth == 0 => return,
+                Tk::Newline if depth == 0 => {
+                    self.ts.next_raw();
+                    return;
+                }
                 _ => {}
             }
+            self.ts.next_raw();
         }
     }
 
@@ -222,31 +240,104 @@ impl<'a> Parser<'a> {
     // ---- items ---------------------------------------------------------
 
     fn items(&mut self) {
-        while let Some(t) = self.peek() {
-            let before = self.errors.len();
-            match (t.kind, &*t.text) {
-                (Tk::Ident, "import") => self.import(),
-                (Tk::Ident, "macro") => self.macro_def(),
-                (Tk::Ident, "lang") => self.lang(),
-                (Tk::Ident, "group") => self.group(),
-                (Tk::Ident, "match" | "in" | "over") => self.matcher(),
-                (Tk::Ident, "format") => self.format(),
-                (Tk::Ident, "set") => self.set(),
-                (Tk::Ident, "ignore") => self.ignore(),
-                (Tk::Ident, _) if self.ts.expand(&mut self.errors) => continue,
-                _ => {
-                    self.errors.push(
-                        ConfigError::new(t.span, format!("expected an item, found {}", t.describe()))
-                            .note("items are: lang, group, match, in/over ... match, format, set, macro, import, ignore"),
-                    );
-                    self.bump();
-                    self.recover();
+        while self.peek().is_some() {
+            self.item(None);
+        }
+    }
+
+    /// One item. Inside a `{ ... }` block, `ctx` is the block's context:
+    /// `match`, `rule` and `indent` lines take their layers from it.
+    fn item(&mut self, ctx: Option<&Context>) {
+        let Some(t) = self.peek() else { return };
+        let before = self.errors.len();
+        match (t.kind, &*t.text) {
+            (Tk::Ident, "import") => self.import(),
+            (Tk::Ident, "macro") => self.macro_def(),
+            (Tk::Ident, "lang") => self.lang(),
+            (Tk::Ident, "group") => self.group(),
+            (Tk::Ident, "in" | "over") => self.context_item(),
+            (Tk::Ident, "match") => self.matcher(ctx),
+            (Tk::Ident, "rule") => self.rule(ctx),
+            (Tk::Ident, "indent") => self.indent(ctx),
+            (Tk::Ident, "set") => self.set(),
+            (Tk::Ident, "ignore") => self.ignore(),
+            (Tk::Ident, _) if self.ts.expand(&mut self.errors) => return,
+            _ => {
+                self.errors.push(
+                    ConfigError::new(t.span, format!("expected an item, found {}", t.describe()))
+                        .note("items are: lang, group, match, in/over ..., rule, indent, set, macro, import, ignore"),
+                );
+                self.bump();
+            }
+        }
+        if self.errors.len() > before {
+            // Keep one error per broken item.
+            self.recover_if_mid_line();
+        }
+    }
+
+    /// `in A or B ...` / `over A ...`: a context for the rest of the line,
+    /// or for every line of the `{ ... }` block that follows.
+    fn context_item(&mut self) {
+        let kw = self.bump().expect("peeked");
+        let parents = self.parent_items();
+        if parents.is_empty() {
+            return;
+        }
+        let ctx = Context { parents, overlay: &*kw.text == "over" };
+        self.skip(false, true);
+        match self.ts.peek_raw(0).cloned() {
+            Some(t) if t.kind == Tk::LBrace => {
+                self.ts.next_raw();
+                self.block(&ctx, t.span);
+            }
+            Some(t) if t.is_ident("match") => self.matcher(Some(&ctx)),
+            Some(t) if t.is_ident("rule") => self.rule(Some(&ctx)),
+            Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
+            other => {
+                let span = other.map(|t| t.span).or(self.ts.last_span);
+                self.errors.push(ConfigError::new(span, format!("expected `match`, `rule`, `indent` or `{{` after `{} ...`", kw.text)));
+            }
+        }
+    }
+
+    /// The lines of a `{ ... }` block, each an item in `ctx`.
+    fn block(&mut self, ctx: &Context, opened: Span) {
+        loop {
+            match self.peek() {
+                None => {
+                    self.errors.push(ConfigError::new(opened, "unclosed `{`"));
+                    return;
                 }
+                Some(t) if t.kind == Tk::RBrace => {
+                    self.bump();
+                    return;
+                }
+                Some(_) => self.item(Some(ctx)),
             }
-            if self.errors.len() > before {
-                // Keep one error per broken item.
-                self.recover_if_mid_line();
+        }
+    }
+
+    /// `in A indent`: lines inside A are indented.
+    fn indent(&mut self, ctx: Option<&Context>) {
+        let kw = self.bump().expect("peeked");
+        match ctx {
+            Some(c) if !c.overlay => self.config.indents.push(IndentDef { targets: c.parents.clone() }),
+            Some(_) => self.errors.push(ConfigError::new(kw.span, "`indent` needs `in`, not `over`")),
+            None => self.errors.push(ConfigError::new(kw.span, "`indent` needs a context: `in <layer> indent`")),
+        }
+        self.end_of_item();
+    }
+
+    /// After an item's head: its `{ ... }` block in `ctx`, or the end of the line.
+    fn block_or_end(&mut self, ctx: Context) {
+        self.skip(false, true);
+        match self.ts.peek_raw(0).cloned() {
+            Some(t) if t.kind == Tk::LBrace => {
+                self.ts.next_raw();
+                self.block(&ctx, t.span);
             }
+            _ => self.end_of_item(),
         }
     }
 
@@ -303,7 +394,9 @@ impl<'a> Parser<'a> {
             return;
         }
         let mut params: Vec<Rc<str>> = Vec::new();
-        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LParen) {
+        // Parameters are glued to the name: `macro f(a, b) ...`. A spaced
+        // `(` starts a one-line body: `macro nl (if ... )`.
+        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LParen && t.span.start == name.span.end) {
             self.ts.next_raw();
             loop {
                 match self.ts.next_raw() {
@@ -325,8 +418,30 @@ impl<'a> Parser<'a> {
 
         let mut body = Vec::new();
         let mut depth = 0usize;
-        match self.ts.next_raw() {
-            Some(t) if t.kind == Tk::Eq => loop {
+        match self.ts.peek_raw(0).map(|t| t.kind) {
+            // A block of lines.
+            Some(Tk::LBrace) => {
+                self.ts.next_raw();
+                loop {
+                    let Some(t) = self.ts.next_raw() else {
+                        self.errors.push(ConfigError::new(name.span, format!("unclosed body of macro `{}`", name.text)));
+                        return;
+                    };
+                    match t.kind {
+                        Tk::LParen | Tk::LBrace | Tk::LBrack | Tk::InvOpen => depth += 1,
+                        Tk::RBrace if depth == 0 => break,
+                        Tk::RParen | Tk::RBrace | Tk::RBrack | Tk::InvClose => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                    body.push(t);
+                }
+            }
+            None | Some(Tk::Newline) => {
+                self.errors.push(ConfigError::new(name.span, format!("macro `{}` needs a body after its name", name.text)));
+                return;
+            }
+            // The rest of the line.
+            _ => loop {
                 let Some(t) = self.ts.peek_raw(0).cloned() else { break };
                 if t.kind == Tk::Newline && depth == 0 {
                     break;
@@ -344,24 +459,6 @@ impl<'a> Parser<'a> {
                 self.ts.next_raw();
                 body.push(t);
             },
-            Some(t) if t.kind == Tk::LBrace => loop {
-                let Some(t) = self.ts.next_raw() else {
-                    self.errors.push(ConfigError::new(name.span, format!("unclosed body of macro `{}`", name.text)));
-                    return;
-                };
-                match t.kind {
-                    Tk::LParen | Tk::LBrace | Tk::LBrack | Tk::InvOpen => depth += 1,
-                    Tk::RBrace if depth == 0 => break,
-                    Tk::RParen | Tk::RBrace | Tk::RBrack | Tk::InvClose => depth = depth.saturating_sub(1),
-                    _ => {}
-                }
-                body.push(t);
-            },
-            other => {
-                let span = other.map(|t| t.span).unwrap_or(name.span);
-                self.errors.push(ConfigError::new(span, "expected `=` or `{` after the macro name"));
-                return;
-            }
         }
         let def = MacroDef { name: Rc::from(name.text.as_str()), params, body: body.into() };
         self.ts.macros.insert(def.name.clone(), Rc::new(def));
@@ -370,44 +467,34 @@ impl<'a> Parser<'a> {
     fn group(&mut self) {
         self.bump();
         let Some(name) = self.ident("a group name") else { return };
-        self.skip(false, true);
-        let extend = self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Plus);
-        if extend {
-            self.ts.next_raw();
-        }
-        if self.expect(Tk::Eq, if extend { "`=` after `+`" } else { "`=` or `+=`" }).is_none() {
-            return;
-        }
         let parents = self.parent_list();
         if parents.is_empty() {
             return;
         }
         self.end_of_item();
-        self.config.groups.push(GroupDef { name, extend, parents });
+        self.config.groups.push(GroupDef { name, parents });
     }
 
     fn lang(&mut self) {
         self.bump();
         let Some(name) = self.ident("a language name") else { return };
-        if self.expect(Tk::Eq, "`=`").is_none() {
-            return;
-        }
         let mut globs = Vec::new();
         loop {
             let Some(glob) = self.string("a file glob like \"*.rs\"") else { return };
             globs.push(glob);
-            if !self.eat_on_line(Tk::Pipe) {
+            if !self.eat_or() {
                 break;
             }
         }
-        self.end_of_item();
+        let root = Parent::Lang(name.clone());
         self.config.langs.push(LangDef { name, globs });
+        self.block_or_end(Context { parents: vec![(root, None)], overlay: false });
     }
 
-    /// Eats `kind` only if it continues the current line.
-    fn eat_on_line(&mut self, kind: Tk) -> bool {
+    /// Eats an `or` that continues the current line.
+    fn eat_or(&mut self) -> bool {
         self.skip(false, true);
-        if self.ts.peek_raw(0).is_some_and(|t| t.kind == kind) {
+        if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("or")) {
             self.ts.next_raw();
             true
         } else {
@@ -426,14 +513,14 @@ impl<'a> Parser<'a> {
             .into_iter()
             .map(|(p, field)| {
                 if let Some(f) = field {
-                    self.errors.push(ConfigError::new(f.span, "only `in layer.field indent` can name a field here"));
+                    self.errors.push(ConfigError::new(f.span, "only rules and `indent` can use a field (`in layer.field rule ...`)"));
                 }
                 p
             })
             .collect()
     }
 
-    /// `a | .lang | b.field`: parents, each maybe narrowed to a field.
+    /// `a or .lang or b.field`: parents, each maybe narrowed to a field.
     fn parent_items(&mut self) -> Vec<(Parent, Option<Name>)> {
         let mut parents: Vec<(Parent, Option<Name>)> = Vec::new();
         loop {
@@ -480,33 +567,21 @@ impl<'a> Parser<'a> {
                 self.errors.push(ConfigError::new(t.span, format!("expected a parent layer, found {}", t.describe())));
                 return parents;
             }
-            if !self.eat_on_line(Tk::Pipe) {
+            if !self.eat_or() {
                 break;
             }
         }
         parents
     }
 
-    fn matcher(&mut self) {
-        let kw = self.bump().expect("peeked");
-        let (parents, overlay) = match &*kw.text {
-            "in" => {
-                let items = self.parent_items();
-                if self.eat_kw("indent") {
-                    self.end_of_item();
-                    self.config.indents.push(IndentDef { targets: items });
-                    return;
-                }
-                (self.no_fields(items), false)
-            }
-            "over" => (self.parent_list(), true),
-            _ => (Vec::new(), false),
+    /// `match name [like base] [pattern] [{ block }]`, with its parents from
+    /// the context. Without a pattern it attaches an existing matcher.
+    fn matcher(&mut self, ctx: Option<&Context>) {
+        self.bump();
+        let (parents, overlay) = match ctx {
+            Some(c) => (self.no_fields(c.parents.clone()), c.overlay),
+            None => (Vec::new(), false),
         };
-        if &*kw.text != "match" && !self.eat_kw("match") {
-            let also = if &*kw.text == "in" { " or `indent`" } else { "" };
-            self.error_here(format!("expected `match`{also} after `{} ...`", kw.text));
-            return;
-        }
         let Some(name) = self.ident("a matcher name") else { return };
         if RESERVED.contains(&name.text.as_str()) {
             self.errors.push(ConfigError::new(name.span, format!("`{}` is a keyword and cannot name a matcher", name.text)));
@@ -521,7 +596,9 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let pattern = if self.eat_on_line(Tk::Eq) {
+        self.skip(false, true);
+        let has_pattern = !matches!(self.ts.peek_raw(0).map(|t| t.kind), None | Some(Tk::Newline | Tk::LBrace | Tk::RBrace));
+        let pattern = if has_pattern {
             match self.pattern_line() {
                 Some(p) => Some(p),
                 // Still declare the name (matching nothing), so a typo in one
@@ -532,107 +609,89 @@ impl<'a> Parser<'a> {
             if parents.is_empty() {
                 self.errors.push(
                     ConfigError::new(name.span, format!("matcher `{}` needs a pattern", name.text))
-                        .note("write `match name = /regex/ ...`, or `in parent match name` to attach an existing matcher"),
+                        .note("write `match name /regex/ ...`, or `in parent match name` to attach an existing matcher"),
                 );
                 return;
             }
             None
         };
-        self.end_of_item();
         if like.is_some() && pattern.is_none() {
-            self.errors.push(ConfigError::new(name.span, "`like` belongs on the definition (`match name like base = ...`)"));
+            self.errors.push(ConfigError::new(name.span, "`like` belongs on the definition (`match name like base /regex/ ...`)"));
             return;
         }
+        let own = Parent::Matcher(name.clone());
         self.config.matchers.push(MatcherDef { name, parents, overlay, pattern, like });
+        self.block_or_end(Context { parents: vec![(own, None)], overlay: false });
     }
 
-    fn target(&mut self) -> Option<Target> {
-        let t = self.peek()?;
-        if t.kind == Tk::Dot {
-            self.bump();
-            let n = self.ts.peek_raw(0).cloned();
-            return match n {
-                Some(n) if (n.kind == Tk::Ident || n.kind == Tk::Star) && t.touches(&n) => {
-                    self.ts.next_raw();
-                    Some(Target::Lang(Name { text: n.text.to_string(), span: t.span.to(n.span) }))
-                }
-                _ => {
-                    self.errors.push(ConfigError::new(t.span, "expected a language name right after `.`"));
-                    None
-                }
-            };
-        }
-        let layer = self.ident("a matcher to format, like `fn` or `fn.name`")?;
-        let dot_glued = self.ts.peek_raw(0).is_some_and(|d| d.kind == Tk::Dot && d.span.start == layer.span.end);
-        if dot_glued {
-            self.ts.next_raw();
-            let field = self.ident("a field name after `.`")?;
-            return Some(Target::Field(layer, field));
-        }
-        Some(Target::Matcher(layer))
-    }
-
-    fn format(&mut self) {
-        self.bump();
-        let Some(name) = self.glued_name("a formatter name", false) else { return };
-        if !self.eat_kw("on") {
-            self.error_here(format!("expected `on <matcher>` after `format {}`", name.text));
-            return;
-        }
-        let mut targets = Vec::new();
-        loop {
-            let Some(target) = self.target() else { return };
-            targets.push(target);
-            if !self.eat_on_line(Tk::Pipe) {
-                break;
+    /// `rule name [severity [message]] [fix expr] [{ clauses }]`, checking the
+    /// context's layers.
+    fn rule(&mut self, ctx: Option<&Context>) {
+        let kw = self.bump().expect("peeked");
+        let Some(name) = self.glued_name("a rule name", false) else { return };
+        let targets: Vec<Target> = match ctx {
+            Some(c) => c.parents.iter().map(target_of).collect(),
+            None => {
+                self.errors.push(ConfigError::new(kw.span, "a rule needs a context: `in <layer> rule name ...`"));
+                return;
             }
-        }
-        let mut def = FormatDef {
+        };
+        let mut def = RuleDef {
             name,
             targets,
-            description: None,
             severity: None,
+            message: None,
             options: Vec::new(),
             files: Vec::new(),
             ignore: Vec::new(),
             when: Vec::new(),
-            message: None,
-            shape: None,
+            fix: None,
             report: Report::Node,
         };
         self.skip(false, true);
-        // A description is a string, or a macro that expands to one.
-        let described = match self.ts.peek_raw(0) {
-            Some(t) if t.kind == Tk::Str => true,
-            Some(t) if t.kind == Tk::Ident => {
-                let name = t.text.clone();
-                self.ts.is_macro(&name)
-            }
-            _ => false,
-        };
-        if described {
-            def.description = self.expr();
+        if let Some(severity) = self.peek_severity() {
+            self.ts.next_raw();
+            def.severity = Some(severity);
+            self.message_after_severity(&mut def);
         }
         self.skip(false, true);
-        match self.ts.peek_raw(0).map(|t| t.kind) {
-            Some(Tk::Eq) => {
-                self.ts.next_raw();
-                def.shape = self.expr();
-                self.end_of_item();
-            }
-            Some(Tk::LBrace) => {
-                self.ts.next_raw();
-                self.format_body(&mut def);
-            }
-            _ => self.end_of_item(),
+        if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
+            self.ts.next_raw();
+            def.fix = self.expr();
         }
-        self.config.formats.push(def);
+        self.skip(false, true);
+        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+            self.ts.next_raw();
+            self.rule_body(&mut def);
+        } else {
+            self.end_of_item();
+        }
+        self.config.rules.push(def);
     }
 
-    fn format_body(&mut self, def: &mut FormatDef) {
+    /// A severity keyword (`off hint info warn error`) next on the line.
+    fn peek_severity(&mut self) -> Option<Severity> {
+        let t = self.ts.peek_raw(0).filter(|t| t.kind == Tk::Ident)?;
+        Severity::NAMES.contains(&&*t.text).then(|| Severity::parse(&t.text)).flatten()
+    }
+
+    /// The optional message after a severity keyword: the rest of the line,
+    /// up to a `fix` or a `{`.
+    fn message_after_severity(&mut self, def: &mut RuleDef) {
+        self.skip(false, true);
+        let ends = match self.ts.peek_raw(0) {
+            None => true,
+            Some(t) => matches!(t.kind, Tk::Newline | Tk::LBrace | Tk::RBrace) || t.is_ident("fix"),
+        };
+        if !ends {
+            def.message = self.expr();
+        }
+    }
+
+    fn rule_body(&mut self, def: &mut RuleDef) {
         loop {
             let Some(t) = self.peek() else {
-                self.errors.push(ConfigError::new(def.name.span, format!("unclosed body of formatter `{}`", def.name.text)));
+                self.errors.push(ConfigError::new(def.name.span, format!("unclosed body of rule `{}`", def.name.text)));
                 return;
             };
             if t.kind == Tk::RBrace {
@@ -644,29 +703,35 @@ impl<'a> Parser<'a> {
                 (Tk::Ident, "option") => {
                     self.bump();
                     if let Some(name) = self.ident("an option name") {
-                        if self.expect(Tk::Eq, "`=` and a default value").is_some() {
-                            if let Some(default) = self.expr() {
-                                self.skip(false, true);
-                                let description = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Str) {
-                                    self.string("an option description").map(|(s, _)| s)
-                                } else {
-                                    None
-                                };
-                                def.options.push(OptionDef { name, default, description });
-                            }
+                        if let Some(default) = self.expr() {
+                            self.skip(false, true);
+                            let description = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Str) {
+                                self.string("an option description").map(|(s, _)| s)
+                            } else {
+                                None
+                            };
+                            def.options.push(OptionDef { name, default, description });
                         }
                     }
                 }
-                (Tk::Ident, "severity") => {
+                (Tk::Ident, word) if Severity::NAMES.contains(&word) => {
                     self.bump();
-                    if let Some(level) = self.ident("a severity") {
-                        match Severity::parse(&level.text) {
-                            Some(s) => def.severity = Some(s),
-                            None => self.errors.push(
-                                ConfigError::new(level.span, format!("unknown severity `{}`", level.text))
-                                    .suggest(&level.text, Severity::NAMES.iter().copied()),
-                            ),
-                        }
+                    if def.severity.is_some() {
+                        self.errors.push(ConfigError::new(t.span, format!("rule `{}` already has a severity", def.name.text)));
+                    } else {
+                        def.severity = Severity::parse(word);
+                        self.message_after_severity(def);
+                    }
+                }
+                (Tk::Ident, "fix") => {
+                    self.bump();
+                    if def.fix.is_some() {
+                        self.errors.push(
+                            ConfigError::new(t.span, format!("rule `{}` already has a fix", def.name.text))
+                                .note("a rule has at most one fix: the expression saying what the text should be"),
+                        );
+                    } else {
+                        def.fix = self.expr();
                     }
                 }
                 (Tk::Ident, "when") => {
@@ -684,15 +749,11 @@ impl<'a> Parser<'a> {
                             "end" => def.report = Report::End,
                             other => self.errors.push(
                                 ConfigError::new(what.span, format!("unknown report target `{other}`")).note(
-                                    "`report node` points at the whole node, `report change` at what the shape changes, `report end` at the node's end",
+                                    "`report node` points at the whole node, `report change` at what the fix changes, `report end` at the node's end",
                                 ),
                             ),
                         }
                     }
-                }
-                (Tk::Ident, "message") => {
-                    self.bump();
-                    def.message = self.expr();
                 }
                 (Tk::Ident, kw @ ("files" | "ignore")) => {
                     let kw = kw.to_string();
@@ -700,7 +761,7 @@ impl<'a> Parser<'a> {
                     let mut globs = Vec::new();
                     while let Some(g) = self.string("a path glob") {
                         globs.push(g);
-                        if !self.eat_on_line(Tk::Pipe) {
+                        if !self.eat_or() {
                             break;
                         }
                     }
@@ -710,18 +771,15 @@ impl<'a> Parser<'a> {
                         def.ignore.extend(globs);
                     }
                 }
-                (Tk::Ident, _) if self.ts.is_macro(&t.text) => {
-                    self.ts.expand(&mut self.errors);
-                    // A macro of clauses is read as clauses; anything else is
-                    // the shape, parsed with its invisible group intact so
-                    // `macro + "x"` stays one expression.
-                    let first = self.ts.peek_raw(1).cloned();
-                    if first.is_some_and(|f| f.kind == Tk::Ident && FORMAT_CLAUSES.contains(&&*f.text)) {
-                        continue;
-                    }
-                    self.shape(def)
+                // A macro of clauses: its lines are read as clauses.
+                (Tk::Ident, _) if self.ts.expand(&mut self.errors) => continue,
+                _ => {
+                    self.errors.push(
+                        ConfigError::new(t.span, format!("expected a rule clause, found {}", t.describe()))
+                            .note("rule clauses: a severity and message (`warn \"...\"`), when, fix, option, files, ignore, report"),
+                    );
+                    self.bump();
                 }
-                _ => self.shape(def),
             }
             if self.errors.len() > before {
                 self.recover_if_mid_line();
@@ -731,32 +789,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn shape(&mut self, def: &mut FormatDef) {
-        let span = self.here();
-        let Some(e) = self.expr() else { return };
-        if def.shape.is_some() {
-            self.errors.push(
-                ConfigError::new(span, format!("formatter `{}` already has a shape", def.name.text))
-                    .note("a formatter has at most one shape: the expression saying what the text should be"),
-            );
-        }
-        def.shape = Some(e);
-    }
-
+    /// `set rule.option value`, or `set rule severity`. `rule` may glob.
     fn set(&mut self) {
         self.bump();
-        let Some(target) = self.glued_name("a formatter name or glob", true) else { return };
-        if self.expect(Tk::Dot, "`.` and an option name, like `rule.max`").is_none() {
-            return;
-        }
-        let Some(key) = self.ident("an option name") else { return };
-        if self.expect(Tk::Eq, "`=`").is_none() {
-            return;
-        }
-        let value = if key.text == "severity" {
-            let Some(level) = self.ident("a severity") else { return };
+        let Some(target) = self.glued_name("a rule name or glob", true) else { return };
+        self.skip(false, true);
+        let (key, value) = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Dot) {
+            self.ts.next_raw();
+            let Some(key) = self.ident("an option name") else { return };
+            let Some(e) = self.expr() else { return };
+            (key, SetValue::Expr(e))
+        } else {
+            let Some(level) = self.ident("a severity (`off`, `error`, ...) or `.option value`") else { return };
             match Severity::parse(&level.text) {
-                Some(s) => SetValue::Severity(s),
+                Some(s) => (Name { text: "severity".into(), span: level.span }, SetValue::Severity(s)),
                 None => {
                     self.errors.push(
                         ConfigError::new(level.span, format!("unknown severity `{}`", level.text))
@@ -765,9 +811,6 @@ impl<'a> Parser<'a> {
                     return;
                 }
             }
-        } else {
-            let Some(e) = self.expr() else { return };
-            SetValue::Expr(e)
         };
         self.end_of_item();
         self.config.sets.push(SetDef { target, key, value });
@@ -778,7 +821,7 @@ impl<'a> Parser<'a> {
         loop {
             let Some(g) = self.string("a path glob") else { return };
             self.config.ignores.push(g);
-            if !self.eat_on_line(Tk::Pipe) {
+            if !self.eat_or() {
                 break;
             }
         }
@@ -807,79 +850,147 @@ mod tests {
         config
     }
 
+    fn parents(m: &MatcherDef) -> Vec<String> {
+        m.parents
+            .iter()
+            .map(|p| match p {
+                Parent::Lang(n) => format!(".{}", n.text),
+                Parent::AnyLang(_) => ".*".into(),
+                Parent::Matcher(n) => n.text.clone(),
+            })
+            .collect()
+    }
+
     #[test]
     fn parses_the_design_sketch() {
         let c = ok(r#"
-            lang rust = "*.rs"
-            match ws = /\s+/
-            in .rust match dstr = /"/ * /"/
-            in dstr | sstr match escape = /\\(.)/
-            in .rust match sstr = /'/ * /'/
-            match params = /\(/ * /\)/
+            lang rust "*.rs"
+            match ws /\s+/
+            in .rust match dstr /"/ until /"/
+            in dstr or sstr match escape /\\(.)/
+            in .rust match sstr /'/ until /'/
+            match params /\(/ until /\)/
             in params match params
-            in .rust match fn = /fn/ ws name:/\w+/ ws? :params
-            over .rust match line = /^.*$/
+            in .rust match fn /fn/ ws name:/\w+/ ws? :params
+            over .rust match line /^.*$/
+            in .rust match either (/a/ or "b") until /c/
         "#);
         assert_eq!(c.langs.len(), 1);
-        assert_eq!(c.matchers.len(), 8);
+        assert_eq!(c.matchers.len(), 9);
         let fun = c.matchers.iter().find(|m| m.name.text == "fn").unwrap();
         assert_eq!(fun.pattern.as_ref().unwrap().0.labels(), vec!["name", "params"]);
         assert!(c.matchers.iter().find(|m| m.name.text == "line").unwrap().overlay);
         assert!(c.matchers.iter().any(|m| m.name.text == "params" && m.pattern.is_none()));
+        let either = &c.matchers.iter().find(|m| m.name.text == "either").unwrap().pattern.as_ref().unwrap().0;
+        assert!(matches!(either, Pat::Seq(items) if matches!(items[0], Pat::Alt(_)) && matches!(items[1], Pat::Skip)), "{either:?}");
     }
 
     #[test]
-    fn formatters_with_body_shorthand_and_sets() {
+    fn rules_in_one_line_or_with_a_body() {
         let c = ok(r#"
-            format fn-snake on fn.name "names are snake_case" = snake_case(text)
-            format line-length on line "lines under {max}" {
-              option max = 100 "max chars"
-              severity error
+            in fn.name rule fn-snake warn "names are snake_case" fix snake_case(text)
+            in line rule line-length {
+              option max 100 "max chars"
+              error "lines under {max}"
               when len(text) > max
             }
-            set line-length.max = 120
-            set *.severity = warn
+            in todo or .md rule todo-note info "{text} left"
+            in x rule quiet
+            set line-length.max 120
+            set * warn
         "#);
-        assert_eq!(c.formats.len(), 2);
-        assert!(matches!(c.formats[0].targets[..], [Target::Field(..)]));
-        assert!(c.formats[0].shape.is_some());
-        assert_eq!(c.formats[1].options.len(), 1);
-        assert_eq!(c.formats[1].severity, Some(Severity::Error));
+        assert_eq!(c.rules.len(), 4);
+        assert!(matches!(c.rules[0].targets[..], [Target::Field(..)]));
+        assert!(c.rules[0].fix.is_some() && c.rules[0].message.is_some());
+        assert_eq!(c.rules[1].options.len(), 1);
+        assert_eq!(c.rules[1].severity, Some(Severity::Error));
+        assert!(matches!(c.rules[2].targets[..], [Target::Matcher(_), Target::Lang(_)]));
+        assert_eq!(c.rules[2].severity, Some(Severity::Info));
+        assert!(c.rules[3].severity.is_none() && c.rules[3].message.is_none());
         assert_eq!(c.sets.len(), 2);
         assert_eq!(c.sets[1].target.text, "*");
+        assert!(matches!(c.sets[1].value, SetValue::Severity(Severity::Warn)));
+    }
+
+    #[test]
+    fn context_blocks_apply_to_every_line() {
+        let c = ok(r#"
+            lang t "*.t" {
+              match brace /\{/ until /\}/ {
+                indent
+                match inner /x/
+                rule braces warn "brace" { when true }
+              }
+            }
+            over .t or brace {
+              match line /^.+/
+            }
+            in brace { in .t match back /y/ }
+            in brace.body indent
+        "#);
+        let by_name = |n: &str| c.matchers.iter().find(|m| m.name.text == n).unwrap();
+        assert_eq!(parents(by_name("brace")), vec![".t"]);
+        assert_eq!(parents(by_name("inner")), vec!["brace"]);
+        assert_eq!(parents(by_name("line")), vec![".t", "brace"]);
+        assert!(by_name("line").overlay && !by_name("inner").overlay);
+        // A nested `in` replaces the block's context.
+        assert_eq!(parents(by_name("back")), vec![".t"]);
+        assert!(matches!(&c.rules[0].targets[..], [Target::Matcher(n)] if n.text == "brace"));
+        assert_eq!(c.indents.len(), 2);
+        assert!(matches!(&c.indents[1].targets[..], [(Parent::Matcher(_), Some(f))] if f.text == "body"));
+    }
+
+    #[test]
+    fn groups_add_on_every_line() {
+        let c = ok("group code .t or paren\ngroup code brace\n");
+        assert_eq!(c.groups.len(), 2);
+        assert_eq!(c.groups[1].parents.len(), 1);
+    }
+
+    #[test]
+    fn rules_need_a_context_and_matchers_take_no_fields() {
+        let (_, errors, _) = parse_str("rule lonely warn \"x\"\nin a.b match c /x/\nin a indent extra\n");
+        let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(errors.len(), 3, "{all:#?}");
+        assert!(all[0].contains("needs a context") && all[1].contains("can use a field"), "{all:#?}");
     }
 
     #[test]
     fn macros_generate_items() {
         let c = ok(r#"
             macro forbid(name, pat, why) {
-              in .rust match name = pat
-              format name on name why { severity error }
+              in .rust match name pat {
+                rule name error why
+              }
             }
             forbid(dbg, "dbg!" /\(/, "no dbg")
         "#);
         assert_eq!(c.matchers[0].name.text, "dbg");
-        assert_eq!(c.formats[0].name.text, "dbg");
-        assert_eq!(c.formats[0].severity, Some(Severity::Error));
+        assert_eq!(c.rules[0].name.text, "dbg");
+        assert_eq!(c.rules[0].severity, Some(Severity::Error));
+        assert!(c.rules[0].message.is_some());
     }
 
     #[test]
-    fn macros_start_shapes_or_clauses_in_formatter_bodies() {
+    fn macros_expand_to_rule_clauses_and_messages() {
         let c = ok(r#"
-            macro nl = (if true then "a" else "b")
-            macro strict = severity error
-            format f on x {
+            macro nl (if true then "a" else "b")
+            macro strict {
+              when true
+              fix nl + "!" + nl
+            }
+            in x rule f warn nl {
               strict
-              nl + "!" + nl
             }
         "#);
-        assert_eq!(c.formats[0].severity, Some(Severity::Error));
-        assert!(matches!(c.formats[0].shape.as_ref().map(|e| &e.kind), Some(ExprKind::Binary(..))));
+        assert_eq!(c.rules[0].when.len(), 1);
+        assert!(matches!(c.rules[0].fix.as_ref().map(|e| &e.kind), Some(ExprKind::Binary(..))));
+        assert!(c.rules[0].message.is_some());
     }
 
     #[test]
     fn macro_expansions_act_as_groups() {
-        let c = ok("macro digits = /\\d/+\nmatch x = \"a\" digits?\n");
+        let c = ok("macro digits /\\d/+\nmatch x \"a\" digits?\n");
         let Some((Pat::Seq(items), _)) = &c.matchers[0].pattern else { panic!("{:?}", c.matchers[0].pattern) };
         assert!(
             matches!(&items[1], Pat::Repeat { min: 0, max: Some(1), inner, .. } if matches!(**inner, Pat::Repeat { min: 1, .. })),
@@ -889,10 +1000,12 @@ mod tests {
 
     #[test]
     fn errors_point_at_the_problem_and_recover() {
-        let (c, errors, _) = parse_str("match = /x/\nmatch ok = /y/\nmatch bad = /(/\n");
-        assert_eq!(errors.len(), 2, "{errors:#?}");
-        // `bad` stays declared (matching nothing) so its uses don't cascade.
+        let (c, errors, _) = parse_str("match /x/\nmatch ok /y/\nmatch bad /(/\nin ok {\n  match bad2 /(/\n  match after /z/\n}\nmatch last /w/\n");
+        assert_eq!(errors.len(), 3, "{errors:#?}");
+        // `bad` stays declared (matching nothing) so its uses don't cascade,
+        // and an error inside a block leaves the block's `}` alone.
         let names: Vec<&str> = c.matchers.iter().map(|m| m.name.text.as_str()).collect();
-        assert_eq!(names, vec!["ok", "bad"]);
+        assert_eq!(names, vec!["ok", "bad", "bad2", "after", "last"]);
+        assert!(c.matchers[4].parents.is_empty());
     }
 }

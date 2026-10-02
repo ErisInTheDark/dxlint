@@ -2,16 +2,18 @@
 
 import "std/core"
 
-lang toml = "*.toml"
+lang toml "*.toml" {
+  match brack
+  match brace
+}
 
-in .toml match brack
-in .toml match brace
+group toml_code .toml or brack or brace
 
-group toml_code = .toml | brack | brace
-
-in toml_code match toml_comment = /#/ * /$/
-in toml_code match toml_string3 = /"""/ * /"""/
-in toml_code match toml_literal3 = /'''/ * /'''/
-in toml_code match toml_string = /"/ * /"|$/
-in toml_code match toml_literal = /'/ * /'|$/
-in toml_string | toml_string3 match toml_escape = /\\(?:.|\n)/
+in toml_code {
+  match toml_comment /#/ until /$/
+  match toml_string3 /"""/ until /"""/
+  match toml_literal3 /'''/ until /'''/
+  match toml_string /"/ until /"|$/
+  match toml_literal /'/ until /'|$/
+}
+in toml_string or toml_string3 match toml_escape /\\(?:.|\n)/

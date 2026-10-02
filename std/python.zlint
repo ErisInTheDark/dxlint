@@ -3,17 +3,19 @@
 
 import "std/core"
 
-lang python = "*.py" | "*.pyi"
+lang python "*.py" or "*.pyi" {
+  match paren
+  match brack
+  match brace
+}
 
-in .python match paren
-in .python match brack
-in .python match brace
+group py_code .python or paren or brack or brace
 
-group py_code = .python | paren | brack | brace
-
-in py_code match py_comment = /#/ * /$/
-in py_code match py_string3 = /(?:\b[rRbBuUfF]{1,2})?"""/ * /"""/
-in py_code match py_sstring3 = /(?:\b[rRbBuUfF]{1,2})?'''/ * /'''/
-in py_code match py_string = /(?:\b[rRbBuUfF]{1,2})?"/ * /"|$/
-in py_code match py_sstring = /(?:\b[rRbBuUfF]{1,2})?'/ * /'|$/
-in py_string | py_sstring | py_string3 | py_sstring3 match py_escape = /\\(?:.|\n)/
+in py_code {
+  match py_comment /#/ until /$/
+  match py_string3 /(?:\b[rRbBuUfF]{1,2})?"""/ until /"""/
+  match py_sstring3 /(?:\b[rRbBuUfF]{1,2})?'''/ until /'''/
+  match py_string /(?:\b[rRbBuUfF]{1,2})?"/ until /"|$/
+  match py_sstring /(?:\b[rRbBuUfF]{1,2})?'/ until /'|$/
+}
+in py_string or py_sstring or py_string3 or py_sstring3 match py_escape /\\(?:.|\n)/

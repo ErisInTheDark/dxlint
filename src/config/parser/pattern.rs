@@ -1,6 +1,7 @@
 //! Matcher patterns: a sequence of items on one line (newlines are allowed
-//! inside parentheses). Items: `/regex/`, `"literal"`, matcher names,
-//! `label:item`, `:name`, `*`, `( a | b )`, and glued-on `? + *`.
+//! inside parentheses), ending at the line's end or at a `{` block. Items:
+//! `/regex/`, `"literal"`, matcher names, `label:item`, `:name`, `until`,
+//! `( a or b )`, and glued-on `? + *`.
 
 use super::super::error::ConfigError;
 use super::super::lexer::{decode_escapes, Tk, Token};
@@ -32,7 +33,7 @@ impl Parser<'_> {
 
     fn pat_alt(&mut self, depth: usize) -> Pat {
         let mut branches = vec![self.pat_seq(depth)];
-        while self.pat_peek(depth).is_some_and(|t| t.kind == Tk::Pipe) {
+        while self.pat_peek(depth).is_some_and(|t| is_or(&t)) {
             self.ts.next_raw();
             branches.push(self.pat_seq(depth));
         }
@@ -47,7 +48,7 @@ impl Parser<'_> {
         let mut items = Vec::new();
         loop {
             let Some(t) = self.pat_peek(depth) else { break };
-            if matches!(t.kind, Tk::Newline | Tk::Pipe | Tk::RParen | Tk::InvClose | Tk::RBrace) {
+            if is_or(&t) || matches!(t.kind, Tk::Newline | Tk::RParen | Tk::InvClose | Tk::LBrace | Tk::RBrace) {
                 break;
             }
             match self.pat_postfix(depth) {
@@ -55,7 +56,7 @@ impl Parser<'_> {
                 None => {
                     // Skip the rest of the pattern after an error.
                     while let Some(t) = self.pat_peek(depth) {
-                        if matches!(t.kind, Tk::Newline | Tk::RParen | Tk::InvClose | Tk::RBrace) {
+                        if matches!(t.kind, Tk::Newline | Tk::RParen | Tk::InvClose | Tk::LBrace | Tk::RBrace) {
                             break;
                         }
                         self.ts.next_raw();
@@ -110,7 +111,7 @@ impl Parser<'_> {
         };
         let q = self.ts.next_raw().expect("peeked");
         if matches!(atom, Pat::Skip) {
-            self.errors.push(ConfigError::new(q.span, "`*` cannot be repeated"));
+            self.errors.push(ConfigError::new(q.span, "`until` cannot be repeated"));
             return None;
         }
         let greedy = if self.glued(Tk::Question) {
@@ -153,7 +154,7 @@ impl Parser<'_> {
                     }
                 }
             }
-            Tk::Star => {
+            Tk::Ident if &*t.text == "until" => {
                 self.ts.next_raw();
                 Some(Pat::Skip)
             }
@@ -196,7 +197,7 @@ impl Parser<'_> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected a pattern item, found {}", t.describe()))
-                        .note("pattern items: /regex/, \"literal\", matcher names, label:item, :name, *, ( a | b )"),
+                        .note("pattern items: /regex/, \"literal\", matcher names, label:item, :name, until, ( a or b )"),
                 );
                 None
             }
@@ -207,6 +208,11 @@ impl Parser<'_> {
     pub(super) fn pattern_item(&mut self) -> Option<Pat> {
         self.pat_postfix(1)
     }
+}
+
+/// `or` between pattern branches (not a label `or:`).
+fn is_or(t: &Token) -> bool {
+    t.is_ident("or")
 }
 
 fn label(inner: Pat, name: &str) -> Pat {

@@ -13,7 +13,7 @@ pub struct Name {
 pub struct Config {
     pub langs: Vec<LangDef>,
     pub matchers: Vec<MatcherDef>,
-    pub formats: Vec<FormatDef>,
+    pub rules: Vec<RuleDef>,
     pub sets: Vec<SetDef>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
@@ -21,25 +21,23 @@ pub struct Config {
     pub indents: Vec<IndentDef>,
 }
 
-/// `in brace | fn.body indent`: lines inside these layers' `*` (or inside
-/// these fields) are one level deeper than the line the layer opened on.
+/// `in brace or fn.body indent`: lines inside these layers' `until` (or
+/// inside these fields) are one level deeper than the line the layer opened on.
 #[derive(Debug)]
 pub struct IndentDef {
     /// A layer or group, optionally narrowed to one of its fields.
     pub targets: Vec<(Parent, Option<Name>)>,
 }
 
-/// `group name = a | b` or `group name += c`: a named, extensible list of
-/// parent layers. `in name match x` attaches `x` to every member, including
-/// members added later.
+/// `group name a or b`: adds members to a named, open list of layers. Every
+/// `group name ...` line adds; `in name match x` reaches all of them.
 #[derive(Debug)]
 pub struct GroupDef {
     pub name: Name,
-    pub extend: bool,
     pub parents: Vec<Parent>,
 }
 
-/// `lang rust = "*.rs" | "*.rs.in"`
+/// `lang rust "*.rs" or "*.rs.in"`
 #[derive(Debug)]
 pub struct LangDef {
     pub name: Name,
@@ -55,7 +53,7 @@ pub enum Parent {
     Matcher(Name),
 }
 
-/// `[in|over A | B] match name [= pattern]`. Without a pattern it attaches
+/// `[in|over A or B] match name [pattern]`. Without a pattern it attaches
 /// an existing matcher to more parents.
 #[derive(Debug)]
 pub struct MatcherDef {
@@ -64,9 +62,9 @@ pub struct MatcherDef {
     /// `over`: searched across the parent's text without consuming it.
     pub overlay: bool,
     pub pattern: Option<(Pat, Span)>,
-    /// `match name like base = ...`: a specialisation of `base`. It gets all
+    /// `match name like base ...`: a specialisation of `base`. It gets all
     /// of `base`'s children and overlays, wins ties against it, and counts as
-    /// a `base` for formatters and ancestor lookups.
+    /// a `base` for rules and ancestor lookups.
     pub like: Option<Name>,
 }
 
@@ -105,14 +103,14 @@ impl Severity {
     pub const NAMES: &'static [&'static str] = &["off", "hint", "info", "warn", "error"];
 }
 
-/// What a formatter applies to.
+/// What a rule applies to (the context it is declared in).
 #[derive(Clone, Debug)]
 pub enum Target {
-    /// Every node of a matcher: `on fn`.
+    /// Every node of a matcher, or of each member of a group: `in fn rule`.
     Matcher(Name),
-    /// A labelled field of a matcher: `on fn.name`.
+    /// A labelled field of a matcher: `in fn.name rule`.
     Field(Name, Name),
-    /// The whole file of a language: `on .rust`; `on .*` for every language.
+    /// The whole file of a language: `in .rust rule`; `.*` for every language.
     Lang(Name),
 }
 
@@ -123,20 +121,22 @@ pub struct OptionDef {
     pub description: Option<String>,
 }
 
+/// `in target rule name [severity [message]] [fix expr] [{ clauses }]`
 #[derive(Debug)]
-pub struct FormatDef {
+pub struct RuleDef {
     pub name: Name,
-    /// `on a | b`: every layer (or field, or language) it applies to.
+    /// `in a or b`: every layer (or field, language, group) it applies to.
     pub targets: Vec<Target>,
-    pub description: Option<Expr>,
+    /// The severity keyword (`warn`, ...); the message follows it.
     pub severity: Option<Severity>,
+    pub message: Option<Expr>,
     pub options: Vec<OptionDef>,
     pub files: Vec<(String, Span)>,
     pub ignore: Vec<(String, Span)>,
     pub when: Vec<Expr>,
-    pub message: Option<Expr>,
-    /// What the node should look like. Different text => diagnostic + fix.
-    pub shape: Option<Expr>,
+    /// `fix expr`: what the node should look like. Different text =>
+    /// diagnostic + fix.
+    pub fix: Option<Expr>,
     /// Where diagnostics point (`report node | change | end`).
     pub report: Report,
 }
@@ -146,7 +146,7 @@ pub enum Report {
     /// The whole node.
     #[default]
     Node,
-    /// The part of the node the shape changes.
+    /// The part of the node the fix changes.
     Change,
     /// The (empty) end of the node: "missing X after", "too much before X".
     End,
@@ -158,7 +158,8 @@ pub enum SetValue {
     Expr(Expr),
 }
 
-/// `set rule.key = value`; `rule` may be a glob like `style-*`.
+/// `set rule.key value` or `set rule severity`; `rule` may be a glob like
+/// `style-*`.
 #[derive(Debug)]
 pub struct SetDef {
     pub target: Name,

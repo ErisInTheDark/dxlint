@@ -3,21 +3,25 @@
 
 import "std/core"
 
-lang zlint = "*.zlint"
+lang zlint "*.zlint" {
+  match paren
+  match brack
+  match brace
+}
 
-in .zlint match paren
-in .zlint match brack
-in .zlint match brace
+group zl_code .zlint or paren or brack or brace
 
-group zl_code = .zlint | paren | brack | brace
-
-in zl_code match zl_comment = /#/ * /$/
-in zl_code match zl_string = /"/ * /"/
-in zl_code match zl_sstring = /'/ * /'/
-in zl_string | zl_sstring match zl_escape = /\\(?:.|\n)/
+in zl_code {
+  match zl_comment /#/ until /$/
+  match zl_string /"/ until /"/
+  match zl_sstring /'/ until /'/
+}
+in zl_string or zl_sstring match zl_escape /\\(?:.|\n)/
 
 # Regex literals: `/` never means division in zlint.
-in zl_code match zl_regex = /\// * /\/|$/
-in zl_regex match zl_regex_escape = /\\./
-in zl_regex match zl_regex_class = /\[/ * /\]/
-in zl_regex_class match zl_regex_escape
+in zl_code match zl_regex /\// until /\/|$/ {
+  match zl_regex_escape /\\./
+  match zl_regex_class /\[/ until /\]/ {
+    match zl_regex_escape
+  }
+}

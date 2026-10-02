@@ -4,18 +4,20 @@
 
 import "std/core"
 
-lang c = "*.c" | "*.h" | "*.cc" | "*.cpp" | "*.cxx" | "*.hpp" | "*.hh" | "*.java" | "*.cs" | "*.go" | "*.kt" | "*.kts" | "*.swift" | "*.scala" | "*.dart"
+lang c "*.c" or "*.h" or "*.cc" or "*.cpp" or "*.cxx" or "*.hpp" or "*.hh" or "*.java" or "*.cs" or "*.go" or "*.kt" or "*.kts" or "*.swift" or "*.scala" or "*.dart" {
+  match paren
+  match brack
+  match brace
+}
 
-in .c match paren
-in .c match brack
-in .c match brace
+group c_code .c or paren or brack or brace
 
-group c_code = .c | paren | brack | brace
-
-in c_code match c_line_comment = /\/\// * /$/
-in c_code match c_block_comment = /\/\*/ * /\*\//
-in c_code match c_string3 = /"""/ * /"""/
-in c_code match c_string = /"/ * /"|$/
-in c_code match c_char = /'(?:\\.[^'\n]{0,8}|[^\\'\n])'/
-in c_code match c_raw = /`/ * /`/
-in c_string | c_string3 match c_escape = /\\(?:.|\n)/
+in c_code {
+  match c_line_comment /\/\// until /$/
+  match c_block_comment /\/\*/ until /\*\//
+  match c_string3 /"""/ until /"""/
+  match c_string /"/ until /"|$/
+  match c_char /'(?:\\.[^'\n]{0,8}|[^\\'\n])'/
+  match c_raw /`/ until /`/
+}
+in c_string or c_string3 match c_escape /\\(?:.|\n)/

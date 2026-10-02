@@ -1,4 +1,4 @@
-//! Formatter expressions: compiled once against a target layer (names
+//! Rule expressions: compiled once against a target layer (names
 //! resolved to fields, options and builtins), evaluated per node.
 
 pub mod case;
@@ -17,13 +17,13 @@ use crate::pattern::dfa::{is_decidable, Dfa};
 use functions::Function;
 pub use value::Value;
 
-/// Variables every formatter can use.
+/// Variables every rule can use.
 pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("text", "the node's text"),
     ("indent", "leading whitespace of the line the node starts on"),
     ("parent_indent", "leading whitespace of the line the node's layer starts on (empty for the file)"),
     ("parent_line", "the whole line the node's layer starts on (empty for the file)"),
-    ("indented", "the node's line starts inside the `*` of a layer declared with `in layer indent`"),
+    ("indented", "the node's line starts inside the `until` of a layer declared with `in layer indent`"),
     ("indent_anchor", "leading whitespace of the line that innermost `indent` layer opened on (empty when not indented)"),
     ("indent_anchor_line", "that whole opener line (empty when not indented)"),
     ("indent_closes", "this line starts with that layer's end (what follows its `*`), so it sits at the anchor"),
@@ -70,7 +70,7 @@ pub enum CExpr {
     TestDfa(Box<CExpr>, Box<Dfa>),
 }
 
-/// What names mean inside one formatter.
+/// What names mean inside one rule.
 pub struct Scope<'a> {
     pub grammar: &'a Grammar,
     /// Fields of the target node: label name -> label id.

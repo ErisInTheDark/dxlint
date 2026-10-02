@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::path::PathBuf;
 
-use super::{Formatter, Linter, OptionSlot, Target};
-use crate::config::ast::{FormatDef, SetValue, Severity, Target as AstTarget};
+use super::{Linter, OptionSlot, Rule, Target};
+use crate::config::ast::{Parent, RuleDef, SetValue, Severity, Target as AstTarget};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
@@ -15,7 +15,7 @@ use crate::path_globs::{wildcard, PathGlobs};
 use crate::pattern::Pat;
 
 pub struct Built {
-    /// Always built: broken matchers, formatters and settings are left out
+    /// Always built: broken matchers, rules and settings are left out
     /// (and reported in `errors`), so one mistake never turns linting off.
     /// Still an `Option` for existing callers.
     pub linter: Option<Linter>,
@@ -27,43 +27,42 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let Loaded { config, sources, mut errors } = loaded;
     let grammar = Grammar::build(&config, &mut errors);
 
-    let mut formatters: Vec<Formatter> = Vec::new();
+    let mut rules: Vec<Rule> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    // Formatters that failed to build: already reported, so settings aimed
-    // at them are quietly dropped instead of reported again.
+    // Rules that failed to build: already reported, so settings aimed at
+    // them are quietly dropped instead of reported again.
     let mut broken: Vec<&str> = Vec::new();
-    for def in &config.formats {
+    for def in &config.rules {
         // Checked by name, so a broken first definition still counts.
         if !seen.insert(def.name.text.as_str()) {
             errors.push(
-                ConfigError::new(def.name.span, format!("formatter `{}` is defined twice", def.name.text))
-                    .note("configure existing formatters with `set name.option = value`"),
+                ConfigError::new(def.name.span, format!("rule `{}` is defined twice", def.name.text))
+                    .note("configure existing rules with `set name.option value`"),
             );
             continue;
         }
-        match formatter(def, &grammar, &mut errors) {
-            Some(f) => formatters.push(f),
+        match rule(def, &grammar, &mut errors) {
+            Some(r) => rules.push(r),
             None => broken.push(&def.name.text),
         }
     }
 
     for set in &config.sets {
-        let matching: Vec<usize> =
-            (0..formatters.len()).filter(|&i| wildcard(&set.target.text, &formatters[i].name)).collect();
+        let matching: Vec<usize> = (0..rules.len()).filter(|&i| wildcard(&set.target.text, &rules[i].name)).collect();
         if matching.is_empty() && broken.iter().any(|name| wildcard(&set.target.text, name)) {
             continue;
         }
         if matching.is_empty() {
             errors.push(
-                ConfigError::new(set.target.span, format!("no formatter matches `{}`", set.target.text))
-                    .suggest(&set.target.text, formatters.iter().map(|f| f.name.as_str())),
+                ConfigError::new(set.target.span, format!("no rule matches `{}`", set.target.text))
+                    .suggest(&set.target.text, rules.iter().map(|f| f.name.as_str())),
             );
             continue;
         }
         let value = match &set.value {
             SetValue::Severity(s) => {
                 for &i in &matching {
-                    formatters[i].severity = *s;
+                    rules[i].severity = *s;
                 }
                 continue;
             }
@@ -81,7 +80,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         };
         let mut any = false;
         for &i in &matching {
-            let f = &mut formatters[i];
+            let f = &mut rules[i];
             if let Some(slot) = f.options.iter_mut().find(|o| o.name == set.key.text) {
                 any = true;
                 if !matches!(slot.default, Value::Null) && discriminant(&slot.default) != discriminant(&value) {
@@ -102,11 +101,11 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         }
         if !any {
             let names: Vec<&str> =
-                matching.iter().flat_map(|&i| formatters[i].options.iter().map(|o| o.name.as_str())).collect();
+                matching.iter().flat_map(|&i| rules[i].options.iter().map(|o| o.name.as_str())).collect();
             let mut err = ConfigError::new(set.key.span, format!("no option `{}` on `{}`", set.key.text, set.target.text))
-                .suggest(&set.key.text, names.iter().copied().chain(["severity"]));
+                .suggest(&set.key.text, names.iter().copied());
             if names.is_empty() {
-                err = err.note("this formatter has no options; `severity` can always be set");
+                err = err.note("this rule has no options; its severity can always be set (`set name off`)");
             }
             errors.push(err);
         }
@@ -134,10 +133,10 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let mut by_matcher = vec![Vec::new(); grammar.matchers.len()];
     let mut by_field: HashMap<(u32, u16), Vec<usize>> = HashMap::new();
     let mut by_lang = Vec::new();
-    for (i, f) in formatters.iter().enumerate() {
+    for (i, f) in rules.iter().enumerate() {
         for &target in &f.targets {
             match target {
-                // Formatters on a matcher also see its specialisations.
+                // Rules on a matcher also see its specialisations.
                 Target::Matcher(m) => {
                     for (x, list) in by_matcher.iter_mut().enumerate() {
                         if grammar.is_a(x as u32, m) && !list.contains(&i) {
@@ -151,7 +150,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         }
     }
     let linter =
-        Linter { reach: grammar.reach(), profile: None, grammar, formatters, sources: sources.clone(), root, ignores, by_matcher, by_field, by_lang };
+        Linter { reach: grammar.reach(), profile: None, grammar, rules, sources: sources.clone(), root, ignores, by_matcher, by_field, by_lang };
     Built { linter: Some(linter), errors, sources }
 }
 
@@ -188,15 +187,19 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
     out
 }
 
-fn formatter(def: &FormatDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<Formatter> {
+fn rule(def: &RuleDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<Rule> {
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
-        let (target, text) = resolve_target(t, g, errors)?;
-        targets.push(target);
+        let (resolved, text) = resolve_target(t, g, errors)?;
+        targets.extend(resolved);
         texts.push(text);
     }
-    let target_text = texts.join(" | ");
+    let target_text = texts.join(" or ");
+    if targets.is_empty() {
+        errors.push(ConfigError::new(def.name.span, format!("rule `{}` has nothing to check: its group is empty", def.name.text)));
+        return None;
+    }
 
     let before = errors.len();
     let mut options: Vec<OptionSlot> = Vec::new();
@@ -235,10 +238,9 @@ fn formatter(def: &FormatDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Opt
     let compile_all = |exprs: &[crate::config::ast::Expr], errors: &mut Vec<ConfigError>| -> Vec<CExpr> {
         exprs.iter().filter_map(|e| scope.compile(e, errors)).collect()
     };
-    let description = def.description.as_ref().and_then(|d| scope.compile(d, errors));
     let when = compile_all(&def.when, errors);
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
-    let shape = def.shape.as_ref().and_then(|s| scope.compile(s, errors));
+    let fix = def.fix.as_ref().and_then(|s| scope.compile(s, errors));
 
     let globs = |list: &[(String, crate::config::source::Span)], errors: &mut Vec<ConfigError>| {
         PathGlobs::new(list.iter().map(|(g, _)| g.as_str())).unwrap_or_else(|(glob, e)| {
@@ -253,27 +255,43 @@ fn formatter(def: &FormatDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Opt
     if errors.len() > before {
         return None;
     }
-    Some(Formatter {
+    Some(Rule {
         name: def.name.text.clone(),
         span: def.name.span,
         targets,
         target_text,
         severity: def.severity.unwrap_or(Severity::Warn),
         options,
-        description,
         files,
         ignore,
         when,
         message,
-        shape,
+        fix,
         report: def.report,
     })
 }
 
-fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<(Target, String)> {
+/// A rule target as engine targets (a group gives one per member), and how
+/// to show it.
+fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<(Vec<Target>, String)> {
     Some(match target {
         AstTarget::Matcher(name) => match g.matcher(&name.text) {
-            Some(m) => (Target::Matcher(m), name.text.clone()),
+            Some(m) => (vec![Target::Matcher(m)], name.text.clone()),
+            None if g.group(&name.text).is_some() => {
+                let mut out = Vec::new();
+                for member in g.group(&name.text).unwrap_or_default() {
+                    match member {
+                        Parent::Matcher(n) => match g.matcher(&n.text) {
+                            Some(m) => out.push(Target::Matcher(m)),
+                            // Unknown members are reported where the group attaches them.
+                            None => continue,
+                        },
+                        Parent::Lang(n) => out.extend(g.lang(&n.text).map(|l| Target::Lang(Some(l)))),
+                        Parent::AnyLang(_) => out.push(Target::Lang(None)),
+                    }
+                }
+                (out, name.text.clone())
+            }
             None => {
                 let mut err = ConfigError::new(name.span, format!("unknown matcher `{}`", name.text))
                     .suggest(&name.text, g.matchers.iter().map(|m| m.name.as_str()));
@@ -294,7 +312,7 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
             };
             let labels = g.matchers[m as usize].pat.labels();
             match g.labels.get(&field.text).filter(|_| labels.contains(&field.text)) {
-                Some(l) => (Target::Field(m, l), format!("{}.{}", layer.text, field.text)),
+                Some(l) => (vec![Target::Field(m, l)], format!("{}.{}", layer.text, field.text)),
                 None => {
                     errors.push(
                         ConfigError::new(field.span, format!("matcher `{}` has no field `{}`", layer.text, field.text))
@@ -304,9 +322,9 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
                 }
             }
         }
-        AstTarget::Lang(name) if name.text == "*" => (Target::Lang(None), ".*".into()),
+        AstTarget::Lang(name) if name.text == "*" => (vec![Target::Lang(None)], ".*".into()),
         AstTarget::Lang(name) => match g.lang(&name.text) {
-            Some(l) => (Target::Lang(Some(l)), format!(".{}", name.text)),
+            Some(l) => (vec![Target::Lang(Some(l))], format!(".{}", name.text)),
             None => {
                 errors.push(
                     ConfigError::new(name.span, format!("unknown language `.{}`", name.text))

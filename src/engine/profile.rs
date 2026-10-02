@@ -1,4 +1,4 @@
-//! `zlint --profile`: where linting time goes, per matcher and formatter.
+//! `zlint --profile`: where linting time goes, per matcher and rule.
 //! Counters are atomics so parallel lint threads share one profile.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,11 +10,12 @@ pub struct Profile {
     pub matcher_steps: Vec<AtomicU64>,
     /// Program runs per matcher (memoised calls and overlay attempts).
     pub matcher_runs: Vec<AtomicU64>,
-    /// Nanoseconds spent evaluating each formatter, and how often.
-    pub formatter_nanos: Vec<AtomicU64>,
-    pub formatter_evals: Vec<AtomicU64>,
+    /// Nanoseconds spent evaluating each rule, and how often.
+    pub rule_nanos: Vec<AtomicU64>,
+    pub rule_evals: Vec<AtomicU64>,
     pub parse_nanos: AtomicU64,
-    pub format_nanos: AtomicU64,
+    /// Time spent running rules, all together.
+    pub rules_nanos: AtomicU64,
 }
 
 fn counters(n: usize) -> Vec<AtomicU64> {
@@ -22,12 +23,12 @@ fn counters(n: usize) -> Vec<AtomicU64> {
 }
 
 impl Profile {
-    pub fn new(matchers: usize, formatters: usize) -> Profile {
+    pub fn new(matchers: usize, rules: usize) -> Profile {
         Profile {
             matcher_steps: counters(matchers),
             matcher_runs: counters(matchers),
-            formatter_nanos: counters(formatters),
-            formatter_evals: counters(formatters),
+            rule_nanos: counters(rules),
+            rule_evals: counters(rules),
             ..Profile::default()
         }
     }

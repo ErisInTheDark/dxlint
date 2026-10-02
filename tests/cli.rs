@@ -24,9 +24,10 @@ fn stdout(o: &Output) -> String {
 }
 
 const RULES: &str = r#"
-lang t = "*.t"
-in .t match shout = /\b[A-Z]{3,}\b/
-format no-shout on shout "`{text}` is shouting" = lower(text)
+lang t "*.t"
+in .t match shout /\b[A-Z]{3,}\b/ {
+  rule no-shout warn "`{text}` is shouting" fix lower(text)
+}
 "#;
 
 #[test]
@@ -34,7 +35,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
     let dir = project(
         "cli-basic",
         &[
-            ("zoomie.zlint", "import \"rules/shout\"\nset no-shout.severity = error\n"),
+            ("zoomie.zlint", "import \"rules/shout\"\nset no-shout error\n"),
             ("rules/shout.zlint", RULES),
             ("src/a.t", "fine LOUD\nquiet # zlint-ignore\nNOPE # zlint-ignore no-shout\n"),
         ],
@@ -58,17 +59,17 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 fn config_errors_point_into_the_imported_file() {
     let dir = project(
         "cli-config-error",
-        &[("zoomie.zlint", "import \"broken\"\n"), ("broken.zlint", "lang t = \"*.t\"\nformat x on nope \"x\"\n")],
+        &[("zoomie.zlint", "import \"broken\"\n"), ("broken.zlint", "lang t \"*.t\"\nin nope rule x\n")],
     );
     let out = zlint(&dir, &["check"]);
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("unknown matcher `nope`") && err.contains("broken.zlint:2:13"), "{err}");
+    assert!(err.contains("unknown matcher `nope`") && err.contains("broken.zlint:2:4"), "{err}");
 }
 
 #[test]
 fn a_broken_config_still_lints_with_what_works() {
-    let config = format!("{RULES}format x on nope \"x\"\nset no-shout.max = 3\n");
+    let config = format!("{RULES}in nope rule x\nset no-shout.max 3\n");
     let dir = project("cli-partly-broken", &[("zoomie.zlint", config.as_str()), ("a.t", "LOUD\n")]);
     let out = zlint(&dir, &["--format", "jsonl"]);
     // The errors are printed and fail the run, but the working rule ran.

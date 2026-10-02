@@ -8,12 +8,15 @@ use crate::config::source::Disk;
 use crate::config::{self, ast::Severity};
 
 const LANG: &str = r#"
-lang t = "*.t"
-match paren = /\(/ * /\)/
-in .t | paren match paren
-in .t | paren match str = /"/ * /"/
-in str match escape = /\\./
-in .t | paren match comment = /\/\// * /$/
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t or paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
 "#;
 
 fn linter(rules: &str) -> Linter {
@@ -43,8 +46,9 @@ fn spans<'a>(diags: &[Diagnostic], text: &'a str) -> Vec<&'a str> {
 #[test]
 fn strings_comments_and_escapes_hide_text_from_their_parent() {
     let l = linter(r#"
-        in .t | paren match todo = /TODO/
-        format no-todo on todo "no todos"
+        in .t or paren match todo /TODO/ {
+          rule no-todo warn "no todos"
+        }
     "#);
     let text = r#"TODO "TODO \" TODO" // TODO
 (x, "(", TODO)"#;
@@ -58,8 +62,8 @@ fn strings_comments_and_escapes_hide_text_from_their_parent() {
 #[test]
 fn nested_brackets_close_at_the_right_place() {
     let l = linter(r#"
-        in .t match call = name:/\w+/ :paren
-        format calls on call.paren "args" { message "{call.name}{text}" }
+        in .t match call name:/\w+/ :paren
+        in call.paren rule calls warn "{call.name}{text}"
     "#);
     let text = r#"f(")", g(x), "\")") + h()"#;
     let diags = lint(&l, text);
@@ -70,9 +74,9 @@ fn nested_brackets_close_at_the_right_place() {
 #[test]
 fn nested_layers_recurse_through_fields() {
     let l = linter(r#"
-        in .t | args match call = name:/\w+/ args:args
-        match args = /\(/ * /\)/
-        format each-call on call.name "call" { message "{text}" }
+        in .t or args match call name:/\w+/ args:args
+        match args /\(/ until /\)/
+        in call.name rule each-call warn "{text}"
     "#);
     let diags = lint(&l, "a(b(c()), d())");
     let names: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
@@ -80,10 +84,11 @@ fn nested_layers_recurse_through_fields() {
 }
 
 #[test]
-fn shapes_report_only_differences_and_fix_them() {
+fn fixes_report_only_differences_and_fix_them() {
     let l = linter(r#"
-        in .t | paren match param = name:/\w+/ /\s*:\s*/ ty:/\w+/
-        format colon on param "one space after `:`" = "{name}: {ty}"
+        in .t or paren match param name:/\w+/ /\s*:\s*/ ty:/\w+/ {
+          rule colon warn "one space after `:`" fix "{name}: {ty}"
+        }
     "#);
     let text = "(a:int, b: int, c  :  int)";
     let diags = lint(&l, text);
@@ -95,11 +100,11 @@ fn shapes_report_only_differences_and_fix_them() {
 }
 
 #[test]
-fn shapes_can_transform_text_with_functions() {
+fn fixes_can_transform_text_with_functions() {
     let l = linter(r#"
-        in .t match def = /fn /ws? name:/\w+/
-        match ws = /[ \t]+/
-        format snake on def.name "snake case" = snake_case(text)
+        in .t match def /fn /ws? name:/\w+/
+        match ws /[ \t]+/
+        in def.name rule snake warn "snake case" fix snake_case(text)
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "fn doThing fn ok_name fn HTTPServer");
     assert_eq!(fixed.text, "fn do_thing fn ok_name fn http_server");
@@ -108,18 +113,56 @@ fn shapes_can_transform_text_with_functions() {
 #[test]
 fn repeated_fields_are_lists() {
     let l = linter(r#"
-        in .t match use = /use \{/ item:/\w+/ (/, */ item:/\w+/)* /\}/
-        format sorted on use "sorted imports" = "use {{{join(sort(item), ', ')}}}"
+        in .t match use /use \{/ item:/\w+/ (/, */ item:/\w+/)* /\}/ {
+          rule sorted warn "sorted imports" fix "use {{{join(sort(item), ', ')}}}"
+        }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "use {b, c,a}");
     assert_eq!(fixed.text, "use {a, b, c}");
 }
 
 #[test]
+fn context_blocks_give_every_line_their_layers() {
+    let l = linter(r#"
+        in .t {
+          match kw /\bkw\b/ {
+            rule kw-rule info "keyword"
+            match kw_tail /!/
+          }
+          match brk /\[/ until /\]/ {
+            match word /\w+/ {
+              rule words warn "{text} in {parent}"
+            }
+          }
+        }
+        in kw_tail rule tails warn "tail"
+    "#);
+    let diags = lint(&l, "kw [a] x");
+    let got: Vec<(&str, &str)> = diags.iter().map(|d| (d.rule.as_str(), d.message.as_str())).collect();
+    // `kw` has no `!` after it, so `kw_tail` never matches inside it.
+    assert_eq!(got, vec![("kw-rule", "keyword"), ("words", "a in brk")]);
+    assert_eq!(diags[0].severity, Severity::Info);
+}
+
+#[test]
+fn rules_on_a_group_check_every_member() {
+    let l = linter(r#"
+        in .t match a /A/
+        in .t match b /B/
+        group ab a
+        group ab b
+        in ab rule letters warn "{text}"
+    "#);
+    let messages: Vec<String> = lint(&l, "A B C").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["A", "B"]);
+}
+
+#[test]
 fn overlays_see_text_that_layers_consumed() {
     let l = linter(r#"
-        over .t match trailing = /[ \t]+$/
-        format trailing-ws on trailing "trailing whitespace" = ""
+        over .t match trailing /[ \t]+$/ {
+          rule trailing-ws warn "trailing whitespace" fix ""
+        }
     "#);
     let text = "a  \n\"multi  \nline\" \n";
     let fixed = l.fix(Path::new("/root/file.t"), text);
@@ -127,11 +170,13 @@ fn overlays_see_text_that_layers_consumed() {
 }
 
 #[test]
-fn overlays_stay_searched_when_only_their_children_are_formatted() {
+fn overlays_stay_searched_when_only_their_children_are_checked() {
     let l = linter(r#"
-        over .t match line = /^[^\n]+/
-        in line match shout = /[A-Z]{3,}/
-        format no-shout on shout "quiet please"
+        over .t match line /^[^\n]+/ {
+          match shout /[A-Z]{3,}/ {
+            rule no-shout warn "quiet please"
+          }
+        }
     "#);
     assert_eq!(lint(&l, "ok\nNOPE x\n").len(), 1);
 }
@@ -139,10 +184,14 @@ fn overlays_stay_searched_when_only_their_children_are_formatted() {
 #[test]
 fn pair_filters_do_not_hide_real_matches() {
     let l = linter(r#"
-        in .t match raw = /\bb?r"/ * /"/
-        in .t match word = /\b[a-z]+\b/
-        format raw-str on raw "raw"
-        format words on word "word"
+        in .t {
+          match raw /\bb?r"/ until /"/ {
+            rule raw-str warn "raw"
+          }
+          match word /\b[a-z]+\b/ {
+            rule words warn "word"
+          }
+        }
     "#);
     let text = "for r\"x\" br\"y\" bar";
     let diags = lint(&l, text);
@@ -153,8 +202,9 @@ fn pair_filters_do_not_hide_real_matches() {
 #[test]
 fn unclosed_groups_fail_without_eating_the_rest_of_the_file() {
     let l = linter(r#"
-        in .t match call = name:/\w+/ :paren
-        format calls on call "call" { message "{name}" }
+        in .t match call name:/\w+/ :paren {
+          rule calls warn "{name}"
+        }
     "#);
     let diags = lint(&l, "a( b(1) c(2)");
     let names: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
@@ -164,10 +214,12 @@ fn unclosed_groups_fail_without_eating_the_rest_of_the_file() {
 #[test]
 fn lookbehind_tells_regex_literals_from_division() {
     let l = linter(r#"
-        in .t | paren match re = /(?<=(?:^|[=(,:!&|?{};]|\breturn)[ \t]*)\// * /\/[a-z]*/
-        in re match re_escape = /\\./
-        in .t | paren match word = /\bx\b/
-        format words on word "x"
+        in .t or paren match re /(?<=(?:^|[=(,:!&|?{};]|\breturn)[ \t]*)\// until /\/[a-z]*/ {
+          match re_escape /\\./
+        }
+        in .t or paren match word /\bx\b/ {
+          rule words warn "x"
+        }
     "#);
     // `a / x / b` is division: both `x`s are code. In the regex, `x` is hidden.
     let text = "a / x / b; f(/x\\/x/g); return /x/; y = c /x/ d";
@@ -180,8 +232,9 @@ fn lookbehind_tells_regex_literals_from_division() {
 #[test]
 fn lookahead_checks_without_consuming() {
     let l = linter(r#"
-        over .t match semi_line = /;(?=[ \t]*\r?\n[ \t]*\S)/
-        format no-semi on semi_line "semicolon before code" = ""
+        over .t match semi_line /;(?=[ \t]*\r?\n[ \t]*\S)/ {
+          rule no-semi warn "semicolon before code" fix ""
+        }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "a;\r\nb;\r\n\r\nc;\n");
     assert_eq!(fixed.text, "a\r\nb;\r\n\r\nc;\n");
@@ -190,26 +243,30 @@ fn lookahead_checks_without_consuming() {
 #[test]
 fn specialisations_inherit_children_and_win_ties() {
     let l = linter(r#"
-        match blk = /\{/ * /\}/
-        match obj like blk = /(?<==[ \t]*)\{/ * /\}/
-        in .t | blk match blk
-        in .t | blk match obj
-        in blk match item = /\w+/
-        format items on item "item" { message "{text} in {parent}" }
-        format blocks on blk "block" { message "{if before ~ /.*=\s*/ then 'object' else 'block'}" }
+        match blk /\{/ until /\}/
+        match obj like blk /(?<==[ \t]*)\{/ until /\}/
+        in .t or blk {
+          match blk
+          match obj
+        }
+        in blk match item /\w+/ {
+          rule items warn "{text} in {parent}"
+        }
+        in blk rule blocks warn "{if before ~ /.*=\s*/ then 'object' else 'block'}"
     "#);
     let text = "x = { a } { b }";
     let messages: Vec<String> = lint(&l, text).into_iter().map(|d| d.message).collect();
     // `{ a }` is an `obj` (it inherits `item` from `blk`, and the `blocks`
-    // formatter on `blk` sees it); `{ b }` is a plain `blk`.
+    // rule on `blk` sees it); `{ b }` is a plain `blk`.
     assert_eq!(messages, vec!["object", "a in obj", "block", "b in blk"]);
 }
 
 #[test]
 fn enclosing_sees_through_overlays_into_comments_and_strings() {
     let l = linter(r#"
-        over .t | paren match bad = /BAD/
-        format where on bad "x" { message "{enclosing}" }
+        over .t or paren match bad /BAD/ {
+          rule where warn "{enclosing}"
+        }
     "#);
     let messages: Vec<String> = lint(&l, "BAD // BAD\n(BAD \"BAD\")").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec![".t", "comment", "paren", "str"]);
@@ -221,10 +278,10 @@ fn report_points_at_node_change_or_end() {
     let span_for = |report: &str| {
         let l = linter(&format!(
             r#"
-            in .t match pair = /\w+ +\w+/
-            format one-space on pair "x" {{
+            in .t match pair /\w+ +\w+/
+            in pair rule one-space warn "x" {{
               report {report}
-              re_replace(text, / +/, " ")
+              fix re_replace(text, / +/, " ")
             }}
         "#
         ));
@@ -239,8 +296,9 @@ fn report_points_at_node_change_or_end() {
 #[test]
 fn parent_before_spans_lines_within_the_parent_only() {
     let l = linter(r#"
-        in paren match word = /\w+/
-        format w on word "x" { message "[{parent_before}]" }
+        in paren match word /\w+/ {
+          rule w warn "[{parent_before}]"
+        }
     "#);
     let messages: Vec<String> = lint(&l, "z (a\nb)").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["[(]", "[(a\n]"]);
@@ -250,8 +308,9 @@ fn parent_before_spans_lines_within_the_parent_only() {
 fn indent_follows_the_inside_of_declared_layers() {
     let l = linter(r#"
         in paren indent
-        over .t | paren match line = /^[ \t]*\S/
-        format ind on line "x" { message "[{if indented then indent_anchor else 'none'}|{indent_closes}|{indent_hangs}]" }
+        over .t or paren match line /^[ \t]*\S/ {
+          rule ind warn "[{if indented then indent_anchor else 'none'}|{indent_closes}|{indent_hangs}]"
+        }
     "#);
     let text = "x (\n  a (b,\n    c)\n)";
     let messages: Vec<String> = lint(&l, text).into_iter().map(|d| d.message).collect();
@@ -269,10 +328,11 @@ fn indent_follows_the_inside_of_declared_layers() {
 #[test]
 fn indent_can_target_a_field_only() {
     let l = linter(r#"
-        in .t match pair = /\[/ body:paren /\]/
+        in .t match pair /\[/ body:paren /\]/
         in pair.body indent
-        over .t | paren match line = /^[ \t]*\S/
-        format ind on line "x" { message "[{if indented then indent_anchor else 'none'}]" }
+        over .t or paren match line /^[ \t]*\S/ {
+          rule ind warn "[{if indented then indent_anchor else 'none'}]"
+        }
     "#);
     let text = "[(\na\n)] (\nb\n)";
     let messages: Vec<String> = lint(&l, text).into_iter().map(|d| d.message).collect();
@@ -281,15 +341,29 @@ fn indent_can_target_a_field_only() {
 }
 
 #[test]
+fn indent_inside_a_matcher_block_indents_that_matcher() {
+    let l = linter(r#"
+        in .t match blk /\[/ until /\]/ {
+          indent
+        }
+        over .t or blk match line /^[ \t]*\S/ {
+          rule ind warn "{indented}"
+        }
+    "#);
+    let messages: Vec<String> = lint(&l, "[\na\n]").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["false", "true", "true"]);
+}
+
+#[test]
 fn broken_parts_leave_the_rest_linting() {
     let src = format!(
         r#"{LANG}
-        in .t match bad = /x/ nope
-        in .t match w = /W/
-        format works on w "x" {{}}
-        format broken on missing "x" {{}}
-        set works.nope = 1
-        set broken.severity = error
+        in .t match bad /x/ nope
+        in .t match w /W/
+        in w rule works warn "x"
+        in missing rule broken warn "x"
+        set works.nope 1
+        set broken error
     "#
     );
     let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
@@ -303,10 +377,11 @@ fn broken_parts_leave_the_rest_linting() {
 #[test]
 fn a_mistake_in_a_macro_is_reported_once() {
     let errs = errors(r#"
-        macro bad = no_such_name
-        in .t match w = /\w+/
-        format a on w "x" { when bad }
-        format b on w "x" { when bad }
+        macro bad no_such_name
+        in .t match w /\w+/ {
+          rule a warn "x" { when bad }
+          rule b warn "x" { when bad }
+        }
     "#);
     assert_eq!(errs.len(), 1, "{errs:?}");
 }
@@ -314,8 +389,9 @@ fn a_mistake_in_a_macro_is_reported_once() {
 #[test]
 fn parent_indent_is_the_indentation_where_the_layer_opens() {
     let l = linter(r#"
-        in .t | paren match word = /\w+/
-        format w on word "x" { message "[{parent_indent}|{parent_line}]" }
+        in .t or paren match word /\w+/ {
+          rule w warn "[{parent_indent}|{parent_line}]"
+        }
     "#);
     let messages: Vec<String> = lint(&l, "  z (\n\t\ta\n)").into_iter().map(|d| d.message).collect();
     // `z` sits in the file (no indentation); `a` in a paren opened on an
@@ -326,8 +402,9 @@ fn parent_indent_is_the_indentation_where_the_layer_opens() {
 #[test]
 fn line_context_survives_nodes_ending_inside_crlf() {
     let l = linter(r#"
-        in .t match upto_cr = /x[^\n]*/
-        format ctx on upto_cr "x" { message "[{after}]" }
+        in .t match upto_cr /x[^\n]*/ {
+          rule ctx warn "[{after}]"
+        }
     "#);
     assert_eq!(lint(&l, "x a\r\nb")[0].message, "[]");
 }
@@ -335,10 +412,11 @@ fn line_context_survives_nodes_ending_inside_crlf() {
 #[test]
 fn regex_functions_and_line_context() {
     let l = linter(r#"
-        in .t match word = /\b[a-z]+\b/
-        format ctx on word "x" {
-          when re_test(default(next_line, ''), "^end") || prev_line == null
-          message "{text}|{before}|{after}|{re_replace(text, '([aeiou])', '<$1>')}"
+        in .t match word /\b[a-z]+\b/ {
+          rule ctx {
+            when re_test(default(next_line, ''), "^end") || prev_line == null
+            warn "{text}|{before}|{after}|{re_replace(text, '([aeiou])', '<$1>')}"
+          }
         }
     "#);
     let diags = lint(&l, "one two\nmid\nend");
@@ -349,9 +427,11 @@ fn regex_functions_and_line_context() {
 #[test]
 fn patterns_that_could_match_empty_never_produce_empty_nodes() {
     let l = linter(r#"
-        in .t match xs = /x*/
-        in .t match lazy = /y*?z?/
-        format found on xs | lazy "found" { message "{text}" }
+        in .t {
+          match xs /x*/
+          match lazy /y*?z?/
+        }
+        in xs or lazy rule found warn "{text}"
     "#);
     let diags = lint(&l, "a xx b yyz y");
     let found: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
@@ -362,12 +442,11 @@ fn patterns_that_could_match_empty_never_produce_empty_nodes() {
 #[test]
 fn longest_child_wins_and_ties_go_to_the_first() {
     let l = linter(r#"
-        in .t match short = /ab/
-        in .t match long = /abc/
-        in .t match tie = /abc/
-        format s on short "short"
-        format l on long "long"
-        format t on tie "tie"
+        in .t {
+          match short /ab/ { rule s warn "short" }
+          match long /abc/ { rule l warn "long" }
+          match tie /abc/ { rule t warn "tie" }
+        }
     "#);
     let diags = lint(&l, "abc ab");
     let rules: Vec<&str> = diags.iter().map(|d| d.rule.as_str()).collect();
@@ -375,15 +454,16 @@ fn longest_child_wins_and_ties_go_to_the_first() {
 }
 
 #[test]
-fn options_defaults_sets_and_descriptions() {
+fn options_defaults_sets_and_messages() {
     let l = linter(r#"
-        over .t match line = /^[^\n]+/
-        format long-line on line "max {max}" {
-          option max = 10 "max chars"
-          when len(text) > max
+        over .t match line /^[^\n]+/ {
+          rule long-line warn "max {max}" {
+            option max 10 "max chars"
+            when len(text) > max
+          }
         }
-        set long-line.max = 5
-        set long-line.severity = error
+        set long-line.max 5
+        set long-line error
     "#);
     let diags = lint(&l, "123456\n12345\n");
     assert_eq!(diags.len(), 1);
@@ -394,8 +474,8 @@ fn options_defaults_sets_and_descriptions() {
 #[test]
 fn ancestors_and_builtins_are_visible_from_fields() {
     let l = linter(r#"
-        in .t match fun = /fn /name:/\w+/ :paren
-        format where on fun.paren "x" { message "{fun.name}@{line}:{col} [{indent}]" }
+        in .t match fun /fn /name:/\w+/ :paren
+        in fun.paren rule where warn "{fun.name}@{line}:{col} [{indent}]"
     "#);
     let diags = lint(&l, "x\n  fn go(a)");
     assert_eq!(diags[0].message, "go@2:8 [  ]");
@@ -404,10 +484,11 @@ fn ancestors_and_builtins_are_visible_from_fields() {
 #[test]
 fn value_tests_match_whole_values() {
     let l = linter(r#"
-        match snake = /[a-z_][a-z0-9_]*/
-        in .t match word = /\w+/
-        format not-snake on word "x" { when !(text ~ snake) }
-        format has-digit on word "y" { when text ~ /.*\d.*/ }
+        match snake /[a-z_][a-z0-9_]*/
+        in .t match word /\w+/ {
+          rule not-snake warn "x" { when !(text ~ snake) }
+          rule has-digit warn "y" { when text ~ /.*\d.*/ }
+        }
     "#);
     let diags = lint(&l, "ok Bad x1");
     let got: Vec<(&str, &str)> = diags.iter().map(|d| (d.rule.as_str(), &"ok Bad x1"[d.start..d.end])).collect();
@@ -418,8 +499,9 @@ fn value_tests_match_whole_values() {
 fn macros_generate_rules() {
     let l = linter(r#"
         macro forbid(name, pat, why) {
-          in .t match name = pat
-          format name on name why { severity error }
+          in .t match name pat {
+            rule name error why
+          }
         }
         forbid(dbg, "dbg!", "remove dbg! calls")
         forbid(todo_macro, "todo!", "finish this")
@@ -427,15 +509,17 @@ fn macros_generate_rules() {
     let diags = lint(&l, "dbg!(x); todo!()");
     let got: Vec<(&str, &str)> = diags.iter().map(|d| (d.rule.as_str(), d.message.as_str())).collect();
     assert_eq!(got, vec![("dbg", "remove dbg! calls"), ("todo_macro", "finish this")]);
+    assert_eq!(diags[0].severity, Severity::Error);
 }
 
 #[test]
 fn language_gates_keep_children_out_of_other_languages() {
     let l = linter(r#"
-        lang u = "*.u"
-        in .u | paren match ustr = /'/ * /'/
-        in .t | .u match word = /\bword\b/
-        format w on word "word"
+        lang u "*.u"
+        in .u or paren match ustr /'/ until /'/
+        in .t or .u match word /\bword\b/ {
+          rule w warn "word"
+        }
     "#);
     // In `.t`, `'` is not a string, so `word` is visible.
     assert_eq!(l.lint(Path::new("/root/a.t"), "'word'").len(), 1);
@@ -445,8 +529,9 @@ fn language_gates_keep_children_out_of_other_languages() {
 #[test]
 fn ignore_comments_suppress() {
     let l = linter(r#"
-        in .t match x = /X/
-        format no-x on x "no x"
+        in .t match x /X/ {
+          rule no-x warn "no x"
+        }
     "#);
     let diags = lint(&l, "// zlint-ignore\nX\nX // zlint-ignore other\nX // zlint-ignore no-x\n");
     assert_eq!(diags.len(), 1);
@@ -456,11 +541,13 @@ fn ignore_comments_suppress() {
 fn file_and_ignore_globs() {
     let l = linter(r#"
         ignore "vendor"
-        in .t match x = /X/
-        format no-x on x "no x" { ignore "tests/**" }
+        in .t match x /X/ {
+          rule no-x warn "no x" { ignore "tests/**" or "other/**" }
+        }
     "#);
     assert_eq!(l.lint(Path::new("/root/src/a.t"), "X").len(), 1);
     assert_eq!(l.lint(Path::new("/root/tests/a.t"), "X").len(), 0);
+    assert_eq!(l.lint(Path::new("/root/other/a.t"), "X").len(), 0);
     assert_eq!(l.lint(Path::new("/root/vendor/a.t"), "X").len(), 0);
     assert_eq!(l.lint(Path::new("/root/src/a.txt"), "X").len(), 0);
 }
@@ -468,9 +555,9 @@ fn file_and_ignore_globs() {
 #[test]
 fn whole_file_targets() {
     let l = linter(r#"
-        format header on .t "files start with a header" {
+        in .t rule header warn "files start with a header" {
           when !starts_with(text, "// header")
-          "// header\n" + text
+          fix "// header\n" + text
         }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "body\n");
@@ -480,8 +567,9 @@ fn whole_file_targets() {
 #[test]
 fn runtime_failures_become_visible_diagnostics() {
     let l = linter(r#"
-        in .t match x = /X+/
-        format boom on x "x" { when num(text) > 1 }
+        in .t match x /X+/ {
+          rule boom warn "x" { when num(text) > 1 }
+        }
     "#);
     let diags = lint(&l, "XX");
     assert_eq!(diags[0].severity, Severity::Error);
@@ -491,13 +579,13 @@ fn runtime_failures_become_visible_diagnostics() {
 #[test]
 fn config_errors_explain_themselves() {
     let errs = errors(r#"
-        in .t match a = parn
-        match empty = /^(?=x)/
-        in .t match loop = loop2 /x/
-        match loop2 = loop /y/
-        format f on nope "x"
-        format g on a.missing "x"
-        set nobody.severity = off
+        in .t match a parn
+        match empty /^(?=x)/
+        in .t match loop loop2 /x/
+        match loop2 loop /y/
+        in nope rule f warn "x"
+        in a.missing rule g warn "x"
+        set nobody off
     "#);
     let all = errs.join("\n");
     assert!(all.contains("unknown matcher `parn`") && all.contains("did you mean `paren`?"), "{all}");
@@ -505,16 +593,17 @@ fn config_errors_explain_themselves() {
     assert!(all.contains("left recursion"), "{all}");
     assert!(all.contains("unknown matcher `nope`"), "{all}");
     assert!(all.contains("no field `missing`"), "{all}");
-    assert!(all.contains("no formatter matches `nobody`"), "{all}");
+    assert!(all.contains("no rule matches `nobody`"), "{all}");
 }
 
 #[test]
 fn a_broken_pattern_is_one_error_not_one_per_use() {
     let errs = errors(r#"
-        in .t match broken = /(/
-        in broken match a = /a/
-        in broken match b = /b/
-        format f on broken "x"
+        in .t match broken /(/ {
+          match a /a/
+          match b /b/
+          rule f warn "x"
+        }
     "#);
     assert_eq!(errs.len(), 1, "{errs:#?}");
 }
@@ -522,9 +611,10 @@ fn a_broken_pattern_is_one_error_not_one_per_use() {
 #[test]
 fn option_types_are_checked() {
     let errs = errors(r#"
-        in .t match x = /X/
-        format f on x "x" { option max = 3 }
-        set f.max = "three"
+        in .t match x /X/ {
+          rule f warn "x" { option max 3 }
+        }
+        set f.max "three"
     "#);
     assert!(errs.iter().any(|e| e.contains("is a num")), "{errs:?}");
 }
@@ -541,8 +631,9 @@ fn std_library_parses_and_lints() {
         import "std/toml"
         import "std/whitespace"
         import "std/rust"
-        in rs_code match dbg = /\bdbg!/
-        format no-dbg on dbg "no dbg"
+        in rs_code match dbg /\bdbg!/ {
+          rule no-dbg warn "no dbg"
+        }
     "#;
     let built = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);

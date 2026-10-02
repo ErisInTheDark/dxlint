@@ -9,10 +9,10 @@ import "std/rust"
 
 # A layer: function names, found anywhere in Rust code (never in strings
 # or comments, because those are layers of their own).
-in rs_code match rs_fn = /\bfn[ \t]+/ name:ident
+in rs_code match rs_fn /\bfn[ \t]+/ name:ident
 
-# A formatter: what the text should look like. Different => diagnostic + fix.
-format fn-snake-case on rs_fn.name "`{text}` should be snake_case" = snake_case(text)
+# A rule: what the text should look like. Different => diagnostic + fix.
+in rs_fn.name rule fn-snake-case warn "`{text}` should be snake_case" fix snake_case(text)
 ```
 
 ```
@@ -27,15 +27,15 @@ warn: `doThing` should be snake_case [fn-snake-case] (fixable)
 ## Why
 
 - **Two ideas, small language.** *Matchers* build layers out of regexes, and
-  *formatters* say what a layer should look like. Everything else is
+  *rules* say what a layer should look like. Everything else is
   configuration (`set`), reuse (`import`, `macro`) and file selection.
 - **Brackets, quotes and escapes come for free.** A string is a layer whose
   escapes are child layers. A bracket group is a layer whose nested groups and
-  strings are child layers. `*` skips over children whole, so
+  strings are child layers. `until` skips over children whole, so
   `f(")", g(x))` closes at the right paren without any special rules.
-- **Formatting can do anything.** A formatter's shape is an expression:
-  rename identifiers, sort lists, reorder fields, delete code, add headers.
-  If the shape differs from the text, that is the diagnostic, and the fix.
+- **Fixes can do anything.** A rule's fix is an expression: rename
+  identifiers, sort lists, reorder fields, delete code, add headers. If the
+  fix differs from the text, that is the diagnostic, and the fix.
 - **Fast.** Pure-regex layers compile to lazy DFAs. Everything else runs on a
   memoised linear-time backtracker with prefilters, two-byte start filters and
   skip fast-forwarding, and files are linted in parallel. See
@@ -54,8 +54,8 @@ the current directory, and paths in it are relative to its directory.
 import "std/rust"
 import "std/whitespace"
 
-set max-line-length.max = 100
-ignore "vendor" | "src/generated/**"
+set max-line-length.max 100
+ignore "vendor" or "src/generated/**"
 ```
 
 | command | |
@@ -65,7 +65,7 @@ ignore "vendor" | "src/generated/**"
 | `zlint --format jsonl` | one JSON diagnostic per line, streamed as files finish |
 | `zlint --stats` | timing and throughput |
 | `zlint check` | validate the config only |
-| `zlint rules` | list formatters with severities, options and descriptions |
+| `zlint rules` | list rules with severities, options and messages |
 | `zlint tree <file>` | print the layer tree (handy while writing matchers) |
 | `zlint functions` | list expression functions and variables |
 | `zlint lsp` | language server on stdio |
@@ -78,34 +78,39 @@ The full reference is [docs/language.md](docs/language.md). The short
 version:
 
 ```zlint
-lang rust = "*.rs"                                  # .rust: the root layer of Rust files
+lang rust "*.rs" {                                  # .rust: the root layer of Rust files
+  match paren                                       # lines in a block share its context
+  match rs_string /"/ until /"/                     # a layer: `"`, skip, `"`
+}
+match paren /\(/ until /\)/
+in paren {
+  match paren                                       # parens nest
+  match rs_string                                   # strings live in parens too
+  indent                                            # lines inside parens are indented
+}
+in rs_string match rs_escape /\\./                  # escapes live in strings
 
-match paren = /\(/ * /\)/                           # a layer: `(`, skip, `)`
-in .rust | paren match paren                        # parens nest
-in .rust | paren match rs_string = /"/ * /"/        # strings live in code and parens
-in rs_string match rs_escape = /\\./                # escapes live in strings
-
-in .rust match call = name:/\w+/ args:paren         # fields: call.name, call.args
-over .* match trailing_ws = /[ \t]+$/               # overlays see all text
-
-format no-trailing-ws on trailing_ws "no trailing whitespace" = ""
-
-format long-calls on call.args "keep calls short" {
-  option max = 80 "longest allowed argument list"
-  when len(text) > max
-  message "`{call.name}` has {len(text)} characters of arguments"
+in .rust match call name:/\w+/ args:paren           # fields: call.name, call.args
+over .* match trailing_ws /[ \t]+$/ {               # overlays see all text
+  rule no-trailing-ws warn "no trailing whitespace" fix ""
 }
 
-set long-calls.max = 120                            # configure existing rules
+in call.args rule long-calls {
+  option max 80 "longest allowed argument list"
+  when len(text) > max
+  warn "`{call.name}` has {len(text)} characters of arguments"
+}
+
+set long-calls.max 120                              # configure existing rules
+set long-calls error
 ```
 
-Layers can be specialised (`match js_object like brace = ...` wins ties
-against plain braces and is still a `brace` to rules), collected into open
-groups (`group js_code += js_stmt`), and declared as indenting (`in paren |
-brace indent`), so an indentation rule only decides units and continuation
-lines. Regexes support lookahead and lookbehind, and formatter expressions
-have line context (`prev_line`, `parent_before`, `indent_anchor`, ...) and
-`re_*` functions.
+Layers can be specialised (`match js_object like brace ...` wins ties against
+plain braces and is still a `brace` to rules), collected into open groups
+(`group js_code js_stmt` adds to `js_code`), and declared as indenting, so an
+indentation rule only decides units and continuation lines. Regexes support
+lookahead and lookbehind, and rule expressions have line context
+(`prev_line`, `parent_before`, `indent_anchor`, ...) and `re_*` functions.
 
 A config with mistakes still lints with every part that built: the errors
 are reported, and the run fails, but one typo never switches linting off.
@@ -159,7 +164,7 @@ Where the speed comes from:
 3. **Cheap rejection.** First-byte sets, a 64K-bit table of possible first
    two bytes, and `*` fast-forwarding to the next byte where anything could
    start.
-4. **Only what is needed.** Overlays nobody formats are never searched,
+4. **Only what is needed.** Overlays no rule looks at are never searched,
    expression values borrow from the source instead of copying, and warm DFA
    caches are pooled across files.
 
@@ -170,8 +175,8 @@ Where the speed comes from:
 | `src/config` | lexer, macro/import token stream, parser, embedded std |
 | `src/pattern` | pattern AST, regex parser, compiler, DFA bridge, prefilters |
 | `src/grammar` | layers per language, the parser that builds trees |
-| `src/expr` | formatter expressions, values, functions |
-| `src/engine` | the linter: formatters, fixes, suppressions |
+| `src/expr` | rule expressions, values, functions |
+| `src/engine` | the linter: rules, fixes, suppressions |
 | `src/cli`, `src/lsp` | the binary |
 | `std/` | the standard library (`import "std/..."`) |
 | `editors/vscode` | VS Code extension |

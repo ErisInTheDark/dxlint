@@ -9,12 +9,12 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 const CONFIG: &str = r#"
-lang t = "*.t"
-match paren = /\(/ * /\)/
-in .t | paren match paren
-in .t | paren match str = /"/ * /"/
-in .t match bad = /\bBAD\b/
-format no-bad on bad "no BAD here" = "good"
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t or paren match paren
+in .t or paren match str /"/ until /"/
+in .t match bad /\bBAD\b/
+in bad rule no-bad warn "no BAD here" fix "good"
 "#;
 
 struct Client {
@@ -283,7 +283,7 @@ fn config_errors_show_up_in_the_config_and_recover() {
     assert_eq!(c.diagnostics_for(&file).len(), 1);
 
     // A broken unsaved config reports in place.
-    let broken = CONFIG.replace("format no-bad on bad", "format no-bad on bas");
+    let broken = CONFIG.replace("in bad rule", "in bas rule");
     c.notify(
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": uri(&config), "languageId": "zlint", "version": 1, "text": broken } }),

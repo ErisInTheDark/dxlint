@@ -10,35 +10,42 @@ import "std/whitespace"
 ignore "examples"
 
 # Long lines are a judgement call here, not a rule.
-set max-line-length.severity = off
-set tab-indent.severity = warn
+set max-line-length off
+set tab-indent warn
 
 # ---- rust ---------------------------------------------------------------
 
-in rs_code match rs_dbg = /\bdbg!/
-format no-dbg on rs_dbg "remove `dbg!` before committing" { severity error }
-
-in rs_code match rs_unfinished = /\b(?:todo|unimplemented)!/
-format no-unfinished on rs_unfinished "`{text}` panics at runtime; finish this code" { severity error }
-
-# Test modules are a layer, so rules can ask whether they are inside one.
-in .rust | brace match rs_test_mod = /#\[cfg\(test\)\]\s*mod\s+\w+\s*/ body:brace
-in rs_code match rs_unwrap = /\.unwrap\(\)/
-format no-unwrap on rs_unwrap "`.unwrap()` outside tests; use `?` or `.expect(\"why\")`" {
-  ignore "tests.rs" | "tests/**"
-  when rs_test_mod == null
+in rs_code {
+  match rs_dbg /\bdbg!/ {
+    rule no-dbg error "remove `dbg!` before committing"
+  }
+  match rs_unfinished /\b(?:todo|unimplemented)!/ {
+    rule no-unfinished error "`{text}` panics at runtime; finish this code"
+  }
 }
 
-in rs_code match rs_fn = /\bfn[ \t]+/ name:ident
-format fn-snake-case on rs_fn.name "function names are snake_case" = snake_case(text)
+# Test modules are a layer, so rules can ask whether they are inside one.
+in .rust or brace match rs_test_mod /#\[cfg\(test\)\]\s*mod\s+\w+\s*/ body:brace
+in rs_code match rs_unwrap /\.unwrap\(\)/ {
+  rule no-unwrap {
+    when rs_test_mod == null
+    warn "`.unwrap()` outside tests; use `?` or `.expect(\"why\")`"
+    ignore "tests.rs" or "tests/**"
+  }
+}
 
-in rs_line_comment | rs_block_comment match todo_note = /\b(?:TODO|FIXME|XXX)\b/
-format todo-comment on todo_note "{text} left in a comment" { severity info }
+in rs_code match rs_fn /\bfn[ \t]+/ name:ident
+in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_case(text)
+
+in rs_line_comment or rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
+  rule todo-comment info "{text} left in a comment"
+}
 
 # ---- zlint --------------------------------------------------------------
 
-in .zlint match zl_format = /^format[ \t]+/ name:/[\w-]+/
-format formatter-names on zl_format.name "formatter names are kebab-case" = kebab_case(text)
-
-in .zlint match zl_matcher = /^(?:(?:in|over)[ \t][^\n]*?)?\bmatch[ \t]+/ name:/[\w-]+/
-format matcher-names on zl_matcher.name "matcher names are snake_case" = snake_case(text)
+in zl_code {
+  match zl_rule /\brule[ \t]+/ name:/[\w-]+/
+  match zl_matcher /\bmatch[ \t]+/ name:/\w+/
+}
+in zl_rule.name rule rule-names warn "rule names are kebab-case" fix kebab_case(text)
+in zl_matcher.name rule matcher-names warn "matcher names are snake_case" fix snake_case(text)

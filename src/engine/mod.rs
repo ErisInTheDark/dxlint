@@ -1,4 +1,4 @@
-//! The linter: a compiled grammar plus formatters, run over files.
+//! The linter: a compiled grammar plus rules, run over files.
 
 mod build;
 pub mod diagnostic;
@@ -35,46 +35,46 @@ pub struct OptionSlot {
 pub enum Target {
     Matcher(u32),
     Field(u32, u16),
-    /// `None` = every language (`on .*`).
+    /// `None` = every language (`in .*`).
     Lang(Option<usize>),
 }
 
-pub struct Formatter {
+pub struct Rule {
     pub name: String,
     pub span: Span,
     pub targets: Vec<Target>,
     pub target_text: String,
     pub severity: Severity,
     pub options: Vec<OptionSlot>,
-    description: Option<CExpr>,
     files: PathGlobs,
     ignore: PathGlobs,
     when: Vec<CExpr>,
     message: Option<CExpr>,
-    shape: Option<CExpr>,
+    /// What the node should look like (`fix expr`).
+    fix: Option<CExpr>,
     report: Report,
 }
 
-impl Formatter {
+impl Rule {
     fn option_values(&self) -> Vec<Value<'static>> {
         self.options.iter().map(|o| o.value.clone()).collect()
     }
 
-    /// The description with current option values filled in; holes that
-    /// need a node (`{text}`) stay as written.
-    pub fn description(&self) -> Option<String> {
-        Some(Ctx::display(self.description.as_ref()?, &self.option_values()))
+    /// The message with current option values filled in; holes that need a
+    /// node (`{text}`) stay as written.
+    pub fn message_template(&self) -> Option<String> {
+        Some(Ctx::display(self.message.as_ref()?, &self.option_values()))
     }
 
     pub fn has_fix(&self) -> bool {
-        self.shape.is_some()
+        self.fix.is_some()
     }
 
     fn applies_to(&self, rel: &Path, lang: usize) -> bool {
         if self.severity == Severity::Off {
             return false;
         }
-        // A formatter only on other languages' files has nothing to do here.
+        // A rule only on other languages' files has nothing to do here.
         if self.targets.iter().all(|t| matches!(t, Target::Lang(Some(l)) if *l != lang)) {
             return false;
         }
@@ -84,7 +84,7 @@ impl Formatter {
 
 pub struct Linter {
     pub grammar: Grammar,
-    pub formatters: Vec<Formatter>,
+    pub rules: Vec<Rule>,
     pub sources: std::sync::Arc<SourceMap>,
     /// Paths are matched relative to this (the config file's directory).
     pub root: PathBuf,
@@ -95,14 +95,14 @@ pub struct Linter {
     pub profile: Option<Profile>,
     by_matcher: Vec<Vec<usize>>,
     by_field: HashMap<(u32, u16), Vec<usize>>,
-    /// Whole-file formatters and the language they want (`None`: any).
+    /// Whole-file rules and the language they want (`None`: any).
     by_lang: Vec<(usize, Option<usize>)>,
 }
 
 impl Linter {
     /// Collect `--profile` counters from now on.
     pub fn enable_profile(&mut self) {
-        self.profile = Some(Profile::new(self.grammar.matchers.len(), self.formatters.len()));
+        self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len()));
     }
 
     pub fn relative<'p>(&self, path: &'p Path) -> std::borrow::Cow<'p, Path> {
@@ -128,14 +128,14 @@ impl Linter {
             return Vec::new();
         }
         let Some(lang) = self.grammar.lang_for(&rel) else { return Vec::new() };
-        let active: Vec<bool> = self.formatters.iter().map(|f| f.applies_to(&rel, lang)).collect();
+        let active: Vec<bool> = self.rules.iter().map(|f| f.applies_to(&rel, lang)).collect();
         if !active.iter().any(|a| *a) {
             return Vec::new();
         }
 
-        // Overlays only matter when an active formatter can see inside them.
+        // Overlays only matter when an active rule can see inside them.
         let mut targets = vec![false; self.grammar.matchers.len()];
-        for (f, _) in self.formatters.iter().zip(&active).filter(|(_, a)| **a) {
+        for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
             for t in &f.targets {
                 if let Target::Matcher(m) | Target::Field(m, _) = *t {
                     targets[m as usize] = true;
@@ -145,13 +145,13 @@ impl Linter {
         let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
         let parse_started = std::time::Instant::now();
         let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
-        let format_started = std::time::Instant::now();
+        let rules_started = std::time::Instant::now();
         if let Some(p) = &self.profile {
-            Profile::add_time(&p.parse_nanos, format_started - parse_started);
+            Profile::add_time(&p.parse_nanos, rules_started - parse_started);
         }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
-        let options: Vec<Vec<Value<'static>>> = self.formatters.iter().map(Formatter::option_values).collect();
+        let options: Vec<Vec<Value<'static>>> = self.rules.iter().map(Rule::option_values).collect();
         let mut out = Vec::new();
 
         for &id in &tree.order {
@@ -160,12 +160,12 @@ impl Linter {
                 if active[fi] {
                     let ctx = Ctx { grammar: &self.grammar, lang, tree: &tree, node: id, source: text, lines: &lines, file: &file, options: &options[fi] };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
-                    if let Some(d) = self.apply(&self.formatters[fi], &ctx) {
+                    if let Some(d) = self.apply(&self.rules[fi], &ctx) {
                         out.push(d);
                     }
                     if let (Some(p), Some(s)) = (&self.profile, started) {
-                        Profile::add_time(&p.formatter_nanos[fi], s.elapsed());
-                        Profile::add(&p.formatter_evals[fi], 1);
+                        Profile::add_time(&p.rule_nanos[fi], s.elapsed());
+                        Profile::add(&p.rule_evals[fi], 1);
                     }
                 }
             };
@@ -194,7 +194,7 @@ impl Linter {
         }
 
         if let Some(p) = &self.profile {
-            Profile::add_time(&p.format_nanos, format_started.elapsed());
+            Profile::add_time(&p.rules_nanos, rules_started.elapsed());
         }
         let suppressions = Suppressions::parse(text, &lines);
         if !suppressions.is_empty() {
@@ -205,13 +205,13 @@ impl Linter {
         out
     }
 
-    fn apply(&self, f: &Formatter, ctx: &Ctx) -> Option<Diagnostic> {
+    fn apply(&self, f: &Rule, ctx: &Ctx) -> Option<Diagnostic> {
         let node = ctx.tree.node(ctx.node);
         let (start, end) = (node.start as usize, node.end as usize);
         let failed = |e: String| Diagnostic {
             rule: f.name.clone(),
             severity: Severity::Error,
-            message: format!("formatter `{}` failed here: {e}", f.name),
+            message: format!("rule `{}` failed here: {e}", f.name),
             start,
             end,
             fix: None,
@@ -223,8 +223,8 @@ impl Linter {
                 Err(e) => return Some(failed(e)),
             }
         }
-        let fix = match &f.shape {
-            Some(shape) => match ctx.eval(shape) {
+        let fix = match &f.fix {
+            Some(expr) => match ctx.eval(expr) {
                 Ok(v) => {
                     let want = v.text();
                     if want == ctx.source[start..end] {
@@ -242,8 +242,7 @@ impl Linter {
             _ => (start, end),
         };
         let fix = fix.map(|edit| vec![edit]);
-        // The description doubles as the default message.
-        let message = match f.message.as_ref().or(f.description.as_ref()) {
+        let message = match &f.message {
             Some(m) => match ctx.eval(m) {
                 Ok(v) => v.text().into_owned(),
                 Err(e) => return Some(failed(e)),

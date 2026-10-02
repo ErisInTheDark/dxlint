@@ -42,7 +42,7 @@ pub struct LintArgs {
     /// Print timing and throughput
     #[arg(long)]
     pub stats: bool,
-    /// Report which matchers and formatters cost the most time
+    /// Report which matchers and rules cost the most time
     #[arg(long)]
     pub profile: bool,
     #[command(flatten)]
@@ -64,7 +64,7 @@ enum Command {
         #[command(flatten)]
         config: ConfigArg,
     },
-    /// List formatters with their severity, options and descriptions
+    /// List rules with their severity, options and messages
     Rules {
         #[command(flatten)]
         config: ConfigArg,
@@ -78,7 +78,7 @@ enum Command {
         #[command(flatten)]
         config: ConfigArg,
     },
-    /// List the functions available in formatter expressions
+    /// List the functions available in rule expressions
     Functions,
     /// Run the language server on stdio
     Lsp,

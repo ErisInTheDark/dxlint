@@ -1,4 +1,4 @@
-//! Expressions used by formatters: shapes, `when`, `message`, options.
+//! Expressions used by rules: messages, `when`, `fix`, options.
 //! Strings are templates: `"{name}: {snake_case(type)}"`.
 
 use std::rc::Rc;

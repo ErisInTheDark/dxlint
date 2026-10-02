@@ -19,12 +19,12 @@
           "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "entity.name.function.zlint" } }
         },
         {
-          "match": "\\b(format)\\s+([A-Za-z_][\\w-]*)\\s+(on)\\b",
-          "captures": {
-            "1": { "name": "keyword.other.zlint" },
-            "2": { "name": "entity.name.type.zlint" },
-            "3": { "name": "keyword.other.zlint" }
-          }
+          "match": "\\b(rule)\\s+([A-Za-z_][\\w:-]*)",
+          "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "entity.name.type.zlint" } }
+        },
+        {
+          "match": "\\b(group)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "entity.name.namespace.zlint" } }
         },
         {
           "match": "\\b(lang)\\s+([A-Za-z_]\\w*)",
@@ -35,7 +35,7 @@
           "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "entity.name.function.macro.zlint" } }
         },
         {
-          "match": "\\b(set)\\s+([\\w*-]+)(\\.)([A-Za-z_]\\w*)",
+          "match": "\\b(set)\\s+([\\w*:-]+)(?:(\\.)([A-Za-z_]\\w*))?",
           "captures": {
             "1": { "name": "keyword.other.zlint" },
             "2": { "name": "entity.name.type.zlint" },
@@ -56,20 +56,19 @@
         { "include": "#sstring" },
         { "include": "#regex" },
         {
-          "match": "\\b(import|macro|lang|match|in|over|format|on|set|ignore|option|severity|when|message|files)\\b",
+          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|when|fix|files|report)\\b",
           "name": "keyword.other.zlint"
         },
+        { "match": "\\b(until|or)\\b", "name": "keyword.operator.word.zlint" },
         { "match": "\\b(if|then|else)\\b", "name": "keyword.control.zlint" },
         { "match": "\\b(true|false|null)\\b", "name": "constant.language.zlint" },
-        { "match": "\\b(off|hint|info|warn|warning|error)\\b", "name": "support.constant.severity.zlint" },
+        { "match": "\\b(off|hint|info|warn|error)\\b", "name": "support.constant.severity.zlint" },
         { "match": "\\.(?:[A-Za-z_]\\w*|\\*)", "name": "entity.name.namespace.zlint" },
         { "match": "\\b([A-Za-z_]\\w*)(:)(?!\\s)", "captures": { "1": { "name": "variable.parameter.label.zlint" }, "2": { "name": "punctuation.separator.label.zlint" } } },
         { "match": "(:)([A-Za-z_]\\w*)", "captures": { "1": { "name": "punctuation.separator.label.zlint" }, "2": { "name": "variable.parameter.label.zlint" } } },
         { "match": "\\b([A-Za-z_]\\w*)(?=\\()", "name": "support.function.zlint" },
         { "match": "\\b\\d+(?:\\.\\d+)?\\b", "name": "constant.numeric.zlint" },
-        { "match": "==|!=|<=|>=|&&|\\|\\||[<>!~+\\-%]", "name": "keyword.operator.zlint" },
-        { "match": "\\*", "name": "keyword.operator.skip.zlint" },
-        { "match": "\\|", "name": "keyword.operator.alternation.zlint" }
+        { "match": "==|!=|<=|>=|&&|\\|\\||[<>!~+\\-%*]", "name": "keyword.operator.zlint" }
       ]
     },
     "string": {
