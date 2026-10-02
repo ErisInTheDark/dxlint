@@ -5,8 +5,15 @@ const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
 const BINARY = process.platform === "win32" ? "zlint.exe" : "zlint";
+// Cargo may write a fresh build more than once; restart once it settles.
+const REBUILD_SETTLE_MS = 500;
 
 let client;
+// Where workspace builds are copied to before running (per workspace).
+let copiesDir;
+// Identity of the workspace build the server runs, if it runs one.
+let runningBuild;
+let rebuildTimer;
 
 function workspaceRoots() {
   return (vscode.workspace.workspaceFolders || [])
@@ -32,25 +39,68 @@ function workspaceBuild() {
         continue;
       }
       if (stat.isFile() && (!newest || stat.mtimeMs > newest.mtimeMs)) {
-        newest = { path: candidate, mtimeMs: stat.mtimeMs };
+        newest = { path: candidate, mtimeMs: stat.mtimeMs, size: stat.size, key: `${candidate}|${stat.mtimeMs}|${stat.size}` };
       }
     }
   }
-  return newest && newest.path;
+  return newest;
+}
+
+// Runs a copy of the build, so cargo can always replace the original (a
+// running exe is locked on Windows). Copies are named by build identity, and
+// older ones are removed while no server runs from them.
+function copyOfBuild(build) {
+  if (!copiesDir) {
+    return build.path;
+  }
+  const name = `zlint-${Math.trunc(build.mtimeMs)}-${build.size}${path.extname(BINARY)}`;
+  const copy = path.join(copiesDir, name);
+  fs.mkdirSync(copiesDir, { recursive: true });
+  for (const old of fs.readdirSync(copiesDir)) {
+    if (old !== name) {
+      try {
+        fs.rmSync(path.join(copiesDir, old), { force: true });
+      } catch {
+        // Still running (another window's server); the next start retries.
+      }
+    }
+  }
+  if (!fs.existsSync(copy)) {
+    const partial = `${copy}.partial`;
+    fs.copyFileSync(build.path, partial);
+    fs.renameSync(partial, copy);
+  }
+  return copy;
 }
 
 // `zlint.path` if set (relative paths resolve against the first workspace
 // folder), else a workspace build, else `zlint` from PATH.
-function resolveServerCommand(configured) {
+function resolveServer(configured) {
   if (configured) {
     const isBareName = !/[\\/]/.test(configured);
     const [root] = workspaceRoots();
     if (isBareName || path.isAbsolute(configured) || !root) {
-      return configured;
+      return { command: configured };
     }
-    return path.resolve(root, configured);
+    return { command: path.resolve(root, configured) };
   }
-  return workspaceBuild() || "zlint";
+  const build = workspaceBuild();
+  return build ? { command: copyOfBuild(build), build } : { command: "zlint" };
+}
+
+// A workspace build changed: restart once it settles, if it is now a
+// different build than the one running.
+function onBuildChanged() {
+  clearTimeout(rebuildTimer);
+  rebuildTimer = setTimeout(() => {
+    if (vscode.workspace.getConfiguration("zlint").get("path")) {
+      return;
+    }
+    const build = workspaceBuild();
+    if (build && build.key !== runningBuild) {
+      restart();
+    }
+  }, REBUILD_SETTLE_MS);
 }
 
 function createClient(command) {
@@ -71,12 +121,47 @@ function createClient(command) {
   return new LanguageClient("zlint", "zoomie-lint", serverOptions, clientOptions);
 }
 
+// Files the user is looking at (active first) and files open in tabs, so the
+// server lints them before the rest of the workspace.
+function focusParams() {
+  const isFile = (uri) => uri.scheme === "file";
+  const asUri = (uri) => client.code2ProtocolConverter.asUri(uri);
+  const active = vscode.window.activeTextEditor;
+  const editors = [active, ...vscode.window.visibleTextEditors.filter((e) => e !== active)].filter(Boolean);
+  const tabs = vscode.window.tabGroups.all
+    .flatMap((group) => group.tabs)
+    .map((tab) => tab.input)
+    .flatMap((input) =>
+      input instanceof vscode.TabInputText
+        ? [input.uri]
+        : input instanceof vscode.TabInputTextDiff
+          ? [input.modified]
+          : [],
+    );
+  return {
+    visible: editors.map((e) => e.document.uri).filter(isFile).map(asUri),
+    tabs: tabs.filter(isFile).map(asUri),
+  };
+}
+
+function sendFocus() {
+  if (client && client.isRunning()) {
+    // A client stopping mid-send has nothing left to prioritize.
+    client.sendNotification("zlint/focus", focusParams()).catch(() => {});
+  }
+}
+
 async function start() {
   const configured = vscode.workspace.getConfiguration("zlint").get("path");
-  const command = resolveServerCommand(configured);
-  client = createClient(command);
+  let command = configured || "zlint";
+  runningBuild = undefined;
   try {
+    const server = resolveServer(configured);
+    command = server.command;
+    client = createClient(command);
     await client.start();
+    runningBuild = server.build && server.build.key;
+    sendFocus();
   } catch (error) {
     // Not awaited: activation shouldn't block on the user dismissing this.
     const openSettings = "Open Settings";
@@ -102,7 +187,12 @@ async function restart() {
 }
 
 async function activate(context) {
+  copiesDir = context.storageUri && path.join(context.storageUri.fsPath, "bin");
+  const builds = vscode.workspace.createFileSystemWatcher(`**/target/{release,debug}/${BINARY}`);
   context.subscriptions.push(
+    builds,
+    builds.onDidCreate(onBuildChanged),
+    builds.onDidChange(onBuildChanged),
     vscode.commands.registerCommand("zlint.restart", restart),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration("zlint")) {
@@ -111,11 +201,15 @@ async function activate(context) {
     }),
     // Workspace builds are only used once the workspace is trusted.
     vscode.workspace.onDidGrantWorkspaceTrust(restart),
+    vscode.window.onDidChangeActiveTextEditor(sendFocus),
+    vscode.window.onDidChangeVisibleTextEditors(sendFocus),
+    vscode.window.tabGroups.onDidChangeTabs(sendFocus),
   );
   await start();
 }
 
 function deactivate() {
+  clearTimeout(rebuildTimer);
   return client && client.needsStop() ? client.stop() : undefined;
 }
 

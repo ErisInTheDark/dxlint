@@ -1,13 +1,14 @@
 //! Background workspace scan: lints every file on disk and streams each
 //! file's diagnostics to the client as soon as it is done, with progress.
-//! A newer scan (config change) cancels older ones via the generation.
+//! Tabs the user has open go first, then the rest breadth-first. A newer scan
+//! (config change) cancels older ones via the generation.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ignore::{WalkBuilder, WalkState};
+use ignore::{DirEntry, WalkBuilder, WalkState};
 use serde_json::json;
 
 use super::projects::Linters;
@@ -17,11 +18,21 @@ use super::{convert, uri};
 /// State shared between the request loop and scans.
 #[derive(Default)]
 pub struct Shared {
-    /// Files open in the editor; their diagnostics come from the buffer.
-    pub open: Mutex<HashSet<PathBuf>>,
+    /// Files the request loop lints itself (open buffers, gitignored tabs);
+    /// scans leave them and their diagnostics alone.
+    pub editor: Mutex<HashSet<PathBuf>>,
     /// URIs that currently show at least one diagnostic.
     pub published: Mutex<HashSet<String>>,
     pub generation: AtomicU64,
+    /// Files the current scan lints next, ahead of the walk order.
+    priority: Mutex<Priority>,
+}
+
+#[derive(Default)]
+struct Priority {
+    /// The scan this queue belongs to; older scans' workers never take from it.
+    generation: u64,
+    queue: VecDeque<PathBuf>,
 }
 
 impl Shared {
@@ -43,11 +54,25 @@ impl Shared {
         }
         out.notify("textDocument/publishDiagnostics", params);
     }
+
+    /// Moves files to the front of the running scan.
+    pub fn prioritize(&self, files: impl IntoIterator<Item = PathBuf>) {
+        self.priority.lock().expect("lock").queue.extend(files);
+    }
+
+    fn next_priority(&self, generation: u64) -> Option<PathBuf> {
+        let mut p = self.priority.lock().expect("lock");
+        if p.generation != generation {
+            return None;
+        }
+        p.queue.pop_front()
+    }
 }
 
 /// Walks `roots` like the CLI does: `.gitignore` respected, hidden files
-/// included, `.git` skipped. Roots inside other roots are dropped.
-pub fn walker(roots: &[PathBuf]) -> Option<WalkBuilder> {
+/// included, `.git` skipped, and directories `keep_dir` rejects skipped.
+/// Roots inside other roots are dropped.
+pub fn walker(roots: &[PathBuf], keep_dir: impl Fn(&Path) -> bool + Send + Sync + 'static) -> Option<WalkBuilder> {
     let mut sorted: Vec<&PathBuf> = roots.iter().collect();
     sorted.sort();
     let mut outer: Vec<&PathBuf> = Vec::new();
@@ -61,81 +86,205 @@ pub fn walker(roots: &[PathBuf]) -> Option<WalkBuilder> {
     for root in rest {
         walker.add(root);
     }
-    walker.hidden(false).filter_entry(|e| e.file_name() != ".git");
+    walker.hidden(false).filter_entry(move |e: &DirEntry| {
+        e.file_name() != ".git" && (!e.file_type().is_some_and(|t| t.is_dir()) || keep_dir(e.path()))
+    });
     Some(walker)
 }
 
-/// Scans `roots`, linting each file with its nearest config.
-pub fn start(linters: Linters, roots: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool) {
-    let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    std::thread::spawn(move || run(linters, roots, shared, out, progress, generation));
+/// Whether a walk of the workspace would reach `path`, ie it is not
+/// gitignored (or otherwise ignored). Only `path`'s ancestors are listed, and
+/// an ignored ancestor stops the walk early. Paths outside every root count
+/// as reached, and a path not on disk yet (an unsaved buffer) is judged by
+/// its directory.
+pub fn walk_reaches(roots: &[PathBuf], path: &Path) -> bool {
+    let Some(root) = roots.iter().filter(|r| path.starts_with(r)).max_by_key(|r| r.components().count()) else {
+        return true;
+    };
+    if !path.exists() {
+        return path.parent().is_none_or(|dir| dir == root.as_path() || walk_reaches(roots, dir));
+    }
+    let target = path.to_path_buf();
+    let Some(walk) = walker(std::slice::from_ref(root), move |dir| target.starts_with(dir)) else { return true };
+    walk.build().flatten().any(|e| e.path() == path)
 }
 
-fn run(linters: Linters, roots: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool, generation: u64) {
-    let token = format!("zlint-scan-{generation}");
-    if progress {
-        out.request(&format!("progress-{generation}"), "window/workDoneProgress/create", json!({ "token": token }));
-        out.notify(
-            "$/progress",
-            json!({ "token": token, "value": { "kind": "begin", "title": "zlint", "message": "scanning workspace", "cancellable": false } }),
-        );
+/// Where a scan walks: each workspace root that a config covers, else the
+/// config directories inside it. Nothing outside a config gets linted.
+fn scan_roots(roots: &[PathBuf], linters: &Linters) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for root in roots {
+        if linters.covers(root) {
+            out.push(root.clone());
+        } else {
+            out.extend(linters.config_dirs().filter(|d| d.starts_with(root)).cloned());
+        }
     }
-    let files = AtomicUsize::new(0);
-    let problems = AtomicUsize::new(0);
-    let touched = Mutex::new(HashSet::new());
-    let current = || shared.generation.load(Ordering::SeqCst) == generation;
+    out
+}
 
-    // With no configs there is nothing to lint; the stale sweep below still
-    // clears what earlier configs reported.
-    let walk = if linters.is_empty() { None } else { walker(&roots) };
-    if let Some(walk) = walk {
+/// Directories the nearest config ignores hold nothing to lint, unless a
+/// nested config lives below them.
+fn worth_walking(linters: &Linters, dir: &Path) -> bool {
+    match linters.for_dir(dir) {
+        Some(l) if l.is_ignored(dir) => linters.config_dirs().any(|c| c.starts_with(dir)),
+        _ => true,
+    }
+}
+
+/// Scans `roots`, linting `tabs` first, then every other file breadth-first,
+/// each with its nearest config.
+pub fn start(linters: Linters, roots: Vec<PathBuf>, tabs: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool) {
+    let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    *shared.priority.lock().expect("lock") = Priority { generation, queue: tabs.into() };
+    std::thread::spawn(move || Scan::new(linters, shared, out, progress, generation).run(&roots));
+}
+
+struct Scan {
+    linters: Linters,
+    shared: Arc<Shared>,
+    out: Outbox,
+    progress: bool,
+    generation: u64,
+    token: String,
+    /// Files already linted (or skipped) by this scan.
+    done: Mutex<HashSet<PathBuf>>,
+    /// URIs this scan published, for the stale sweep.
+    touched: Mutex<HashSet<String>>,
+    files: AtomicUsize,
+    problems: AtomicUsize,
+    /// Known once the walk is done.
+    total: AtomicUsize,
+}
+
+impl Scan {
+    fn new(linters: Linters, shared: Arc<Shared>, out: Outbox, progress: bool, generation: u64) -> Scan {
+        Scan {
+            linters,
+            shared,
+            out,
+            progress,
+            generation,
+            token: format!("zlint-scan-{generation}"),
+            done: Mutex::default(),
+            touched: Mutex::default(),
+            files: AtomicUsize::new(0),
+            problems: AtomicUsize::new(0),
+            total: AtomicUsize::new(0),
+        }
+    }
+
+    fn current(&self) -> bool {
+        self.shared.generation.load(Ordering::SeqCst) == self.generation
+    }
+
+    fn run(&self, roots: &[PathBuf]) {
+        let (token, generation) = (&self.token, self.generation);
+        if self.progress {
+            self.out.request(&format!("progress-{generation}"), "window/workDoneProgress/create", json!({ "token": token }));
+            let value = json!({ "kind": "begin", "title": "zlint", "message": "scanning workspace", "cancellable": false, "percentage": 0 });
+            self.out.notify("$/progress", json!({ "token": token, "value": value }));
+        }
+        // With no configs there is nothing to lint; the stale sweep below
+        // still clears what earlier configs reported.
+        if !self.linters.is_empty() {
+            self.drain(&[]);
+            let files = self.collect(roots);
+            self.total.store(files.len(), Ordering::Relaxed);
+            self.drain(&files);
+        }
+        if self.current() {
+            self.sweep();
+        }
+        if self.progress {
+            let message = format!("{} files, {} problems", self.files.load(Ordering::Relaxed), self.problems.load(Ordering::Relaxed));
+            self.out.notify("$/progress", json!({ "token": token, "value": { "kind": "end", "message": message } }));
+        }
+    }
+
+    /// Every file some config wants, shallowest first.
+    fn collect(&self, roots: &[PathBuf]) -> Vec<PathBuf> {
+        let linters = self.linters.clone();
+        let Some(walk) = walker(&scan_roots(roots, &self.linters), move |dir| worth_walking(&linters, dir)) else {
+            return Vec::new();
+        };
+        let found = Mutex::new(Vec::new());
         walk.build_parallel().run(|| {
             Box::new(|entry| {
-                if !current() {
+                if !self.current() {
                     return WalkState::Quit;
                 }
                 let Ok(entry) = entry else { return WalkState::Continue };
                 let path = entry.path();
-                if !entry.file_type().is_some_and(|t| t.is_file()) {
-                    return WalkState::Continue;
-                }
-                let Some(linter) = linters.for_path(path).filter(|l| l.wants(path)) else { return WalkState::Continue };
-                if shared.open.lock().expect("lock").contains(path) {
-                    return WalkState::Continue;
-                }
-                let Ok(text) = std::fs::read_to_string(path) else { return WalkState::Continue };
-                let diags = linter.lint(path, &text);
-                let u = uri::from_path(path);
-                problems.fetch_add(diags.len(), Ordering::Relaxed);
-                touched.lock().expect("lock").insert(u.clone());
-                // The editor may have opened the file while it was being linted;
-                // then the buffer's diagnostics win.
-                if current() && !shared.open.lock().expect("lock").contains(path) {
-                    shared.publish(&out, &u, None, convert::diagnostics(&text, &diags));
-                }
-                let n = files.fetch_add(1, Ordering::Relaxed) + 1;
-                if progress && n.is_multiple_of(100) {
-                    out.notify("$/progress", json!({ "token": token, "value": { "kind": "report", "message": format!("{n} files") } }));
+                if entry.file_type().is_some_and(|t| t.is_file()) && self.linters.for_path(path).is_some_and(|l| l.wants(path)) {
+                    found.lock().expect("lock").push((entry.depth(), path.to_path_buf()));
                 }
                 WalkState::Continue
             })
         });
+        let mut found = found.into_inner().expect("lock");
+        found.sort();
+        found.into_iter().map(|(_, path)| path).collect()
     }
 
-    if current() {
-        // Files that showed problems before but were not seen now (deleted,
-        // or no longer owned by any language) get cleared.
-        let touched = touched.into_inner().expect("lock");
-        let open = shared.open.lock().expect("lock").clone();
-        let open_uris: HashSet<String> = open.iter().map(|p| uri::from_path(p)).collect();
-        let stale: Vec<String> =
-            shared.published.lock().expect("lock").iter().filter(|u| !touched.contains(*u) && !open_uris.contains(*u)).cloned().collect();
-        for u in stale {
-            shared.publish(&out, &u, None, json!([]));
+    /// Lints priority files, then `files` in order, on all but one core so
+    /// the request loop stays responsive.
+    fn drain(&self, files: &[PathBuf]) {
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1));
+        let next = AtomicUsize::new(0);
+        let take = || self.shared.next_priority(self.generation).or_else(|| files.get(next.fetch_add(1, Ordering::Relaxed)).cloned());
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| {
+                    while self.current() {
+                        let Some(path) = take() else { break };
+                        self.lint(&path);
+                    }
+                });
+            }
+        });
+    }
+
+    fn lint(&self, path: &Path) {
+        if !self.done.lock().expect("lock").insert(path.to_path_buf()) {
+            return;
+        }
+        let Some(linter) = self.linters.for_path(path).filter(|l| l.wants(path)) else { return };
+        let open = || self.shared.editor.lock().expect("lock").contains(path);
+        if open() {
+            return;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else { return };
+        let diags = linter.lint(path, &text);
+        let u = uri::from_path(path);
+        self.problems.fetch_add(diags.len(), Ordering::Relaxed);
+        self.touched.lock().expect("lock").insert(u.clone());
+        // The editor may have opened the file while it was being linted;
+        // then the buffer's diagnostics win.
+        if self.current() && !open() {
+            self.shared.publish(&self.out, &u, None, convert::diagnostics(&text, &diags));
+        }
+        let n = self.files.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.progress && n.is_multiple_of(100) {
+            let total = self.total.load(Ordering::Relaxed);
+            let value = if total == 0 {
+                json!({ "kind": "report", "message": format!("{n} files") })
+            } else {
+                json!({ "kind": "report", "message": format!("{n}/{total} files"), "percentage": (n * 100 / total).min(100) })
+            };
+            self.out.notify("$/progress", json!({ "token": self.token, "value": value }));
         }
     }
-    if progress {
-        let message = format!("{} files, {} problems", files.load(Ordering::Relaxed), problems.load(Ordering::Relaxed));
-        out.notify("$/progress", json!({ "token": token, "value": { "kind": "end", "message": message } }));
+
+    /// Files that showed problems before but were not seen now (deleted, or
+    /// no longer owned by any language) get cleared.
+    fn sweep(&self) {
+        let touched = self.touched.lock().expect("lock");
+        let open_uris: HashSet<String> = self.shared.editor.lock().expect("lock").iter().map(|p| uri::from_path(p)).collect();
+        let stale: Vec<String> =
+            self.shared.published.lock().expect("lock").iter().filter(|u| !touched.contains(*u) && !open_uris.contains(*u)).cloned().collect();
+        for u in stale {
+            self.shared.publish(&self.out, &u, None, json!([]));
+        }
     }
 }

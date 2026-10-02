@@ -28,6 +28,8 @@ struct Doc {
     uri: String,
     text: String,
     version: i64,
+    /// Whether [`Server::editor_config`] lets this file be linted at all.
+    lint: bool,
 }
 
 /// Config reads see unsaved editor buffers.
@@ -58,6 +60,16 @@ struct Server {
     rediscover: bool,
     /// Configs to reload.
     stale: HashSet<PathBuf>,
+    /// Files in visible editors, most important first (`zlint/focus`).
+    visible: Vec<PathBuf>,
+    /// Files open in editor tabs (`zlint/focus`) that scans reach; they lint
+    /// them first.
+    tabs: Vec<PathBuf>,
+    /// Gitignored tabs under a gitignored config. Scans never reach them, so
+    /// the request loop lints them from disk.
+    ignored_tabs: HashSet<PathBuf>,
+    /// Ignored tabs whose diagnostics are out of date.
+    dirty_tabs: HashSet<PathBuf>,
 }
 
 pub fn run() -> ExitCode {
@@ -74,6 +86,10 @@ pub fn run() -> ExitCode {
         dirty: HashSet::new(),
         rediscover: false,
         stale: HashSet::new(),
+        visible: Vec::new(),
+        tabs: Vec::new(),
+        ignored_tabs: HashSet::new(),
+        dirty_tabs: HashSet::new(),
     };
     // Reading happens on its own thread so the loop below can see how much
     // input is already waiting, and lint once per burst of edits instead of
@@ -149,6 +165,7 @@ impl Server {
                 "textDocument/didChange" => self.did_change(params),
                 "textDocument/didClose" => self.did_close(params),
                 "workspace/didChangeWatchedFiles" => self.watched_files(params),
+                "zlint/focus" => self.focus(params),
                 _ => {}
             },
         }
@@ -156,12 +173,115 @@ impl Server {
     }
 
     /// Does the deferred work of a burst of messages: at most one reload per
-    /// config, and one lint per changed document.
+    /// config, one lint per changed document (visible ones first), and only
+    /// then a rescan, so the scan never competes with what the user sees.
     fn flush(&mut self) {
-        self.reload_configs();
-        for path in std::mem::take(&mut self.dirty) {
+        let rescan = self.reload_configs();
+        let mut dirty: Vec<PathBuf> = std::mem::take(&mut self.dirty).into_iter().collect();
+        dirty.sort_by_key(|p| self.visible.iter().position(|v| v == p).unwrap_or(usize::MAX));
+        for path in dirty {
             self.publish_doc(&path);
         }
+        for path in std::mem::take(&mut self.dirty_tabs) {
+            self.publish_ignored_tab(&path);
+        }
+        if rescan && self.scan_workspace {
+            let roots = if self.roots.is_empty() { self.projects.dirs() } else { self.roots.clone() };
+            scan::start(self.projects.linters(), roots, self.tabs.clone(), self.shared.clone(), self.out.clone(), self.progress);
+        }
+    }
+
+    /// The config for a file the user has in the editor (buffer or tab): its
+    /// nearest one, unless the file is gitignored and that config is not.
+    /// Tracked configs are for the project; a gitignored config is for the
+    /// gitignored files below it.
+    fn editor_config(&self, path: &Path) -> Option<PathBuf> {
+        let config = path.parent().and_then(config::find)?;
+        if !scan::walk_reaches(&self.roots, path) && scan::walk_reaches(&self.roots, &config) {
+            return None;
+        }
+        Some(config)
+    }
+
+    /// Makes sure `config` gets loaded by the next flush.
+    fn want_config(&mut self, config: PathBuf) {
+        if !self.projects.is_loaded(&config) {
+            self.stale.insert(config);
+        }
+    }
+
+    /// The editor's visible files and tabs changed. Tabs not seen before jump
+    /// the running scan's queue, or (if gitignored) get linted right away.
+    fn focus(&mut self, params: &Value) {
+        let paths = |key: &str| -> Vec<PathBuf> {
+            params[key].as_array().into_iter().flatten().filter_map(|u| u.as_str().and_then(uri::to_path)).collect()
+        };
+        self.visible = paths("visible");
+        let (old_tabs, old_ignored) = (std::mem::take(&mut self.tabs), std::mem::take(&mut self.ignored_tabs));
+        let mut new_tabs = Vec::new();
+        for tab in paths("tabs") {
+            let known = old_tabs.contains(&tab) || old_ignored.contains(&tab);
+            if known {
+                if old_ignored.contains(&tab) {
+                    self.ignored_tabs.insert(tab);
+                } else {
+                    self.tabs.push(tab);
+                }
+            } else {
+                new_tabs.push(tab);
+            }
+        }
+        for gone in old_ignored.iter().filter(|t| !self.ignored_tabs.contains(*t)) {
+            self.drop_ignored_tab(gone);
+        }
+        let mut scan_next = Vec::new();
+        for tab in new_tabs {
+            self.add_tab(tab, &mut scan_next);
+        }
+        self.shared.prioritize(scan_next);
+    }
+
+    /// Sorts a tab: scans reach it, or it is gitignored under a gitignored
+    /// config and linted here, or it is gitignored and never linted.
+    fn add_tab(&mut self, tab: PathBuf, scan_next: &mut Vec<PathBuf>) {
+        if scan::walk_reaches(&self.roots, &tab) {
+            scan_next.push(tab.clone());
+            self.tabs.push(tab);
+        } else if let Some(config) = self.editor_config(&tab) {
+            self.want_config(config);
+            self.shared.editor.lock().expect("lock").insert(tab.clone());
+            self.dirty_tabs.insert(tab.clone());
+            self.ignored_tabs.insert(tab);
+        }
+    }
+
+    /// A gitignored tab was closed: nothing lints it anymore.
+    fn drop_ignored_tab(&self, tab: &Path) {
+        if self.docs.contains_key(tab) {
+            return;
+        }
+        self.shared.editor.lock().expect("lock").remove(tab);
+        self.shared.publish(&self.out, &uri::from_path(tab), None, json!([]));
+    }
+
+    /// Re-sorts open buffers and tabs, after `.gitignore` or configs moved.
+    fn reclassify_editor(&mut self) {
+        let lint: Vec<(PathBuf, bool)> = self.docs.keys().map(|p| (p.clone(), self.editor_config(p).is_some())).collect();
+        for (path, lint) in lint {
+            if let Some(doc) = self.docs.get_mut(&path) {
+                doc.lint = lint;
+            }
+            self.dirty.insert(path);
+        }
+        let tabs: Vec<PathBuf> = std::mem::take(&mut self.tabs).into_iter().chain(self.ignored_tabs.iter().cloned()).collect();
+        for gone in std::mem::take(&mut self.ignored_tabs) {
+            self.drop_ignored_tab(&gone);
+        }
+        let mut scan_next = Vec::new();
+        for tab in tabs {
+            self.add_tab(tab, &mut scan_next);
+        }
+        // A rediscovery rescans with the new tabs anyway.
     }
 
     fn initialize(&mut self, params: &Value) -> Value {
@@ -189,44 +309,49 @@ impl Server {
         self.out.notify("window/showMessage", json!({ "type": kind, "message": message }));
     }
 
-    /// Loads stale configs, or every config after a rediscovery, then relints
-    /// and rescans when the linters changed.
-    fn reload_configs(&mut self) {
-        let mut configs = std::mem::take(&mut self.stale);
-        let mut changed = false;
+    /// Loads stale configs, or every config after a rediscovery. When the
+    /// linters changed, marks open buffers and ignored tabs for relinting.
+    /// Returns whether the workspace needs a rescan: a config scans can reach
+    /// changed (gitignored configs only matter to the editor).
+    fn reload_configs(&mut self) -> bool {
+        let mut rescan = false;
         if std::mem::take(&mut self.rediscover) {
+            self.reclassify_editor();
             let found = if self.scan_workspace {
                 projects::discover(&self.roots)
             } else {
                 self.roots.iter().filter_map(|r| config::find(r)).collect()
             };
-            let open = self.docs.keys().filter_map(|p| p.parent().and_then(config::find));
-            configs = found.into_iter().chain(open).collect();
-            changed = self.projects.retain(&configs);
-            if configs.is_empty() && !self.warned_no_config {
+            let editor: Vec<PathBuf> = self.docs.keys().chain(&self.ignored_tabs).filter_map(|p| self.editor_config(p)).collect();
+            // Reload everything kept, not just what was stale.
+            self.stale.extend(found.into_iter().chain(editor));
+            rescan = self.projects.retain(&self.stale);
+            if self.stale.is_empty() && !self.warned_no_config {
                 self.warned_no_config = true;
                 self.show(3, &format!("zlint: no {} found in the workspace; linting is off", config::CONFIG_NAME));
             }
         }
-        if configs.is_empty() && !changed {
-            return;
+        let configs = std::mem::take(&mut self.stale);
+        if configs.is_empty() && !rescan {
+            return false;
         }
+        let mut changed = rescan;
         let docs = &self.docs;
         let uri_of = |p: &Path| docs.get(p).map(|d| d.uri.clone()).unwrap_or_else(|| uri::from_path(p));
         for config in &configs {
-            changed |= self.projects.load(config, &Overlay(docs), &uri_of);
+            if self.projects.load(config, &Overlay(docs), &uri_of) {
+                changed = true;
+                rescan |= scan::walk_reaches(&self.roots, config);
+            }
         }
         self.projects.publish_errors(&self.out);
 
         // A broken config keeps its last good linter, so nothing to relint.
-        if !changed {
-            return;
+        if changed {
+            self.dirty.extend(self.docs.keys().cloned());
+            self.dirty_tabs.extend(self.ignored_tabs.iter().cloned());
         }
-        self.dirty.extend(self.docs.keys().cloned());
-        if self.scan_workspace {
-            let roots = if self.roots.is_empty() { self.projects.dirs() } else { self.roots.clone() };
-            scan::start(self.projects.linters(), roots, self.shared.clone(), self.out.clone(), self.progress);
-        }
+        rescan
     }
 
     /// A `.zlint` file changed in the editor or on disk: reload what reads it.
@@ -239,23 +364,45 @@ impl Server {
         if self.projects.has_errors(&doc.uri) {
             return;
         }
-        let diags = match self.projects.linter_for(path) {
+        let diags = match self.projects.linter_for(path).filter(|_| doc.lint) {
             Some(l) => convert::diagnostics(&doc.text, &l.lint(path, &doc.text)),
             None => json!([]),
         };
         self.shared.publish(&self.out, &doc.uri, Some(doc.version), diags);
     }
 
-    /// After a file leaves the editor, its diagnostics come from disk.
-    fn publish_disk(&self, path: &Path, u: &str) {
-        let diags = match (self.projects.linter_for(path), self.scan_workspace) {
-            (Some(l), true) if l.wants(path) => match std::fs::read_to_string(path) {
+    /// Lints a gitignored tab from disk, unless it is open as a buffer.
+    fn publish_ignored_tab(&self, path: &Path) {
+        if self.docs.contains_key(path) || !self.ignored_tabs.contains(path) {
+            return;
+        }
+        self.publish_from_disk(path, &uri::from_path(path));
+    }
+
+    fn publish_from_disk(&self, path: &Path, u: &str) {
+        let diags = match self.projects.linter_for(path) {
+            Some(l) if l.wants(path) => match std::fs::read_to_string(path) {
                 Ok(text) => convert::diagnostics(&text, &l.lint(path, &text)),
                 Err(_) => json!([]),
             },
             _ => json!([]),
         };
         self.shared.publish(&self.out, u, None, diags);
+    }
+
+    /// A file the user does not have open changed on disk, or was just
+    /// closed: relint it like a scan would. Scans never lint gitignored files.
+    fn publish_disk(&self, path: &Path, u: &str) {
+        if self.ignored_tabs.contains(path) {
+            self.publish_ignored_tab(path);
+        } else if self.scan_workspace
+            && self.projects.linter_for(path).is_some_and(|l| l.wants(path))
+            && scan::walk_reaches(&self.roots, path)
+        {
+            self.publish_from_disk(path, u);
+        } else {
+            self.shared.publish(&self.out, u, None, json!([]));
+        }
     }
 
     fn doc_path(params: &Value) -> Option<(PathBuf, String)> {
@@ -266,18 +413,18 @@ impl Server {
     fn did_open(&mut self, params: &Value) {
         let Some((path, u)) = Self::doc_path(params) else { return };
         let td = &params["textDocument"];
-        let doc = Doc { uri: u, text: td["text"].as_str().unwrap_or_default().to_string(), version: td["version"].as_i64().unwrap_or(0) };
+        let config = if self.projects.is_config(&path) { None } else { self.editor_config(&path) };
+        let text = td["text"].as_str().unwrap_or_default().to_string();
+        let doc = Doc { uri: u, text, version: td["version"].as_i64().unwrap_or(0), lint: config.is_some() };
         self.docs.insert(path.clone(), doc);
-        self.shared.open.lock().expect("lock").insert(path.clone());
+        self.shared.editor.lock().expect("lock").insert(path.clone());
         if self.projects.is_config(&path) {
             self.config_touched(&path);
             return;
         }
         // Files outside the workspace, or under configs not loaded yet.
-        if let Some(config) = path.parent().and_then(config::find) {
-            if !self.projects.is_loaded(&config) {
-                self.stale.insert(config);
-            }
+        if let Some(config) = config {
+            self.want_config(config);
         }
         self.dirty.insert(path);
     }
@@ -310,7 +457,10 @@ impl Server {
     fn did_close(&mut self, params: &Value) {
         let Some((path, u)) = Self::doc_path(params) else { return };
         self.docs.remove(&path);
-        self.shared.open.lock().expect("lock").remove(&path);
+        // A gitignored tab stays the request loop's to lint.
+        if !self.ignored_tabs.contains(&path) {
+            self.shared.editor.lock().expect("lock").remove(&path);
+        }
         if self.projects.is_config(&path) {
             self.config_touched(&path);
         } else {
@@ -324,8 +474,12 @@ impl Server {
             let Some(path) = uri::to_path(u) else { continue };
             // 1 = created, 3 = deleted
             let kind = change["type"].as_u64();
-            if path.file_name().is_some_and(|n| n == config::CONFIG_NAME) && matches!(kind, Some(1 | 3)) {
+            let name = path.file_name();
+            if name.is_some_and(|n| n == config::CONFIG_NAME) && matches!(kind, Some(1 | 3)) {
                 // Which config is nearest may have changed for any file.
+                self.rediscover = true;
+            } else if name.is_some_and(|n| n == ".gitignore") {
+                // What scans reach, and which editor files lint, may have changed.
                 self.rediscover = true;
             } else if self.projects.is_config(&path) {
                 self.config_touched(&path);
@@ -340,7 +494,7 @@ impl Server {
     }
 
     fn fix_all(&self, path: &Path) -> Option<Value> {
-        let doc = self.docs.get(path)?;
+        let doc = self.docs.get(path).filter(|d| d.lint)?;
         let linter = self.projects.linter_for(path)?;
         let fixed = linter.fix(path, &doc.text);
         (fixed.applied > 0 && fixed.text != doc.text).then(|| convert::whole_document_edit(&doc.text, &fixed.text))

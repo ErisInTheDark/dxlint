@@ -119,6 +119,20 @@ impl Client {
         msg["params"]["diagnostics"].as_array().cloned().unwrap_or_default()
     }
 
+    /// Diagnostics for each file, in whatever order the scan publishes them.
+    fn diagnostics_for_each(&mut self, files: &[&Path]) -> Vec<Vec<Value>> {
+        let uris: Vec<String> = files.iter().map(|f| uri(f)).collect();
+        let mut found: Vec<Option<Vec<Value>>> = vec![None; files.len()];
+        while found.iter().any(Option::is_none) {
+            let msg = self.wait("publishDiagnostics", |m| m["method"] == "textDocument/publishDiagnostics");
+            let got = msg["params"]["uri"].as_str().unwrap_or("");
+            if let Some(i) = uris.iter().position(|u| same_uri(got, u)) {
+                found[i] = Some(msg["params"]["diagnostics"].as_array().cloned().unwrap_or_default());
+            }
+        }
+        found.into_iter().flatten().collect()
+    }
+
     fn shutdown(mut self) {
         self.request("shutdown", Value::Null);
         self.notify("exit", Value::Null);
@@ -200,8 +214,9 @@ fn nested_configs_lint_their_own_files() {
     let mut c = Client::start(&dir);
 
     // The scan lints each file with its nearest config.
-    assert_eq!(c.diagnostics_for(&top)[0]["message"], "no BAD here");
-    assert_eq!(c.diagnostics_for(&inner)[0]["message"], "nested says no");
+    let diags = c.diagnostics_for_each(&[&top, &inner]);
+    assert_eq!(diags[0][0]["message"], "no BAD here");
+    assert_eq!(diags[1][0]["message"], "nested says no");
 
     // So does an open buffer.
     let open = sub.join("open.t");
@@ -210,6 +225,51 @@ fn nested_configs_lint_their_own_files() {
         json!({ "textDocument": { "uri": uri(&open), "languageId": "t", "version": 1, "text": "BAD\n" } }),
     );
     assert_eq!(c.diagnostics_for(&open)[0]["message"], "nested says no");
+    c.shutdown();
+}
+
+#[test]
+fn scan_reaches_configs_below_uncovered_and_ignored_dirs() {
+    // The workspace root has no config; `proj` has one that ignores
+    // `skipped`, which still holds a nested config of its own.
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lsp-skip");
+    let _ = std::fs::remove_dir_all(&dir);
+    let deep = dir.join("proj").join("skipped").join("sub");
+    std::fs::create_dir_all(&deep).expect("dirs");
+    std::fs::write(dir.join("proj").join("zoomie.zlint"), format!("{CONFIG}\nignore \"skipped\"\n")).expect("config");
+    std::fs::write(deep.join("zoomie.zlint"), CONFIG.replace("no BAD here", "deep says no")).expect("deep config");
+    let file = deep.join("f.t");
+    std::fs::write(&file, "BAD\n").expect("write");
+    let mut c = Client::start(&dir);
+    assert_eq!(c.diagnostics_for(&file)[0]["message"], "deep says no");
+    c.shutdown();
+}
+
+#[test]
+fn gitignored_files_lint_only_under_gitignored_configs() {
+    let dir = project("lsp-ignored");
+    // `.gitignore` only applies inside a repository.
+    std::fs::create_dir_all(dir.join(".git")).expect(".git");
+    std::fs::write(dir.join(".gitignore"), "/scratch\n").expect("gitignore");
+    let scratch = dir.join("scratch").join("s");
+    std::fs::create_dir_all(&scratch).expect("dirs");
+    std::fs::write(scratch.join("zoomie.zlint"), CONFIG.replace("no BAD here", "scratch says no")).expect("config");
+    let tab = scratch.join("tab.t");
+    std::fs::write(&tab, "BAD\n").expect("write");
+    let mut c = Client::start(&dir);
+
+    // A tab that was never opened, under a gitignored config, uses it.
+    c.notify("zlint/focus", json!({ "visible": [], "tabs": [uri(&tab)] }));
+    assert_eq!(c.diagnostics_for(&tab)[0]["message"], "scratch says no");
+
+    // Buffers: a gitignored file is only linted (and fixed) by a gitignored
+    // config, never by the tracked root one.
+    let mut format = |path: &Path| {
+        c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(path), "languageId": "t", "version": 1, "text": "BAD\n" } }));
+        c.request("textDocument/formatting", json!({ "textDocument": { "uri": uri(path) }, "options": {} }))
+    };
+    assert_eq!(format(&dir.join("scratch").join("plain.t")), json!([]));
+    assert_eq!(format(&scratch.join("open.t"))[0]["newText"], "good\n");
     c.shutdown();
 }
 

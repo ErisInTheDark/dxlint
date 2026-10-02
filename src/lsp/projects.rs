@@ -41,21 +41,35 @@ impl Linters {
     }
 
     pub fn for_path(&self, path: &Path) -> Option<&Arc<Linter>> {
-        nearest(&self.0, path)?.as_ref()
+        nearest(&self.0, path.parent()?)?.as_ref()
+    }
+
+    /// The linter of the nearest config at or above `dir`.
+    pub fn for_dir(&self, dir: &Path) -> Option<&Arc<Linter>> {
+        nearest(&self.0, dir)?.as_ref()
+    }
+
+    /// Whether a config (even a broken one) covers `dir`.
+    pub fn covers(&self, dir: &Path) -> bool {
+        nearest(&self.0, dir).is_some()
+    }
+
+    pub fn config_dirs(&self) -> impl Iterator<Item = &PathBuf> {
+        self.0.keys()
     }
 }
 
-/// The value for the nearest config directory above `path`. A broken nearest
-/// config still wins; its files never fall back to a parent config.
-fn nearest<'a, T>(by_dir: &'a HashMap<PathBuf, T>, path: &Path) -> Option<&'a T> {
-    path.ancestors().skip(1).find_map(|dir| by_dir.get(dir))
+/// The value for the nearest config directory at or above `dir`. A broken
+/// nearest config still wins; its files never fall back to a parent config.
+fn nearest<'a, T>(by_dir: &'a HashMap<PathBuf, T>, dir: &Path) -> Option<&'a T> {
+    dir.ancestors().find_map(|d| by_dir.get(d))
 }
 
 /// Configs under `roots` (walked like the scan walks them), plus the nearest
 /// one above each root.
 pub fn discover(roots: &[PathBuf]) -> HashSet<PathBuf> {
     let mut found: HashSet<PathBuf> = roots.iter().filter_map(|r| config::find(r)).collect();
-    if let Some(walker) = scan::walker(roots) {
+    if let Some(walker) = scan::walker(roots, |_| true) {
         for entry in walker.build().flatten() {
             if entry.file_name() == CONFIG_NAME && entry.file_type().is_some_and(|t| t.is_file()) {
                 found.insert(normalize_path(entry.path()));
@@ -67,7 +81,7 @@ pub fn discover(roots: &[PathBuf]) -> HashSet<PathBuf> {
 
 impl Projects {
     pub fn linter_for(&self, path: &Path) -> Option<&Arc<Linter>> {
-        nearest(&self.by_dir, path)?.linter.as_ref()
+        nearest(&self.by_dir, path.parent()?)?.linter.as_ref()
     }
 
     pub fn linters(&self) -> Linters {

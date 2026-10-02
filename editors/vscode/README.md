@@ -12,7 +12,8 @@ Runs `zlint lsp` and shows its results as you type:
 
 1. Build zlint: `cargo build --release` at the repo root. The extension finds the binary by:
    - `zlint.path`, if set
-   - the newest `target/release/zlint` or `target/debug/zlint` in the (trusted) workspace, so working on zlint itself just works
+   - the newest `target/release/zlint` or `target/debug/zlint` in the (trusted) workspace, so working on zlint itself just works.
+     It runs a copy, so `cargo build` never hits a locked exe, and it restarts automatically when you rebuild
    - `zlint` on your `PATH` (eg `cargo install --path .`)
 2. In this folder: `npm install`
 3. Open the folder in VS Code and press F5, or package it with `npx @vscode/vsce package` and install the `.vsix`
