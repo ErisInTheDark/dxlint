@@ -7,6 +7,9 @@ const { LanguageClient } = require("vscode-languageclient/node");
 const BINARY = process.platform === "win32" ? "zlint.exe" : "zlint";
 // Cargo may write a fresh build more than once; restart once it settles.
 const REBUILD_SETTLE_MS = 500;
+// Builds are polled rather than watched: `files.watcherExclude` often
+// excludes `target`, and polling works before the file exists.
+const BUILD_POLL_MS = 1000;
 
 let client;
 // Where workspace builds are copied to before running (per workspace).
@@ -14,11 +17,36 @@ let copiesDir;
 // Identity of the workspace build the server runs, if it runs one.
 let runningBuild;
 let rebuildTimer;
+// Build paths currently polled by `watchBuilds`.
+let watchedBuilds = [];
 
 function workspaceRoots() {
   return (vscode.workspace.workspaceFolders || [])
     .filter((folder) => folder.uri.scheme === "file")
     .map((folder) => folder.uri.fsPath);
+}
+
+function buildCandidates() {
+  return workspaceRoots().flatMap((root) => ["release", "debug"].map((profile) => path.join(root, "target", profile, BINARY)));
+}
+
+function unwatchBuilds() {
+  for (const file of watchedBuilds) {
+    fs.unwatchFile(file);
+  }
+  watchedBuilds = [];
+}
+
+function watchBuilds() {
+  unwatchBuilds();
+  watchedBuilds = buildCandidates();
+  for (const file of watchedBuilds) {
+    fs.watchFile(file, { interval: BUILD_POLL_MS }, (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs || curr.size !== prev.size) {
+        onBuildChanged();
+      }
+    });
+  }
 }
 
 // Most recently built `target/{release,debug}/zlint` in the workspace, so
@@ -29,18 +57,15 @@ function workspaceBuild() {
     return undefined;
   }
   let newest;
-  for (const root of workspaceRoots()) {
-    for (const profile of ["release", "debug"]) {
-      const candidate = path.join(root, "target", profile, BINARY);
-      let stat;
-      try {
-        stat = fs.statSync(candidate);
-      } catch {
-        continue;
-      }
-      if (stat.isFile() && (!newest || stat.mtimeMs > newest.mtimeMs)) {
-        newest = { path: candidate, mtimeMs: stat.mtimeMs, size: stat.size, key: `${candidate}|${stat.mtimeMs}|${stat.size}` };
-      }
+  for (const candidate of buildCandidates()) {
+    let stat;
+    try {
+      stat = fs.statSync(candidate);
+    } catch {
+      continue;
+    }
+    if (stat.isFile() && (!newest || stat.mtimeMs > newest.mtimeMs)) {
+      newest = { path: candidate, mtimeMs: stat.mtimeMs, size: stat.size, key: `${candidate}|${stat.mtimeMs}|${stat.size}` };
     }
   }
   return newest;
@@ -188,11 +213,10 @@ async function restart() {
 
 async function activate(context) {
   copiesDir = context.storageUri && path.join(context.storageUri.fsPath, "bin");
-  const builds = vscode.workspace.createFileSystemWatcher(`**/target/{release,debug}/${BINARY}`);
+  watchBuilds();
   context.subscriptions.push(
-    builds,
-    builds.onDidCreate(onBuildChanged),
-    builds.onDidChange(onBuildChanged),
+    { dispose: unwatchBuilds },
+    vscode.workspace.onDidChangeWorkspaceFolders(watchBuilds),
     vscode.commands.registerCommand("zlint.restart", restart),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration("zlint")) {
@@ -210,6 +234,7 @@ async function activate(context) {
 
 function deactivate() {
   clearTimeout(rebuildTimer);
+  unwatchBuilds();
   return client && client.needsStop() ? client.stop() : undefined;
 }
 
