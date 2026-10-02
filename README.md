@@ -12,7 +12,7 @@ import "std/rust"
 in rs_code match rs_fn /\bfn[ \t]+/ name:ident
 
 # A rule: what the text should look like. Different => diagnostic + fix.
-in rs_fn.name rule fn-snake-case warn "`{text}` should be snake_case" fix snake_case(text)
+in rs_fn.name rule fn-snake-case warn "`{text}` should be snake_case" fix as snake_case(text)
 ```
 
 ```
@@ -55,7 +55,7 @@ import "std/rust"
 import "std/whitespace"
 
 set max-line-length.max 100
-ignore "vendor" or "src/generated/**"
+ignore "vendor" "src/generated/**"
 ```
 
 | command | |
@@ -92,8 +92,9 @@ in rs_string match rs_escape /\\./                  # escapes live in strings
 
 in .rust match call name:/\w+/ args:paren           # fields: call.name, call.args
 over .* match trailing_ws /[ \t]+$/ {               # overlays see all text
-  rule no-trailing-ws warn "no trailing whitespace" fix ""
+  rule no-trailing-ws warn "no trailing whitespace" fix as ""
 }
+in call.name rule loud-calls warn "shout it" fix as upper(text) "!"   # values side by side join
 
 in call.args rule long-calls {
   option max 80 "longest allowed argument list"
@@ -108,7 +109,9 @@ set long-calls error
 Layers can be specialised (`match js_object like brace ...` wins ties against
 plain braces and is still a `brace` to rules), collected into open groups
 (`group js_code js_stmt` adds to `js_code`), and declared as indenting, so an
-indentation rule only decides units and continuation lines. Regexes support
+indentation rule only decides units and continuation lines (a mis-indented
+block opener is one report: the lines inside are measured from where it will
+be once fixed). Regexes support
 lookahead and lookbehind, and rule expressions have line context
 (`prev_line`, `parent_before`, `indent_anchor`, ...) and `re_*` functions.
 

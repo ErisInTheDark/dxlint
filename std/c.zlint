@@ -4,7 +4,7 @@
 
 import "std/core"
 
-lang c "*.c" or "*.h" or "*.cc" or "*.cpp" or "*.cxx" or "*.hpp" or "*.hh" or "*.java" or "*.cs" or "*.go" or "*.kt" or "*.kts" or "*.swift" or "*.scala" or "*.dart" {
+lang c "*.c" "*.h" "*.cc" "*.cpp" "*.cxx" "*.hpp" "*.hh" "*.java" "*.cs" "*.go" "*.kt" "*.kts" "*.swift" "*.scala" "*.dart" {
   match paren
   match brack
   match brace

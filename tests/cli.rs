@@ -26,7 +26,7 @@ fn stdout(o: &Output) -> String {
 const RULES: &str = r#"
 lang t "*.t"
 in .t match shout /\b[A-Z]{3,}\b/ {
-  rule no-shout warn "`{text}` is shouting" fix lower(text)
+  rule no-shout warn "`{text}` is shouting" fix as lower(text)
 }
 "#;
 

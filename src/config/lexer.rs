@@ -124,6 +124,11 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                 }
                 push(&mut out, Tk::Num, start, i, &text[start..i]);
             }
+            b'"' if text[i..].starts_with("\"\"\"") => {
+                let (end, raw) = block_string(text, i, file, base, errors);
+                push(&mut out, Tk::Str, start, end, &raw);
+                i = end;
+            }
             // Single quotes exist mostly so templates can nest strings:
             // "{join(args, ', ')}".
             b'"' | b'\'' => {
@@ -226,6 +231,70 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
     out
 }
 
+/// A `"""` string starting at `start`: its end and its raw (still escaped)
+/// text. The text starts on the line after the opening `"""`; the closing
+/// `"""` sits on its own line, and its indentation is removed from every
+/// line. A line ending in `\` continues onto the next without a line break.
+fn block_string(text: &str, start: usize, file: FileId, base: usize, errors: &mut Vec<ConfigError>) -> (usize, String) {
+    let span = |a: usize, b: usize| Span::new(file, base + a, base + b);
+    let bytes = text.as_bytes();
+    let open_end = start + 3;
+    let line_end = memchr::memchr(b'\n', &bytes[open_end..]).map_or(bytes.len(), |n| open_end + n);
+    if !text[open_end..line_end].trim().is_empty() {
+        errors.push(ConfigError::new(span(start, line_end), "a `\"\"\"` string starts on the line after its `\"\"\"`"));
+    }
+    let content_start = (line_end + 1).min(bytes.len());
+    let mut close = None;
+    let mut i = content_start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' if text[i..].starts_with("\"\"\"") => {
+                close = Some(i);
+                break;
+            }
+            _ => i += 1,
+        }
+    }
+    let Some(close) = close else {
+        errors.push(ConfigError::new(span(start, open_end), "unterminated `\"\"\"` string"));
+        return (bytes.len(), String::new());
+    };
+    let end = close + 3;
+    let close_line = text[..close].rfind('\n').map_or(0, |n| n + 1);
+    let strip = &text[close_line..close];
+    if close_line < content_start || !strip.bytes().all(|b| b == b' ' || b == b'\t') {
+        errors.push(ConfigError::new(span(close, end), "the closing `\"\"\"` sits on a line of its own"));
+        return (end, String::new());
+    }
+
+    let mut out = String::new();
+    let mut at = content_start;
+    let mut first = true;
+    let mut joined = false;
+    while at < close_line {
+        let next = memchr::memchr(b'\n', &bytes[at..close_line]).map_or(close_line, |n| at + n + 1);
+        let line = text[at..next].trim_end_matches('\n').trim_end_matches('\r');
+        if !first && !joined {
+            out.push('\n');
+        }
+        first = false;
+        let body = if line.trim().is_empty() {
+            ""
+        } else if let Some(rest) = line.strip_prefix(strip) {
+            rest
+        } else {
+            errors.push(ConfigError::new(span(at, at + line.len()), "line is indented less than the closing `\"\"\"`"));
+            line.trim_start()
+        };
+        let slashes = body.len() - body.trim_end_matches('\\').len();
+        joined = slashes % 2 == 1;
+        out.push_str(if joined { &body[..body.len() - 1] } else { body });
+        at = next;
+    }
+    (end, out)
+}
+
 /// Decodes `\n`, `\t`, `\u{...}` and friends inside a string literal.
 pub fn decode_escapes(raw: &str, span: Span) -> Result<String, ConfigError> {
     let mut out = String::with_capacity(raw.len());
@@ -288,6 +357,28 @@ mod tests {
     #[test]
     fn operators_prefer_longest_form() {
         assert_eq!(kinds("a == c != d || e"), vec![Tk::Ident, Tk::EqEq, Tk::Ident, Tk::Ne, Tk::Ident, Tk::OrOr, Tk::Ident]);
+    }
+
+    fn block(src: &str) -> (String, Vec<ConfigError>) {
+        let mut errors = Vec::new();
+        let toks = lex(FileId(0), src, 0, &mut errors);
+        (toks.iter().find(|t| t.kind == Tk::Str).map_or(String::new(), |t| t.text.to_string()), errors)
+    }
+
+    #[test]
+    fn block_strings_lose_the_closing_indentation_and_join_at_backslashes() {
+        let (text, errors) = block("x \"\"\"\r\n    /*!\r\n     * a \"quote\" \\\r\n    b\\\\\r\n\r\n    */\r\n    \"\"\" y");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(text, "/*!\n * a \"quote\" b\\\\\n\n*/");
+        assert_eq!(block("\"\"\"\n\"\"\"").0, "");
+    }
+
+    #[test]
+    fn block_strings_need_their_own_lines() {
+        assert_eq!(block("\"\"\"a\n\"\"\"").1.len(), 1);
+        assert_eq!(block("\"\"\"\n  a\n b\n  \"\"\"").1.len(), 1);
+        assert_eq!(block("\"\"\"\n  a \"\"\"").1.len(), 1);
+        assert_eq!(block("\"\"\"\n  a").1.len(), 1);
     }
 
     #[test]

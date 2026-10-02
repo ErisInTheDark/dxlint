@@ -42,8 +42,8 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             continue;
         }
         match rule(def, &grammar, &mut errors) {
-            Some(r) => rules.push(r),
-            None => broken.push(&def.name.text),
+            Some(r) if !def.broken => rules.push(r),
+            _ => broken.push(&def.name.text),
         }
     }
 

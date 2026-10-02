@@ -22,8 +22,8 @@ use crate::pattern::Pat;
 /// macros or matchers.
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
-    "fix", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info", "warn",
-    "error",
+    "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
+    "warn", "error",
 ];
 
 /// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
@@ -478,17 +478,28 @@ impl<'a> Parser<'a> {
     fn lang(&mut self) {
         self.bump();
         let Some(name) = self.ident("a language name") else { return };
-        let mut globs = Vec::new();
-        loop {
-            let Some(glob) = self.string("a file glob like \"*.rs\"") else { return };
-            globs.push(glob);
-            if !self.eat_or() {
-                break;
-            }
+        let globs = self.globs("a file glob like \"*.rs\"");
+        if globs.is_empty() {
+            return;
         }
         let root = Parent::Lang(name.clone());
         self.config.langs.push(LangDef { name, globs });
         self.block_or_end(Context { parents: vec![(root, None)], overlay: false });
+    }
+
+    /// One or more globs, side by side on the line: `"*.rs" "*.rs.in"`.
+    fn globs(&mut self, what: &str) -> Vec<(String, Span)> {
+        let mut globs = Vec::new();
+        loop {
+            match self.string(what) {
+                Some(glob) => globs.push(glob),
+                None => return Vec::new(),
+            }
+            self.skip(false, true);
+            if !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Str) {
+                return globs;
+            }
+        }
     }
 
     /// Eats an `or` that continues the current line.
@@ -624,7 +635,7 @@ impl<'a> Parser<'a> {
         self.block_or_end(Context { parents: vec![(own, None)], overlay: false });
     }
 
-    /// `rule name [severity [message]] [fix expr] [{ clauses }]`, checking the
+    /// `rule name [severity [message]] [fix as expr] [{ clauses }]`, checking the
     /// context's layers.
     fn rule(&mut self, ctx: Option<&Context>) {
         let kw = self.bump().expect("peeked");
@@ -647,7 +658,9 @@ impl<'a> Parser<'a> {
             when: Vec::new(),
             fix: None,
             report: Report::Node,
+            broken: false,
         };
+        let before = self.errors.len();
         self.skip(false, true);
         if let Some(severity) = self.peek_severity() {
             self.ts.next_raw();
@@ -657,16 +670,37 @@ impl<'a> Parser<'a> {
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
             self.ts.next_raw();
-            def.fix = self.expr();
+            def.fix = self.fix_as();
         }
-        self.skip(false, true);
-        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
-            self.ts.next_raw();
-            self.rule_body(&mut def);
-        } else {
-            self.end_of_item();
+        if self.errors.len() == before {
+            self.skip(false, true);
+            if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+                self.ts.next_raw();
+                self.rule_body(&mut def);
+            } else {
+                self.end_of_item();
+            }
         }
+        // After a broken head, the caller skips the rest of the line, body
+        // included.
+        def.broken = self.errors.len() > before;
         self.config.rules.push(def);
+    }
+
+    /// After `fix`: `as expr`.
+    fn fix_as(&mut self) -> Option<Expr> {
+        self.skip(false, true);
+        match self.ts.peek_raw(0).cloned() {
+            Some(t) if t.is_ident("as") => {
+                self.ts.next_raw();
+                self.expr()
+            }
+            other => {
+                let span = other.map(|t| t.span).or(self.ts.last_span);
+                self.errors.push(ConfigError::new(span, "expected `as` after `fix`: `fix as <what the text should be>`"));
+                None
+            }
+        }
     }
 
     /// A severity keyword (`off hint info warn error`) next on the line.
@@ -703,7 +737,7 @@ impl<'a> Parser<'a> {
                 (Tk::Ident, "option") => {
                     self.bump();
                     if let Some(name) = self.ident("an option name") {
-                        if let Some(default) = self.expr() {
+                        if let Some(default) = self.operand() {
                             self.skip(false, true);
                             let description = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Str) {
                                 self.string("an option description").map(|(s, _)| s)
@@ -731,7 +765,7 @@ impl<'a> Parser<'a> {
                                 .note("a rule has at most one fix: the expression saying what the text should be"),
                         );
                     } else {
-                        def.fix = self.expr();
+                        def.fix = self.fix_as();
                     }
                 }
                 (Tk::Ident, "when") => {
@@ -758,13 +792,7 @@ impl<'a> Parser<'a> {
                 (Tk::Ident, kw @ ("files" | "ignore")) => {
                     let kw = kw.to_string();
                     self.bump();
-                    let mut globs = Vec::new();
-                    while let Some(g) = self.string("a path glob") {
-                        globs.push(g);
-                        if !self.eat_or() {
-                            break;
-                        }
-                    }
+                    let globs = self.globs("a path glob");
                     if kw == "files" {
                         def.files.extend(globs);
                     } else {
@@ -818,13 +846,11 @@ impl<'a> Parser<'a> {
 
     fn ignore(&mut self) {
         self.bump();
-        loop {
-            let Some(g) = self.string("a path glob") else { return };
-            self.config.ignores.push(g);
-            if !self.eat_or() {
-                break;
-            }
+        let globs = self.globs("a path glob");
+        if globs.is_empty() {
+            return;
         }
+        self.config.ignores.extend(globs);
         self.end_of_item();
     }
 }
@@ -888,7 +914,7 @@ mod tests {
     #[test]
     fn rules_in_one_line_or_with_a_body() {
         let c = ok(r#"
-            in fn.name rule fn-snake warn "names are snake_case" fix snake_case(text)
+            in fn.name rule fn-snake warn "names are snake_case" fix as snake_case(text)
             in line rule line-length {
               option max 100 "max chars"
               error "lines under {max}"
@@ -977,15 +1003,47 @@ mod tests {
             macro nl (if true then "a" else "b")
             macro strict {
               when true
-              fix nl + "!" + nl
+              fix as nl "!" nl
             }
             in x rule f warn nl {
               strict
             }
         "#);
         assert_eq!(c.rules[0].when.len(), 1);
-        assert!(matches!(c.rules[0].fix.as_ref().map(|e| &e.kind), Some(ExprKind::Binary(..))));
+        assert!(matches!(c.rules[0].fix.as_ref().map(|e| &e.kind), Some(ExprKind::Binary(BinOp::Join, ..))));
         assert!(c.rules[0].message.is_some());
+    }
+
+    #[test]
+    fn values_side_by_side_join_until_a_keyword_or_the_line_ends() {
+        let c = ok(r#"
+            in x rule a warn "{text}" "!" fix as if c then text "=" else (text
+              "-") {
+              option max 100 "max chars"
+              when len(text) + 1 "px" == "4px"
+              files "src/**" "lib/**"
+              ignore "a" "b"
+            }
+            lang l "*.l" "*.ll"
+            ignore "x" "y"
+        "#);
+        let rule = &c.rules[0];
+        let join = |e: &Expr| matches!(e.kind, ExprKind::Binary(BinOp::Join, ..));
+        assert!(join(rule.message.as_ref().unwrap()));
+        let Some(ExprKind::If(_, then, other)) = rule.fix.as_ref().map(|e| &e.kind) else { panic!("{:?}", rule.fix) };
+        assert!(join(then) && join(other));
+        assert!(matches!(rule.options[0].default.kind, ExprKind::Num(_)) && rule.options[0].description.is_some());
+        // `len(text) + 1` is one side of the join; the join is one side of `==`.
+        let ExprKind::Binary(BinOp::Eq, lhs, _) = &rule.when[0].kind else { panic!("{:?}", rule.when[0]) };
+        assert!(matches!(&lhs.kind, ExprKind::Binary(BinOp::Join, sum, _) if matches!(sum.kind, ExprKind::Binary(BinOp::Add, ..))));
+        assert_eq!((rule.files.len(), rule.ignore.len(), c.langs[0].globs.len(), c.ignores.len()), (2, 2, 2, 2));
+    }
+
+    #[test]
+    fn plus_adds_numbers_and_fix_needs_as() {
+        let (_, errors, _) = parse_str("in x rule a fix as text + \"!\"\nin x rule b fix text\nin x rule c { fix as [a] + 1 }\n");
+        let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(all, vec!["`+` adds numbers", "expected `as` after `fix`: `fix as <what the text should be>`", "`+` adds numbers"]);
     }
 
     #[test]

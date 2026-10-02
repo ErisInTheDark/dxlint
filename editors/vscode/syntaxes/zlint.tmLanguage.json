@@ -52,6 +52,7 @@
     "expression": {
       "patterns": [
         { "include": "#comment" },
+        { "include": "#block-string" },
         { "include": "#string" },
         { "include": "#sstring" },
         { "include": "#regex" },
@@ -60,7 +61,7 @@
           "name": "keyword.other.zlint"
         },
         { "match": "\\b(until|or)\\b", "name": "keyword.operator.word.zlint" },
-        { "match": "\\b(if|then|else)\\b", "name": "keyword.control.zlint" },
+        { "match": "\\b(if|then|else|as)\\b", "name": "keyword.control.zlint" },
         { "match": "\\b(true|false|null)\\b", "name": "constant.language.zlint" },
         { "match": "\\b(off|hint|info|warn|error)\\b", "name": "support.constant.severity.zlint" },
         { "match": "\\.(?:[A-Za-z_]\\w*|\\*)", "name": "entity.name.namespace.zlint" },
@@ -69,6 +70,16 @@
         { "match": "\\b([A-Za-z_]\\w*)(?=\\()", "name": "support.function.zlint" },
         { "match": "\\b\\d+(?:\\.\\d+)?\\b", "name": "constant.numeric.zlint" },
         { "match": "==|!=|<=|>=|&&|\\|\\||[<>!~+\\-%*]", "name": "keyword.operator.zlint" }
+      ]
+    },
+    "block-string": {
+      "begin": "\"\"\"",
+      "end": "\"\"\"",
+      "name": "string.quoted.triple.zlint",
+      "patterns": [
+        { "match": "\\\\(?:u\\{[0-9a-fA-F]+\\}|.|$)", "name": "constant.character.escape.zlint" },
+        { "match": "\\{\\{|\\}\\}", "name": "constant.character.escape.zlint" },
+        { "include": "#hole" }
       ]
     },
     "string": {

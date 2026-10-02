@@ -71,7 +71,7 @@ impl Parser<'_> {
     }
 
     fn e_cmp(&mut self) -> Option<Expr> {
-        let lhs = self.e_add()?;
+        let lhs = self.e_join()?;
         let op = match self.op_peek() {
             Some(Tk::EqEq) => BinOp::Eq,
             Some(Tk::Ne) => BinOp::Ne,
@@ -91,13 +91,56 @@ impl Parser<'_> {
             _ => return Some(lhs),
         };
         self.ts.next_raw();
-        let rhs = self.e_add()?;
+        let rhs = self.e_join()?;
         let span = lhs.span.to(rhs.span);
         Some(Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span })
     }
 
+    /// Values side by side are joined: `text "="`, `[a] [b]`.
+    fn e_join(&mut self) -> Option<Expr> {
+        let mut lhs = self.e_add()?;
+        while self.joins_next() {
+            let rhs = self.e_add()?;
+            let span = lhs.span.to(rhs.span);
+            lhs = Expr { kind: ExprKind::Binary(BinOp::Join, Box::new(lhs), Box::new(rhs)), span };
+        }
+        Some(lhs)
+    }
+
+    /// Does another joined value follow? The words that may follow an
+    /// expression (`then`, `else`, `fix`), `{` and the end of the line
+    /// (outside brackets) end it.
+    fn joins_next(&mut self) -> bool {
+        self.skip(self.expr_depth > 0, false);
+        self.ts.peek_raw(0).is_some_and(|t| match t.kind {
+            Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if"),
+            _ => false,
+        })
+    }
+
     fn e_add(&mut self) -> Option<Expr> {
-        self.binary(&[(Tk::Plus, BinOp::Add), (Tk::Minus, BinOp::Sub)], Self::e_mul)
+        let sum = self.binary(&[(Tk::Plus, BinOp::Add), (Tk::Minus, BinOp::Sub)], Self::e_mul)?;
+        self.only_numbers_add(&sum);
+        Some(sum)
+    }
+
+    fn only_numbers_add(&mut self, e: &Expr) {
+        if let ExprKind::Binary(BinOp::Add, a, b) = &e.kind {
+            for side in [a, b] {
+                if matches!(side.kind, ExprKind::Str(_) | ExprKind::Template(_) | ExprKind::List(_)) {
+                    self.errors.push(
+                        ConfigError::new(side.span, "`+` adds numbers").note("put values side by side to join them: `text \"!\"`"),
+                    );
+                }
+            }
+            self.only_numbers_add(a);
+        }
+    }
+
+    /// One value without operators or joins (`100`, `"x"`, `-1`, `(a b)`).
+    pub(super) fn operand(&mut self) -> Option<Expr> {
+        self.e_unary()
     }
 
     fn e_mul(&mut self) -> Option<Expr> {
@@ -256,6 +299,9 @@ impl Parser<'_> {
             };
         }
         let base = tok.span.start as usize + 1;
+        // `"""` strings lose indentation, so their holes have no exact
+        // position; errors inside them point at the whole string.
+        let exact = (tok.span.end - tok.span.start) as usize == raw.len() + 2;
         let bytes = raw.as_bytes();
         let mut parts = Vec::new();
         let mut lit = String::new();
@@ -291,8 +337,12 @@ impl Parser<'_> {
                     };
                     flush(&mut lit, &mut parts);
                     let hole = &raw[i + 1..close];
-                    let span = Span::new(tok.span.file, base + i, base + close + 1);
-                    parts.push(TemplatePart::Expr(self.hole(hole, base + i + 1, span)?, hole.trim().to_string()));
+                    let (span, hole_base) = if exact {
+                        (Span::new(tok.span.file, base + i, base + close + 1), base + i + 1)
+                    } else {
+                        (tok.span, tok.span.start as usize)
+                    };
+                    parts.push(TemplatePart::Expr(self.hole(hole, hole_base, span)?, hole.trim().to_string()));
                     i = close + 1;
                     seg_start = i;
                 }

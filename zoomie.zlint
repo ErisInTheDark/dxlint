@@ -30,12 +30,12 @@ in rs_code match rs_unwrap /\.unwrap\(\)/ {
   rule no-unwrap {
     when rs_test_mod == null
     warn "`.unwrap()` outside tests; use `?` or `.expect(\"why\")`"
-    ignore "tests.rs" or "tests/**"
+    ignore "tests.rs" "tests/**"
   }
 }
 
 in rs_code match rs_fn /\bfn[ \t]+/ name:ident
-in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_case(text)
+in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 
 in rs_line_comment or rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
   rule todo-comment info "{text} left in a comment"
@@ -47,5 +47,5 @@ in zl_code {
   match zl_rule /\brule[ \t]+/ name:/[\w-]+/
   match zl_matcher /\bmatch[ \t]+/ name:/\w+/
 }
-in zl_rule.name rule rule-names warn "rule names are kebab-case" fix kebab_case(text)
-in zl_matcher.name rule matcher-names warn "matcher names are snake_case" fix snake_case(text)
+in zl_rule.name rule rule-names warn "rule names are kebab-case" fix as kebab_case(text)
+in zl_matcher.name rule matcher-names warn "matcher names are snake_case" fix as snake_case(text)

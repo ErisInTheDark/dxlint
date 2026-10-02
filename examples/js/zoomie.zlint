@@ -18,10 +18,10 @@ in js_code {
   # Arrow functions with one plain parameter drop the parens: (x) => x
   match js_arrow params:paren /\s*=>/
 }
-in js_loose_eq.op rule strict-equality warn "use `{text}=` instead of `{text}`" fix text + "="
+in js_loose_eq.op rule strict-equality warn "use `{text}=` instead of `{text}`" fix as text "="
 in js_arrow.params rule arrow-parens warn "no parens around a single arrow parameter" {
   when text ~ /\(\s*[A-Za-z_$][\w$]*\s*\)/
-  fix trim(slice(text, 1, -1))
+  fix as trim(slice(text, 1, -1))
 }
 
 # Searched only inside comments.

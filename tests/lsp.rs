@@ -14,7 +14,7 @@ match paren /\(/ until /\)/
 in .t or paren match paren
 in .t or paren match str /"/ until /"/
 in .t match bad /\bBAD\b/
-in bad rule no-bad warn "no BAD here" fix "good"
+in bad rule no-bad warn "no BAD here" fix as "good"
 "#;
 
 struct Client {

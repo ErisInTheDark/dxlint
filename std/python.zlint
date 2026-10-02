@@ -3,7 +3,7 @@
 
 import "std/core"
 
-lang python "*.py" or "*.pyi" {
+lang python "*.py" "*.pyi" {
   match paren
   match brack
   match brace

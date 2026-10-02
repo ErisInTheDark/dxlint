@@ -4,7 +4,7 @@
 
 import "std/core"
 
-lang js "*.js" or "*.mjs" or "*.cjs" or "*.jsx" or "*.ts" or "*.tsx" or "*.mts" or "*.cts"
+lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts"
 
 group js_code .js or paren or brack or brace or js_interp
 

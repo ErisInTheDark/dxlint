@@ -87,7 +87,7 @@ fn nested_layers_recurse_through_fields() {
 fn fixes_report_only_differences_and_fix_them() {
     let l = linter(r#"
         in .t or paren match param name:/\w+/ /\s*:\s*/ ty:/\w+/ {
-          rule colon warn "one space after `:`" fix "{name}: {ty}"
+          rule colon warn "one space after `:`" fix as "{name}: {ty}"
         }
     "#);
     let text = "(a:int, b: int, c  :  int)";
@@ -104,7 +104,7 @@ fn fixes_can_transform_text_with_functions() {
     let l = linter(r#"
         in .t match def /fn /ws? name:/\w+/
         match ws /[ \t]+/
-        in def.name rule snake warn "snake case" fix snake_case(text)
+        in def.name rule snake warn "snake case" fix as snake_case(text)
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "fn doThing fn ok_name fn HTTPServer");
     assert_eq!(fixed.text, "fn do_thing fn ok_name fn http_server");
@@ -114,7 +114,7 @@ fn fixes_can_transform_text_with_functions() {
 fn repeated_fields_are_lists() {
     let l = linter(r#"
         in .t match use /use \{/ item:/\w+/ (/, */ item:/\w+/)* /\}/ {
-          rule sorted warn "sorted imports" fix "use {{{join(sort(item), ', ')}}}"
+          rule sorted warn "sorted imports" fix as "use {{{join(sort(item), ', ')}}}"
         }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "use {b, c,a}");
@@ -161,7 +161,7 @@ fn rules_on_a_group_check_every_member() {
 fn overlays_see_text_that_layers_consumed() {
     let l = linter(r#"
         over .t match trailing /[ \t]+$/ {
-          rule trailing-ws warn "trailing whitespace" fix ""
+          rule trailing-ws warn "trailing whitespace" fix as ""
         }
     "#);
     let text = "a  \n\"multi  \nline\" \n";
@@ -233,7 +233,7 @@ fn lookbehind_tells_regex_literals_from_division() {
 fn lookahead_checks_without_consuming() {
     let l = linter(r#"
         over .t match semi_line /;(?=[ \t]*\r?\n[ \t]*\S)/ {
-          rule no-semi warn "semicolon before code" fix ""
+          rule no-semi warn "semicolon before code" fix as ""
         }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "a;\r\nb;\r\n\r\nc;\n");
@@ -281,7 +281,7 @@ fn report_points_at_node_change_or_end() {
             in .t match pair /\w+ +\w+/
             in pair rule one-space warn "x" {{
               report {report}
-              fix re_replace(text, / +/, " ")
+              fix as re_replace(text, / +/, " ")
             }}
         "#
         ));
@@ -355,6 +355,27 @@ fn indent_inside_a_matcher_block_indents_that_matcher() {
 }
 
 #[test]
+fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
+    let l = linter(r#"
+        in paren indent
+        over .t or paren match line /^[ \t]*\S/ {
+          macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
+          rule ind warn "indent" {
+            when slice(text, 0, -1) != level
+            fix as level slice(text, -1)
+          }
+        }
+    "#);
+    // Only the over-indented opener is wrong: its lines are right relative to
+    // where it belongs, so they are not reported, and one pass fixes it all.
+    let text = "x (\n    a (\n    b\n  )\n)";
+    let diags = lint(&l, text);
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    let (fixed, _) = super::apply_fixes(text, &diags);
+    assert_eq!(fixed, "x (\n  a (\n    b\n  )\n)");
+}
+
+#[test]
 fn broken_parts_leave_the_rest_linting() {
     let src = format!(
         r#"{LANG}
@@ -362,13 +383,16 @@ fn broken_parts_leave_the_rest_linting() {
         in .t match w /W/
         in w rule works warn "x"
         in missing rule broken warn "x"
+        in w rule half-written warn "x" fix lower(text)
         set works.nope 1
         set broken error
+        set half-written error
     "#
     );
     let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
-    // Settings for `broken` add no errors of their own.
-    assert_eq!(built.errors.len(), 3, "{:#?}", built.errors);
+    // Settings for broken rules add no errors of their own, and a rule whose
+    // fix did not parse does not run without it (reporting every node).
+    assert_eq!(built.errors.len(), 4, "{:#?}", built.errors);
     let l = built.linter.expect("a broken config still builds a linter");
     // `bad` never matches (and never crashes); `works` still reports.
     assert_eq!(lint(&l, "x W").iter().map(|d| d.rule.as_str()).collect::<Vec<_>>(), vec!["works"]);
@@ -422,6 +446,16 @@ fn regex_functions_and_line_context() {
     let diags = lint(&l, "one two\nmid\nend");
     let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(messages, vec!["one|| two|<o>n<e>", "two|one ||tw<o>", "mid|||m<i>d"]);
+}
+
+#[test]
+fn values_side_by_side_join_text_and_lists() {
+    let l = linter(r#"
+        in .t match word /\b[a-z]+\b/ {
+          rule j warn "{text len(text) null '!'}|{join([text] ['b'] 'c', '-')}|{len(text) + 1}"
+        }
+    "#);
+    assert_eq!(lint(&l, "ab")[0].message, "ab2!|ab-b-c|3");
 }
 
 #[test]
@@ -542,7 +576,7 @@ fn file_and_ignore_globs() {
     let l = linter(r#"
         ignore "vendor"
         in .t match x /X/ {
-          rule no-x warn "no x" { ignore "tests/**" or "other/**" }
+          rule no-x warn "no x" { ignore "tests/**" "other/**" }
         }
     "#);
     assert_eq!(l.lint(Path::new("/root/src/a.t"), "X").len(), 1);
@@ -557,7 +591,7 @@ fn whole_file_targets() {
     let l = linter(r#"
         in .t rule header warn "files start with a header" {
           when !starts_with(text, "// header")
-          fix "// header\n" + text
+          fix as "// header\n" text
         }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "body\n");

@@ -1,7 +1,7 @@
 # std/markdown: code fences, inline code and HTML comments, so prose rules
 # can stay out of code samples.
 
-lang markdown "*.md" or "*.markdown" {
+lang markdown "*.md" "*.markdown" {
   match md_fence /^[ \t]*```/ until /^[ \t]*```/
   match md_tilde_fence /^[ \t]*~~~/ until /^[ \t]*~~~/
   match md_code /`/ until /`|$/

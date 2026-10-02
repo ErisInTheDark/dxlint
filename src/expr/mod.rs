@@ -24,7 +24,7 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("parent_indent", "leading whitespace of the line the node's layer starts on (empty for the file)"),
     ("parent_line", "the whole line the node's layer starts on (empty for the file)"),
     ("indented", "the node's line starts inside the `until` of a layer declared with `in layer indent`"),
-    ("indent_anchor", "leading whitespace of the line that innermost `indent` layer opened on (empty when not indented)"),
+    ("indent_anchor", "leading whitespace of the line that innermost `indent` layer opened on (empty when not indented); lines above the node read as their indentation fixes leave them"),
     ("indent_anchor_line", "that whole opener line (empty when not indented)"),
     ("indent_closes", "this line starts with that layer's end (what follows its `*`), so it sits at the anchor"),
     ("indent_hangs", "that layer's inside starts on its opener line (`f(a,⏎ b)`)"),
@@ -259,9 +259,35 @@ pub struct Ctx<'a> {
     pub lines: &'a LineIndex,
     pub file: &'a str,
     pub options: &'a [Value<'static>],
+    /// Lines whose indentation a fix already changes: line -> its leading
+    /// whitespace after the fix. Builtins reading lines above the node see
+    /// these, so lines inside a mis-indented block are measured from where
+    /// the block will be, and one mistake is one report.
+    pub reindented: &'a HashMap<usize, String>,
 }
 
 impl<'a> Ctx<'a> {
+    /// Leading whitespace of `line`, as fixed when it lies above the node.
+    fn line_indent(&self, line: usize) -> Value<'a> {
+        Value::from(self.fixed_indent(line).unwrap_or_else(|| self.indent_at(self.lines.line_start(line))))
+    }
+
+    /// The whole of `line`, with its fixed indentation when it lies above
+    /// the node.
+    fn whole_line(&self, line: usize) -> Value<'a> {
+        let text = self.lines.line_text(self.source, line);
+        match self.fixed_indent(line) {
+            Some(ws) => Value::from(format!("{ws}{}", text.trim_start_matches([' ', '\t']))),
+            None => Value::from(text),
+        }
+    }
+
+    fn fixed_indent(&self, line: usize) -> Option<&'a str> {
+        let own = self.lines.line_of(self.tree.node(self.node).start as usize);
+        let reindented: &'a HashMap<usize, String> = self.reindented;
+        reindented.get(&line).filter(|_| line < own).map(String::as_str)
+    }
+
     fn node_text(&self, id: u32) -> &'a str {
         let n = self.tree.node(id);
         &self.source[n.start as usize..n.end as usize]
@@ -337,16 +363,16 @@ impl<'a> Ctx<'a> {
             "text" => Value::from(self.node_text(self.node)),
             "indent" => Value::from(self.indent_at(start)),
             "parent_indent" => match self.parent_layer() {
-                Some(id) if !self.tree.is_root(id) => Value::from(self.indent_at(self.tree.node(id).start as usize)),
+                Some(id) if !self.tree.is_root(id) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
                 _ => Value::from(""),
             },
             "indented" => Value::Bool(self.indent_block().is_some()),
             "indent_anchor" => match self.indent_block() {
-                Some((id, _)) => Value::from(self.indent_at(self.tree.node(id).start as usize)),
+                Some((id, _)) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
                 None => Value::from(""),
             },
             "indent_anchor_line" => match self.indent_block() {
-                Some((id, _)) => Value::from(self.lines.line_text(self.source, self.lines.line_of(self.tree.node(id).start as usize))),
+                Some((id, _)) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),
                 None => Value::from(""),
             },
             "indent_closes" => Value::Bool(self.indent_block().is_some_and(|(_, (_, end))| {
@@ -358,9 +384,7 @@ impl<'a> Ctx<'a> {
                 !self.source[inside..line_end.max(inside)].trim().is_empty()
             })),
             "parent_line" => match self.parent_layer() {
-                Some(id) if !self.tree.is_root(id) => {
-                    Value::from(self.lines.line_text(self.source, self.lines.line_of(self.tree.node(id).start as usize)))
-                }
+                Some(id) if !self.tree.is_root(id) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),
                 _ => Value::from(""),
             },
             "line" => Value::from(self.lines.line_of(start) + 1),
@@ -384,7 +408,7 @@ impl<'a> Ctx<'a> {
             }
             "prev_line" => match self.lines.line_of(start) {
                 0 => Value::Null,
-                line => Value::from(self.lines.line_text(self.source, line - 1)),
+                line => self.whole_line(line - 1),
             },
             "next_line" => {
                 let end = self.tree.node(self.node).end as usize;
@@ -551,11 +575,11 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
         BinOp::Le => Value::Bool(a.compare(&b).is_le()),
         BinOp::Gt => Value::Bool(a.compare(&b).is_gt()),
         BinOp::Ge => Value::Bool(a.compare(&b).is_ge()),
-        BinOp::Add => match (&a, &b) {
-            (Value::Num(x), Value::Num(y)) => Value::Num(x + y),
-            (Value::List(x), _) => Value::List(x.iter().cloned().chain(b.items()).collect()),
+        BinOp::Join => match (&a, &b) {
+            (Value::List(_), _) | (_, Value::List(_)) => Value::List(a.items().into_iter().chain(b.items()).collect()),
             _ => Value::from(a.text().into_owned() + &b.text()),
         },
+        BinOp::Add => Value::Num(a.num()? + b.num()?),
         BinOp::Sub => Value::Num(a.num()? - b.num()?),
         BinOp::Mul => match (&a, &b) {
             (Value::Str(s), n @ Value::Num(_)) | (n @ Value::Num(_), Value::Str(s)) => {

@@ -153,14 +153,31 @@ impl Linter {
         let file = rel.to_string_lossy().replace('\\', "/");
         let options: Vec<Vec<Value<'static>>> = self.rules.iter().map(Rule::option_values).collect();
         let mut out = Vec::new();
+        // Nodes run in document order, so a line's indentation fix is known
+        // before the lines below it are checked.
+        let mut reindented: HashMap<usize, String> = HashMap::new();
 
         for &id in &tree.order {
             let node = tree.node(id);
             let mut run = |fi: usize| {
                 if active[fi] {
-                    let ctx = Ctx { grammar: &self.grammar, lang, tree: &tree, node: id, source: text, lines: &lines, file: &file, options: &options[fi] };
+                    let ctx = Ctx {
+                        grammar: &self.grammar,
+                        lang,
+                        tree: &tree,
+                        node: id,
+                        source: text,
+                        lines: &lines,
+                        file: &file,
+                        options: &options[fi],
+                        reindented: &reindented,
+                    };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
-                    if let Some(d) = self.apply(&self.rules[fi], &ctx) {
+                    let found = self.apply(&self.rules[fi], &ctx);
+                    if let Some(d) = found {
+                        if let Some([edit]) = d.fix.as_deref() {
+                            record_reindent(&mut reindented, text, &lines, edit);
+                        }
                         out.push(d);
                     }
                     if let (Some(p), Some(s)) = (&self.profile, started) {
@@ -251,4 +268,22 @@ impl Linter {
         };
         Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, start, end, fix })
     }
+}
+
+/// Remembers a fix that only rewrites a line's leading whitespace, as that
+/// line's indentation once fixed.
+fn record_reindent(reindented: &mut HashMap<usize, String>, source: &str, lines: &LineIndex, edit: &Edit) {
+    if !edit.text.bytes().all(|b| b == b' ' || b == b'\t') {
+        return;
+    }
+    let line = lines.line_of(edit.start);
+    let line_start = lines.line_start(line);
+    let text = lines.line_text(source, line);
+    let ws_end = line_start + text.len() - text.trim_start_matches([' ', '\t']).len();
+    // A second fix on the same line overlaps the first, which wins.
+    if edit.end > ws_end || reindented.contains_key(&line) {
+        return;
+    }
+    let fixed = format!("{}{}{}", &source[line_start..edit.start], edit.text, &source[edit.end..ws_end]);
+    reindented.insert(line, fixed);
 }

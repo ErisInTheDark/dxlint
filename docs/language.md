@@ -9,7 +9,7 @@ they check.
 import "std/rust"
 
 in rs_code match rs_fn /\bfn[ \t]+/ name:ident
-in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_case(text)
+in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 ```
 
 - [Items](#items)
@@ -27,7 +27,7 @@ in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_
 
 | item | meaning |
 |---|---|
-| `lang rust "*.rs" or "*.rs.in"` | a language: the root layer `.rust` for files matching the globs |
+| `lang rust "*.rs" "*.rs.in"` | a language: the root layer `.rust` for files matching the globs |
 | `match name pattern` | a matcher (layer) that is only used where something references it |
 | `in A or B match name pattern` | a matcher searched inside layers `A` and `B` |
 | `in A match name` | attach an existing matcher to more parents |
@@ -37,16 +37,17 @@ in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_
 | `in A or B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
 | `in A rule name ...` | a rule checking `A`'s nodes, see [Rules](#rules) |
 | `set name.option value`, `set name severity` | configure an existing rule |
-| `ignore "glob" or "glob"` | never lint matching files |
+| `ignore "glob" "glob"` | never lint matching files |
 | `import "path"` | paste another `.zlint` file here |
 | `macro name tokens`, `macro name(args) { lines }` | define a macro |
 
 `#` starts a comment. Items end at the end of the line, or at a `}` that
 closes their block.
 
-Globs without a `/` match any single path component (`*.rs`, `target`), and
-globs with a `/` match the path relative to the config file (`src/**/*.rs`,
-`tests/fixtures/**`).
+Glob lists are strings side by side (`"*.rs" "*.rs.in"`); `or` separates
+layers, not globs. Globs without a `/` match any single path component
+(`*.rs`, `target`), and globs with a `/` match the path relative to the
+config file (`src/**/*.rs`, `tests/fixtures/**`).
 
 ## Context blocks
 
@@ -137,7 +138,7 @@ re-describing them:
 ```zlint
 match js_object like brace /(?<=[=(,]\s*)\{/ until /\}/
 in js_code match js_object {
-  rule object-spacing warn "..." fix ...         # plain braces are untouched
+  rule object-spacing warn "..." fix as ...      # plain braces are untouched
 }
 ```
 
@@ -174,12 +175,18 @@ decide the unit and any language-specific continuation lines:
 in paren or brack or brace indent
 over rs_code match line /^[ \t]*\S/          # each code line, first char included
 
-macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor + "    ")
+macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "    ")
 in line rule indent warn "Expected {len(level)} spaces of indentation." {
   when slice(text, 0, -1) != level
-  fix level + slice(text, -1)
+  fix as level slice(text, -1)
 }
 ```
+
+Lines above the node are read as their fixes leave them: when a rule's fix
+only changes a line's leading whitespace, `indent_anchor`,
+`indent_anchor_line`, `prev_line`, `parent_indent` and `parent_line` see
+that line re-indented. So a mis-indented `if x {` is one report, not one per
+line inside it, and its block's lines are checked against where it will be.
 
 **Fields.** Labelled pieces of a match become fields:
 
@@ -243,19 +250,19 @@ positions can start a match. Backreferences are not supported.
 
 ```zlint
 in todo_note rule todo-comment info "{text} left in a comment"
-in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix snake_case(text)
+in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 
 in line rule line-length {
   option max 100 "what max means"
   error "line is {len(text)} long"
   files "src/**"
-  ignore "src/generated/**" or "vendor/**"
+  ignore "src/generated/**" "vendor/**"
   when len(text) > max
-  fix slice(text, 0, max)
+  fix as slice(text, 0, max - 3) "..."
 }
 ```
 
-A rule is `rule name [severity [message]] [fix expr] [{ clauses }]` in a
+A rule is `rule name [severity [message]] [fix as expr] [{ clauses }]` in a
 context (`in ...` or a block).
 
 **Targets.** A rule checks every node of its context's layers: a matcher (and
@@ -276,7 +283,7 @@ values filled in and other holes left as written.
 off` reaches every variant, and suppressing `semi` suppresses the whole
 family.
 
-**Fix.** `fix expr` says what the node *should* be. If its text differs from
+**Fix.** `fix as expr` says what the node *should* be. If its text differs from
 the node's text, the rule reports the node and offers the fix. If they are
 equal, nothing happens. Fixes can be anything: reorder, rename, delete
 (`""`), add text. A rule without a fix reports every node that passes its
@@ -288,10 +295,10 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 |---|---|
 | `off\|hint\|info\|warn\|error [message]` | severity (default `warn`) and message |
 | `when expr` | only nodes where `expr` is truthy; several `when`s must all hold |
-| `fix expr` | what the node should be |
-| `option name value "description"` | a configurable value, see [`set`](#configuring-rules-set) |
-| `files "glob" or ...` | only these files |
-| `ignore "glob" or ...` | not these files |
+| `fix as expr` | what the node should be |
+| `option name value "description"` | a configurable value, see [`set`](#configuring-rules-set); `value` is one literal (or `( ... )`) |
+| `files "glob" ...` | only these files |
+| `ignore "glob" ...` | not these files |
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
 
 A macro at the start of a body line is pasted as clauses.
@@ -309,17 +316,40 @@ so nested rules compose.
 |---|---|
 | `"text {expr} more"` | template string; `{{` and `}}` for literal braces |
 | `'text'` | single-quoted string (handy inside `{...}`) |
+| `"""` ... `"""` | multi-line string, see below |
 | `42`, `1.5`, `true`, `false`, `null` | literals |
 | `[a, b]` | list |
 | `name` | a field of the node, an option, or a variable |
 | `matcher` / `matcher.field` | the closest enclosing node of `matcher`, or its field |
 | `f(a, b)` | function call |
-| `!a` `-a` `a * b` `a % b` `a + b` `a - b` | operators (`+` joins text and lists, `text * n` repeats) |
+| `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
+| `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
 | `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
+
+**Joins** bind tighter than comparisons and looser than arithmetic:
+`len(x) + 1 "px"` is `"4px"`, and `a == "x" "y"` compares with `"xy"`. A join
+runs to the end of the line (inside brackets, across lines) or to `then`,
+`else`, `fix` or a `{`. Numbers join as their text, `null` as nothing. `+`
+only adds numbers.
+
+**Multi-line strings** start with `"""` at the end of a line and end with
+`"""` on a line of its own. That closing line's indentation is removed from
+every line, and the line break before it is not part of the string. A line
+ending in `\` continues on the next without a line break. Escapes and
+`{holes}` work as in `"..."`, and `"` needs no escaping:
+
+```zlint
+set header:*.license """
+  /*!
+   * Copyright 2025 Someone. Modification and/or \
+  distribution is prohibited.
+   */
+  """
+```
 
 **Values** are `null`, booleans, numbers, text and lists. A field that did not
 match is `null`, and a field that matched several times is a list. `null`,
@@ -336,7 +366,7 @@ match is `null`, and a field that matched several times is a list. `null`,
 | `file` | path relative to the config |
 | `lang` | the file's language |
 | `before`, `after` | the rest of the node's first line before it, and of its last line after it |
-| `prev_line`, `next_line` | the whole lines around the node (`null` at the file's edges) |
+| `prev_line`, `next_line` | the whole lines around the node (`null` at the file's edges); `prev_line` as its indentation fix leaves it |
 | `text_before`, `text_after`, `source` | everything before the node, after it, and the whole file |
 | `parent`, `parent_text` | the layer the node sits in, and its text |
 | `parent_before` | the parent's text up to the node ("what came earlier in this statement") |

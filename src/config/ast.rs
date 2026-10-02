@@ -37,7 +37,7 @@ pub struct GroupDef {
     pub parents: Vec<Parent>,
 }
 
-/// `lang rust "*.rs" or "*.rs.in"`
+/// `lang rust "*.rs" "*.rs.in"`
 #[derive(Debug)]
 pub struct LangDef {
     pub name: Name,
@@ -121,7 +121,7 @@ pub struct OptionDef {
     pub description: Option<String>,
 }
 
-/// `in target rule name [severity [message]] [fix expr] [{ clauses }]`
+/// `in target rule name [severity [message]] [fix as expr] [{ clauses }]`
 #[derive(Debug)]
 pub struct RuleDef {
     pub name: Name,
@@ -134,11 +134,14 @@ pub struct RuleDef {
     pub files: Vec<(String, Span)>,
     pub ignore: Vec<(String, Span)>,
     pub when: Vec<Expr>,
-    /// `fix expr`: what the node should look like. Different text =>
+    /// `fix as expr`: what the node should look like. Different text =>
     /// diagnostic + fix.
     pub fix: Option<Expr>,
     /// Where diagnostics point (`report node | change | end`).
     pub report: Report,
+    /// Part of the rule failed to parse: running the rest would check
+    /// something else than what was written.
+    pub broken: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -177,6 +180,8 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
+    /// Values side by side: text joins as text, lists as lists.
+    Join,
     Add,
     Sub,
     Mul,

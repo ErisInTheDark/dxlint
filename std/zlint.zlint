@@ -13,10 +13,12 @@ group zl_code .zlint or paren or brack or brace
 
 in zl_code {
   match zl_comment /#/ until /$/
+  # Longer than `""` at the same spot, so it wins.
+  match zl_block_string /"""/ until /"""/
   match zl_string /"/ until /"/
   match zl_sstring /'/ until /'/
 }
-in zl_string or zl_sstring match zl_escape /\\(?:.|\n)/
+in zl_string or zl_sstring or zl_block_string match zl_escape /\\(?:.|\n)/
 
 # Regex literals: `/` never means division in zlint.
 in zl_code match zl_regex /\// until /\/|$/ {
