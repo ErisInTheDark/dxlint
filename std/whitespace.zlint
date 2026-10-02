@@ -1,0 +1,31 @@
+# std/whitespace: language-agnostic hygiene. Overlays on `.*` run over the
+# text of every declared language without hiding anything from other layers.
+
+over .* match trailing_ws = /[ \t]+$/
+format trailing-whitespace on trailing_ws "no trailing whitespace" = ""
+
+over .* match line_text = /^[^\r\n]+/
+format max-line-length on line_text "lines are at most {max} characters" {
+  option max = 120 "maximum line length, in characters"
+  when len(text) > max
+  message "line is {len(text)} characters long (max {max})"
+}
+
+over .* match tab_indent = /^ *\t[ \t]*/
+format tab-indent on tab_indent "indent with spaces, not tabs" {
+  option width = 4 "spaces per tab"
+  severity off
+  replace(text, "\t", repeat(" ", width))
+}
+
+over .* match blank_run = /\n(?:[ \t]*\r?\n){2,}/
+format blank-lines on blank_run "at most {max} blank lines in a row" {
+  option max = 2 "blank lines allowed in a row"
+  when len(split(text, "\n")) - 2 > max
+  "\n" + repeat("\n", max)
+}
+
+over .* match file_end = /[^\n]\z|\n(?:\r?\n)+\z/
+format final-newline on file_end "files end with exactly one newline" {
+  if ends_with(text, "\n") then "\n" else text + "\n"
+}

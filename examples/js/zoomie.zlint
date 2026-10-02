@@ -1,0 +1,26 @@
+# Example: a few JavaScript/TypeScript rules.
+# Try it: cd examples/js && zlint
+
+import "std/js"
+import "std/whitespace"
+
+# `==` -> `===`. The operator is a field, so the fix only touches it.
+in js_code match js_loose_eq = /[^=!<>]/ op:/[!=]=/ /[^=]/
+format strict-equality on js_loose_eq.op "use `{text}=` instead of `{text}`" = text + "="
+
+# console.log anywhere except in scripts/.
+in js_code match js_console = /\bconsole\.(?:log|debug)\b/
+format no-console on js_console "remove `{text}`" {
+  ignore "scripts/**"
+}
+
+# Arrow functions with one plain parameter drop the parens: (x) => x
+in js_code match js_arrow = params:paren /\s*=>/
+format arrow-parens on js_arrow.params "no parens around a single arrow parameter" {
+  when text ~ /\(\s*[A-Za-z_$][\w$]*\s*\)/
+  trim(slice(text, 1, -1))
+}
+
+# Searched only inside comments.
+in js_line_comment | js_block_comment match js_todo = /\bTODO\b/
+format todo on js_todo "TODO left in a comment" { severity info }

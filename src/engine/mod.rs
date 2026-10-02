@@ -1,0 +1,224 @@
+//! The linter: a compiled grammar plus formatters, run over files.
+
+mod build;
+pub mod diagnostic;
+mod fix;
+mod suppress;
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+pub use build::{build, Built};
+pub use diagnostic::{Diagnostic, Edit, ENGINE_RULE};
+pub use fix::{apply_fixes, Fixed};
+
+use crate::config::ast::Severity;
+use crate::config::source::{SourceMap, Span};
+use crate::expr::{CExpr, Ctx, Value};
+use crate::grammar::{Grammar, Tree, ROOT, TEXT};
+use crate::line_index::LineIndex;
+use crate::path_globs::PathGlobs;
+use suppress::Suppressions;
+
+pub struct OptionSlot {
+    pub name: String,
+    pub description: Option<String>,
+    pub default: Value<'static>,
+    pub value: Value<'static>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Matcher(u32),
+    Field(u32, u16),
+    /// `None` = every language (`on .*`).
+    Lang(Option<usize>),
+}
+
+pub struct Formatter {
+    pub name: String,
+    pub span: Span,
+    pub target: Target,
+    pub target_text: String,
+    pub severity: Severity,
+    pub options: Vec<OptionSlot>,
+    description: Option<CExpr>,
+    files: PathGlobs,
+    ignore: PathGlobs,
+    when: Vec<CExpr>,
+    message: Option<CExpr>,
+    shape: Option<CExpr>,
+}
+
+impl Formatter {
+    fn option_values(&self) -> Vec<Value<'static>> {
+        self.options.iter().map(|o| o.value.clone()).collect()
+    }
+
+    /// The description with current option values filled in; holes that
+    /// need a node (`{text}`) stay as written.
+    pub fn description(&self) -> Option<String> {
+        Some(Ctx::display(self.description.as_ref()?, &self.option_values()))
+    }
+
+    pub fn has_fix(&self) -> bool {
+        self.shape.is_some()
+    }
+
+    fn applies_to(&self, rel: &Path, lang: usize) -> bool {
+        if self.severity == Severity::Off {
+            return false;
+        }
+        if let Target::Lang(Some(l)) = self.target {
+            if l != lang {
+                return false;
+            }
+        }
+        (self.files.is_empty() || self.files.matches(rel)) && !self.ignore.matches(rel)
+    }
+}
+
+pub struct Linter {
+    pub grammar: Grammar,
+    pub formatters: Vec<Formatter>,
+    pub sources: std::sync::Arc<SourceMap>,
+    /// Paths are matched relative to this (the config file's directory).
+    pub root: PathBuf,
+    ignores: PathGlobs,
+    /// See [Grammar::reach].
+    reach: Vec<Vec<bool>>,
+    by_matcher: Vec<Vec<usize>>,
+    by_field: HashMap<(u32, u16), Vec<usize>>,
+    by_lang: Vec<usize>,
+}
+
+impl Linter {
+    pub fn relative<'p>(&self, path: &'p Path) -> std::borrow::Cow<'p, Path> {
+        match path.strip_prefix(&self.root) {
+            Ok(rel) => rel.into(),
+            Err(_) => path.into(),
+        }
+    }
+
+    /// Is this file linted at all (not ignored, owned by some language)?
+    pub fn wants(&self, path: &Path) -> bool {
+        let rel = self.relative(path);
+        !self.ignores.matches(&rel) && self.grammar.lang_for(&rel).is_some()
+    }
+
+    pub fn is_ignored(&self, path: &Path) -> bool {
+        self.ignores.matches(&self.relative(path))
+    }
+
+    pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
+        let rel = self.relative(path);
+        if self.ignores.matches(&rel) {
+            return Vec::new();
+        }
+        let Some(lang) = self.grammar.lang_for(&rel) else { return Vec::new() };
+        let active: Vec<bool> = self.formatters.iter().map(|f| f.applies_to(&rel, lang)).collect();
+        if !active.iter().any(|a| *a) {
+            return Vec::new();
+        }
+
+        // Overlays only matter when an active formatter can see inside them.
+        let mut targets = vec![false; self.grammar.matchers.len()];
+        for (f, _) in self.formatters.iter().zip(&active).filter(|(_, a)| **a) {
+            if let Target::Matcher(m) | Target::Field(m, _) = f.target {
+                targets[m as usize] = true;
+            }
+        }
+        let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
+        let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays));
+        let lines = LineIndex::new(text);
+        let file = rel.to_string_lossy().replace('\\', "/");
+        let options: Vec<Vec<Value<'static>>> = self.formatters.iter().map(Formatter::option_values).collect();
+        let mut out = Vec::new();
+
+        for &id in &tree.order {
+            let node = tree.node(id);
+            let mut run = |fi: usize| {
+                if active[fi] {
+                    let ctx = Ctx { grammar: &self.grammar, lang, tree: &tree, node: id, source: text, lines: &lines, file: &file, options: &options[fi] };
+                    if let Some(d) = self.apply(&self.formatters[fi], &ctx) {
+                        out.push(d);
+                    }
+                }
+            };
+            match node.matcher {
+                ROOT => self.by_lang.iter().for_each(|&fi| run(fi)),
+                TEXT => {}
+                m => self.by_matcher[m as usize].iter().for_each(|&fi| run(fi)),
+            }
+            if let (Some(label), Some(owner)) = (tree.label(id), tree.owner(id)) {
+                let owner_matcher = tree.node(owner).matcher;
+                if let Some(list) = self.by_field.get(&(owner_matcher, label)) {
+                    list.iter().for_each(|&fi| run(fi));
+                }
+            }
+        }
+
+        if tree.too_deep {
+            out.push(Diagnostic {
+                rule: ENGINE_RULE.into(),
+                severity: Severity::Warn,
+                message: "nesting is too deep to follow; some structure in this file was skipped".into(),
+                start: 0,
+                end: 0,
+                fix: None,
+            });
+        }
+
+        let suppressions = Suppressions::parse(text, &lines);
+        if !suppressions.is_empty() {
+            out.retain(|d| suppressions.allows(d, &lines));
+        }
+        out.sort_by(|a, b| (a.start, a.end, &a.rule).cmp(&(b.start, b.end, &b.rule)));
+        out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.rule == b.rule);
+        out
+    }
+
+    fn apply(&self, f: &Formatter, ctx: &Ctx) -> Option<Diagnostic> {
+        let node = ctx.tree.node(ctx.node);
+        let (start, end) = (node.start as usize, node.end as usize);
+        let failed = |e: String| Diagnostic {
+            rule: f.name.clone(),
+            severity: Severity::Error,
+            message: format!("formatter `{}` failed here: {e}", f.name),
+            start,
+            end,
+            fix: None,
+        };
+        for w in &f.when {
+            match ctx.eval(w) {
+                Ok(v) if v.truthy() => {}
+                Ok(_) => return None,
+                Err(e) => return Some(failed(e)),
+            }
+        }
+        let fix = match &f.shape {
+            Some(shape) => match ctx.eval(shape) {
+                Ok(v) => {
+                    let want = v.text();
+                    if want == ctx.source[start..end] {
+                        return None;
+                    }
+                    Some(vec![Edit { start, end, text: want.into_owned() }])
+                }
+                Err(e) => return Some(failed(e)),
+            },
+            None => None,
+        };
+        // The description doubles as the default message.
+        let message = match f.message.as_ref().or(f.description.as_ref()) {
+            Some(m) => match ctx.eval(m) {
+                Ok(v) => v.text().into_owned(),
+                Err(e) => return Some(failed(e)),
+            },
+            None => f.name.clone(),
+        };
+        Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, start, end, fix })
+    }
+}

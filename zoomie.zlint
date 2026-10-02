@@ -1,0 +1,43 @@
+# zoomie-lint lints itself with this file.
+
+import "std/rust"
+import "std/zlint"
+import "std/markdown"
+import "std/toml"
+import "std/whitespace"
+
+# Examples are deliberately broken; they have their own configs.
+ignore "examples"
+
+set max-line-length.max = 160
+set tab-indent.severity = warn
+
+# ---- rust ---------------------------------------------------------------
+
+in rs_code match rs_dbg = /\bdbg!/
+format no-dbg on rs_dbg "remove `dbg!` before committing" { severity error }
+
+in rs_code match rs_unfinished = /\b(?:todo|unimplemented)!/
+format no-unfinished on rs_unfinished "`{text}` panics at runtime; finish this code" { severity error }
+
+# Test modules are a layer, so rules can ask whether they are inside one.
+in .rust | brace match rs_test_mod = /#\[cfg\(test\)\]\s*mod\s+\w+\s*/ body:brace
+in rs_code match rs_unwrap = /\.unwrap\(\)/
+format no-unwrap on rs_unwrap "`.unwrap()` outside tests; use `?` or `.expect(\"why\")`" {
+  ignore "tests.rs" | "tests/**"
+  when rs_test_mod == null
+}
+
+in rs_code match rs_fn = /\bfn[ \t]+/ name:ident
+format fn-snake-case on rs_fn.name "function names are snake_case" = snake_case(text)
+
+in rs_line_comment | rs_block_comment match todo_note = /\b(?:TODO|FIXME|XXX)\b/
+format todo-comment on todo_note "{text} left in a comment" { severity info }
+
+# ---- zlint --------------------------------------------------------------
+
+in .zlint match zl_format = /^format[ \t]+/ name:/[\w-]+/
+format formatter-names on zl_format.name "formatter names are kebab-case" = kebab_case(text)
+
+in .zlint match zl_matcher = /^(?:(?:in|over)[ \t][^\n]*?)?\bmatch[ \t]+/ name:/[\w-]+/
+format matcher-names on zl_matcher.name "matcher names are snake_case" = snake_case(text)

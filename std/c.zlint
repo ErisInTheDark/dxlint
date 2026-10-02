@@ -1,0 +1,21 @@
+# std/c: the C family (C, C++, Java, C#, Go, Kotlin, Swift, Scala, Dart).
+# Close enough for structure: // and /* */ comments, "strings", 'chars',
+# `raw` (Go) and """text blocks""".
+
+import "std/core"
+
+lang c = "*.c" | "*.h" | "*.cc" | "*.cpp" | "*.cxx" | "*.hpp" | "*.hh" | "*.java" | "*.cs" | "*.go" | "*.kt" | "*.kts" | "*.swift" | "*.scala" | "*.dart"
+
+in .c match paren
+in .c match brack
+in .c match brace
+
+macro c_code = .c | paren | brack | brace
+
+in c_code match c_line_comment = /\/\// * /$/
+in c_code match c_block_comment = /\/\*/ * /\*\//
+in c_code match c_string3 = /"""/ * /"""/
+in c_code match c_string = /"/ * /"|$/
+in c_code match c_char = /'(?:\\.[^'\n]{0,8}|[^\\'\n])'/
+in c_code match c_raw = /`/ * /`/
+in c_string | c_string3 match c_escape = /\\(?:.|\n)/

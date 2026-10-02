@@ -1,0 +1,9 @@
+# std/markdown: code fences, inline code and HTML comments, so prose rules
+# can stay out of code samples.
+
+lang markdown = "*.md" | "*.markdown"
+
+in .markdown match md_fence = /^[ \t]*```/ * /^[ \t]*```/
+in .markdown match md_tilde_fence = /^[ \t]*~~~/ * /^[ \t]*~~~/
+in .markdown match md_code = /`/ * /`|$/
+in .markdown match md_comment = /<!--/ * /-->/

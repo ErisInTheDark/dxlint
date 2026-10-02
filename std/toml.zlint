@@ -1,0 +1,17 @@
+# std/toml: TOML structure.
+
+import "std/core"
+
+lang toml = "*.toml"
+
+in .toml match brack
+in .toml match brace
+
+macro toml_code = .toml | brack | brace
+
+in toml_code match toml_comment = /#/ * /$/
+in toml_code match toml_string3 = /"""/ * /"""/
+in toml_code match toml_literal3 = /'''/ * /'''/
+in toml_code match toml_string = /"/ * /"|$/
+in toml_code match toml_literal = /'/ * /'|$/
+in toml_string | toml_string3 match toml_escape = /\\(?:.|\n)/

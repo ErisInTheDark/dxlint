@@ -1,0 +1,27 @@
+# std/rust: Rust's structure. Strings, chars and comments are layers, so
+# brackets, quotes and comments inside them never confuse anything else.
+
+import "std/core"
+
+lang rust = "*.rs"
+
+in .rust match paren
+in .rust match brack
+in .rust match brace
+
+macro rs_code = .rust | paren | brack | brace
+
+in rs_code match rs_line_comment = /\/\// * /$/
+in rs_code match rs_block_comment = /\/\*/ * /\*\//
+in rs_block_comment match rs_block_comment
+
+in rs_code match rs_string = /(?:\bb)?"/ * /"/
+in rs_string match rs_escape = /\\(?:.|\n)/
+
+# Raw strings cannot escape anything, so they have no children.
+in rs_code match rs_raw_string = /\bb?r"/ * /"/
+in rs_code match rs_raw_string1 = /\bb?r#"/ * /"#/
+in rs_code match rs_raw_string2 = /\bb?r##"/ * /"##/
+
+# 'a' and '\n' are chars; 'a on its own is a lifetime and stays code.
+in rs_code match rs_char = /(?:\bb)?'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'/

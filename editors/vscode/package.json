@@ -1,0 +1,50 @@
+{
+  "name": "zoomie-lint",
+  "displayName": "zoomie-lint",
+  "description": "Extremely fast linting with rules written in .zlint",
+  "version": "0.1.0",
+  "publisher": "zoomie",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Linters", "Formatters", "Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["workspaceContains:**/zoomie.zlint", "onLanguage:zlint"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "zlint",
+        "aliases": ["zlint", "zoomie-lint"],
+        "extensions": [".zlint"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zlint",
+        "scopeName": "source.zlint",
+        "path": "./syntaxes/zlint.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "zoomie-lint",
+      "properties": {
+        "zlint.path": {
+          "type": "string",
+          "default": "zlint",
+          "description": "Path to the zlint binary."
+        },
+        "zlint.scanWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "Lint every file in the workspace in the background, streaming results as files finish. When off, only open files are linted."
+        }
+      }
+    },
+    "commands": [
+      { "command": "zlint.restart", "title": "zlint: Restart language server" }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

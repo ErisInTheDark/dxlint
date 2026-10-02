@@ -1,0 +1,22 @@
+# Example: Rust rules showing fields, lists and nested layers.
+# Try it: cd examples/rust && zlint
+
+import "std/rust"
+import "std/whitespace"
+
+# Flat `use a::{c, b}` lists stay sorted. Repeated fields are lists.
+in .rust | brace match rs_use_list = /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ item:/[\w:]+/ (/,\s*/ item:/[\w:]+/)* /,?\s*\}/
+format sorted-use-lists on rs_use_list "keep `use` lists sorted" = "use {path}{{{join(sort(item), ', ')}}}"
+
+# `.expect("...")` messages start lowercase. `msg` is a whole string layer,
+# escapes and all.
+in rs_code match rs_expect = /\.expect\(\s*/ msg:rs_string /\s*\)/
+format expect-lowercase on rs_expect.msg "`expect` messages start lowercase" {
+  when slice(text, 1, 2) ~ /[A-Z]/
+  slice(text, 0, 1) + lower(slice(text, 1, 2)) + slice(text, 2)
+}
+
+# Type annotations are written `name: Type`. Only the separator is a
+# target, so the fix touches nothing else.
+in rs_code match rs_annotation = name:ident sep:/[ \t]*:[ \t]*/ ty:/[A-Z]\w*/
+format annotation-colon on rs_annotation.sep "write `{rs_annotation.name}: {rs_annotation.ty}`" = ": "

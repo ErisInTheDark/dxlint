@@ -1,0 +1,20 @@
+# std/core: building blocks shared by every language.
+#
+# Brackets are layers whose `*` middle lets their children eat nested
+# content, so `(a, f(")"))` closes at the right paren. Languages attach the
+# brackets to their root and add their own strings and comments to them:
+#
+#   in .mylang match paren
+#   in .mylang | paren | brack | brace match my_string = /"/ * /"/
+
+match paren = /\(/ * /\)/
+match brack = /\[/ * /\]/
+match brace = /\{/ * /\}/
+in paren | brack | brace match paren
+in paren | brack | brace match brack
+in paren | brack | brace match brace
+
+match ws = /[ \t]+/
+match space = /\s+/
+match ident = /\b[A-Za-z_]\w*/
+match number = /\b\d[\d_]*(?:\.\d+)?/

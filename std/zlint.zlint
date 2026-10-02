@@ -1,0 +1,23 @@
+# std/zlint: the structure of .zlint files themselves, so zlint can lint
+# its own rules.
+
+import "std/core"
+
+lang zlint = "*.zlint"
+
+in .zlint match paren
+in .zlint match brack
+in .zlint match brace
+
+macro zl_code = .zlint | paren | brack | brace
+
+in zl_code match zl_comment = /#/ * /$/
+in zl_code match zl_string = /"/ * /"/
+in zl_code match zl_sstring = /'/ * /'/
+in zl_string | zl_sstring match zl_escape = /\\(?:.|\n)/
+
+# Regex literals: `/` never means division in zlint.
+in zl_code match zl_regex = /\// * /\/|$/
+in zl_regex match zl_regex_escape = /\\./
+in zl_regex match zl_regex_class = /\[/ * /\]/
+in zl_regex_class match zl_regex_escape
