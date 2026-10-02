@@ -188,6 +188,32 @@ fn streams_workspace_diagnostics_and_serves_fixes() {
 }
 
 #[test]
+fn nested_configs_lint_their_own_files() {
+    let dir = project("lsp-nested");
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).expect("sub dir");
+    std::fs::write(sub.join("zoomie.zlint"), CONFIG.replace("no BAD here", "nested says no")).expect("nested config");
+    let top = dir.join("top.t");
+    let inner = sub.join("inner.t");
+    std::fs::write(&top, "BAD\n").expect("write");
+    std::fs::write(&inner, "BAD\n").expect("write");
+    let mut c = Client::start(&dir);
+
+    // The scan lints each file with its nearest config.
+    assert_eq!(c.diagnostics_for(&top)[0]["message"], "no BAD here");
+    assert_eq!(c.diagnostics_for(&inner)[0]["message"], "nested says no");
+
+    // So does an open buffer.
+    let open = sub.join("open.t");
+    c.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": uri(&open), "languageId": "t", "version": 1, "text": "BAD\n" } }),
+    );
+    assert_eq!(c.diagnostics_for(&open)[0]["message"], "nested says no");
+    c.shutdown();
+}
+
+#[test]
 fn config_errors_show_up_in_the_config_and_recover() {
     let dir = project("lsp-config");
     let file = dir.join("a.t");

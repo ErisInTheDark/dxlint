@@ -1,0 +1,154 @@
+//! Loaded configs. Each file is linted by its nearest `zoomie.zlint`; a
+//! nested config fully replaces its parents for the files below it.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use serde_json::{json, Value};
+
+use super::transport::Outbox;
+use super::{convert, scan};
+use zoomie_lint::config::source::{normalize_path, SourceProvider};
+use zoomie_lint::config::{self, CONFIG_NAME};
+use zoomie_lint::engine::{build, Linter};
+
+#[derive(Default)]
+struct Project {
+    /// The last good linter; a broken config keeps it.
+    linter: Option<Arc<Linter>>,
+    /// Every `.zlint` file the config reads, imports included.
+    files: HashSet<PathBuf>,
+    /// Config errors by the URI of the file they point at.
+    errors: HashMap<String, Vec<Value>>,
+}
+
+#[derive(Default)]
+pub struct Projects {
+    /// Keyed by config directory.
+    by_dir: HashMap<PathBuf, Project>,
+    /// URIs currently showing config errors.
+    error_uris: HashSet<String>,
+}
+
+/// Linters by config directory, snapshotted for background scans.
+#[derive(Clone, Default)]
+pub struct Linters(Arc<HashMap<PathBuf, Option<Arc<Linter>>>>);
+
+impl Linters {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn for_path(&self, path: &Path) -> Option<&Arc<Linter>> {
+        nearest(&self.0, path)?.as_ref()
+    }
+}
+
+/// The value for the nearest config directory above `path`. A broken nearest
+/// config still wins; its files never fall back to a parent config.
+fn nearest<'a, T>(by_dir: &'a HashMap<PathBuf, T>, path: &Path) -> Option<&'a T> {
+    path.ancestors().skip(1).find_map(|dir| by_dir.get(dir))
+}
+
+/// Configs under `roots` (walked like the scan walks them), plus the nearest
+/// one above each root.
+pub fn discover(roots: &[PathBuf]) -> HashSet<PathBuf> {
+    let mut found: HashSet<PathBuf> = roots.iter().filter_map(|r| config::find(r)).collect();
+    if let Some(walker) = scan::walker(roots) {
+        for entry in walker.build().flatten() {
+            if entry.file_name() == CONFIG_NAME && entry.file_type().is_some_and(|t| t.is_file()) {
+                found.insert(normalize_path(entry.path()));
+            }
+        }
+    }
+    found
+}
+
+impl Projects {
+    pub fn linter_for(&self, path: &Path) -> Option<&Arc<Linter>> {
+        nearest(&self.by_dir, path)?.linter.as_ref()
+    }
+
+    pub fn linters(&self) -> Linters {
+        Linters(Arc::new(self.by_dir.iter().map(|(dir, p)| (dir.clone(), p.linter.clone())).collect()))
+    }
+
+    pub fn dirs(&self) -> Vec<PathBuf> {
+        self.by_dir.keys().cloned().collect()
+    }
+
+    pub fn is_config(&self, path: &Path) -> bool {
+        path.file_name().is_some_and(|n| n == CONFIG_NAME) || self.by_dir.values().any(|p| p.files.contains(path))
+    }
+
+    /// Configs that read `file`: itself if it is a `zoomie.zlint`, plus every
+    /// loaded config importing it.
+    pub fn owners_of(&self, file: &Path) -> Vec<PathBuf> {
+        let mut owners: Vec<PathBuf> =
+            self.by_dir.iter().filter(|(_, p)| p.files.contains(file)).map(|(dir, _)| dir.join(CONFIG_NAME)).collect();
+        if file.file_name().is_some_and(|n| n == CONFIG_NAME) && !owners.iter().any(|o| o == file) {
+            owners.push(file.to_path_buf());
+        }
+        owners
+    }
+
+    pub fn is_loaded(&self, config: &Path) -> bool {
+        config.parent().is_some_and(|dir| self.by_dir.contains_key(dir))
+    }
+
+    pub fn has_errors(&self, uri: &str) -> bool {
+        self.error_uris.contains(uri)
+    }
+
+    /// Drops configs not in `keep`. Returns whether any were dropped.
+    pub fn retain(&mut self, keep: &HashSet<PathBuf>) -> bool {
+        let before = self.by_dir.len();
+        self.by_dir.retain(|dir, _| keep.contains(&dir.join(CONFIG_NAME)));
+        self.by_dir.len() != before
+    }
+
+    /// (Re)loads one config. Returns whether the linters changed: a new good
+    /// build, or a config that no longer exists.
+    pub fn load(&mut self, config: &Path, sources: &dyn SourceProvider, uri_of: &dyn Fn(&Path) -> String) -> bool {
+        let Some(dir) = config.parent() else { return false };
+        if !config.is_file() {
+            return self.by_dir.remove(dir).is_some();
+        }
+        let built = build(config::load_file(config, sources), dir.to_path_buf());
+        let project = self.by_dir.entry(dir.to_path_buf()).or_default();
+        project.files = built.sources.files().filter_map(|(_, f)| f.path.clone()).collect();
+        project.errors.clear();
+        for e in &built.errors {
+            let file = e.span.and_then(|s| built.sources.get(s.file).path.clone()).unwrap_or_else(|| config.to_path_buf());
+            project.errors.entry(uri_of(&file)).or_default().push(convert::config_error(&built.sources, e));
+        }
+        let Some(linter) = built.linter else { return false };
+        project.linter = Some(Arc::new(linter));
+        true
+    }
+
+    /// Publishes every config's errors in the files they point at, clearing
+    /// files that no longer have any.
+    pub fn publish_errors(&mut self, out: &Outbox) {
+        let mut by_uri: HashMap<&str, Vec<Value>> = HashMap::new();
+        for project in self.by_dir.values() {
+            for (u, errors) in &project.errors {
+                let list = by_uri.entry(u).or_default();
+                // Files imported by several configs report each error once.
+                for e in errors {
+                    if !list.contains(e) {
+                        list.push(e.clone());
+                    }
+                }
+            }
+        }
+        for stale in self.error_uris.iter().filter(|u| !by_uri.contains_key(u.as_str())) {
+            out.notify("textDocument/publishDiagnostics", json!({ "uri": stale, "diagnostics": [] }));
+        }
+        self.error_uris = by_uri.keys().map(|u| u.to_string()).collect();
+        for (u, diags) in by_uri {
+            out.notify("textDocument/publishDiagnostics", json!({ "uri": u, "diagnostics": diags }));
+        }
+    }
+}

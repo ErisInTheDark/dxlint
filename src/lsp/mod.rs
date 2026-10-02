@@ -1,8 +1,10 @@
 //! Language server. Open documents are linted on every change; the rest of
 //! the workspace is scanned in the background and streamed file by file.
-//! `.zlint` edits reload the config live, with errors shown in place.
+//! Each file uses its nearest `zoomie.zlint`. `.zlint` edits reload configs
+//! live, with errors shown in place.
 
 mod convert;
+mod projects;
 mod scan;
 mod transport;
 mod uri;
@@ -15,11 +17,11 @@ use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
 
+use projects::Projects;
 use scan::Shared;
 use transport::Outbox;
 use zoomie_lint::config::source::{normalize_path, SourceProvider};
 use zoomie_lint::config::{self};
-use zoomie_lint::engine::{build, Linter};
 use zoomie_lint::line_index::LineIndex;
 
 struct Doc {
@@ -43,18 +45,19 @@ impl SourceProvider for Overlay<'_> {
 struct Server {
     out: Outbox,
     shared: Arc<Shared>,
-    root: Option<PathBuf>,
-    linter: Option<Arc<Linter>>,
-    config_path: Option<PathBuf>,
-    config_files: HashSet<PathBuf>,
-    config_error_uris: HashSet<String>,
+    /// Workspace folders.
+    roots: Vec<PathBuf>,
+    projects: Projects,
     docs: HashMap<PathBuf, Doc>,
     scan_workspace: bool,
     progress: bool,
     warned_no_config: bool,
     /// Open documents whose diagnostics are out of date.
     dirty: HashSet<PathBuf>,
-    reload_pending: bool,
+    /// Find every config again (startup, a `zoomie.zlint` created or deleted).
+    rediscover: bool,
+    /// Configs to reload.
+    stale: HashSet<PathBuf>,
 }
 
 pub fn run() -> ExitCode {
@@ -62,17 +65,15 @@ pub fn run() -> ExitCode {
     let mut server = Server {
         out: out.clone(),
         shared: Arc::new(Shared::default()),
-        root: None,
-        linter: None,
-        config_path: None,
-        config_files: HashSet::new(),
-        config_error_uris: HashSet::new(),
+        roots: Vec::new(),
+        projects: Projects::default(),
         docs: HashMap::new(),
         scan_workspace: true,
         progress: false,
         warned_no_config: false,
         dirty: HashSet::new(),
-        reload_pending: false,
+        rediscover: false,
+        stale: HashSet::new(),
     };
     // Reading happens on its own thread so the loop below can see how much
     // input is already waiting, and lint once per burst of edits instead of
@@ -143,7 +144,7 @@ impl Server {
             }
             None => match method {
                 "exit" => return true,
-                "initialized" | "workspace/didChangeConfiguration" => self.reload_pending = true,
+                "initialized" | "workspace/didChangeConfiguration" => self.rediscover = true,
                 "textDocument/didOpen" => self.did_open(params),
                 "textDocument/didChange" => self.did_change(params),
                 "textDocument/didClose" => self.did_close(params),
@@ -154,20 +155,22 @@ impl Server {
         false
     }
 
-    /// Does the deferred work of a burst of messages: at most one config
-    /// reload, and one lint per changed document.
+    /// Does the deferred work of a burst of messages: at most one reload per
+    /// config, and one lint per changed document.
     fn flush(&mut self) {
-        if std::mem::take(&mut self.reload_pending) {
-            self.reload_config();
-        }
+        self.reload_configs();
         for path in std::mem::take(&mut self.dirty) {
             self.publish_doc(&path);
         }
     }
 
     fn initialize(&mut self, params: &Value) -> Value {
-        let root_uri = params["workspaceFolders"][0]["uri"].as_str().or_else(|| params["rootUri"].as_str());
-        self.root = root_uri.and_then(uri::to_path).or_else(|| params["rootPath"].as_str().map(|p| normalize_path(Path::new(p))));
+        let folders = params["workspaceFolders"].as_array().into_iter().flatten();
+        self.roots = folders.filter_map(|f| f["uri"].as_str().and_then(uri::to_path)).collect();
+        if self.roots.is_empty() {
+            let root = params["rootUri"].as_str().and_then(uri::to_path);
+            self.roots.extend(root.or_else(|| params["rootPath"].as_str().map(|p| normalize_path(Path::new(p)))));
+        }
         self.progress = params["capabilities"]["window"]["workDoneProgress"].as_bool().unwrap_or(false);
         if let Some(scan) = params["initializationOptions"]["scanWorkspace"].as_bool() {
             self.scan_workspace = scan;
@@ -186,58 +189,57 @@ impl Server {
         self.out.notify("window/showMessage", json!({ "type": kind, "message": message }));
     }
 
-    fn reload_config(&mut self) {
-        let start = self.root.clone().or_else(|| self.docs.keys().next().and_then(|p| p.parent().map(Path::to_path_buf)));
-        let Some(path) = start.and_then(|s| config::find(&s)) else {
-            if !self.warned_no_config {
+    /// Loads stale configs, or every config after a rediscovery, then relints
+    /// and rescans when the linters changed.
+    fn reload_configs(&mut self) {
+        let mut configs = std::mem::take(&mut self.stale);
+        let mut changed = false;
+        if std::mem::take(&mut self.rediscover) {
+            let found = if self.scan_workspace {
+                projects::discover(&self.roots)
+            } else {
+                self.roots.iter().filter_map(|r| config::find(r)).collect()
+            };
+            let open = self.docs.keys().filter_map(|p| p.parent().and_then(config::find));
+            configs = found.into_iter().chain(open).collect();
+            changed = self.projects.retain(&configs);
+            if configs.is_empty() && !self.warned_no_config {
                 self.warned_no_config = true;
                 self.show(3, &format!("zlint: no {} found in the workspace; linting is off", config::CONFIG_NAME));
             }
+        }
+        if configs.is_empty() && !changed {
             return;
-        };
-        let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let built = build(config::load_file(&path, &Overlay(&self.docs)), root);
-        self.config_path = Some(path);
-        self.config_files = built.sources.files().filter_map(|(_, f)| f.path.clone()).collect();
+        }
+        let docs = &self.docs;
+        let uri_of = |p: &Path| docs.get(p).map(|d| d.uri.clone()).unwrap_or_else(|| uri::from_path(p));
+        for config in &configs {
+            changed |= self.projects.load(config, &Overlay(docs), &uri_of);
+        }
+        self.projects.publish_errors(&self.out);
 
-        // Config errors appear in the .zlint files they point at.
-        let mut by_uri: HashMap<String, Vec<Value>> = HashMap::new();
-        for e in &built.errors {
-            let file = e.span.and_then(|s| built.sources.get(s.file).path.clone()).or_else(|| self.config_path.clone());
-            if let Some(file) = file {
-                let u = self.docs.get(&file).map(|d| d.uri.clone()).unwrap_or_else(|| uri::from_path(&file));
-                by_uri.entry(u).or_default().push(convert::config_error(&built.sources, e));
-            }
+        // A broken config keeps its last good linter, so nothing to relint.
+        if !changed {
+            return;
         }
-        for stale in self.config_error_uris.iter().filter(|u| !by_uri.contains_key(*u)) {
-            self.out.notify("textDocument/publishDiagnostics", json!({ "uri": stale, "diagnostics": [] }));
-        }
-        self.config_error_uris = by_uri.keys().cloned().collect();
-        for (u, diags) in by_uri {
-            self.out.notify("textDocument/publishDiagnostics", json!({ "uri": u, "diagnostics": diags }));
-        }
-
-        // A broken config keeps the last good linter running.
-        let Some(linter) = built.linter else { return };
-        self.linter = Some(Arc::new(linter));
         self.dirty.extend(self.docs.keys().cloned());
         if self.scan_workspace {
-            if let Some(l) = &self.linter {
-                scan::start(l.clone(), self.shared.clone(), self.out.clone(), self.progress);
-            }
+            let roots = if self.roots.is_empty() { self.projects.dirs() } else { self.roots.clone() };
+            scan::start(self.projects.linters(), roots, self.shared.clone(), self.out.clone(), self.progress);
         }
     }
 
-    fn is_config(&self, path: &Path) -> bool {
-        self.config_files.contains(path) || path.file_name().is_some_and(|n| n == config::CONFIG_NAME)
+    /// A `.zlint` file changed in the editor or on disk: reload what reads it.
+    fn config_touched(&mut self, path: &Path) {
+        self.stale.extend(self.projects.owners_of(path));
     }
 
     fn publish_doc(&self, path: &Path) {
         let Some(doc) = self.docs.get(path) else { return };
-        if self.config_error_uris.contains(&doc.uri) {
+        if self.projects.has_errors(&doc.uri) {
             return;
         }
-        let diags = match &self.linter {
+        let diags = match self.projects.linter_for(path) {
             Some(l) => convert::diagnostics(&doc.text, &l.lint(path, &doc.text)),
             None => json!([]),
         };
@@ -246,7 +248,7 @@ impl Server {
 
     /// After a file leaves the editor, its diagnostics come from disk.
     fn publish_disk(&self, path: &Path, u: &str) {
-        let diags = match (&self.linter, self.scan_workspace) {
+        let diags = match (self.projects.linter_for(path), self.scan_workspace) {
             (Some(l), true) if l.wants(path) => match std::fs::read_to_string(path) {
                 Ok(text) => convert::diagnostics(&text, &l.lint(path, &text)),
                 Err(_) => json!([]),
@@ -267,12 +269,17 @@ impl Server {
         let doc = Doc { uri: u, text: td["text"].as_str().unwrap_or_default().to_string(), version: td["version"].as_i64().unwrap_or(0) };
         self.docs.insert(path.clone(), doc);
         self.shared.open.lock().expect("lock").insert(path.clone());
-        if (self.linter.is_none() && self.config_path.is_none()) || self.is_config(&path) {
-            self.reload_pending = true;
+        if self.projects.is_config(&path) {
+            self.config_touched(&path);
+            return;
         }
-        if !self.is_config(&path) {
-            self.dirty.insert(path);
+        // Files outside the workspace, or under configs not loaded yet.
+        if let Some(config) = path.parent().and_then(config::find) {
+            if !self.projects.is_loaded(&config) {
+                self.stale.insert(config);
+            }
         }
+        self.dirty.insert(path);
     }
 
     fn did_change(&mut self, params: &Value) {
@@ -293,8 +300,8 @@ impl Server {
                 None => doc.text = text.to_string(),
             }
         }
-        if self.is_config(&path) {
-            self.reload_pending = true;
+        if self.projects.is_config(&path) {
+            self.config_touched(&path);
         } else {
             self.dirty.insert(path);
         }
@@ -304,35 +311,37 @@ impl Server {
         let Some((path, u)) = Self::doc_path(params) else { return };
         self.docs.remove(&path);
         self.shared.open.lock().expect("lock").remove(&path);
-        if self.is_config(&path) {
-            self.reload_pending = true;
+        if self.projects.is_config(&path) {
+            self.config_touched(&path);
         } else {
             self.publish_disk(&path, &u);
         }
     }
 
     fn watched_files(&mut self, params: &Value) {
-        let mut reload = false;
         for change in params["changes"].as_array().into_iter().flatten() {
             let Some(u) = change["uri"].as_str() else { continue };
             let Some(path) = uri::to_path(u) else { continue };
-            if self.is_config(&path) {
-                reload = true;
+            // 1 = created, 3 = deleted
+            let kind = change["type"].as_u64();
+            if path.file_name().is_some_and(|n| n == config::CONFIG_NAME) && matches!(kind, Some(1 | 3)) {
+                // Which config is nearest may have changed for any file.
+                self.rediscover = true;
+            } else if self.projects.is_config(&path) {
+                self.config_touched(&path);
             } else if !self.docs.contains_key(&path) {
-                // 3 = deleted
-                if change["type"].as_u64() == Some(3) {
+                if kind == Some(3) {
                     self.shared.publish(&self.out, u, None, json!([]));
                 } else {
                     self.publish_disk(&path, u);
                 }
             }
         }
-        self.reload_pending |= reload;
     }
 
     fn fix_all(&self, path: &Path) -> Option<Value> {
         let doc = self.docs.get(path)?;
-        let linter = self.linter.as_ref()?;
+        let linter = self.projects.linter_for(path)?;
         let fixed = linter.fix(path, &doc.text);
         (fixed.applied > 0 && fixed.text != doc.text).then(|| convert::whole_document_edit(&doc.text, &fixed.text))
     }

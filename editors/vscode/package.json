@@ -30,8 +30,8 @@
       "properties": {
         "zlint.path": {
           "type": "string",
-          "default": "zlint",
-          "description": "Path to the zlint binary."
+          "default": "",
+          "description": "Path to the zlint binary. Relative paths resolve against the first workspace folder. Empty: use the newest target/{release,debug}/zlint build in the workspace, else zlint from PATH."
         },
         "zlint.scanWorkspace": {
           "type": "boolean",

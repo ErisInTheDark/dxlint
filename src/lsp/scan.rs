@@ -10,9 +10,9 @@ use std::sync::{Arc, Mutex};
 use ignore::{WalkBuilder, WalkState};
 use serde_json::json;
 
+use super::projects::Linters;
 use super::transport::Outbox;
 use super::{convert, uri};
-use zoomie_lint::engine::Linter;
 
 /// State shared between the request loop and scans.
 #[derive(Default)]
@@ -45,12 +45,33 @@ impl Shared {
     }
 }
 
-pub fn start(linter: Arc<Linter>, shared: Arc<Shared>, out: Outbox, progress: bool) {
-    let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    std::thread::spawn(move || run(linter, shared, out, progress, generation));
+/// Walks `roots` like the CLI does: `.gitignore` respected, hidden files
+/// included, `.git` skipped. Roots inside other roots are dropped.
+pub fn walker(roots: &[PathBuf]) -> Option<WalkBuilder> {
+    let mut sorted: Vec<&PathBuf> = roots.iter().collect();
+    sorted.sort();
+    let mut outer: Vec<&PathBuf> = Vec::new();
+    for root in sorted {
+        if !outer.iter().any(|o| root.starts_with(o)) {
+            outer.push(root);
+        }
+    }
+    let (first, rest) = outer.split_first()?;
+    let mut walker = WalkBuilder::new(first);
+    for root in rest {
+        walker.add(root);
+    }
+    walker.hidden(false).filter_entry(|e| e.file_name() != ".git");
+    Some(walker)
 }
 
-fn run(linter: Arc<Linter>, shared: Arc<Shared>, out: Outbox, progress: bool, generation: u64) {
+/// Scans `roots`, linting each file with its nearest config.
+pub fn start(linters: Linters, roots: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool) {
+    let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || run(linters, roots, shared, out, progress, generation));
+}
+
+fn run(linters: Linters, roots: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox, progress: bool, generation: u64) {
     let token = format!("zlint-scan-{generation}");
     if progress {
         out.request(&format!("progress-{generation}"), "window/workDoneProgress/create", json!({ "token": token }));
@@ -64,36 +85,42 @@ fn run(linter: Arc<Linter>, shared: Arc<Shared>, out: Outbox, progress: bool, ge
     let touched = Mutex::new(HashSet::new());
     let current = || shared.generation.load(Ordering::SeqCst) == generation;
 
-    WalkBuilder::new(&linter.root).hidden(false).filter_entry(|e| e.file_name() != ".git").build_parallel().run(|| {
-        Box::new(|entry| {
-            if !current() {
-                return WalkState::Quit;
-            }
-            let Ok(entry) = entry else { return WalkState::Continue };
-            let path = entry.path();
-            if !entry.file_type().is_some_and(|t| t.is_file()) || !linter.wants(path) {
-                return WalkState::Continue;
-            }
-            if shared.open.lock().expect("lock").contains(path) {
-                return WalkState::Continue;
-            }
-            let Ok(text) = std::fs::read_to_string(path) else { return WalkState::Continue };
-            let diags = linter.lint(path, &text);
-            let u = uri::from_path(path);
-            problems.fetch_add(diags.len(), Ordering::Relaxed);
-            touched.lock().expect("lock").insert(u.clone());
-            // The editor may have opened the file while it was being linted;
-            // then the buffer's diagnostics win.
-            if current() && !shared.open.lock().expect("lock").contains(path) {
-                shared.publish(&out, &u, None, convert::diagnostics(&text, &diags));
-            }
-            let n = files.fetch_add(1, Ordering::Relaxed) + 1;
-            if progress && n.is_multiple_of(100) {
-                out.notify("$/progress", json!({ "token": token, "value": { "kind": "report", "message": format!("{n} files") } }));
-            }
-            WalkState::Continue
-        })
-    });
+    // With no configs there is nothing to lint; the stale sweep below still
+    // clears what earlier configs reported.
+    let walk = if linters.is_empty() { None } else { walker(&roots) };
+    if let Some(walk) = walk {
+        walk.build_parallel().run(|| {
+            Box::new(|entry| {
+                if !current() {
+                    return WalkState::Quit;
+                }
+                let Ok(entry) = entry else { return WalkState::Continue };
+                let path = entry.path();
+                if !entry.file_type().is_some_and(|t| t.is_file()) {
+                    return WalkState::Continue;
+                }
+                let Some(linter) = linters.for_path(path).filter(|l| l.wants(path)) else { return WalkState::Continue };
+                if shared.open.lock().expect("lock").contains(path) {
+                    return WalkState::Continue;
+                }
+                let Ok(text) = std::fs::read_to_string(path) else { return WalkState::Continue };
+                let diags = linter.lint(path, &text);
+                let u = uri::from_path(path);
+                problems.fetch_add(diags.len(), Ordering::Relaxed);
+                touched.lock().expect("lock").insert(u.clone());
+                // The editor may have opened the file while it was being linted;
+                // then the buffer's diagnostics win.
+                if current() && !shared.open.lock().expect("lock").contains(path) {
+                    shared.publish(&out, &u, None, convert::diagnostics(&text, &diags));
+                }
+                let n = files.fetch_add(1, Ordering::Relaxed) + 1;
+                if progress && n.is_multiple_of(100) {
+                    out.notify("$/progress", json!({ "token": token, "value": { "kind": "report", "message": format!("{n} files") } }));
+                }
+                WalkState::Continue
+            })
+        });
+    }
 
     if current() {
         // Files that showed problems before but were not seen now (deleted,

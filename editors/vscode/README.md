@@ -10,7 +10,10 @@ Runs `zlint lsp` and shows its results as you type:
 
 ## Setup
 
-1. Build zlint: `cargo build --release` at the repo root, and put `target/release/zlint` on your `PATH` (or set `zlint.path`)
+1. Build zlint: `cargo build --release` at the repo root. The extension finds the binary by:
+   - `zlint.path`, if set
+   - the newest `target/release/zlint` or `target/debug/zlint` in the (trusted) workspace, so working on zlint itself just works
+   - `zlint` on your `PATH` (eg `cargo install --path .`)
 2. In this folder: `npm install`
 3. Open the folder in VS Code and press F5, or package it with `npx @vscode/vsce package` and install the `.vsix`
 
@@ -20,7 +23,7 @@ The extension activates in workspaces that contain a `zoomie.zlint`.
 
 | setting | default | |
 |---|---|---|
-| `zlint.path` | `zlint` | path to the binary |
+| `zlint.path` | empty (auto) | path to the binary; relative paths resolve against the first workspace folder |
 | `zlint.scanWorkspace` | `true` | lint the whole workspace in the background, not just open files |
 
 To use zlint as the formatter for a language, set `"editor.defaultFormatter": "zoomie.zoomie-lint"` for it.

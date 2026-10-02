@@ -1,16 +1,63 @@
 // Thin client: all linting happens in `zlint lsp`.
+const fs = require("fs");
+const path = require("path");
 const vscode = require("vscode");
-const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
+const { LanguageClient } = require("vscode-languageclient/node");
+
+const BINARY = process.platform === "win32" ? "zlint.exe" : "zlint";
 
 let client;
 
-function createClient() {
+function workspaceRoots() {
+  return (vscode.workspace.workspaceFolders || [])
+    .filter((folder) => folder.uri.scheme === "file")
+    .map((folder) => folder.uri.fsPath);
+}
+
+// Most recently built `target/{release,debug}/zlint` in the workspace, so
+// working on zlint itself uses the fresh build. Trusted workspaces only:
+// this executes a workspace binary.
+function workspaceBuild() {
+  if (!vscode.workspace.isTrusted) {
+    return undefined;
+  }
+  let newest;
+  for (const root of workspaceRoots()) {
+    for (const profile of ["release", "debug"]) {
+      const candidate = path.join(root, "target", profile, BINARY);
+      let stat;
+      try {
+        stat = fs.statSync(candidate);
+      } catch {
+        continue;
+      }
+      if (stat.isFile() && (!newest || stat.mtimeMs > newest.mtimeMs)) {
+        newest = { path: candidate, mtimeMs: stat.mtimeMs };
+      }
+    }
+  }
+  return newest && newest.path;
+}
+
+// `zlint.path` if set (relative paths resolve against the first workspace
+// folder), else a workspace build, else `zlint` from PATH.
+function resolveServerCommand(configured) {
+  if (configured) {
+    const isBareName = !/[\\/]/.test(configured);
+    const [root] = workspaceRoots();
+    if (isBareName || path.isAbsolute(configured) || !root) {
+      return configured;
+    }
+    return path.resolve(root, configured);
+  }
+  return workspaceBuild() || "zlint";
+}
+
+function createClient(command) {
   const config = vscode.workspace.getConfiguration("zlint");
-  const command = config.get("path") || "zlint";
-  const serverOptions = {
-    run: { command, args: ["lsp"], transport: TransportKind.stdio },
-    debug: { command, args: ["lsp"], transport: TransportKind.stdio },
-  };
+  // No `transport`: TransportKind.stdio appends `--stdio`, which `zlint lsp`
+  // rejects. Plain executables talk over stdio anyway.
+  const serverOptions = { command, args: ["lsp"] };
   const clientOptions = {
     // The server decides which files it owns (via `lang` in .zlint), so
     // every file document is offered to it.
@@ -25,30 +72,51 @@ function createClient() {
 }
 
 async function start() {
-  client = createClient();
-  await client.start();
+  const configured = vscode.workspace.getConfiguration("zlint").get("path");
+  const command = resolveServerCommand(configured);
+  client = createClient(command);
+  try {
+    await client.start();
+  } catch (error) {
+    // Not awaited: activation shouldn't block on the user dismissing this.
+    const openSettings = "Open Settings";
+    vscode.window
+      .showErrorMessage(
+        `zoomie-lint: couldn't start \`${command}\` (${error.message || error}). ` +
+          "Put zlint on PATH, build it in this workspace, or set zlint.path.",
+        openSettings,
+      )
+      .then((choice) => {
+        if (choice === openSettings) {
+          vscode.commands.executeCommand("workbench.action.openSettings", "zlint.path");
+        }
+      });
+  }
+}
+
+async function restart() {
+  if (client && client.needsStop()) {
+    await client.stop();
+  }
+  await start();
 }
 
 async function activate(context) {
   context.subscriptions.push(
-    vscode.commands.registerCommand("zlint.restart", async () => {
-      if (client) {
-        await client.stop();
-      }
-      await start();
-    }),
+    vscode.commands.registerCommand("zlint.restart", restart),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
-      if (e.affectsConfiguration("zlint") && client) {
-        await client.stop();
-        await start();
+      if (e.affectsConfiguration("zlint")) {
+        await restart();
       }
     }),
+    // Workspace builds are only used once the workspace is trusted.
+    vscode.workspace.onDidGrantWorkspaceTrust(restart),
   );
   await start();
 }
 
 function deactivate() {
-  return client ? client.stop() : undefined;
+  return client && client.needsStop() ? client.stop() : undefined;
 }
 
 module.exports = { activate, deactivate };
