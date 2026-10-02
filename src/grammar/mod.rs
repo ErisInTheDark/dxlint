@@ -51,17 +51,61 @@ pub struct Matcher {
     pub like: Option<u32>,
     /// Attached with `over` somewhere: its nodes lie on top of the text.
     pub is_overlay: bool,
+    /// A node kind of a native front end (`native ts`), not a pattern.
+    pub native: Option<NativeKind>,
     /// Languages this matcher is restricted to; `None` means every language.
     gate: Option<Vec<usize>>,
     children: Vec<u32>,
     overlays: Vec<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeKind {
+    /// Index into [`Grammar::natives`].
+    pub front: u8,
+    pub kind: u16,
+}
+
+/// A native front end enabled by `native <name>`.
+pub struct NativeFront {
+    pub name: &'static str,
+    /// Matcher id of its first node kind; kinds are contiguous.
+    pub base: u32,
+    /// Label id of each of its fields.
+    pub labels: Vec<u16>,
+}
+
+impl NativeFront {
+    /// Turns front-end kind and field numbers into this grammar's ids.
+    pub fn remap(&self, mut nodes: Vec<Node>) -> Vec<Node> {
+        for n in &mut nodes {
+            if n.matcher != TEXT {
+                n.matcher += self.base;
+            }
+            for e in &mut n.children {
+                e.label = self.labels[e.label as usize];
+            }
+        }
+        nodes
+    }
+}
+
 impl Matcher {
     /// Field labels of this matcher's pattern, and which matcher each
     /// labelled reference points at.
     pub fn fields(&self) -> Vec<(String, Option<String>)> {
-        self.pat.labels().into_iter().map(|l| (l.clone(), self.pat.label_target(&l).map(str::to_string))).collect()
+        self.labels().into_iter().map(|l| (l.clone(), self.pat.label_target(&l).map(str::to_string))).collect()
+    }
+
+    /// The field names nodes of this matcher can have.
+    pub fn labels(&self) -> Vec<String> {
+        match self.native {
+            Some(n) if n.front == 0 => crate::native::ts::kinds::KINDS[n.kind as usize].1
+                .iter()
+                .map(|f| crate::native::ts::kinds::FIELD_NAMES[*f as usize].to_string())
+                .collect(),
+            _ => self.pat.labels(),
+        }
     }
 }
 
@@ -100,6 +144,7 @@ pub struct Grammar {
     indents: Vec<(u32, Option<u16>)>,
     /// Every group's final members.
     groups: HashMap<String, Vec<Parent>>,
+    pub natives: Vec<NativeFront>,
     views: Vec<View>,
     by_name: HashMap<String, u32>,
     /// Warm DFA caches, reused across files (building one is not cheap).
@@ -284,11 +329,13 @@ impl Grammar {
                 has_skip: false,
                 like: None,
                 is_overlay: false,
+                native: None,
                 gate: Some(Vec::new()),
                 children: Vec::new(),
                 overlays: Vec::new(),
             });
         }
+        let natives = add_natives(config, &mut matchers, &mut by_name, &mut labels, errors);
 
         // Pass 3: parents (definitions and `in x match y` attachments), with
         // groups resolved to their final members.
@@ -304,6 +351,13 @@ impl Grammar {
                 }
                 continue;
             };
+            if matchers[id as usize].native.is_some() {
+                errors.push(ConfigError::new(
+                    def.name.span,
+                    format!("`{}` is a native layer: its nodes come from its front end, not from parents", def.name.text),
+                ));
+                continue;
+            }
             let parents: Vec<&Parent> = def
                 .parents
                 .iter()
@@ -340,6 +394,10 @@ impl Grammar {
                         ungated[id as usize] = true;
                     }
                     Parent::Matcher(name) => match by_name.get(&name.text) {
+                        Some(&pid) if matchers[pid as usize].native.is_some() => errors.push(ConfigError::new(
+                            name.span,
+                            format!("`{}` is a native layer; pattern layers cannot live inside it", name.text),
+                        )),
                         Some(&pid) => {
                             let p = &mut matchers[pid as usize];
                             push_unique(if def.overlay { &mut p.overlays } else { &mut p.children }, id);
@@ -388,7 +446,12 @@ impl Grammar {
         check_left_recursion(&matchers, &by_name, errors);
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
-        Grammar { matchers, langs, labels, indents, groups, views, by_name, cache_pool: Mutex::new(Vec::new()) }
+        Grammar { matchers, langs, labels, indents, groups, natives, views, by_name, cache_pool: Mutex::new(Vec::new()) }
+    }
+
+    /// The native node kind of matcher `m`, if it has one.
+    pub fn native_kind(&self, m: u32) -> Option<NativeKind> {
+        self.matchers.get(m as usize).and_then(|x| x.native)
     }
 
     /// A group's members (`group name a or .lang`), nested groups flattened.
@@ -404,6 +467,58 @@ impl Grammar {
             Some(f) => label == Some(f) && owner.is_some_and(|o| self.is_a(o, m)),
         })
     }
+}
+
+/// Registers the node kinds of every `native <name>` front end as matchers.
+fn add_natives(
+    config: &Config,
+    matchers: &mut Vec<Matcher>,
+    by_name: &mut HashMap<String, u32>,
+    labels: &mut Labels,
+    errors: &mut Vec<ConfigError>,
+) -> Vec<NativeFront> {
+    use crate::native::ts::kinds::{FIELD_NAMES, KINDS};
+    let mut fronts: Vec<NativeFront> = Vec::new();
+    for name in &config.natives {
+        if name.text != "ts" {
+            errors.push(ConfigError::new(name.span, format!("unknown native front end `{}`", name.text)).note("available: ts"));
+            continue;
+        }
+        if fronts.iter().any(|f| f.name == "ts") {
+            continue;
+        }
+        let base = matchers.len() as u32;
+        for (kind, (layer, _)) in KINDS.iter().enumerate() {
+            if by_name.contains_key(*layer) {
+                errors.push(ConfigError::new(name.span, format!("`native ts` defines `{layer}`, which is already a matcher")));
+            } else {
+                by_name.insert(layer.to_string(), matchers.len() as u32);
+            }
+            matchers.push(Matcher {
+                name: layer.to_string(),
+                span: name.span,
+                pat: Pat::Class(CharClass::new(Vec::new(), Vec::new(), false)),
+                prog: Program::default(),
+                first: ByteSet::default(),
+                prefilter: Prefilter::All,
+                pairs: None,
+                prev: None,
+                dfa: None,
+                guard: None,
+                has_captures: false,
+                has_skip: false,
+                like: None,
+                is_overlay: false,
+                native: Some(NativeKind { front: fronts.len() as u8, kind: kind as u16 }),
+                gate: None,
+                children: Vec::new(),
+                overlays: Vec::new(),
+            });
+        }
+        let labels = FIELD_NAMES.iter().map(|f| labels.intern(f)).collect();
+        fronts.push(NativeFront { name: "ts", base, labels });
+    }
+    fronts
 }
 
 /// `in a or b.field indent` targets, with groups expanded.
@@ -465,7 +580,7 @@ fn resolve_indents(
 fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) {
     // A DFA cannot skip an empty match to find a longer one, so patterns
     // that could match empty always run on the interpreter.
-    let pure: Vec<bool> = matchers.iter().map(|m| is_pure(&m.pat) && !m.pat.nullable()).collect();
+    let pure: Vec<bool> = matchers.iter().map(|m| m.native.is_none() && is_pure(&m.pat) && !m.pat.nullable()).collect();
     let mut built = Vec::with_capacity(matchers.len());
     {
         let ms: &[Matcher] = matchers;

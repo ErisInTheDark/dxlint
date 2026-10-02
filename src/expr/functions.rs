@@ -408,6 +408,33 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| fold_num(a, f64::max),
     },
     Function {
+        name: "sum",
+        signature: "sum(a, b, ...) or sum(list)",
+        doc: "total of numbers (0 when there are none)",
+        min: 1,
+        max: 64,
+        call: |a| {
+            let items: Vec<Value> = if a.len() == 1 { a[0].items() } else { a.to_vec() };
+            items.iter().try_fold(0.0, |acc, v| Ok(acc + v.num()?)).map(Value::Num)
+        },
+    },
+    Function {
+        name: "compact",
+        signature: "compact(list)",
+        doc: "the list without null and empty items (always a list)",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::List(a[0].items().into_iter().filter(|v| !matches!(v, Value::Null) && v.text() != "").collect())),
+    },
+    Function {
+        name: "any",
+        signature: "any(list)",
+        doc: "is any item truthy?",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::Bool(a[0].items().iter().any(Value::truthy))),
+    },
+    Function {
         name: "abs",
         signature: "abs(n)",
         doc: "absolute value",

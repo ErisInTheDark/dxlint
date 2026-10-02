@@ -4,6 +4,7 @@ static FILES: &[(&str, &str)] = &[
     ("core", include_str!("../../std/core.zlint")),
     ("rust", include_str!("../../std/rust.zlint")),
     ("js", include_str!("../../std/js.zlint")),
+    ("ts", include_str!("../../std/ts.zlint")),
     ("python", include_str!("../../std/python.zlint")),
     ("c", include_str!("../../std/c.zlint")),
     ("zlint", include_str!("../../std/zlint.zlint")),

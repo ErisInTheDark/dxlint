@@ -8,6 +8,7 @@ mod suppress;
 #[cfg(test)]
 mod tests;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -18,9 +19,11 @@ pub use profile::Profile;
 
 use crate::config::ast::{Report, Severity};
 use crate::config::source::{SourceMap, Span};
-use crate::expr::{CExpr, Ctx, Value};
+use crate::expr::{Attr, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
+use crate::native::ts::facts::{Facts, NativeFile};
+use crate::native::ts::syntax::Syntax;
 use crate::path_globs::PathGlobs;
 use suppress::Suppressions;
 
@@ -97,6 +100,10 @@ pub struct Linter {
     by_field: HashMap<(u32, u16), Vec<usize>>,
     /// Whole-file rules and the language they want (`None`: any).
     by_lang: Vec<(usize, Option<usize>)>,
+    /// `let` attributes, by id.
+    attrs: Vec<Attr>,
+    /// Other files' exports, read on demand by native rules.
+    project: crate::native::ts::modules::Project,
 }
 
 impl Linter {
@@ -133,50 +140,104 @@ impl Linter {
             return Vec::new();
         }
 
-        // Overlays only matter when an active rule can see inside them.
+        // Overlays only matter when an active rule can see inside them, and
+        // each tree only when an active rule targets its layers.
         let mut targets = vec![false; self.grammar.matchers.len()];
+        let (mut wants_layers, mut wants_native) = (false, false);
         for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
             for t in &f.targets {
-                if let Target::Matcher(m) | Target::Field(m, _) = *t {
-                    targets[m as usize] = true;
+                match *t {
+                    Target::Matcher(m) | Target::Field(m, _) if self.grammar.native_kind(m).is_some() => wants_native = true,
+                    Target::Matcher(m) | Target::Field(m, _) => {
+                        targets[m as usize] = true;
+                        wants_layers = true;
+                    }
+                    Target::Lang(_) => wants_layers = true,
                 }
             }
-        }
-        let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
-        let parse_started = std::time::Instant::now();
-        let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
-        let rules_started = std::time::Instant::now();
-        if let Some(p) = &self.profile {
-            Profile::add_time(&p.parse_nanos, rules_started - parse_started);
         }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
         let options: Vec<Vec<Value<'static>>> = self.rules.iter().map(Rule::option_values).collect();
+        let run = Run { lang, text, lines: &lines, file: &file, active: &active, options: &options };
         let mut out = Vec::new();
+
+        if wants_layers {
+            let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
+            let parse_started = std::time::Instant::now();
+            let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
+            let rules_started = std::time::Instant::now();
+            if let Some(p) = &self.profile {
+                Profile::add_time(&p.parse_nanos, rules_started - parse_started);
+            }
+            self.check_tree(&tree, &run, None, &mut out);
+            if tree.too_deep {
+                out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));
+            }
+            if let Some(p) = &self.profile {
+                Profile::add_time(&p.rules_nanos, rules_started.elapsed());
+            }
+        }
+
+        if wants_native {
+            if let (Some(front), Some(jsx)) = (self.grammar.natives.first(), crate::native::ts::reads(path)) {
+                let parse_started = std::time::Instant::now();
+                let parsed = crate::native::ts::parse(text, jsx);
+                let rules_started = std::time::Instant::now();
+                if let Some(p) = &self.profile {
+                    Profile::add_time(&p.parse_nanos, rules_started - parse_started);
+                }
+                match parsed {
+                    Ok(parsed) => {
+                        let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
+                        let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project);
+                        self.check_tree(&tree, &run, Some(&facts), &mut out);
+                    }
+                    Err((at, msg)) => out.push(engine_warning(at as usize, format!("could not parse this file as TypeScript: {msg}"))),
+                }
+                if let Some(p) = &self.profile {
+                    Profile::add_time(&p.rules_nanos, rules_started.elapsed());
+                }
+            }
+        }
+        let suppressions = Suppressions::parse(text, &lines);
+        if !suppressions.is_empty() {
+            out.retain(|d| suppressions.allows(d, &lines));
+        }
+        out.sort_by(|a, b| (a.start, a.end, &a.rule).cmp(&(b.start, b.end, &b.rule)));
+        out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.rule == b.rule);
+        out
+    }
+
+    /// Runs every active rule on the nodes of `tree` they target.
+    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a dyn Facts>, out: &mut Vec<Diagnostic>) {
         // Nodes run in document order, so a line's indentation fix is known
         // before the lines below it are checked.
-        let mut reindented: HashMap<usize, String> = HashMap::new();
-
+        let reindented: RefCell<HashMap<usize, String>> = RefCell::default();
+        let memo = AttrMemo::default();
         for &id in &tree.order {
             let node = tree.node(id);
-            let mut run = |fi: usize| {
-                if active[fi] {
+            let mut apply = |fi: usize| {
+                if run.active[fi] {
                     let ctx = Ctx {
                         grammar: &self.grammar,
-                        lang,
-                        tree: &tree,
+                        lang: run.lang,
+                        tree,
                         node: id,
-                        source: text,
-                        lines: &lines,
-                        file: &file,
-                        options: &options[fi],
+                        source: run.text,
+                        lines: run.lines,
+                        file: run.file,
+                        options: &run.options[fi],
                         reindented: &reindented,
+                        attrs: &self.attrs,
+                        memo: &memo,
+                        native,
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
                     let found = self.apply(&self.rules[fi], &ctx);
                     if let Some(d) = found {
                         if let Some([edit]) = d.fix.as_deref() {
-                            record_reindent(&mut reindented, text, &lines, edit);
+                            record_reindent(&mut reindented.borrow_mut(), run.text, run.lines, edit);
                         }
                         out.push(d);
                     }
@@ -187,39 +248,17 @@ impl Linter {
                 }
             };
             match node.matcher {
-                ROOT => self.by_lang.iter().filter(|(_, l)| l.is_none_or(|l| l == lang)).for_each(|&(fi, _)| run(fi)),
+                ROOT => self.by_lang.iter().filter(|(_, l)| l.is_none_or(|l| l == run.lang)).for_each(|&(fi, _)| apply(fi)),
                 TEXT => {}
-                m => self.by_matcher[m as usize].iter().for_each(|&fi| run(fi)),
+                m => self.by_matcher[m as usize].iter().for_each(|&fi| apply(fi)),
             }
             if let (Some(label), Some(owner)) = (tree.label(id), tree.owner(id)) {
                 let owner_matcher = tree.node(owner).matcher;
                 if let Some(list) = self.by_field.get(&(owner_matcher, label)) {
-                    list.iter().for_each(|&fi| run(fi));
+                    list.iter().for_each(|&fi| apply(fi));
                 }
             }
         }
-
-        if tree.too_deep {
-            out.push(Diagnostic {
-                rule: ENGINE_RULE.into(),
-                severity: Severity::Warn,
-                message: "nesting is too deep to follow; some structure in this file was skipped".into(),
-                start: 0,
-                end: 0,
-                fix: None,
-            });
-        }
-
-        if let Some(p) = &self.profile {
-            Profile::add_time(&p.rules_nanos, rules_started.elapsed());
-        }
-        let suppressions = Suppressions::parse(text, &lines);
-        if !suppressions.is_empty() {
-            out.retain(|d| suppressions.allows(d, &lines));
-        }
-        out.sort_by(|a, b| (a.start, a.end, &a.rule).cmp(&(b.start, b.end, &b.rule)));
-        out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.rule == b.rule);
-        out
     }
 
     fn apply(&self, f: &Rule, ctx: &Ctx) -> Option<Diagnostic> {
@@ -268,6 +307,20 @@ impl Linter {
         };
         Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, start, end, fix })
     }
+}
+
+/// What every rule run over one file shares.
+struct Run<'a> {
+    lang: usize,
+    text: &'a str,
+    lines: &'a LineIndex,
+    file: &'a str,
+    active: &'a [bool],
+    options: &'a [Vec<Value<'static>>],
+}
+
+fn engine_warning(at: usize, message: String) -> Diagnostic {
+    Diagnostic { rule: ENGINE_RULE.into(), severity: Severity::Warn, message, start: at, end: at, fix: None }
 }
 
 /// Remembers a fix that only rewrites a line's leading whitespace, as that

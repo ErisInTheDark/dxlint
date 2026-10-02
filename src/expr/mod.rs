@@ -6,11 +6,12 @@ pub mod functions;
 mod re;
 pub mod value;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::config::ast::{BinOp, Expr, ExprKind, TemplatePart, UnOp};
 use crate::config::error::{closest, ConfigError};
-use crate::grammar::{full_match, Grammar, Tree};
+use crate::grammar::{full_match, Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
 use crate::pattern::compile::{compile, Labels, Program};
 use crate::pattern::dfa::{is_decidable, Dfa};
@@ -46,6 +47,19 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("layer", "name of the node's own layer"),
     ("enclosing", "innermost layer containing the node's start, looking past overlays (a comment, a string, ...)"),
     ("source", "the whole file's text"),
+    ("uses", "native layers: how often the name this identifier declares is used (null if it declares nothing)"),
+    ("value_uses", "native layers: uses that need the runtime value (not type positions, `typeof x` in types)"),
+    ("self_uses", "native layers: those uses inside the declaration itself (a function calling itself)"),
+    ("writes", "native layers: assignments to the name this identifier declares"),
+    ("decl_kind", "native layers: what this identifier's declaration is (`const`, `param`, `import`, `class`, `type`, ...)"),
+    ("exported", "native layers: the declaration is `export`ed"),
+    ("ambient", "native layers: the declaration is inside `declare` (no runtime code)"),
+    ("decl_import", "native layers: the module an identifier's binding is imported from (null if not imported)"),
+    ("decl_doc", "native layers: the JSDoc of the declaration an identifier is or refers to, followed into imported files"),
+    ("type", "native layers: the expression's declared type as text (`Promise<void>`, `never`); null when it cannot tell"),
+    ("type_members", "native layers: member names of the expression's type, inherited ones included (`then`, `[Symbol.dispose]`)"),
+    ("type_param_defaults", "native layers: on a call, `new`, type reference or class: each type parameter's default, printed (null where none)"),
+    ("type_params_inferred", "native layers: on a call or `new`: what the arguments would infer for each type parameter (null where unknown)"),
 ];
 
 #[derive(Debug)]
@@ -68,6 +82,28 @@ pub enum CExpr {
     If(Box<CExpr>, Box<CExpr>, Box<CExpr>),
     Test(Box<CExpr>, Box<Program>),
     TestDfa(Box<CExpr>, Box<Dfa>),
+    /// A `let` attribute of the node itself.
+    Attr(u16),
+    /// A `let` attribute of the node's field (a list when it repeats).
+    FieldAttr(u16, u16),
+    /// `parent.field`
+    ParentField(u16),
+    /// `parent.attr`
+    ParentAttr(u16),
+}
+
+/// A `let` attribute: its expression on each layer that defines it.
+pub struct Attr {
+    pub name: String,
+    pub defs: Vec<(u32, CExpr)>,
+}
+
+/// Attribute values computed for one file's tree, so each node's attribute
+/// is evaluated once however many rules and parents read it.
+#[derive(Default)]
+pub struct AttrMemo<'a> {
+    values: RefCell<HashMap<(u32, u16), Value<'a>>>,
+    busy: RefCell<Vec<(u32, u16)>>,
 }
 
 /// What names mean inside one rule.
@@ -78,6 +114,8 @@ pub struct Scope<'a> {
     pub options: Vec<String>,
     /// Option values are constants: no node names at all.
     pub options_only: bool,
+    /// Names of every `let` attribute, by id.
+    pub attrs: &'a [String],
 }
 
 impl Scope<'_> {
@@ -189,6 +227,9 @@ impl Scope<'_> {
                 if let Some((_, label)) = self.fields.iter().find(|(f, _)| *f == name.text) {
                     return Some(CExpr::Field(*label));
                 }
+                if let Some(i) = self.attrs.iter().position(|a| *a == name.text) {
+                    return Some(CExpr::Attr(i as u16));
+                }
                 if let Some(i) = BUILTIN_VARS.iter().position(|(b, _)| *b == name.text) {
                     return Some(CExpr::Builtin(i));
                 }
@@ -213,6 +254,24 @@ impl Scope<'_> {
                 None
             }
             [layer, field] => {
+                // `field.attr`: an attribute of one of the node's fields.
+                let own_field = self.fields.iter().find(|(f, _)| *f == layer.text);
+                let attr = self.attrs.iter().position(|a| *a == field.text);
+                let ancestor_field = self.grammar.matcher(&layer.text).is_some_and(|m| self.grammar.matchers[m as usize].labels().contains(&field.text));
+                if let (Some((_, label)), Some(attr), false) = (own_field, attr, ancestor_field) {
+                    return Some(CExpr::FieldAttr(*label, attr as u16));
+                }
+                // `parent.x`: a field or attribute of the node's parent layer.
+                if layer.text == "parent" && self.grammar.matcher("parent").is_none() {
+                    if let Some(a) = attr {
+                        return Some(CExpr::ParentAttr(a as u16));
+                    }
+                    if let Some(label) = self.grammar.labels.get(&field.text) {
+                        return Some(CExpr::ParentField(label));
+                    }
+                    errors.push(ConfigError::new(field.span, format!("no field or attribute `{}`", field.text)));
+                    return None;
+                }
                 let Some(m) = self.grammar.matcher(&layer.text) else {
                     errors.push(
                         ConfigError::new(layer.span, format!("unknown matcher `{}`", layer.text))
@@ -220,7 +279,7 @@ impl Scope<'_> {
                     );
                     return None;
                 };
-                let fields = self.grammar.matchers[m as usize].pat.labels();
+                let fields = self.grammar.matchers[m as usize].labels();
                 if !fields.contains(&field.text) {
                     errors.push(
                         ConfigError::new(field.span, format!("matcher `{}` has no field `{}`", layer.text, field.text))
@@ -250,6 +309,7 @@ fn arity(f: &Function) -> String {
 }
 
 /// Everything an expression can look at while evaluating for one node.
+#[derive(Clone, Copy)]
 pub struct Ctx<'a> {
     pub grammar: &'a Grammar,
     pub lang: usize,
@@ -263,13 +323,43 @@ pub struct Ctx<'a> {
     /// whitespace after the fix. Builtins reading lines above the node see
     /// these, so lines inside a mis-indented block are measured from where
     /// the block will be, and one mistake is one report.
-    pub reindented: &'a HashMap<usize, String>,
+    pub reindented: &'a RefCell<HashMap<usize, String>>,
+    pub attrs: &'a [Attr],
+    pub memo: &'a AttrMemo<'a>,
+    /// Facts of the native front end, when `tree` is a native tree.
+    pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
 }
 
 impl<'a> Ctx<'a> {
+    /// The value of attribute `attr` on `node` (null where no layer of the
+    /// node defines it).
+    fn attr(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
+        if let Some(v) = self.memo.values.borrow().get(&(node, attr)) {
+            return Ok(v.clone());
+        }
+        let m = self.tree.node(node).matcher;
+        let def = &self.attrs[attr as usize];
+        let Some((_, expr)) = def.defs.iter().find(|(d, _)| m != ROOT && m != TEXT && self.grammar.is_a(m, *d)) else {
+            return Ok(Value::Null);
+        };
+        if self.memo.busy.borrow().contains(&(node, attr)) {
+            return Err(format!("attribute `{}` depends on itself", def.name));
+        }
+        self.memo.busy.borrow_mut().push((node, attr));
+        let ctx = Ctx { node, options: &[], ..*self };
+        let value = ctx.eval(expr);
+        self.memo.busy.borrow_mut().pop();
+        let value = value?;
+        self.memo.values.borrow_mut().insert((node, attr), value.clone());
+        Ok(value)
+    }
+
     /// Leading whitespace of `line`, as fixed when it lies above the node.
     fn line_indent(&self, line: usize) -> Value<'a> {
-        Value::from(self.fixed_indent(line).unwrap_or_else(|| self.indent_at(self.lines.line_start(line))))
+        match self.fixed_indent(line) {
+            Some(ws) => Value::from(ws),
+            None => Value::from(self.indent_at(self.lines.line_start(line))),
+        }
     }
 
     /// The whole of `line`, with its fixed indentation when it lies above
@@ -282,10 +372,12 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    fn fixed_indent(&self, line: usize) -> Option<&'a str> {
+    fn fixed_indent(&self, line: usize) -> Option<String> {
         let own = self.lines.line_of(self.tree.node(self.node).start as usize);
-        let reindented: &'a HashMap<usize, String> = self.reindented;
-        reindented.get(&line).filter(|_| line < own).map(String::as_str)
+        if line >= own {
+            return None;
+        }
+        self.reindented.borrow().get(&line).cloned()
     }
 
     fn node_text(&self, id: u32) -> &'a str {
@@ -387,6 +479,43 @@ impl<'a> Ctx<'a> {
                 Some(id) if !self.tree.is_root(id) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),
                 _ => Value::from(""),
             },
+            name @ ("uses" | "value_uses" | "self_uses" | "writes" | "decl_kind" | "exported" | "ambient") => {
+                match self.native.and_then(|n| n.binding(self.node)) {
+                    Some(b) => match name {
+                        "uses" => Value::from(b.uses as usize),
+                        "value_uses" => Value::from(b.value_uses as usize),
+                        "self_uses" => Value::from(b.self_uses as usize),
+                        "writes" => Value::from(b.writes as usize),
+                        "decl_kind" => Value::from(b.kind),
+                        "exported" => Value::Bool(b.exported),
+                        _ => Value::Bool(b.ambient),
+                    },
+                    None => Value::Null,
+                }
+            }
+            "decl_import" => match self.native.and_then(|n| n.import_of(self.node)) {
+                Some((from, _)) => Value::from(from),
+                None => Value::Null,
+            },
+            "decl_doc" => match self.native.and_then(|n| n.decl_doc(self.node)) {
+                Some(doc) => Value::from(doc),
+                None => Value::Null,
+            },
+            "type" => match self.native.and_then(|n| n.type_text(self.node)) {
+                Some(t) => Value::from(t),
+                None => Value::Null,
+            },
+            name @ ("type_param_defaults" | "type_params_inferred") => match self.native.and_then(|n| n.type_params(self.node)) {
+                Some((defaults, inferred)) => {
+                    let list = if name == "type_param_defaults" { defaults } else { inferred };
+                    Value::List(list.into_iter().map(|t| t.map_or(Value::Null, Value::from)).collect())
+                }
+                None => Value::Null,
+            },
+            "type_members" => match self.native.and_then(|n| n.type_members(self.node)) {
+                Some(names) => Value::List(names.into_iter().map(|n| Value::from(n.to_string())).collect()),
+                None => Value::Null,
+            },
             "line" => Value::from(self.lines.line_of(start) + 1),
             "col" => Value::from(self.lines.line_col(self.source, start).1 + 1),
             "file" => Value::from(self.file),
@@ -481,6 +610,26 @@ impl<'a> Ctx<'a> {
                 },
             },
             CExpr::Builtin(i) => self.builtin(*i),
+            CExpr::Attr(a) => self.attr(self.node, *a)?,
+            CExpr::ParentField(label) => match self.parent_layer() {
+                Some(p) => self.field(p, *label),
+                None => Value::Null,
+            },
+            CExpr::ParentAttr(a) => match self.parent_layer() {
+                Some(p) => self.attr(p, *a)?,
+                None => Value::Null,
+            },
+            CExpr::FieldAttr(label, a) => {
+                let mut values = Vec::new();
+                for id in self.tree.fields(self.node, *label) {
+                    values.push(self.attr(id, *a)?);
+                }
+                match values.len() {
+                    0 => Value::Null,
+                    1 => values.pop().expect("one"),
+                    _ => Value::List(values),
+                }
+            }
             CExpr::Opt(i) => self.options[*i].clone(),
             CExpr::Call(f, args) => {
                 // Most calls take few arguments: keep them off the heap.

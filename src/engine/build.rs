@@ -9,7 +9,7 @@ use crate::config::ast::{Parent, RuleDef, SetValue, Severity, Target as AstTarge
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
-use crate::expr::{CExpr, Ctx, Scope, Value};
+use crate::expr::{Attr, CExpr, Ctx, Scope, Value, BUILTIN_VARS};
 use crate::grammar::Grammar;
 use crate::path_globs::{wildcard, PathGlobs};
 use crate::pattern::Pat;
@@ -26,6 +26,13 @@ pub struct Built {
 pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let Loaded { config, sources, mut errors } = loaded;
     let grammar = Grammar::build(&config, &mut errors);
+    let mut attr_names: Vec<String> = Vec::new();
+    for def in &config.attrs {
+        if !attr_names.contains(&def.name.text) {
+            attr_names.push(def.name.text.clone());
+        }
+    }
+    let attrs = attributes(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -41,7 +48,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             );
             continue;
         }
-        match rule(def, &grammar, &mut errors) {
+        match rule(def, &grammar, &attr_names, &mut errors) {
             Some(r) if !def.broken => rules.push(r),
             _ => broken.push(&def.name.text),
         }
@@ -67,7 +74,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
                 continue;
             }
             SetValue::Expr(e) => {
-                let scope = Scope { grammar: &grammar, fields: Vec::new(), options: Vec::new(), options_only: true };
+                let scope = Scope { grammar: &grammar, fields: Vec::new(), options: Vec::new(), options_only: true, attrs: &[] };
                 match scope.compile(e, &mut errors).map(|c| Ctx::eval_static(&c, &[])) {
                     Some(Ok(v)) => v,
                     Some(Err(err)) => {
@@ -149,20 +156,32 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             }
         }
     }
-    let linter =
-        Linter { reach: grammar.reach(), profile: None, grammar, rules, sources: sources.clone(), root, ignores, by_matcher, by_field, by_lang };
+    let linter = Linter {
+        reach: grammar.reach(),
+        profile: None,
+        grammar,
+        rules,
+        sources: sources.clone(),
+        root,
+        ignores,
+        by_matcher,
+        by_field,
+        by_lang,
+        attrs,
+        project: Default::default(),
+    };
     Built { linter: Some(linter), errors, sources }
 }
 
 /// Labels available on a node of `target`.
 fn target_fields(g: &Grammar, target: Target) -> Vec<(String, u16)> {
     let names = match target {
-        Target::Matcher(m) => g.matchers[m as usize].pat.labels(),
+        Target::Matcher(m) => g.matchers[m as usize].labels(),
         Target::Field(m, label) => {
             let pat = &g.matchers[m as usize].pat;
             let label_name = g.labels.name(label);
             match pat.label_target(label_name).and_then(|t| g.matcher(t)) {
-                Some(t) => g.matchers[t as usize].pat.labels(),
+                Some(t) => g.matchers[t as usize].labels(),
                 None => capture_inner_labels(pat, label_name),
             }
         }
@@ -187,7 +206,40 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
     out
 }
 
-fn rule(def: &RuleDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<Rule> {
+/// Compiles every `let` attribute on each layer that defines it.
+fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], errors: &mut Vec<ConfigError>) -> Vec<Attr> {
+    let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
+    for def in &config.attrs {
+        if BUILTIN_VARS.iter().any(|(b, _)| *b == def.name.text) {
+            errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));
+            continue;
+        }
+        let id = names.iter().position(|n| *n == def.name.text).expect("collected");
+        for target in &def.targets {
+            let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, errors) else { continue };
+            for t in resolved {
+                let Target::Matcher(m) = t else {
+                    errors.push(ConfigError::new(target.span, "attributes belong to layers, not languages"));
+                    continue;
+                };
+                if attrs[id].defs.iter().any(|(d, _)| *d == m) {
+                    errors.push(ConfigError::new(
+                        def.name.span,
+                        format!("attribute `{}` is defined twice for `{}`", def.name.text, g.matchers[m as usize].name),
+                    ));
+                    continue;
+                }
+                let scope = Scope { grammar: g, fields: target_fields(g, t), options: Vec::new(), options_only: false, attrs: names };
+                if let Some(e) = scope.compile(&def.expr, errors) {
+                    attrs[id].defs.push((m, e));
+                }
+            }
+        }
+    }
+    attrs
+}
+
+fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], errors: &mut Vec<ConfigError>) -> Option<Rule> {
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
@@ -208,7 +260,7 @@ fn rule(def: &RuleDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<Rul
             errors.push(ConfigError::new(opt.name.span, format!("option `{}` is declared twice", opt.name.text)));
             continue;
         }
-        let scope = Scope { grammar: g, fields: Vec::new(), options: Vec::new(), options_only: true };
+        let scope = Scope { grammar: g, fields: Vec::new(), options: Vec::new(), options_only: true, attrs: &[] };
         let Some(compiled) = scope.compile(&opt.default, errors) else { continue };
         match Ctx::eval_static(&compiled, &[]) {
             Ok(v) => options.push(OptionSlot {
@@ -233,7 +285,7 @@ fn rule(def: &RuleDef, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<Rul
             errors.push(ConfigError::new(opt.name.span, format!("option `{field}` has the same name as a field of `{target_text}`")));
         }
     }
-    let scope = Scope { grammar: g, fields, options: option_names, options_only: false };
+    let scope = Scope { grammar: g, fields, options: option_names, options_only: false, attrs };
 
     let compile_all = |exprs: &[crate::config::ast::Expr], errors: &mut Vec<ConfigError>| -> Vec<CExpr> {
         exprs.iter().filter_map(|e| scope.compile(e, errors)).collect()
@@ -295,7 +347,7 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
             None => {
                 let mut err = ConfigError::new(name.span, format!("unknown matcher `{}`", name.text))
                     .suggest(&name.text, g.matchers.iter().map(|m| m.name.as_str()));
-                if let Some(owner) = g.matchers.iter().find(|m| m.pat.labels().contains(&name.text)) {
+                if let Some(owner) = g.matchers.iter().find(|m| m.labels().contains(&name.text)) {
                     err = err.note(format!("`{}` is a field of `{}`; target it as `{}.{}`", name.text, owner.name, owner.name, name.text));
                 }
                 errors.push(err);
@@ -310,7 +362,7 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
                 );
                 return None;
             };
-            let labels = g.matchers[m as usize].pat.labels();
+            let labels = g.matchers[m as usize].labels();
             match g.labels.get(&field.text).filter(|_| labels.contains(&field.text)) {
                 Some(l) => (vec![Target::Field(m, l)], format!("{}.{}", layer.text, field.text)),
                 None => {

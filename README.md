@@ -115,6 +115,14 @@ be once fixed). Regexes support
 lookahead and lookbehind, and rule expressions have line context
 (`prev_line`, `parent_before`, `indent_anchor`, ...) and `re_*` functions.
 
+For TypeScript and JavaScript, `import "std/ts"` adds zlint's own parser:
+the real syntax tree as `ts_*` layers, scopes (`uses`, `value_uses`),
+cross-file facts (`decl_doc`) and declared types (`type`, `type_members`)
+read from your tsconfig, `lib` and `@types` files, without running
+TypeScript itself. Computed attributes (`in ts_logical let ops 1 + left.ops +
+right.ops`) fold trees for rules like "conditions with more than two
+`&&`/`||`".
+
 A config with mistakes still lints with every part that built: the errors
 are reported, and the run fails, but one typo never switches linting off.
 

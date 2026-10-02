@@ -23,7 +23,7 @@ use crate::pattern::Pat;
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
-    "warn", "error",
+    "warn", "error", "native", "let",
 ];
 
 /// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
@@ -259,13 +259,15 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "match") => self.matcher(ctx),
             (Tk::Ident, "rule") => self.rule(ctx),
             (Tk::Ident, "indent") => self.indent(ctx),
+            (Tk::Ident, "let") => self.attr(ctx),
+            (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.set(),
             (Tk::Ident, "ignore") => self.ignore(),
             (Tk::Ident, _) if self.ts.expand(&mut self.errors) => return,
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe()))
-                        .note("items are: lang, group, match, in/over ..., rule, indent, set, macro, import, ignore"),
+                        .note("items are: lang, group, match, in/over ..., rule, indent, let, set, macro, import, ignore, native"),
                 );
                 self.bump();
             }
@@ -294,9 +296,10 @@ impl<'a> Parser<'a> {
             Some(t) if t.is_ident("match") => self.matcher(Some(&ctx)),
             Some(t) if t.is_ident("rule") => self.rule(Some(&ctx)),
             Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
+            Some(t) if t.is_ident("let") => self.attr(Some(&ctx)),
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
-                self.errors.push(ConfigError::new(span, format!("expected `match`, `rule`, `indent` or `{{` after `{} ...`", kw.text)));
+                self.errors.push(ConfigError::new(span, format!("expected `match`, `rule`, `indent`, `let` or `{{` after `{} ...`", kw.text)));
             }
         }
     }
@@ -327,6 +330,49 @@ impl<'a> Parser<'a> {
             None => self.errors.push(ConfigError::new(kw.span, "`indent` needs a context: `in <layer> indent`")),
         }
         self.end_of_item();
+    }
+
+    /// `in a or b let name expr`: a computed attribute of those layers.
+    fn attr(&mut self, ctx: Option<&Context>) {
+        let kw = self.bump().expect("peeked");
+        let Some(name) = self.ident("an attribute name") else { return };
+        if RESERVED.contains(&name.text.as_str()) {
+            self.errors.push(ConfigError::new(name.span, format!("`{}` is a keyword and cannot name an attribute", name.text)));
+            return;
+        }
+        let targets = match ctx {
+            Some(c) if !c.overlay => {
+                let mut out = Vec::new();
+                for (parent, field) in &c.parents {
+                    match (parent, field) {
+                        (Parent::Matcher(m), None) => out.push(m.clone()),
+                        (Parent::Matcher(_), Some(f)) => {
+                            self.errors.push(ConfigError::new(f.span, "attributes belong to layers, not fields"))
+                        }
+                        (Parent::Lang(n), _) => self.errors.push(ConfigError::new(n.span, "attributes belong to layers, not languages")),
+                        (Parent::AnyLang(s), _) => self.errors.push(ConfigError::new(*s, "attributes belong to layers, not languages")),
+                    }
+                }
+                out
+            }
+            _ => {
+                self.errors.push(ConfigError::new(kw.span, "`let` needs a layer: `in <layer> let name expr`"));
+                return;
+            }
+        };
+        let Some(expr) = self.expr() else { return };
+        self.end_of_item();
+        if !targets.is_empty() {
+            self.config.attrs.push(AttrDef { name, targets, expr });
+        }
+    }
+
+    /// `native ts`
+    fn native(&mut self) {
+        self.bump();
+        let Some(name) = self.ident("a native front end name (`ts`)") else { return };
+        self.end_of_item();
+        self.config.natives.push(name);
     }
 
     /// After an item's head: its `{ ... }` block in `ctx`, or the end of the line.

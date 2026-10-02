@@ -19,6 +19,18 @@ pub struct Config {
     pub ignores: Vec<(String, Span)>,
     pub groups: Vec<GroupDef>,
     pub indents: Vec<IndentDef>,
+    /// `native ts`: native front ends whose node kinds become layers.
+    pub natives: Vec<Name>,
+    pub attrs: Vec<AttrDef>,
+}
+
+/// `in a or b let name expr`: a value computed for every node of these
+/// layers, readable as `name` on the node and `field.name` from its parent.
+#[derive(Debug)]
+pub struct AttrDef {
+    pub name: Name,
+    pub targets: Vec<Name>,
+    pub expr: Expr,
 }
 
 /// `in brace or fn.body indent`: lines inside these layers' `until` (or

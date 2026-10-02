@@ -35,6 +35,12 @@ impl Tree {
         Tree::from_nodes(std::mem::take(&mut p.nodes), std::mem::take(&mut p.holes), root, too_deep)
     }
 
+    /// A tree from a native front end's nodes (already using this grammar's
+    /// matcher and label ids).
+    pub fn from_native(nodes: Vec<Node>, root: u32) -> Tree {
+        Tree::from_nodes(nodes, Vec::new(), root, false)
+    }
+
     fn from_nodes(mut nodes: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
         let starts: Vec<u32> = nodes.iter().map(|n| n.start).collect();
         for node in &mut nodes {

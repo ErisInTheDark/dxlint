@@ -375,6 +375,135 @@ fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
     assert_eq!(fixed, "x (\n  a (\n    b\n  )\n)");
 }
 
+fn native_linter(rules: &str) -> Linter {
+    let src = format!("import \"std/ts\"\n{rules}");
+    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    assert!(built.errors.is_empty(), "{:#?}", built.errors);
+    built.linter.expect("no errors")
+}
+
+#[test]
+fn native_layers_carry_fields_and_attributes() {
+    let l = native_linter(r#"
+        in ts_logical let ops 1 + left.ops + right.ops
+        in ts_paren let ops expr.ops
+        in ts_call let ops sum(arg.ops)
+        in ts_if.test rule complex warn "{ops} in `{text}`" { when ops > 1 }
+        in ts_call.callee rule callee info "{text}"
+    "#);
+    let text = "if (a && b || c) {}\nif ((a && b)) f(x || y && z);\nif (g(a || b, c && d)) {}\n";
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["2 in `a && b || c`", "f", "g", "2 in `g(a || b, c && d)`"]);
+    // Other files never get the native parse.
+    assert!(l.lint(Path::new("/root/file.t"), text).is_empty());
+}
+
+#[test]
+fn bindings_count_value_type_and_self_uses() {
+    let l = native_linter(r#"
+        in ts_ident rule b info "{text}:{decl_kind}:{uses}/{value_uses}/{self_uses}/{writes}" { when uses != null }
+    "#);
+    let text = "import { A, B, C } from \"m\";\nlet x: A = 1;\ntype T = typeof B;\nconst f = () => f();\ninterface D {}\nconst D = 1;\nx = C;\nexport { D };\n";
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
+    assert_eq!(
+        messages,
+        vec![
+            "A:import:1/0/0/0",     // a type position only
+            "B:import:1/0/0/0",     // `typeof B` in a type needs no runtime value
+            "C:import:1/1/0/0",
+            "x:let:0/0/0/1",        // written, never read
+            "T:type:0/0/0/0",
+            "f:const:1/1/1/0",      // only its own body calls it
+            "D:interface:1/1/0/0",  // merged with `const D`: one binding
+        ]
+    );
+}
+
+#[test]
+fn files_the_native_parser_cannot_read_say_so() {
+    let l = native_linter("in ts_call rule c warn \"call\"");
+    let diags = l.lint(Path::new("/root/file.ts"), "f(;\n");
+    assert_eq!(diags.len(), 1, "{diags:#?}");
+    assert!(diags[0].message.starts_with("could not parse this file as TypeScript"), "{}", diags[0].message);
+}
+
+/// Writes `files` under a fresh directory in `target/` and lints `main`
+/// with `rules`, returning the messages.
+fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules: &str) -> Vec<String> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    for (path, text) in files {
+        let p = dir.join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, text).unwrap();
+    }
+    let src = format!("import \"std/ts\"\n{rules}");
+    let built = build(config::load_text("test.zlint", &src, &Disk), dir.clone());
+    assert!(built.errors.is_empty(), "{:#?}", built.errors);
+    let l = built.linter.unwrap();
+    let text = std::fs::read_to_string(dir.join(main)).unwrap();
+    l.lint(&dir.join(main), &text).into_iter().map(|d| d.message).collect()
+}
+
+#[test]
+fn declared_types_follow_imports_members_and_initializers() {
+    let messages = lint_project(
+        "types-basic",
+        &[
+            ("tsconfig.json", "{ \"compilerOptions\": { \"paths\": { \"@app/*\": [\"./src/*\"] } } }"),
+            (
+                "src/a.ts",
+                "import { Emitter } from \"./events\";\n@decorate\nexport default class Store<T = string> extends Emitter.Host<number> {\n  value!: T;\n  save(): Task<T> { return 0 as never }\n  stop(): never { throw 0 }\n}\nexport interface Box { store: Store<number>; }\ninterface Task<R> { then(ok: (r: R) => void): void; }\n",
+            ),
+            ("src/events.ts", "export namespace Emitter {\n  export class Host<E> {\n    on(event: E): this { return this }\n  }\n}\n"),
+            (
+                "src/b.ts",
+                "import Store, { type Box } from \"@app/a\";\nclass Holder {\n  store = new Store();\n  run(box: Box) {\n    this.store.save();\n    box.store.value;\n    this.store.stop();\n    this.store.on(1);\n  }\n}\n",
+            ),
+        ],
+        "src/b.ts",
+        "in ts_expr_stmt.expr rule t info \"{default(type, '?')}\"",
+    );
+    assert_eq!(messages, vec!["Task<string>", "number", "never", "Store<string>"]);
+}
+
+#[test]
+fn docs_follow_imports_through_barrels() {
+    let messages = lint_project(
+        "docs-barrel",
+        &[
+            ("a.ts", "/**\n * Old.\n * @deprecated use b\n */\nexport function a() {}\nexport function b() {}\n"),
+            ("index.ts", "export * from \"./a\";\n"),
+            ("main.ts", "import { a, b } from \"./index\";\na();\nb();\n"),
+        ],
+        "main.ts",
+        "in ts_ident rule d info \"{text}: {decl_doc}\" { when decl_import != null && decl_doc != null }",
+    );
+    assert_eq!(messages, vec!["a: Old.\n@deprecated use b", "a: Old.\n@deprecated use b"]);
+}
+
+#[test]
+fn parent_reads_the_parent_layers_fields_and_attributes() {
+    let l = native_linter(r#"
+        in ts_call let arity count(arg)
+        in ts_call.arg rule p info "{parent.callee}/{parent.arity}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f(1, 2);\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["f/2", "f/2"]);
+}
+
+#[test]
+fn native_layers_have_no_pattern_children() {
+    let src = "import \"std/ts\"\nin ts_call match x /x/\nmatch ts_if /y/\nin x let text 1\n";
+    let errors: Vec<String> = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"))
+        .errors
+        .into_iter()
+        .map(|e| e.message)
+        .collect();
+    assert_eq!(errors.len(), 3, "{errors:#?}");
+    assert!(errors[0].contains("already a matcher") && errors[1].contains("native layer") && errors[2].contains("built-in"), "{errors:#?}");
+}
+
 #[test]
 fn broken_parts_leave_the_rest_linting() {
     let src = format!(

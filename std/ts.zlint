@@ -1,0 +1,11 @@
+# std/ts: TypeScript and JavaScript syntax from zlint's native parser. Every
+# node kind is a `ts_*` layer with ESTree-style fields (`ts_if.test`,
+# `ts_call.callee`, `ts_binary.op`); `zlint tree file.ts` shows them. Files
+# are only parsed this way when a rule targets a `ts_*` layer.
+
+import "std/js"
+
+native ts
+
+group ts_function_like ts_function or ts_arrow or ts_method
+group ts_loop ts_for or ts_for_in or ts_for_of or ts_while or ts_do_while

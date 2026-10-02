@@ -12,5 +12,6 @@ pub mod engine;
 pub mod expr;
 pub mod grammar;
 pub mod line_index;
+pub mod native;
 pub mod path_globs;
 pub mod pattern;

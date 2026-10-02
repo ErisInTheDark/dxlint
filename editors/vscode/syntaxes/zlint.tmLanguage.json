@@ -44,6 +44,10 @@
           }
         },
         {
+          "match": "\\b(let)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "variable.other.property.zlint" } }
+        },
+        {
           "match": "\\b(option)\\s+([A-Za-z_]\\w*)",
           "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "variable.parameter.zlint" } }
         }
@@ -57,7 +61,7 @@
         { "include": "#sstring" },
         { "include": "#regex" },
         {
-          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|when|fix|files|report)\\b",
+          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|when|fix|files|report|let|native)\\b",
           "name": "keyword.other.zlint"
         },
         { "match": "\\b(until|or)\\b", "name": "keyword.operator.word.zlint" },

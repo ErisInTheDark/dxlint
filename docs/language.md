@@ -18,6 +18,8 @@ in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as sna
 - [Patterns](#patterns)
 - [Rules](#rules)
 - [Expressions](#expressions)
+- [Attributes](#attributes)
+- [Native layers (TypeScript)](#native-layers-typescript)
 - [Configuring rules: `set`](#configuring-rules-set)
 - [Imports and macros](#imports-and-macros)
 - [Suppressing diagnostics](#suppressing-diagnostics)
@@ -36,6 +38,8 @@ in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as sna
 | `group name A or B` | add layers to a named group, usable wherever a layer list is |
 | `in A or B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
 | `in A rule name ...` | a rule checking `A`'s nodes, see [Rules](#rules) |
+| `in A let name expr` | an attribute computed for `A`'s nodes, see [Attributes](#attributes) |
+| `native ts` | TypeScript/JavaScript syntax as `ts_*` layers, see [Native layers](#native-layers-typescript) |
 | `set name.option value`, `set name severity` | configure an existing rule |
 | `ignore "glob" "glob"` | never lint matching files |
 | `import "path"` | paste another `.zlint` file here |
@@ -383,12 +387,85 @@ match is `null`, and a field that matched several times is a list. `null`,
 `screaming_case`, `title_case`, `trim`, `trim_start`, `trim_end`, `replace`,
 `repeat`, `pad_start`, `pad_end`, `starts_with`, `ends_with`, `contains`,
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
+`compact`, `sum`, `any`,
 `count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`.
 
 Regex functions take the full syntax of Rust's `regex` crate (no lookaround
 or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first
 match or `null`), `re_count(text, re)`, `re_replace(text, re, with)` (`$1`
 for groups) and `re_escape(text)` to build patterns from text.
+
+## Attributes
+
+`in A let name expr` computes a value for every node of `A`, on demand and
+once per node. Attributes read their own node like a rule does, and other
+nodes' attributes through fields, so they can fold a tree bottom-up:
+
+```zlint
+import "std/ts"
+in ts_logical let ops 1 + left.ops + right.ops
+in ts_paren let ops expr.ops
+in ts_call let ops sum(arg.ops)
+in ts_if.test rule too-complex warn "{ops} operators" { when ops > 2 }
+```
+
+- `name` is the node's attribute; `field.name` is the attribute of that
+  field's node (a list when the field repeats). Layers without a definition
+  give `null`.
+- `parent.field` and `parent.name` read the parent layer's field or
+  attribute (`in ts_call.arg rule ... { when parent.callee == "f" }`).
+- An attribute that depends on itself fails like any expression error.
+- Attributes also lift builtins onto fields: `in ts_ident let used uses`
+  makes `local.used` readable from an import specifier.
+
+## Native layers (TypeScript)
+
+`import "std/ts"` (or `native ts` with your own JS language) parses
+`.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with zlint's own TypeScript parser and
+turns its syntax tree into `ts_*` layers: `ts_if` with fields `test`,
+`consequent`, `alternate`; `ts_call` with `callee`, `type_arg`, `arg`;
+`ts_binary`/`ts_logical` with `left`, `op`, `right`, and so on (ESTree names;
+`zlint tree file.ts` shows any file). Rules on them work like any rule:
+
+```zlint
+import "std/ts"
+in ts_call rule no-eval warn "no eval" { when callee == "eval" }
+in ts_if.test or ts_while.test rule assign-in-condition warn "assignment in a condition" {
+  when layer == "ts_assign"
+}
+```
+
+Files are only parsed this way when an active rule targets a `ts_*` layer,
+and a file the parser cannot read gets one warning instead of rules. Native
+layers have no pattern children (`in ts_call match x ...` is an error).
+
+**Facts.** Native layers add builtins (null elsewhere):
+
+| name | value |
+|---|---|
+| `uses`, `value_uses` | on a declaring identifier: how often its name is used, and how many of those uses need the runtime value (type positions, and `typeof x` or `[x]` keys inside types, do not) |
+| `self_uses`, `writes` | uses inside its own function, and assignments to it |
+| `decl_kind` | `const`, `let`, `var`, `param`, `function`, `class`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, ... |
+| `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
+| `decl_import` | on an identifier that is or refers to an import: the module it comes from |
+| `decl_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
+| `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
+| `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
+| `type_param_defaults`, `type_params_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
+
+Values and types are separate namespaces (`const X` does not hide an
+imported type `X`), and merged declarations (`interface X` + `const X`,
+overloads) are one binding.
+
+**Types** come from declarations, never from the checker's inference:
+annotations, return types, initializers and member chains, generic
+arguments fixed by an argument (`map(x => ...)`), `await`, `as`, `!`. Types
+are read from the files they are declared in (other project files,
+`node_modules` packages and `@types`, `declare module "x"`), with the
+nearest `tsconfig.json`'s `paths`, `lib`, `types` and `references` deciding
+what is visible. There is no control-flow narrowing or contextual inference;
+where a type cannot be told, `type` is null and rules stay quiet. Other
+files are read once per run and kept only as declaration summaries.
 
 ## Configuring rules: `set`
 
@@ -412,6 +489,7 @@ library:
 |---|---|
 | `std/core` | `paren`, `brack`, `brace` (nesting), `ws`, `space`, `ident`, `number` |
 | `std/rust`, `std/js`, `std/python`, `std/c`, `std/toml`, `std/zlint` | languages with brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
+| `std/ts` | `native ts` (with `std/js`) and the groups `ts_function_like`, `ts_loop` |
 | `std/markdown` | code fences, inline code, HTML comments |
 | `std/whitespace` | `trailing-whitespace`, `max-line-length`, `tab-indent`, `blank-lines`, `final-newline` |
 
