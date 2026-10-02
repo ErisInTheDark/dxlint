@@ -7,7 +7,7 @@ lang toml = "*.toml"
 in .toml match brack
 in .toml match brace
 
-macro toml_code = .toml | brack | brace
+group toml_code = .toml | brack | brace
 
 in toml_code match toml_comment = /#/ * /$/
 in toml_code match toml_string3 = /"""/ * /"""/

@@ -42,6 +42,9 @@ pub enum Pat {
     /// `*`: lazily skip ahead, letting the current layer's children eat
     /// whole chunks (strings, nested brackets, ...) as they go.
     Skip,
+    /// `(?=...)`, `(?!...)`, `(?<=...)`, `(?<!...)`: does a pure regex match
+    /// right after (or right before) this position? Runs as a lazy DFA.
+    Around { behind: bool, negate: bool, inner: Box<Pat> },
 }
 
 impl Pat {
@@ -53,7 +56,7 @@ impl Pat {
     /// references never can (that is checked per matcher).
     pub fn nullable(&self) -> bool {
         match self {
-            Pat::Empty | Pat::Look(_) | Pat::Skip => true,
+            Pat::Empty | Pat::Look(_) | Pat::Skip | Pat::Around { .. } => true,
             Pat::Lit { bytes, .. } => bytes.is_empty(),
             Pat::Class(_) | Pat::Any { .. } | Pat::Ref { .. } => false,
             Pat::Seq(items) => items.iter().all(Pat::nullable),

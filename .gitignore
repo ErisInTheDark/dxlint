@@ -1,3 +1,4 @@
 /target
+/scratch
 /editors/vscode/node_modules
 /editors/vscode/*.vsix

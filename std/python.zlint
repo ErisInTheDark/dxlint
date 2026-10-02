@@ -9,7 +9,7 @@ in .python match paren
 in .python match brack
 in .python match brace
 
-macro py_code = .python | paren | brack | brace
+group py_code = .python | paren | brack | brace
 
 in py_code match py_comment = /#/ * /$/
 in py_code match py_string3 = /(?:\b[rRbBuUfF]{1,2})?"""/ * /"""/

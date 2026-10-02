@@ -3,6 +3,7 @@
 mod build;
 pub mod diagnostic;
 mod fix;
+mod profile;
 mod suppress;
 #[cfg(test)]
 mod tests;
@@ -13,8 +14,9 @@ use std::path::{Path, PathBuf};
 pub use build::{build, Built};
 pub use diagnostic::{Diagnostic, Edit, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
+pub use profile::Profile;
 
-use crate::config::ast::Severity;
+use crate::config::ast::{Report, Severity};
 use crate::config::source::{SourceMap, Span};
 use crate::expr::{CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
@@ -40,7 +42,7 @@ pub enum Target {
 pub struct Formatter {
     pub name: String,
     pub span: Span,
-    pub target: Target,
+    pub targets: Vec<Target>,
     pub target_text: String,
     pub severity: Severity,
     pub options: Vec<OptionSlot>,
@@ -50,6 +52,7 @@ pub struct Formatter {
     when: Vec<CExpr>,
     message: Option<CExpr>,
     shape: Option<CExpr>,
+    report: Report,
 }
 
 impl Formatter {
@@ -71,10 +74,9 @@ impl Formatter {
         if self.severity == Severity::Off {
             return false;
         }
-        if let Target::Lang(Some(l)) = self.target {
-            if l != lang {
-                return false;
-            }
+        // A formatter only on other languages' files has nothing to do here.
+        if self.targets.iter().all(|t| matches!(t, Target::Lang(Some(l)) if *l != lang)) {
+            return false;
         }
         (self.files.is_empty() || self.files.matches(rel)) && !self.ignore.matches(rel)
     }
@@ -87,14 +89,22 @@ pub struct Linter {
     /// Paths are matched relative to this (the config file's directory).
     pub root: PathBuf,
     ignores: PathGlobs,
-    /// See [Grammar::reach].
+    /// See [`Grammar::reach`].
     reach: Vec<Vec<bool>>,
+    /// Set by [`Linter::enable_profile`].
+    pub profile: Option<Profile>,
     by_matcher: Vec<Vec<usize>>,
     by_field: HashMap<(u32, u16), Vec<usize>>,
-    by_lang: Vec<usize>,
+    /// Whole-file formatters and the language they want (`None`: any).
+    by_lang: Vec<(usize, Option<usize>)>,
 }
 
 impl Linter {
+    /// Collect `--profile` counters from now on.
+    pub fn enable_profile(&mut self) {
+        self.profile = Some(Profile::new(self.grammar.matchers.len(), self.formatters.len()));
+    }
+
     pub fn relative<'p>(&self, path: &'p Path) -> std::borrow::Cow<'p, Path> {
         match path.strip_prefix(&self.root) {
             Ok(rel) => rel.into(),
@@ -126,12 +136,19 @@ impl Linter {
         // Overlays only matter when an active formatter can see inside them.
         let mut targets = vec![false; self.grammar.matchers.len()];
         for (f, _) in self.formatters.iter().zip(&active).filter(|(_, a)| **a) {
-            if let Target::Matcher(m) | Target::Field(m, _) = f.target {
-                targets[m as usize] = true;
+            for t in &f.targets {
+                if let Target::Matcher(m) | Target::Field(m, _) = *t {
+                    targets[m as usize] = true;
+                }
             }
         }
         let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
-        let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays));
+        let parse_started = std::time::Instant::now();
+        let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
+        let format_started = std::time::Instant::now();
+        if let Some(p) = &self.profile {
+            Profile::add_time(&p.parse_nanos, format_started - parse_started);
+        }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
         let options: Vec<Vec<Value<'static>>> = self.formatters.iter().map(Formatter::option_values).collect();
@@ -142,13 +159,18 @@ impl Linter {
             let mut run = |fi: usize| {
                 if active[fi] {
                     let ctx = Ctx { grammar: &self.grammar, lang, tree: &tree, node: id, source: text, lines: &lines, file: &file, options: &options[fi] };
+                    let started = self.profile.as_ref().map(|_| std::time::Instant::now());
                     if let Some(d) = self.apply(&self.formatters[fi], &ctx) {
                         out.push(d);
+                    }
+                    if let (Some(p), Some(s)) = (&self.profile, started) {
+                        Profile::add_time(&p.formatter_nanos[fi], s.elapsed());
+                        Profile::add(&p.formatter_evals[fi], 1);
                     }
                 }
             };
             match node.matcher {
-                ROOT => self.by_lang.iter().for_each(|&fi| run(fi)),
+                ROOT => self.by_lang.iter().filter(|(_, l)| l.is_none_or(|l| l == lang)).for_each(|&(fi, _)| run(fi)),
                 TEXT => {}
                 m => self.by_matcher[m as usize].iter().for_each(|&fi| run(fi)),
             }
@@ -171,6 +193,9 @@ impl Linter {
             });
         }
 
+        if let Some(p) = &self.profile {
+            Profile::add_time(&p.format_nanos, format_started.elapsed());
+        }
         let suppressions = Suppressions::parse(text, &lines);
         if !suppressions.is_empty() {
             out.retain(|d| suppressions.allows(d, &lines));
@@ -205,12 +230,18 @@ impl Linter {
                     if want == ctx.source[start..end] {
                         return None;
                     }
-                    Some(vec![Edit { start, end, text: want.into_owned() }])
+                    Some(fix::minimal_edit(ctx.source, start, end, &want))
                 }
                 Err(e) => return Some(failed(e)),
             },
             None => None,
         };
+        let (start, end) = match (f.report, &fix) {
+            (Report::Change, Some(edit)) => (edit.start, edit.end),
+            (Report::End, _) => (end, end),
+            _ => (start, end),
+        };
+        let fix = fix.map(|edit| vec![edit]);
         // The description doubles as the default message.
         let message = match f.message.as_ref().or(f.description.as_ref()) {
             Some(m) => match ctx.eval(m) {

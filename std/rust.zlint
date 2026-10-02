@@ -9,7 +9,7 @@ in .rust match paren
 in .rust match brack
 in .rust match brace
 
-macro rs_code = .rust | paren | brack | brace
+group rs_code = .rust | paren | brack | brace
 
 in rs_code match rs_line_comment = /\/\// * /$/
 in rs_code match rs_block_comment = /\/\*/ * /\*\//

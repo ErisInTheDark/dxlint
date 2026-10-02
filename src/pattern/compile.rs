@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use super::class::CharClass;
+use super::dfa::LookDfa;
 use super::prefilter::ByteSet;
 use super::{Look, Pat};
 
@@ -21,6 +22,9 @@ pub enum Inst {
     Jmp(u32),
     /// Text capture boundary: slot `2 * label` opens, `2 * label + 1` closes.
     Save(u16),
+    /// Where a `*` starts (`false`) and ends (`true`): the layer's inside,
+    /// which `in layer indent` indents.
+    Hole(bool),
     Look(Look),
     /// Match another matcher here, as a child layer under `label`.
     Call { matcher: u32, label: u16 },
@@ -28,6 +32,8 @@ pub enum Inst {
     /// char if no child matches, then fast-forward past bytes where neither
     /// a child nor the continuation can start (`Program::skip_stops`).
     Skip(u32),
+    /// Zero-width lookaround, Program::arounds[i].
+    Around(u32),
     Match,
 }
 
@@ -40,6 +46,7 @@ pub struct Program {
     /// means it could start anywhere (no fast-forward). Filled in by the
     /// grammar, which knows every matcher's first bytes.
     pub skip_stops: Vec<Option<ByteSet>>,
+    pub arounds: Vec<LookDfa>,
 }
 
 impl Program {
@@ -73,7 +80,7 @@ impl Program {
                     stack.push(b as usize);
                 }
                 Inst::Jmp(t) => stack.push(t as usize),
-                Inst::Save(_) => stack.push(pc + 1),
+                Inst::Save(_) | Inst::Hole(_) => stack.push(pc + 1),
                 // `$` only holds right before a line break (or at the end,
                 // where fast-forwarding stops anyway).
                 Inst::Look(Look::Eol) => {
@@ -81,7 +88,7 @@ impl Program {
                     set.insert(b'\n');
                 }
                 Inst::Look(Look::Eof) => {}
-                Inst::Look(_) => stack.push(pc + 1),
+                Inst::Look(_) | Inst::Around(_) => stack.push(pc + 1),
                 Inst::Call { matcher, .. } => set.union(&call_first(matcher)),
             }
         }
@@ -181,14 +188,21 @@ impl Compiler<'_> {
                 let label = label.as_deref().map_or(NO_LABEL, |l| self.labels.intern(l));
                 self.push(Inst::Call { matcher, label })?;
             }
+            Pat::Around { behind, negate, inner } => {
+                let idx = self.prog.arounds.len() as u32;
+                self.prog.arounds.push(LookDfa::new(inner, *behind, *negate)?);
+                self.push(Inst::Around(idx))?;
+            }
             Pat::Skip => {
                 // Lazy loop: try what follows first, else take one more step.
+                self.push(Inst::Hole(false))?;
                 let split = self.push(Inst::Split(0, 0))?;
                 self.push(Inst::Skip(self.prog.skip_stops.len() as u32))?;
                 self.prog.skip_stops.push(None);
                 self.push(Inst::Jmp(split))?;
                 let end = self.pc();
                 self.patch(split, Inst::Split(end, split + 1));
+                self.push(Inst::Hole(true))?;
             }
         }
         Ok(())

@@ -66,10 +66,13 @@ fn lint_file(linter: &Linter, path: &Path, fix: bool) -> Msg {
 
 pub fn run(args: LintArgs) -> ExitCode {
     let started = Instant::now();
-    let linter = match load(&args.config) {
-        Ok(l) => l,
+    let (mut linter, config_ok) = match load(&args.config) {
+        Ok(p) => (p.linter, p.config_ok),
         Err(code) => return code,
     };
+    if args.profile {
+        linter.enable_profile();
+    }
     let cwd = std::env::current_dir().unwrap_or_default();
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
 
@@ -175,6 +178,9 @@ pub fn run(args: LintArgs) -> ExitCode {
         }
         render::summary(errors, warnings, other, fixable, files);
     }
+    if args.profile {
+        super::info::profile(&linter);
+    }
     if args.stats {
         let secs = started.elapsed().as_secs_f64();
         eprintln!(
@@ -184,7 +190,10 @@ pub fn run(args: LintArgs) -> ExitCode {
             bytes as f64 / 1048576.0 / secs.max(1e-9)
         );
     }
-    if failed || errors > 0 {
+    // A broken config still lints with what built, but never passes.
+    if !config_ok {
+        ExitCode::from(2)
+    } else if failed || errors > 0 {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS

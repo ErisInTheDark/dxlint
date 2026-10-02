@@ -42,6 +42,9 @@ pub struct LintArgs {
     /// Print timing and throughput
     #[arg(long)]
     pub stats: bool,
+    /// Report which matchers and formatters cost the most time
+    #[arg(long)]
+    pub profile: bool,
     #[command(flatten)]
     pub config: ConfigArg,
 }
@@ -86,18 +89,19 @@ pub fn run() -> ExitCode {
     match cli.command {
         None => lint::run(cli.lint),
         Some(Command::Check { config }) => match load(&config) {
-            Ok(_) => {
+            Ok(Project { config_ok: true, .. }) => {
                 eprintln!("config ok");
                 ExitCode::SUCCESS
             }
+            Ok(_) => ExitCode::from(2),
             Err(code) => code,
         },
         Some(Command::Rules { config }) => match load(&config) {
-            Ok(linter) => info::rules(&linter),
+            Ok(p) => info::rules(&p.linter),
             Err(code) => code,
         },
         Some(Command::Tree { file, all, config }) => match load(&config) {
-            Ok(linter) => info::tree(&linter, &file, all),
+            Ok(p) => info::tree(&p.linter, &file, all),
             Err(code) => code,
         },
         Some(Command::Functions) => info::functions(),
@@ -105,9 +109,18 @@ pub fn run() -> ExitCode {
     }
 }
 
-/// Loads and builds the linter, printing config errors on failure. Uses the
-/// explicit `--config`, else the nearest `zoomie.zlint` upward.
-pub fn load(arg: &ConfigArg) -> Result<Linter, ExitCode> {
+/// A built linter, and whether its config had no errors.
+pub struct Project {
+    pub linter: Linter,
+    /// `false` when config errors were printed: the linter still runs with
+    /// every part that built, but the command should fail in the end.
+    pub config_ok: bool,
+}
+
+/// Loads and builds the linter, printing any config errors. Uses the
+/// explicit `--config`, else the nearest `zoomie.zlint` upward. Only a
+/// missing config is fatal: a broken one lints with what still works.
+pub fn load(arg: &ConfigArg) -> Result<Project, ExitCode> {
     let path = match &arg.config {
         Some(p) => normalize_path(p),
         None => match config::find(&std::env::current_dir().unwrap_or_default()) {
@@ -121,14 +134,15 @@ pub fn load(arg: &ConfigArg) -> Result<Linter, ExitCode> {
     load_from(&path, &Disk)
 }
 
-pub fn load_from(path: &Path, provider: &dyn SourceProvider) -> Result<Linter, ExitCode> {
+pub fn load_from(path: &Path, provider: &dyn SourceProvider) -> Result<Project, ExitCode> {
     let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let built = build(config::load_file(path, provider), root);
+    let config_ok = built.errors.is_empty();
+    if !config_ok {
+        render::config_errors(&built.errors, &built.sources);
+    }
     match built.linter {
-        Some(l) => Ok(l),
-        None => {
-            render::config_errors(&built.errors, &built.sources);
-            Err(ExitCode::from(2))
-        }
+        Some(linter) => Ok(Project { linter, config_ok }),
+        None => Err(ExitCode::from(2)),
     }
 }

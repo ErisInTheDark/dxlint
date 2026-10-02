@@ -17,6 +17,26 @@ pub struct Config {
     pub sets: Vec<SetDef>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
+    pub groups: Vec<GroupDef>,
+    pub indents: Vec<IndentDef>,
+}
+
+/// `in brace | fn.body indent`: lines inside these layers' `*` (or inside
+/// these fields) are one level deeper than the line the layer opened on.
+#[derive(Debug)]
+pub struct IndentDef {
+    /// A layer or group, optionally narrowed to one of its fields.
+    pub targets: Vec<(Parent, Option<Name>)>,
+}
+
+/// `group name = a | b` or `group name += c`: a named, extensible list of
+/// parent layers. `in name match x` attaches `x` to every member, including
+/// members added later.
+#[derive(Debug)]
+pub struct GroupDef {
+    pub name: Name,
+    pub extend: bool,
+    pub parents: Vec<Parent>,
 }
 
 /// `lang rust = "*.rs" | "*.rs.in"`
@@ -44,6 +64,10 @@ pub struct MatcherDef {
     /// `over`: searched across the parent's text without consuming it.
     pub overlay: bool,
     pub pattern: Option<(Pat, Span)>,
+    /// `match name like base = ...`: a specialisation of `base`. It gets all
+    /// of `base`'s children and overlays, wins ties against it, and counts as
+    /// a `base` for formatters and ancestor lookups.
+    pub like: Option<Name>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -102,7 +126,8 @@ pub struct OptionDef {
 #[derive(Debug)]
 pub struct FormatDef {
     pub name: Name,
-    pub target: Target,
+    /// `on a | b`: every layer (or field, or language) it applies to.
+    pub targets: Vec<Target>,
     pub description: Option<Expr>,
     pub severity: Option<Severity>,
     pub options: Vec<OptionDef>,
@@ -112,6 +137,19 @@ pub struct FormatDef {
     pub message: Option<Expr>,
     /// What the node should look like. Different text => diagnostic + fix.
     pub shape: Option<Expr>,
+    /// Where diagnostics point (`report node | change | end`).
+    pub report: Report,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Report {
+    /// The whole node.
+    #[default]
+    Node,
+    /// The part of the node the shape changes.
+    Change,
+    /// The (empty) end of the node: "missing X after", "too much before X".
+    End,
 }
 
 #[derive(Debug)]

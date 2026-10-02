@@ -123,7 +123,7 @@ fn concat(a: Starts, b: &Starts) -> Option<Starts> {
 fn starts(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet) -> Option<Starts> {
     let full = ByteSet::full;
     Some(match pat {
-        Pat::Empty | Pat::Look(_) => vec![vec![]],
+        Pat::Empty | Pat::Look(_) | Pat::Around { .. } => vec![vec![]],
         Pat::Lit { bytes, fold } => {
             let set = |b: u8| {
                 let mut s = ByteSet::default();
@@ -152,6 +152,13 @@ fn starts(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet) -> Option<Starts> {
                 if acc.iter().all(|s| s.len() >= 2) {
                     break;
                 }
+                // A lookahead constrains the bytes from here on. Using only
+                // its constraint (and dropping what follows) stays a safe
+                // superset of the possible starts.
+                if let Pat::Around { behind: false, negate: false, inner } = item {
+                    acc = concat(acc, &starts(inner, refs)?)?;
+                    break;
+                }
                 acc = concat(acc, &starts(item, refs)?)?;
             }
             acc
@@ -174,6 +181,94 @@ fn starts(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet) -> Option<Starts> {
             (out.len() <= MAX_STARTS).then_some(out)?
         }
     })
+}
+
+/// Which byte may come right before a match, from a leading lookbehind:
+/// `(?<=\{)x` only needs trying right after a `{`. ASCII bytes are checked
+/// exactly; any non-ASCII byte is allowed when the lookbehind can end in
+/// non-ASCII text.
+#[derive(Debug, Clone)]
+pub struct PrevSet {
+    ascii: [bool; 128],
+    non_ascii: bool,
+}
+
+impl PrevSet {
+    pub fn build(pat: &Pat) -> Option<PrevSet> {
+        let inner = leading_lookbehind(pat)?;
+        let mut set = PrevSet { ascii: [false; 128], non_ascii: false };
+        if last_bytes(inner, &mut set) {
+            // The lookbehind can match empty text: no constraint.
+            return None;
+        }
+        Some(set)
+    }
+
+    #[inline]
+    pub fn allows(&self, text: &[u8], pos: usize) -> bool {
+        match pos.checked_sub(1).map(|p| text[p]) {
+            None => true,
+            Some(b) if b >= 0x80 => self.non_ascii,
+            Some(b) => self.ascii[b as usize],
+        }
+    }
+}
+
+fn leading_lookbehind(pat: &Pat) -> Option<&Pat> {
+    match pat {
+        Pat::Around { behind: true, negate: false, inner } => Some(inner),
+        Pat::Capture { inner, .. } => leading_lookbehind(inner),
+        Pat::Seq(items) => items.iter().find(|p| !matches!(p, Pat::Empty)).and_then(leading_lookbehind),
+        _ => None,
+    }
+}
+
+/// Adds every byte that can end a match of `pat`; returns whether `pat` can
+/// match empty text (so what comes before it can also end the match).
+fn last_bytes(pat: &Pat, set: &mut PrevSet) -> bool {
+    let all = |set: &mut PrevSet| {
+        set.ascii = [true; 128];
+        set.non_ascii = true;
+    };
+    match pat {
+        Pat::Empty | Pat::Look(_) | Pat::Around { .. } => true,
+        Pat::Lit { bytes, fold } => match bytes.last() {
+            None => true,
+            Some(&b) if b >= 0x80 => {
+                set.non_ascii = true;
+                false
+            }
+            Some(&b) => {
+                set.ascii[b as usize] = true;
+                if *fold {
+                    set.ascii[b.to_ascii_lowercase() as usize] = true;
+                    set.ascii[b.to_ascii_uppercase() as usize] = true;
+                }
+                false
+            }
+        },
+        Pat::Class(class) => {
+            for b in 0..128u8 {
+                if class.contains_ascii(b) {
+                    set.ascii[b as usize] = true;
+                }
+            }
+            set.non_ascii |= class.may_match_non_ascii();
+            false
+        }
+        Pat::Any { .. } | Pat::Ref { .. } => {
+            all(set);
+            false
+        }
+        Pat::Skip => {
+            all(set);
+            true
+        }
+        Pat::Seq(items) => items.iter().rev().all(|p| last_bytes(p, set)),
+        Pat::Alt(items) => items.iter().fold(false, |nullable, p| last_bytes(p, set) | nullable),
+        Pat::Repeat { inner, min, .. } => last_bytes(inner, set) || *min == 0,
+        Pat::Capture { inner, .. } => last_bytes(inner, set),
+    }
 }
 
 #[derive(Debug)]
@@ -294,9 +389,9 @@ fn ends_at_eof(pat: &Pat) -> bool {
 }
 
 /// Longest possible match in bytes, if bounded.
-fn max_len(pat: &Pat) -> Option<usize> {
+pub fn max_len(pat: &Pat) -> Option<usize> {
     match pat {
-        Pat::Empty | Pat::Look(_) => Some(0),
+        Pat::Empty | Pat::Look(_) | Pat::Around { .. } => Some(0),
         Pat::Lit { bytes, .. } => Some(bytes.len()),
         Pat::Class(_) | Pat::Any { .. } => Some(4),
         Pat::Seq(items) => items.iter().try_fold(0usize, |acc, p| Some(acc + max_len(p)?)),
@@ -311,7 +406,7 @@ fn leading_literal(pat: &Pat) -> Option<&[u8]> {
     match pat {
         Pat::Lit { bytes, fold: false } => Some(bytes),
         Pat::Capture { inner, .. } => leading_literal(inner),
-        Pat::Seq(items) => items.iter().find(|p| !matches!(p, Pat::Look(_) | Pat::Empty)).and_then(leading_literal),
+        Pat::Seq(items) => items.iter().find(|p| !matches!(p, Pat::Look(_) | Pat::Empty | Pat::Around { .. })).and_then(leading_literal),
         _ => None,
     }
 }
@@ -329,7 +424,7 @@ fn starts_with_bol(pat: &Pat) -> bool {
 /// nullable (so whatever follows can also start the match).
 pub fn first_set(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet, set: &mut ByteSet) -> bool {
     match pat {
-        Pat::Empty | Pat::Look(_) => true,
+        Pat::Empty | Pat::Look(_) | Pat::Around { .. } => true,
         Pat::Lit { bytes, fold } => match bytes.first() {
             None => true,
             Some(&b) => {
@@ -374,5 +469,31 @@ pub fn first_set(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet, set: &mut ByteSet) -
             set.union(&ByteSet::full());
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pattern::regex::parse;
+
+    fn no_refs(_: &str) -> ByteSet {
+        ByteSet::default()
+    }
+
+    #[test]
+    fn lookaheads_narrow_the_pair_filter() {
+        let pairs = PairSet::build(&parse(r"[^ \t\r\n{](?=\})").unwrap(), &no_refs).expect("selective");
+        assert!(pairs.allows(b"a}", 0));
+        assert!(!pairs.allows(b"ab", 0));
+    }
+
+    #[test]
+    fn leading_lookbehinds_give_a_previous_byte_filter() {
+        let prev = PrevSet::build(&parse(r"(?<=[{(][ \t]*)x").unwrap()).expect("constrained");
+        assert!(prev.allows(b"{x", 1) && prev.allows(b"( x", 2) && prev.allows(b"x", 0));
+        assert!(!prev.allows(b"ax", 1));
+        // A lookbehind that can match empty text constrains nothing.
+        assert!(PrevSet::build(&parse(r"(?<=a?)x").unwrap()).is_none());
     }
 }

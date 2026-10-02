@@ -29,7 +29,10 @@ format fn-snake-case on rs_fn.name "function names are snake_case" = snake_case(
 | `match name = pattern` | a matcher (layer) that is only used where something references it |
 | `in A \| B match name = pattern` | a matcher searched inside layers `A` and `B` |
 | `in A match name` | attach an existing matcher to more parents |
+| `match name like base = pattern` | a specialisation of `base`, see [Layers](#layers) |
 | `over A match name = pattern` | an overlay: searched over `A`'s text without consuming it |
+| `group name = A \| B`, `group name += C` | a named, open set of layers, usable wherever a layer list is |
+| `in A \| B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
 | `format name on target ...` | a formatter, see [Formatters](#formatters) |
 | `set name.key = value` | configure an existing formatter |
 | `ignore "glob" \| "glob"` | never lint matching files |
@@ -83,7 +86,26 @@ A matcher without `*` searches for its children across its own text after it
 matches, skipping its fields, the same way a language root does.
 
 **Ties.** When several children match at the same position, the longest match
-wins, and among equal lengths the one attached first wins.
+wins, and among equal lengths a specialisation beats its base, then the one
+attached first wins.
+
+**Specialisation (`like`).** `match js_object like brace = ...` is a kind of
+`brace`: it keeps every child and overlay of `brace`, wins ties against it,
+and counts as a `brace` for formatters (`on brace` sees it, with `layer` naming
+the specialisation) and for ancestor lookups (`brace` in an expression finds
+the closest one). Use it to tell kinds of one shape apart without
+re-describing them:
+
+```zlint
+match js_object like brace = /(?<=[=(,]\s*)\{/ * /\}/
+in js_code match js_object
+format object-spacing on js_object "..." = ...   # plain braces are untouched
+```
+
+**Groups.** `group js_code = .js | paren | brace` names a set of layers, and
+`group js_code += js_stmt` adds to it from anywhere (another file, an
+importer). Groups are resolved after everything is loaded, so `in js_code
+match x` reaches layers added later too.
 
 **Language gating.** A matcher attached to a `.lang` only runs inside files
 of the languages it is attached to (or attached through `.*`). That lets
@@ -98,6 +120,28 @@ line-oriented checks:
 over .* match trailing_ws = /[ \t]+$/
 ```
 
+**Indentation.** `in brace | paren | brack indent` declares that a layer's
+inside, the text its `*` skips, is indented: a line starting there belongs
+one level deeper than the line the layer opened on, and the line where its
+end pattern starts (`}`) sits at the opener's level. `in fn.body indent`
+does the same for one field. Measuring from the opener *line* means
+`foo(Bar {` adds one level, not two. The engine works out which layer a line
+is in; formatters read it through `indented`, `indent_anchor`,
+`indent_closes`, `indent_hangs` and `indent_anchor_line` (see
+[Expressions](#expressions)) and decide the unit and any language-specific
+continuation rules:
+
+```zlint
+in paren | brack | brace indent
+over rs_code match line = /^[ \t]*\S/        # each code line, first char included
+
+macro level = (if !indented then "" else if indent_closes then indent_anchor else indent_anchor + "    ")
+format indent on line "Expected {len(level)} spaces of indentation." {
+  when slice(text, 0, -1) != level
+  level + slice(text, -1)
+}
+```
+
 **Fields.** Labelled pieces of a match become fields:
 
 ```zlint
@@ -109,9 +153,10 @@ A label on a matcher reference makes that child node the field. A label on
 regex text makes a plain text node. A label that matches several times
 (inside a repetition) is a list.
 
-**Restrictions.** A matcher must always consume at least one character, and
-it may only reach itself again after consuming text (no left recursion).
-Both are reported when the config loads.
+**Restrictions.** A matcher never produces an empty node: a pattern that
+*may* match empty (`/[ \t]*/`) simply skips those spots, and one that can
+*only* match empty is an error. A matcher may only reach itself again after
+consuming text (no left recursion). Both are reported when the config loads.
 
 ## Patterns
 
@@ -138,18 +183,22 @@ in time proportional to the text no matter how it is written.
 |---|---|
 | `abc`, `\.`, `\/` | literals (escape `/` inside a regex) |
 | `.` | any character except `\n` |
-| `[a-z_]`, `[^"\\]` | classes, with ranges, negation and escapes |
-| `\d \D \w \W \s \S` | digit, word, space classes (unicode-aware) |
+| `[a-z_]`, `[^"\\]`, `[\x00-\x1f]` | classes, with ranges (either end may be escaped), negation and escapes |
+| `\d \D \w \W \s \S` | digit, word, space classes (unicode-aware, also inside `[...]`) |
 | `^` `$` | start and end of a line (`$` also sits before `\r\n`) |
 | `\A` `\z` | start and end of the text |
 | `\b` `\B` | word boundary and non-boundary |
 | `a\|b`, `(...)`, `(?:...)` | alternation and groups |
 | `(?<name>...)` | a labelled field, like `name:` |
+| `(?=...)` `(?!...)` `(?<=...)` `(?<!...)` | lookahead and lookbehind |
 | `* + ? {n} {n,} {n,m}` | repetition, add `?` for lazy |
 | `(?i)` at the start | ASCII case-insensitive |
 | `\n \t \r \xHH \u{HHHH}` | escapes |
 
-Backreferences and lookaround are not supported.
+Lookarounds may hold any regex of this subset (lookbehinds can be unbounded,
+`(?<=\bclass\b[^{;]*)\{`), but cannot nest or hold fields. Leading
+lookbehinds and lookaheads also speed matching up: they tell zlint which
+positions can start a match. Backreferences are not supported.
 
 ## Formatters
 
@@ -166,9 +215,16 @@ format name on target "description" {
 }
 ```
 
-**Targets.** `on m` targets every node of matcher `m`. `on m.field` targets a
-field of `m`. `on .lang` targets whole files of a language, and `on .*`
-targets whole files of every language.
+**Targets.** `on m` targets every node of matcher `m` (and of its
+specialisations). `on m.field` targets a field of `m`. `on .lang` targets
+whole files of a language, and `on .*` targets whole files of every language.
+`on a | b.field` targets several; fields used in the body must exist on all of
+them.
+
+**Names.** A formatter name may be `family:variant` (`semi:never`,
+`no-multiple-empty-lines:eof`): several formatters that make up one rule.
+`set semi:*.severity = off` reaches every variant, and suppressing `semi`
+suppresses the whole family.
 
 **Shape.** The bare expression in the body (or after `=`) says what the node
 *should* be. If its text differs from the node's text, the formatter reports
@@ -188,10 +244,18 @@ conditions.
 | `message expr` | the diagnostic message |
 | `files "glob" \| ...` | only these files |
 | `ignore "glob" \| ...` | not these files |
+| `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the shape changes, or the node's end |
 
 The description is the default message, and can use everything a message can:
-`"{text} left in a comment"`. `zlint rules` shows descriptions with option
-values filled in and other holes left as written.
+`"{text} left in a comment"`. It may also be a macro. `zlint rules` shows
+descriptions with option values filled in and other holes left as written.
+
+Fixes are minimal: the common start and end of the node and its shape are
+left alone, so a formatter on a whole statement that only adds `;` edits one
+character. With `report change` the diagnostic points at that edit too.
+
+A macro at the start of a body line that expands to clauses (`when ...`,
+`option ...`) is pasted as clauses; otherwise it is the shape.
 
 Fixes that overlap are applied over several passes (re-linting in between),
 so nested formatters compose.
@@ -211,6 +275,7 @@ so nested formatters compose.
 | `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
+| `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
 
 **Values** are `null`, booleans, numbers, text and lists. A field that did not
@@ -222,10 +287,24 @@ match is `null`, and a field that matched several times is a list. `null`,
 | name | value |
 |---|---|
 | `text` | the node's text |
+| `layer` | the node's own matcher name (a specialisation's own name) |
 | `indent` | leading whitespace of the node's first line |
 | `line`, `col` | 1-based position of the node |
 | `file` | path relative to the config |
 | `lang` | the file's language |
+| `before`, `after` | the rest of the node's first line before it, and of its last line after it |
+| `prev_line`, `next_line` | the whole lines around the node (`null` at the file's edges) |
+| `text_before`, `text_after`, `source` | everything before the node, after it, and the whole file |
+| `parent`, `parent_text` | the layer the node sits in, and its text |
+| `parent_before` | the parent's text up to the node ("what came earlier in this statement") |
+| `parent_indent`, `parent_line` | leading whitespace and whole text of the line the parent starts on |
+| `prev_sibling`, `prev_gap` | the previous node of the same layer in the same parent, and the text between |
+| `enclosing` | the innermost layer around the node's start, seeing through overlays (`"js_string"` inside a string) |
+
+| `indented` | the node's line starts inside a layer declared with `in ... indent` |
+| `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
+| `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
+| `indent_hangs` | that layer's inside starts on its opener line (`f(a,⏎ b)`) |
 
 **Functions.** `zlint functions` lists them all. Highlights: `len`, `lower`,
 `upper`, `snake_case`, `camel_case`, `pascal_case`, `kebab_case`,
@@ -233,6 +312,11 @@ match is `null`, and a field that matched several times is a list. `null`,
 `repeat`, `pad_start`, `pad_end`, `starts_with`, `ends_with`, `contains`,
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`.
+
+Regex functions take the full syntax of Rust's `regex` crate (no lookaround
+or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first
+match or `null`), `re_count(text, re)`, `re_replace(text, re, with)` (`$1`
+for groups) and `re_escape(text)` to build patterns from text.
 
 ## Configuring rules: `set`
 
@@ -283,5 +367,14 @@ Write these inside any comment:
 |---|---|
 | `zlint-ignore` alone on a line | next line, every rule |
 | `zlint-ignore` after code | this line |
-| `zlint-ignore rule-a rule-b` | only these rules (`*` globs allowed) |
+| `zlint-ignore rule-a rule-b` | only these rules (`*` globs allowed, a family name covers its variants) |
+| `zlint-ignore-start [rules]` ... `zlint-ignore-end` | every line in between |
 | `zlint-ignore-file [rules]` | the whole file |
+
+## Performance
+
+`zlint --stats` prints throughput, and `zlint --profile` lists the matchers
+that cost the most interpreter steps and the formatters that cost the most
+time. Matchers that compile to a DFA never show up there; slow ones are
+usually nullable, use fields, or have no leading literal or lookaround to
+tell zlint where they can start.

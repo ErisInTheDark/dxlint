@@ -4,7 +4,12 @@
 //! // zlint-ignore                  -> next line (comment alone on its line)
 //! x = 1 // zlint-ignore rule-a     -> this line, only rule-a
 //! # zlint-ignore-file style-*      -> whole file, rules matching style-*
+//! /* zlint-ignore-start rule-a */  -> from here...
+//! /* zlint-ignore-end rule-a */    -> ...to here (or the end of the file)
 //! ```
+//!
+//! A rule name also matches every `family:variant` formatter of that family:
+//! `zlint-ignore semi` silences `semi:never` too.
 
 use std::collections::HashMap;
 
@@ -21,7 +26,8 @@ type Rules = Vec<String>;
 
 #[derive(Default)]
 pub struct Suppressions {
-    file: Option<Rules>,
+    /// Zero-based line ranges `[from, to)` where rules are off.
+    ranges: Vec<(usize, usize, Rules)>,
     lines: HashMap<usize, Rules>,
 }
 
@@ -39,12 +45,15 @@ fn merged(existing: Option<Rules>, rules: Rules) -> Rules {
 }
 
 fn covers(rules: &Rules, rule: &str) -> bool {
-    rules.is_empty() || rules.iter().any(|r| wildcard(r, rule))
+    let family = rule.split(':').next().unwrap_or(rule);
+    rules.is_empty() || rules.iter().any(|r| wildcard(r, rule) || wildcard(r, family))
 }
 
 impl Suppressions {
     pub fn parse(text: &str, lines: &LineIndex) -> Suppressions {
         let mut out = Suppressions::default();
+        // Open `-start` ranges: (first line, rules).
+        let mut open: Vec<(usize, Rules)> = Vec::new();
         for at in memmem::find_iter(text.as_bytes(), DIRECTIVE) {
             let line = lines.line_of(at);
             let line_start = lines.line_start(line);
@@ -56,41 +65,54 @@ impl Suppressions {
             if before.chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-') {
                 continue;
             }
-            let mut rest = &text[at + DIRECTIVE.len()..line_end];
-            let whole_file = rest.starts_with("-file");
-            if whole_file {
-                rest = &rest[5..];
-            }
-            if rest.chars().next().is_some_and(|c| !c.is_whitespace() && c != ',') {
+            let rest = &text[at + DIRECTIVE.len()..line_end];
+            let kind = ["-file", "-start", "-end"].into_iter().find(|k| rest.starts_with(k)).unwrap_or("");
+            let rest = &rest[kind.len()..];
+            if rest.chars().next().is_some_and(|c| !c.is_whitespace() && c != ',' && c != '*') {
                 continue;
             }
             let rules: Rules = rest
+                .split("*/")
+                .next()
+                .unwrap_or(rest)
                 .split(|c: char| c.is_whitespace() || c == ',')
                 .filter(|t| !t.is_empty())
-                .take_while(|t| t.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '*' | '.')))
+                .take_while(|t| t.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '*' | '.' | ':')))
                 .map(str::to_string)
                 .collect();
-            if whole_file {
-                out.file = Some(merged(out.file.take(), rules));
-                continue;
+            match kind {
+                "-file" => out.ranges.push((0, usize::MAX, rules)),
+                "-start" => open.push((line, rules)),
+                "-end" => {
+                    // A bare end closes every open range; a named one closes
+                    // the ranges for exactly those rules.
+                    let (closed, kept): (Vec<_>, Vec<_>) =
+                        open.drain(..).partition(|(_, r)| rules.is_empty() || r.iter().all(|x| rules.contains(x)));
+                    open = kept;
+                    out.ranges.extend(closed.into_iter().map(|(from, r)| (from, line + 1, r)));
+                }
+                _ => {
+                    let alone = before.chars().all(|c| !c.is_alphanumeric());
+                    let target = if alone { line + 1 } else { line };
+                    let existing = out.lines.remove(&target);
+                    out.lines.insert(target, merged(existing, rules));
+                }
             }
-            let alone = before.chars().all(|c| !c.is_alphanumeric());
-            let target = if alone { line + 1 } else { line };
-            let existing = out.lines.remove(&target);
-            out.lines.insert(target, merged(existing, rules));
         }
+        out.ranges.extend(open.into_iter().map(|(from, r)| (from, usize::MAX, r)));
         out
     }
 
     pub fn is_empty(&self) -> bool {
-        self.file.is_none() && self.lines.is_empty()
+        self.ranges.is_empty() && self.lines.is_empty()
     }
 
     pub fn allows(&self, d: &Diagnostic, lines: &LineIndex) -> bool {
-        if self.file.as_ref().is_some_and(|r| covers(r, &d.rule)) {
+        let line = lines.line_of(d.start);
+        if self.ranges.iter().any(|(from, to, rules)| *from <= line && line < *to && covers(rules, &d.rule)) {
             return false;
         }
-        !self.lines.get(&lines.line_of(d.start)).is_some_and(|r| covers(r, &d.rule))
+        !self.lines.get(&line).is_some_and(|r| covers(r, &d.rule))
     }
 }
 
@@ -104,23 +126,35 @@ mod tests {
         Diagnostic { rule: rule.into(), severity: Severity::Warn, message: String::new(), start, end: start + 1, fix: None }
     }
 
-    #[test]
-    fn line_and_next_line_directives() {
-        let text = "// zlint-ignore\nA\nB // zlint-ignore rule-b\nC\n";
+    fn check(text: &str, cases: &[(&str, &str, bool)]) {
         let lines = LineIndex::new(text);
         let s = Suppressions::parse(text, &lines);
-        assert!(!s.allows(&diag("any", text, "A"), &lines));
-        assert!(!s.allows(&diag("rule-b", text, "B"), &lines));
-        assert!(s.allows(&diag("rule-x", text, "B"), &lines));
-        assert!(s.allows(&diag("any", text, "C"), &lines));
+        for (rule, needle, allowed) in cases {
+            assert_eq!(s.allows(&diag(rule, text, needle), &lines), *allowed, "{rule} at {needle}");
+        }
+    }
+
+    #[test]
+    fn line_and_next_line_directives() {
+        check(
+            "// zlint-ignore\nA\nB // zlint-ignore rule-b\nC\n",
+            &[("any", "A", false), ("rule-b", "B", false), ("rule-x", "B", true), ("any", "C", true)],
+        );
     }
 
     #[test]
     fn file_directive_with_globs_and_prose_mentions() {
-        let text = "/* zlint-ignore-file style-* */\nsee the zlint-ignore docs\nX\n";
-        let lines = LineIndex::new(text);
-        let s = Suppressions::parse(text, &lines);
-        assert!(!s.allows(&diag("style-a", text, "X"), &lines));
-        assert!(s.allows(&diag("other", text, "X"), &lines));
+        check("/* zlint-ignore-file style-* */\nsee the zlint-ignore docs\nX\n", &[("style-a", "X", false), ("other", "X", true)]);
+    }
+
+    #[test]
+    fn ranges_open_and_close() {
+        let text = "/* zlint-ignore-start semi */\nA\n/* zlint-ignore-end semi */\nB\n/*zlint-ignore-start*/\nC\n";
+        check(text, &[("semi:never", "A", false), ("quotes", "A", true), ("semi", "B", true), ("any", "C", false)]);
+    }
+
+    #[test]
+    fn families_match_their_variants() {
+        check("X // zlint-ignore semi\n", &[("semi:never", "X", false), ("semicolon", "X", true)]);
     }
 }

@@ -3,6 +3,7 @@
 
 pub mod case;
 pub mod functions;
+mod re;
 pub mod value;
 
 use std::collections::HashMap;
@@ -20,10 +21,31 @@ pub use value::Value;
 pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("text", "the node's text"),
     ("indent", "leading whitespace of the line the node starts on"),
+    ("parent_indent", "leading whitespace of the line the node's layer starts on (empty for the file)"),
+    ("parent_line", "the whole line the node's layer starts on (empty for the file)"),
+    ("indented", "the node's line starts inside the `*` of a layer declared with `in layer indent`"),
+    ("indent_anchor", "leading whitespace of the line that innermost `indent` layer opened on (empty when not indented)"),
+    ("indent_anchor_line", "that whole opener line (empty when not indented)"),
+    ("indent_closes", "this line starts with that layer's end (what follows its `*`), so it sits at the anchor"),
+    ("indent_hangs", "that layer's inside starts on its opener line (`f(a,⏎ b)`)"),
     ("line", "1-based line of the node's start"),
     ("col", "1-based column of the node's start"),
     ("file", "the file's path, relative to the project root"),
     ("lang", "the file's language"),
+    ("before", "text on the node's first line before the node"),
+    ("after", "text on the node's last line after the node"),
+    ("prev_line", "the whole line before the node's first line (null on the first line)"),
+    ("next_line", "the whole line after the node's last line (null on the last line)"),
+    ("parent", "name of the layer the node sits in (`.lang` for the file root)"),
+    ("parent_text", "text of the layer the node sits in"),
+    ("parent_before", "text of the layer the node sits in, up to the node"),
+    ("text_before", "all of the file before the node"),
+    ("text_after", "all of the file after the node"),
+    ("prev_sibling", "text of the previous node of the same layer in the same parent (null if none)"),
+    ("prev_gap", "text between that previous sibling and this node (null if none)"),
+    ("layer", "name of the node's own layer"),
+    ("enclosing", "innermost layer containing the node's start, looking past overlays (a comment, a string, ...)"),
+    ("source", "the whole file's text"),
 ];
 
 #[derive(Debug)]
@@ -95,6 +117,15 @@ impl Scope<'_> {
                     return None;
                 }
                 let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
+                // Literal regex patterns are checked when the config loads.
+                if f.name.starts_with("re_") {
+                    if let Some(CExpr::Const(Value::Str(pattern))) = args.get(1) {
+                        if let Err(err) = re::compile(pattern) {
+                            errors.push(ConfigError::new(e.span, err));
+                            return None;
+                        }
+                    }
+                }
                 CExpr::Call(f, args)
             }
             ExprKind::Unary(op, inner) => {
@@ -245,19 +276,162 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Leading whitespace of the line holding byte `at`.
+    fn indent_at(&self, at: usize) -> &'a str {
+        let text = self.lines.line_text(self.source, self.lines.line_of(at));
+        &text[..text.len() - text.trim_start_matches([' ', '\t']).len()]
+    }
+
+    /// The innermost ancestor declared `indent` whose inside (its `*`, or its
+    /// whole text without one) opened on an earlier line and still holds the
+    /// start of this node's line; with that inside's span.
+    fn indent_block(&self) -> Option<(u32, (usize, usize))> {
+        let start = self.tree.node(self.node).start as usize;
+        let line = self.lines.line_of(start);
+        let line_start = self.lines.line_start(line);
+        let mut p = self.tree.parent(self.node);
+        while let Some(id) = p {
+            let n = self.tree.node(id);
+            let label = self.tree.label(id);
+            let owner = label.and_then(|_| self.tree.owner(id)).map(|o| self.tree.node(o).matcher);
+            if !self.tree.is_root(id) && self.grammar.indents(n.matcher, label, owner) {
+                let (s, e) = self.tree.hole(id).map_or((n.start as usize, n.end as usize), |(s, e)| (s as usize, e as usize));
+                if self.lines.line_of(s) < line && line_start <= e {
+                    return Some((id, (s, e)));
+                }
+            }
+            p = self.tree.parent(id);
+        }
+        None
+    }
+
+    /// The layer node this node sits in, looking through labelled text.
+    fn parent_layer(&self) -> Option<u32> {
+        let mut p = self.tree.parent(self.node);
+        while let Some(id) = p.filter(|&id| self.tree.is_text(id)) {
+            p = self.tree.parent(id);
+        }
+        p
+    }
+
+    /// The closest earlier node of the same layer under the same parent.
+    fn prev_sibling(&self) -> Option<u32> {
+        let parent = self.tree.parent(self.node)?;
+        let me = self.tree.node(self.node);
+        self.tree
+            .node(parent)
+            .children
+            .iter()
+            .map(|e| e.node)
+            .filter(|&c| c != self.node)
+            .filter(|&c| {
+                let n = self.tree.node(c);
+                n.matcher == me.matcher && n.end <= me.start
+            })
+            .max_by_key(|&c| self.tree.node(c).end)
+    }
+
     fn builtin(&self, i: usize) -> Value<'a> {
         let start = self.tree.node(self.node).start as usize;
         match BUILTIN_VARS[i].0 {
             "text" => Value::from(self.node_text(self.node)),
-            "indent" => {
-                let line = self.lines.line_of(start);
-                let text = self.lines.line_text(self.source, line);
-                Value::from(&text[..text.len() - text.trim_start_matches([' ', '\t']).len()])
-            }
+            "indent" => Value::from(self.indent_at(start)),
+            "parent_indent" => match self.parent_layer() {
+                Some(id) if !self.tree.is_root(id) => Value::from(self.indent_at(self.tree.node(id).start as usize)),
+                _ => Value::from(""),
+            },
+            "indented" => Value::Bool(self.indent_block().is_some()),
+            "indent_anchor" => match self.indent_block() {
+                Some((id, _)) => Value::from(self.indent_at(self.tree.node(id).start as usize)),
+                None => Value::from(""),
+            },
+            "indent_anchor_line" => match self.indent_block() {
+                Some((id, _)) => Value::from(self.lines.line_text(self.source, self.lines.line_of(self.tree.node(id).start as usize))),
+                None => Value::from(""),
+            },
+            "indent_closes" => Value::Bool(self.indent_block().is_some_and(|(_, (_, end))| {
+                let line_start = self.lines.line_start(self.lines.line_of(start));
+                self.lines.line_of(end) == self.lines.line_of(start) && self.source[line_start..end].trim().is_empty()
+            })),
+            "indent_hangs" => Value::Bool(self.indent_block().is_some_and(|(_, (inside, _))| {
+                let line_end = self.lines.line_end(self.source, self.lines.line_of(inside));
+                !self.source[inside..line_end.max(inside)].trim().is_empty()
+            })),
+            "parent_line" => match self.parent_layer() {
+                Some(id) if !self.tree.is_root(id) => {
+                    Value::from(self.lines.line_text(self.source, self.lines.line_of(self.tree.node(id).start as usize)))
+                }
+                _ => Value::from(""),
+            },
             "line" => Value::from(self.lines.line_of(start) + 1),
             "col" => Value::from(self.lines.line_col(self.source, start).1 + 1),
             "file" => Value::from(self.file),
             "lang" => Value::from(self.grammar.langs[self.lang].name.as_str()),
+            "before" => {
+                let line_start = self.lines.line_start(self.lines.line_of(start));
+                Value::from(&self.source[line_start..start])
+            }
+            "after" => {
+                let end = self.tree.node(self.node).end as usize;
+                // A node ending in (or inside) a line break has nothing
+                // after it on its line.
+                let line_end = self.lines.line_end(self.source, self.lines.line_of(end));
+                if end > start && self.source.as_bytes()[end - 1] == b'\n' || end > line_end {
+                    Value::from("")
+                } else {
+                    Value::from(&self.source[end..line_end])
+                }
+            }
+            "prev_line" => match self.lines.line_of(start) {
+                0 => Value::Null,
+                line => Value::from(self.lines.line_text(self.source, line - 1)),
+            },
+            "next_line" => {
+                let end = self.tree.node(self.node).end as usize;
+                let last = self.lines.line_of(end.saturating_sub(1).max(start));
+                if last + 1 < self.lines.line_count() {
+                    Value::from(self.lines.line_text(self.source, last + 1))
+                } else {
+                    Value::Null
+                }
+            }
+            "parent" => match self.parent_layer() {
+                Some(id) if !self.tree.is_root(id) => Value::from(self.grammar.matchers[self.tree.node(id).matcher as usize].name.as_str()),
+                _ => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),
+            },
+            "text_before" => Value::from(&self.source[..start]),
+            "text_after" => Value::from(&self.source[self.tree.node(self.node).end as usize..]),
+            "prev_sibling" => match self.prev_sibling() {
+                Some(id) => Value::from(self.node_text(id)),
+                None => Value::Null,
+            },
+            "prev_gap" => match self.prev_sibling() {
+                Some(id) => Value::from(&self.source[self.tree.node(id).end as usize..start]),
+                None => Value::Null,
+            },
+            "parent_text" => match self.parent_layer() {
+                Some(id) => Value::from(self.node_text(id)),
+                None => Value::Null,
+            },
+            "parent_before" => match self.parent_layer() {
+                Some(id) => Value::from(&self.source[self.tree.node(id).start as usize..start]),
+                None => Value::Null,
+            },
+            "layer" => {
+                if self.tree.is_root(self.node) {
+                    Value::from(format!(".{}", self.grammar.langs[self.lang].name))
+                } else if self.tree.is_text(self.node) {
+                    // Labelled text is a field, not a layer.
+                    Value::Null
+                } else {
+                    Value::from(self.grammar.matchers[self.tree.node(self.node).matcher as usize].name.as_str())
+                }
+            }
+            "source" => Value::from(self.source),
+            "enclosing" => match self.tree.innermost_at(self.grammar, start as u32, self.node) {
+                Some(id) if !self.tree.is_root(id) => Value::from(self.grammar.matchers[self.tree.node(id).matcher as usize].name.as_str()),
+                _ => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),
+            },
             other => unreachable!("builtin {other}"),
         }
     }
@@ -275,7 +449,7 @@ impl<'a> Ctx<'a> {
             }
             CExpr::List(items) => Value::List(items.iter().map(|i| self.eval(i)).collect::<Result<_, _>>()?),
             CExpr::Field(label) => self.field(self.node, *label),
-            CExpr::Ancestor(m, field) => match self.tree.ancestor(self.node, *m) {
+            CExpr::Ancestor(m, field) => match self.tree.ancestor(self.grammar, self.node, *m) {
                 None => Value::Null,
                 Some(a) => match field {
                     None => Value::from(self.node_text(a)),

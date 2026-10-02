@@ -3,10 +3,12 @@
 //! interpreter in [`crate::grammar`] only handles what a DFA cannot: child
 //! layers, `*`, and capturing every repetition of a label.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 
 use regex_automata::meta::{Cache, Regex};
-use regex_automata::{Anchored, Input};
+use regex_automata::nfa::thompson;
+use regex_automata::{hybrid, Anchored, Input};
 use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir, HirKind, Look as HLook, Repetition};
 
 use super::class::{CharClass, Named};
@@ -21,7 +23,7 @@ const MAX_INLINE_DEPTH: usize = 32;
 /// Is `pat` free of matcher references and `*`?
 pub fn is_pure(pat: &Pat) -> bool {
     let mut pure = true;
-    pat.walk(&mut |p| pure &= !matches!(p, Pat::Ref { .. } | Pat::Skip));
+    pat.walk(&mut |p| pure &= !matches!(p, Pat::Ref { .. } | Pat::Skip | Pat::Around { .. }));
     pure
 }
 
@@ -36,7 +38,7 @@ fn decidable(pat: &Pat, resolve: Resolve, depth: usize) -> bool {
     }
     let mut ok = true;
     pat.walk(&mut |p| match p {
-        Pat::Skip => ok = false,
+        Pat::Skip | Pat::Around { .. } => ok = false,
         Pat::Ref { name, .. } => ok &= resolve(name).is_some_and(|inner| decidable(inner, resolve, depth + 1)),
         _ => {}
     });
@@ -58,7 +60,7 @@ fn named(n: Named) -> &'static ClassUnicode {
     static CLASSES: OnceLock<Vec<ClassUnicode>> = OnceLock::new();
     let all = CLASSES.get_or_init(|| {
         // Exactly the `char` methods the interpreter uses.
-        [r"\p{Alphabetic}", r"[\p{Alphabetic}\p{N}]", r"[\p{Alphabetic}\p{N}_]", r"\p{White_Space}", r"\p{Uppercase}", r"\p{Lowercase}"]
+        [r"\p{Alphabetic}", r"[\p{Alphabetic}\p{N}]", r"[\p{Alphabetic}\p{N}_]", r"\p{White_Space}", r"\p{Uppercase}", r"\p{Lowercase}", r"[0-9]"]
             .iter()
             .map(|src| match regex_syntax::parse(src).map(|h| h.into_kind()) {
                 Ok(HirKind::Class(Class::Unicode(c))) => c,
@@ -73,16 +75,22 @@ fn named(n: Named) -> &'static ClassUnicode {
         Named::Space => 3,
         Named::Upper => 4,
         Named::Lower => 5,
+        Named::Digit => 6,
     }]
 }
 
 fn class(c: &CharClass) -> Hir {
-    let (ranges, names, negated) = c.parts();
-    let mut out = ClassUnicode::new(ranges.iter().map(|&(a, b)| ClassUnicodeRange::new(a, b)));
-    for n in names {
+    let parts = c.parts();
+    let mut out = ClassUnicode::new(parts.ranges.iter().map(|&(a, b)| ClassUnicodeRange::new(a, b)));
+    for n in parts.named {
         out.union(named(*n));
     }
-    if negated {
+    for n in parts.not_named {
+        let mut complement = named(*n).clone();
+        complement.negate();
+        out.union(&complement);
+    }
+    if parts.negated {
         out.negate();
     }
     Hir::class(Class::Unicode(out))
@@ -131,7 +139,66 @@ fn to_hir(pat: &Pat, resolve: Resolve, depth: usize) -> Result<Hir, String> {
             to_hir(inner, resolve, depth + 1)?
         }
         Pat::Skip => return Err("`*` needs the layer engine".into()),
+        Pat::Around { .. } => return Err("lookarounds need the layer engine".into()),
     })
+}
+
+/// A lookaround: a lazy DFA run forward from the position (lookahead) or
+/// backward from it (lookbehind), so even `(?<=[=(]\s*)` stays linear.
+pub struct LookDfa {
+    /// Unique per process; keys the per-parser caches.
+    pub id: u32,
+    pub behind: bool,
+    pub negate: bool,
+    dfa: hybrid::dfa::DFA,
+}
+
+impl std::fmt::Debug for LookDfa {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LookDfa(behind: {}, negate: {})", self.behind, self.negate)
+    }
+}
+
+impl LookDfa {
+    pub fn new(inner: &Pat, behind: bool, negate: bool) -> Result<LookDfa, String> {
+        static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+        // A lazy DFA gives up on unicode word boundaries next to non-ASCII
+        // text, so `\b` inside lookarounds is the ASCII one.
+        let hir = ascii_words(to_hir(inner, &|_| None, 0)?);
+        let nfa = thompson::Compiler::new()
+            .configure(thompson::Config::new().reverse(behind).which_captures(thompson::WhichCaptures::None))
+            .build_from_hir(&hir)
+            .map_err(|e| e.to_string())?;
+        let dfa = hybrid::dfa::DFA::builder().build_from_nfa(nfa).map_err(|e| e.to_string())?;
+        Ok(LookDfa { id: NEXT_ID.fetch_add(1, Ordering::Relaxed), behind, negate, dfa })
+    }
+
+    pub fn cache(&self) -> hybrid::dfa::Cache {
+        self.dfa.create_cache()
+    }
+
+    /// Does the assertion hold at `pos`?
+    pub fn holds(&self, cache: &mut hybrid::dfa::Cache, hay: &[u8], pos: usize) -> bool {
+        let input = if self.behind { Input::new(hay).range(..pos) } else { Input::new(hay).range(pos..) };
+        let input = input.anchored(Anchored::Yes).earliest(true);
+        let found = if self.behind { self.dfa.try_search_rev(cache, &input) } else { self.dfa.try_search_fwd(cache, &input) };
+        found.is_ok_and(|m| m.is_some()) != self.negate
+    }
+}
+
+fn ascii_words(hir: Hir) -> Hir {
+    match hir.into_kind() {
+        HirKind::Look(HLook::WordUnicode) => Hir::look(HLook::WordAscii),
+        HirKind::Look(HLook::WordUnicodeNegate) => Hir::look(HLook::WordAsciiNegate),
+        HirKind::Look(l) => Hir::look(l),
+        HirKind::Concat(items) => Hir::concat(items.into_iter().map(ascii_words).collect()),
+        HirKind::Alternation(items) => Hir::alternation(items.into_iter().map(ascii_words).collect()),
+        HirKind::Repetition(r) => Hir::repetition(Repetition { sub: Box::new(ascii_words(*r.sub)), ..r }),
+        HirKind::Capture(c) => ascii_words(*c.sub),
+        HirKind::Empty => Hir::empty(),
+        HirKind::Literal(l) => Hir::literal(l.0),
+        HirKind::Class(c) => Hir::class(c),
+    }
 }
 
 pub struct Dfa {

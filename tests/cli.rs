@@ -67,6 +67,18 @@ fn config_errors_point_into_the_imported_file() {
 }
 
 #[test]
+fn a_broken_config_still_lints_with_what_works() {
+    let config = format!("{RULES}format x on nope \"x\"\nset no-shout.max = 3\n");
+    let dir = project("cli-partly-broken", &[("zoomie.zlint", config.as_str()), ("a.t", "LOUD\n")]);
+    let out = zlint(&dir, &["--format", "jsonl"]);
+    // The errors are printed and fail the run, but the working rule ran.
+    assert_eq!(out.status.code(), Some(2));
+    assert!(stdout(&out).contains("`LOUD` is shouting"), "{}", stdout(&out));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unknown matcher `nope`") && err.contains("no option `max`"), "{err}");
+}
+
+#[test]
 fn examples_find_what_their_comments_promise() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     for (dir, expected) in [("js", vec!["todo", "arrow-parens", "strict-equality", "strict-equality", "arrow-parens", "no-console", "no-console"]),

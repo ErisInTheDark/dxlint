@@ -99,14 +99,25 @@ format long-calls on call.args "keep calls short" {
 set long-calls.max = 120                            # configure existing rules
 ```
 
+Layers can be specialised (`match js_object like brace = ...` wins ties
+against plain braces and is still a `brace` to rules), collected into open
+groups (`group js_code += js_stmt`), and declared as indenting (`in paren |
+brace indent`), so an indentation rule only decides units and continuation
+lines. Regexes support lookahead and lookbehind, and formatter expressions
+have line context (`prev_line`, `parent_before`, `indent_anchor`, ...) and
+`re_*` functions.
+
+A config with mistakes still lints with every part that built: the errors
+are reported, and the run fails, but one typo never switches linting off.
+
 The standard library ships languages (`std/rust`, `std/js`, `std/python`,
 `std/c`, `std/toml`, `std/markdown`, `std/zlint`), bracket nesting
 (`std/core`), and hygiene rules (`std/whitespace`). See
 [examples/](examples) for complete configs, and [zoomie.zlint](zoomie.zlint)
 for the rules this repository lints itself with.
 
-Suppress with a comment anywhere: `zlint-ignore`, `zlint-ignore rule-name`, or
-`zlint-ignore-file`.
+Suppress with a comment anywhere: `zlint-ignore`, `zlint-ignore rule-name`,
+`zlint-ignore-start` ... `zlint-ignore-end`, or `zlint-ignore-file`.
 
 ## Editors
 

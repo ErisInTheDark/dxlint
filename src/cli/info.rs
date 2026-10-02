@@ -106,6 +106,44 @@ fn is_noise(name: &str) -> bool {
     matches!(name, "paren" | "brack" | "brace") || name.ends_with("escape")
 }
 
+/// `--profile`: the most expensive matchers and formatters, on stderr.
+pub fn profile(linter: &Linter) {
+    use anstream::eprintln;
+    use zoomie_lint::engine::Profile;
+    let Some(p) = &linter.profile else { return };
+    let ms = |nanos: u64| nanos as f64 / 1e6;
+    eprintln!(
+        "{BOLD}profile{BOLD:#} {DIM}(summed over threads){DIM:#}\n  parsing {:.1} ms, formatters {:.1} ms",
+        ms(Profile::get(&p.parse_nanos)),
+        ms(Profile::get(&p.format_nanos))
+    );
+    let mut matchers: Vec<(u64, u64, &str)> = linter
+        .grammar
+        .matchers
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (Profile::get(&p.matcher_steps[i]), Profile::get(&p.matcher_runs[i]), m.name.as_str()))
+        .filter(|(steps, _, _)| *steps > 0)
+        .collect();
+    matchers.sort_by(|a, b| b.0.cmp(&a.0));
+    eprintln!("\n  {BOLD}matchers{BOLD:#} {DIM}by interpreter steps (DFA-only matchers do not show up){DIM:#}");
+    for (steps, runs, name) in matchers.iter().take(15) {
+        eprintln!("  {steps:>14} steps {runs:>11} runs  {CYAN}{name}{CYAN:#}");
+    }
+    let mut formatters: Vec<(u64, u64, &str)> = linter
+        .formatters
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (Profile::get(&p.formatter_nanos[i]), Profile::get(&p.formatter_evals[i]), f.name.as_str()))
+        .filter(|(_, evals, _)| *evals > 0)
+        .collect();
+    formatters.sort_by(|a, b| b.0.cmp(&a.0));
+    eprintln!("\n  {BOLD}formatters{BOLD:#} {DIM}by time{DIM:#}");
+    for (nanos, evals, name) in formatters.iter().take(15) {
+        eprintln!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
+    }
+}
+
 pub fn functions() -> ExitCode {
     println!("{BOLD}variables{BOLD:#}");
     for (name, doc) in BUILTIN_VARS {

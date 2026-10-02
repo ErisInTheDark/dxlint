@@ -9,7 +9,8 @@ import "std/whitespace"
 # Examples are deliberately broken; they have their own configs.
 ignore "examples"
 
-set max-line-length.max = 160
+# Long lines are a judgement call here, not a rule.
+set max-line-length.severity = off
 set tab-indent.severity = warn
 
 # ---- rust ---------------------------------------------------------------

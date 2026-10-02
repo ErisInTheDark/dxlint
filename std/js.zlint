@@ -1,15 +1,16 @@
-# std/js: JavaScript and TypeScript structure, including template
-# literals whose `${...}` holes are code again.
+# std/js: JavaScript and TypeScript structure: brackets, strings, template
+# literals (whose `${...}` holes are code again), comments and regex
+# literals. `js_code` names every layer that holds code.
 
 import "std/core"
 
 lang js = "*.js" | "*.mjs" | "*.cjs" | "*.jsx" | "*.ts" | "*.tsx" | "*.mts" | "*.cts"
 
-in .js | js_interp match paren
-in .js | js_interp match brack
-in .js | js_interp match brace
+group js_code = .js | paren | brack | brace | js_interp
 
-macro js_code = .js | paren | brack | brace | js_interp
+in js_code match paren
+in js_code match brack
+in js_code match brace
 
 in js_code match js_line_comment = /\/\// * /$/
 in js_code match js_block_comment = /\/\*/ * /\*\//
@@ -18,4 +19,14 @@ in js_code match js_string = /"/ * /"|$/
 in js_code match js_sstring = /'/ * /'|$/
 in js_code match js_template = /`/ * /`/
 in js_template match js_interp = /\$\{/ * /\}/
-in js_string | js_sstring | js_template match js_escape = /\\(?:.|\n)/
+in js_string | js_sstring | js_template match js_escape = /\\(?:\r\n|.|\n)/
+
+# A `/` starts a regex literal only where an expression can start: after an
+# operator, an opening bracket, or a keyword like `return`. Everywhere else
+# it is division.
+in js_code match js_regex = (
+  /(?<=(?:^|[=(,:;!&|?{}\[+\-*%<>~^]|\b(?:return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await))[ \t]*)/
+  /\/(?![*\/])/ * /\/[dgimsuyv]*|$/
+)
+in js_regex match js_regex_class = /\[/ * /\]|$/
+in js_regex | js_regex_class match js_regex_escape = /\\./

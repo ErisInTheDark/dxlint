@@ -132,6 +132,12 @@ impl Parser<'_> {
                 self.ts.next_raw();
                 self.template(&t)
             }
+            // `/.../` in an expression is the regex source as text, for the
+            // `re_*` functions: no string escaping needed.
+            Tk::Regex => {
+                self.ts.next_raw();
+                simple(ExprKind::Str(t.text.to_string()))
+            }
             Tk::LBrack => {
                 self.ts.next_raw();
                 let items = self.comma_list(Tk::RBrack, "`]`")?;

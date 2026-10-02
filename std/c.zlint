@@ -10,7 +10,7 @@ in .c match paren
 in .c match brack
 in .c match brace
 
-macro c_code = .c | paren | brack | brace
+group c_code = .c | paren | brack | brace
 
 in c_code match c_line_comment = /\/\// * /$/
 in c_code match c_block_comment = /\/\*/ * /\*\//

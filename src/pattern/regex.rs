@@ -94,7 +94,7 @@ impl Parser {
         };
         // Consume the quantifier char (or the closing `}` of `{n,m}`).
         self.i += 1;
-        if matches!(atom, Pat::Look(_) | Pat::Empty) {
+        if matches!(atom, Pat::Look(_) | Pat::Empty | Pat::Around { .. }) {
             return Err("nothing to repeat".into());
         }
         let greedy = !self.eat('?');
@@ -139,6 +139,32 @@ impl Parser {
         self.i += 1;
         Ok(match c {
             '(' => {
+                let around = if self.eat_str("?=") {
+                    Some((false, false))
+                } else if self.eat_str("?!") {
+                    Some((false, true))
+                } else if self.eat_str("?<=") {
+                    Some((true, false))
+                } else if self.eat_str("?<!") {
+                    Some((true, true))
+                } else {
+                    None
+                };
+                if let Some((behind, negate)) = around {
+                    let inner = self.alt()?;
+                    if !self.eat(')') {
+                        return Err("unclosed lookaround `(?...`".into());
+                    }
+                    if !inner.labels().is_empty() {
+                        return Err("lookarounds cannot contain labels".into());
+                    }
+                    let mut nested = false;
+                    inner.walk(&mut |p| nested |= matches!(p, Pat::Around { .. }));
+                    if nested {
+                        return Err("lookarounds cannot be nested".into());
+                    }
+                    return Ok(Pat::Around { behind, negate, inner: Box::new(inner) });
+                }
                 let name = if self.eat_str("?:") {
                     None
                 } else if self.eat_str("?<") {
@@ -152,7 +178,7 @@ impl Parser {
                     }
                     Some(name)
                 } else if self.peek() == Some('?') {
-                    return Err("lookaround and inline flags are not supported (only a leading `(?i)`)".into());
+                    return Err("inline flags are not supported (only a leading `(?i)`)".into());
                 } else {
                     None
                 };
@@ -264,8 +290,16 @@ mod tests {
     }
 
     #[test]
+    fn lookarounds_parse() {
+        assert!(matches!(parse("(?<=[=(])").unwrap(), Pat::Around { behind: true, negate: false, .. }));
+        assert!(matches!(parse("(?!x)").unwrap(), Pat::Around { behind: false, negate: true, .. }));
+        assert!(parse("(?=(?<n>x))").is_err());
+        assert!(parse("(?=x)+").is_err());
+    }
+
+    #[test]
     fn rejects_unsupported_features() {
-        assert!(parse("(?=x)").is_err());
+        assert!(parse("(?s)x").is_err());
         assert!(parse("a**").is_err());
         assert!(parse("(a").is_err());
         assert!(parse(r"\1").is_err());

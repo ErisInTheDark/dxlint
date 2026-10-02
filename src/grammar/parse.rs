@@ -48,6 +48,7 @@ pub struct Node {
 enum Event {
     Save { slot: u16, pos: u32 },
     Child { label: u16, node: u32 },
+    Hole { close: bool, pos: u32 },
 }
 
 #[derive(Clone, Copy)]
@@ -92,19 +93,33 @@ pub struct Parser<'g, 't> {
     g: &'g Grammar,
     /// Overlays to search (by matcher); None searches all of them.
     pub enabled_overlays: Option<&'t [bool]>,
+    /// `zlint --profile` counters, when profiling.
+    pub profile: Option<&'t crate::engine::Profile>,
     view: &'g View,
     text: &'t [u8],
     memo: Memo,
     pub nodes: Vec<Node>,
+    /// `(node, start, end)` of each node's inside (from its first `*` to the
+    /// end of its last one), in node order.
+    pub holes: Vec<(u32, u32, u32)>,
     free_pages: Vec<Box<[u64]>>,
     frames: Vec<Frame>,
     /// Per matcher; see [`Dead`].
     dead: Vec<Option<Dead>>,
     /// Borrowed from the grammar's pool for the parser's lifetime.
     caches: DfaCaches,
+    /// Lookaround DFA caches, by LookDfa::id.
+    look_caches: HashMap<u32, regex_automata::hybrid::dfa::Cache>,
     depth: u32,
     /// Set when nesting exceeded [`MAX_DEPTH`] and some structure was skipped.
     pub too_deep: bool,
+}
+
+/// Cheap checks before running a matcher at `pos`: its first byte, first two
+/// bytes, and the byte before (from a leading lookbehind).
+#[inline]
+fn may_start(m: &super::Matcher, text: &[u8], pos: usize) -> bool {
+    m.first.contains(text[pos]) && m.pairs.as_ref().is_none_or(|p| p.allows(text, pos)) && m.prev.as_ref().is_none_or(|p| p.allows(text, pos))
 }
 
 fn cache<'c>(slot: &'c mut Option<Cache>, dfa: &Dfa) -> &'c mut Cache {
@@ -123,14 +138,17 @@ impl<'g, 't> Parser<'g, 't> {
         Parser {
             g,
             enabled_overlays: None,
+            profile: None,
             view: g.view(lang),
             text: text.as_bytes(),
             memo: Memo::default(),
             nodes: Vec::new(),
+            holes: Vec::new(),
             free_pages: Vec::new(),
             frames: Vec::new(),
             dead: (0..n).map(|_| None).collect(),
             caches: g.take_caches(),
+            look_caches: HashMap::new(),
             depth: 0,
             too_deep: false,
         }
@@ -225,6 +243,32 @@ impl<'g, 't> Parser<'g, 't> {
         }
     }
 
+    fn hosts_overlay(&self, node: u32, o: u32) -> bool {
+        match self.nodes[node as usize].matcher {
+            ROOT => self.view.root_overlays.contains(&o),
+            TEXT => false,
+            m => self.view.overlays[m as usize].contains(&o),
+        }
+    }
+
+    /// Ranges of the nearest descendants of `id` that host overlay `o`
+    /// themselves, sorted. `id` leaves those to them, so every position is
+    /// searched once, by its innermost host.
+    fn overlay_holes(&self, id: u32, o: u32) -> Vec<(usize, usize)> {
+        let mut holes = Vec::new();
+        let mut stack: Vec<u32> = self.nodes[id as usize].children.iter().map(|e| e.node).collect();
+        while let Some(c) = stack.pop() {
+            let n = &self.nodes[c as usize];
+            if self.hosts_overlay(c, o) {
+                holes.push((n.start as usize, n.end as usize));
+            } else {
+                stack.extend(n.children.iter().map(|e| e.node));
+            }
+        }
+        holes.sort_unstable();
+        holes
+    }
+
     /// Searches overlay matchers inside every node that has them. Overlay
     /// searches are never repeated, so they skip the memo.
     fn overlays(&mut self, root: u32) {
@@ -254,6 +298,8 @@ impl<'g, 't> Parser<'g, 't> {
                     continue;
                 }
                 let om = &g.matchers[o as usize];
+                let holes = self.overlay_holes(id, o);
+                let mut hole = 0;
                 let mut pos = start;
                 while pos < end {
                     let found = match &om.dfa {
@@ -261,8 +307,17 @@ impl<'g, 't> Parser<'g, 't> {
                         None => om.prefilter.next(&text[..end], pos).map(|p| (p, p)),
                     };
                     let Some((s, e)) = found else { break };
+                    // Matches may run into a nested host, but not start there.
+                    while hole < holes.len() && holes[hole].1 <= s {
+                        hole += 1;
+                    }
+                    if hole < holes.len() && holes[hole].0 <= s {
+                        pos = holes[hole].1;
+                        continue;
+                    }
                     let node = match &om.dfa {
                         Some(_) if !om.has_captures => Some(self.leaf(o, s, e)),
+                        _ if !may_start(om, text, s) => None,
                         _ => self.match_at(o, s, end),
                     };
                     match node {
@@ -288,7 +343,12 @@ impl<'g, 't> Parser<'g, 't> {
             }
             if let Some(n) = self.call(c, pos) {
                 let end = self.nodes[n as usize].end;
-                if end as usize <= limit && best.is_none_or(|b| end > self.nodes[b as usize].end) {
+                // Longer wins; on a tie a specialisation beats its base.
+                let better = best.is_none_or(|b| {
+                    let other = &self.nodes[b as usize];
+                    end > other.end || (end == other.end && c != other.matcher && self.g.is_a(c, other.matcher))
+                });
+                if end as usize <= limit && better {
                     best = Some(n);
                 }
             }
@@ -301,7 +361,7 @@ impl<'g, 't> Parser<'g, 't> {
         let g = self.g;
         let text = self.text;
         let matcher = &g.matchers[m as usize];
-        if pos >= text.len() || !matcher.first.contains(text[pos]) || matcher.pairs.as_ref().is_some_and(|p| !p.allows(text, pos)) {
+        if pos >= text.len() || !may_start(matcher, text, pos) {
             return None;
         }
         // DFAs answer most calls without the interpreter or the memo.
@@ -361,6 +421,7 @@ impl<'g, 't> Parser<'g, 't> {
     fn build_node(&mut self, m: u32, start: usize, end: usize, log: &[Event]) -> u32 {
         let mut open: Vec<(u16, u32, Vec<Edge>)> = Vec::new();
         let mut cur: Vec<Edge> = Vec::new();
+        let mut hole: Option<(u32, u32)> = None;
         for &ev in log {
             match ev {
                 Event::Child { label, node } => cur.push(Edge { label, node }),
@@ -372,9 +433,15 @@ impl<'g, 't> Parser<'g, 't> {
                         cur.push(Edge { label, node: id });
                     }
                 }
+                Event::Hole { close: false, pos } => hole = Some(hole.map_or((pos, pos), |(s, _)| (s, pos))),
+                Event::Hole { close: true, pos } => hole = hole.map(|(s, _)| (s, pos)),
             }
         }
-        self.push(Node { matcher: m, start: start as u32, end: end as u32, children: cur })
+        let id = self.push(Node { matcher: m, start: start as u32, end: end as u32, children: cur });
+        if let Some((s, e)) = hole {
+            self.holes.push((id, s, e));
+        }
+        id
     }
 
     /// Runs `prog` from `start`. `owner` is the matcher whose children `*`
@@ -388,12 +455,14 @@ impl<'g, 't> Parser<'g, 't> {
         let mut frame = self.take(prog.insts.len(), start);
         let Frame { stack, log, visited } = &mut frame;
         stack.push(Job { pc: 0, pos: start as u32, log: 0 });
+        let mut steps = 0u64;
 
         let found = 'search: loop {
             let Some(job) = stack.pop() else { break None };
             log.truncate(job.log as usize);
             let (mut pc, mut pos) = (job.pc as usize, job.pos as usize);
             loop {
+                steps += 1;
                 if !visited.insert(pc, pos, &mut self.free_pages) {
                     break;
                 }
@@ -449,8 +518,16 @@ impl<'g, 't> Parser<'g, 't> {
                         continue;
                     }
                     Inst::Save(slot) => log.push(Event::Save { slot, pos: pos as u32 }),
+                    Inst::Hole(close) => log.push(Event::Hole { close, pos: pos as u32 }),
                     Inst::Look(l) => {
                         if !look(text, pos, limit, l) {
+                            break;
+                        }
+                    }
+                    Inst::Around(i) => {
+                        let around = &prog.arounds[i as usize];
+                        let cache = self.look_caches.entry(around.id).or_insert_with(|| around.cache());
+                        if !around.holds(cache, &text[..limit], pos) {
                             break;
                         }
                     }
@@ -490,7 +567,10 @@ impl<'g, 't> Parser<'g, 't> {
                         }
                     }
                     Inst::Match => {
-                        if must_end.is_none_or(|e| e == pos) {
+                        // Layers never match empty text: keep backtracking
+                        // for a longer way through the pattern.
+                        let empty = owner.is_some() && pos == start;
+                        if !empty && must_end.is_none_or(|e| e == pos) {
                             break 'search Some(pos);
                         }
                         break;
@@ -499,6 +579,10 @@ impl<'g, 't> Parser<'g, 't> {
                 pc += 1;
             }
         };
+        if let (Some(p), Some(m)) = (self.profile, owner) {
+            crate::engine::Profile::add(&p.matcher_steps[m as usize], steps);
+            crate::engine::Profile::add(&p.matcher_runs[m as usize], 1);
+        }
         match found {
             Some(end) => Some((end, frame)),
             None => {

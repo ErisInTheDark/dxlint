@@ -49,6 +49,27 @@ pub fn apply_fixes(text: &str, diags: &[Diagnostic]) -> (String, usize) {
     (out, applied)
 }
 
+/// The smallest edit turning `source[start..end]` into `want`: common
+/// leading and trailing text is left alone, so fixes touch only what
+/// changes and rarely overlap.
+pub fn minimal_edit(source: &str, start: usize, end: usize, want: &str) -> Edit {
+    let have = &source[start..end];
+    let mut prefix = have.bytes().zip(want.bytes()).take_while(|(a, b)| a == b).count();
+    while !have.is_char_boundary(prefix) || !want.is_char_boundary(prefix) {
+        prefix -= 1;
+    }
+    let (have_rest, want_rest) = (&have[prefix..], &want[prefix..]);
+    let mut suffix = have_rest.bytes().rev().zip(want_rest.bytes().rev()).take_while(|(a, b)| a == b).count();
+    while !have_rest.is_char_boundary(have_rest.len() - suffix) || !want_rest.is_char_boundary(want_rest.len() - suffix) {
+        suffix -= 1;
+    }
+    Edit {
+        start: start + prefix,
+        end: end - suffix,
+        text: want_rest[..want_rest.len() - suffix].to_string(),
+    }
+}
+
 /// Ranges conflict when they share any byte, or when an insertion sits at
 /// the same start as another edit (their order would be ambiguous).
 fn conflicts((s1, e1): (usize, usize), (s2, e2): (usize, usize)) -> bool {
@@ -87,6 +108,17 @@ mod tests {
             end,
             fix: Some(vec![Edit { start, end, text: text.into() }]),
         }
+    }
+
+    #[test]
+    fn minimal_edits_keep_shared_text() {
+        let src = "xx\n\n\n\nyy";
+        let e = minimal_edit(src, 2, 6, "\n\n");
+        assert_eq!((e.start, e.end, e.text.as_str()), (4, 6, ""));
+        let e = minimal_edit("aéb", 0, 4, "aèb");
+        assert_eq!((e.start, e.end, e.text.as_str()), (1, 3, "è"));
+        let e = minimal_edit("ab", 0, 2, "ab!");
+        assert_eq!((e.start, e.end, e.text.as_str()), (2, 2, "!"));
     }
 
     #[test]

@@ -9,7 +9,7 @@ in .zlint match paren
 in .zlint match brack
 in .zlint match brace
 
-macro zl_code = .zlint | paren | brack | brace
+group zl_code = .zlint | paren | brack | brace
 
 in zl_code match zl_comment = /#/ * /$/
 in zl_code match zl_string = /"/ * /"/

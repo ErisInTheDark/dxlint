@@ -15,13 +15,14 @@ use std::sync::Mutex;
 
 use regex_automata::meta::Cache;
 
-use crate::config::ast::{Config, Parent};
+use crate::config::ast::{Config, MatcherDef, Parent};
 use crate::config::error::ConfigError;
 use crate::config::source::Span;
 use crate::path_globs::PathGlobs;
+use crate::pattern::class::CharClass;
 use crate::pattern::compile::{compile, Inst, Labels, Program};
 use crate::pattern::dfa::{guard_prefix, is_pure, Dfa};
-use crate::pattern::prefilter::{first_set, ByteSet, PairSet, Prefilter};
+use crate::pattern::prefilter::{first_set, max_len, ByteSet, PairSet, Prefilter, PrevSet};
 use crate::pattern::Pat;
 
 pub struct Matcher {
@@ -34,6 +35,8 @@ pub struct Matcher {
     pub prefilter: Prefilter,
     /// Which first two bytes can start a match, when that is selective.
     pub pairs: Option<PairSet>,
+    /// Which byte can come right before a match (from a leading lookbehind).
+    pub prev: Option<PrevSet>,
     /// The whole matcher as a DFA, when it is pure regex.
     pub dfa: Option<Dfa>,
     /// A DFA for the pure leading part of an impure matcher: a cheap way to
@@ -44,6 +47,10 @@ pub struct Matcher {
     pub has_captures: bool,
     /// Does the pattern contain * (which decides where children go)?
     pub has_skip: bool,
+    /// The matcher this one specialises (`match x like base`).
+    pub like: Option<u32>,
+    /// Attached with `over` somewhere: its nodes lie on top of the text.
+    pub is_overlay: bool,
     /// Languages this matcher is restricted to; `None` means every language.
     gate: Option<Vec<usize>>,
     children: Vec<u32>,
@@ -88,6 +95,9 @@ pub struct Grammar {
     pub matchers: Vec<Matcher>,
     pub langs: Vec<Lang>,
     pub labels: Labels,
+    /// `in x indent` / `in x.field indent`: (matcher, field) pairs whose
+    /// insides are indented.
+    indents: Vec<(u32, Option<u16>)>,
     views: Vec<View>,
     by_name: HashMap<String, u32>,
     /// Warm DFA caches, reused across files (building one is not cheap).
@@ -120,6 +130,19 @@ impl Grammar {
 
     pub fn matcher(&self, name: &str) -> Option<u32> {
         self.by_name.get(name).copied()
+    }
+
+    /// Is matcher `m` `base` itself, or a specialisation of it?
+    pub fn is_a(&self, mut m: u32, base: u32) -> bool {
+        loop {
+            if m == base {
+                return true;
+            }
+            match self.matchers.get(m as usize).and_then(|x| x.like) {
+                Some(next) => m = next,
+                None => return false,
+            }
+        }
     }
 
     /// For every matcher, which matchers can appear inside its nodes (via
@@ -220,7 +243,8 @@ impl Grammar {
         let mut labels = Labels::default();
         let mut matchers = Vec::with_capacity(defs.len());
         for (def, pat, span) in &defs {
-            let prog = match compile(pat, &by_name, &mut labels) {
+            let mut pat = (*pat).clone();
+            let prog = match compile(&pat, &by_name, &mut labels) {
                 Ok(p) => p,
                 Err(e) => {
                     let mut err = ConfigError::new(*span, format!("in matcher `{}`: {e}", def.name.text));
@@ -228,34 +252,45 @@ impl Grammar {
                         err = err.suggest(unknown, by_name.keys().map(String::as_str));
                     }
                     errors.push(err);
-                    Program::default()
+                    // The rest of the config still lints: this matcher just
+                    // never matches.
+                    pat = Pat::Class(CharClass::new(Vec::new(), Vec::new(), false));
+                    compile(&pat, &by_name, &mut labels).unwrap_or_default()
                 }
             };
-            if pat.nullable() {
+            // Patterns may be able to match empty text (the engine skips
+            // empty matches), but not *only* empty text.
+            if max_len(&pat) == Some(0) {
                 errors.push(
-                    ConfigError::new(*span, format!("matcher `{}` can match empty text", def.name.text))
-                        .note("every matcher must consume at least one character; `*` alone, `?` and `*`-quantified items can be empty"),
+                    ConfigError::new(*span, format!("matcher `{}` can only match empty text", def.name.text))
+                        .note("layers never match empty text, so this matcher would never match"),
                 );
             }
+            let prev = PrevSet::build(&pat);
             matchers.push(Matcher {
                 name: def.name.text.clone(),
                 span: def.name.span,
-                pat: (*pat).clone(),
+                pat,
                 prog,
                 first: ByteSet::default(),
                 prefilter: Prefilter::All,
                 pairs: None,
+                prev,
                 dfa: None,
                 guard: None,
                 has_captures: false,
                 has_skip: false,
+                like: None,
+                is_overlay: false,
                 gate: Some(Vec::new()),
                 children: Vec::new(),
                 overlays: Vec::new(),
             });
         }
 
-        // Pass 3: parents (definitions and `in x match y` attachments).
+        // Pass 3: parents (definitions and `in x match y` attachments), with
+        // groups resolved to their final members.
+        let groups = resolve_groups(config, &by_name, errors);
         let mut ungated = vec![false; matchers.len()];
         for def in &config.matchers {
             let Some(&id) = by_name.get(&def.name.text) else {
@@ -267,7 +302,18 @@ impl Grammar {
                 }
                 continue;
             };
-            for parent in &def.parents {
+            let parents: Vec<&Parent> = def
+                .parents
+                .iter()
+                .flat_map(|p| match p {
+                    Parent::Matcher(n) if groups.contains_key(&n.text) => groups[&n.text].iter().collect(),
+                    other => vec![other],
+                })
+                .collect();
+            if def.overlay && !def.parents.is_empty() {
+                matchers[id as usize].is_overlay = true;
+            }
+            for parent in parents {
                 match parent {
                     Parent::Lang(name) => match langs.iter().position(|l| l.name == name.text) {
                         Some(li) => {
@@ -309,6 +355,8 @@ impl Grammar {
                 m.gate = None;
             }
         }
+        resolve_likes(&mut matchers, &defs, &by_name, errors);
+        let indents = resolve_indents(config, &groups, &by_name, &matchers, &labels, errors);
 
         // First-byte sets: a fixpoint, since references can be mutual.
         loop {
@@ -338,13 +386,79 @@ impl Grammar {
         check_left_recursion(&matchers, &by_name, errors);
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
-        Grammar { matchers, langs, labels, views, by_name, cache_pool: Mutex::new(Vec::new()) }
+        Grammar { matchers, langs, labels, indents, views, by_name, cache_pool: Mutex::new(Vec::new()) }
     }
+
+    /// Is `node` (of `matcher`, labelled `label` inside a node of `owner`)
+    /// declared indenting? Specialisations count as their base.
+    pub fn indents(&self, matcher: u32, label: Option<u16>, owner: Option<u32>) -> bool {
+        self.indents.iter().any(|&(m, field)| match field {
+            None => matcher != ROOT && matcher != TEXT && self.is_a(matcher, m),
+            Some(f) => label == Some(f) && owner.is_some_and(|o| self.is_a(o, m)),
+        })
+    }
+}
+
+/// `in a | b.field indent` targets, with groups expanded.
+fn resolve_indents(
+    config: &Config,
+    groups: &HashMap<String, Vec<Parent>>,
+    by_name: &HashMap<String, u32>,
+    matchers: &[Matcher],
+    labels: &Labels,
+    errors: &mut Vec<ConfigError>,
+) -> Vec<(u32, Option<u16>)> {
+    let mut out = Vec::new();
+    for def in &config.indents {
+        for (parent, field) in &def.targets {
+            let members: Vec<&Parent> = match parent {
+                Parent::Matcher(n) if groups.contains_key(&n.text) => groups[&n.text].iter().collect(),
+                other => vec![other],
+            };
+            for member in members {
+                let name = match member {
+                    Parent::Matcher(name) => name,
+                    Parent::Lang(name) => {
+                        errors.push(ConfigError::new(name.span, "a language root has no inside to indent").note("indent its brackets or blocks instead"));
+                        continue;
+                    }
+                    Parent::AnyLang(span) => {
+                        errors.push(ConfigError::new(*span, "a language root has no inside to indent").note("indent its brackets or blocks instead"));
+                        continue;
+                    }
+                };
+                let Some(&id) = by_name.get(&name.text) else {
+                    let err = ConfigError::new(name.span, format!("unknown matcher `{}`", name.text));
+                    errors.push(err.suggest(&name.text, by_name.keys().map(String::as_str)));
+                    continue;
+                };
+                let label = match field {
+                    None => None,
+                    Some(f) => {
+                        let has = matchers[id as usize].fields().iter().any(|(l, _)| *l == f.text);
+                        match labels.get(&f.text).filter(|_| has) {
+                            Some(l) => Some(l),
+                            None => {
+                                errors.push(ConfigError::new(f.span, format!("`{}` has no field `{}`", name.text, f.text)));
+                                continue;
+                            }
+                        }
+                    }
+                };
+                if !out.contains(&(id, label)) {
+                    out.push((id, label));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// DFAs for pure matchers and guards, and `*` fast-forward stop sets.
 fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) {
-    let pure: Vec<bool> = matchers.iter().map(|m| is_pure(&m.pat)).collect();
+    // A DFA cannot skip an empty match to find a longer one, so patterns
+    // that could match empty always run on the interpreter.
+    let pure: Vec<bool> = matchers.iter().map(|m| is_pure(&m.pat) && !m.pat.nullable()).collect();
     let mut built = Vec::with_capacity(matchers.len());
     {
         let ms: &[Matcher] = matchers;
@@ -375,6 +489,91 @@ fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, 
             if let (Inst::Skip(idx), Inst::Split(after, _)) = (m.prog.insts[pc], m.prog.insts[pc - 1]) {
                 m.prog.skip_stops[idx as usize] = m.prog.first_from(after as usize, &call_first);
             }
+        }
+    }
+}
+
+/// Final members of every `group`, with nested groups flattened. A group
+/// cannot share a name with a matcher.
+fn resolve_groups(config: &Config, by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) -> HashMap<String, Vec<Parent>> {
+    let mut raw: HashMap<String, Vec<Parent>> = HashMap::new();
+    for g in &config.groups {
+        if by_name.contains_key(&g.name.text) {
+            errors.push(ConfigError::new(g.name.span, format!("`{}` is already a matcher; groups need their own name", g.name.text)));
+            continue;
+        }
+        match raw.get_mut(&g.name.text) {
+            Some(list) if g.extend => list.extend(g.parents.iter().cloned()),
+            Some(_) => errors.push(
+                ConfigError::new(g.name.span, format!("group `{}` is defined twice", g.name.text)).note("extend a group with `group name += ...`"),
+            ),
+            None if g.extend => errors.push(
+                ConfigError::new(g.name.span, format!("unknown group `{}`", g.name.text))
+                    .note("define it with `group name = ...` before extending it"),
+            ),
+            None => {
+                raw.insert(g.name.text.clone(), g.parents.clone());
+            }
+        }
+    }
+    fn flatten(name: &str, raw: &HashMap<String, Vec<Parent>>, seen: &mut Vec<String>, out: &mut Vec<Parent>) {
+        if seen.iter().any(|s| s == name) {
+            return;
+        }
+        seen.push(name.to_string());
+        for p in &raw[name] {
+            match p {
+                Parent::Matcher(n) if raw.contains_key(&n.text) => flatten(&n.text, raw, seen, out),
+                other => out.push(other.clone()),
+            }
+        }
+    }
+    raw.keys()
+        .map(|name| {
+            let mut out = Vec::new();
+            flatten(name, &raw, &mut Vec::new(), &mut out);
+            (name.clone(), out)
+        })
+        .collect()
+}
+
+/// Resolves `like` bases and gives every specialisation its bases'
+/// children and overlays (own ones first, so they win ties).
+fn resolve_likes(matchers: &mut [Matcher], defs: &[(&MatcherDef, &Pat, Span)], by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) {
+    for (i, (def, _, _)) in defs.iter().enumerate() {
+        let Some(base) = &def.like else { continue };
+        match by_name.get(&base.text) {
+            Some(&b) => matchers[i].like = Some(b),
+            None => errors.push(
+                ConfigError::new(base.span, format!("unknown matcher `{}`", base.text)).suggest(&base.text, by_name.keys().map(String::as_str)),
+            ),
+        }
+    }
+    // Reject cycles before walking chains.
+    for start in 0..matchers.len() {
+        let mut seen = vec![false; matchers.len()];
+        let mut m = start;
+        while let Some(next) = matchers[m].like {
+            if std::mem::replace(&mut seen[m], true) {
+                errors.push(ConfigError::new(matchers[start].span, format!("matcher `{}` is `like` itself", matchers[start].name)));
+                matchers[start].like = None;
+                break;
+            }
+            m = next as usize;
+        }
+    }
+    let originals: Vec<(Vec<u32>, Vec<u32>)> = matchers.iter().map(|m| (m.children.clone(), m.overlays.clone())).collect();
+    for i in 0..matchers.len() {
+        let mut base = matchers[i].like;
+        while let Some(b) = base {
+            let (children, overlays) = &originals[b as usize];
+            for &c in children {
+                push_unique(&mut matchers[i].children, c);
+            }
+            for &o in overlays {
+                push_unique(&mut matchers[i].overlays, o);
+            }
+            base = matchers[b as usize].like;
         }
     }
 }
