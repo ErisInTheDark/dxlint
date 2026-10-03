@@ -236,7 +236,7 @@ impl<'t> NativeFile<'t> {
                     None => Ty::Unknown,
                 }
             }
-            "param" => {
+            "parameter" => {
                 if !s.is(owner, K::Param) {
                     return Ty::Unknown;
                 }
@@ -673,7 +673,7 @@ impl<'t> NativeFile<'t> {
     fn object_literal(&self, id: u32) -> Ty {
         let s = &self.syntax;
         let mut props: Vec<(Box<str>, Ty)> = Vec::new();
-        for p in s.all(id, F::Prop).collect::<Vec<_>>() {
+        for p in s.all(id, F::Property).collect::<Vec<_>>() {
             let Some(key) = s.get(p, F::Key) else { return Ty::Unknown };
             let name: Box<str> = match s.kind(key) {
                 Some(K::Ident | K::Number) => s.text(key).into(),

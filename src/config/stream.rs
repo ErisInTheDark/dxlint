@@ -14,6 +14,8 @@ const MAX_MACRO_DEPTH: usize = 64;
 
 pub struct MacroDef {
     pub name: Rc<str>,
+    /// The name where it is defined.
+    pub span: Span,
     pub params: Vec<Rc<str>>,
     pub body: Rc<[Token]>,
 }
@@ -29,11 +31,34 @@ pub struct Stream {
     pub macros: HashMap<Rc<str>, Rc<MacroDef>>,
     /// Span of the last consumed token, for "expected X after here" errors.
     pub last_span: Option<Span>,
+    /// Every macro call: (name, call span), for tooling.
+    pub calls: Vec<(Rc<str>, Span)>,
+    /// Every token consumed, in order: the configuration as the parser saw
+    /// it, imports and macros expanded (see [`Stream::fingerprint`]).
+    seen: std::collections::hash_map::DefaultHasher,
+    /// The last token seen ended a line (or there was none): line ends in a
+    /// row count once, and leading ones not at all.
+    at_line_end: bool,
 }
 
 impl Stream {
     pub fn new() -> Self {
-        Stream { frames: Vec::new(), macros: HashMap::new(), last_span: None }
+        Stream {
+            frames: Vec::new(),
+            macros: HashMap::new(),
+            last_span: None,
+            calls: Vec::new(),
+            seen: Default::default(),
+            at_line_end: true,
+        }
+    }
+
+    /// A hash of every token consumed so far (kinds and texts, no
+    /// positions): comments, spacing and blank lines never change it, and
+    /// any change to what was parsed does.
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::Hasher;
+        self.seen.finish()
     }
 
     pub fn push_tokens(&mut self, tokens: Vec<Token>) {
@@ -64,11 +89,22 @@ impl Stream {
     }
 
     pub fn next_raw(&mut self) -> Option<Token> {
+        use std::hash::{Hash, Hasher};
         self.settle();
         let frame = self.frames.last_mut()?;
         let tok = frame.tokens[frame.pos].clone();
         frame.pos += 1;
         self.last_span = Some(tok.span);
+        // `;` and a line break mean the same.
+        let line_end = tok.kind == Tk::Newline;
+        if !(line_end && self.at_line_end) {
+            std::mem::discriminant(&tok.kind).hash(&mut self.seen);
+            if !line_end {
+                self.seen.write(tok.text.as_bytes());
+            }
+            self.seen.write_u8(0xff);
+        }
+        self.at_line_end = line_end;
         Some(tok)
     }
 
@@ -89,6 +125,7 @@ impl Stream {
         };
         let Some(def) = self.macros.get(&name).cloned() else { return false };
         let call = self.next_raw().expect("peeked");
+        self.calls.push((def.name.clone(), call.span));
 
         let mut args: Vec<Vec<Token>> = Vec::new();
         if !def.params.is_empty() {

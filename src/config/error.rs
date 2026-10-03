@@ -8,15 +8,25 @@ pub struct ConfigError {
     pub span: Option<Span>,
     pub message: String,
     pub notes: Vec<String>,
+    /// Other places the error is about ("first defined here", "still used
+    /// here"), possibly in other files.
+    pub related: Vec<(Span, String)>,
 }
 
 impl ConfigError {
     pub fn new(span: impl Into<Option<Span>>, message: impl Into<String>) -> Self {
-        ConfigError { span: span.into(), message: message.into(), notes: Vec::new() }
+        ConfigError { span: span.into(), message: message.into(), notes: Vec::new(), related: Vec::new() }
     }
 
     pub fn note(mut self, note: impl Into<String>) -> Self {
         self.notes.push(note.into());
+        self
+    }
+
+    pub fn related(mut self, span: impl Into<Option<Span>>, label: impl Into<String>) -> Self {
+        if let Some(span) = span.into() {
+            self.related.push((span, label.into()));
+        }
         self
     }
 

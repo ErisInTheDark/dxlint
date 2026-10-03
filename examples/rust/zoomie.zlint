@@ -5,7 +5,7 @@ import "std/rust"
 import "std/whitespace"
 
 # Flat `use a::{c, b}` lists stay sorted. Repeated fields are lists.
-in .rust or brace match rs_use_list /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ item:/[\w:]+/ (/,\s*/ item:/[\w:]+/)* /,?\s*\}/ {
+in .rust, braces match rs_use_list /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ item:/[\w:]+/ (/,\s*/ item:/[\w:]+/)* /,?\s*\}/ {
   rule sorted-use-lists warn "keep `use` lists sorted" fix as "use {path}{{{join(sort(item), ', ')}}}"
 }
 
@@ -19,5 +19,5 @@ in rs_expect.msg rule expect-lowercase warn "`expect` messages start lowercase" 
 
 # Type annotations are written `name: Type`. Only the separator is a
 # target, so the fix touches nothing else.
-in rs_code match rs_annotation name:ident sep:/[ \t]*:[ \t]*/ ty:/[A-Z]\w*/
+in rs_code match rs_annotation name:identifier sep:/[ \t]*:[ \t]*/ ty:/[A-Z]\w*/
 in rs_annotation.sep rule annotation-colon warn "write `{rs_annotation.name}: {rs_annotation.ty}`" fix as ": "

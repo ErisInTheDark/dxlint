@@ -1,11 +1,17 @@
 # std/ts: TypeScript and JavaScript syntax from zlint's native parser. Every
 # node kind is a `ts_*` layer with ESTree-style fields (`ts_if.test`,
-# `ts_call.callee`, `ts_binary.op`); `zlint tree file.ts` shows them. Files
-# are only parsed this way when a rule targets a `ts_*` layer.
+# `ts_call.callee`, `ts_binary.operator`); `zlint tree file.ts` shows them.
+# Files are only parsed this way when a rule targets a `ts_*` layer.
 
 import "std/js"
 
 native ts
 
-group ts_function_like ts_function or ts_arrow or ts_method
-group ts_loop ts_for or ts_for_in or ts_for_of or ts_while or ts_do_while
+group ts_function_like ts_function, ts_arrow, ts_method
+group ts_loop ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while
+# Every layer that can be a statement. `ts_function` and `ts_class` are also
+# expressions (`const f = function () {}`): check the parent when it matters.
+group ts_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break,
+  ts_continue, ts_if, ts_switch, ts_try, ts_block, ts_labeled, ts_empty, ts_debugger, ts_with, ts_loop,
+  ts_function, ts_class, ts_export, ts_import, ts_import_equals, ts_export_assignment, ts_type_alias,
+  ts_interface, ts_enum, ts_namespace

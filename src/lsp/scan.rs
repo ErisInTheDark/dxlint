@@ -1,9 +1,13 @@
 //! Background workspace scan: lints every file on disk and streams each
 //! file's diagnostics to the client as soon as it is done, with progress.
 //! Tabs the user has open go first, then the rest breadth-first. A newer scan
-//! (config change) cancels older ones via the generation.
+//! (config change) cancels older ones via the generation. Scans reuse and
+//! update each config's `.zlintcache`.
+//!
+//! Every lint's reads are kept, so an edit re-lints just the files it
+//! affects ([`relint`]).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,6 +18,9 @@ use serde_json::json;
 use super::projects::Linters;
 use super::transport::Outbox;
 use super::{convert, uri};
+use zoomie_lint::engine::cache::Cache;
+use zoomie_lint::engine::Linter;
+use zoomie_lint::native::ts::reads::Reads;
 
 /// State shared between the request loop and scans.
 #[derive(Default)]
@@ -26,6 +33,18 @@ pub struct Shared {
     pub generation: AtomicU64,
     /// Files the current scan lints next, ahead of the walk order.
     priority: Mutex<Priority>,
+    /// What each file's latest lint read, to find the files an edit affects.
+    pub reads: Mutex<HashMap<PathBuf, Arc<Reads>>>,
+    relint: Mutex<Relint>,
+}
+
+/// Files waiting for [`relint`], the linters to use, and whether its
+/// worker runs.
+#[derive(Default)]
+struct Relint {
+    queue: VecDeque<PathBuf>,
+    linters: Linters,
+    running: bool,
 }
 
 #[derive(Default)]
@@ -67,6 +86,80 @@ impl Shared {
         }
         p.queue.pop_front()
     }
+
+    /// Lints `path` with `text`, keeping what the lint read.
+    pub fn lint(&self, linter: &Linter, path: &Path, text: &str) -> Vec<zoomie_lint::engine::Diagnostic> {
+        let (diags, reads) = linter.lint_tracked(path, text);
+        self.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
+        diags
+    }
+}
+
+/// Re-lints files on disk (whose reads an edit broke) on one background
+/// worker, until a new scan takes over.
+pub fn relint(linters: Linters, files: Vec<PathBuf>, shared: Arc<Shared>, out: Outbox) {
+    let generation = shared.generation.load(Ordering::SeqCst);
+    {
+        let mut relint = shared.relint.lock().expect("lock");
+        relint.linters = linters;
+        for f in files {
+            if !relint.queue.contains(&f) {
+                relint.queue.push_back(f);
+            }
+        }
+        if std::mem::replace(&mut relint.running, true) {
+            return;
+        }
+    }
+    std::thread::spawn(move || loop {
+        let (path, linters) = {
+            let mut relint = shared.relint.lock().expect("lock");
+            match relint.queue.pop_front() {
+                // A newer scan lints everything anyway.
+                Some(path) if shared.generation.load(Ordering::SeqCst) == generation => (path, relint.linters.clone()),
+                _ => {
+                    relint.queue.clear();
+                    relint.running = false;
+                    break;
+                }
+            }
+        };
+        if let Some(linter) = linters.for_path(&path).filter(|l| l.wants(&path)) {
+            publish_disk(linter, None, &shared, &out, &path, || shared.generation.load(Ordering::SeqCst) == generation);
+        }
+    });
+}
+
+/// Lints a file on disk (from `cache` when it can) and publishes the
+/// result, unless the editor owns the file. Returns the problem count.
+fn publish_disk(linter: &Linter, cache: Option<&Cache>, shared: &Shared, out: &Outbox, path: &Path, current: impl Fn() -> bool) -> Option<usize> {
+    let open = || shared.editor.lock().expect("lock").contains(path);
+    if open() {
+        return None;
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
+    let diags = match cache.and_then(|c| c.lookup(linter, &rel, &text)) {
+        Some((diags, reads)) => {
+            shared.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
+            diags
+        }
+        None => {
+            let (diags, reads) = linter.lint_tracked(path, &text);
+            let reads = Arc::new(reads);
+            if let Some(cache) = cache {
+                cache.store(&rel, &text, &diags, reads.clone());
+            }
+            shared.reads.lock().expect("lock").insert(path.to_path_buf(), reads);
+            diags
+        }
+    };
+    // The editor may have opened the file while it was being linted; then
+    // the buffer's diagnostics win.
+    if current() && !open() {
+        shared.publish(out, &uri::from_path(path), None, convert::diagnostics(&text, &diags, linter));
+    }
+    Some(diags.len())
 }
 
 /// Walks `roots` like the CLI does: `.gitignore` respected, hidden files
@@ -155,10 +248,13 @@ struct Scan {
     problems: AtomicUsize,
     /// Known once the walk is done.
     total: AtomicUsize,
+    /// Each config's `.zlintcache`, by config directory.
+    caches: HashMap<PathBuf, Cache>,
 }
 
 impl Scan {
     fn new(linters: Linters, shared: Arc<Shared>, out: Outbox, progress: bool, generation: u64) -> Scan {
+        let caches = linters.all().map(|l| (l.root.clone(), Cache::open(l))).collect();
         Scan {
             linters,
             shared,
@@ -171,6 +267,7 @@ impl Scan {
             files: AtomicUsize::new(0),
             problems: AtomicUsize::new(0),
             total: AtomicUsize::new(0),
+            caches,
         }
     }
 
@@ -178,7 +275,7 @@ impl Scan {
         self.shared.generation.load(Ordering::SeqCst) == self.generation
     }
 
-    fn run(&self, roots: &[PathBuf]) {
+    fn run(self, roots: &[PathBuf]) {
         let (token, generation) = (&self.token, self.generation);
         if self.progress {
             self.out.request(&format!("progress-{generation}"), "window/workDoneProgress/create", json!({ "token": token }));
@@ -193,12 +290,20 @@ impl Scan {
             self.total.store(files.len(), Ordering::Relaxed);
             self.drain(&files);
         }
-        if self.current() {
+        let finished = self.current();
+        if finished {
             self.sweep();
         }
         if self.progress {
             let message = format!("{} files, {} problems", self.files.load(Ordering::Relaxed), self.problems.load(Ordering::Relaxed));
             self.out.notify("$/progress", json!({ "token": token, "value": { "kind": "end", "message": message } }));
+        }
+        // Only a whole scan's results are worth keeping. Files the editor
+        // owns were skipped, so nothing is pruned.
+        if finished {
+            for cache in self.caches.into_values() {
+                let _ = cache.save(false);
+            }
         }
     }
 
@@ -250,20 +355,10 @@ impl Scan {
             return;
         }
         let Some(linter) = self.linters.for_path(path).filter(|l| l.wants(path)) else { return };
-        let open = || self.shared.editor.lock().expect("lock").contains(path);
-        if open() {
-            return;
-        }
-        let Ok(text) = std::fs::read_to_string(path) else { return };
-        let diags = linter.lint(path, &text);
-        let u = uri::from_path(path);
-        self.problems.fetch_add(diags.len(), Ordering::Relaxed);
-        self.touched.lock().expect("lock").insert(u.clone());
-        // The editor may have opened the file while it was being linted;
-        // then the buffer's diagnostics win.
-        if self.current() && !open() {
-            self.shared.publish(&self.out, &u, None, convert::diagnostics(&text, &diags));
-        }
+        let cache = self.caches.get(&linter.root);
+        let Some(problems) = publish_disk(linter, cache, &self.shared, &self.out, path, || self.current()) else { return };
+        self.problems.fetch_add(problems, Ordering::Relaxed);
+        self.touched.lock().expect("lock").insert(uri::from_path(path));
         let n = self.files.fetch_add(1, Ordering::Relaxed) + 1;
         if self.progress && n.is_multiple_of(100) {
             let total = self.total.load(Ordering::Relaxed);

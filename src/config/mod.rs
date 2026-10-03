@@ -36,20 +36,25 @@ pub struct Loaded {
     pub config: Config,
     pub sources: SourceMap,
     pub errors: Vec<ConfigError>,
+    /// A hash of every token parsed, imports and macros expanded: equal
+    /// fingerprints mean the same rules (comments and spacing aside).
+    pub fingerprint: u64,
 }
 
 pub fn load_file(path: &Path, provider: &dyn SourceProvider) -> Loaded {
     let mut sources = SourceMap::default();
     let mut parser = parser::Parser::new(&mut sources, provider);
     parser.parse_entry(path);
+    let fingerprint = parser.finish();
     let (config, errors) = (std::mem::take(&mut parser.config), std::mem::take(&mut parser.errors));
-    Loaded { config, sources, errors }
+    Loaded { config, sources, errors, fingerprint }
 }
 
 pub fn load_text(name: &str, text: &str, provider: &dyn SourceProvider) -> Loaded {
     let mut sources = SourceMap::default();
     let mut parser = parser::Parser::new(&mut sources, provider);
     parser.parse_text(name, text);
+    let fingerprint = parser.finish();
     let (config, errors) = (std::mem::take(&mut parser.config), std::mem::take(&mut parser.errors));
-    Loaded { config, sources, errors }
+    Loaded { config, sources, errors, fingerprint }
 }

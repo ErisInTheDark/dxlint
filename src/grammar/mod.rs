@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use regex_automata::meta::Cache;
 
-use crate::config::ast::{Config, MatcherDef, Parent};
+use crate::config::ast::{Config, Dropped, MatcherDef, Parent};
 use crate::config::error::ConfigError;
 use crate::config::source::Span;
 use crate::path_globs::PathGlobs;
@@ -149,6 +149,9 @@ pub struct Grammar {
     by_name: HashMap<String, u32>,
     /// Warm DFA caches, reused across files (building one is not cheap).
     cache_pool: Mutex<Vec<DfaCaches>>,
+    /// What the config `drop`ped: unknown names that were dropped are
+    /// reported at their `drop`.
+    pub dropped: Vec<Dropped>,
 }
 
 /// Per-matcher lazy DFA caches for one parser.
@@ -275,11 +278,11 @@ impl Grammar {
             let Some((pat, span)) = &def.pattern else { continue };
             if let Some(&prev) = by_name.get(&def.name.text) {
                 let prev_span = config.matchers.iter().filter(|d| d.pattern.is_some()).nth(prev as usize).map(|d| d.name.span);
-                let mut err = ConfigError::new(def.name.span, format!("matcher `{}` is defined twice", def.name.text));
-                if prev_span.is_some() {
-                    err = err.note("use `in parent match name` (no pattern) to attach an existing matcher to more parents");
-                }
-                errors.push(err);
+                errors.push(
+                    ConfigError::new(def.name.span, format!("matcher `{}` is defined twice", def.name.text))
+                        .related(prev_span, "first defined here")
+                        .note("`override match name pattern` replaces it; `in parent match name` (no pattern) attaches it to more parents"),
+                );
                 continue;
             }
             by_name.insert(def.name.text.clone(), defs.len() as u32);
@@ -296,7 +299,10 @@ impl Grammar {
                 Err(e) => {
                     let mut err = ConfigError::new(*span, format!("in matcher `{}`: {e}", def.name.text));
                     if let Some(unknown) = e.strip_prefix("unknown matcher `").and_then(|r| r.strip_suffix('`')) {
-                        err = err.suggest(unknown, by_name.keys().map(String::as_str));
+                        err = match Dropped::find(&config.dropped, unknown) {
+                            Some(d) => d.still_used(*span),
+                            None => err.suggest(unknown, by_name.keys().map(String::as_str)),
+                        };
                     }
                     errors.push(err);
                     // The rest of the config still lints: this matcher just
@@ -344,10 +350,11 @@ impl Grammar {
         for def in &config.matchers {
             let Some(&id) = by_name.get(&def.name.text) else {
                 if def.pattern.is_none() {
-                    errors.push(
-                        ConfigError::new(def.name.span, format!("unknown matcher `{}`", def.name.text))
+                    errors.push(match Dropped::find(&config.dropped, &def.name.text) {
+                        Some(d) => d.still_used(def.name.span),
+                        None => ConfigError::new(def.name.span, format!("unknown matcher `{}`", def.name.text))
                             .suggest(&def.name.text, by_name.keys().map(String::as_str)),
-                    );
+                    });
                 }
                 continue;
             };
@@ -402,10 +409,11 @@ impl Grammar {
                             let p = &mut matchers[pid as usize];
                             push_unique(if def.overlay { &mut p.overlays } else { &mut p.children }, id);
                         }
-                        None => errors.push(
-                            ConfigError::new(name.span, format!("unknown parent matcher `{}`", name.text))
+                        None => errors.push(match Dropped::find(&config.dropped, &name.text) {
+                            Some(d) => d.still_used(name.span),
+                            None => ConfigError::new(name.span, format!("unknown parent matcher `{}`", name.text))
                                 .suggest(&name.text, by_name.keys().map(String::as_str)),
-                        ),
+                        }),
                     },
                 }
             }
@@ -415,7 +423,7 @@ impl Grammar {
                 m.gate = None;
             }
         }
-        resolve_likes(&mut matchers, &defs, &by_name, errors);
+        resolve_likes(&mut matchers, &defs, &by_name, &config.dropped, errors);
         let indents = resolve_indents(config, &groups, &by_name, &matchers, &labels, errors);
 
         // First-byte sets: a fixpoint, since references can be mutual.
@@ -446,7 +454,18 @@ impl Grammar {
         check_left_recursion(&matchers, &by_name, errors);
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
-        Grammar { matchers, langs, labels, indents, groups, natives, views, by_name, cache_pool: Mutex::new(Vec::new()) }
+        Grammar {
+            matchers,
+            langs,
+            labels,
+            indents,
+            groups,
+            natives,
+            views,
+            by_name,
+            cache_pool: Mutex::new(Vec::new()),
+            dropped: config.dropped.clone(),
+        }
     }
 
     /// The native node kind of matcher `m`, if it has one.
@@ -550,8 +569,11 @@ fn resolve_indents(
                     }
                 };
                 let Some(&id) = by_name.get(&name.text) else {
-                    let err = ConfigError::new(name.span, format!("unknown matcher `{}`", name.text));
-                    errors.push(err.suggest(&name.text, by_name.keys().map(String::as_str)));
+                    errors.push(match Dropped::find(&config.dropped, &name.text) {
+                        Some(d) => d.still_used(name.span),
+                        None => ConfigError::new(name.span, format!("unknown matcher `{}`", name.text))
+                            .suggest(&name.text, by_name.keys().map(String::as_str)),
+                    });
                     continue;
                 };
                 let label = match field {
@@ -625,6 +647,13 @@ fn resolve_groups(config: &Config, by_name: &HashMap<String, u32>, errors: &mut 
             errors.push(ConfigError::new(g.name.span, format!("`{}` is already a matcher; groups need their own name", g.name.text)));
             continue;
         }
+        for p in &g.parents {
+            if let (Parent::Matcher(n), Some(d)) = (p, Dropped::find(&config.dropped, &p.text())) {
+                if !by_name.contains_key(&n.text) {
+                    errors.push(d.still_used(n.span));
+                }
+            }
+        }
         raw.entry(g.name.text.clone()).or_default().extend(g.parents.iter().cloned());
     }
     fn flatten(name: &str, raw: &HashMap<String, Vec<Parent>>, seen: &mut Vec<String>, out: &mut Vec<Parent>) {
@@ -650,14 +679,22 @@ fn resolve_groups(config: &Config, by_name: &HashMap<String, u32>, errors: &mut 
 
 /// Resolves `like` bases and gives every specialisation its bases'
 /// children and overlays (own ones first, so they win ties).
-fn resolve_likes(matchers: &mut [Matcher], defs: &[(&MatcherDef, &Pat, Span)], by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) {
+fn resolve_likes(
+    matchers: &mut [Matcher],
+    defs: &[(&MatcherDef, &Pat, Span)],
+    by_name: &HashMap<String, u32>,
+    dropped: &[Dropped],
+    errors: &mut Vec<ConfigError>,
+) {
     for (i, (def, _, _)) in defs.iter().enumerate() {
         let Some(base) = &def.like else { continue };
         match by_name.get(&base.text) {
             Some(&b) => matchers[i].like = Some(b),
-            None => errors.push(
-                ConfigError::new(base.span, format!("unknown matcher `{}`", base.text)).suggest(&base.text, by_name.keys().map(String::as_str)),
-            ),
+            None => errors.push(match Dropped::find(dropped, &base.text) {
+                Some(d) => d.still_used(base.span),
+                None => ConfigError::new(base.span, format!("unknown matcher `{}`", base.text))
+                    .suggest(&base.text, by_name.keys().map(String::as_str)),
+            }),
         }
     }
     // Reject cycles before walking chains.

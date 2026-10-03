@@ -3,6 +3,7 @@
 //! Each file uses its nearest `zoomie.zlint`. `.zlint` edits reload configs
 //! live, with errors shown in place.
 
+mod config_docs;
 mod convert;
 mod projects;
 mod scan;
@@ -22,7 +23,10 @@ use scan::Shared;
 use transport::Outbox;
 use zoomie_lint::config::source::{normalize_path, SourceProvider};
 use zoomie_lint::config::{self};
+use zoomie_lint::engine::Linter;
 use zoomie_lint::line_index::LineIndex;
+use zoomie_lint::native::ts::modules::Stale;
+use zoomie_lint::native::ts::reads::{self, Reads};
 
 struct Doc {
     uri: String,
@@ -53,6 +57,9 @@ struct Server {
     docs: HashMap<PathBuf, Doc>,
     scan_workspace: bool,
     progress: bool,
+    /// Hover in source files shows the layers and facts at the cursor
+    /// (`zlint.inspectHover`).
+    inspect_hover: bool,
     warned_no_config: bool,
     /// Open documents whose diagnostics are out of date.
     dirty: HashSet<PathBuf>,
@@ -70,6 +77,9 @@ struct Server {
     ignored_tabs: HashSet<PathBuf>,
     /// Ignored tabs whose diagnostics are out of date.
     dirty_tabs: HashSet<PathBuf>,
+    /// Source files edited, created or deleted since the last flush: what
+    /// other files learned from them is out of date.
+    changed: HashSet<PathBuf>,
 }
 
 pub fn run() -> ExitCode {
@@ -82,6 +92,7 @@ pub fn run() -> ExitCode {
         docs: HashMap::new(),
         scan_workspace: true,
         progress: false,
+        inspect_hover: false,
         warned_no_config: false,
         dirty: HashSet::new(),
         rediscover: false,
@@ -90,6 +101,7 @@ pub fn run() -> ExitCode {
         tabs: Vec::new(),
         ignored_tabs: HashSet::new(),
         dirty_tabs: HashSet::new(),
+        changed: HashSet::new(),
     };
     // Reading happens on its own thread so the loop below can see how much
     // input is already waiting, and lint once per burst of edits instead of
@@ -155,6 +167,11 @@ impl Server {
                     }
                     "textDocument/codeAction" => self.out.respond(id, self.code_actions(params)),
                     "textDocument/formatting" => self.out.respond(id, self.format(params)),
+                    "textDocument/hover" => self.out.respond(id, self.hover(params)),
+                    "textDocument/definition" => self.out.respond(id, self.in_config(params, |c| c.definition(params))),
+                    "textDocument/references" => self.out.respond(id, self.in_config(params, |c| c.references(params))),
+                    "textDocument/documentSymbol" => self.out.respond(id, self.in_config(params, |c| c.outline())),
+                    "textDocument/completion" => self.out.respond(id, self.in_config(params, |c| c.complete(params))),
                     _ => self.out.respond_error(id, -32601, &format!("method not supported: {method}")),
                 }
             }
@@ -177,6 +194,7 @@ impl Server {
     /// then a rescan, so the scan never competes with what the user sees.
     fn flush(&mut self) {
         let rescan = self.reload_configs();
+        self.relint_dependents();
         let mut dirty: Vec<PathBuf> = std::mem::take(&mut self.dirty).into_iter().collect();
         dirty.sort_by_key(|p| self.visible.iter().position(|v| v == p).unwrap_or(usize::MAX));
         for path in dirty {
@@ -189,6 +207,46 @@ impl Server {
             let roots = if self.roots.is_empty() { self.projects.dirs() } else { self.roots.clone() };
             scan::start(self.projects.linters(), roots, self.tabs.clone(), self.shared.clone(), self.out.clone(), self.progress);
         }
+    }
+
+    /// Makes every linter forget what the changed files said, and relints
+    /// the files whose last lint read something that changed: open ones
+    /// with the next flush, the rest in the background.
+    fn relint_dependents(&mut self) {
+        if self.changed.is_empty() {
+            return;
+        }
+        let changed: Vec<PathBuf> = std::mem::take(&mut self.changed).into_iter().collect();
+        let linters = self.projects.linters();
+        let stale: Vec<(&Arc<Linter>, Stale)> = linters.all().map(|l| (l, l.invalidate(&changed))).collect();
+        let reads: Vec<(PathBuf, Arc<Reads>)> = self.shared.reads.lock().expect("lock").iter().map(|(p, r)| (p.clone(), r.clone())).collect();
+        let mut background = Vec::new();
+        for (path, reads) in reads {
+            let Some(linter) = linters.for_path(&path) else { continue };
+            let Some((_, stale)) = stale.iter().find(|(l, _)| Arc::ptr_eq(l, linter)) else { continue };
+            if changed.contains(&path) || !linter.is_stale(stale, &reads) {
+                continue;
+            }
+            if self.docs.contains_key(&path) {
+                self.dirty.insert(path);
+            } else if self.ignored_tabs.contains(&path) {
+                self.dirty_tabs.insert(path);
+            } else {
+                background.push(path);
+            }
+        }
+        if !background.is_empty() {
+            scan::relint(linters.clone(), background, self.shared.clone(), self.out.clone());
+        }
+    }
+
+    /// A source file's text changed (buffer or disk), or it came or went.
+    fn source_changed(&mut self, path: &Path) {
+        match self.docs.get(path) {
+            Some(doc) => reads::set_buffer(path, &doc.text),
+            None => reads::drop_buffer(path),
+        }
+        self.changed.insert(path.to_path_buf());
     }
 
     /// The config for a file the user has in the editor (buffer or tab): its
@@ -295,11 +353,17 @@ impl Server {
         if let Some(scan) = params["initializationOptions"]["scanWorkspace"].as_bool() {
             self.scan_workspace = scan;
         }
+        self.inspect_hover = params["initializationOptions"]["inspectHover"].as_bool().unwrap_or(false);
         json!({
             "capabilities": {
                 "textDocumentSync": { "openClose": true, "change": 2 },
                 "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.zlint"] },
                 "documentFormattingProvider": true,
+                "hoverProvider": true,
+                "definitionProvider": true,
+                "referencesProvider": true,
+                "documentSymbolProvider": true,
+                "completionProvider": { "triggerCharacters": [".", " ", "\"", "["] },
             },
             "serverInfo": { "name": "zlint", "version": env!("CARGO_PKG_VERSION") },
         })
@@ -365,7 +429,7 @@ impl Server {
             return;
         }
         let diags = match self.projects.linter_for(path).filter(|_| doc.lint) {
-            Some(l) => convert::diagnostics(&doc.text, &l.lint(path, &doc.text)),
+            Some(l) => convert::diagnostics(&doc.text, &self.shared.lint(l, path, &doc.text), l),
             None => json!([]),
         };
         self.shared.publish(&self.out, &doc.uri, Some(doc.version), diags);
@@ -382,7 +446,7 @@ impl Server {
     fn publish_from_disk(&self, path: &Path, u: &str) {
         let diags = match self.projects.linter_for(path) {
             Some(l) if l.wants(path) => match std::fs::read_to_string(path) {
-                Ok(text) => convert::diagnostics(&text, &l.lint(path, &text)),
+                Ok(text) => convert::diagnostics(&text, &self.shared.lint(l, path, &text), l),
                 Err(_) => json!([]),
             },
             _ => json!([]),
@@ -426,6 +490,7 @@ impl Server {
         if let Some(config) = config {
             self.want_config(config);
         }
+        self.source_changed(&path);
         self.dirty.insert(path);
     }
 
@@ -450,6 +515,7 @@ impl Server {
         if self.projects.is_config(&path) {
             self.config_touched(&path);
         } else {
+            self.source_changed(&path);
             self.dirty.insert(path);
         }
     }
@@ -464,6 +530,8 @@ impl Server {
         if self.projects.is_config(&path) {
             self.config_touched(&path);
         } else {
+            // Back to the disk's text, for this file and what reads it.
+            self.source_changed(&path);
             self.publish_disk(&path, &u);
         }
     }
@@ -484,7 +552,9 @@ impl Server {
             } else if self.projects.is_config(&path) {
                 self.config_touched(&path);
             } else if !self.docs.contains_key(&path) {
+                self.source_changed(&path);
                 if kind == Some(3) {
+                    self.shared.reads.lock().expect("lock").remove(&path);
                     self.shared.publish(&self.out, u, None, json!([]));
                 } else {
                     self.publish_disk(&path, u);
@@ -533,6 +603,42 @@ impl Server {
             }
         }
         Value::Array(actions)
+    }
+
+    /// Runs `f` on the `.zlint` file of a request (null elsewhere).
+    fn in_config(&self, params: &Value, f: impl FnOnce(&config_docs::ConfigFile) -> Value) -> Value {
+        let Some((path, _)) = Self::doc_path(params) else { return Value::Null };
+        match self.projects.config_file(&path) {
+            Some((symbols, file)) => f(&config_docs::ConfigFile { symbols: &symbols, file }),
+            None => Value::Null,
+        }
+    }
+
+    /// In `.zlint` files: what the name is. In source files, when enabled:
+    /// the layers and facts at the cursor.
+    fn hover(&self, params: &Value) -> Value {
+        let Some((path, _)) = Self::doc_path(params) else { return Value::Null };
+        if let Some((symbols, file)) = self.projects.config_file(&path) {
+            return config_docs::ConfigFile { symbols: &symbols, file }.hover(params);
+        }
+        if !self.inspect_hover {
+            return Value::Null;
+        }
+        let Some(linter) = self.projects.linter_for(&path) else { return Value::Null };
+        let text = match self.docs.get(&path) {
+            Some(doc) => doc.text.clone(),
+            None => match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(_) => return Value::Null,
+            },
+        };
+        let pos = &params["position"];
+        let lines = LineIndex::new(&text);
+        let offset = lines.from_utf16(&text, pos["line"].as_u64().unwrap_or(0) as u32, pos["character"].as_u64().unwrap_or(0) as u32);
+        match linter.inspect(&path, &text, offset) {
+            Some(md) => json!({ "contents": { "kind": "markdown", "value": format!("**zlint**\n\n{md}") } }),
+            None => Value::Null,
+        }
     }
 
     fn format(&self, params: &Value) -> Value {

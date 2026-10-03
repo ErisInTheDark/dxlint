@@ -1,7 +1,7 @@
 # std/whitespace: language-agnostic hygiene. Overlays on `.*` run over the
 # text of every declared language without hiding anything from other layers.
 
-over .* match trailing_ws /[ \t]+$/ {
+over .* match trailing_whitespace /[ \t]+$/ {
   rule trailing-whitespace warn "no trailing whitespace" fix as ""
 }
 

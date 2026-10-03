@@ -1,22 +1,25 @@
 # std/core: building blocks shared by every language.
 #
 # Brackets are layers whose `until` middle lets their children eat nested
-# content, so `(a, f(")"))` closes at the right paren. Languages attach the
-# brackets to their root and add their own strings and comments to them:
+# content, so `(a, f(")"))` closes at the right parenthesis. Languages attach
+# the brackets to their root and add their own strings and comments to them:
 #
-#   in .mylang match paren
-#   in .mylang or paren or brack or brace match my_string /"/ until /"/
+#   in .mylang match parentheses
+#   in .mylang, parentheses, brackets, braces match my_string /"/ until /"/
 
-match paren /\(/ until /\)/
-match brack /\[/ until /\]/
-match brace /\{/ until /\}/
-in paren or brack or brace {
-  match paren
-  match brack
-  match brace
+match parentheses /\(/ until /\)/
+match brackets /\[/ until /\]/
+match braces /\{/ until /\}/
+in parentheses, brackets, braces {
+  match parentheses
+  match brackets
+  match braces
 }
 
-match ws /[ \t]+/
+match whitespace /[ \t]+/
 match space /\s+/
-match ident /\b[A-Za-z_]\w*/
+match identifier /\b[A-Za-z_]\w*/
 match number /\b\d[\d_]*(?:\.\d+)?/
+
+# The line break this file uses, for fixes that add lines.
+macro newline (if contains(source, "\r\n") then "\r\n" else "\n")

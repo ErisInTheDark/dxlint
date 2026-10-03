@@ -10,6 +10,7 @@ pub mod kinds;
 mod lexer;
 pub mod modules;
 mod parse;
+pub mod reads;
 mod regex;
 mod returns;
 mod summary;

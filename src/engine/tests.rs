@@ -10,7 +10,7 @@ use crate::config::{self, ast::Severity};
 const LANG: &str = r#"
 lang t "*.t"
 match paren /\(/ until /\)/
-in .t or paren {
+in .t, paren {
   match paren
   match str /"/ until /"/ {
     match escape /\\./
@@ -46,7 +46,7 @@ fn spans<'a>(diags: &[Diagnostic], text: &'a str) -> Vec<&'a str> {
 #[test]
 fn strings_comments_and_escapes_hide_text_from_their_parent() {
     let l = linter(r#"
-        in .t or paren match todo /TODO/ {
+        in .t, paren match todo /TODO/ {
           rule no-todo warn "no todos"
         }
     "#);
@@ -74,7 +74,7 @@ fn nested_brackets_close_at_the_right_place() {
 #[test]
 fn nested_layers_recurse_through_fields() {
     let l = linter(r#"
-        in .t or args match call name:/\w+/ args:args
+        in .t, args match call name:/\w+/ args:args
         match args /\(/ until /\)/
         in call.name rule each-call warn "{text}"
     "#);
@@ -86,7 +86,7 @@ fn nested_layers_recurse_through_fields() {
 #[test]
 fn fixes_report_only_differences_and_fix_them() {
     let l = linter(r#"
-        in .t or paren match param name:/\w+/ /\s*:\s*/ ty:/\w+/ {
+        in .t, paren match param name:/\w+/ /\s*:\s*/ ty:/\w+/ {
           rule colon warn "one space after `:`" fix as "{name}: {ty}"
         }
     "#);
@@ -214,10 +214,10 @@ fn unclosed_groups_fail_without_eating_the_rest_of_the_file() {
 #[test]
 fn lookbehind_tells_regex_literals_from_division() {
     let l = linter(r#"
-        in .t or paren match re /(?<=(?:^|[=(,:!&|?{};]|\breturn)[ \t]*)\// until /\/[a-z]*/ {
+        in .t, paren match re /(?<=(?:^|[=(,:!&|?{};]|\breturn)[ \t]*)\// until /\/[a-z]*/ {
           match re_escape /\\./
         }
-        in .t or paren match word /\bx\b/ {
+        in .t, paren match word /\bx\b/ {
           rule words warn "x"
         }
     "#);
@@ -245,7 +245,7 @@ fn specialisations_inherit_children_and_win_ties() {
     let l = linter(r#"
         match blk /\{/ until /\}/
         match obj like blk /(?<==[ \t]*)\{/ until /\}/
-        in .t or blk {
+        in .t, blk {
           match blk
           match obj
         }
@@ -264,7 +264,7 @@ fn specialisations_inherit_children_and_win_ties() {
 #[test]
 fn enclosing_sees_through_overlays_into_comments_and_strings() {
     let l = linter(r#"
-        over .t or paren match bad /BAD/ {
+        over .t, paren match bad /BAD/ {
           rule where warn "{enclosing}"
         }
     "#);
@@ -308,7 +308,7 @@ fn parent_before_spans_lines_within_the_parent_only() {
 fn indent_follows_the_inside_of_declared_layers() {
     let l = linter(r#"
         in paren indent
-        over .t or paren match line /^[ \t]*\S/ {
+        over .t, paren match line /^[ \t]*\S/ {
           rule ind warn "[{if indented then indent_anchor else 'none'}|{indent_closes}|{indent_hangs}]"
         }
     "#);
@@ -330,7 +330,7 @@ fn indent_can_target_a_field_only() {
     let l = linter(r#"
         in .t match pair /\[/ body:paren /\]/
         in pair.body indent
-        over .t or paren match line /^[ \t]*\S/ {
+        over .t, paren match line /^[ \t]*\S/ {
           rule ind warn "[{if indented then indent_anchor else 'none'}]"
         }
     "#);
@@ -346,7 +346,7 @@ fn indent_inside_a_matcher_block_indents_that_matcher() {
         in .t match blk /\[/ until /\]/ {
           indent
         }
-        over .t or blk match line /^[ \t]*\S/ {
+        over .t, blk match line /^[ \t]*\S/ {
           rule ind warn "{indented}"
         }
     "#);
@@ -358,7 +358,7 @@ fn indent_inside_a_matcher_block_indents_that_matcher() {
 fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
     let l = linter(r#"
         in paren indent
-        over .t or paren match line /^[ \t]*\S/ {
+        over .t, paren match line /^[ \t]*\S/ {
           macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
           rule ind warn "indent" {
             when slice(text, 0, -1) != level
@@ -386,8 +386,8 @@ fn native_linter(rules: &str) -> Linter {
 fn native_layers_carry_fields_and_attributes() {
     let l = native_linter(r#"
         in ts_logical let ops 1 + left.ops + right.ops
-        in ts_paren let ops expr.ops
-        in ts_call let ops sum(arg.ops)
+        in ts_parenthesized let ops expression.ops
+        in ts_call let ops sum(argument.ops)
         in ts_if.test rule complex warn "{ops} in `{text}`" { when ops > 1 }
         in ts_call.callee rule callee info "{text}"
     "#);
@@ -401,7 +401,7 @@ fn native_layers_carry_fields_and_attributes() {
 #[test]
 fn bindings_count_value_type_and_self_uses() {
     let l = native_linter(r#"
-        in ts_ident rule b info "{text}:{decl_kind}:{uses}/{value_uses}/{self_uses}/{writes}" { when uses != null }
+        in ts_identifier rule b info "{text}:{declaration_kind}:{uses}/{value_uses}/{self_uses}/{writes}" { when uses != null }
     "#);
     let text = "import { A, B, C } from \"m\";\nlet x: A = 1;\ntype T = typeof B;\nconst f = () => f();\ninterface D {}\nconst D = 1;\nx = C;\nexport { D };\n";
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
@@ -462,14 +462,14 @@ fn declared_types_follow_imports_members_and_initializers() {
             ),
         ],
         "src/b.ts",
-        "in ts_expr_stmt.expr rule t info \"{default(type, '?')}\"",
+        "in ts_expression_statement.expression rule t info \"{default(type, '?')}\"",
     );
     assert_eq!(messages, vec!["Task<string>", "number", "never", "Store<string>"]);
 }
 
 /// The type of every expression statement in a single file.
 fn statement_types(text: &str) -> Vec<String> {
-    let l = native_linter("in ts_expr_stmt.expr rule t info \"{default(type, '?')}\"");
+    let l = native_linter("in ts_expression_statement.expression rule t info \"{default(type, '?')}\"");
     l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect()
 }
 
@@ -514,7 +514,9 @@ loop();
 
 #[test]
 fn redundant_type_arguments_use_mutual_assignability() {
-    let l = native_linter("in ts_call.type_arg or ts_type_ref.type_arg rule t info \"{text}:{type_arg_redundant}\" { when type_arg_redundant != null }");
+    let l = native_linter(
+        "in ts_call.type_argument, ts_type_reference.type_argument rule t info \"{text}:{type_argument_redundant}\" { when type_argument_redundant != null }",
+    );
     let text = "\
 enum E { A, B }
 enum S { A = \"a\" }
@@ -535,7 +537,7 @@ let b: Box<string>;
 #[test]
 fn class_members_functions_and_constructors() {
     let l = native_linter(
-        "in ts_class_prop rule m info \"{key}:{member_reads}/{member_writes}/{member_ctor_writes}\"\n\
+        "in ts_class_property rule m info \"{key}:{member_reads}/{member_writes}/{member_constructor_writes}\"\n\
          in ts_function rule f info \"{name}:{uses_this}:{uses_arguments}:{has_yield}\"\n\
          in ts_method rule c info \"{super_calls}\" { when super_calls != null }",
     );
@@ -594,8 +596,8 @@ fn regexes_and_regexp_patterns() {
 fn facts_of_fields_and_parents_and_sibling_builtins() {
     let l = native_linter(
         "in ts_call rule c info \"{callee}:{callee.resolved}\"\n\
-         in ts_call.arg rule a info \"{index}:{text}:{parent.type_flags == null}\"\n\
-         in ts_expr_stmt rule g info \"{default(gap_before, 'first')}\" { when index > 0 }",
+         in ts_call.argument rule a info \"{index}:{text}:{parent.type_flags == null}\"\n\
+         in ts_expression_statement rule g info \"{default(gap_before, 'first')}\" { when index > 0 }",
     );
     let text = "import { f } from \"m\";\nf(a, b);\n\n// note\ng(c);\n";
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
@@ -612,7 +614,7 @@ fn docs_follow_imports_through_barrels() {
             ("main.ts", "import { a, b } from \"./index\";\na();\nb();\n"),
         ],
         "main.ts",
-        "in ts_ident rule d info \"{text}: {decl_doc}\" { when decl_import != null && decl_doc != null }",
+        "in ts_identifier rule d info \"{text}: {declaration_doc}\" { when imported_from != null && declaration_doc != null }",
     );
     assert_eq!(messages, vec!["a: Old.\n@deprecated use b", "a: Old.\n@deprecated use b"]);
 }
@@ -620,8 +622,8 @@ fn docs_follow_imports_through_barrels() {
 #[test]
 fn parent_reads_the_parent_layers_fields_and_attributes() {
     let l = native_linter(r#"
-        in ts_call let arity count(arg)
-        in ts_call.arg rule p info "{parent.callee}/{parent.arity}"
+        in ts_call let arity count(argument)
+        in ts_call.argument rule p info "{parent.callee}/{parent.arity}"
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f(1, 2);\n").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["f/2", "f/2"]);
@@ -677,7 +679,7 @@ fn a_mistake_in_a_macro_is_reported_once() {
 #[test]
 fn parent_indent_is_the_indentation_where_the_layer_opens() {
     let l = linter(r#"
-        in .t or paren match word /\w+/ {
+        in .t, paren match word /\w+/ {
           rule w warn "[{parent_indent}|{parent_line}]"
         }
     "#);
@@ -702,7 +704,7 @@ fn regex_functions_and_line_context() {
     let l = linter(r#"
         in .t match word /\b[a-z]+\b/ {
           rule ctx {
-            when re_test(default(next_line, ''), "^end") || prev_line == null
+            when re_test(default(next_line, ''), "^end") || previous_line == null
             warn "{text}|{before}|{after}|{re_replace(text, '([aeiou])', '<$1>')}"
           }
         }
@@ -729,7 +731,7 @@ fn patterns_that_could_match_empty_never_produce_empty_nodes() {
           match xs /x*/
           match lazy /y*?z?/
         }
-        in xs or lazy rule found warn "{text}"
+        in xs, lazy rule found warn "{text}"
     "#);
     let diags = lint(&l, "a xx b yyz y");
     let found: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
@@ -773,7 +775,7 @@ fn options_defaults_sets_and_messages() {
 fn ancestors_and_builtins_are_visible_from_fields() {
     let l = linter(r#"
         in .t match fun /fn /name:/\w+/ :paren
-        in fun.paren rule where warn "{fun.name}@{line}:{col} [{indent}]"
+        in fun.paren rule where warn "{fun.name}@{line}:{column} [{indent}]"
     "#);
     let diags = lint(&l, "x\n  fn go(a)");
     assert_eq!(diags[0].message, "go@2:8 [  ]");
@@ -814,8 +816,8 @@ fn macros_generate_rules() {
 fn language_gates_keep_children_out_of_other_languages() {
     let l = linter(r#"
         lang u "*.u"
-        in .u or paren match ustr /'/ until /'/
-        in .t or .u match word /\bword\b/ {
+        in .u, paren match ustr /'/ until /'/
+        in .t, .u match word /\bword\b/ {
           rule w warn "word"
         }
     "#);
@@ -860,6 +862,199 @@ fn whole_file_targets() {
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "body\n");
     assert_eq!(fixed.text, "// header\nbody\n");
+}
+
+/// The rules a config ends up with, and their messages on `text`.
+fn rule_messages(l: &Linter, text: &str) -> Vec<String> {
+    lint(l, text).into_iter().map(|d| format!("{}: {}", d.rule, d.message)).collect()
+}
+
+#[test]
+fn override_replaces_definitions_in_place_and_forgets_their_settings() {
+    let l = linter(r#"
+        in .t match word /\b[a-z]+\b/
+        in word rule shout warn "old {text}"
+        set shout error
+        macro twice(x) x x
+        override in word rule shout info "new {twice(text)}"
+        override macro twice(x) x "+" x
+        in word rule echo warn "{twice(text)}"
+        override in .t match word /\b[a-z]{2}\b/
+    "#);
+    let diags = lint(&l, "ab abc");
+    // One word now (the new pattern); the old rule's `set` went with it; the
+    // replaced macro applies from the `override` on, not before.
+    assert_eq!(rule_messages(&l, "ab abc"), vec!["echo: ab+ab", "shout: new abab"]);
+    assert_eq!(diags[1].severity, Severity::Info);
+}
+
+#[test]
+fn redefinitions_need_override() {
+    let errs = errors(r#"
+        in .t match word /\w+/
+        in word rule r warn "x"
+        in word rule r warn "y"
+        macro m 1
+        macro m 2
+        override in word rule ghost warn "z"
+    "#);
+    let all = errs.join("\n");
+    assert!(all.contains("rule `r` is defined twice") && all.contains("override in <layer> rule r"), "{all}");
+    assert!(all.contains("macro `m` is defined twice") && all.contains("override macro m"), "{all}");
+    assert!(all.contains("nothing to override: no rule `ghost`"), "{all}");
+}
+
+#[test]
+fn drop_removes_definitions_and_reports_what_still_uses_them() {
+    let src = format!(
+        "{LANG}\n{}",
+        r#"
+        in .t match word /\w+/
+        in word rule a warn "a"
+        in word rule b:one warn "b1"
+        in word rule b:two warn "b2"
+        set a error
+        set b:* error
+        drop rule a
+        drop rule b:*
+        set a warn
+        drop match word
+    "#
+    );
+    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let messages: Vec<&str> = built.errors.iter().map(|e| e.message.as_str()).collect();
+    // The settings above the drops went with the rules; the one below and
+    // nothing else is an error. The dropped matcher's own rules went first,
+    // so dropping it leaves no users.
+    assert_eq!(messages, vec!["`a` is dropped here, but it is still used"], "{:#?}", built.errors);
+    let err = &built.errors[0];
+    let used = err.related[0].0;
+    assert_eq!(&src[used.start as usize..used.end as usize], "a");
+    assert_eq!(&src[err.span.unwrap().start as usize..err.span.unwrap().end as usize], "drop rule a");
+}
+
+#[test]
+fn dropping_something_in_use_is_an_error_at_the_drop() {
+    let src = format!(
+        "{LANG}\n{}",
+        r#"
+        in .t match word /\w+/
+        in word rule w warn "w"
+        in .t match pair word /=/ word
+        drop match word
+    "#
+    );
+    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    let uses: Vec<String> = built
+        .errors
+        .iter()
+        .map(|e| {
+            assert_eq!(e.message, "`word` is dropped here, but it is still used");
+            let (span, _) = e.related[0];
+            src[span.start as usize..span.end as usize].lines().next().unwrap_or_default().to_string()
+        })
+        .collect();
+    // The rule's target and the other matcher's pattern.
+    assert_eq!(uses.len(), 2, "{:#?}", built.errors);
+}
+
+#[test]
+fn drop_detaches_layers_groups_attributes_and_ignores() {
+    let l = linter(r#"
+        group words word, num
+        in .t, paren match word /[a-z]+/
+        in .t match num /[0-9]+/
+        in word, num let shown text "!"
+        in words rule w warn "{shown}"
+        drop in paren match word
+        drop group words num
+        drop in num let shown
+        ignore "gen/**"
+        drop ignore "gen/**"
+    "#);
+    // `num` left the group, `word` is no longer searched inside parens.
+    assert_eq!(rule_messages(&l, "ab (cd) 12"), vec!["w: ab!"]);
+    assert!(l.wants(Path::new("/root/gen/x.t")));
+}
+
+#[test]
+fn amend_adds_conditions_and_replaces_messages() {
+    let l = linter(r#"
+        in .t match word /[a-z]+/ { rule w warn "word" }
+        amend rule w info "short {text}" { when len(text) < 3 }
+    "#);
+    let diags = lint(&l, "ab abcd");
+    assert_eq!(rule_messages(&l, "ab abcd"), vec!["w: short ab"]);
+    assert_eq!(diags[0].severity, Severity::Info);
+}
+
+#[test]
+fn children_and_siblings_read_neighbouring_nodes() {
+    let l = native_linter(r#"
+        in ts_call rule kids info "{join([] children.layer, ',')}"
+        in ts_call.argument rule around info "{default(previous, '-')}<{text}>{default(next, '-')}"
+        in ts_expression_statement rule first info "first" { when previous == null && index == 0 }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f(a, b);\n").into_iter().map(|d| d.message).collect();
+    // Children in order, nulls kept (the callee is an identifier layer, the
+    // arguments too); siblings only within the same field.
+    assert_eq!(messages, vec!["ts_identifier,ts_identifier,ts_identifier", "first", "-<a>b", "a<b>-"]);
+}
+
+#[test]
+fn is_tests_layer_names_against_layers_groups_and_specialisations() {
+    let l = linter(r#"
+        match word /[a-z]+/
+        match shout like word /[A-Z]+/
+        group things word, paren
+        in .t, paren match word
+        in .t, paren match shout
+        in word rule w info "{layer is word}/{layer is [paren, shout]}/{parent is things}"
+    "#);
+    assert_eq!(rule_messages(&l, "ab (CD)"), vec!["w: true/false/false", "w: true/true/true"]);
+}
+
+#[test]
+fn forward_reads_attributes_through_wrappers() {
+    let l = native_linter(r#"
+        in ts_identifier let size len(text)
+        in ts_identifier let kind_of "id"
+        in ts_parenthesized, ts_non_null forward size from expression
+        in ts_expression_statement rule s info "{expression.size}/{default(expression.kind_of, '-')}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "((abc))!;\n").into_iter().map(|d| d.message).collect();
+    // Only the attributes named pass through.
+    assert_eq!(messages, vec!["3/-"]);
+}
+
+#[test]
+fn rule_lets_name_values_and_long_conditions_span_lines() {
+    let l = linter(r#"
+        in .t match word /[a-z]+/ {
+          rule long {
+            let size len(text)
+            let big size > 3
+            when big
+              && starts_with(text, "a")
+              || text == "zz"
+            warn "{size} letters"
+          }
+        }
+    "#);
+    assert_eq!(rule_messages(&l, "abcd abc zz bbbbb"), vec!["long: 4 letters", "long: 2 letters"]);
+}
+
+#[test]
+fn inspect_names_the_layers_fields_and_facts_at_a_position() {
+    let l = native_linter("in ts_call rule c warn \"c\"");
+    let text = "const n = 1;\nparseInt(\"2\");\n";
+    let at = text.find("parseInt").unwrap() + 2;
+    let md = l.inspect(Path::new("/root/file.ts"), text, at).expect("linted");
+    // Innermost first, each with the field it sits in, then the facts.
+    let identifier = md.find("`ts_identifier` — `callee` of `ts_call`").expect(&md);
+    let call = md.find("`ts_call` — `expression` of `ts_expression_statement`").expect(&md);
+    assert!(identifier < call, "{md}");
+    assert!(md.contains("`resolved` = \"global\""), "{md}");
 }
 
 #[test]

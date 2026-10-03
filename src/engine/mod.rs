@@ -1,10 +1,13 @@
 //! The linter: a compiled grammar plus rules, run over files.
 
 mod build;
+pub mod cache;
 pub mod diagnostic;
 mod fix;
+mod inspect;
 mod profile;
 mod suppress;
+pub mod symbols;
 #[cfg(test)]
 mod tests;
 
@@ -23,6 +26,8 @@ use crate::expr::{Attr, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
 use crate::native::ts::facts::{Facts, NativeFile};
+use crate::native::ts::modules::Stale;
+use crate::native::ts::reads::{self, Dep, Reads};
 use crate::native::ts::syntax::Syntax;
 use crate::path_globs::PathGlobs;
 use suppress::Suppressions;
@@ -52,6 +57,8 @@ pub struct Rule {
     files: PathGlobs,
     ignore: PathGlobs,
     when: Vec<CExpr>,
+    /// `let` values, by slot.
+    locals: Vec<CExpr>,
     message: Option<CExpr>,
     /// What the node should look like (`fix expr`).
     fix: Option<CExpr>,
@@ -102,8 +109,13 @@ pub struct Linter {
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
     attrs: Vec<Attr>,
+    /// `in a forward x from field`: (matcher, attribute, label).
+    forwards: Vec<(u32, u16, u16)>,
     /// Other files' exports, read on demand by native rules.
     project: crate::native::ts::modules::Project,
+    /// Identifies these rules: the tokens parsed (imports and macros
+    /// expanded) and the project root.
+    pub fingerprint: u64,
 }
 
 impl Linter {
@@ -127,6 +139,27 @@ impl Linter {
 
     pub fn is_ignored(&self, path: &Path) -> bool {
         self.ignores.matches(&self.relative(path))
+    }
+
+    /// [`Linter::lint`], plus what the lint read besides `text` (other
+    /// files' summaries, module resolution, tsconfigs): the result stays
+    /// right while every dep holds ([`Linter::holds`]).
+    pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
+        reads::track(|| self.lint(path, text))
+    }
+
+    pub fn holds(&self, dep: &Dep) -> bool {
+        self.project.holds(dep)
+    }
+
+    /// Forgets what the `changed` files said (see `Project::invalidate`);
+    /// [`Linter::is_stale`] then tells which recorded deps they broke.
+    pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
+        self.project.invalidate(changed)
+    }
+
+    pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
+        self.project.is_stale(stale, reads)
     }
 
     pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
@@ -230,7 +263,9 @@ impl Linter {
                         options: &run.options[fi],
                         reindented: &reindented,
                         attrs: &self.attrs,
+                        forwards: &self.forwards,
                         memo: &memo,
+                        locals: Some((fi as u32, &self.rules[fi].locals)),
                         native,
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());

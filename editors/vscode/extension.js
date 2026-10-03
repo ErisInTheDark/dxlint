@@ -137,7 +137,10 @@ function createClient(command) {
     // The server decides which files it owns (via `lang` in .zlint), so
     // every file document is offered to it.
     documentSelector: [{ scheme: "file" }],
-    initializationOptions: { scanWorkspace: config.get("scanWorkspace", true) },
+    initializationOptions: {
+      scanWorkspace: config.get("scanWorkspace", true),
+      inspectHover: config.get("inspectHover", false),
+    },
     synchronize: {
       // Disk changes refresh background results and reload the config.
       fileEvents: vscode.workspace.createFileSystemWatcher("**/*"),

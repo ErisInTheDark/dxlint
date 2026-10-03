@@ -42,8 +42,8 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| opt(f.binding(n), |b| Value::from(b.writes as usize)),
     },
     Fact {
-        name: "decl_kind",
-        doc: "native layers: what this identifier's declaration is (`const`, `param`, `import`, `class`, `type`, ...)",
+        name: "declaration_kind",
+        doc: "native layers: what this identifier's declaration is (`const`, `parameter`, `import`, `class`, `type`, ...)",
         get: |f, n| opt(f.binding(n), |b| Value::from(b.kind)),
     },
     Fact { name: "exported", doc: "native layers: the declaration is `export`ed", get: |f, n| opt(f.binding(n), |b| Value::Bool(b.exported)) },
@@ -53,12 +53,12 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| opt(f.binding(n), |b| Value::Bool(b.ambient)),
     },
     Fact {
-        name: "decl_import",
+        name: "imported_from",
         doc: "native layers: the module an identifier's binding is imported from (null if not imported)",
         get: |f, n| opt(f.import_of(n), |(from, _)| Value::from(from)),
     },
     Fact {
-        name: "decl_doc",
+        name: "declaration_doc",
         doc: "native layers: the JSDoc of the declaration an identifier is or refers to, followed into imported files",
         get: |f, n| opt(f.decl_doc(n), Value::from),
     },
@@ -78,17 +78,17 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| opt(f.type_members(n), |names| Value::List(names.into_iter().map(|n| Value::from(n.to_string())).collect())),
     },
     Fact {
-        name: "type_param_defaults",
+        name: "type_parameter_defaults",
         doc: "native layers: on a call, `new`, type reference or class: each type parameter's default, printed (null where none)",
         get: |f, n| opt(f.type_params(n), |(defaults, _)| Value::List(defaults.into_iter().map(|t| opt(t, Value::from)).collect())),
     },
     Fact {
-        name: "type_params_inferred",
+        name: "type_parameters_inferred",
         doc: "native layers: on a call or `new`: what the arguments would infer for each type parameter (null where unknown)",
         get: |f, n| opt(f.type_params(n), |(_, inferred)| Value::List(inferred.into_iter().map(|t| opt(t, Value::from)).collect())),
     },
     Fact {
-        name: "type_arg_redundant",
+        name: "type_argument_redundant",
         doc: "native layers: on the last type argument of a call, `new`, type reference or class: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types that are assignable both ways count as the same); null otherwise",
         get: |f, n| opt(f.type_arg_redundant(n), Value::from),
     },
@@ -98,8 +98,8 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| opt(f.resolved(n), Value::from),
     },
     Fact {
-        name: "ref_kind",
-        doc: "native layers: on a referencing identifier: the kind of the declaration it resolves to (`const`, `param`, `catch`, ...; see `decl_kind`)",
+        name: "reference_kind",
+        doc: "native layers: on a referencing identifier: the kind of the declaration it resolves to (`const`, `parameter`, `catch`, ...; see `declaration_kind`)",
         get: |f, n| opt(f.ref_kind(n), Value::from),
     },
     Fact {
@@ -113,7 +113,7 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| opt(f.member_uses(n), |u| Value::from(u.writes as usize)),
     },
     Fact {
-        name: "member_ctor_writes",
+        name: "member_constructor_writes",
         doc: "native layers: on a class member: writes inside the constructor",
         get: |f, n| opt(f.member_uses(n), |u| Value::from(u.ctor_writes as usize)),
     },

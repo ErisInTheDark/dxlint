@@ -216,7 +216,7 @@ impl<'t> Binder<'_, 't> {
         match s.kind(pat) {
             Some(K::Ident) => self.declare(scope, pat, space),
             Some(K::ObjectPattern) => {
-                for p in s.all(pat, F::Prop).collect::<Vec<_>>() {
+                for p in s.all(pat, F::Property).collect::<Vec<_>>() {
                     match s.get(p, F::Value) {
                         Some(v) if !(s.is(v, K::AssignPattern) && s.get(v, F::Left).is_none()) => self.declare_pattern(v, scope, space),
                         _ => {
@@ -255,7 +255,7 @@ impl<'t> Binder<'_, 't> {
         let s = self.s;
         match s.kind(pat) {
             Some(K::ObjectPattern) => {
-                for p in s.all(pat, F::Prop).collect::<Vec<_>>() {
+                for p in s.all(pat, F::Property).collect::<Vec<_>>() {
                     if let Some(k) = s.get(p, F::Key).filter(|&k| s.is(k, K::Computed)) {
                         self.walk(k, scope, Mode::Value);
                     }
@@ -297,7 +297,7 @@ impl<'t> Binder<'_, 't> {
         let params: Vec<u32> = s.all(owner, F::TypeParam).collect();
         for &tp in &params {
             if let Some(n) = s.get(tp, F::Name) {
-                self.as_("type_param", tp);
+                self.as_("type_parameter", tp);
                 self.declare(scope, n, TYPE);
             }
         }
@@ -333,7 +333,7 @@ impl<'t> Binder<'_, 't> {
                 self.walk(d, scope, Mode::Value);
             }
             if let Some(n) = s.get(p, F::Name) {
-                self.as_("param", p);
+                self.as_("parameter", p);
                 self.declare_pattern(n, scope, VALUE);
                 self.pattern_exprs(n, scope);
             }
@@ -370,7 +370,7 @@ impl<'t> Binder<'_, 't> {
                 }
             }
             Some(K::Object) => {
-                for p in s.all(id, F::Prop).collect::<Vec<_>>() {
+                for p in s.all(id, F::Property).collect::<Vec<_>>() {
                     match (s.kind(p), s.get(p, F::Value)) {
                         (Some(K::Prop), Some(v)) if !(s.is(v, K::AssignPattern) && s.get(v, F::Left).is_none()) => {
                             self.key(p, scope, Mode::Value);
@@ -835,7 +835,7 @@ impl<'t> Binder<'_, 't> {
             K::Infer => {
                 if let Some(tp) = s.get(id, F::TypeParam) {
                     if let Some(n) = s.get(tp, F::Name) {
-                        self.as_("type_param", tp);
+                        self.as_("type_parameter", tp);
                         self.declare(scope, n, TYPE);
                     }
                     self.walk_fields(tp, scope, Mode::Type, &[F::Constraint]);
@@ -850,7 +850,7 @@ impl<'t> Binder<'_, 't> {
                 let inner = self.scope(Some(scope), false);
                 if let Some(tp) = s.get(id, F::TypeParam) {
                     if let Some(n) = s.get(tp, F::Name) {
-                        self.as_("type_param", tp);
+                        self.as_("type_parameter", tp);
                         self.declare(inner, n, TYPE);
                     }
                     self.walk_fields(tp, scope, Mode::Type, &[F::Constraint]);
@@ -866,7 +866,10 @@ impl<'t> Binder<'_, 't> {
                 let type_kind = kind as u16 >= K::TypeRef as u16;
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {
                     let Some(f) = f else { continue };
-                    if matches!(f, F::Key | F::Name | F::Label | F::Property | F::Imported | F::Exported | F::Op | F::Kind | F::Modifier | F::Optional | F::Quasi) {
+                    // A member's `.property` is a name, not a use; object
+                    // literal and pattern properties are code.
+                    let member_name = f == F::Property && kind == K::Member;
+                    if member_name || matches!(f, F::Key | F::Name | F::Label | F::Imported | F::Exported | F::Op | F::Kind | F::Modifier | F::Optional | F::Quasi) {
                         continue;
                     }
                     let child_mode = if type_kind

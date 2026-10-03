@@ -12,15 +12,18 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use zoomie_lint::config::source::{normalize_path, Disk, SourceProvider};
 use zoomie_lint::config::{self, CONFIG_NAME};
+use zoomie_lint::engine::symbols::Symbols;
 use zoomie_lint::engine::{build, Linter};
 
 #[derive(Parser)]
-#[command(name = "zlint", version, about = "Extremely fast linting with rules written in .zlint", args_conflicts_with_subcommands = true)]
+#[command(name = "zlint", version, about = "Extremely fast linting with rules written in .zlint", subcommand_precedence_over_arg = true)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
     #[command(flatten)]
     lint: LintArgs,
+    #[command(flatten)]
+    config: ConfigArg,
 }
 
 #[derive(clap::Args, Clone)]
@@ -43,11 +46,12 @@ pub struct LintArgs {
     /// Print timing and throughput
     #[arg(long)]
     pub stats: bool,
-    /// Report which matchers and rules cost the most time
+    /// Report which matchers and rules cost the most time (implies --no-cache)
     #[arg(long)]
     pub profile: bool,
-    #[command(flatten)]
-    pub config: ConfigArg,
+    /// Lint every file, without reading or writing `.zlintcache`
+    #[arg(long)]
+    pub no_cache: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -61,14 +65,15 @@ pub enum Format {
 #[derive(Subcommand)]
 enum Command {
     /// Check the configuration without linting anything
-    Check {
-        #[command(flatten)]
-        config: ConfigArg,
-    },
+    Check,
     /// List rules with their severity, options and messages
-    Rules {
-        #[command(flatten)]
-        config: ConfigArg,
+    Rules,
+    /// Explain a name from the configuration: a rule, layer, field,
+    /// attribute, macro, group, option, builtin, fact, function or keyword,
+    /// with where it is defined and used
+    Describe {
+        /// The name (`no-console`, `ts_call`, `callee`, `type_flags`, `group`)
+        name: String,
     },
     /// Print the layer tree zlint builds for a file (for writing matchers)
     Tree {
@@ -80,21 +85,17 @@ enum Command {
         /// every candidate matcher does there
         #[arg(long, value_name = "LINE:COL")]
         at: Option<String>,
-        #[command(flatten)]
-        config: ConfigArg,
     },
     /// Evaluate an expression on every node of a layer, with the project's
     /// config (attributes, facts and macros included)
     Eval {
-        /// Target, as in `in <target> rule`: `ts_call`, `ts_call.callee`, `a or b`
+        /// Target, as in `in <target> rule`: `ts_call`, `ts_call.callee`, `a, b`
         target: String,
         /// The expression (`type`, `callee.resolved`, `len(text) > 80`)
         expr: String,
         /// Files to evaluate in
         #[arg(required = true)]
         files: Vec<PathBuf>,
-        #[command(flatten)]
-        config: ConfigArg,
     },
     /// List the functions available in rule expressions
     Functions,
@@ -104,9 +105,10 @@ enum Command {
 
 pub fn run() -> ExitCode {
     let cli = Cli::parse();
+    let config = &cli.config;
     match cli.command {
-        None => lint::run(cli.lint),
-        Some(Command::Check { config }) => match load(&config) {
+        None => lint::run(cli.lint, config),
+        Some(Command::Check) => match load(config) {
             Ok(Project { config_ok: true, .. }) => {
                 eprintln!("config ok");
                 ExitCode::SUCCESS
@@ -114,18 +116,22 @@ pub fn run() -> ExitCode {
             Ok(_) => ExitCode::from(2),
             Err(code) => code,
         },
-        Some(Command::Rules { config }) => match load(&config) {
+        Some(Command::Rules) => match load(config) {
             Ok(p) => info::rules(&p.linter),
             Err(code) => code,
         },
-        Some(Command::Tree { file, all, at, config }) => match load(&config) {
+        Some(Command::Describe { name }) => match load(config) {
+            Ok(p) => info::describe(&p.symbols, &name),
+            Err(code) => code,
+        },
+        Some(Command::Tree { file, all, at }) => match load(config) {
             Ok(p) => match at {
                 Some(at) => info::explain(&p.linter, &file, &at),
                 None => info::tree(&p.linter, &file, all),
             },
             Err(code) => code,
         },
-        Some(Command::Eval { target, expr, files, config }) => eval::run(&config, &target, &expr, &files),
+        Some(Command::Eval { target, expr, files }) => eval::run(config, &target, &expr, &files),
         Some(Command::Functions) => info::functions(),
         Some(Command::Lsp) => crate::lsp::run(),
     }
@@ -134,6 +140,7 @@ pub fn run() -> ExitCode {
 /// A built linter, and whether its config had no errors.
 pub struct Project {
     pub linter: Linter,
+    pub symbols: std::sync::Arc<Symbols>,
     /// `false` when config errors were printed: the linter still runs with
     /// every part that built, but the command should fail in the end.
     pub config_ok: bool,
@@ -164,7 +171,7 @@ pub fn load_from(path: &Path, provider: &dyn SourceProvider) -> Result<Project, 
         render::config_errors(&built.errors, &built.sources);
     }
     match built.linter {
-        Some(linter) => Ok(Project { linter, config_ok }),
+        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok }),
         None => Err(ExitCode::from(2)),
     }
 }

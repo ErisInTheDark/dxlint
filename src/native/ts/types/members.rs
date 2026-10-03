@@ -225,17 +225,12 @@ impl Checker<'_> {
                 self.member_names(&prim, out);
             }
             Ty::Named(sym, args) => {
-                let key = (Arc::as_ptr(&self.globals) as usize, sym.to_vec(), args.iter().map(|a| self.print(a)).collect::<Vec<_>>());
-                let names = match self.project.cached_members(&key) {
-                    Some(names) => names,
-                    None => {
-                        let mut names = Vec::new();
-                        self.named_member_names(sym, args, &mut names);
-                        let names: Arc<[Box<str>]> = names.into();
-                        self.project.cache_members(key, names.clone());
-                        names
-                    }
-                };
+                let key = (self.globals.id, sym.to_vec(), args.iter().map(|a| self.print(a)).collect::<Vec<_>>());
+                let names = self.project.members_or(key, self.file, || {
+                    let mut names = Vec::new();
+                    self.named_member_names(sym, args, &mut names);
+                    names.into()
+                });
                 if out.is_empty() {
                     out.extend(names.iter().cloned());
                 } else {

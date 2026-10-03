@@ -4,26 +4,26 @@
 import "std/core"
 
 lang zlint "*.zlint" {
-  match paren
-  match brack
-  match brace
+  match parentheses
+  match brackets
+  match braces
 }
 
-group zl_code .zlint or paren or brack or brace
+group zlint_code .zlint, parentheses, brackets, braces
 
-in zl_code {
-  match zl_comment /#/ until /$/
+in zlint_code {
+  match zlint_comment /#/ until /$/
   # Longer than `""` at the same spot, so it wins.
-  match zl_block_string /"""/ until /"""/
-  match zl_string /"/ until /"/
-  match zl_sstring /'/ until /'/
+  match zlint_block_string /"""/ until /"""/
+  match zlint_string /"/ until /"/
+  match zlint_single_string /'/ until /'/
 }
-in zl_string or zl_sstring or zl_block_string match zl_escape /\\(?:.|\n)/
+in zlint_string, zlint_single_string, zlint_block_string match zlint_escape /\\(?:.|\n)/
 
 # Regex literals: `/` never means division in zlint.
-in zl_code match zl_regex /\// until /\/|$/ {
-  match zl_regex_escape /\\./
-  match zl_regex_class /\[/ until /\]/ {
-    match zl_regex_escape
+in zlint_code match zlint_regex /\// until /\/|$/ {
+  match zlint_regex_escape /\\./
+  match zlint_regex_class /\[/ until /\]/ {
+    match zlint_regex_escape
   }
 }

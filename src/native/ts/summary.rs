@@ -2,8 +2,13 @@
 //! compact type syntax, members, generics, docs and exports. Other files'
 //! summaries are all the type evaluator ever reads of them; syntax trees
 //! are dropped as soon as a summary is built.
+//!
+//! [`FileSummary::fingerprint`] identifies what other files can see of a
+//! file: the `.zlintcache` keeps a file's cached result while every summary
+//! it read keeps its fingerprint.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use super::docs::leading_doc;
@@ -11,7 +16,7 @@ use super::kinds::{Field as F, Kind as K};
 use super::view::View;
 
 /// A type as written, before names are resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum TypeSyn {
     /// `any`, `never`, `string`, `this`, ... (`boolean` for predicates).
     Kw(Box<str>),
@@ -35,14 +40,14 @@ pub enum TypeSyn {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct TParam {
     pub name: Box<str>,
     pub constraint: Option<TypeSyn>,
     pub default: Option<TypeSyn>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Param {
     pub name: Box<str>,
     pub ty: Option<TypeSyn>,
@@ -62,7 +67,15 @@ pub struct Sig {
     pub body_at: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Positions only mean something in the declaring file, which has its own
+/// content hash: other files only see whether there is a body.
+impl Hash for Sig {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (&self.type_params, &self.params, &self.ret, self.is_async, self.body_at.is_some()).hash(h);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MemberKind {
     Prop,
     Method,
@@ -72,7 +85,7 @@ pub enum MemberKind {
     Index,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Member {
     /// The key as written (`name`, `"str"`, `[Symbol.dispose]`).
     pub name: Box<str>,
@@ -88,7 +101,7 @@ pub struct Member {
 
 /// An initializer's shape, enough to type it from another file: `new`,
 /// calls and member chains over names, annotations and literals.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Init {
     New(Box<[Box<str>]>, Vec<TypeSyn>),
     Call(Box<Init>, Vec<TypeSyn>),
@@ -102,7 +115,7 @@ pub enum Init {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum DeclKind {
     Class,
     Interface,
@@ -144,9 +157,30 @@ pub struct Decl {
     pub module: Option<usize>,
 }
 
+/// Everything but `start`, which only the declaring file reads.
+impl Hash for Decl {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (&self.name, &self.kind, &self.type_params, &self.extends, &self.members, &self.sigs, &self.ty, &self.init, &self.doc).hash(h);
+        (&self.scope, self.ambient, self.parent, self.module).hash(h);
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Scope {
     pub names: HashMap<Box<str>, Vec<u32>>,
+}
+
+/// Hashes a map in key order, so equal maps hash alike in every process.
+fn hash_sorted<V: Hash, H: Hasher>(map: &HashMap<Box<str>, V>, h: &mut H) {
+    let mut entries: Vec<_> = map.iter().collect();
+    entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    entries.hash(h);
+}
+
+impl Hash for Scope {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        hash_sorted(&self.names, h);
+    }
 }
 
 impl Scope {
@@ -155,7 +189,7 @@ impl Scope {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub enum Export {
     /// Local declarations (several when merged).
     Decls(Vec<u32>),
@@ -174,6 +208,13 @@ pub struct Module {
     pub equals: Option<Vec<u32>>,
 }
 
+impl Hash for Module {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        hash_sorted(&self.exports, h);
+        (&self.stars, &self.equals).hash(h);
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct FileSummary {
     pub decls: Vec<Decl>,
@@ -190,6 +231,17 @@ pub struct FileSummary {
     pub ref_types: Vec<Box<str>>,
     pub ref_libs: Vec<Box<str>>,
     pub ref_paths: Vec<Box<str>>,
+}
+
+impl FileSummary {
+    /// Identifies what other files can learn from this summary: equal
+    /// fingerprints mean equal answers for them (positions aside).
+    pub fn fingerprint(&self) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&self.decls, &self.top, &self.module, &self.globals, &self.ambient_modules, self.is_module).hash(&mut h);
+        (&self.ref_types, &self.ref_libs, &self.ref_paths).hash(&mut h);
+        h.finish()
+    }
 }
 
 // ---- building ------------------------------------------------------------------

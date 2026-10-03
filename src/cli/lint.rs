@@ -9,8 +9,9 @@ use std::time::Instant;
 use ignore::{WalkBuilder, WalkState};
 use serde::Serialize;
 
-use super::{load, render, Format, LintArgs};
+use super::{load, render, ConfigArg, Format, LintArgs};
 use zoomie_lint::config::ast::Severity;
+use zoomie_lint::engine::cache::{self, Cache};
 use zoomie_lint::engine::{Diagnostic, Linter};
 use zoomie_lint::line_index::LineIndex;
 
@@ -43,7 +44,7 @@ fn display(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-fn lint_file(linter: &Linter, path: &Path, fix: bool) -> Msg {
+fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
     let text = match std::fs::read(path) {
         Ok(bytes) => match String::from_utf8(bytes) {
             Ok(t) => t,
@@ -51,8 +52,23 @@ fn lint_file(linter: &Linter, path: &Path, fix: bool) -> Msg {
         },
         Err(e) => return Msg::Error(path.to_path_buf(), e.to_string()),
     };
+    let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
+    // With `--fix`, a cached result only saves work when there is nothing
+    // to fix.
+    if let Some((diags, _)) = cache.and_then(|c| c.lookup(linter, &rel, &text)) {
+        if !fix || diags.iter().all(|d| d.fix.is_none()) {
+            return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
+        }
+    }
     if !fix {
-        let diags = linter.lint(path, &text);
+        let diags = match cache {
+            Some(cache) => {
+                let (diags, reads) = linter.lint_tracked(path, &text);
+                cache.store(&rel, &text, &diags, reads.into());
+                diags
+            }
+            None => linter.lint(path, &text),
+        };
         return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
     }
     let fixed = linter.fix(path, &text);
@@ -64,15 +80,17 @@ fn lint_file(linter: &Linter, path: &Path, fix: bool) -> Msg {
     Msg::File(FileResult { path: path.to_path_buf(), text: fixed.text, diags: fixed.remaining, fixed: fixed.applied })
 }
 
-pub fn run(args: LintArgs) -> ExitCode {
+pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
     let started = Instant::now();
-    let (mut linter, config_ok) = match load(&args.config) {
+    let (mut linter, config_ok) = match load(config) {
         Ok(p) => (p.linter, p.config_ok),
         Err(code) => return code,
     };
     if args.profile {
         linter.enable_profile();
     }
+    // Profiling measures linting, so it never reads results instead.
+    let cache = (!args.no_cache && !args.profile).then(|| Cache::open(&linter));
     let cwd = std::env::current_dir().unwrap_or_default();
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
 
@@ -96,6 +114,7 @@ pub fn run(args: LintArgs) -> ExitCode {
 
     std::thread::scope(|s| {
         let linter = &linter;
+        let cache = cache.as_ref();
         let explicit: Vec<PathBuf> = roots.iter().filter(|r| r.is_file()).cloned().collect();
         s.spawn(move || {
             walker.build_parallel().run(|| {
@@ -109,7 +128,7 @@ pub fn run(args: LintArgs) -> ExitCode {
                     let path = entry.path();
                     // Explicitly named files are linted even if ignored by git.
                     let wanted = linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path));
-                    if wanted && tx.send(lint_file(linter, path, fix)).is_err() {
+                    if wanted && tx.send(lint_file(linter, cache, path, fix)).is_err() {
                         return WalkState::Quit;
                     }
                     WalkState::Continue
@@ -181,10 +200,17 @@ pub fn run(args: LintArgs) -> ExitCode {
     if args.profile {
         super::info::profile(&linter);
     }
+    let cached = cache.as_ref().map_or(0, Cache::hits);
+    if let Some(cache) = cache {
+        // A run over the whole project forgets files that are gone.
+        if let Err(e) = cache.save(args.paths.is_empty()) {
+            render::error(&format!("cannot write {}: {e}", cache::FILE_NAME));
+        }
+    }
     if args.stats {
         let secs = started.elapsed().as_secs_f64();
         eprintln!(
-            "{files} files, {:.1} MiB in {:.1} ms ({:.0} MiB/s)",
+            "{files} files ({cached} from cache), {:.1} MiB in {:.1} ms ({:.0} MiB/s)",
             bytes as f64 / 1048576.0,
             secs * 1000.0,
             bytes as f64 / 1048576.0 / secs.max(1e-9)

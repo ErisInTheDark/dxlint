@@ -9,14 +9,17 @@ use serde_json::{json, Value};
 
 use super::transport::Outbox;
 use super::{convert, scan};
-use zoomie_lint::config::source::{normalize_path, SourceProvider};
+use zoomie_lint::config::source::{normalize_path, FileId, SourceProvider};
 use zoomie_lint::config::{self, CONFIG_NAME};
+use zoomie_lint::engine::symbols::Symbols;
 use zoomie_lint::engine::{build, Linter};
 
 #[derive(Default)]
 struct Project {
     /// The last good linter; a broken config keeps it.
     linter: Option<Arc<Linter>>,
+    /// Every name of the config as last parsed (even when broken).
+    symbols: Option<Arc<Symbols>>,
     /// Every `.zlint` file the config reads, imports included.
     files: HashSet<PathBuf>,
     /// Config errors by the URI of the file they point at.
@@ -56,6 +59,11 @@ impl Linters {
 
     pub fn config_dirs(&self) -> impl Iterator<Item = &PathBuf> {
         self.0.keys()
+    }
+
+    /// Every working linter.
+    pub fn all(&self) -> impl Iterator<Item = &Arc<Linter>> {
+        self.0.values().flatten()
     }
 }
 
@@ -107,6 +115,19 @@ impl Projects {
         owners
     }
 
+    /// The symbols of a config that reads `file` (a `.zlint` file, or one of
+    /// the read-only std copies), and the file's id in it.
+    pub fn config_file(&self, file: &Path) -> Option<(Arc<Symbols>, FileId)> {
+        let std = super::config_docs::std_module(file);
+        self.by_dir.values().filter_map(|p| p.symbols.clone()).find_map(|symbols| {
+            let id = symbols.sources.files().find(|(_, f)| match &std {
+                Some(name) => f.name == *name,
+                None => f.path.as_deref() == Some(file),
+            })?.0;
+            Some((symbols, id))
+        })
+    }
+
     pub fn is_loaded(&self, config: &Path) -> bool {
         config.parent().is_some_and(|dir| self.by_dir.contains_key(dir))
     }
@@ -132,10 +153,12 @@ impl Projects {
         let built = build(config::load_file(config, sources), dir.to_path_buf());
         let project = self.by_dir.entry(dir.to_path_buf()).or_default();
         project.files = built.sources.files().filter_map(|(_, f)| f.path.clone()).collect();
+        project.symbols = Some(built.symbols.clone());
         project.errors.clear();
+        let file_uri = |id| built.sources.get(id).path.as_deref().map(|p: &Path| uri_of(p));
         for e in &built.errors {
             let file = e.span.and_then(|s| built.sources.get(s.file).path.clone()).unwrap_or_else(|| config.to_path_buf());
-            project.errors.entry(uri_of(&file)).or_default().push(convert::config_error(&built.sources, e));
+            project.errors.entry(uri_of(&file)).or_default().push(convert::config_error(&built.sources, e, &file_uri));
         }
         let Some(linter) = built.linter else { return false };
         project.linter = Some(Arc::new(linter));

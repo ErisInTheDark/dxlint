@@ -61,11 +61,13 @@
         { "include": "#sstring" },
         { "include": "#regex" },
         {
-          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|when|fix|files|report|let|native)\\b",
+          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|when|fix|files|report|let|native|forward|from)\\b",
           "name": "keyword.other.zlint"
         },
-        { "match": "\\b(until|or)\\b", "name": "keyword.operator.word.zlint" },
+        { "match": "\\b(drop|override|amend)\\b", "name": "keyword.other.modifier.zlint" },
+        { "match": "\\b(until|or|is)\\b", "name": "keyword.operator.word.zlint" },
         { "match": "\\b(if|then|else|as)\\b", "name": "keyword.control.zlint" },
+        { "match": "\\b(children|previous|next)\\b(?=\\.|\\s|\\)|$)", "name": "variable.language.zlint" },
         { "match": "\\b(true|false|null)\\b", "name": "constant.language.zlint" },
         { "match": "\\b(off|hint|info|warn|error)\\b", "name": "support.constant.severity.zlint" },
         { "match": "\\.(?:[A-Za-z_]\\w*|\\*)", "name": "entity.name.namespace.zlint" },

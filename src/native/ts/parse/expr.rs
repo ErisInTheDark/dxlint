@@ -622,7 +622,7 @@ impl<'s> Parser<'s> {
         let mut kids = Kids::default();
         while !self.is("}") {
             let p = if self.is("...") { self.spread()? } else { self.object_member()? };
-            kids.add(Field::Prop, p);
+            kids.add(Field::Property, p);
             if !self.eat(",") {
                 break;
             }
@@ -893,7 +893,7 @@ impl<'s> Parser<'s> {
                     p.add(Field::Value, v);
                 }
                 let p = self.finish(Kind::PatternProp, pstart, p);
-                kids.add(Field::Prop, p);
+                kids.add(Field::Property, p);
             }
             if !self.eat(",") {
                 break;

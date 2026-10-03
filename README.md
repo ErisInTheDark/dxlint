@@ -9,10 +9,10 @@ import "std/rust"
 
 # A layer: function names, found anywhere in Rust code (never in strings
 # or comments, because those are layers of their own).
-in rs_code match rs_fn /\bfn[ \t]+/ name:ident
+in rs_code match rs_function /\bfn[ \t]+/ name:identifier
 
 # A rule: what the text should look like. Different => diagnostic + fix.
-in rs_fn.name rule fn-snake-case warn "`{text}` should be snake_case" fix as snake_case(text)
+in rs_function.name rule fn-snake-case warn "`{text}` should be snake_case" fix as snake_case(text)
 ```
 
 ```
@@ -29,6 +29,9 @@ warn: `doThing` should be snake_case [fn-snake-case] (fixable)
 - **Two ideas, small language.** *Matchers* build layers out of regexes, and
   *rules* say what a layer should look like. Everything else is
   configuration (`set`), reuse (`import`, `macro`) and file selection.
+- **Defaults you fully control.** Import a ruleset, then `set` its options,
+  `override` or `amend` any rule, matcher, attribute or macro, or `drop` it;
+  anything left depending on a dropped name is reported at the `drop`.
 - **Brackets, quotes and escapes come for free.** A string is a layer whose
   escapes are child layers. A bracket group is a layer whose nested groups and
   strings are child layers. `until` skips over children whole, so
@@ -63,14 +66,22 @@ ignore "vendor" "src/generated/**"
 | `zlint [paths]` | lint (default: the whole project, respecting `.gitignore`) |
 | `zlint --fix` | apply fixes in place |
 | `zlint --format jsonl` | one JSON diagnostic per line, streamed as files finish |
-| `zlint --stats` | timing and throughput |
+| `zlint --stats` | timing and throughput (and how many files came from `.zlintcache`) |
+| `zlint --no-cache` | lint every file, ignoring `.zlintcache` |
 | `zlint check` | validate the config only |
 | `zlint rules` | list rules with severities, options and messages |
+| `zlint describe <name>` | explain any name in the config (rule, layer, group, attribute, macro, fact...) and where it is used |
 | `zlint tree <file>` | print the layer tree (handy while writing matchers) |
 | `zlint functions` | list expression functions and variables |
 | `zlint lsp` | language server on stdio |
 
 The exit code is 1 when there are errors, and 2 when the config is broken.
+`-c <config>` picks a config explicitly, before or after a subcommand.
+
+Results are cached in `.zlintcache` beside the config (add it to
+`.gitignore`): a file is linted again only when its text, the rules, or
+something its lint read from another file (an imported declaration, module
+resolution, a tsconfig) changed.
 
 ## The language
 
@@ -79,24 +90,24 @@ version:
 
 ```zlint
 lang rust "*.rs" {                                  # .rust: the root layer of Rust files
-  match paren                                       # lines in a block share its context
+  match parentheses                                 # lines in a block share its context
   match rs_string /"/ until /"/                     # a layer: `"`, skip, `"`
 }
-match paren /\(/ until /\)/
-in paren {
-  match paren                                       # parens nest
-  match rs_string                                   # strings live in parens too
-  indent                                            # lines inside parens are indented
+match parentheses /\(/ until /\)/
+in parentheses {
+  match parentheses                                 # parentheses nest
+  match rs_string                                   # strings live in them too
+  indent                                            # lines inside are indented
 }
 in rs_string match rs_escape /\\./                  # escapes live in strings
 
-in .rust match call name:/\w+/ args:paren           # fields: call.name, call.args
-over .* match trailing_ws /[ \t]+$/ {               # overlays see all text
-  rule no-trailing-ws warn "no trailing whitespace" fix as ""
+in .rust match call name:/\w+/ arguments:parentheses   # fields: call.name, call.arguments
+over .* match trailing_whitespace /[ \t]+$/ {       # overlays see all text
+  rule no-trailing-whitespace warn "no trailing whitespace" fix as ""
 }
 in call.name rule loud-calls warn "shout it" fix as upper(text) "!"   # values side by side join
 
-in call.args rule long-calls {
+in call.arguments rule long-calls {
   option max 80 "longest allowed argument list"
   when len(text) > max
   warn "`{call.name}` has {len(text)} characters of arguments"
@@ -106,22 +117,25 @@ set long-calls.max 120                              # configure existing rules
 set long-calls error
 ```
 
-Layers can be specialised (`match js_object like brace ...` wins ties against
-plain braces and is still a `brace` to rules), collected into open groups
-(`group js_code js_stmt` adds to `js_code`), and declared as indenting, so an
-indentation rule only decides units and continuation lines (a mis-indented
-block opener is one report: the lines inside are measured from where it will
-be once fixed). Regexes support
+Layers can be specialised (`match js_object like braces ...` wins ties against
+plain braces and is still `braces` to rules), collected into open groups
+(`group js_code js_statement` adds to `js_code`, even for rules written
+earlier), and declared as indenting, so an indentation rule only decides
+units and continuation lines (a mis-indented block opener is one report: the
+lines inside are measured from where it will be once fixed). Regexes support
 lookahead and lookbehind, and rule expressions have line context
-(`prev_line`, `parent_before`, `indent_anchor`, ...) and `re_*` functions.
+(`previous_line`, `parent_before`, `indent_anchor`, ...), neighbours
+(`children.x`, `previous.x`, `next.x`), layer tests (`parent is [ts_block,
+ts_program]`), rule-local `let`s and `re_*` functions.
 
 For TypeScript and JavaScript, `import "std/ts"` adds zlint's own parser:
 the real syntax tree as `ts_*` layers, scopes (`uses`, `value_uses`),
-cross-file facts (`decl_doc`) and declared types (`type`, `type_members`)
-read from your tsconfig, `lib` and `@types` files, without running
-TypeScript itself. Computed attributes (`in ts_logical let ops 1 + left.ops +
-right.ops`) fold trees for rules like "conditions with more than two
-`&&`/`||`".
+cross-file facts (`declaration_doc`) and declared types (`type`,
+`type_members`) read from your tsconfig, `lib` and `@types` files, without
+running TypeScript itself. Computed attributes (`in ts_logical let operators
+1 + sum(children.operators)`, with `in ts_parenthesized forward operators
+from expression` for wrappers) fold trees for rules like "conditions with
+more than two `&&`/`||`".
 
 A config with mistakes still lints with every part that built: the errors
 are reported, and the run fails, but one typo never switches linting off.
@@ -145,7 +159,12 @@ Suppress with a comment anywhere: `zlint-ignore`, `zlint-ignore rule-name`,
 - quick fixes per diagnostic, "fix all" as `source.fixAll.zlint`, and document
   formatting that applies every fix
 - `.zlint` files reload live, and config errors appear in the `.zlint` file
-  they point at
+  they point at, with links to related places
+- in `.zlint` files: hover on any name, go to definition (into std too),
+  find all references, completion and an outline; diagnostic codes link to
+  their rule
+- an edit re-lints the other files it affects (an importer seeing a changed
+  export), open or not, and the scan reuses `.zlintcache`
 
 A VS Code extension (client + `.zlint` syntax highlighting) is in
 [editors/vscode](editors/vscode).
@@ -187,7 +206,8 @@ Where the speed comes from:
 | `src/pattern` | pattern AST, regex parser, compiler, DFA bridge, prefilters |
 | `src/grammar` | layers per language, the parser that builds trees |
 | `src/expr` | rule expressions, values, functions |
-| `src/engine` | the linter: rules, fixes, suppressions |
+| `src/engine` | the linter: rules, fixes, suppressions, `.zlintcache`, the symbol index behind `describe` and hover |
+| `src/native` | the TypeScript front end: parser, scopes, types, the project's files |
 | `src/cli`, `src/lsp` | the binary |
 | `std/` | the standard library (`import "std/..."`) |
 | `editors/vscode` | VS Code extension |

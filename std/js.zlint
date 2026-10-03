@@ -6,23 +6,23 @@ import "std/core"
 
 lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts"
 
-group js_code .js or paren or brack or brace or js_interp
+group js_code .js, parentheses, brackets, braces, js_interpolation
 
 in js_code {
-  match paren
-  match brack
-  match brace
+  match parentheses
+  match brackets
+  match braces
 
   match js_line_comment /\/\// until /$/
   match js_block_comment /\/\*/ until /\*\//
 
   match js_string /"/ until /"|$/
-  match js_sstring /'/ until /'|$/
+  match js_single_string /'/ until /'|$/
   match js_template /`/ until /`/ {
-    match js_interp /\$\{/ until /\}/
+    match js_interpolation /\$\{/ until /\}/
   }
 }
-in js_string or js_sstring or js_template match js_escape /\\(?:\r\n|.|\n)/
+in js_string, js_single_string, js_template match js_escape /\\(?:\r\n|.|\n)/
 
 # A `/` starts a regex literal only where an expression can start: after an
 # operator, an opening bracket, or a keyword like `return`. Everywhere else
@@ -33,4 +33,4 @@ in js_code match js_regex (
 ) {
   match js_regex_class /\[/ until /\]|$/
 }
-in js_regex or js_regex_class match js_regex_escape /\\./
+in js_regex, js_regex_class match js_regex_escape /\\./

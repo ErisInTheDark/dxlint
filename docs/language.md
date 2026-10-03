@@ -8,8 +8,8 @@ they check.
 ```zlint
 import "std/rust"
 
-in rs_code match rs_fn /\bfn[ \t]+/ name:ident
-in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
+in rs_code match rs_function /\bfn[ \t]+/ name:identifier
+in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 ```
 
 - [Items](#items)
@@ -18,12 +18,15 @@ in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as sna
 - [Patterns](#patterns)
 - [Rules](#rules)
 - [Expressions](#expressions)
+- [Debugging rules](#debugging-rules)
 - [Attributes](#attributes)
 - [Native layers (TypeScript)](#native-layers-typescript)
 - [Configuring rules: `set`](#configuring-rules-set)
+- [Changing imported definitions: `override`, `amend`, `drop`](#changing-imported-definitions-override-amend-drop)
 - [Imports and macros](#imports-and-macros)
 - [Suppressing diagnostics](#suppressing-diagnostics)
-- [Performance](#performance)
+- [Editor and tooling](#editor-and-tooling)
+- [Performance and caching](#performance-and-caching)
 
 ## Items
 
@@ -31,27 +34,35 @@ in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as sna
 |---|---|
 | `lang rust "*.rs" "*.rs.in"` | a language: the root layer `.rust` for files matching the globs |
 | `match name pattern` | a matcher (layer) that is only used where something references it |
-| `in A or B match name pattern` | a matcher searched inside layers `A` and `B` |
+| `in A, B match name pattern` | a matcher searched inside layers `A` and `B` |
 | `in A match name` | attach an existing matcher to more parents |
 | `match name like base pattern` | a specialisation of `base`, see [Layers](#layers) |
 | `over A match name pattern` | an overlay: searched over `A`'s text without consuming it |
-| `group name A or B` | add layers to a named group, usable wherever a layer list is |
-| `in A or B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
+| `group name A, B` | add layers to a named group, usable wherever a layer list is |
+| `in A, B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
 | `in A rule name ...` | a rule checking `A`'s nodes, see [Rules](#rules) |
 | `in A let name expr` | an attribute computed for `A`'s nodes, see [Attributes](#attributes) |
+| `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |
 | `native ts` | TypeScript/JavaScript syntax as `ts_*` layers, see [Native layers](#native-layers-typescript) |
 | `set name.option value`, `set name severity` | configure an existing rule |
+| `override <definition>`, `amend rule name { ... }`, `drop ...` | replace, patch or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-amend-drop) |
 | `ignore "glob" "glob"` | never lint matching files |
 | `import "path"` | paste another `.zlint` file here |
 | `macro name tokens`, `macro name(args) { lines }` | define a macro |
 
-`#` starts a comment. Items end at the end of the line, or at a `}` that
-closes their block.
+`#` starts a comment, and `#` lines right above a definition are its
+documentation (shown on hover). Items end at the end of the line, or at a
+`}` that closes their block.
 
-Glob lists are strings side by side (`"*.rs" "*.rs.in"`); `or` separates
-layers, not globs. Globs without a `/` match any single path component
-(`*.rs`, `target`), and globs with a `/` match the path relative to the
-config file (`src/**/*.rs`, `tests/fixtures/**`).
+Layer lists are separated by `,` (`in a, b`); a list may continue on the next
+line after a `,`. Glob lists are strings side by side (`"*.rs" "*.rs.in"`).
+Globs without a `/` match any single path component (`*.rs`, `target`), and
+globs with a `/` match the path relative to the config file (`src/**/*.rs`,
+`tests/fixtures/**`).
+
+Names are whole words (`ts_expression_statement`, `previous_line`), except
+for language prefixes (`ts_`, `rs_`, `js_`, `py_`) and the ESTree field names
+native layers keep (`init`, `quasi`, `consequent`).
 
 ## Context blocks
 
@@ -61,7 +72,7 @@ and every line inside it is in that context:
 
 | head | lines inside mean |
 |---|---|
-| `in A or B {` | `in A or B <line>` |
+| `in A, B {` | `in A, B <line>` |
 | `over A {` | `over A <line>`: matchers are overlays |
 | `match x ... {` | `in x <line>` |
 | `lang l ... {` | `in .l <line>` |
@@ -73,9 +84,9 @@ layer, its children and its rules can live together:
 
 ```zlint
 lang rust "*.rs" {
-  match brace /\{/ until /\}/ {
+  match braces /\{/ until /\}/ {
     indent
-    match brace                                  # braces nest
+    match braces                                 # braces nest
     match rs_string /"/ until /"/ {
       match rs_escape /\\./
       rule no-tabs warn "tab in a string" { when contains(text, "\t") }
@@ -93,17 +104,17 @@ Every file is parsed into a tree:
 ```
 .rust                      the language root: the whole file
 ├── rs_line_comment        children found in the root
-├── brace
-│   ├── rs_string          children found inside a brace
+├── braces
+│   ├── rs_string          children found inside braces
 │   │   └── rs_escape
-│   └── brace
-└── rs_fn
-    └── name: ident        fields: labelled parts of a match
+│   └── braces
+└── rs_function
+    └── name: identifier   fields: labelled parts of a match
 ```
 
-**Parents.** `in A or B match x` makes `x` a child of `A` and `B`. A parent
-is a matcher name, a group, `.lang` (a language root) or `.*` (every
-language root).
+**Parents.** `in A, B match x` makes `x` a child of `A` and `B`. A parent is
+a matcher name, a group, `.lang` (a language root) or `.*` (every language
+root).
 
 **Searching.** A layer looks for its children across its text. Anything that
 no child matches is skipped, so you never have to describe a whole language,
@@ -114,16 +125,16 @@ of the pattern can match, and while skipping, the layer's children eat whole
 chunks:
 
 ```zlint
-match paren /\(/ until /\)/
-in paren match paren                         # nested parens are eaten whole
-in .rust or paren match rs_string /"/ until /"/
+match parentheses /\(/ until /\)/
+in parentheses match parentheses             # nested parentheses are eaten whole
+in .rust, parentheses match rs_string /"/ until /"/
 in rs_string match rs_escape /\\./           # so `\"` never ends a string
 ```
 
-`f(")", g(x))` is one `paren`: the `")"` is eaten by `rs_string`, and `(x)` by
-the nested `paren`, so the outer `\)` only matches the real closing bracket.
-This is how brackets, quotes and escapes work without special support. They
-are just layers.
+`f(")", g(x))` is one `parentheses` node: the `")"` is eaten by `rs_string`,
+and `(x)` by the nested `parentheses`, so the outer `\)` only matches the real
+closing bracket. This is how brackets, quotes and escapes work without
+special support. They are just layers.
 
 A matcher without `until` searches for its children across its own text
 after it matches, skipping its fields, the same way a language root does.
@@ -132,71 +143,84 @@ after it matches, skipping its fields, the same way a language root does.
 wins, and among equal lengths a specialisation beats its base, then the one
 attached first wins.
 
-**Specialisation (`like`).** `match js_object like brace ...` is a kind of
-`brace`: it keeps every child and overlay of `brace`, wins ties against it,
-and counts as a `brace` for rules (`in brace rule` sees it, with `layer`
-naming the specialisation) and for ancestor lookups (`brace` in an expression
-finds the closest one). Use it to tell kinds of one shape apart without
-re-describing them:
+**Specialisation (`like`).** `match js_object like braces ...` is a kind of
+`braces`: it keeps every child and overlay of `braces`, wins ties against it,
+and counts as `braces` for rules (`in braces rule` sees it, with `layer`
+naming the specialisation), for `is` tests and for ancestor lookups (`braces`
+in an expression finds the closest one). Use it to tell kinds of one shape
+apart without re-describing them:
 
 ```zlint
-match js_object like brace /(?<=[=(,]\s*)\{/ until /\}/
+match js_object like braces /(?<=[=(,]\s*)\{/ until /\}/
 in js_code match js_object {
   rule object-spacing warn "..." fix as ...      # plain braces are untouched
 }
 ```
 
-**Groups.** `group js_code .js or paren or brace` names a set of layers, and
-every further `group js_code ...` line adds to it, from anywhere (another
-file, an importer). Groups are resolved after everything is loaded, so
-`in js_code match x` reaches layers added later too.
+**Groups.** `group js_code .js, parentheses, braces` names a set of layers.
+Groups are **open**: every further `group js_code ...` line adds to it, from
+anywhere (another file, an importer), and they are resolved after everything
+is loaded. So anything aimed at a group, even written earlier, reaches layers
+added later. That makes groups the extension point of a library:
+
+```zlint
+# std/js.zlint
+group js_code .js, parentheses, brackets, braces
+in js_code match js_string /"/ until /"/        # strings inside every code layer
+# your config, after importing it
+group js_code js_type_arguments                 # ...and now inside these too
+```
+
+A macro listing the same layers would be pasted where it is used, so a later
+addition would not reach earlier uses.
 
 **Language gating.** A matcher attached to a `.lang` only runs inside files
 of the languages it is attached to (or attached through `.*`). That lets
-shared layers like `paren` carry Rust strings in Rust files and JavaScript
-strings in JavaScript files.
+shared layers like `parentheses` carry Rust strings in Rust files and
+JavaScript strings in JavaScript files.
 
 **Overlays.** `over A match x ...` searches `A`'s text for `x` without
 taking that text away from `A`'s other children. Use overlays for
 line-oriented checks:
 
 ```zlint
-over .* match trailing_ws /[ \t]+$/
+over .* match trailing_whitespace /[ \t]+$/
 ```
 
-**Indentation.** `in brace or paren or brack indent` declares that a layer's
-inside, the text its `until` skips, is indented: a line starting there
-belongs one level deeper than the line the layer opened on, and the line
-where its end pattern starts (`}`) sits at the opener's level. `in fn.body
-indent` does the same for one field, and `indent` alone inside a matcher's
-block indents that matcher. Measuring from the opener *line* means
+**Indentation.** `in braces, parentheses, brackets indent` declares that a
+layer's inside, the text its `until` skips, is indented: a line starting
+there belongs one level deeper than the line the layer opened on, and the
+line where its end pattern starts (`}`) sits at the opener's level. `in
+function.body indent` does the same for one field, and `indent` alone inside a
+matcher's block indents that matcher. Measuring from the opener *line* means
 `foo(Bar {` adds one level, not two. The engine works out which layer a line
 is in; rules read it through `indented`, `indent_anchor`, `indent_closes`,
 `indent_hangs` and `indent_anchor_line` (see [Expressions](#expressions)) and
 decide the unit and any language-specific continuation lines:
 
 ```zlint
-in paren or brack or brace indent
+in parentheses, brackets, braces indent
 over rs_code match line /^[ \t]*\S/          # each code line, first char included
 
-macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "    ")
-in line rule indent warn "Expected {len(level)} spaces of indentation." {
+in line rule indent {
+  let level if !indented then "" else if indent_closes then indent_anchor else indent_anchor "    "
   when slice(text, 0, -1) != level
+  warn "Expected {len(level)} spaces of indentation."
   fix as level slice(text, -1)
 }
 ```
 
 Lines above the node are read as their fixes leave them: when a rule's fix
 only changes a line's leading whitespace, `indent_anchor`,
-`indent_anchor_line`, `prev_line`, `parent_indent` and `parent_line` see
+`indent_anchor_line`, `previous_line`, `parent_indent` and `parent_line` see
 that line re-indented. So a mis-indented `if x {` is one report, not one per
 line inside it, and its block's lines are checked against where it will be.
 
 **Fields.** Labelled pieces of a match become fields:
 
 ```zlint
-in .rust match call name:ident args:paren     # call.name, call.args
-in .rust match call2 ident :paren             # `:paren` is short for `paren:paren`
+in .rust match call name:identifier arguments:parentheses   # call.name, call.arguments
+in .rust match call2 identifier :parentheses                # `:parentheses` is short for `parentheses:parentheses`
 ```
 
 A label on a matcher reference makes that child node the field. A label on
@@ -221,7 +245,7 @@ of the line or to a `{` block. Newlines are allowed inside `( ... )`.
 | `label:item` | label an item as a field |
 | `:name` | `name:name` |
 | `until` | skip, see [Layers](#layers) |
-| `( a b or c )` | grouping and alternation |
+| `( a b or c )` | grouping and alternation (`or` means "one of", unlike the `,` of layer lists) |
 | `item?` `item*` `item+` | repetition, glued to the item; add `?` for lazy (`item*?`) |
 
 ### The regex subset
@@ -254,7 +278,7 @@ positions can start a match. Backreferences are not supported.
 
 ```zlint
 in todo_note rule todo-comment info "{text} left in a comment"
-in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
+in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 
 in line rule line-length {
   option max 100 "what max means"
@@ -272,7 +296,7 @@ context (`in ...` or a block).
 **Targets.** A rule checks every node of its context's layers: a matcher (and
 its specialisations), a field (`in m.field rule`), a group (every member),
 `.lang` (whole files of a language) or `.*` (whole files of every language).
-With several targets (`in a or b.field rule`), fields used in the body must
+With several targets (`in a, b.field rule`), fields used in the body must
 exist on all of them.
 
 **Severity and message.** The severity keyword (`off`, `hint`, `info`, `warn`,
@@ -285,7 +309,8 @@ values filled in and other holes left as written.
 **Names.** A rule name may be `family:variant` (`semi:never`,
 `no-multiple-empty-lines:eof`): several rules that make up one. `set semi:*
 off` reaches every variant, and suppressing `semi` suppresses the whole
-family.
+family. A second `rule` with a name already in use is an error; use
+[`override`](#changing-imported-definitions-override-amend-drop) to replace one.
 
 **Fix.** `fix as expr` says what the node *should* be. If its text differs from
 the node's text, the rule reports the node and offers the fix. If they are
@@ -298,7 +323,8 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | clause | meaning |
 |---|---|
 | `off\|hint\|info\|warn\|error [message]` | severity (default `warn`) and message |
-| `when expr` | only nodes where `expr` is truthy; several `when`s must all hold |
+| `when expr` | only nodes where `expr` is truthy; several `when`s must all hold, in order |
+| `let name expr` | a value computed once per node and usable by later clauses, the message and the fix |
 | `fix as expr` | what the node should be |
 | `option name value "description"` | a configurable value, see [`set`](#configuring-rules-set); `value` is one literal (or `( ... )`) |
 | `files "glob" ...` | only these files |
@@ -306,6 +332,19 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
 
 A macro at the start of a body line is pasted as clauses.
+
+**Rule `let`s** name an intermediate value, so a long condition reads as
+steps. Each is computed at most once per node, only when something reads it,
+and can read the `let`s above it:
+
+```zlint
+in ts_statement rule padding-line-between-statements {
+  when index > 0 && parent is [ts_block, ts_program]
+  let wanted is_conditional || previous.wants_blank_after == true
+  when wanted && !re_test(default(gap_before, ""), /\n[ \t]*\r?\n/)
+  warn "Expected blank line before this statement."
+}
+```
 
 Fixes are minimal: the common start and end of the node and its fix are left
 alone, so a rule on a whole statement that only adds `;` edits one character.
@@ -323,7 +362,7 @@ so nested rules compose.
 | `"""` ... `"""` | multi-line string, see below |
 | `42`, `1.5`, `true`, `false`, `null` | literals |
 | `[a, b]` | list |
-| `name` | a field of the node, an option, or a variable |
+| `name` | a field of the node, an option, a `let`, or a variable |
 | `matcher` / `matcher.field` | the closest enclosing node of `matcher`, or its field |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
@@ -331,6 +370,7 @@ so nested rules compose.
 | `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
+| `value is layer`, `value is [a, b]` | does the layer named by `value` (`layer`, `parent`, `previous.layer`...) count as one of these: itself, a specialisation, or a group member |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
 
@@ -339,6 +379,21 @@ so nested rules compose.
 runs to the end of the line (inside brackets, across lines) or to `then`,
 `else`, `fix` or a `{`. Numbers join as their text, `null` as nothing. `+`
 only adds numbers.
+
+**Long conditions.** A line that starts with `&&`, `||`, a comparison or `is`
+continues the expression above it, as does a line after a trailing operator
+or inside brackets:
+
+```zlint
+let wants_blank_after is_conditional
+  || layer is [ts_break, ts_continue, ts_throw]
+  || spans_lines && declares != null
+```
+
+**`is`** compares layer identity, not text: `layer is ts_loop` holds for every
+member of the `ts_loop` group, and `parent is braces` for any specialisation
+of `braces`. A list after `is` needs brackets, because `,` separates function
+arguments. Unknown names are config errors.
 
 **Multi-line strings** start with `"""` at the end of a line and end with
 `"""` on a line of its own. That closing line's indentation is removed from
@@ -366,23 +421,33 @@ match is `null`, and a field that matched several times is a list. `null`,
 | `text` | the node's text |
 | `layer` | the node's own matcher name (a specialisation's own name) |
 | `indent` | leading whitespace of the node's first line |
-| `line`, `col` | 1-based position of the node |
+| `line`, `column` | 1-based position of the node |
 | `file` | path relative to the config |
 | `lang` | the file's language |
 | `before`, `after` | the rest of the node's first line before it, and of its last line after it |
-| `prev_line`, `next_line` | the whole lines around the node (`null` at the file's edges); `prev_line` as its indentation fix leaves it |
+| `previous_line`, `next_line` | the whole lines around the node (`null` at the file's edges); `previous_line` as its indentation fix leaves it |
 | `text_before`, `text_after`, `source` | everything before the node, after it, and the whole file |
 | `parent`, `parent_text` | the layer the node sits in, and its text |
 | `parent_before` | the parent's text up to the node ("what came earlier in this statement") |
 | `parent_indent`, `parent_line` | leading whitespace and whole text of the line the parent starts on |
-| `prev_sibling`, `prev_gap` | the previous node of the same layer in the same parent, and the text between |
+| `previous_sibling`, `previous_gap` | the previous node of the same layer in the same parent, and the text between |
 | `gap_before` | the text between the previous child of the parent (of any layer) and the node: blank lines, comments, separators; `null` for the first child |
-| `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.arg` is `1`) |
+| `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.argument` is `1`) |
 | `enclosing` | the innermost layer around the node's start, seeing through overlays (`"js_string"` inside a string) |
 | `indented` | the node's line starts inside a layer declared with `indent` |
 | `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
 | `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
 | `indent_hangs` | that layer's inside starts on its opener line (`f(a,⏎ b)`) |
+
+**Neighbours.** `children`, `previous` and `next` reach other nodes:
+
+| name | value |
+|---|---|
+| `children.x` | `x` of every direct child, in order, whatever its field (`null`s kept, so `last(children.x)` is the last child's) |
+| `previous.x`, `next.x` | `x` of the previous or next node in the same field of the same parent (`null` at the edges) |
+| `children`, `previous`, `next` alone | their text |
+
+`x` can be a field, an attribute, a fact or a builtin (`previous.layer`).
 
 **Functions.** `zlint functions` lists them all. Highlights: `len`, `lower`,
 `upper`, `snake_case`, `camel_case`, `pascal_case`, `kebab_case`,
@@ -399,6 +464,11 @@ for groups) and `re_escape(text)` to build patterns from text.
 
 ## Debugging rules
 
+- **`zlint describe <name>`** explains any name in the config: a rule (final
+  severity, options with their values, targets, where it is defined and
+  `set`), a layer (pattern, parents, fields, rules and attributes on it), a
+  group (its final members), an attribute, macro, builtin, fact, function or
+  keyword, with every place it is used. Misspelt names get a suggestion.
 - **`dbg(value, "label")`** returns `value` unchanged and prints
   `file:line:col layer label = value` to stderr for every node it is
   evaluated on. Wrap any part of a `when`, `let` or message to see what it
@@ -419,47 +489,62 @@ for groups) and `re_escape(text)` to build patterns from text.
   When a span went to the wrong layer (or to none), this names the matcher
   that took it.
 
+`-c config` works before or after any subcommand.
+
 ## Attributes
 
 `in A let name expr` computes a value for every node of `A`, on demand and
 once per node. Attributes read their own node like a rule does, and other
-nodes' attributes through fields, so they can fold a tree bottom-up:
+nodes' attributes through fields and neighbours, so they can fold a tree
+bottom-up:
 
 ```zlint
 import "std/ts"
-in ts_logical let ops 1 + left.ops + right.ops
-in ts_paren let ops expr.ops
-in ts_call let ops sum(arg.ops)
-in ts_if.test rule too-complex warn "{ops} operators" { when ops > 2 }
+in ts_logical let operators 1 + sum(children.operators)
+in ts_parenthesized forward operators from expression
+in ts_call let operators sum(argument.operators)
+in ts_if.test rule too-complex warn "{operators} operators" { when operators > 2 }
 ```
 
 - `name` is the node's attribute; `field.name` is the attribute of that
   field's node (a list when the field repeats). Layers without a definition
   give `null`.
 - `parent.field` and `parent.name` read the parent layer's field or
-  attribute (`in ts_call.arg rule ... { when parent.callee == "f" }`).
+  attribute (`in ts_call.argument rule ... { when parent.callee == "f" }`).
+- `children.name`, `previous.name` and `next.name` read neighbours (see
+  [Expressions](#expressions)).
 - Native facts read the same way: `callee.resolved` is the fact of the
   `callee` field's node, `parent.type_flags` the parent's.
 - `[] field.name` is always a list, whether the field matched none, one or
   several nodes.
 - An attribute that depends on itself fails like any expression error.
-- Attributes also lift builtins onto fields: `in ts_ident let used uses`
+- Attributes also lift builtins onto fields: `in ts_identifier let used uses`
   makes `local.used` readable from an import specifier.
+
+**Forwarding.** `in ts_parenthesized forward operators, call_depth from
+expression` makes wrapper nodes transparent: when a `ts_parenthesized` node
+has no `operators` of its own, it gives its `expression`'s. Only the listed
+attributes pass through, so other rulesets' attributes on the same layer are
+unaffected. A field that repeats gives the list of its nodes' values.
+
+A value one rule needs is better as a rule [`let`](#rules) than as an
+attribute: it stays next to its rule.
 
 ## Native layers (TypeScript)
 
 `import "std/ts"` (or `native ts` with your own JS language) parses
 `.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with zlint's own TypeScript parser and
 turns its syntax tree into `ts_*` layers: `ts_if` with fields `test`,
-`consequent`, `alternate`; `ts_call` with `callee`, `type_arg`, `arg`;
-`ts_binary`/`ts_logical` with `left`, `op`, `right`, and so on (ESTree names;
-`zlint tree file.ts` shows any file). Rules on them work like any rule:
+`consequent`, `alternate`; `ts_call` with `callee`, `type_argument`,
+`argument`; `ts_binary`/`ts_logical` with `left`, `operator`, `right`, and so
+on (ESTree names, abbreviations spelled out; `zlint tree file.ts` shows any
+file). Rules on them work like any rule:
 
 ```zlint
 import "std/ts"
 in ts_call rule no-eval warn "no eval" { when callee == "eval" }
-in ts_if.test or ts_while.test rule assign-in-condition warn "assignment in a condition" {
-  when layer == "ts_assign"
+in ts_if.test, ts_while.test rule assign-in-condition warn "assignment in a condition" {
+  when layer is ts_assignment
 }
 ```
 
@@ -473,17 +558,17 @@ layers have no pattern children (`in ts_call match x ...` is an error).
 |---|---|
 | `uses`, `value_uses` | on a declaring identifier: how often its name is used, and how many of those uses need the runtime value (type positions, and `typeof x` or `[x]` keys inside types, do not) |
 | `self_uses`, `writes` | uses inside its own function, and assignments to it |
-| `decl_kind` | `const`, `let`, `var`, `param`, `function`, `class`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, ... |
+| `declaration_kind` | `const`, `let`, `var`, `parameter`, `type_parameter`, `function`, `class`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, ... |
 | `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
-| `decl_import` | on an identifier that is or refers to an import: the module it comes from |
-| `decl_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
-| `resolved`, `ref_kind` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file), and the `decl_kind` of what it refers to |
+| `imported_from` | on an identifier that is or refers to an import: the module it comes from |
+| `declaration_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
+| `resolved`, `reference_kind` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file), and the `declaration_kind` of what it refers to |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
-| `type_param_defaults`, `type_params_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
-| `type_arg_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
-| `member_reads`, `member_writes`, `member_ctor_writes` | on a class property, method or parameter property: reads through `this` (or `x.#name`, or another instance's `private` member) inside the class, writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
+| `type_parameter_defaults`, `type_parameters_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
+| `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
+| `member_reads`, `member_writes`, `member_constructor_writes` | on a class property, method or parameter property: reads through `this` (or `x.#name`, or another instance's `private` member) inside the class, writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
 | `uses_this`, `uses_arguments`, `has_yield` | on a function or method: what its own body does (arrows inside count, nested functions do not) |
 | `super_calls` | on a constructor: `all`, `some` or `none` of the paths that leave it normally call `super()` |
 | `regex_problems` | on a regex literal or the pattern string of `RegExp(...)`: one problem per line: `empty_class`, `spaces:N`, `backref:<kind>:<backref>:<group>`, `misleading:<kind>` |
@@ -528,6 +613,44 @@ set style-* off                      # `*` globs over rule names
 Option values must be constants of the same type as the option's default.
 Every rule's severity can be set.
 
+## Changing imported definitions: `override`, `amend`, `drop`
+
+An imported ruleset is a starting point. Its importer can replace, patch or
+remove anything in it, in order: each of these sees everything above it
+(imports included), and everything below sees the result.
+
+```zlint
+import "../rules/ts-problems"
+
+override in ts_call rule no-eval error "eval is banned here" { when callee == "eval" }
+amend rule no-floating-promises { ignore "scripts/**" }
+override macro newline "\n"
+drop rule no-console                     # the name is free again
+drop rule semi:*                         # rule names take globs
+drop in ts_call let operators            # one layer's definition
+drop let operators                       # every layer's
+drop group ts_statement ts_with          # some members, or `drop group g` for all
+drop in braces match rs_string           # detach from one parent
+drop match js_jsdoc_line
+drop macro is_identifier
+drop ignore "static/**"
+```
+
+- **`override`** goes in front of a definition (`rule`, `match`, `let`,
+  `macro` or `group`) and replaces the existing one, which must exist.
+  A plain second definition is an error that points at the first and
+  suggests `override`. An overridden rule keeps its place, and `set`s above
+  the override are dropped with the old rule. `override match x pattern`
+  replaces the whole definition, parents included, so write
+  `override in A match x ...` to keep it in `A`.
+- **`amend rule name { ... }`** patches a rule in place: `when`, `let`,
+  `option`, `files` and `ignore` clauses are added, and a severity, message,
+  `fix` or `report` replaces the old one.
+- **`drop`** removes a definition. Whatever still uses it (rules, `let`s,
+  patterns, `like` bases, group members, children, expressions, `set`s
+  below) is an error **at the `drop`**, with a link to each use, so the fix
+  sits in your file: drop or override those too.
+
 ## Imports and macros
 
 `import "path"` pastes another file's items in place. Paths are relative to
@@ -537,16 +660,16 @@ library:
 
 | module | contents |
 |---|---|
-| `std/core` | `paren`, `brack`, `brace` (nesting), `ws`, `space`, `ident`, `number` |
+| `std/core` | `parentheses`, `brackets`, `braces` (nesting), `whitespace`, `space`, `identifier`, `number`, and the `newline` macro (the file's own line break) |
 | `std/rust`, `std/js`, `std/python`, `std/c`, `std/toml`, `std/zlint` | languages with brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
-| `std/ts` | `native ts` (with `std/js`) and the groups `ts_function_like`, `ts_loop` |
+| `std/ts` | `native ts` (with `std/js`) and the groups `ts_function_like`, `ts_loop`, `ts_statement` |
 | `std/markdown` | code fences, inline code, HTML comments |
 | `std/whitespace` | `trailing-whitespace`, `max-line-length`, `tab-indent`, `blank-lines`, `final-newline` |
 
 Macros paste tokens: they generate zlint code, not text.
 
 ```zlint
-macro rs_code_layers .rust or paren or brack or brace      # one line
+macro rs_code_layers .rust, parentheses, brackets, braces   # one line
 
 macro forbid(name, pattern, why) {                          # lines, with arguments
   in rs_code match name pattern {
@@ -559,7 +682,8 @@ forbid(no_dbg, /\bdbg!/, "remove dbg! before committing")
 Arguments are glued to the name (`forbid(`); `macro nl (...)`, with a space,
 is a one-line macro whose body starts with `(`. An expansion behaves like a
 parenthesised group wherever it lands, so `macro digits /\d/+` then
-`digits?` means `(/\d/+)?`. Macros cannot recurse.
+`digits?` means `(/\d/+)?`. Macros cannot recurse, and redefining one needs
+`override macro`.
 
 ## Suppressing diagnostics
 
@@ -573,10 +697,43 @@ Write these inside any comment:
 | `zlint-ignore-start [rules]` ... `zlint-ignore-end` | every line in between |
 | `zlint-ignore-file [rules]` | the whole file |
 
-## Performance
+## Editor and tooling
+
+`zlint lsp` (used by the VS Code extension) understands `.zlint` files as
+well as the files they lint:
+
+- **hover** on any name: rules with their final severity and option values,
+  layers with their fields, rules and attributes, groups with their members,
+  attributes, macros, builtins, facts, functions and keywords
+- **go to definition** (std modules open as read-only copies), **find all
+  references** across imports and macro bodies, **completion** by context
+  (layers after `in`, fields after `layer.`, rules after `set`, options after
+  `set rule.`, modules inside `import "`) and an **outline**
+- config errors in place, with links to related spots ("first defined
+  here", "still used here")
+- every diagnostic's rule code links to where the rule is defined
+- with `zlint.inspectHover`, hovering in a linted file shows the layers at
+  the cursor and their facts
+
+## Performance and caching
 
 `zlint --stats` prints throughput, and `zlint --profile` lists the matchers
 that cost the most interpreter steps and the rules that cost the most time.
 Matchers that compile to a DFA never show up there; slow ones are usually
 nullable, use fields, or have no leading literal or lookaround to tell zlint
 where they can start.
+
+**`.zlintcache`.** zlint keeps each file's results beside the config and
+reuses them while the file's text is unchanged and so is everything its lint
+read from other files: the declaration summaries of imported files (an edit
+inside a function body changes nothing for importers, an exported type
+does), module resolution (a new `a.ts` beside `a/index.ts`), tsconfigs and
+`package.json`s, and which files declare globals. Results with problems are
+kept too, so a warm run only lints what changed. Any change to the rules
+(comments and blank lines aside) or to the zlint binary starts afresh.
+
+`--no-cache` lints everything without reading or writing the cache, and
+`--profile` implies it. `--stats` shows how many files came from the cache.
+A run over the whole project forgets files that no longer exist. The editor
+uses the same cache for its workspace scan, and re-lints the files an edit
+affects as you type, open or not. Add `.zlintcache` to `.gitignore`.

@@ -59,6 +59,12 @@ pub fn config_errors(errors: &[ConfigError], sources: &SourceMap) {
         for note in &e.notes {
             out.push_str(&format!("  {BOLD}= note:{BOLD:#} {note}\n"));
         }
+        for (span, label) in &e.related {
+            let file = sources.get(span.file);
+            let (line, col) = file.lines.line_col(&file.text, span.start as usize);
+            out.push_str(&format!("  {DIM}-->{DIM:#} {}:{}:{} {label}\n", file.name, line + 1, col + 1));
+            snippet(&mut out, &file.text, &file.lines, span.start as usize, span.end as usize, DIM);
+        }
         eprintln!("{out}");
     }
     let n = errors.len();

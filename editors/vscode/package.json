@@ -37,6 +37,11 @@
           "type": "boolean",
           "default": true,
           "description": "Lint every file in the workspace in the background, streaming results as files finish. When off, only open files are linted."
+        },
+        "zlint.inspectHover": {
+          "type": "boolean",
+          "default": false,
+          "description": "For writing rules: hovering in a linted file shows the zlint layers at the cursor, the field each sits in, and the native facts (type, resolved, ...) there."
         }
       }
     },

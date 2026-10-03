@@ -4,12 +4,12 @@
 import "std/core"
 
 lang rust "*.rs" {
-  match paren
-  match brack
-  match brace
+  match parentheses
+  match brackets
+  match braces
 }
 
-group rs_code .rust or paren or brack or brace
+group rs_code .rust, parentheses, brackets, braces
 
 in rs_code {
   match rs_line_comment /\/\// until /$/
@@ -23,8 +23,8 @@ in rs_code {
 
   # Raw strings cannot escape anything, so they have no children.
   match rs_raw_string /\bb?r"/ until /"/
-  match rs_raw_string1 /\bb?r#"/ until /"#/
-  match rs_raw_string2 /\bb?r##"/ until /"##/
+  match rs_raw_string_hash /\bb?r#"/ until /"#/
+  match rs_raw_string_double_hash /\bb?r##"/ until /"##/
 
   # 'a' and '\n' are chars; 'a on its own is a lifetime and stays code.
   match rs_char /(?:\bb)?'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'/

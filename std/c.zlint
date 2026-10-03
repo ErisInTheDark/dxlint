@@ -5,19 +5,19 @@
 import "std/core"
 
 lang c "*.c" "*.h" "*.cc" "*.cpp" "*.cxx" "*.hpp" "*.hh" "*.java" "*.cs" "*.go" "*.kt" "*.kts" "*.swift" "*.scala" "*.dart" {
-  match paren
-  match brack
-  match brace
+  match parentheses
+  match brackets
+  match braces
 }
 
-group c_code .c or paren or brack or brace
+group c_code .c, parentheses, brackets, braces
 
 in c_code {
   match c_line_comment /\/\// until /$/
   match c_block_comment /\/\*/ until /\*\//
-  match c_string3 /"""/ until /"""/
+  match c_text_block /"""/ until /"""/
   match c_string /"/ until /"|$/
   match c_char /'(?:\\.[^'\n]{0,8}|[^\\'\n])'/
-  match c_raw /`/ until /`/
+  match c_raw_string /`/ until /`/
 }
-in c_string or c_string3 match c_escape /\\(?:.|\n)/
+in c_string, c_text_block match c_escape /\\(?:.|\n)/

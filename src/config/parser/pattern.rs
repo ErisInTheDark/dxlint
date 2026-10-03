@@ -3,6 +3,7 @@
 //! `/regex/`, `"literal"`, matcher names, `label:item`, `:name`, `until`,
 //! `( a or b )`, and glued-on `? + *`.
 
+use super::super::ast::{Name, Use};
 use super::super::error::ConfigError;
 use super::super::lexer::{decode_escapes, Tk, Token};
 use super::super::source::Span;
@@ -179,6 +180,7 @@ impl Parser<'_> {
                 match self.ts.peek_raw(0).cloned() {
                     Some(n) if n.kind == Tk::Ident && t.touches(&n) => {
                         self.ts.next_raw();
+                        self.config.uses.push(Use::Layer(Name { text: n.text.to_string(), span: n.span }));
                         Some(Pat::Ref { name: n.text.to_string(), label: Some(n.text.to_string()) })
                     }
                     _ => {
@@ -192,6 +194,7 @@ impl Parser<'_> {
                     return self.pat_atom(depth);
                 }
                 self.ts.next_raw();
+                self.config.uses.push(Use::Layer(Name { text: t.text.to_string(), span: t.span }));
                 Some(Pat::Ref { name: t.text.to_string(), label: None })
             }
             _ => {

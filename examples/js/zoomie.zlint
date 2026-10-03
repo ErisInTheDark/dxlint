@@ -16,7 +16,7 @@ in js_code {
   }
 
   # Arrow functions with one plain parameter drop the parens: (x) => x
-  match js_arrow params:paren /\s*=>/
+  match js_arrow params:parentheses /\s*=>/
 }
 in js_loose_eq.op rule strict-equality warn "use `{text}=` instead of `{text}`" fix as text "="
 in js_arrow.params rule arrow-parens warn "no parens around a single arrow parameter" {
@@ -25,6 +25,6 @@ in js_arrow.params rule arrow-parens warn "no parens around a single arrow param
 }
 
 # Searched only inside comments.
-in js_line_comment or js_block_comment match js_todo /\bTODO\b/ {
+in js_line_comment, js_block_comment match js_todo /\bTODO\b/ {
   rule todo info "TODO left in a comment"
 }

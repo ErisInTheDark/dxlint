@@ -2,11 +2,17 @@
 //! across threads), module resolution (relative paths, tsconfig `paths`,
 //! `node_modules`, `declare module "x"`) and each tsconfig's global scope
 //! (its `lib` files and `@types` packages).
+//!
+//! Every filesystem read goes through [`reads`], and every shared answer
+//! (summaries, tsconfigs, globals, member names) keeps what it was computed
+//! from, so a lint's recorded deps cover what it learned from other lints.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
+use super::reads::{self, Dep, Reads, MISSING};
 use super::summary::{summarise, Export, FileSummary, Module, Scope, Summary};
 use super::view::Raw;
 use crate::config::source::normalize_path;
@@ -49,6 +55,8 @@ struct Config {
 /// Everything visible without an import, for one tsconfig.
 #[derive(Default)]
 pub struct Globals {
+    /// Unique per build (0: the empty scope of files without a tsconfig).
+    pub id: u64,
     pub names: HashMap<Box<str>, Vec<DeclRef>>,
     pub modules: HashMap<Box<str>, Vec<ModRef>>,
 }
@@ -59,21 +67,68 @@ struct Files {
     paths: Vec<PathBuf>,
 }
 
+/// A shared answer and the reads it was computed from, which every user
+/// of the answer records as its own.
+#[derive(Clone)]
+struct Cached<T> {
+    value: T,
+    reads: Arc<Reads>,
+}
+
+impl<T: Clone> Cached<T> {
+    fn compute(f: impl FnOnce() -> T) -> Self {
+        let (value, reads) = reads::track(f);
+        Cached { value, reads: Arc::new(reads) }
+    }
+
+    fn get(&self) -> T {
+        reads::note_group(&self.reads);
+        self.value.clone()
+    }
+}
+
+/// A file's summary, with the content hash it was built from and its
+/// fingerprint ([`MISSING`] for both when the file has none).
+#[derive(Clone)]
+struct Known {
+    summary: Option<Summary>,
+    content: u64,
+    fingerprint: u64,
+}
+
 #[derive(Default)]
 pub struct Project {
     files: RwLock<Files>,
-    summaries: RwLock<HashMap<FileId, Option<Summary>>>,
-    configs: Mutex<HashMap<PathBuf, Option<Arc<Config>>>>,
-    globals: Mutex<HashMap<String, Arc<OnceLock<Arc<Globals>>>>>,
+    summaries: RwLock<HashMap<FileId, Known>>,
+    configs: Mutex<HashMap<PathBuf, Cached<Option<Arc<Config>>>>>,
+    /// Built once per distinct scope, by whichever lint asks first.
+    globals: Mutex<HashMap<String, Arc<GlobalsCell>>>,
     /// Member names of named types (declarations and printed arguments):
     /// the same few types are asked about from many files.
-    members: RwLock<HashMap<MembersKey, Arc<[Box<str>]>>>,
+    members: RwLock<HashMap<MembersKey, Cached<MemberNames>>>,
 }
 
-/// `(globals identity, declarations, printed type arguments)`: heritage
-/// resolves through a tsconfig's globals, so the same declaration can have
-/// different inherited members under different `lib` settings.
-pub type MembersKey = (usize, Vec<DeclRef>, Vec<String>);
+pub type MemberNames = Arc<[Box<str>]>;
+type GlobalsCell = OnceLock<Cached<Arc<Globals>>>;
+
+/// `(globals id, declarations, printed type arguments)`: heritage resolves
+/// through a tsconfig's globals, so the same declaration can have different
+/// inherited members under different `lib` settings.
+pub type MembersKey = (u64, Vec<DeclRef>, Vec<String>);
+
+/// What changed, from [`Project::invalidate`].
+pub struct Stale {
+    changed: Vec<PathBuf>,
+    /// Directories whose global declaration files changed.
+    globals: Vec<PathBuf>,
+    /// Touched deps already checked.
+    checked: Mutex<HashMap<Dep, bool>>,
+    /// Groups already checked, by address (kept alive, so no address is
+    /// reused meanwhile).
+    groups: Mutex<HashMap<usize, (Arc<Reads>, bool)>>,
+}
+
+static GLOBALS_BUILT: AtomicU64 = AtomicU64::new(1);
 
 impl Project {
     pub fn file_id(&self, path: &Path) -> FileId {
@@ -94,37 +149,132 @@ impl Project {
         self.files.read().expect("files lock").paths[id.0 as usize].clone()
     }
 
-    /// A file's summary, reading and parsing it the first time.
-    pub fn summary(&self, id: FileId) -> Option<Summary> {
-        if let Some(s) = self.summaries.read().ok()?.get(&id) {
-            return s.clone();
-        }
-        let path = self.path(id);
-        let s = std::fs::read_to_string(&path).ok().and_then(|src| summary_of(&path, &src));
-        self.summaries.write().ok()?.insert(id, s.clone());
-        s
+    fn existing_id(&self, path: &Path) -> Option<FileId> {
+        self.files.read().ok()?.by_path.get(path).copied()
     }
 
-    /// Registers the summary of a file being linted (its text may differ
-    /// from the disk's).
-    pub fn summary_for(&self, path: &Path, view: &impl super::view::View, root: u32) -> (FileId, Summary) {
+    /// A file's summary, reading and parsing it the first time.
+    pub fn summary(&self, id: FileId) -> Option<Summary> {
+        let path = self.path(id);
+        let known = self.known(id, &path);
+        reads::note(Dep::Summary(path, known.content, known.fingerprint));
+        known.summary
+    }
+
+    fn known(&self, id: FileId, path: &Path) -> Known {
+        if let Some(k) = self.summaries.read().ok().and_then(|m| m.get(&id).cloned()) {
+            return k;
+        }
+        let (text, content) = reads::read_unrecorded(path);
+        let summary = text.and_then(|src| summary_of(path, &src));
+        let fingerprint = summary.as_ref().map_or(MISSING, |s| s.fingerprint());
+        let known = Known { summary, content, fingerprint };
+        match self.summaries.write() {
+            // A file being linted may have registered its own meanwhile.
+            Ok(mut map) => map.entry(id).or_insert(known).clone(),
+            Err(_) => known,
+        }
+    }
+
+    /// Registers the summary of a file being linted, from its `text` (which
+    /// may differ from the disk's).
+    pub fn summary_for(&self, path: &Path, text: &str, view: &impl super::view::View, root: u32) -> (FileId, Summary) {
         let id = self.file_id(path);
         let dts = path.to_string_lossy().ends_with(".d.ts");
         let s: Summary = Arc::new(summarise(view, root, dts));
+        let known = Known { summary: Some(s.clone()), content: reads::hash_bytes(text.as_bytes()), fingerprint: s.fingerprint() };
         if let Ok(mut map) = self.summaries.write() {
-            map.insert(id, Some(s.clone()));
+            map.insert(id, known);
         }
         (id, s)
     }
 
-    pub fn cached_members(&self, key: &MembersKey) -> Option<Arc<[Box<str>]>> {
-        self.members.read().ok()?.get(key).cloned()
+    /// The member names under `key`, computed by `compute` the first time.
+    /// `asker` is the file computing them: its checker reads its own
+    /// syntax, not just its summary, so the answer depends on its text.
+    pub fn members_or(&self, key: MembersKey, asker: FileId, compute: impl FnOnce() -> MemberNames) -> MemberNames {
+        if let Some(c) = self.members.read().ok().and_then(|m| m.get(&key).cloned()) {
+            return c.get();
+        }
+        let cached = Cached::compute(|| {
+            let path = self.path(asker);
+            reads::note(Dep::Text(path.clone(), self.known(asker, &path).content));
+            compute()
+        });
+        if let Ok(mut m) = self.members.write() {
+            m.insert(key, cached.clone());
+        }
+        cached.get()
     }
 
-    pub fn cache_members(&self, key: MembersKey, names: Arc<[Box<str>]>) {
-        if let Ok(mut m) = self.members.write() {
-            m.insert(key, names);
+    // ---- staleness -----------------------------------------------------------
+
+    /// Whether `dep` still holds.
+    pub fn holds(&self, dep: &Dep) -> bool {
+        dep.holds(|path| self.known(self.file_id(path), path).fingerprint)
+    }
+
+    /// Forgets what the `changed` files (edited, created or deleted) said:
+    /// their summaries and every shared answer computed from them. The
+    /// result tells which recorded reads no longer hold
+    /// ([`Project::is_stale`]).
+    pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
+        if let Ok(mut map) = self.summaries.write() {
+            for id in changed.iter().filter_map(|p| self.existing_id(p)) {
+                map.remove(&id);
+            }
         }
+        let stale = Stale {
+            changed: changed.to_vec(),
+            globals: reads::globals_changed(changed),
+            checked: Mutex::default(),
+            groups: Mutex::default(),
+        };
+        if let Ok(mut configs) = self.configs.lock() {
+            configs.retain(|_, c| !self.is_stale(&stale, &c.reads));
+        }
+        if let Ok(mut globals) = self.globals.lock() {
+            globals.retain(|_, cell| cell.get().is_none_or(|c| !self.is_stale(&stale, &c.reads)));
+        }
+        let live: HashSet<u64> = self.globals.lock().map(|g| g.values().filter_map(|c| c.get().map(|c| c.value.id)).collect()).unwrap_or_default();
+        if let Ok(mut members) = self.members.write() {
+            members.retain(|key, c| (key.0 == 0 || live.contains(&key.0)) && !self.is_stale(&stale, &c.reads));
+        }
+        stale
+    }
+
+    /// Whether anything in `reads` (recorded by a lint, or by a shared
+    /// answer) no longer holds after the changes in `stale`.
+    pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
+        reads.deps.iter().any(|dep| self.dep_is_stale(stale, dep))
+            || reads.groups.iter().any(|g| {
+                let key = Arc::as_ptr(g) as usize;
+                let checked = stale.groups.lock().ok().and_then(|c| c.get(&key).map(|(_, gone)| *gone));
+                checked.unwrap_or_else(|| {
+                    let gone = self.is_stale(stale, g);
+                    if let Ok(mut c) = stale.groups.lock() {
+                        c.insert(key, (g.clone(), gone));
+                    }
+                    gone
+                })
+            })
+    }
+
+    fn dep_is_stale(&self, stale: &Stale, dep: &Dep) -> bool {
+        if !stale.changed.iter().any(|p| dep.touches(p)) {
+            return false;
+        }
+        if let Dep::Globals(dir, _) = dep {
+            return stale.globals.contains(dir);
+        }
+        let checked = stale.checked.lock().ok().and_then(|c| c.get(dep).copied());
+        checked.unwrap_or_else(|| {
+            let gone = !self.holds(dep);
+            if let Ok(mut c) = stale.checked.lock() {
+                c.insert(dep.clone(), gone);
+            }
+            gone
+        })
     }
 
     // ---- modules -----------------------------------------------------------
@@ -159,7 +309,7 @@ impl Project {
         let mut at = Some(dir);
         while let Some(d) = at {
             let nm = d.join("node_modules");
-            if nm.is_dir() {
+            if reads::is_dir(&nm) {
                 if let Some(found) = package_types(&nm.join(spec)).or_else(|| package_types(&nm.join("@types").join(types_name(spec)))) {
                     return Some(ModRef::File(self.file_id(&found)));
                 }
@@ -255,16 +405,19 @@ impl Project {
     // ---- configs and globals -------------------------------------------------
 
     fn config_for(&self, dir: &Path) -> Option<Arc<Config>> {
-        if let Some(c) = self.configs.lock().ok()?.get(dir) {
-            return c.clone();
+        if let Some(c) = self.configs.lock().ok()?.get(dir).cloned() {
+            return c.get();
         }
-        let found = if dir.join("tsconfig.json").is_file() {
-            load_config(&dir.join("tsconfig.json")).map(Arc::new)
-        } else {
-            dir.parent().and_then(|p| self.config_for(p))
-        };
-        self.configs.lock().ok()?.insert(dir.to_path_buf(), found.clone());
-        found
+        let cached = Cached::compute(|| {
+            let file = dir.join("tsconfig.json");
+            if reads::is_file(&file) {
+                load_config(&file).map(Arc::new)
+            } else {
+                dir.parent().and_then(|p| self.config_for(p))
+            }
+        });
+        self.configs.lock().ok()?.insert(dir.to_path_buf(), cached.clone());
+        cached.get()
     }
 
     /// The global scope of the tsconfig governing `file`.
@@ -283,7 +436,14 @@ impl Project {
             let mut map = self.globals.lock().expect("globals lock");
             map.entry(key).or_default().clone()
         };
-        cell.get_or_init(|| Arc::new(self.build_globals(config, lib_dir.as_deref()))).clone()
+        cell.get_or_init(|| {
+            Cached::compute(|| {
+                let mut g = self.build_globals(config, lib_dir.as_deref());
+                g.id = GLOBALS_BUILT.fetch_add(1, Ordering::Relaxed);
+                Arc::new(g)
+            })
+        })
+        .get()
     }
 
     fn build_globals(&self, config: &Config, lib_dir: Option<&Path>) -> Globals {
@@ -302,14 +462,12 @@ impl Project {
         if let Some(nm) = &node_modules {
             let mut types: Vec<String> = match &config.types {
                 Some(t) => t.clone(),
-                None => std::fs::read_dir(nm.join("@types"))
-                    .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-                    .unwrap_or_default(),
+                None => reads::list(&nm.join("@types")),
             };
             // A program that imports anything built on Node (electron, test
             // runners) has Node's globals even when `types` lists others:
             // packages pull them in with `/// <reference types="node" />`.
-            if !types.iter().any(|t| t == "node") && nm.join("@types").join("node").is_dir() {
+            if !types.iter().any(|t| t == "node") && reads::is_dir(&nm.join("@types").join("node")) {
                 types.push("node".into());
             }
             for t in types {
@@ -321,7 +479,7 @@ impl Project {
         }
         while let Some(p) = queue.pop_front() {
             let p = normalize_path(&p);
-            if !seen.insert(p.clone()) || !p.is_file() {
+            if !seen.insert(p.clone()) || !reads::is_file(&p) {
                 continue;
             }
             let id = self.file_id(&p);
@@ -347,17 +505,9 @@ impl Project {
         // The project's own globals: `declare global` blocks and script files
         // (no imports or exports) in this project and the ones it references.
         for dir in std::iter::once(&config.dir).chain(&config.references) {
-            for entry in ignore::WalkBuilder::new(dir).build().flatten() {
-                let path = entry.path();
-                let name = path.to_string_lossy();
-                if !(name.ends_with(".ts") || name.ends_with(".tsx")) || seen.contains(path) {
-                    continue;
-                }
-                let Ok(text) = std::fs::read_to_string(path) else { continue };
-                let script = !text.contains("import ") && !text.contains("export ") && name.ends_with(".d.ts");
-                if script || text.contains("declare global") {
-                    seen.insert(path.to_path_buf());
-                    files.push(path.to_path_buf());
+            for path in reads::global_files(dir) {
+                if seen.insert(path.clone()) {
+                    files.push(path);
                 }
             }
         }
@@ -412,12 +562,12 @@ fn package_types(dir: &Path) -> Option<PathBuf> {
         return Some(f);
     }
     let pkg = dir.join("package.json");
-    if let Ok(text) = std::fs::read_to_string(&pkg) {
+    if let Some(text) = reads::read(&pkg) {
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
             for key in ["types", "typings"] {
                 if let Some(t) = json.get(key).and_then(|t| t.as_str()) {
                     let p = normalize_path(&dir.join(t));
-                    if p.is_file() {
+                    if reads::is_file(&p) {
                         return Some(p);
                     }
                     if let Some(f) = with_extension(&p) {
@@ -428,7 +578,7 @@ fn package_types(dir: &Path) -> Option<PathBuf> {
         }
     }
     let index = dir.join("index.d.ts");
-    index.is_file().then_some(index)
+    reads::is_file(&index).then_some(index)
 }
 
 fn find_up(dir: &Path, parts: &[&str]) -> Option<PathBuf> {
@@ -438,7 +588,7 @@ fn find_up(dir: &Path, parts: &[&str]) -> Option<PathBuf> {
         for part in parts {
             p.push(part);
         }
-        if p.is_dir() {
+        if reads::is_dir(&p) {
             return Some(p);
         }
         at = d.parent();
@@ -449,27 +599,27 @@ fn find_up(dir: &Path, parts: &[&str]) -> Option<PathBuf> {
 /// `x` as TypeScript would find it: `x.ts`, `x.tsx`, `x.d.ts`, `x/index.ts`...
 fn with_extension(base: &Path) -> Option<PathBuf> {
     let s = base.to_string_lossy();
-    if [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| s.ends_with(e)) && base.is_file() {
+    if [".ts", ".tsx", ".mts", ".cts"].iter().any(|e| s.ends_with(e)) && reads::is_file(base) {
         return Some(base.to_path_buf());
     }
     // `./x.js` in TypeScript source means `./x.ts`.
     if let Some(stem) = s.strip_suffix(".js").or_else(|| s.strip_suffix(".mjs")).or_else(|| s.strip_suffix(".cjs")) {
         for ext in [".ts", ".tsx", ".mts", ".cts", ".d.ts"] {
             let p = PathBuf::from(format!("{stem}{ext}"));
-            if p.is_file() {
+            if reads::is_file(&p) {
                 return Some(p);
             }
         }
     }
     for ext in [".ts", ".tsx", ".d.ts", ".mts", ".cts"] {
         let p = PathBuf::from(format!("{s}{ext}"));
-        if p.is_file() {
+        if reads::is_file(&p) {
             return Some(p);
         }
     }
     for index in ["index.ts", "index.tsx", "index.d.ts"] {
         let p = base.join(index);
-        if p.is_file() {
+        if reads::is_file(&p) {
             return Some(p);
         }
     }
@@ -484,7 +634,7 @@ fn load_config(file: &Path) -> Option<Config> {
     let mut have_types = false;
     let mut current = file.to_path_buf();
     for depth in 0..8 {
-        let text = std::fs::read_to_string(&current).ok()?;
+        let text = reads::read(&current)?;
         let json: serde_json::Value = serde_json::from_str(&strip_jsonc(&text)).ok()?;
         let dir = current.parent()?.to_path_buf();
         if depth == 0 {

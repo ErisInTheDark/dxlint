@@ -180,7 +180,7 @@ impl<'t> NativeFile<'t> {
     /// file for the project).
     pub fn typing(&self) -> &Typing<'t> {
         self.typing.get_or_init(|| {
-            let (file, summary) = self.project.summary_for(self.path, &self.syntax, self.syntax.root());
+            let (file, summary) = self.project.summary_for(self.path, self.syntax.src, &self.syntax, self.syntax.root());
             Typing::new(Checker::new(self.project, file, summary))
         })
     }

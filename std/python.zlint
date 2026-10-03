@@ -4,18 +4,18 @@
 import "std/core"
 
 lang python "*.py" "*.pyi" {
-  match paren
-  match brack
-  match brace
+  match parentheses
+  match brackets
+  match braces
 }
 
-group py_code .python or paren or brack or brace
+group py_code .python, parentheses, brackets, braces
 
 in py_code {
   match py_comment /#/ until /$/
-  match py_string3 /(?:\b[rRbBuUfF]{1,2})?"""/ until /"""/
-  match py_sstring3 /(?:\b[rRbBuUfF]{1,2})?'''/ until /'''/
+  match py_triple_string /(?:\b[rRbBuUfF]{1,2})?"""/ until /"""/
+  match py_triple_single_string /(?:\b[rRbBuUfF]{1,2})?'''/ until /'''/
   match py_string /(?:\b[rRbBuUfF]{1,2})?"/ until /"|$/
-  match py_sstring /(?:\b[rRbBuUfF]{1,2})?'/ until /'|$/
+  match py_single_string /(?:\b[rRbBuUfF]{1,2})?'/ until /'|$/
 }
-in py_string or py_sstring or py_string3 or py_sstring3 match py_escape /\\(?:.|\n)/
+in py_string, py_single_string, py_triple_string, py_triple_single_string match py_escape /\\(?:.|\n)/

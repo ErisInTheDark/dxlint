@@ -1,0 +1,259 @@
+//! Language features inside `.zlint` files, read from the config's symbol
+//! index: hover, go to definition, references, completion and outline.
+
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
+
+use super::convert;
+use super::uri;
+use zoomie_lint::config::source::{FileId, SourceFile, Span};
+use zoomie_lint::config::std_lib;
+use zoomie_lint::engine::symbols::{Kind, Symbol, Symbols};
+
+/// One `.zlint` file of a built config.
+pub struct ConfigFile<'a> {
+    pub symbols: &'a Symbols,
+    pub file: FileId,
+}
+
+impl ConfigFile<'_> {
+    fn text(&self) -> &str {
+        &self.symbols.sources.get(self.file).text
+    }
+
+    /// The byte offset of an LSP position in this file (as it was built).
+    fn offset(&self, params: &Value) -> u32 {
+        let f = self.symbols.sources.get(self.file);
+        let pos = &params["position"];
+        let line = pos["line"].as_u64().unwrap_or(0) as u32;
+        let character = pos["character"].as_u64().unwrap_or(0) as u32;
+        f.lines.from_utf16(&f.text, line, character) as u32
+    }
+
+    /// The word around `offset` (`[A-Za-z0-9_]`, plus `-`/`:` inside rule
+    /// names).
+    fn word(&self, offset: u32) -> &str {
+        let text = self.text();
+        let b = text.as_bytes();
+        let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b':';
+        let mut start = offset as usize;
+        while start > 0 && is_word(b[start - 1]) {
+            start -= 1;
+        }
+        let mut end = offset as usize;
+        while end < b.len() && is_word(b[end]) {
+            end += 1;
+        }
+        &text[start..end]
+    }
+
+    fn at(&self, offset: u32) -> Option<usize> {
+        self.symbols.at(self.file, offset).or_else(|| {
+            let word = self.word(offset);
+            self.symbols.get(Kind::Keyword, word).or_else(|| self.symbols.named(word).first().copied())
+        })
+    }
+
+    pub fn hover(&self, params: &Value) -> Value {
+        let Some(id) = self.at(self.offset(params)) else { return Value::Null };
+        json!({ "contents": { "kind": "markdown", "value": self.symbols.describe(id) } })
+    }
+
+    pub fn definition(&self, params: &Value) -> Value {
+        let Some(id) = self.at(self.offset(params)) else { return Value::Null };
+        Value::Array(self.symbols.symbols[id].defs.iter().filter_map(|s| location(self.symbols, *s)).collect())
+    }
+
+    pub fn references(&self, params: &Value) -> Value {
+        let Some(id) = self.at(self.offset(params)) else { return Value::Null };
+        let declarations = params["context"]["includeDeclaration"].as_bool().unwrap_or(true);
+        let defs = self.symbols.symbols[id].defs.iter().copied().filter(|_| declarations);
+        Value::Array(self.symbols.uses_of(id).chain(defs).filter_map(|s| location(self.symbols, s)).collect())
+    }
+
+    /// The outline: what this file defines.
+    pub fn outline(&self) -> Value {
+        let f = self.symbols.sources.get(self.file);
+        let mut out = Vec::new();
+        for sym in &self.symbols.symbols {
+            let Some(kind) = symbol_kind(sym.kind) else { continue };
+            for d in sym.defs.iter().filter(|d| d.file == self.file) {
+                let range = convert::range(&f.text, &f.lines, d.start as usize, d.end as usize);
+                out.push(json!({
+                    "name": sym.name,
+                    "detail": sym.summary.chars().take(80).collect::<String>(),
+                    "kind": kind,
+                    "range": range,
+                    "selectionRange": range,
+                }));
+            }
+        }
+        Value::Array(out)
+    }
+
+    /// Completions for what the line up to the cursor asks for.
+    pub fn complete(&self, params: &Value) -> Value {
+        let offset = self.offset(params) as usize;
+        let text = self.text();
+        let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+        let before = &text[line_start..offset];
+        let trimmed = before.trim_start();
+        let items: Vec<Value> = if let Some(rest) = trimmed.strip_prefix("import \"") {
+            if rest.contains('"') {
+                Vec::new()
+            } else {
+                std_lib::names().map(|n| json!({ "label": format!("std/{n}"), "kind": 9 })).collect()
+            }
+        } else if let Some(rest) = trimmed.strip_prefix("set ") {
+            match rest.split_once('.') {
+                Some((rule, _)) => self.of_kind(Kind::Option).filter_map(|(i, s)| s.name.strip_prefix(&format!("{rule}.")).map(|o| item_named(i, s, o))).collect(),
+                None => self.of_kind(Kind::Rule).map(|(i, s)| item(i, s)).collect(),
+            }
+        } else if let Some(layer) = dotted(before) {
+            match self.symbols.get(Kind::Layer, layer) {
+                // `layer.` in a target or path: its fields.
+                Some(id) => self.symbols.symbols[id]
+                    .fields
+                    .iter()
+                    .map(|f| json!({ "label": f, "kind": 5, "detail": format!("field of {layer}") }))
+                    .collect(),
+                // `field.`, `parent.`, `children.`...: what a node has.
+                None => [Kind::Attr, Kind::Fact, Kind::Builtin].iter().flat_map(|&k| self.of_kind(k)).map(|(i, s)| item(i, s)).collect(),
+            }
+        } else if is_layer_list(trimmed) {
+            [Kind::Layer, Kind::Group, Kind::Lang].iter().flat_map(|&k| self.of_kind(k)).map(|(i, s)| item(i, s)).collect()
+        } else {
+            [Kind::Attr, Kind::Builtin, Kind::Fact, Kind::Function, Kind::Relative, Kind::Macro, Kind::Layer, Kind::Keyword]
+                .iter()
+                .flat_map(|&k| self.of_kind(k))
+                .map(|(i, s)| item(i, s))
+                .collect()
+        };
+        json!({ "isIncomplete": false, "items": items })
+    }
+
+    fn of_kind(&self, kind: Kind) -> impl Iterator<Item = (usize, &Symbol)> + '_ {
+        self.symbols.symbols.iter().enumerate().filter(move |(_, s)| s.kind == kind)
+    }
+}
+
+/// `in a, b`, `over a`, `group g a`, `drop group g`, `is [` before the
+/// cursor, with no `match`/`rule`/`let` yet: a list of layers.
+fn is_layer_list(before: &str) -> bool {
+    let words: Vec<&str> = before.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).collect();
+    let head = words.first().copied().unwrap_or("");
+    let past_head = words.iter().any(|w| matches!(*w, "match" | "rule" | "let" | "indent" | "forward"));
+    (matches!(head, "in" | "over" | "group") || before.ends_with("is ") || before.ends_with("is [") || before.ends_with(", ")) && !past_head
+}
+
+/// The name before a `.` the cursor follows: `ts_call.` -> `ts_call`.
+fn dotted(before: &str) -> Option<&str> {
+    let head = before.strip_suffix('.').or_else(|| {
+        let i = before.rfind('.')?;
+        before[i + 1..].chars().all(|c| c.is_ascii_alphanumeric() || c == '_').then_some(&before[..i])
+    })?;
+    let start = head.rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).map_or(0, |i| i + 1);
+    let name = &head[start..];
+    (!name.is_empty()).then_some(name)
+}
+
+fn item(_id: usize, s: &Symbol) -> Value {
+    item_named(_id, s, &s.name)
+}
+
+fn item_named(_id: usize, s: &Symbol, label: &str) -> Value {
+    json!({
+        "label": label,
+        "kind": completion_kind(s.kind),
+        "detail": s.summary.chars().take(100).collect::<String>(),
+        "documentation": { "kind": "markdown", "value": s.doc },
+    })
+}
+
+fn completion_kind(k: Kind) -> u8 {
+    match k {
+        Kind::Rule => 23,
+        Kind::Layer => 7,
+        Kind::Group => 13,
+        Kind::Attr => 10,
+        Kind::Macro => 15,
+        Kind::Lang => 9,
+        Kind::Option => 5,
+        Kind::Local => 6,
+        Kind::Field => 5,
+        Kind::Builtin => 6,
+        Kind::Fact => 10,
+        Kind::Function => 3,
+        Kind::Relative => 6,
+        Kind::Keyword => 14,
+        Kind::File => 17,
+    }
+}
+
+fn symbol_kind(k: Kind) -> Option<u8> {
+    Some(match k {
+        Kind::Rule => 24,
+        Kind::Layer => 5,
+        Kind::Group => 10,
+        Kind::Attr => 7,
+        Kind::Macro => 14,
+        Kind::Lang => 2,
+        Kind::Option => 8,
+        Kind::Local => 13,
+        _ => return None,
+    })
+}
+
+/// An LSP location for a span; std modules are opened from read-only
+/// copies.
+pub fn location(symbols: &Symbols, span: Span) -> Option<Value> {
+    let f = symbols.sources.get(span.file);
+    let path = source_path(f)?;
+    let range = convert::range(&f.text, &f.lines, span.start as usize, span.end as usize);
+    Some(json!({ "uri": uri::from_path(&path), "range": range }))
+}
+
+/// A config file an editor can open: its own path, or a std copy.
+pub fn source_path(f: &SourceFile) -> Option<PathBuf> {
+    match &f.path {
+        Some(p) => Some(p.clone()),
+        None => std_copy(&f.name, &f.text),
+    }
+}
+
+/// Where std modules are written so editors can open them.
+fn std_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("zlint-std-{}", env!("CARGO_PKG_VERSION")))
+}
+
+/// A read-only file holding std module `std/name`'s text.
+fn std_copy(name: &str, text: &str) -> Option<PathBuf> {
+    let module = name.strip_prefix("std/")?;
+    let path = std_dir().join(format!("{module}.zlint"));
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
+        std::fs::create_dir_all(std_dir()).ok()?;
+        // A stale read-only copy has to be writable again first.
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+        std::fs::write(&path, text).ok()?;
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mut perms = meta.permissions();
+            perms.set_readonly(true);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+    }
+    Some(path)
+}
+
+/// `std/name` when `path` is one of the std copies.
+pub fn std_module(path: &Path) -> Option<String> {
+    if path.parent()? != std_dir() {
+        return None;
+    }
+    Some(format!("std/{}", path.file_stem()?.to_string_lossy()))
+}

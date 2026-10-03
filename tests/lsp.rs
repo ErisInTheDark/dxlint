@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 const CONFIG: &str = r#"
 lang t "*.t"
 match paren /\(/ until /\)/
-in .t or paren match paren
-in .t or paren match str /"/ until /"/
+in .t, paren match paren
+in .t, paren match str /"/ until /"/
 in .t match bad /\bBAD\b/
 in bad rule no-bad warn "no BAD here" fix as "good"
 "#;
@@ -198,6 +198,74 @@ fn streams_workspace_diagnostics_and_serves_fixes() {
     let edits = c.request("textDocument/formatting", json!({ "textDocument": { "uri": uri(&open) }, "options": {} }));
     assert_eq!(edits[0]["newText"], "ok\nfine good\n");
 
+    c.shutdown();
+}
+
+#[test]
+fn zlint_files_have_hover_definitions_references_and_completion() {
+    let dir = project("lsp-config-docs");
+    let config = dir.join("zoomie.zlint");
+    let file = dir.join("f.t");
+    std::fs::write(&file, "BAD\n").expect("write");
+    let mut c = Client::start(&dir);
+
+    // Diagnostics link their rule's definition.
+    let diags = c.diagnostics_for(&file);
+    let href = diags[0]["codeDescription"]["href"].as_str().unwrap_or_default();
+    assert!(href.ends_with("zoomie.zlint#L7"), "{href}");
+
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&config), "languageId": "zlint", "version": 1, "text": CONFIG } }));
+    let at = |line: u32, character: u32| json!({ "textDocument": { "uri": uri(&config) }, "position": { "line": line, "character": character } });
+
+    // `bad` in `in bad rule no-bad`: the layer, defined a line above.
+    let hover = c.request("textDocument/hover", at(6, 4));
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(text.contains("**layer** `bad`") && text.contains("no-bad"), "{text}");
+    let defs = c.request("textDocument/definition", at(6, 4));
+    assert_eq!(defs[0]["range"]["start"]["line"], 5, "{defs:#}");
+    assert!(same_uri(defs[0]["uri"].as_str().unwrap_or_default(), &uri(&config)));
+    let refs = c.request("textDocument/references", json!({ "textDocument": { "uri": uri(&config) }, "position": { "line": 6, "character": 4 }, "context": { "includeDeclaration": false } }));
+    assert_eq!(refs.as_array().map(Vec::len), Some(1), "{refs:#}");
+
+    // Keywords explain themselves; layer lists complete layers.
+    let hover = c.request("textDocument/hover", at(6, 9));
+    assert!(hover["contents"]["value"].as_str().unwrap_or_default().contains("**keyword** `rule`"), "{hover:#}");
+    let items = c.request("textDocument/completion", at(6, 3));
+    let labels: Vec<&str> = items["items"].as_array().into_iter().flatten().filter_map(|i| i["label"].as_str()).collect();
+    assert!(labels.contains(&"paren") && labels.contains(&"t"), "{labels:?}");
+
+    // The outline lists what the file defines.
+    let outline = c.request("textDocument/documentSymbol", json!({ "textDocument": { "uri": uri(&config) } }));
+    let names: Vec<&str> = outline.as_array().into_iter().flatten().filter_map(|s| s["name"].as_str()).collect();
+    assert!(names.contains(&"no-bad") && names.contains(&"str"), "{names:?}");
+    c.shutdown();
+}
+
+#[test]
+fn editing_an_export_relints_its_importers() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lsp-cross-file");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("tmp dir");
+    std::fs::write(dir.join("zoomie.zlint"), "import \"std/ts\"\nin ts_identifier rule typed info \"{text}: {type}\" { when imported_from != null }\n")
+        .expect("config");
+    let a = dir.join("a.ts");
+    let b = dir.join("b.ts");
+    std::fs::write(&a, "export const x: number = 1;\n").expect("write");
+    std::fs::write(&b, "import { x } from \"./a\";\nx;\n").expect("write");
+    let mut c = Client::start(&dir);
+    assert_eq!(c.diagnostics_for(&b)[0]["message"], "x: number");
+
+    // An unsaved edit to `a` reaches `b`, which is not even open.
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&a), "languageId": "typescript", "version": 1, "text": "export const x: number = 1;\n" } }));
+    c.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": uri(&a), "version": 2 }, "contentChanges": [{ "text": "export const x: string = \"\";\n" }] }),
+    );
+    assert_eq!(c.diagnostics_for(&b)[0]["message"], "x: string");
+
+    // Closing without saving goes back to what the disk says.
+    c.notify("textDocument/didClose", json!({ "textDocument": { "uri": uri(&a) } }));
+    assert_eq!(c.diagnostics_for(&b)[0]["message"], "x: number");
     c.shutdown();
 }
 

@@ -1,11 +1,13 @@
 //! zlint types -> LSP JSON.
 
+use std::collections::HashMap;
+
 use serde_json::{json, Value};
 
 use zoomie_lint::config::ast::Severity;
 use zoomie_lint::config::error::ConfigError;
 use zoomie_lint::config::source::SourceMap;
-use zoomie_lint::engine::{Diagnostic, Edit};
+use zoomie_lint::engine::{Diagnostic, Edit, Linter};
 use zoomie_lint::line_index::LineIndex;
 
 pub fn range(text: &str, lines: &LineIndex, start: usize, end: usize) -> Value {
@@ -42,17 +44,41 @@ pub fn diagnostic(text: &str, lines: &LineIndex, d: &Diagnostic) -> Value {
     v
 }
 
-pub fn diagnostics(text: &str, diags: &[Diagnostic]) -> Value {
+/// Diagnostics of one file; each rule code links to where the rule is
+/// defined.
+pub fn diagnostics(text: &str, diags: &[Diagnostic], linter: &Linter) -> Value {
     let lines = LineIndex::new(text);
-    Value::Array(diags.iter().map(|d| diagnostic(text, &lines, d)).collect())
+    let mut links: HashMap<&str, Option<String>> = HashMap::new();
+    Value::Array(
+        diags
+            .iter()
+            .map(|d| {
+                let mut v = diagnostic(text, &lines, d);
+                if let Some(href) = links.entry(&d.rule).or_insert_with(|| rule_link(linter, &d.rule)) {
+                    v["codeDescription"] = json!({ "href": href });
+                }
+                v
+            })
+            .collect(),
+    )
 }
 
-pub fn config_error(sources: &SourceMap, e: &ConfigError) -> Value {
+/// `file:///rules.zlint#L12`: where a rule is defined.
+fn rule_link(linter: &Linter, rule: &str) -> Option<String> {
+    let r = linter.rules.iter().find(|r| r.name == rule)?;
+    let f = linter.sources.get(r.span.file);
+    let path = super::config_docs::source_path(f)?;
+    Some(format!("{}#L{}", super::uri::from_path(&path), f.lines.line_of(r.span.start as usize) + 1))
+}
+
+/// A config error in its file; `uri_of` names the files of related spans.
+pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(zoomie_lint::config::source::FileId) -> Option<String>) -> Value {
+    let span_range = |span: zoomie_lint::config::source::Span| {
+        let f = sources.get(span.file);
+        range(&f.text, &f.lines, span.start as usize, span.end as usize)
+    };
     let range = match e.span {
-        Some(span) => {
-            let f = sources.get(span.file);
-            range(&f.text, &f.lines, span.start as usize, span.end as usize)
-        }
+        Some(span) => span_range(span),
         None => json!({ "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }),
     };
     let mut message = e.message.clone();
@@ -60,7 +86,18 @@ pub fn config_error(sources: &SourceMap, e: &ConfigError) -> Value {
         message.push_str("\nnote: ");
         message.push_str(note);
     }
-    json!({ "range": range, "severity": 1, "source": "zlint", "code": "config", "message": message })
+    let mut v = json!({ "range": range, "severity": 1, "source": "zlint", "code": "config", "message": message });
+    let related: Vec<Value> = e
+        .related
+        .iter()
+        .filter_map(|(span, label)| {
+            Some(json!({ "location": { "uri": uri_of(span.file)?, "range": span_range(*span) }, "message": label }))
+        })
+        .collect();
+    if !related.is_empty() {
+        v["relatedInformation"] = Value::Array(related);
+    }
+    v
 }
 
 /// Replaces the whole document with `new_text`.

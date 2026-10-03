@@ -23,7 +23,7 @@ use crate::pattern::Pat;
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
-    "warn", "error", "native", "let",
+    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is",
 ];
 
 /// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
@@ -56,6 +56,8 @@ pub struct Parser<'a> {
     /// Bracket depth inside expressions; operators may only continue onto
     /// the next line while it is above zero.
     expr_depth: usize,
+    /// Set by `override`: the next definition replaces an existing one.
+    overriding: Option<Span>,
 }
 
 impl<'a> Parser<'a> {
@@ -68,6 +70,7 @@ impl<'a> Parser<'a> {
             imported: HashSet::new(),
             config: Config::default(),
             expr_depth: 0,
+            overriding: None,
         }
     }
 
@@ -90,11 +93,21 @@ impl<'a> Parser<'a> {
         self.items();
     }
 
-    fn push_source(&mut self, name: String, path: Option<PathBuf>, text: String) {
+    fn push_source(&mut self, name: String, path: Option<PathBuf>, text: String) -> super::source::FileId {
         let text: Arc<str> = Arc::from(text);
         let id = self.sources.add(name, path, text.clone());
         let tokens = lex(id, &text, 0, &mut self.errors);
         self.ts.push_tokens(tokens);
+        id
+    }
+
+    /// Hands over what the token stream collected: macro calls become uses,
+    /// and the fingerprint of everything parsed.
+    pub fn finish(&mut self) -> u64 {
+        for (name, span) in std::mem::take(&mut self.ts.calls) {
+            self.config.uses.push(Use::Macro(Name { text: name.to_string(), span }));
+        }
+        self.ts.fingerprint()
     }
 
     // ---- token helpers -------------------------------------------------
@@ -260,14 +273,24 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "rule") => self.rule(ctx),
             (Tk::Ident, "indent") => self.indent(ctx),
             (Tk::Ident, "let") => self.attr(ctx),
+            (Tk::Ident, "forward") => self.forward(ctx),
             (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.set(),
             (Tk::Ident, "ignore") => self.ignore(),
+            (Tk::Ident, "drop") => self.drop_item(),
+            (Tk::Ident, "override") => self.override_item(ctx),
+            (Tk::Ident, "amend") => self.amend(),
             (Tk::Ident, _) if self.ts.expand(&mut self.errors) => return,
+            (Tk::Ident, name) if Dropped::find(&self.config.dropped, name).is_some() => {
+                let d = Dropped::find(&self.config.dropped, name).expect("found").clone();
+                self.errors.push(d.still_used(t.span));
+                self.bump();
+            }
             _ => {
                 self.errors.push(
-                    ConfigError::new(t.span, format!("expected an item, found {}", t.describe()))
-                        .note("items are: lang, group, match, in/over ..., rule, indent, let, set, macro, import, ignore, native"),
+                    ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
+                        "items are: lang, group, match, in/over ..., rule, indent, let, set, macro, import, ignore, native, drop, override, amend",
+                    ),
                 );
                 self.bump();
             }
@@ -297,9 +320,13 @@ impl<'a> Parser<'a> {
             Some(t) if t.is_ident("rule") => self.rule(Some(&ctx)),
             Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
             Some(t) if t.is_ident("let") => self.attr(Some(&ctx)),
+            Some(t) if t.is_ident("forward") => self.forward(Some(&ctx)),
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
-                self.errors.push(ConfigError::new(span, format!("expected `match`, `rule`, `indent`, `let` or `{{` after `{} ...`", kw.text)));
+                self.errors.push(ConfigError::new(
+                    span,
+                    format!("expected `match`, `rule`, `indent`, `let`, `forward` or `{{` after `{} ...`", kw.text),
+                ));
             }
         }
     }
@@ -334,6 +361,7 @@ impl<'a> Parser<'a> {
 
     /// `in a or b let name expr`: a computed attribute of those layers.
     fn attr(&mut self, ctx: Option<&Context>) {
+        let overriding = self.overriding.take();
         let kw = self.bump().expect("peeked");
         let Some(name) = self.ident("an attribute name") else { return };
         if RESERVED.contains(&name.text.as_str()) {
@@ -362,8 +390,78 @@ impl<'a> Parser<'a> {
         };
         let Some(expr) = self.expr() else { return };
         self.end_of_item();
+        if targets.is_empty() {
+            return;
+        }
+        if overriding.is_some() && self.remove_attr_targets(&name.text, &targets) == 0 {
+            let on: Vec<&str> = targets.iter().map(|t| t.text.as_str()).collect();
+            self.errors.push(ConfigError::new(
+                name.span,
+                format!("nothing to override: `{}` is not defined on `{}`", name.text, on.join("`, `")),
+            ));
+        }
+        self.config.attrs.push(AttrDef { name, targets, expr });
+    }
+
+    /// Removes these layers from every definition of attribute `name`;
+    /// returns how many it removed.
+    fn remove_attr_targets(&mut self, name: &str, targets: &[Name]) -> usize {
+        let mut removed = 0;
+        for def in self.config.attrs.iter_mut().filter(|d| d.name.text == name) {
+            let before = def.targets.len();
+            def.targets.retain(|t| !targets.iter().any(|x| x.text == t.text));
+            removed += before - def.targets.len();
+        }
+        self.config.attrs.retain(|d| !d.targets.is_empty());
+        removed
+    }
+
+    /// `in a, b forward x, y from field`: those attributes, where these
+    /// layers lack them, come from that field's node.
+    fn forward(&mut self, ctx: Option<&Context>) {
+        let kw = self.bump().expect("peeked");
+        let mut attrs = Vec::new();
+        loop {
+            // A macro may name the attributes.
+            self.skip(false, true);
+            if self.ts.expand(&mut self.errors) {
+                continue;
+            }
+            let Some(attr) = self.ident("an attribute to forward") else { return };
+            attrs.push(attr);
+            self.skip(false, true);
+            if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Comma) {
+                self.ts.next_raw();
+                continue;
+            }
+            break;
+        }
+        if !self.ts.peek_raw(0).is_some_and(|t| t.is_ident("from")) {
+            self.error_here("expected `from <field>`: `forward attribute, ... from field`");
+            return;
+        }
+        self.ts.next_raw();
+        let Some(field) = self.ident("the field to forward from") else { return };
+        self.end_of_item();
+        let targets: Vec<Name> = match ctx {
+            Some(c) if !c.overlay => c
+                .parents
+                .iter()
+                .filter_map(|(p, f)| match (p, f) {
+                    (Parent::Matcher(n), None) => Some(n.clone()),
+                    _ => {
+                        self.errors.push(ConfigError::new(p.span(), "`forward` belongs to layers, not fields or languages"));
+                        None
+                    }
+                })
+                .collect(),
+            _ => {
+                self.errors.push(ConfigError::new(kw.span, "`forward` needs a layer: `in <layer> forward attribute from field`"));
+                return;
+            }
+        };
         if !targets.is_empty() {
-            self.config.attrs.push(AttrDef { name, targets, expr });
+            self.config.forwards.push(ForwardDef { targets, attrs, field });
         }
     }
 
@@ -401,10 +499,14 @@ impl<'a> Parser<'a> {
         if let Some(name) = path.strip_prefix("std/") {
             let key = format!("std/{name}");
             if !self.imported.insert(key.clone()) {
+                self.record_import(span, |f| f.name == key);
                 return;
             }
             match std_lib::get(name) {
-                Some(text) => self.push_source(key, None, text.to_string()),
+                Some(text) => {
+                    let id = self.push_source(key, None, text.to_string());
+                    self.config.uses.push(Use::Import(span, id));
+                }
                 None => self.errors.push(
                     ConfigError::new(span, format!("unknown std module `{path}`")).suggest(name, std_lib::names()),
                 ),
@@ -424,16 +526,28 @@ impl<'a> Parser<'a> {
         let full = normalize_path(&full);
         let key = full.to_string_lossy().into_owned();
         if !self.imported.insert(key) {
+            self.record_import(span, |f| f.path.as_deref() == Some(full.as_path()));
             return;
         }
         match self.provider.read(&full) {
-            Ok(text) => self.push_source(full.display().to_string(), Some(full), text),
+            Ok(text) => {
+                let id = self.push_source(full.display().to_string(), Some(full), text);
+                self.config.uses.push(Use::Import(span, id));
+            }
             Err(e) => self.errors.push(ConfigError::new(span, format!("cannot import `{}`: {e}", full.display()))),
         }
     }
 
+    /// An import of a file already loaded: still a link to it.
+    fn record_import(&mut self, span: Span, is: impl Fn(&super::source::SourceFile) -> bool) {
+        if let Some((id, _)) = self.sources.files().find(|(_, f)| is(f)) {
+            self.config.uses.push(Use::Import(span, id));
+        }
+    }
+
     fn macro_def(&mut self) {
-        self.bump();
+        let overriding = self.overriding.take();
+        let kw = self.bump().expect("peeked");
         let Some(name) = self.ident("a macro name") else { return };
         if RESERVED.contains(&name.text.as_str()) {
             self.errors.push(ConfigError::new(name.span, format!("`{}` is a keyword and cannot name a macro", name.text)));
@@ -506,11 +620,35 @@ impl<'a> Parser<'a> {
                 body.push(t);
             },
         }
-        let def = MacroDef { name: Rc::from(name.text.as_str()), params, body: body.into() };
+        let def = MacroDef { name: Rc::from(name.text.as_str()), span: name.span, params, body: body.into() };
+        self.config.macros.push(MacroInfo {
+            name: name.clone(),
+            params: def.params.iter().map(|p| p.to_string()).collect(),
+            span: kw.span.to(self.ts.last_span.unwrap_or(name.span)),
+        });
+        let first = self.ts.macros.get(&def.name).map(|m| m.span);
+        match (first, overriding) {
+            (Some(first), None) => {
+                self.errors.push(
+                    ConfigError::new(name.span, format!("macro `{}` is defined twice", name.text))
+                        .related(first, "first defined here")
+                        .note(format!("`override macro {} ...` replaces it", name.text)),
+                );
+                return;
+            }
+            (None, Some(_)) => {
+                self.errors.push(
+                    ConfigError::new(name.span, format!("nothing to override: no macro `{}`", name.text))
+                        .suggest(&name.text, self.ts.macros.keys().map(|k| &**k)),
+                );
+            }
+            _ => {}
+        }
         self.ts.macros.insert(def.name.clone(), Rc::new(def));
     }
 
     fn group(&mut self) {
+        let overriding = self.overriding.take();
         self.bump();
         let Some(name) = self.ident("a group name") else { return };
         let parents = self.parent_list();
@@ -518,6 +656,13 @@ impl<'a> Parser<'a> {
             return;
         }
         self.end_of_item();
+        if overriding.is_some() {
+            let before = self.config.groups.len();
+            self.config.groups.retain(|g| g.name.text != name.text);
+            if self.config.groups.len() == before {
+                self.errors.push(ConfigError::new(name.span, format!("nothing to override: no group `{}`", name.text)));
+            }
+        }
         self.config.groups.push(GroupDef { name, parents });
     }
 
@@ -548,14 +693,24 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Eats an `or` that continues the current line.
-    fn eat_or(&mut self) -> bool {
+    /// Eats the `,` between two layers of a list; the list may continue on
+    /// the next line after it. An `or` there is the old spelling.
+    fn eat_comma(&mut self) -> bool {
         self.skip(false, true);
-        if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("or")) {
-            self.ts.next_raw();
-            true
-        } else {
-            false
+        match self.ts.peek_raw(0).cloned() {
+            Some(t) if t.kind == Tk::Comma => {
+                self.ts.next_raw();
+                self.skip(true, true);
+                true
+            }
+            Some(t) if t.is_ident("or") => {
+                self.errors.push(
+                    ConfigError::new(t.span, "layer lists are separated by `,`").note("write `in a, b` instead of `in a or b`"),
+                );
+                self.ts.next_raw();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -624,7 +779,7 @@ impl<'a> Parser<'a> {
                 self.errors.push(ConfigError::new(t.span, format!("expected a parent layer, found {}", t.describe())));
                 return parents;
             }
-            if !self.eat_or() {
+            if !self.eat_comma() {
                 break;
             }
         }
@@ -634,6 +789,7 @@ impl<'a> Parser<'a> {
     /// `match name [like base] [pattern] [{ block }]`, with its parents from
     /// the context. Without a pattern it attaches an existing matcher.
     fn matcher(&mut self, ctx: Option<&Context>) {
+        let overriding = self.overriding.take();
         self.bump();
         let (parents, overlay) = match ctx {
             Some(c) => (self.no_fields(c.parents.clone()), c.overlay),
@@ -677,13 +833,28 @@ impl<'a> Parser<'a> {
             return;
         }
         let own = Parent::Matcher(name.clone());
-        self.config.matchers.push(MatcherDef { name, parents, overlay, pattern, like });
+        let def = MatcherDef { name, parents, overlay, pattern, like };
+        match overriding {
+            Some(kw) if def.pattern.is_none() => {
+                self.errors.push(ConfigError::new(kw, "`override match` needs the new pattern: `override match name pattern`"));
+            }
+            // In place, so ties between matchers resolve as before.
+            Some(_) => match self.config.matchers.iter().position(|m| m.name.text == def.name.text && m.pattern.is_some()) {
+                Some(i) => self.config.matchers[i] = def,
+                None => {
+                    self.errors.push(ConfigError::new(def.name.span, format!("nothing to override: no matcher `{}`", def.name.text)));
+                    self.config.matchers.push(def);
+                }
+            },
+            None => self.config.matchers.push(def),
+        }
         self.block_or_end(Context { parents: vec![(own, None)], overlay: false });
     }
 
     /// `rule name [severity [message]] [fix as expr] [{ clauses }]`, checking the
     /// context's layers.
     fn rule(&mut self, ctx: Option<&Context>) {
+        let overriding = self.overriding.take();
         let kw = self.bump().expect("peeked");
         let Some(name) = self.glued_name("a rule name", false) else { return };
         let targets: Vec<Target> = match ctx {
@@ -693,25 +864,46 @@ impl<'a> Parser<'a> {
                 return;
             }
         };
-        let mut def = RuleDef {
-            name,
-            targets,
-            severity: None,
-            message: None,
-            options: Vec::new(),
-            files: Vec::new(),
-            ignore: Vec::new(),
-            when: Vec::new(),
-            fix: None,
-            report: Report::Node,
-            broken: false,
-        };
+        let mut def = RuleDef::new(name, targets);
+        self.rule_tail(&mut def);
+        let existing = self.config.rules.iter().position(|r| r.name.text == def.name.text);
+        match (existing, overriding) {
+            (Some(i), Some(_)) => {
+                // `set`s above configured the old rule.
+                self.forget_sets(&def.name.text);
+                self.config.rules[i] = def;
+            }
+            (Some(i), None) => {
+                let first = self.config.rules[i].name.span;
+                self.errors.push(
+                    ConfigError::new(def.name.span, format!("rule `{}` is defined twice", def.name.text))
+                        .related(first, "first defined here")
+                        .note(format!(
+                            "`override in <layer> rule {0} ...` replaces it, `amend rule {0} {{ ... }}` changes it, `set {0}.option value` configures it",
+                            def.name.text
+                        )),
+                );
+            }
+            (None, Some(_)) => {
+                self.errors.push(
+                    ConfigError::new(def.name.span, format!("nothing to override: no rule `{}`", def.name.text))
+                        .suggest(&def.name.text, self.config.rules.iter().map(|r| r.name.text.as_str())),
+                );
+                self.config.rules.push(def);
+            }
+            (None, None) => self.config.rules.push(def),
+        }
+    }
+
+    /// Everything after a rule's name: `[severity [message]] [fix as expr]
+    /// [{ clauses }]`. Marks the rule broken when any of it fails to parse.
+    fn rule_tail(&mut self, def: &mut RuleDef) {
         let before = self.errors.len();
         self.skip(false, true);
         if let Some(severity) = self.peek_severity() {
             self.ts.next_raw();
             def.severity = Some(severity);
-            self.message_after_severity(&mut def);
+            self.message_after_severity(def);
         }
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
@@ -722,15 +914,228 @@ impl<'a> Parser<'a> {
             self.skip(false, true);
             if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
                 self.ts.next_raw();
-                self.rule_body(&mut def);
+                self.rule_body(def);
             } else {
                 self.end_of_item();
             }
         }
         // After a broken head, the caller skips the rest of the line, body
         // included.
-        def.broken = self.errors.len() > before;
-        self.config.rules.push(def);
+        def.broken |= self.errors.len() > before;
+    }
+
+    /// A rule was replaced or dropped: `set`s naming it exactly configured
+    /// the old one and go; globs stay, and may now match nothing.
+    fn forget_sets(&mut self, rule: &str) {
+        self.config.sets.retain(|s| s.target.text != rule);
+        for s in &mut self.config.sets {
+            if crate::path_globs::wildcard(&s.target.text, rule) {
+                s.soft = true;
+            }
+        }
+    }
+
+    /// `override <definition>`: the definition replaces the existing one of
+    /// its name, in its place.
+    fn override_item(&mut self, ctx: Option<&Context>) {
+        let kw = self.bump().expect("peeked");
+        self.overriding = Some(kw.span);
+        self.item(ctx);
+        if self.overriding.take().is_some() {
+            self.errors.push(ConfigError::new(kw.span, "`override` goes before a definition: `rule`, `match`, `let`, `macro` or `group`"));
+        }
+    }
+
+    /// `amend rule name [severity [message]] [fix as expr] [{ clauses }]`:
+    /// changes a rule in place. `when`, `files`, `ignore` and options add to
+    /// it; a severity, message, fix or `report` replaces its own.
+    fn amend(&mut self) {
+        let kw = self.bump().expect("peeked");
+        self.skip(false, true);
+        if !self.ts.peek_raw(0).is_some_and(|t| t.is_ident("rule")) {
+            self.error_here("expected `rule` after `amend`: `amend rule name { ... }`");
+            return;
+        }
+        self.ts.next_raw();
+        let Some(name) = self.glued_name("a rule name", false) else { return };
+        let mut patch = RuleDef::new(name, Vec::new());
+        self.rule_tail(&mut patch);
+        let Some(rule) = self.config.rules.iter_mut().find(|r| r.name.text == patch.name.text) else {
+            self.errors.push(
+                ConfigError::new(kw.span.to(patch.name.span), format!("nothing to amend: no rule `{}`", patch.name.text))
+                    .suggest(&patch.name.text, self.config.rules.iter().map(|r| r.name.text.as_str())),
+            );
+            return;
+        };
+        if patch.severity.is_some() {
+            rule.severity = patch.severity;
+        }
+        if patch.message.is_some() {
+            rule.message = patch.message;
+        }
+        if patch.fix.is_some() {
+            rule.fix = patch.fix;
+        }
+        if patch.report.is_some() {
+            rule.report = patch.report;
+        }
+        rule.when.extend(patch.when);
+        rule.locals.extend(patch.locals);
+        rule.files.extend(patch.files);
+        rule.ignore.extend(patch.ignore);
+        rule.options.extend(patch.options);
+        rule.broken |= patch.broken;
+    }
+
+    /// `drop rule name`, `drop match x`, `drop in a, b match x`, `drop let x`,
+    /// `drop in a let x`, `drop macro m`, `drop group g [members]`,
+    /// `drop ignore "glob"`.
+    fn drop_item(&mut self) {
+        let kw = self.bump().expect("peeked");
+        self.skip(false, true);
+        let Some(what) = self.ts.peek_raw(0).cloned().filter(|t| t.kind == Tk::Ident) else {
+            self.error_here("expected what to drop: `rule`, `match`, `let`, `macro`, `group`, `ignore` or `in <layer> match/let`");
+            return;
+        };
+        self.ts.next_raw();
+        match &*what.text {
+            "rule" => {
+                let Some(name) = self.glued_name("a rule name or glob", true) else { return };
+                let span = kw.span.to(name.span);
+                let gone: Vec<String> = self
+                    .config
+                    .rules
+                    .iter()
+                    .filter(|r| crate::path_globs::wildcard(&name.text, &r.name.text))
+                    .map(|r| r.name.text.clone())
+                    .collect();
+                if gone.is_empty() {
+                    self.errors.push(
+                        ConfigError::new(name.span, format!("nothing to drop: no rule matches `{}`", name.text))
+                            .suggest(&name.text, self.config.rules.iter().map(|r| r.name.text.as_str())),
+                    );
+                }
+                self.config.rules.retain(|r| !gone.contains(&r.name.text));
+                for rule in gone {
+                    self.forget_sets(&rule);
+                    self.config.dropped.push(Dropped { name: rule, span });
+                }
+            }
+            "match" => {
+                let Some(name) = self.ident("a matcher name") else { return };
+                let before = self.config.matchers.len();
+                // The definition and every attachment of it.
+                self.config.matchers.retain(|m| m.name.text != name.text);
+                if self.config.matchers.len() == before {
+                    self.errors.push(
+                        ConfigError::new(name.span, format!("nothing to drop: no matcher `{}`", name.text))
+                            .note("native layers cannot be dropped"),
+                    );
+                } else {
+                    self.config.dropped.push(Dropped { name: name.text, span: kw.span.to(name.span) });
+                }
+            }
+            "let" => {
+                let Some(name) = self.ident("an attribute name") else { return };
+                let before = self.config.attrs.len();
+                self.config.attrs.retain(|a| a.name.text != name.text);
+                if self.config.attrs.len() == before {
+                    self.errors.push(ConfigError::new(name.span, format!("nothing to drop: no attribute `{}`", name.text)));
+                } else {
+                    self.config.dropped.push(Dropped { name: name.text, span: kw.span.to(name.span) });
+                }
+            }
+            "macro" => {
+                let Some(name) = self.ident("a macro name") else { return };
+                if self.ts.macros.remove(name.text.as_str()).is_none() {
+                    self.errors.push(ConfigError::new(name.span, format!("nothing to drop: no macro `{}`", name.text)));
+                } else {
+                    self.config.dropped.push(Dropped { name: name.text, span: kw.span.to(name.span) });
+                }
+            }
+            "group" => {
+                let Some(name) = self.ident("a group name") else { return };
+                if !self.config.groups.iter().any(|g| g.name.text == name.text) {
+                    self.errors.push(ConfigError::new(name.span, format!("nothing to drop: no group `{}`", name.text)));
+                    self.recover_if_mid_line();
+                    return;
+                }
+                self.skip(false, true);
+                let members_follow = self.ts.peek_raw(0).is_some_and(|t| !matches!(t.kind, Tk::Newline | Tk::RBrace));
+                if !members_follow {
+                    self.config.groups.retain(|g| g.name.text != name.text);
+                    self.config.dropped.push(Dropped { name: name.text, span: kw.span.to(name.span) });
+                } else {
+                    for member in self.parent_list() {
+                        let text = member.text();
+                        let mut found = false;
+                        for g in self.config.groups.iter_mut().filter(|g| g.name.text == name.text) {
+                            let before = g.parents.len();
+                            g.parents.retain(|p| p.text() != text);
+                            found |= g.parents.len() != before;
+                        }
+                        if !found {
+                            self.errors.push(ConfigError::new(member.span(), format!("`{text}` is not in group `{}`", name.text)));
+                        }
+                    }
+                }
+            }
+            "ignore" => {
+                for (glob, span) in self.globs("a path glob") {
+                    let before = self.config.ignores.len();
+                    self.config.ignores.retain(|(g, _)| *g != glob);
+                    if self.config.ignores.len() == before {
+                        self.errors.push(ConfigError::new(span, format!("nothing to drop: no `ignore \"{glob}\"`")));
+                    }
+                }
+            }
+            "in" => {
+                let parents = self.parent_items();
+                let layers = self.no_fields(parents);
+                self.skip(false, true);
+                let kind = self.ts.next_raw().filter(|t| t.is_ident("match") || t.is_ident("let"));
+                let Some(kind) = kind else {
+                    self.error_here("expected `match name` or `let name` after `drop in <layers>`");
+                    return;
+                };
+                let Some(name) = self.ident("a name") else { return };
+                let wanted: Vec<String> = layers.iter().map(Parent::text).collect();
+                let removed = if kind.is_ident("match") {
+                    let mut removed = 0;
+                    for m in self.config.matchers.iter_mut().filter(|m| m.name.text == name.text) {
+                        let before = m.parents.len();
+                        m.parents.retain(|p| !wanted.contains(&p.text()));
+                        removed += before - m.parents.len();
+                    }
+                    // Attachments with no parents left attach nothing.
+                    self.config.matchers.retain(|m| m.pattern.is_some() || !m.parents.is_empty());
+                    removed
+                } else {
+                    let targets: Vec<Name> = layers
+                        .iter()
+                        .filter_map(|p| match p {
+                            Parent::Matcher(n) => Some(n.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    self.remove_attr_targets(&name.text, &targets)
+                };
+                if removed == 0 {
+                    self.errors.push(ConfigError::new(
+                        name.span,
+                        format!("nothing to drop: `{}` is not {} `{}`", name.text, if kind.is_ident("match") { "inside" } else { "defined on" }, wanted.join("`, `")),
+                    ));
+                }
+            }
+            other => {
+                self.errors.push(
+                    ConfigError::new(what.span, format!("cannot drop `{other}`"))
+                        .note("`drop` takes `rule`, `match`, `let`, `macro`, `group`, `ignore` or `in <layer> match/let`"),
+                );
+                return;
+            }
+        }
+        self.end_of_item();
     }
 
     /// After `fix`: `as expr`.
@@ -820,13 +1225,24 @@ impl<'a> Parser<'a> {
                         def.when.push(e);
                     }
                 }
+                // A rule-local value: computed once per node.
+                (Tk::Ident, "let") => {
+                    self.bump();
+                    if let Some(name) = self.ident("a name for the value") {
+                        if def.locals.iter().any(|(n, _)| n.text == name.text) {
+                            self.errors.push(ConfigError::new(name.span, format!("`{}` is already a `let` of this rule", name.text)));
+                        } else if let Some(e) = self.expr() {
+                            def.locals.push((name, e));
+                        }
+                    }
+                }
                 (Tk::Ident, "report") => {
                     self.bump();
                     if let Some(what) = self.ident("`node`, `change` or `end`") {
                         match what.text.as_str() {
-                            "node" => def.report = Report::Node,
-                            "change" => def.report = Report::Change,
-                            "end" => def.report = Report::End,
+                            "node" => def.report = Some(Report::Node),
+                            "change" => def.report = Some(Report::Change),
+                            "end" => def.report = Some(Report::End),
                             other => self.errors.push(
                                 ConfigError::new(what.span, format!("unknown report target `{other}`")).note(
                                     "`report node` points at the whole node, `report change` at what the fix changes, `report end` at the node's end",
@@ -850,7 +1266,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.errors.push(
                         ConfigError::new(t.span, format!("expected a rule clause, found {}", t.describe()))
-                            .note("rule clauses: a severity and message (`warn \"...\"`), when, fix, option, files, ignore, report"),
+                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, fix, option, files, ignore, report"),
                     );
                     self.bump();
                 }
@@ -887,7 +1303,7 @@ impl<'a> Parser<'a> {
             }
         };
         self.end_of_item();
-        self.config.sets.push(SetDef { target, key, value });
+        self.config.sets.push(SetDef { target, key, value, soft: false });
     }
 
     fn ignore(&mut self) {
@@ -939,7 +1355,7 @@ mod tests {
             lang rust "*.rs"
             match ws /\s+/
             in .rust match dstr /"/ until /"/
-            in dstr or sstr match escape /\\(.)/
+            in dstr, sstr match escape /\\(.)/
             in .rust match sstr /'/ until /'/
             match params /\(/ until /\)/
             in params match params
@@ -966,7 +1382,7 @@ mod tests {
               error "lines under {max}"
               when len(text) > max
             }
-            in todo or .md rule todo-note info "{text} left"
+            in todo, .md rule todo-note info "{text} left"
             in x rule quiet
             set line-length.max 120
             set * warn
@@ -994,7 +1410,7 @@ mod tests {
                 rule braces warn "brace" { when true }
               }
             }
-            over .t or brace {
+            over .t, brace {
               match line /^.+/
             }
             in brace { in .t match back /y/ }
@@ -1014,7 +1430,7 @@ mod tests {
 
     #[test]
     fn groups_add_on_every_line() {
-        let c = ok("group code .t or paren\ngroup code brace\n");
+        let c = ok("group code .t, paren\ngroup code brace\n");
         assert_eq!(c.groups.len(), 2);
         assert_eq!(c.groups[1].parents.len(), 1);
     }

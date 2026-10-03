@@ -8,7 +8,9 @@ use anstyle::{AnsiColor, Style};
 
 use super::render;
 use zoomie_lint::config::ast::Severity;
+use zoomie_lint::engine::symbols::Symbols;
 use zoomie_lint::engine::Linter;
+use zoomie_lint::expr::show;
 use zoomie_lint::expr::functions::FUNCTIONS;
 use zoomie_lint::expr::BUILTIN_VARS;
 use zoomie_lint::grammar::Tree;
@@ -37,14 +39,36 @@ pub fn rules(linter: &Linter) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn show(v: &zoomie_lint::expr::Value) -> String {
-    use zoomie_lint::expr::Value;
-    match v {
-        Value::Str(s) => format!("{s:?}"),
-        Value::List(items) => format!("[{}]", items.iter().map(show).collect::<Vec<_>>().join(", ")),
-        Value::Null => "null".into(),
-        other => other.to_string(),
+/// `zlint describe name`: everything of that name, as hover shows it, and
+/// where each is used.
+pub fn describe(symbols: &Symbols, name: &str) -> ExitCode {
+    let found = symbols.named(name);
+    if found.is_empty() {
+        render::error(&format!("nothing named `{name}` in this configuration"));
+        let names = symbols.symbols.iter().map(|s| s.name.as_str());
+        if let Some(best) = zoomie_lint::config::error::closest(name, names) {
+            eprintln!("  did you mean `{best}`?");
+        }
+        return ExitCode::from(1);
     }
+    // Paths relative to where zlint runs.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let prefix = format!("{}{}", cwd.display(), std::path::MAIN_SEPARATOR);
+    let local = |s: String| s.replace(&prefix, "");
+    for (i, id) in found.into_iter().enumerate() {
+        if i > 0 {
+            println!("{DIM}----{DIM:#}");
+        }
+        println!("{}", local(symbols.describe(id)));
+        let uses: Vec<String> = symbols.uses_of(id).map(|s| local(symbols.location(s))).collect();
+        if !uses.is_empty() {
+            println!("\nused at:");
+            for u in uses {
+                println!("  {u}");
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// A file's text and the language that owns it.

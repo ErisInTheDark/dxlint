@@ -39,53 +39,104 @@ fn write(nodes: &[crate::grammar::Node], src: &str, id: u32, out: &mut String) {
 
 #[test]
 fn precedence_and_associativity() {
-    assert_eq!(dump("a || b && c;"), "expr_stmt(expr=logical(left=a op=|| right=logical(left=b op=&& right=c)))");
-    assert_eq!(dump("a ** b ** c;"), "expr_stmt(expr=binary(left=a op=** right=binary(left=b op=** right=c)))");
-    assert_eq!(dump("x = a >> b >= c;"), "expr_stmt(expr=assign(left=x op== right=binary(left=binary(left=a op=>> right=b) op=>= right=c)))");
-    assert_eq!(dump("x >>>= 1;"), "expr_stmt(expr=assign(left=x op=>>>= right=1))");
+    assert_eq!(
+        dump("a || b && c;"),
+        "expression_statement(expression=logical(left=a operator=|| right=logical(left=b operator=&& right=c)))"
+    );
+    assert_eq!(
+        dump("a ** b ** c;"),
+        "expression_statement(expression=binary(left=a operator=** right=binary(left=b operator=** right=c)))"
+    );
+    assert_eq!(
+        dump("x = a >> b >= c;"),
+        "expression_statement(expression=assignment(left=x operator== right=binary(left=binary(left=a operator=>> right=b) operator=>= right=c)))"
+    );
+    assert_eq!(dump("x >>>= 1;"), "expression_statement(expression=assignment(left=x operator=>>>= right=1))");
 }
 
 #[test]
 fn arrows_generics_and_casts() {
-    assert_eq!(dump("f<T>(x);"), "expr_stmt(expr=call(callee=f type_arg=type_ref(name=T) arg=x))");
-    assert_eq!(dump("a < b > c;"), "expr_stmt(expr=binary(left=binary(left=a op=< right=b) op=> right=c))");
-    assert_eq!(dump("(a, b): T => a;"), "expr_stmt(expr=arrow(param=param(name=a) param=param(name=b) return_type=type_ref(name=T) op==> body=a))");
-    assert_eq!(dump("async x => x;"), "expr_stmt(expr=arrow(modifier=async param=param(name=x) op==> body=x))");
-    assert_eq!(dump("c ? (x) : y;"), "expr_stmt(expr=conditional(test=c consequent=paren(expr=x) alternate=y))");
-    assert_eq!(dump("x as const;"), "expr_stmt(expr=as(expr=x type=const))");
-    assert_eq!(dump("<T>x;"), "expr_stmt(expr=type_assertion(type=type_ref(name=T) expr=x))");
-    assert_eq!(dump("a?.b!.c?.(d);"), "expr_stmt(expr=call(callee=member(object=non_null(expr=member(object=a optional=?. property=b)) property=c) optional=?. arg=d))");
+    assert_eq!(
+        dump("f<T>(x);"),
+        "expression_statement(expression=call(callee=f type_argument=type_reference(name=T) argument=x))"
+    );
+    assert_eq!(
+        dump("a < b > c;"),
+        "expression_statement(expression=binary(left=binary(left=a operator=< right=b) operator=> right=c))"
+    );
+    assert_eq!(
+        dump("(a, b): T => a;"),
+        "expression_statement(expression=arrow(parameter=parameter(name=a) parameter=parameter(name=b) return_type=type_reference(name=T) operator==> body=a))"
+    );
+    assert_eq!(
+        dump("async x => x;"),
+        "expression_statement(expression=arrow(modifier=async parameter=parameter(name=x) operator==> body=x))"
+    );
+    assert_eq!(
+        dump("c ? (x) : y;"),
+        "expression_statement(expression=conditional(test=c consequent=parenthesized(expression=x) alternate=y))"
+    );
+    assert_eq!(dump("x as const;"), "expression_statement(expression=as(expression=x type=const))");
+    assert_eq!(dump("<T>x;"), "expression_statement(expression=type_assertion(type=type_reference(name=T) expression=x))");
+    assert_eq!(
+        dump("a?.b!.c?.(d);"),
+        "expression_statement(expression=call(callee=member(object=non_null(expression=member(object=a optional=?. property=b)) property=c) optional=?. argument=d))"
+    );
 }
 
 #[test]
 fn regexes_templates_and_asi() {
-    assert_eq!(dump("x = a / b / c;"), "expr_stmt(expr=assign(left=x op== right=binary(left=binary(left=a op=/ right=b) op=/ right=c)))");
-    assert_eq!(dump("x = /a\\/b[/]/g.test(s)"), "expr_stmt(expr=assign(left=x op== right=call(callee=member(object=/a\\/b[/]/g property=test) arg=s)))");
-    assert_eq!(dump("`a${b}c${`d${e}`}`"), "expr_stmt(expr=template(quasi=`a${ expr=b quasi=}c${ expr=template(quasi=`d${ expr=e quasi=}`) quasi=}`))");
-    assert_eq!(dump("let a = 1\nlet b = 2"), "var(kind=let decl=declarator(name=a init=1)); var(kind=let decl=declarator(name=b init=2))");
+    assert_eq!(
+        dump("x = a / b / c;"),
+        "expression_statement(expression=assignment(left=x operator== right=binary(left=binary(left=a operator=/ right=b) operator=/ right=c)))"
+    );
+    assert_eq!(
+        dump("x = /a\\/b[/]/g.test(s)"),
+        "expression_statement(expression=assignment(left=x operator== right=call(callee=member(object=/a\\/b[/]/g property=test) argument=s)))"
+    );
+    assert_eq!(
+        dump("`a${b}c${`d${e}`}`"),
+        "expression_statement(expression=template(quasi=`a${ expression=b quasi=}c${ expression=template(quasi=`d${ expression=e quasi=}`) quasi=}`))"
+    );
+    assert_eq!(
+        dump("let a = 1\nlet b = 2"),
+        "variable_declaration(kind=let declaration=declarator(name=a init=1)); variable_declaration(kind=let declaration=declarator(name=b init=2))"
+    );
 }
 
 #[test]
 fn declarations_and_types() {
     assert_eq!(
         dump("export default class A<T = string> extends B<T> implements C { private readonly x?: T; get y(): number { return 1 } }"),
-        "export(kind=default decl=class(name=A type_param=type_param(name=T default=string) extends=B type_arg=type_ref(name=T) implements=type_ref(name=C) member=class_prop(modifier=private modifier=readonly key=x optional=? type=type_ref(name=T)) member=method(kind=get key=y return_type=number body=block(body=return(arg=1)))))"
+        "export(kind=default declaration=class(name=A type_parameter=type_parameter(name=T default=string) extends=B type_argument=type_reference(name=T) implements=type_reference(name=C) member=class_property(modifier=private modifier=readonly key=x optional=? type=type_reference(name=T)) member=method(kind=get key=y return_type=number body=block(body=return(argument=1)))))"
     );
     assert_eq!(
         dump("type F<T> = T extends Promise<infer U> ? U : never;"),
-        "type_alias(name=F type_param=type_param(name=T) type=conditional_type(check=type_ref(name=T) extends=type_ref(name=Promise type_arg=infer(type_param=type_param(name=U))) consequent=type_ref(name=U) alternate=never))"
+        "type_alias(name=F type_parameter=type_parameter(name=T) type=conditional_type(check=type_reference(name=T) extends=type_reference(name=Promise type_argument=infer(type_parameter=type_parameter(name=U))) consequent=type_reference(name=U) alternate=never))"
     );
-    assert_eq!(dump("let f: (a: number) => void;"), "var(kind=let decl=declarator(name=f type=fn_type(param=param(name=a type=number) return_type=void)))");
-    assert_eq!(dump("import type { A, type B as C } from \"m\";"), "import(kind=type specifier=import_spec(imported=A) specifier=import_spec(kind=type imported=B local=C) from=\"m\")");
-    assert_eq!(dump("function f(x: unknown): x is string;"), "function(name=f param=param(name=x type=unknown) return_type=type_predicate(name=x type=string))");
+    assert_eq!(
+        dump("let f: (a: number) => void;"),
+        "variable_declaration(kind=let declaration=declarator(name=f type=function_type(parameter=parameter(name=a type=number) return_type=void)))"
+    );
+    assert_eq!(
+        dump("import type { A, type B as C } from \"m\";"),
+        "import(kind=type specifier=import_specifier(imported=A) specifier=import_specifier(kind=type imported=B local=C) from=\"m\")"
+    );
+    assert_eq!(
+        dump("function f(x: unknown): x is string;"),
+        "function(name=f parameter=parameter(name=x type=unknown) return_type=type_predicate(name=x type=string))"
+    );
 }
 
 #[test]
 fn tokens_rules_point_at() {
     // `catch` and `=>` are where eslint reports; `new X!(a)` keeps its args.
-    assert_eq!(dump("try {} catch (e) {}"), "try(block={} kind=catch param=e handler={})");
-    assert_eq!(dump("f(x => x);"), "expr_stmt(expr=call(callee=f arg=arrow(param=param(name=x) op==> body=x)))");
-    assert_eq!(dump("new X!(a);"), "expr_stmt(expr=new(callee=non_null(expr=X) arg=a))");
+    assert_eq!(dump("try {} catch (e) {}"), "try(block={} kind=catch parameter=e handler={})");
+    assert_eq!(
+        dump("f(x => x);"),
+        "expression_statement(expression=call(callee=f argument=arrow(parameter=parameter(name=x) operator==> body=x)))"
+    );
+    assert_eq!(dump("new X!(a);"), "expression_statement(expression=new(callee=non_null(expression=X) argument=a))");
 }
 
 #[test]

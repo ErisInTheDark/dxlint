@@ -1,11 +1,13 @@
 //! Compiles a parsed configuration into a [`Linter`].
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::discriminant;
 use std::path::PathBuf;
 
+use super::symbols::Symbols;
 use super::{Linter, OptionSlot, Rule, Target};
-use crate::config::ast::{Parent, RuleDef, SetValue, Severity, Target as AstTarget};
+use crate::config::ast::{Dropped, Parent, RuleDef, SetValue, Severity, Target as AstTarget};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
@@ -21,34 +23,33 @@ pub struct Built {
     pub linter: Option<Linter>,
     pub errors: Vec<ConfigError>,
     pub sources: std::sync::Arc<SourceMap>,
+    /// Every name, its definitions and uses (for tooling).
+    pub symbols: std::sync::Arc<Symbols>,
 }
 
+/// How expressions resolved their names, collected while compiling.
+type Uses = RefCell<Vec<(crate::config::source::Span, crate::expr::Resolved)>>;
+
 pub fn build(loaded: Loaded, root: PathBuf) -> Built {
-    let Loaded { config, sources, mut errors } = loaded;
+    let Loaded { config, sources, mut errors, fingerprint } = loaded;
     let grammar = Grammar::build(&config, &mut errors);
+    let uses: Uses = RefCell::default();
     let mut attr_names: Vec<String> = Vec::new();
     for def in &config.attrs {
         if !attr_names.contains(&def.name.text) {
             attr_names.push(def.name.text.clone());
         }
     }
-    let attrs = attributes(&config, &grammar, &attr_names, &mut errors);
+    let attrs = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
+    let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     // Rules that failed to build: already reported, so settings aimed at
-    // them are quietly dropped instead of reported again.
+    // them are quietly dropped instead of reported again. (The parser keeps
+    // rule names unique.)
     let mut broken: Vec<&str> = Vec::new();
     for def in &config.rules {
-        // Checked by name, so a broken first definition still counts.
-        if !seen.insert(def.name.text.as_str()) {
-            errors.push(
-                ConfigError::new(def.name.span, format!("rule `{}` is defined twice", def.name.text))
-                    .note("configure existing rules with `set name.option value`"),
-            );
-            continue;
-        }
-        match rule(def, &grammar, &attr_names, &mut errors) {
+        match rule(def, &grammar, &attr_names, &uses, &mut errors) {
             Some(r) if !def.broken => rules.push(r),
             _ => broken.push(&def.name.text),
         }
@@ -56,10 +57,14 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
 
     for set in &config.sets {
         let matching: Vec<usize> = (0..rules.len()).filter(|&i| wildcard(&set.target.text, &rules[i].name)).collect();
-        if matching.is_empty() && broken.iter().any(|name| wildcard(&set.target.text, name)) {
+        if matching.is_empty() && (set.soft || broken.iter().any(|name| wildcard(&set.target.text, name))) {
             continue;
         }
         if matching.is_empty() {
+            if let Some(d) = Dropped::find(&config.dropped, &set.target.text) {
+                errors.push(d.still_used(set.target.span));
+                continue;
+            }
             errors.push(
                 ConfigError::new(set.target.span, format!("no rule matches `{}`", set.target.text))
                     .suggest(&set.target.text, rules.iter().map(|f| f.name.as_str())),
@@ -74,7 +79,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
                 continue;
             }
             SetValue::Expr(e) => {
-                let scope = Scope { grammar: &grammar, fields: Vec::new(), options: Vec::new(), options_only: true, attrs: &[] };
+                let scope = Scope::constants(&grammar);
                 match scope.compile(e, &mut errors).map(|c| Ctx::eval_static(&c, &[])) {
                     Some(Ok(v)) => v,
                     Some(Err(err)) => {
@@ -130,13 +135,23 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     // A mistake inside a macro is one mistake, however often it expands.
     let mut seen = Vec::new();
     errors.retain(|e| {
-        let key = (e.span, e.message.clone());
+        let key = (e.span, e.message.clone(), e.related.first().map(|(s, _)| *s));
         let new = !seen.contains(&key);
         seen.push(key);
         new
     });
 
     let sources = std::sync::Arc::new(sources);
+    let symbols = std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, uses.into_inner(), sources.clone()));
+    // The rules as parsed, and where paths are relative to: what cached
+    // results are only valid for.
+    let fingerprint = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        fingerprint.hash(&mut h);
+        root.hash(&mut h);
+        h.finish()
+    };
     let mut by_matcher = vec![Vec::new(); grammar.matchers.len()];
     let mut by_field: HashMap<(u32, u16), Vec<usize>> = HashMap::new();
     let mut by_lang = Vec::new();
@@ -168,9 +183,11 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         by_field,
         by_lang,
         attrs,
+        forwards,
         project: Default::default(),
+        fingerprint,
     };
-    Built { linter: Some(linter), errors, sources }
+    Built { linter: Some(linter), errors, sources, symbols }
 }
 
 /// Labels available on a node of `target`.
@@ -207,7 +224,7 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
 }
 
 /// Compiles every `let` attribute on each layer that defines it.
-fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], errors: &mut Vec<ConfigError>) -> Vec<Attr> {
+fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> Vec<Attr> {
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
@@ -223,13 +240,16 @@ fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String]
                     continue;
                 };
                 if attrs[id].defs.iter().any(|(d, _)| *d == m) {
-                    errors.push(ConfigError::new(
-                        def.name.span,
-                        format!("attribute `{}` is defined twice for `{}`", def.name.text, g.matchers[m as usize].name),
-                    ));
+                    errors.push(
+                        ConfigError::new(
+                            def.name.span,
+                            format!("attribute `{}` is defined twice for `{}`", def.name.text, g.matchers[m as usize].name),
+                        )
+                        .note(format!("`override in {} let {} ...` replaces it", g.matchers[m as usize].name, def.name.text)),
+                    );
                     continue;
                 }
-                let scope = Scope { grammar: g, fields: target_fields(g, t), options: Vec::new(), options_only: false, attrs: names };
+                let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), ..Scope::new(g) };
                 if let Some(e) = scope.compile(&def.expr, errors) {
                     attrs[id].defs.push((m, e));
                 }
@@ -239,7 +259,7 @@ fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String]
     attrs
 }
 
-fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], errors: &mut Vec<ConfigError>) -> Option<Rule> {
+fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> Option<Rule> {
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
@@ -260,8 +280,7 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], errors: &mut Vec<ConfigErr
             errors.push(ConfigError::new(opt.name.span, format!("option `{}` is declared twice", opt.name.text)));
             continue;
         }
-        let scope = Scope { grammar: g, fields: Vec::new(), options: Vec::new(), options_only: true, attrs: &[] };
-        let Some(compiled) = scope.compile(&opt.default, errors) else { continue };
+        let Some(compiled) = Scope::constants(g).compile(&opt.default, errors) else { continue };
         match Ctx::eval_static(&compiled, &[]) {
             Ok(v) => options.push(OptionSlot {
                 name: opt.name.text.clone(),
@@ -285,7 +304,13 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], errors: &mut Vec<ConfigErr
             errors.push(ConfigError::new(opt.name.span, format!("option `{field}` has the same name as a field of `{target_text}`")));
         }
     }
-    let scope = Scope { grammar: g, fields, options: option_names, options_only: false, attrs };
+    let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), ..Scope::new(g) };
+    // Each `let` sees the ones before it.
+    let mut locals = Vec::new();
+    for (name, e) in &def.locals {
+        locals.push(scope.compile(e, errors).unwrap_or(CExpr::Const(Value::Null)));
+        scope.locals.push(name.text.clone());
+    }
 
     let compile_all = |exprs: &[crate::config::ast::Expr], errors: &mut Vec<ConfigError>| -> Vec<CExpr> {
         exprs.iter().filter_map(|e| scope.compile(e, errors)).collect()
@@ -317,10 +342,54 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], errors: &mut Vec<ConfigErr
         files,
         ignore,
         when,
+        locals,
         message,
         fix,
-        report: def.report,
+        report: def.report.unwrap_or_default(),
     })
+}
+
+/// `in a forward x from field` as (matcher, attribute, label); groups give
+/// one per member.
+fn forwards(config: &crate::config::ast::Config, g: &Grammar, attr_names: &[String], errors: &mut Vec<ConfigError>) -> Vec<(u32, u16, u16)> {
+    let mut out: Vec<(u32, u16, u16)> = Vec::new();
+    for def in &config.forwards {
+        let mut attrs = Vec::new();
+        for a in &def.attrs {
+            match attr_names.iter().position(|n| *n == a.text) {
+                Some(i) => attrs.push((i as u16, a)),
+                None => errors.push(match Dropped::find(&config.dropped, &a.text) {
+                    Some(d) => d.still_used(a.span),
+                    None => ConfigError::new(a.span, format!("no attribute `{}`", a.text)).suggest(&a.text, attr_names.iter().map(String::as_str)),
+                }),
+            }
+        }
+        for target in &def.targets {
+            let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, errors) else { continue };
+            for t in resolved {
+                let Target::Matcher(m) = t else {
+                    errors.push(ConfigError::new(target.span, "`forward` belongs to layers, not languages"));
+                    continue;
+                };
+                let labels = g.matchers[m as usize].labels();
+                let Some(label) = g.labels.get(&def.field.text).filter(|_| labels.contains(&def.field.text)) else {
+                    errors.push(
+                        ConfigError::new(def.field.span, format!("`{}` has no field `{}`", g.matchers[m as usize].name, def.field.text))
+                            .suggest(&def.field.text, labels.iter().map(String::as_str)),
+                    );
+                    continue;
+                };
+                for &(attr, name) in &attrs {
+                    if out.iter().any(|&(x, a, _)| x == m && a == attr) {
+                        errors.push(ConfigError::new(name.span, format!("`{}` already forwards `{}`", g.matchers[m as usize].name, name.text)));
+                    } else {
+                        out.push((m, attr, label));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A rule target as engine targets (a group gives one per member), and how
@@ -345,6 +414,10 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
                 (out, name.text.clone())
             }
             None => {
+                if let Some(d) = Dropped::find(&g.dropped, &name.text) {
+                    errors.push(d.still_used(name.span));
+                    return None;
+                }
                 let mut err = ConfigError::new(name.span, format!("unknown matcher `{}`", name.text))
                     .suggest(&name.text, g.matchers.iter().map(|m| m.name.as_str()));
                 if let Some(owner) = g.matchers.iter().find(|m| m.labels().contains(&name.text)) {
@@ -356,10 +429,11 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
         },
         AstTarget::Field(layer, field) => {
             let Some(m) = g.matcher(&layer.text) else {
-                errors.push(
-                    ConfigError::new(layer.span, format!("unknown matcher `{}`", layer.text))
+                errors.push(match Dropped::find(&g.dropped, &layer.text) {
+                    Some(d) => d.still_used(layer.span),
+                    None => ConfigError::new(layer.span, format!("unknown matcher `{}`", layer.text))
                         .suggest(&layer.text, g.matchers.iter().map(|m| m.name.as_str())),
-                );
+                });
                 return None;
             };
             let labels = g.matchers[m as usize].labels();

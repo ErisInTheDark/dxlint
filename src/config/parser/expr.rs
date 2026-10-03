@@ -45,10 +45,31 @@ impl Parser<'_> {
         self.ts.peek_raw(0).cloned()
     }
 
-    /// Binary operators only continue across lines inside brackets.
+    /// Binary operators continue across lines inside brackets, or when the
+    /// next line starts with one (`&&`, `||`, a comparison): no item or
+    /// clause can start that way.
     fn op_peek(&mut self) -> Option<Tk> {
-        self.skip(self.expr_depth > 0, false);
+        let continues = self.expr_depth > 0 || self.next_line_continues();
+        self.skip(continues, false);
         self.ts.peek_raw(0).map(|t| t.kind)
+    }
+
+    fn next_line_continues(&mut self) -> bool {
+        let mut i = 0;
+        let mut crossed = false;
+        while let Some(t) = self.ts.peek_raw(i) {
+            match t.kind {
+                Tk::Newline => crossed = true,
+                Tk::InvOpen | Tk::InvClose => {}
+                kind => {
+                    return crossed
+                        && (matches!(kind, Tk::AndAnd | Tk::OrOr | Tk::EqEq | Tk::Ne | Tk::Lt | Tk::Le | Tk::Gt | Tk::Ge | Tk::Tilde)
+                            || t.is_ident("is"))
+                }
+            }
+            i += 1;
+        }
+        false
     }
 
     fn binary(&mut self, ops: &[(Tk, BinOp)], next: fn(&mut Self) -> Option<Expr>) -> Option<Expr> {
@@ -72,7 +93,11 @@ impl Parser<'_> {
 
     fn e_cmp(&mut self) -> Option<Expr> {
         let lhs = self.e_join()?;
-        let op = match self.op_peek() {
+        let next = self.op_peek();
+        if next == Some(Tk::Ident) && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("is")) {
+            return self.is_test(lhs);
+        }
+        let op = match next {
             Some(Tk::EqEq) => BinOp::Eq,
             Some(Tk::Ne) => BinOp::Ne,
             Some(Tk::Lt) => BinOp::Lt,
@@ -96,6 +121,46 @@ impl Parser<'_> {
         Some(Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span })
     }
 
+    /// `value is name` or `value is [a, b]`, after `value`.
+    fn is_test(&mut self, lhs: Expr) -> Option<Expr> {
+        let kw = self.ts.next_raw().expect("peeked");
+        self.skip(false, true);
+        let mut names = Vec::new();
+        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrack) {
+            self.ts.next_raw();
+            loop {
+                self.skip(true, true);
+                match self.ts.next_raw() {
+                    Some(t) if t.kind == Tk::RBrack => break,
+                    Some(t) if t.kind == Tk::Comma => {}
+                    Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
+                    other => {
+                        let span = other.map(|t| t.span).or(self.ts.last_span);
+                        self.errors.push(ConfigError::new(span, "expected layer or group names in `is [a, b]`"));
+                        return None;
+                    }
+                }
+            }
+        } else {
+            match self.ts.next_raw() {
+                Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
+                other => {
+                    let span = other.map(|t| t.span).or(Some(kw.span));
+                    self.errors.push(
+                        ConfigError::new(span, "expected a layer or group name after `is`").note("several go in brackets: `layer is [a, b]`"),
+                    );
+                    return None;
+                }
+            }
+        }
+        if names.is_empty() {
+            self.errors.push(ConfigError::new(kw.span, "`is []` names no layers"));
+            return None;
+        }
+        let span = lhs.span.to(names.last().expect("non-empty").span);
+        Some(Expr { kind: ExprKind::Is(Box::new(lhs), names), span })
+    }
+
     /// Values side by side are joined: `text "="`, `[a] [b]`.
     fn e_join(&mut self) -> Option<Expr> {
         let mut lhs = self.e_add()?;
@@ -114,7 +179,7 @@ impl Parser<'_> {
         self.skip(self.expr_depth > 0, false);
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
-            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if"),
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is"),
             _ => false,
         })
     }

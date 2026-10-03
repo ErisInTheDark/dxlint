@@ -22,6 +22,57 @@ pub struct Config {
     /// `native ts`: native front ends whose node kinds become layers.
     pub natives: Vec<Name>,
     pub attrs: Vec<AttrDef>,
+    pub forwards: Vec<ForwardDef>,
+    /// Names removed by `drop`: anything still using one is an error at
+    /// the `drop`.
+    pub dropped: Vec<Dropped>,
+    /// Every macro definition, overridden ones included (for tooling).
+    pub macros: Vec<MacroInfo>,
+    /// Uses only the parser sees (for tooling).
+    pub uses: Vec<Use>,
+}
+
+/// `macro name(params) body`, as written.
+#[derive(Clone, Debug)]
+pub struct MacroInfo {
+    pub name: Name,
+    pub params: Vec<String>,
+    /// From `macro` to the end of the body.
+    pub span: Span,
+}
+
+/// A name the parser resolved itself.
+#[derive(Clone, Debug)]
+pub enum Use {
+    /// A macro call.
+    Macro(Name),
+    /// A layer named inside a pattern (`name:ident`, `:params`, `paren`).
+    Layer(Name),
+    /// An import's path string and the file it loaded.
+    Import(Span, super::source::FileId),
+}
+
+/// What `drop` removed.
+#[derive(Clone, Debug)]
+pub struct Dropped {
+    pub name: String,
+    /// The `drop` item.
+    pub span: Span,
+}
+
+impl Dropped {
+    /// The tombstone for `name`, if it was dropped.
+    pub fn find<'a>(dropped: &'a [Dropped], name: &str) -> Option<&'a Dropped> {
+        dropped.iter().rev().find(|d| d.name == name)
+    }
+
+    /// "`name` was dropped, but this still uses it": reported at the `drop`,
+    /// pointing at the use.
+    pub fn still_used(&self, use_span: impl Into<Option<Span>>) -> crate::config::error::ConfigError {
+        crate::config::error::ConfigError::new(self.span, format!("`{}` is dropped here, but it is still used", self.name))
+            .related(use_span, "still used here")
+            .note("drop or override what uses it too")
+    }
 }
 
 /// `in a or b let name expr`: a value computed for every node of these
@@ -63,6 +114,24 @@ pub enum Parent {
     /// `.*`: the root layer of every language.
     AnyLang(Span),
     Matcher(Name),
+}
+
+impl Parent {
+    /// As written: `name`, `.lang` or `.*`.
+    pub fn text(&self) -> String {
+        match self {
+            Parent::Lang(n) => format!(".{}", n.text),
+            Parent::AnyLang(_) => ".*".into(),
+            Parent::Matcher(n) => n.text.clone(),
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Parent::Lang(n) | Parent::Matcher(n) => n.span,
+            Parent::AnyLang(s) => *s,
+        }
+    }
 }
 
 /// `[in|over A or B] match name [pattern]`. Without a pattern it attaches
@@ -149,11 +218,44 @@ pub struct RuleDef {
     /// `fix as expr`: what the node should look like. Different text =>
     /// diagnostic + fix.
     pub fix: Option<Expr>,
-    /// Where diagnostics point (`report node | change | end`).
-    pub report: Report,
+    /// `let name expr` clauses: values computed once per node, usable in
+    /// the rule's other clauses (and later `let`s).
+    pub locals: Vec<(Name, Expr)>,
+    /// Where diagnostics point (`report node | change | end`); the whole
+    /// node when not given.
+    pub report: Option<Report>,
     /// Part of the rule failed to parse: running the rest would check
     /// something else than what was written.
     pub broken: bool,
+}
+
+impl RuleDef {
+    /// A rule with nothing but its name and targets.
+    pub fn new(name: Name, targets: Vec<Target>) -> Self {
+        RuleDef {
+            name,
+            targets,
+            severity: None,
+            message: None,
+            options: Vec::new(),
+            files: Vec::new(),
+            ignore: Vec::new(),
+            when: Vec::new(),
+            fix: None,
+            locals: Vec::new(),
+            report: None,
+            broken: false,
+        }
+    }
+}
+
+/// `in a, b forward x, y from field`: these attributes, where the layers do
+/// not define them, are read from that field's node (transparent wrappers).
+#[derive(Debug)]
+pub struct ForwardDef {
+    pub targets: Vec<Name>,
+    pub attrs: Vec<Name>,
+    pub field: Name,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -180,6 +282,9 @@ pub struct SetDef {
     pub target: Name,
     pub key: Name,
     pub value: SetValue,
+    /// A glob some of whose rules were dropped later: matching nothing is
+    /// then not a mistake.
+    pub soft: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,6 +334,9 @@ pub enum ExprKind {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value ~ pattern`: does the whole value match?
     Test(Box<Expr>, Box<Pat>),
+    /// `layer is a`, `parent is [a, b]`: is the named layer one of these
+    /// (or a specialisation of one, or in one of these groups)?
+    Is(Box<Expr>, Vec<Name>),
 }
 
 #[derive(Debug)]

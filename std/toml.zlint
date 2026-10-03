@@ -3,17 +3,17 @@
 import "std/core"
 
 lang toml "*.toml" {
-  match brack
-  match brace
+  match brackets
+  match braces
 }
 
-group toml_code .toml or brack or brace
+group toml_code .toml, brackets, braces
 
 in toml_code {
   match toml_comment /#/ until /$/
-  match toml_string3 /"""/ until /"""/
-  match toml_literal3 /'''/ until /'''/
+  match toml_multiline_string /"""/ until /"""/
+  match toml_multiline_literal /'''/ until /'''/
   match toml_string /"/ until /"|$/
   match toml_literal /'/ until /'|$/
 }
-in toml_string or toml_string3 match toml_escape /\\(?:.|\n)/
+in toml_string, toml_multiline_string match toml_escape /\\(?:.|\n)/

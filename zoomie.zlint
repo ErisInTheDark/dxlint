@@ -25,27 +25,36 @@ in rs_code {
 }
 
 # Test modules are a layer, so rules can ask whether they are inside one.
-in .rust or brace match rs_test_mod /#\[cfg\(test\)\]\s*mod\s+\w+\s*/ body:brace
+in .rust, braces match rs_test_module /#\[cfg\(test\)\]\s*mod\s+\w+\s*/ body:braces
 in rs_code match rs_unwrap /\.unwrap\(\)/ {
   rule no-unwrap {
-    when rs_test_mod == null
+    when rs_test_module == null
     warn "`.unwrap()` outside tests; use `?` or `.expect(\"why\")`"
     ignore "tests.rs" "tests/**"
   }
 }
 
-in rs_code match rs_fn /\bfn[ \t]+/ name:ident
-in rs_fn.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
+# `.zlintcache` reuses a result while everything its lint read is unchanged,
+# so native code must read the filesystem through the one door that records it.
+in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists|metadata)\(\)|\bread_dir\b|\bWalkBuilder\b/ {
+  rule native-reads-through-door error "native code reads the filesystem through `reads.rs`, which records the read for the cache" {
+    files "src/native/**"
+    ignore "src/native/ts/reads.rs" "src/native/ts/tests.rs"
+  }
+}
 
-in rs_line_comment or rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
+in rs_code match rs_function /\bfn[ \t]+/ name:identifier
+in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
+
+in rs_line_comment, rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
   rule todo-comment info "{text} left in a comment"
 }
 
 # ---- zlint --------------------------------------------------------------
 
-in zl_code {
-  match zl_rule /\brule[ \t]+/ name:/[\w-]+/
-  match zl_matcher /\bmatch[ \t]+/ name:/\w+/
+in zlint_code {
+  match zlint_rule /\brule[ \t]+/ name:/[\w-]+/
+  match zlint_matcher /\bmatch[ \t]+/ name:/\w+/
 }
-in zl_rule.name rule rule-names warn "rule names are kebab-case" fix as kebab_case(text)
-in zl_matcher.name rule matcher-names warn "matcher names are snake_case" fix as snake_case(text)
+in zlint_rule.name rule rule-names warn "rule names are kebab-case" fix as kebab_case(text)
+in zlint_matcher.name rule matcher-names warn "matcher names are snake_case" fix as snake_case(text)

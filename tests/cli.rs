@@ -56,6 +56,81 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 }
 
 #[test]
+fn cache_replays_results_and_relints_exactly_what_changed() {
+    let rules = "import \"std/ts\"\nin ts_identifier rule typed info \"{text}: {type}\" { when text == \"G\" || imported_from != null }\n";
+    let dir = project(
+        "cli-cache",
+        &[
+            ("zoomie.zlint", rules),
+            ("tsconfig.json", "{}"),
+            ("a/index.ts", "export const x: number = f();\nfunction f() { return 1 }\n"),
+            ("b.ts", "import { x } from \"./a\";\nx;\nG;\n"),
+        ],
+    );
+    // b's messages, and the `--stats` line.
+    let run = || {
+        let out = zlint(&dir, &["--format", "jsonl", "--stats"]);
+        let messages: Vec<String> = stdout(&out)
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("json"))
+            .filter(|d| d["file"] == "b.ts")
+            .map(|d| d["message"].as_str().unwrap_or_default().to_string())
+            .collect();
+        (messages, String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let write = |path: &str, text: &str| std::fs::write(dir.join(path), text).expect("write");
+
+    let (cold, stats) = run();
+    assert!(cold[0].contains("number") && stats.contains("2 files (0 from cache)"), "{cold:?} {stats}");
+    let (warm, stats) = run();
+    assert!(warm == cold && stats.contains("2 files (2 from cache)"), "{warm:?} {stats}");
+
+    // A body edit leaves what b sees alone: only a is linted again.
+    write("a/index.ts", "export const x: number = f();\nfunction f() { return 2 }\n");
+    let (same, stats) = run();
+    assert!(same == cold && stats.contains("(1 from cache)"), "{same:?} {stats}");
+
+    // An export's type is what b sees.
+    write("a/index.ts", "export const x: string = \"\";\n");
+    let (changed, stats) = run();
+    assert!(changed[0].contains("string") && stats.contains("(0 from cache)"), "{changed:?} {stats}");
+
+    // A new `a.ts` takes over `./a` from `a/index.ts`.
+    write("a.ts", "export const x: boolean = true;\n");
+    let (moved, stats) = run();
+    assert!(moved[0].contains("boolean") && stats.contains("3 files (1 from cache)"), "{moved:?} {stats}");
+
+    // A new global declaration reaches every file that asked about types
+    // (the others never looked).
+    assert_eq!(moved.last().map(String::as_str), Some("G: "));
+    write("g.d.ts", "declare const G: number;\n");
+    let (global, stats) = run();
+    assert!(global.last().is_some_and(|g| g == "G: number") && stats.contains("4 files (2 from cache)"), "{global:?} {stats}");
+
+    // New rules start afresh (comments aside, which change nothing).
+    write("zoomie.zlint", &format!("# note\n{rules}"));
+    assert!(run().1.contains("(4 from cache)"));
+    write("zoomie.zlint", &rules.replace("{text}: ", "{text} is "));
+    let (renamed, stats) = run();
+    assert!(renamed[0].starts_with("x is ") && stats.contains("(0 from cache)"), "{renamed:?} {stats}");
+}
+
+#[test]
+fn describe_explains_names_and_config_goes_anywhere() {
+    let dir = project("cli-describe", &[("rules.zlint", RULES), ("a.t", "x\n")]);
+    // `-c` before or after the subcommand.
+    for args in [&["-c", "rules.zlint", "describe", "no-shout"][..], &["describe", "no-shout", "-c", "rules.zlint"][..]] {
+        let out = zlint(&dir, args);
+        let text = stdout(&out);
+        assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains("**rule** `no-shout`") && text.contains("checks `shout`") && text.contains("rules.zlint:4"), "{text}");
+    }
+    let out = zlint(&dir, &["-c", "rules.zlint", "describe", "shoutt"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("did you mean `shout`?"));
+}
+
+#[test]
 fn config_errors_point_into_the_imported_file() {
     let dir = project(
         "cli-config-error",
