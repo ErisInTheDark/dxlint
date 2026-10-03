@@ -3,40 +3,37 @@
 
 define {
 
-# curly "all": every body in braces.
-in ts_if.consequent rule curly:if {
-  when layer != "ts_block"
-  warn "Expected {{ after 'if' condition."
+macro suggestion_curly_policy {
+  option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
+  option style ("consistent" | null) = null "consistent braces throughout if chains"
+  let curly_info curly_body
+  when curly_info != null
+  let body_expected if mode == "all" then 1 else if mode == "multi" then curly_info.multi else if mode == "multi-line" then curly_info.multiline else curly_info.nested
+  let chain_required if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent
+  let curly_expected if style == "consistent" && mode != "all" then if chain_required then 1 else 0 else body_expected
+  when curly_expected != -1 && (curly_expected == 1 && !curly_info.block || curly_expected == 0 && curly_info.block)
+  warn "{if curly_expected == 1 then 'Expected' else 'Unnecessary'} {{ after '{curly_info.name}'{if curly_info.condition then ' condition' else ''}."
 }
-in ts_if.alternate rule curly:else {
-  when layer != "ts_block" && layer != "ts_if"
-  warn "Expected {{ after 'else'."
-}
-in ts_for.body, ts_while.body rule curly:loop {
-  when layer != "ts_block"
-  warn "Expected {{ after '{if parent == 'ts_for' then 'for' else 'while'}' condition."
-}
-in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body {
-  when layer != "ts_block"
-  warn "Expected {{ after '{if parent == 'ts_for_in' then 'for-in' else if parent == 'ts_for_of' then 'for-of' else 'do'}'."
-}
+in ts_if.consequent rule curly:if { suggestion_curly_policy }
+in ts_if.alternate rule curly:else { suggestion_curly_policy }
+in ts_for.body, ts_while.body rule curly:loop { suggestion_curly_policy }
+in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body { suggestion_curly_policy }
 
 # The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
-in ts_identifier rule no-eval {
-  when text == "eval" && resolved == "global"
-  warn "eval can be harmful."
+macro suggestion_eval_policy {
+  option allowIndirect boolean = false "allow indirect eval references and calls"
+  let eval_info eval_usage
+  when eval_info != null && (!allowIndirect || eval_info.direct && !eval_info.optional)
+  report at eval_info.offset
+  warn "`eval` can be harmful."
 }
-in ts_member.property rule no-eval:member {
-  when text == "eval" && re_test(parent.object, /^(globalThis|window|global|self)$/)
-  warn "eval can be harmful."
-}
+in ts_identifier rule no-eval { suggestion_eval_policy }
+in ts_member, ts_index rule no-eval:member { suggestion_eval_policy }
 
 # `.bind(x)` on a function that never uses `this` (or on an arrow).
-in ts_function, ts_arrow let function_uses_this uses_this
-in ts_parenthesized let function_uses_this expression.function_uses_this
-in ts_member let unneeded_bind property == "bind" && object.function_uses_this == false && parent == "ts_call" && count(parent.argument) == 1
-in ts_member.property rule no-extra-bind {
-  when parent.unneeded_bind
+in ts_call rule no-extra-bind {
+  when unnecessary_bind != null
+  report at unnecessary_bind
   warn "The function binding is unnecessary."
 }
 
@@ -49,22 +46,22 @@ in ts_unary, ts_call rule no-extra-boolean-cast {
 }
 
 in ts_new rule no-new-wrappers {
-  when re_test(callee, /^(String|Number|Boolean)$/) && callee.resolved == "global"
-  warn "Do not use {callee} as a constructor."
+  when re_test(global_callee, /^(String|Number|Boolean)$/)
+  warn "Do not use {global_callee} as a constructor."
 }
 
 in ts_string rule no-nonoctal-decimal-escape {
-  when re_test(text, /(?:^|[^\\])(?:\\\\)*\\[89]/)
-  warn "Don't use '{re_find(text, /\\[89]/)}' escape sequence."
+  each decimal_escape in nonoctal_decimal_escapes
+  report at decimal_escape.offset
+  warn "Don't use '{decimal_escape.text}' escape sequence."
 }
 
-# Comma operators, except in `for` heads and inside parentheses (twice
-# where the statement or arrow already has its own).
-in ts_parenthesized let is_arrow_body parent == "ts_arrow"
-in ts_sequence let sequence_allowed parent == "ts_for" || parent == "ts_parenthesized" && !parent.is_arrow_body
-in ts_sequence.expression rule no-sequences {
-  when index == 0 && !parent.sequence_allowed
-  report end
+# Comma operators, except loop init/update and explicitly grouped expressions.
+in ts_sequence rule no-sequences {
+  option allowInParentheses boolean = true "allow explicitly parenthesised sequences"
+  let sequence_info sequence_context
+  when sequence_info != null && !(allowInParentheses && sequence_info.intentional)
+  report at sequence_info.offset
   warn "Unexpected use of comma operator."
 }
 
@@ -74,7 +71,7 @@ in ts_throw rule no-throw-literal {
 }
 
 in ts_declarator rule no-undef-init {
-  when init == "undefined" && init.resolved == "global" && ts_variable_declaration.kind != "const" && is_identifier(name)
+  when init == "undefined" && init.resolved == "global" && re_test(ts_variable_declaration.kind, /^(var|let)$/)
   warn "It's not necessary to initialize '{name}' to undefined."
 }
 
@@ -94,8 +91,8 @@ in ts_call rule radix {
 }
 
 in ts_identifier rule no-shadow-restricted-names {
-  when declaration_kind != null && re_test(text, /^(NaN|Infinity|undefined|eval|arguments)$/)
-  when !(text == "undefined" && re_test(declaration_kind, /^(var|let)$/) && ts_declarator.init == null)
+  option reportGlobalThis boolean = true "include globalThis among restricted names"
+  when restricted_binding && (text != "globalThis" || reportGlobalThis)
   warn "Shadowing of global property '{text}'."
 }
 
@@ -108,15 +105,8 @@ in ts_identifier rule prefer-rest-params {
   warn "Use the rest parameters instead of 'arguments'."
 }
 
-# `f.apply(null, args)` / `o.f.apply(o, args)`.
-in ts_call {
-  let applied_function re_replace(callee, /\s*\.\s*apply$/, "")
-  let apply_receiver if re_test(applied_function, /\./) then re_replace(applied_function, /\.[^.]*$/, "") else null
-}
-in ts_array, ts_spread let is_array_like true
 in ts_call rule prefer-spread {
-  when re_test(callee, /\.\s*apply$/) && count(argument) == 2 && !any(compact(slice([] argument.is_array_like, 1)))
-  when if apply_receiver == null then re_test(first(argument), /^(null|undefined|void 0)$/) else normalize_space(first(argument)) == normalize_space(apply_receiver)
+  when variadic_apply
   warn "Use the spread operator instead of '.apply()'."
 }
 
@@ -126,16 +116,8 @@ in ts_call rule prefer-object-spread {
 }
 
 # String concatenation mixing literals and other values.
-in ts_string let has_string true
-in ts_template let has_string true
-in ts_string let all_literals true
-in ts_template let all_literals true
-in ts_binary {
-  let has_string operator == "+" && (left.has_string == true || right.has_string == true)
-  let all_literals operator == "+" && left.all_literals == true && right.all_literals == true
-}
 in ts_binary rule prefer-template {
-  when has_string && !all_literals && !(parent == "ts_binary" && parent.operator == "+")
+  when mixed_string_concatenation
   warn "Unexpected string concatenation."
 }
 
@@ -232,13 +214,13 @@ in ts_binary rule no-useless-concat {
 }
 
 in ts_conditional rule no-unneeded-ternary {
-  when (consequent == "true" || consequent == "false") && (alternate == "true" || alternate == "false")
+  when redundant_conditional == "boolean"
   warn "Unnecessary use of boolean literals in conditional expression."
 }
 
 in ts_conditional rule no-unneeded-ternary:default-assignment {
   option defaultAssignment boolean = true "allow conditional expressions used as default assignments"
-  when !defaultAssignment && is_identifier(test) && test == consequent
+  when !defaultAssignment && redundant_conditional == "default"
   warn "Unnecessary use of conditional expression for default assignment."
 }
 
@@ -352,6 +334,152 @@ in ts_function, ts_arrow rule func-style {
   when requested_style == "expression" && function_info.declaration || requested_style == "declaration" && !function_info.declaration && !(function_info.arrow && (allowArrowFunctions || function_info.captures)) && !(allowTypeAnnotation && function_info.annotated)
   report at function_info.offset
   warn "Expected a function {requested_style}."
+}
+
+in ts_block, ts_switch rule no-empty {
+  option allowEmptyCatch boolean = false "allow empty catch blocks"
+  let empty_info empty_statement_block
+  when empty_info != null && !(allowEmptyCatch && empty_info.catch)
+  report at empty_info.offset
+  warn "Empty {if empty_info.switch then 'switch' else 'block'} statement."
+}
+
+in ts_block rule no-lone-blocks {
+  when lone_statement_block != null
+  warn lone_statement_block
+}
+
+in ts_if rule no-lonely-if {
+  when lonely_if
+  warn "Unexpected if as the only statement in an else block."
+}
+
+in ts_if, ts_conditional rule no-negated-condition {
+  when negated_condition
+  warn "Unexpected negated condition."
+}
+
+in ts_switch rule default-case {
+  option commentPattern regex | null = null "comments that allow a missing default"
+  when missing_switch_default != null
+  when !missing_switch_default.has_comment || !re_test(missing_switch_default.comment, default(commentPattern, "(?i)^no default$"))
+  warn "Expected a default case."
+}
+
+in ts_break, ts_continue rule no-extra-label {
+  let label_info unnecessary_label
+  when label_info != null
+  report at label_info.offset
+  warn "This label '{label_info.name}' is unnecessary."
+}
+
+in ts_await, ts_for_of, ts_variable_declaration rule no-await-in-loop {
+  when await_in_loop
+  warn "Unexpected `await` inside a loop."
+}
+
+in ts_for_in rule guard-for-in {
+  when !guarded_for_in
+  warn "The body of a for-in should be wrapped in an if statement to filter unwanted properties from the prototype."
+}
+
+in ts_assignment rule no-return-assign {
+  option mode ("except-parens" | "always") = "except-parens" "assignment return policy"
+  let return_info returning_assignment
+  when return_info != null && (mode == "always" || !return_info.parenthesized)
+  report at return_info.offset
+  warn if return_info.arrow then "Arrow function should not return assignment." else "Return statement should not contain assignment."
+}
+
+in ts_if rule no-else-return {
+  option allowElseIf boolean = true "allow returning else-if branches"
+  let else_info redundant_else
+  when else_info != null
+  let else_report if allowElseIf then else_info.chain else else_info.direct
+  when else_report != null
+  report at else_report.offset
+  warn "Unnecessary 'else' after 'return'."
+}
+
+in ts_arrow rule arrow-body-style {
+  option mode ("always" | "never" | "as-needed") = "as-needed" "arrow body block policy"
+  option requireReturnForObjectLiteral boolean = false "require a block for object values"
+  let arrow_body_info arrow_body_style
+  when arrow_body_info != null
+  when arrow_body_info.block && (mode == "never" || mode == "as-needed" && arrow_body_info.single_return && !(requireReturnForObjectLiteral && arrow_body_info.object)) || !arrow_body_info.block && (mode == "always" || mode == "as-needed" && requireReturnForObjectLiteral && arrow_body_info.object)
+  report at arrow_body_info.offset
+  warn if arrow_body_info.block then arrow_body_info.message else "Expected block statement surrounding arrow body."
+}
+
+in ts_function, ts_arrow, ts_method rule no-empty-function {
+  option allow string[] = [] "function categories that may be empty"
+  let empty_function_info empty_function
+  when empty_function_info != null && !contains(allow, empty_function_info.category)
+  when !(empty_function_info.private_constructor && (contains(allow, "privateConstructors") || contains(allow, "private-constructors")))
+  when !(empty_function_info.protected_constructor && (contains(allow, "protectedConstructors") || contains(allow, "protected-constructors")))
+  when !(empty_function_info.decorated && contains(allow, "decoratedFunctions"))
+  when !(empty_function_info.overridden && contains(allow, "overrideMethods"))
+  report at empty_function_info.offset
+  warn "Unexpected empty {empty_function_info.name}."
+}
+
+in ts_call rule no-useless-call {
+  when useless_call != null
+  warn "Unnecessary '.{useless_call}()'."
+}
+
+in ts_assignment, ts_call rule no-extend-native {
+  option exceptions string[] = [] "builtins that may be extended"
+  when extended_native != null && !contains(exceptions, extended_native)
+  warn "{extended_native} prototype is read only, properties should not be added."
+}
+
+in ts_string rule no-multi-str {
+  when multiline_string
+  warn "Multiline support is limited to browsers supporting ES5 only."
+}
+
+in ts_regex rule no-div-regex {
+  when re_test(text, "^/=")
+  warn "A regular expression literal can be confused with '/='."
+}
+
+in ts_call, ts_new rule prefer-regex-literals {
+  option disallowRedundantWrapping boolean = false "disallow constructors wrapping regex literals"
+  let regex_preference regex_literal_preference
+  when regex_preference != null && (!regex_preference.wrapped || disallowRedundantWrapping)
+  warn regex_preference.message
+}
+
+in ts_regex, ts_call, ts_new rule require-unicode-regexp {
+  option requireFlag ("u" | "v" | null) = null "require a particular unicode mode"
+  let unicode_info unicode_regex_flags
+  when unicode_info != null
+  when if requireFlag == "u" then !re_test(unicode_info.flags, /u/) else if requireFlag == "v" then !re_test(unicode_info.flags, /v/) else !re_test(unicode_info.flags, /[uv]/)
+  warn if requireFlag == "v" then "Use the 'v' flag." else "Use the 'u' flag."
+}
+
+in ts_program, ts_function, ts_arrow, ts_method rule strict {
+  option mode ("safe" | "never" | "global" | "function") = "safe" "strict directive policy"
+  let strict_policy strict_directive_policy
+  let strict_mode if source_type == "module" then "module" else if mode == "safe" then if source_type == "commonjs" then "global" else "function" else mode
+  each strict_finding in if strict_mode == "module" then strict_policy.module else if strict_mode == "global" then strict_policy.global else if strict_mode == "function" then strict_policy.function else strict_policy.never
+  report at strict_finding.offset
+  warn strict_finding.message
+}
+
+in ts_throw rule preserve-caught-error {
+  option requireCatchParameter boolean = false "require a catch parameter when throwing a symptom error"
+  option errorClassNames (string | { name: string; argumentPosition: number })[] = [] "additional error constructors and options positions"
+  let caught_info caught_error_preservation
+  when caught_info != null
+  let configured_error find_last(errorClassNames, x => caught_info.name == (if type_of(x) == "str" then x else x.name))
+  when caught_info.builtin || configured_error != null
+  let cause_position if caught_info.builtin then caught_info.default_index else if type_of(configured_error) == "str" then 1 else configured_error.argumentPosition - 1
+  let cause_info default(first(slice(caught_info.causes, cause_position)), caught_info.missing)
+  when caught_info.catch == "destructured" || caught_info.catch == "missing" && requireCatchParameter || caught_info.catch == "present" && cause_info.checked
+  report at if caught_info.catch == "destructured" then caught_info.catch_offset else if caught_info.catch == "missing" then caught_info.throw_offset else cause_info.offset
+  warn if caught_info.catch == "destructured" then "Re-throws cannot preserve the caught error as a part of it is being lost due to destructuring." else if caught_info.catch == "missing" then "The caught error is not accessible because the catch clause lacks the error parameter. Start referencing the caught error using the catch parameter." else cause_info.message
 }
 
 }
