@@ -8,55 +8,11 @@ define {
 # curly, new-parens, no-constant-condition and semi:always live in
 # .ts/problems, on the native layers.
 
-in js_code match js_loose_equality /(?<![=!<>])[=!]=(?!=)/
-in js_loose_equality rule eqeqeq warn "Expected '{text}=' and instead saw '{text}'." fix as text "="
-
-# `a && b || c`: eslint reports both operators of every (child, parent)
-# pair. Operands are anything up to a delimiter, with brackets and strings
-# as whole children. Overlays, so the operands stay visible to other rules.
-macro mix_operand (/[^,;?:&|{}()\[\]"'`\/\r\n]/ or /\?\.(?!\d)/ or /\r?\n/ or parentheses or brackets or js_string or js_single_string or js_template or js_regex or /\// or js_line_comment or js_block_comment)
-# `&&` and `||`, not the assignments `&&=` and `||=`.
-macro and_operator /&&(?!=)/
-macro or_operator /\|\|(?!=)/
-# The last `&&` of a run directly before `||`.
-over js_code match js_mix_and_before_or operator:and_operator mix_operand* /(?=\|\|[^=])/
-# The last `&&` of a run directly after `||`.
-over js_code match js_mix_and_after_or or_operator mix_operand* (and_operator mix_operand*)* operator:and_operator
-# `||` before / after a run containing `&&`.
-over js_code match js_mix_or_before_and operator:or_operator mix_operand* /(?=&&[^=])/
-# Only the first `||` of a chain has an `&&` term as its left operand: one
-# after `(`, `,`, a ternary's `?`/`:`, `return` or an assignment `=` (not
-# `a?.b`, nor the end of `===`).
-over js_code match js_mix_or_after_and /(?<=(?:[(\[,:]|\?[^.]|[^=!<>]=[^=>]|\breturn|^)[^|;{}]*)&&(?!=)/ mix_operand* (and_operator mix_operand*)* operator:or_operator
-macro mix_message "Unexpected mix of '&&' and '||'. Use parentheses to clarify the intended order of operations."
-# Overlays also run over comment and string text; real code only.
-macro in_code !re_test(enclosing, /comment|string|template|regex/)
-in js_mix_and_before_or.operator, js_mix_and_after_or.operator rule no-mixed-operators warn mix_message {
- when in_code
-}
-in js_mix_or_before_and.operator rule no-mixed-operators:or-right warn mix_message {
- when in_code
-}
-in js_mix_or_after_and.operator rule no-mixed-operators:or-left warn mix_message {
- when in_code
-}
 # Binary operators start the continuation line, assignments end the first.
 in js_code match js_operator_line_end /(?:&&|\|\||\?\?|===?|!==?|<=|>=|(?<!\+)\+(?!\+)|(?<!-)-(?![-=])|[*%\/]|\binstanceof|\bin|(?<![|&])[|&](?![|&=]))(?=[ \t]*(?:\/\/[^\r\n]*)?\r?\n)/
 in js_operator_line_end rule operator-linebreak:before warn "'{text}' should be placed at the beginning of the line." {
   option style "before" | "none" = "before"
   when style == "before"
-}
-
-# ---- declarations ------------------------------------------------------------
-
-# `const a = 1, b = 2` -> one declaration per statement. A comma directly
-# in a declaration statement (brackets are children) followed by a name.
-in js_statement match js_declaration_comma /,(?=[ \t\r\n]*[\w$]+[ \t]*(?:[=,;:]|$))/
-in js_declaration_comma rule one-var warn "Split declarations into multiple statements." {
-  option style "never" | "consecutive" = "consecutive"
-  when style == "never" && re_test(parent_text, /^[ \t]*(?:export[ \t]+)?(?:const|let|var)\b/)
-  # Not inside type arguments: more `<` than (non-arrow) `>` so far.
-  when re_count(parent_before, /</) <= re_count(parent_before, /(?:^|[^=])>/)
 }
 
 # ---- statement padding (padding-line-between-statements) --------------------

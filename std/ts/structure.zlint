@@ -3,4 +3,243 @@
 
 define {
 
+in ts_call rule wrap-iife {
+  option mode "outside" | "inside" | "any" = "outside"
+  option functionPrototypeMethods boolean = false "include function call/apply invocations"
+  let info iife_layout
+  when info != null && (functionPrototypeMethods || !info.prototype)
+  when !info.call_wrapped && !info.function_wrapped || mode == "inside" && !info.function_wrapped || mode == "outside" && !info.call_wrapped
+  warn if !info.call_wrapped && !info.function_wrapped then "Wrap an immediate function invocation in parentheses." else if mode == "inside" then "Wrap only the function expression in parens." else "Move the invocation into the parens that contain the function."
+}
+
+in ts_binary, ts_logical rule no-mixed-operators {
+  option groups string[][] = [["+", "-", "*", "/", "%", "**"], ["&", "|", "^", "~", "<<", ">>", ">>>"], ["==", "!=", "===", "!==", ">", ">=", "<", "<="], ["&&", "||"], ["in", "instanceof"]] "operator groups requiring parentheses"
+  option allowSamePrecedence boolean = true "allow mixtures with equal precedence"
+  let info mixed_operators
+  when info != null && (!allowSamePrecedence || !info.same_precedence)
+  when any(groups, operators => contains(operators, info.left) && contains(operators, info.right))
+  each offset in info.offsets
+  report at offset
+  warn "Unexpected mix of '{info.left}' and '{info.right}'. Use parentheses to clarify the intended order of operations."
+}
+
+in ts_variable_declaration rule one-var {
+  option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
+  let info declaration_groups
+  let settings default(first(options), "always")
+  let kind info.kind
+  let common if type_of(settings) == "str" then settings else if kind == "var" then settings.var else if kind == "let" then settings.let else if kind == "const" then settings.const else if kind == "using" then settings.using else settings.awaitUsing
+  let init_mode default(settings.initialized, common)
+  let uninit_mode default(settings.uninitialized, common)
+  let counts info.counts
+  let previous_counts info.previous
+  let total counts.initialized + counts.uninitialized
+  let prior_counts info.prior
+  let prior_init prior_counts.initialized > 0 && (!settings.separateRequires || prior_counts.initialized > prior_counts.requires)
+  let prior_uninit prior_counts.uninitialized > 0
+  let prior_required settings.separateRequires && prior_counts.requires > 0
+  let both_always init_mode == "always" && uninit_mode == "always"
+  let always_failed both_always && (prior_init || prior_uninit) && counts.requires == 0 || uninit_mode == "always" && counts.uninitialized > 0 && prior_uninit || init_mode == "always" && counts.initialized > 0 && prior_init && counts.requires == 0 || prior_required && counts.requires > 0
+  let consecutive previous_counts != null && !((counts.requires + previous_counts.requires > 0) && (total + previous_counts.initialized + previous_counts.uninitialized > counts.requires + previous_counts.requires))
+  let consecutive_message if !consecutive then null else if init_mode == "consecutive" && uninit_mode == "consecutive" then "Combine this with the previous '" kind "' statement." else if init_mode == "consecutive" && counts.initialized > 0 && previous_counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else if uninit_mode == "consecutive" && counts.uninitialized > 0 && previous_counts.uninitialized > 0 then "Combine this with the previous '" kind "' statement with uninitialized variables." else null
+  let split_message if total < 2 || info.for_init then null else if init_mode == "never" && uninit_mode == "never" then "Split '" kind "' declarations into multiple statements." else if init_mode == "never" && counts.initialized > 0 then "Split initialized '" kind "' declarations into multiple statements." else if uninit_mode == "never" && counts.uninitialized > 0 then "Split uninitialized '" kind "' declarations into multiple statements." else null
+  each issue in compact([
+    if init_mode == "always" && settings.separateRequires && counts.requires > 0 && counts.requires < total then "Split requires to be separated into a single block." else null,
+    consecutive_message,
+    if always_failed && both_always then "Combine this with the previous '" kind "' statement." else null,
+    if always_failed && !both_always && init_mode == "always" && counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else null,
+    if always_failed && !both_always && uninit_mode == "always" && counts.uninitialized > 0 && !info.for_binding then "Combine this with the previous '" kind "' statement with uninitialized variables." else null,
+    split_message
+  ])
+  warn "{issue}"
+}
+
+macro expanded_line_length(parts, extra, width) (if width == 0 then sum(parts) else sum(map(slice(parts, 0, len(parts) - 1), part => part - part % width + width)) + last(parts)) - extra
+
+in ts_program rule max-len {
+  option options (number | { code?: number; comments?: number; tabWidth?: number; ignorePattern?: string; ignoreComments?: boolean; ignoreStrings?: boolean; ignoreUrls?: boolean; ignoreTemplateLiterals?: boolean; ignoreRegExpLiterals?: boolean; ignoreTrailingComments?: boolean })[] = [] "line limits, tab stops and exemptions"
+  let settings last(options)
+  let code_limit if type_of(first(options)) == "num" then first(options) else default(settings.code, 80)
+  let second first(slice(options, 1))
+  let tab_width if type_of(second) == "num" then second else default(settings.tabWidth, 4)
+  let comment_limit default(settings.comments, 0)
+  let strip_comments settings.ignoreTrailingComments || settings.ignoreComments
+  let measurements map(line_lengths, source_line => {
+    offset: source_line.offset,
+    text: if strip_comments then source_line.stripped else source_line.text,
+    length: expanded_line_length(if strip_comments then source_line.stripped_segments else source_line.segments, if strip_comments then source_line.stripped_unicode_extra else source_line.unicode_extra, tab_width),
+    comment_applies: source_line.comment && comment_limit > 0,
+    limit: if source_line.comment && comment_limit > 0 then comment_limit else code_limit,
+    ignored: settings.ignoreComments && source_line.comment || settings.ignoreStrings && source_line.string || settings.ignoreTemplateLiterals && source_line.template || settings.ignoreRegExpLiterals && source_line.regex
+  })
+  each finding in measurements
+  when !finding.ignored
+  when !settings.ignoreUrls || !re_test(finding.text, /[^:/?#]:\/\/[^?#]/)
+  when !settings.ignorePattern || !re_test(finding.text, settings.ignorePattern)
+  when finding.length > finding.limit
+  report at finding.offset
+  warn if finding.comment_applies then "This line has a comment length of {finding.length}. Maximum allowed is {finding.limit}." else "This line has a length of {finding.length}. Maximum allowed is {finding.limit}."
+}
+
+in ts_program rule line-comment-position {
+  option options ("above" | "beside" | { position?: "above" | "beside"; ignorePattern?: string; applyDefaultIgnorePatterns?: boolean })[] = [] "line comment position and exemptions"
+  let settings first(options)
+  let position if type_of(settings) == "str" then settings else default(settings.position, "above")
+  let ignore_pattern default(settings.ignorePattern, "")
+  let ignore_default default(settings.applyDefaultIgnorePatterns, true)
+  each finding in comment_layout
+  when !ignore_default || !finding.directive && !re_test(finding.body, /^\s*falls?\s?through/)
+  when ignore_pattern == "" || !re_test(finding.body, ignore_pattern)
+  when position == "above" && finding.beside || position == "beside" && !finding.beside
+  report at finding.offset
+  warn if position == "above" then "Expected comment to be above code." else "Expected comment to be beside code."
+}
+
+in ts_program rule multiline-comment-style {
+  option mode "starred-block" | "bare-block" | "separate-lines" = "starred-block"
+  option checkJSDoc boolean = false "check JSDoc when requiring line comments"
+  option checkExclamation boolean = false "check exclamation comments when requiring line comments"
+  each finding in comment_style_findings
+  when finding.mode == mode
+  when checkJSDoc || !finding.jsdoc
+  when checkExclamation || !finding.exclamation
+  report at finding.offset
+  warn "{finding.message}"
+}
+
+in ts_parenthesized, ts_parenthesized_type rule no-extra-parens {
+  option mode "all" | "functions" = "all"
+  option conditionalAssign boolean = true "enforce assignments in conditions"
+  option ternaryOperandBinaryExpressions boolean = true "enforce binary ternary operands"
+  option nestedBinaryExpressions boolean = true "enforce nested binary operands"
+  option returnAssign boolean = true "enforce assignments in returns"
+  option nestedConditionalExpressions boolean = true "enforce nested conditionals"
+  option enforceForArrowConditionals boolean = true "enforce conditional arrow bodies"
+  option enforceForSequenceExpressions boolean = true "enforce sequence expressions"
+  option enforceForNewInMemberExpressions boolean = true "enforce new expressions in member access"
+  option enforceForFunctionPrototypeMethods boolean = true "enforce function prototype receivers"
+  option allowParensAfterCommentPattern string = "" "allow parentheses after matching comments"
+  option ignoreJSX "none" | "all" | "multi-line" | "single-line" = "none"
+  option ignoredNodes string[] = [] "ignored selector contexts"
+  option allowNodesInSpreadElement { ConditionalExpression?: boolean; LogicalExpression?: boolean; AssignmentExpression?: boolean; AwaitExpression?: boolean } = {} "allowed spread operands"
+  let parens excess_parens
+  when parens != null && (mode == "all" || parens.functions)
+  when conditionalAssign || !parens.conditional_assign
+  when ternaryOperandBinaryExpressions || !parens.ternary_binary
+  when nestedBinaryExpressions || !parens.nested_binary
+  when returnAssign || !parens.return_assign
+  when nestedConditionalExpressions || !parens.nested_conditional
+  when enforceForArrowConditionals || !parens.arrow_conditional
+  when enforceForSequenceExpressions || !parens.sequence
+  when enforceForNewInMemberExpressions || !parens.new_member
+  when enforceForFunctionPrototypeMethods || !parens.function_member
+  when !parens.jsx || ignoreJSX == "none" || ignoreJSX == "multi-line" && !parens.multiline || ignoreJSX == "single-line" && parens.multiline
+  when !allowNodesInSpreadElement.ConditionalExpression || !parens.spread_conditional
+  when !allowNodesInSpreadElement.LogicalExpression || !parens.spread_logical
+  when !allowNodesInSpreadElement.AssignmentExpression || !parens.spread_assignment
+  when !allowNodesInSpreadElement.AwaitExpression || !parens.spread_await
+  when !any(ignoredNodes, selector => contains(parens.selectors, re_replace(selector, /["']/, "")))
+  when allowParensAfterCommentPattern == "" || parens.comment == null || !re_test(parens.comment, allowParensAfterCommentPattern)
+  report at parens.offset
+  warn "Unnecessary parentheses around expression."
+}
+
+in ts_conditional rule multiline-ternary {
+  option mode "always" | "always-multiline" | "never" = "always"
+  option ignoreJSX boolean = false "ignore conditionals in JSX expressions"
+  each finding in ternary_linebreaks
+  when !ignoreJSX || !finding.jsx
+  when mode != "always-multiline" || finding.multiline
+  when mode == "never" && finding.broken || mode != "never" && !finding.broken
+  report at finding.offset
+  warn if mode == "never" then "Unexpected newline between {finding.operands} of ternary expression." else "Expected newline between {finding.operands} of ternary expression."
+}
+
+in ts_program rule no-tabs {
+  option allowIndentationTabs boolean = false "allow tabs at the start of a line"
+  each finding in line_layout_findings
+  when finding.kind == "tab" && (!allowIndentationTabs || !finding.indentation)
+  report at finding.offset
+  warn "Unexpected tab character."
+}
+
+in ts_program rule no-mixed-spaces-and-tabs {
+  option mode "default" | "smart-tabs" = "default"
+  each finding in line_layout_findings
+  when mode == "smart-tabs" && finding.kind == "mixed-smart" || mode != "smart-tabs" && finding.kind == "mixed"
+  report at finding.offset
+  warn "Mixed spaces and tabs."
+}
+
+in ts_program rule linebreak-style {
+  option mode "unix" | "windows" = "unix"
+  each finding in line_layout_findings
+  when mode == "unix" && contains(["crlf", "other-linebreak"], finding.kind) || mode == "windows" && contains(["lf", "other-linebreak"], finding.kind)
+  report at finding.offset
+  warn if mode == "unix" then "Expected linebreaks to be 'LF' but found 'CRLF'." else "Expected linebreaks to be 'CRLF' but found 'LF'."
+}
+
+in ts_program rule unicode-bom {
+  option mode "always" | "never" = "never"
+  when mode == "always" && !bom || mode == "never" && bom
+  report at 0
+  warn if mode == "always" then "Expected Unicode BOM (Byte Order Mark)." else "Unexpected Unicode BOM (Byte Order Mark)."
+}
+
+in ts_regex rule wrap-regex {
+  when parent == "ts_member" && field == "object"
+  warn "Wrap the regexp literal in parens to disambiguate the slash."
+}
+
+in ts_declarator rule one-var-declaration-per-line {
+  option mode "initializations" | "always" = "initializations"
+  when previous_sibling != null && !contains(previous_gap, "\n")
+  when !parent.for_declaration
+  when mode == "always" || init != null || previous.init != null
+  warn "Expected variable declaration to be on a new line."
+}
+
+in ts_binary rule eqeqeq {
+  option options ("always" | "smart" | "allow-null" | { null: "always" | "never" | "ignore" })[] = [] "equality mode and null policy"
+  let mode default(first(options), "always")
+  let null_mode default(last(options).null, "always")
+  let left_literal left.literal_value
+  let right_literal right.literal_value
+  let null_check left_literal.type == "null" || right_literal.type == "null"
+  let same_literal_type left_literal != null && right_literal != null && left_literal.type == right_literal.type
+  let loose operator == "==" || operator == "!="
+  let strict_null (operator == "===" || operator == "!==") && null_check && mode == "always" && null_mode == "never"
+  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || equality_typeof))
+  let expected if strict_null then slice(operator, 0, len(operator) - 1) else operator "="
+  report at operator_offset
+  warn "Expected '{expected}' and instead saw '{operator}'."
+}
+
+in ts_arrow.body rule implicit-arrow-linebreak {
+  option mode "beside" | "below" = "beside"
+  when layer != "ts_block"
+  let broken re_test(parent_before, /=>[\s\S]*\n/)
+  when mode == "beside" && broken || mode == "below" && !broken
+  warn if mode == "beside" then "Expected no linebreak before this expression." else "Expected a linebreak before this expression."
+}
+
+in ts_arrow rule no-confusing-arrow {
+  option allowParens boolean = true "parentheses disambiguate a conditional body"
+  option onlyOneSimpleParam boolean = false "check only single identifier parameters"
+  when conditional_arrow_body == "bare" || !allowParens && conditional_arrow_body == "parenthesized"
+  when !onlyOneSimpleParam || count(parameter) == 1 && re_test(first(parameter), /^[A-Za-z_$][\w$]*$/)
+  warn "Arrow function used ambiguously with a conditional expression."
+}
+
+in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule nonblock-statement-body-position {
+  option mode "beside" | "below" | "any" = "beside"
+  option overrides { if?: "beside" | "below" | "any"; else?: "beside" | "below" | "any"; while?: "beside" | "below" | "any"; do?: "beside" | "below" | "any"; for?: "beside" | "below" | "any" } = {} "position by statement"
+  let kind if parent == "ts_if" then (if field == "alternate" then "else" else "if") else if parent == "ts_while" then "while" else if parent == "ts_do_while" then "do" else "for"
+  let style default(if kind == "if" then overrides.if else if kind == "else" then overrides.else else if kind == "while" then overrides.while else if kind == "do" then overrides.do else overrides.for, mode)
+  let broken re_test(parent_before, /\n[ \t]*$/)
+  when layer != "ts_block" && !(kind == "else" && layer == "ts_if")
+  when style != "any" && (style == "beside" && broken || style == "below" && !broken)
+  warn if style == "beside" then "Expected no linebreak before this statement." else "Expected a linebreak before this statement."
+}
+
 }
