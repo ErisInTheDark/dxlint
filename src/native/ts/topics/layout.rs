@@ -12,8 +12,46 @@ mod punctuation;
 mod operators;
 mod delimiters;
 mod lists;
+mod lines;
+mod annotations;
+mod quotes;
 
 pub const FACTS: &[Fact] = &[
+    Fact {
+        name: "string_quote_context",
+        doc: "native string/template: {jsx,non_backtick,template,template_feature}; grammar-safe non-backtick contexts and semantic template features (tag/interpolation/unescaped newline)",
+        get: |f, n| f.with_file(quotes::string_quote_context, n),
+    },
+    Fact {
+        name: "property_quote_sites",
+        doc: "native properties/signatures/enums and object/interface/type/enum groups: {group,quoted,numeric,redundant,redundant_number,keyword,name,offset}; computed keys, methods and shorthand object properties exempt",
+        get: |f, n| f.with_file(quotes::property_quote_sites, n),
+    },
+    Fact {
+        name: "member_delimiter_sites",
+        doc: "native interface/type literal: {kind,single_line,last_same_line,last,delimiter,offset}; offset last token end including optional separator, node multiline ignores declaration header",
+        get: |f, n| f.with_file(delimiters::member_delimiter_sites, n),
+    },
+    Fact {
+        name: "brace_style_sites",
+        doc: "native controlled block/static/switch/class bodies: {kind,offset,same_line,single_line} open/body/close/keyword boundaries, bare statement-list blocks exempt",
+        get: |f, n| f.with_file(delimiters::brace_style_sites, n),
+    },
+    Fact {
+        name: "comment_contents",
+        doc: "native program: {kind,body,offset,side} begin/end lexical comment sites, excluding hashbang and opaque string/template/JSX text spans",
+        get: |f, n| f.with_file(comment_contents, n),
+    },
+    Fact {
+        name: "empty_line_runs",
+        doc: "native program: {kind,count,offsets} runs of empty lines; kind bof/eof/middle, offsets line starts, final editor newline ignored and template quasi lines protected",
+        get: |f, n| f.with_file(lines::empty_line_runs, n),
+    },
+    Fact {
+        name: "annotation_spacing",
+        doc: "native typed declarations/parameters/members/functions/tuples/mapped types: {category,optional,label,before,after,inner,outer}; gap records {spaced,offset}, optional label includes mapped +/- modifiers",
+        get: |f, n| f.with_file(annotations::annotation_spacing, n),
+    },
     Fact {
         name: "token_neighbours",
         doc: "native layers: adjacent tokens as before/after records {text,start,end,gap,spaced,same_line,line_break}; gap retains comments, spaced counts whitespace outside comments, line_break includes comment line breaks; parent_start is the parent's byte offset",
@@ -84,9 +122,55 @@ pub const FACTS: &[Fact] = &[
         doc: "native list owners: {kind,offset,trailing,multiline,allowed,tsx_single}; offset is comma or insertion point, multiline compares last item/comma with closing token",
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
     },
+    Fact {
+        name: "function_paren_spacing",
+        doc: "native functions/methods/async arrows/try-catch: {kind,start,end,spaced,generic_anonymous}; gap immediately before the parameter-list opener",
+        get: |f, n| f.with_file(delimiters::function_paren_spacing, n),
+    },
+    Fact {
+        name: "block_prefix_spacing",
+        doc: "native block/switch/class/interface/enum: {kind,offset,spaced}; same-line gap before the opening brace, excludes arrow/keyword/case-colon boundaries owned by other rules",
+        get: |f, n| f.with_file(delimiters::block_prefix_spacing, n),
+    },
+    Fact {
+        name: "infix_spacing_sites",
+        doc: "native infix/conditional/initializer/type operators: {operator,offset,spaced,types,int32_hint}; space on both sides outside comments, int32_hint preserves terminal |0",
+        get: |f, n| f.with_file(operators::infix_spacing_sites, n),
+    },
+    Fact {
+        name: "block_padding_sites",
+        doc: "native block/static/switch/class: nonempty boundary records {kind,side,offset,padded,single_line}; adjacent same-line comments belong to the brace boundary",
+        get: |f, n| f.with_file(lines::block_padding_sites, n),
+    },
+    Fact {
+        name: "class_member_gaps",
+        doc: "native class: member pairs {prev,next,offset,padded,single_line,overloads_skipped}; both ordinary and overload-filtered pairs, comments attach to neighbouring members across consecutive lines",
+        get: |f, n| f.with_file(lines::class_member_gaps, n),
+    },
 ];
 
 struct Lexed(Vec<Token>);
+
+fn comment_contents(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+    if !file.syntax.is(node, K::Program) {
+        return Value::List(Vec::new());
+    }
+    let lexed = file.cached(lex_comments);
+    Value::List(lexed.0.iter().filter_map(|token| {
+        let block = match token.tok {
+            Tok::P("/*") => true,
+            Tok::P("//") => false,
+            _ => return None,
+        };
+        let end = token.end as usize - if block { 2 } else { 0 };
+        Some(["begin", "end"].map(|side| Value::Record(vec![
+            ("kind".into(), Value::from(if block { "block" } else { "line" })),
+            ("body".into(), Value::from(file.syntax.src[token.start as usize + 2..end].to_owned())),
+            ("offset".into(), Value::from(token.start as usize)),
+            ("side".into(), Value::from(side)),
+        ])))
+    }).flatten().collect())
+}
 struct LexedComments(Vec<Token>);
 
 fn lex_comments(file: &NativeFile<'_>) -> LexedComments {

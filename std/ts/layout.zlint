@@ -3,6 +3,214 @@
 
 define {
 
+drop rule quotes*
+in ts_string, ts_template rule quotes {
+  option style "double" | "single" | "backtick" = "double" "string delimiters"
+  option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
+  option allowTemplateLiterals "never" | "avoidEscape" | "always" | boolean = "never" "allow unused template delimiters"
+  option ignoreStringLiterals boolean = false "check templates only"
+  let quote_context string_quote_context
+  let quote_delimiter if style == "single" then "'" else if style == "double" then "\"" else "`"
+  let quote_alternate if style == "double" then "'" else "\""
+  when if quote_context.template then style != "backtick" && allowTemplateLiterals != "always" && allowTemplateLiterals != true && !quote_context.template_feature && !((allowTemplateLiterals == "avoidEscape") && avoidEscape && contains(text, quote_delimiter)) else !ignoreStringLiterals && !quote_context.jsx && !(style == "backtick" && quote_context.non_backtick) && !starts_with(text, quote_delimiter) && !(avoidEscape && starts_with(text, quote_alternate) && contains(text, quote_delimiter))
+  warn "Strings must use {if style == 'single' then 'singlequote' else if style == 'double' then 'doublequote' else 'backtick'}."
+}
+
+drop rule quote-props*
+in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_object, ts_interface, ts_type_literal, ts_enum, ts_import, ts_export rule quote-props {
+  option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
+  option keywords boolean = false "require quotes on reserved words"
+  option unnecessary boolean = true "report redundant quotes"
+  option numbers boolean = false "require quoted numeric keys"
+  let property_any_quoted any(property_quote_sites, s => s.quoted)
+  let property_necessary any(property_quote_sites, s => s.quoted && !s.redundant || keywords && s.keyword)
+  let property_keyword last(filter(property_quote_sites, s => !s.quoted && s.keyword)).name
+  each property_site in filter(property_quote_sites, s => s.group == (style == "consistent" || style == "consistent-as-needed"))
+  when if style == "always" then !property_site.quoted else if style == "as-needed" then (if property_site.quoted then unnecessary && property_site.redundant && !(numbers && property_site.redundant_number) && !(keywords && property_site.keyword) else keywords && property_site.keyword || numbers && property_site.numeric) else if style == "consistent-as-needed" && property_any_quoted && !property_necessary then property_site.quoted else !property_site.quoted && (property_any_quoted || style == "consistent-as-needed" && keywords && property_keyword != null)
+  report at property_site.offset
+  warn if style == "always" then "Unquoted property '{property_site.name}' found." else if style == "as-needed" then (if property_site.quoted then "Unnecessarily quoted property '{property_site.name}' found." else if property_site.keyword then "Unquoted reserved word '{property_site.name}' used as key." else "Unquoted number literal '{property_site.name}' used as key.") else if style == "consistent-as-needed" && !property_necessary then "Properties shouldn't be quoted as all quotes are redundant." else if style == "consistent-as-needed" && keywords && property_keyword != null then "Properties should be quoted as '{property_keyword}' is a reserved word." else "Inconsistently quoted property '{property_site.name}' found."
+}
+
+schema member_separator_options { delimiter?: "semi" | "comma" | "none"; requireLast?: boolean }
+schema member_separator_config { multiline?: member_separator_options; singleline?: member_separator_options }
+drop rule member-delimiter-style*
+in ts_interface, ts_type_literal rule member-delimiter-style {
+  option delimiter "semi" | "comma" | "none" | null = null "default separator for legacy configurations"
+  option multiline member_separator_options = {} "multiline member separators"
+  option singleline member_separator_options = {} "single-line member separators"
+  option overrides { interface?: member_separator_config; typeLiteral?: member_separator_config } = {} "separators by declaration kind"
+  option multilineDetection "brackets" | "last-member" = "brackets" "multiline classification"
+  let member_delimiter_owner first(member_delimiter_sites)
+  when member_delimiter_owner != null
+  let member_single member_delimiter_owner.single_line || multilineDetection == "last-member" && member_delimiter_owner.last_same_line
+  let member_override if member_delimiter_owner.kind == "interface" then overrides.interface else overrides.typeLiteral
+  let member_base if member_single then singleline else multiline
+  let member_policy if member_single then member_override.singleline else member_override.multiline
+  let member_delimiter default(member_policy.delimiter, default(member_base.delimiter, default(delimiter, "semi")))
+  let member_require_last default(member_policy.requireLast, default(member_base.requireLast, !member_single))
+  each member_site in member_delimiter_sites
+  when member_site.delimiter != (if member_site.last && !member_require_last then "none" else member_delimiter)
+  report at member_site.offset
+  warn if member_site.last && !member_require_last || member_delimiter == "none" then (if member_site.delimiter == "semi" then "Unexpected separator (;)." else "Unexpected separator (,).") else if member_delimiter == "semi" then "Expected a semicolon." else "Expected a comma."
+}
+
+drop rule spaced-comment*
+in ts_program rule spaced-comment {
+  option style "always" | "never" = "always" "spacing inside comment delimiters"
+  option exceptions string[] = [] "repeated sequences exempt from spacing"
+  option markers string[] = [] "comment prefix markers"
+  option line { exceptions?: string[]; markers?: string[] } = {} "line-comment options"
+  option block { exceptions?: string[]; markers?: string[]; balanced?: boolean } = {} "block-comment options"
+  let comment_policies map([
+    { kind: "line", markers: if line.markers != null then line.markers else markers, exceptions: if line.exceptions != null then line.exceptions else exceptions },
+    { kind: "block", markers: if block.markers != null then block.markers else markers, exceptions: if block.exceptions != null then block.exceptions else exceptions }
+  ], p => {
+    kind: p.kind,
+    markers: p.markers,
+    marker_pattern: "(?:" join(map(p.markers, m => re_escape(m)), "|") (if count(p.markers) > 0 then "|\\*)" else "\\*)"),
+    exception_pattern: if count(p.exceptions) == 0 then "\\s" else "(?:\\s|(?:" join(map(p.exceptions, e => "(?:" re_escape(e) ")+"), "|") ")(?:$|[\\n\\r\\u{{2028}}\\u{{2029}}]))",
+    has_exceptions: count(p.exceptions) > 0
+  })
+  each comment_site in map(map(map(comment_contents, c => {
+    site: c, policy: find(comment_policies, p => p.kind == c.kind)
+  }), c => {
+    site: c.site, policy: c.policy, marker: default(re_find(c.site.body, "^" c.policy.marker_pattern), "")
+  }), c => {
+    site: c.site, policy: c.policy, marker: c.marker,
+    identifier: if c.site.kind == "block" then "/*" else "//",
+    skip: c.site.body == "" || c.site.body == "*" || contains(c.policy.markers, c.site.body) || c.site.kind == "line" && re_test(c.site.body, /^\/\s*<(?:reference|amd-)/),
+    begin_bad: if style == "always" then !re_test(c.site.body, "^" c.policy.marker_pattern "?" c.policy.exception_pattern) else re_test(c.site.body, "^" c.policy.marker_pattern "?[ \\t]+"),
+    end_bad: c.site.kind == "block" && block.balanced == true && (if style == "always" then !re_test(c.site.body, c.policy.exception_pattern "$") else re_test(c.site.body, /[ \t]+$/))
+  })
+  when !comment_site.skip && (if comment_site.site.side == "begin" then comment_site.begin_bad else comment_site.end_bad)
+  report at comment_site.site.offset
+  warn if comment_site.site.side == "end" then (if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment.") else if style == "always" then (if comment_site.policy.has_exceptions then "Expected exception block, space or tab after '{comment_site.identifier}{comment_site.marker}' in comment." else "Expected space or tab after '{comment_site.identifier}{comment_site.marker}' in comment.") else if comment_site.marker != "" then "Unexpected space or tab after marker ({comment_site.marker}) in comment." else "Unexpected space or tab after '{comment_site.identifier}' in comment."
+}
+
+drop rule no-floating-decimal*
+in ts_number rule no-floating-decimal:leading {
+  when starts_with(text, ".")
+  warn "A leading decimal point can be confused with a dot."
+  fix as (if token_neighbours.before.gap == "" && re_test(token_neighbours.before.text, /[\w$]$/) then " 0" else "0") text
+}
+in ts_number rule no-floating-decimal:trailing {
+  when ends_with(text, ".")
+  warn "A trailing decimal point can be confused with a dot."
+  fix as text "0"
+}
+
+drop rule no-multiple-empty-lines*
+in ts_program rule no-multiple-empty-lines {
+  option max int(0..) = 2 "maximum consecutive blank lines"
+  option maxEOF int(0..) | null = null "maximum final blank lines"
+  option maxBOF int(0..) | null = null "maximum initial blank lines"
+  each blank_run in map(empty_line_runs, s => {
+    site: s,
+    limit: if s.kind == "bof" then default(maxBOF, max) else if s.kind == "eof" then default(maxEOF, max) else max
+  })
+  when blank_run.site.count > blank_run.limit
+  report at first(slice(blank_run.site.offsets, blank_run.limit))
+  warn if blank_run.site.kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_run.limit} allowed." else if blank_run.site.kind == "eof" then "Too many blank lines at the end of file. Max of {blank_run.limit} allowed." else "More than {blank_run.limit} blank {if blank_run.limit == 1 then 'line' else 'lines'} not allowed."
+}
+
+schema annotation_gap_options { before?: boolean; after?: boolean }
+drop rule type-annotation-spacing*
+in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_index_signature, ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type, ts_tuple_member, ts_mapped_type rule type-annotation-spacing {
+  option before boolean = false "space before annotation punctuation"
+  option after boolean = true "space after annotation punctuation"
+  option overrides { colon?: annotation_gap_options; variable?: annotation_gap_options | "ignore"; property?: annotation_gap_options | "ignore"; parameter?: annotation_gap_options | "ignore"; returnType?: annotation_gap_options | "ignore"; questionMark?: annotation_gap_options | "ignore" } = {} "annotation context policies"
+  let annotation_site annotation_spacing
+  when annotation_site != null
+  let annotation_policy if annotation_site.category == "variable" then overrides.variable else if annotation_site.category == "property" then overrides.property else if annotation_site.category == "parameter" then overrides.parameter else if annotation_site.category == "returnType" then overrides.returnType else overrides.colon
+  when annotation_policy != "ignore"
+  let annotation_colon_before default(overrides.colon.before, before)
+  let annotation_colon_after default(overrides.colon.after, after)
+  let annotation_optional annotation_site.optional && overrides.questionMark != "ignore"
+  let annotation_label if annotation_optional then annotation_site.label else ":"
+  let annotation_before if annotation_optional then default(overrides.questionMark.before, annotation_colon_before) else default(annotation_policy.before, annotation_colon_before)
+  let annotation_after default(annotation_policy.after, annotation_colon_after)
+  each annotation_gap in [
+    { gap: if annotation_optional then annotation_site.outer else annotation_site.before, desired: annotation_before, side: "before" },
+    { gap: annotation_site.after, desired: annotation_after, side: "after" },
+    { gap: annotation_site.inner, desired: default(overrides.questionMark.after, false), side: "between" }
+  ]
+  when annotation_gap.side != "between" || annotation_optional
+  when annotation_gap.gap != null && annotation_gap.gap.spaced != annotation_gap.desired
+  report at annotation_gap.gap.offset
+  warn if annotation_gap.side == "between" then (if annotation_gap.desired then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'.") else (if annotation_gap.desired then "Expected a space {annotation_gap.side} the '{annotation_label}'." else "Unexpected space {annotation_gap.side} the '{annotation_label}'.")
+}
+
+drop rule padded-blocks*
+in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks {
+  option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
+  option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
+  option switches "always" | "never" | "start" | "end" | null = null "switch padding"
+  option classes "always" | "never" | "start" | "end" | null = null "class padding"
+  option allowSingleLineBlocks boolean = false "allow single-line blocks"
+  let padding_kind first(block_padding_sites).kind
+  let padding_mode if style != null then style else if blocks == null && switches == null && classes == null then "always" else if padding_kind == "blocks" then blocks else if padding_kind == "switches" then switches else classes
+  each padding_site in filter(block_padding_sites, s => !(allowSingleLineBlocks && s.single_line) && padding_mode != null && s.padded != (padding_mode == "always" || padding_mode == "start" && s.side == "top" || padding_mode == "end" && s.side == "bottom"))
+  report at padding_site.offset
+  warn if padding_site.padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+}
+
+drop rule lines-between-class-members
+in ts_class rule lines-between-class-members {
+  option style "always" | "never" = "always" "blank lines between class members"
+  option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
+  option exceptAfterSingleLine boolean = false "skip after single-line members"
+  option exceptAfterOverload boolean = true "skip overload signatures"
+  let skip_overloads exceptAfterOverload && (count(enforce) == 0 && style == "always" || any(enforce, e => e.blankLine == "always" && e.prev != "field" && e.next != "field"))
+  each class_gap in map(filter(class_member_gaps, s => s.overloads_skipped == skip_overloads), s => {
+    site: s,
+    mode: if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == s.prev) && (e.next == "*" || e.next == s.next)).blankLine
+  })
+  when class_gap.mode == "never" && class_gap.site.padded || class_gap.mode == "always" && !class_gap.site.padded && !(exceptAfterSingleLine && class_gap.site.single_line)
+  report at class_gap.site.offset
+  warn if class_gap.site.padded then "Unexpected blank line between class members." else "Expected blank line between class members."
+}
+
+drop rule space-infix-ops
+in ts_binary, ts_logical, ts_assignment, ts_assignment_pattern, ts_conditional, ts_conditional_type, ts_declarator, ts_parameter, ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter, ts_union, ts_intersection rule space-infix-ops {
+  option int32Hint boolean = false "allow terminal |0 conversion"
+  option ignoreOperators string[] = [] "operators exempt from spacing"
+  option ignoreTypes boolean = false "skip union and intersection operators"
+  each infix_site in filter(infix_spacing_sites, s => !s.spaced && !(ignoreTypes && s.types) && !(int32Hint && s.int32_hint) && !contains(ignoreOperators, s.operator))
+  report at infix_site.offset
+  warn "Operator '{infix_site.operator}' must be spaced."
+}
+
+drop rule space-before-blocks*
+in ts_block, ts_switch, ts_class, ts_interface, ts_enum rule space-before-blocks {
+  option style "always" | "never" = "always" "spaces before blocks"
+  option functions "always" | "never" | "off" | null = null "function body policy"
+  option keywords "always" | "never" | "off" | null = null "statement body policy"
+  option classes "always" | "never" | "off" | null = null "class body policy"
+  option modules "always" | "never" | "off" | null = null "module body policy"
+  let block_gap block_prefix_spacing
+  when block_gap != null
+  let block_mode if block_gap.kind == "classes" then default(classes, style) else if block_gap.kind == "functions" then default(functions, style) else if block_gap.kind == "modules" then default(modules, style) else default(keywords, style)
+  when block_mode != "off" && block_gap.spaced != (block_mode == "always")
+  report at block_gap.offset
+  warn if block_gap.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
+}
+
+drop rule space-before-function-paren*
+in ts_function, ts_method, ts_arrow, ts_try rule space-before-function-paren {
+  option style "always" | "never" = "always" "spaces before function parameter lists"
+  option named "always" | "never" | "ignore" | null = null "named function policy"
+  option anonymous "always" | "never" | "ignore" | null = null "anonymous function policy"
+  option asyncArrow "always" | "never" | "ignore" | null = null "async arrow policy"
+  option catch "always" | "never" | "ignore" | null = null "catch policy"
+  let function_gap function_paren_spacing
+  when function_gap != null
+  let paren_mode if function_gap.kind == "named" then default(named, style) else if function_gap.kind == "anonymous" then default(anonymous, style) else if function_gap.kind == "asyncArrow" then default(asyncArrow, style) else default(catch, style)
+  when paren_mode != "ignore" && !(paren_mode == "always" && function_gap.generic_anonymous)
+  when function_gap.spaced != (paren_mode == "always")
+  report at if function_gap.spaced then function_gap.start else function_gap.end
+  warn if function_gap.spaced then "Unexpected space before function parentheses." else "Missing space before function parentheses."
+}
+
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
 drop rule comma-dangle*
 in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature rule comma-dangle {
@@ -213,20 +421,14 @@ in ts_tagged_template rule template-tag-spacing:missing {
   warn "Missing space between template tag and template literal."
 }
 
-# brace-style without single-line blocks: a function body written on one
-# line (`f(x => { y(); })`). The closing brace is reported where it is: the
-# fix puts it on its own line.
-in ts_function, ts_arrow, ts_method let owns_function_body true
-in ts_block let one_line_function_body parent.owns_function_body == true && count(body) > 0 && !contains(text, "\n")
-in ts_block rule brace-style:block-same-line {
-  when one_line_function_body
-  warn "Statement inside of curly braces should be on next line."
-}
-in ts_block rule brace-style:single-line-close {
-  when one_line_function_body
-  report change
-  fix as slice(text, 0, len(text) - 1) newline indent "}}"
-  warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
+drop rule brace-style*
+in ts_block, ts_static_block, ts_switch, ts_class rule brace-style {
+  option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
+  option allowSingleLine boolean = false "allow single-line block bodies"
+  each brace_site in brace_style_sites
+  when if brace_site.kind == "keyword" then brace_site.same_line != (style == "1tbs") else if brace_site.kind == "open" then (if style == "allman" then brace_site.same_line && !(allowSingleLine && brace_site.single_line) else !brace_site.same_line) else brace_site.same_line && !(allowSingleLine && brace_site.single_line)
+  report at brace_site.offset
+  warn if brace_site.kind == "keyword" then (if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block.") else if brace_site.kind == "open" then (if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement.") else if brace_site.kind == "body" then "Statement inside of curly braces should be on next line." else "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
 }
 
 # semi "always" on statements: each native statement owns its `;`
