@@ -5,4 +5,433 @@
 
 define {
 
+schema restriction_import_path string | {
+  name: string
+  message?: string
+  importNames?: string[]
+  allowImportNames?: string[]
+  allowTypeImports: boolean = false
+}
+schema restriction_import_pattern string | {
+  group?: string[]
+  regex?: regex
+  message?: string
+  caseSensitive: boolean = false
+  importNames?: string[]
+  allowImportNames?: string[]
+  importNamePattern?: regex
+  allowImportNamePattern?: regex
+  allowTypeImports: boolean = false
+}
+schema restriction_import_options restriction_import_path | {
+  paths: restriction_import_path[] = []
+  patterns: restriction_import_pattern[] = []
+}
+macro restriction_import_paths default(first(options).paths, options)
+macro restriction_import_patterns (if type_of(first(first(options).patterns)) == "str" then [{group: first(options).patterns}] else default(first(options).patterns, []))
+macro restriction_import_list(xs) (if len(xs) < 2 then join(map(xs, x => "'" x "'"), "") else if len(xs) == 2 then join(map(xs, x => "'" x "'"), " and ") else join(map(slice(xs, 0, len(xs) - 1), x => "'" x "'"), ", ") ", and '" last(xs) "'")
+macro restriction_import_plural(xs) (if len(xs) == 1 then "is" else "are")
+macro restriction_import_custom(entry) (if entry.message != null && entry.message != "" then " " entry.message else "")
+macro restriction_import_glob(path, glob, sensitive) (!starts_with(glob, "#") && re_test(path, (if sensitive then "" else "(?i)") (if contains(trim_start(glob, "!"), "/") then "^" else "(?:^|/)") replace(replace(replace(re_escape(replace(replace(trim_start(glob, "!/"), "\\#", "#"), "\\!", "!")), "\\*\\*/", "(?:.*/)?"), "\\*", "[^/]*"), "\\?", "[^/]") "(?:/|$)"))
+macro restriction_import_group(path, entry) find_last(default(entry.group, []), import_glob_pattern => restriction_import_glob(path, import_glob_pattern, entry.caseSensitive))
+macro restriction_import_group_blocked(path, entry) ((restriction_import_group(path, entry)) != null && !starts_with(restriction_import_group(path, entry), "!"))
+macro restriction_import_pattern_matches(entry) (if entry.regex != null then re_test(info.source, (if entry.caseSensitive then "" else "(?i)") entry.regex) else restriction_import_group_blocked(info.source, entry) || any(info.parents, p => restriction_import_group_blocked(p, entry)))
+in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
+  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  let info restriction_import
+  each entry in filter(restriction_import_paths, e => (if type_of(e) == "str" then e else e.name) == info.source && e.importNames == null && e.allowImportNames == null && !(e.allowTypeImports && info.all_type))
+  warn "'{info.source}' import is restricted from being used." restriction_import_custom(entry)
+}
+in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:names {
+  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  let info restriction_import
+  when info.item && info != null
+  each entry in filter(restriction_import_paths, e => e.name == info.source && !(e.allowTypeImports && (info.type || info.all_type)) && (e.importNames != null && (info.name == "*" || contains(e.importNames, info.name)) || e.allowImportNames != null && !contains(e.allowImportNames, info.name)))
+  report at info.offset
+  warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " restriction_import_list(entry.allowImportNames) " from '{info.source}' " restriction_import_plural(entry.allowImportNames) " allowed." else restriction_import_list(entry.importNames) " from '{info.source}' " restriction_import_plural(entry.importNames) " restricted.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " restriction_import_list(entry.allowImportNames) " " restriction_import_plural(entry.allowImportNames) " allowed." else ".")) restriction_import_custom(entry)
+}
+in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
+  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  let info restriction_import
+  when info != null
+  each entry in filter(restriction_import_patterns, e => restriction_import_pattern_matches(e) && !(e.allowTypeImports && info.all_type) && e.importNames == null && e.allowImportNames == null && e.importNamePattern == null && e.allowImportNamePattern == null)
+  warn "'{info.source}' import is restricted from being used by a pattern." restriction_import_custom(entry)
+}
+in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:pattern-names {
+  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  let info restriction_import
+  when info.item && info != null
+  each entry in filter(restriction_import_patterns, e => restriction_import_pattern_matches(e) && !(e.allowTypeImports && (info.type || info.all_type)) && (e.importNames != null && (info.name == "*" || contains(e.importNames, info.name)) || e.importNamePattern != null && (info.name == "*" || re_test(info.name, e.importNamePattern)) || e.allowImportNames != null && !contains(e.allowImportNames, info.name) || e.allowImportNamePattern != null && (info.name == "*" || !re_test(info.name, e.allowImportNamePattern))))
+  report at info.offset
+  warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " restriction_import_list(entry.allowImportNames) " from '{info.source}' " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else restriction_import_list(entry.importNames) " from '{info.source}' " restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " restriction_import_list(entry.allowImportNames) " " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) restriction_import_custom(entry)
+}
+
+in ts_number, ts_bigint rule no-magic-numbers {
+  option detectObjects boolean = false "check object property numbers"
+  option enforceConst boolean = false "require const for named number declarations"
+  option ignore (number | string)[] = [] "numbers and bigint strings to allow"
+  option ignoreArrayIndexes boolean = false "allow valid array indices"
+  option ignoreDefaultValues boolean = false "allow default values"
+  option ignoreClassFieldInitialValues boolean = false "allow class field initialisers"
+  option ignoreEnums boolean = false "allow enum members"
+  option ignoreNumericLiteralTypes boolean = false "allow numeric type aliases"
+  option ignoreReadonlyClassProperties boolean = false "allow readonly class properties"
+  option ignoreTypeIndexes boolean = false "allow numeric type indices"
+  let info restriction_number
+  let typescript_specific re_test(file, /\.[cm]?tsx?$/) && (info.enum || info.literal_type || info.type_index || info.readonly)
+  when !any(ignore, v => type_of(v) == type_of(info.value) && v == info.value)
+  when !(ignoreArrayIndexes && info.array_index || ignoreDefaultValues && info.default || ignoreClassFieldInitialValues && info.class_field || ignoreEnums && info.enum || ignoreNumericLiteralTypes && info.literal_type || ignoreReadonlyClassProperties && info.readonly || ignoreTypeIndexes && info.type_index || info.radix || info.jsx)
+  when if info.declaration then enforceConst && !info.constant else detectObjects || !info.object
+  report at if typescript_specific then info.ts_offset else info.offset
+  warn if info.declaration then "Number constants declarations must use 'const'." else "No magic number: {if typescript_specific then info.ts_raw else info.raw}."
+}
+
+schema restriction_import_syntax "none" | "all" | "multiple" | "single"
+in ts_import rule sort-imports {
+  option ignoreCase boolean = false "ignore letter case"
+  option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
+  option ignoreDeclarationSort boolean = false "ignore declaration order"
+  option ignoreMemberSort boolean = false "ignore named-member order"
+  option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
+  let info restriction_import_order
+  let current_index len(first(split(join(memberSyntaxSortOrder, ","), info.syntax)))
+  let previous_index len(first(split(join(memberSyntaxSortOrder, ","), info.previous_syntax)))
+  when !ignoreDeclarationSort && info.previous_syntax != null && !(allowSeparatedGroups && info.separated)
+  when info.syntax != info.previous_syntax && current_index < previous_index || info.syntax == info.previous_syntax && (if ignoreCase then info.insensitive else info.sensitive)
+  warn if info.syntax != info.previous_syntax then "Expected '{info.syntax}' syntax before '{info.previous_syntax}' syntax." else "Imports should be sorted alphabetically."
+}
+in ts_import rule sort-imports:members {
+  option ignoreCase boolean = false "ignore letter case"
+  option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
+  option ignoreDeclarationSort boolean = false "ignore declaration order"
+  option ignoreMemberSort boolean = false "ignore named-member order"
+  option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
+  let info restriction_import_order
+  when !ignoreMemberSort
+  each hit in filter(info.members, m => m.ignoreCase == ignoreCase)
+  report at hit.offset
+  warn "Member '{hit.name}' of the import declaration should be sorted alphabetically."
+}
+in ts_import, ts_export rule no-duplicate-imports {
+  option includeExports boolean = false "also check re-exports"
+  option allowSeparateTypeImports boolean = false "allow separate type and value imports"
+  each hit in filter(restriction_duplicate_imports, h => h.allowSeparateTypeImports == allowSeparateTypeImports && (includeExports || !h.export && !h.previous_export))
+  warn "'{hit.module}' {if hit.export then 'export' else 'import'} is duplicated{if hit.export == hit.previous_export then '' else if hit.export then ' as import' else ' as export'}."
+}
+
+in ts_variable_declaration rule sort-vars {
+  option ignoreCase boolean = false "ignore letter case"
+  each hit in filter(restriction_sorted_variables, h => h.ignoreCase == ignoreCase)
+  report at hit.offset
+  warn "Variables within the same declaration block should be sorted alphabetically."
+}
+in ts_object rule sort-keys {
+  option mode "asc" | "desc" = "asc" "key order"
+  option caseSensitive boolean = true "compare letter case"
+  option natural boolean = false "compare digit sequences numerically"
+  option minKeys int(2..) = 2 "minimum object properties"
+  option allowLineSeparatedGroups boolean = false "reset sorting after blank lines"
+  option ignoreComputedKeys boolean = false "reset sorting at computed keys"
+  each hit in filter(restriction_sorted_keys, h => h.mode == mode && h.caseSensitive == caseSensitive && h.natural == natural && h.count >= minKeys && h.ignoreComputedKeys == ignoreComputedKeys && h.allowLineSeparatedGroups == allowLineSeparatedGroups)
+  report at hit.offset
+  warn "Expected object keys to be in {if natural then 'natural ' else ''}{if caseSensitive then '' else 'insensitive '}{mode}ending order. '{hit.name}' should be before '{hit.previous}'."
+}
+
+in ts_conditional rule no-ternary warn "Ternary operator used."
+
+in ts_conditional let restriction_ternary true
+in ts_parenthesized let restriction_ternary expression.restriction_ternary == true
+in ts_conditional rule no-nested-ternary {
+  when consequent.restriction_ternary == true || alternate.restriction_ternary == true
+  warn "Do not nest ternary expressions."
+}
+in ts_continue rule no-continue warn "Unexpected use of continue statement."
+in ts_unary rule no-void {
+  option allowAsStatement boolean = false "allow void as an expression statement"
+  when operator == "void" && !(allowAsStatement && restriction_statement)
+  warn "Expected 'undefined' and instead saw 'void'."
+}
+in ts_update rule no-plusplus {
+  option allowForLoopAfterthoughts boolean = false "allow updates in for loop afterthoughts"
+  when !(allowForLoopAfterthoughts && restriction_afterthought)
+  warn "Unary operator '{operator}' used."
+}
+in ts_binary, ts_assignment rule no-bitwise {
+  option allow ("^" | "|" | "&" | "<<" | ">>" | ">>>" | "^=" | "|=" | "&=" | "<<=" | ">>=" | ">>>=" | "~")[] = [] "bitwise operators to allow"
+  option int32Hint boolean = false "allow bitwise or with zero"
+  let value right.literal_value
+  when contains(["^", "|", "&", "<<", ">>", ">>>", "^=", "|=", "&=", "<<=", ">>=", ">>>=", "~"], operator)
+  when !contains(allow, operator) && !(int32Hint && operator == "|" && value.value == "0")
+  warn "Unexpected use of '{operator}'."
+}
+in ts_unary rule no-bitwise:unary {
+  option allow ("^" | "|" | "&" | "<<" | ">>" | ">>>" | "^=" | "|=" | "&=" | "<<=" | ">>=" | ">>>=" | "~")[] = [] "bitwise operators to allow"
+  option int32Hint boolean = false "allow bitwise or with zero"
+  when operator == "~" && !contains(allow, operator)
+  warn "Unexpected use of '{operator}'."
+}
+in ts_identifier rule no-undefined {
+  when text == "undefined" && (declaration_kind != null || resolved == "local" || global == "readonly" || global == "writable")
+  warn "Unexpected use of undefined."
+}
+in ts_call rule no-alert {
+  let name restriction_alert
+  when name != null
+  warn "Unexpected {name}."
+}
+in ts_labeled rule no-labels {
+  option allowLoop boolean = false "allow labels on loops"
+  option allowSwitch boolean = false "allow labels on switches"
+  when !(allowLoop && restriction_label_kind == "loop" || allowSwitch && restriction_label_kind == "switch")
+  warn "Unexpected labeled statement."
+}
+in ts_break rule no-labels:break {
+  option allowLoop boolean = false "allow labels on loops"
+  option allowSwitch boolean = false "allow labels on switches"
+  when label != null
+  when !(allowLoop && restriction_label_kind == "loop" || allowSwitch && restriction_label_kind == "switch")
+  warn "Unexpected label in break statement."
+}
+in ts_continue rule no-labels:continue {
+  option allowLoop boolean = false "allow labels on loops"
+  option allowSwitch boolean = false "allow labels on switches"
+  when label != null
+  when !(allowLoop && restriction_label_kind == "loop" || allowSwitch && restriction_label_kind == "switch")
+  warn "Unexpected label in continue statement."
+}
+
+macro restriction_function_name (upper(slice(default(function_name, "function"), 0, 1)) slice(default(function_name, "function"), 1))
+group restriction_parameter_function ts_function, ts_arrow, ts_method, ts_function_type
+in restriction_parameter_function rule max-params {
+  option max int(0..) = 3 "maximum parameters"
+  option maximum int(0..) | null = null "legacy maximum parameters"
+  option countVoidThis boolean = false "count a void this parameter"
+  option countThis "never" | "except-void" | "always" = "except-void" "whether to count this parameters"
+  let limits restriction_limits
+  let amount limits.params - (if limits.this && (countThis == "never" || countThis == "except-void" && !countVoidThis && limits.void_this) then 1 else 0)
+  let limit default(maximum, max)
+  when amount > limit
+  report at default(function_head, offset)
+  warn "{restriction_function_name} has too many parameters ({amount}). Maximum allowed is {limit}."
+}
+in ts_function_like rule max-statements {
+  option max int(0..) = 10 "maximum statements"
+  option maximum int(0..) | null = null "legacy maximum statements"
+  option ignoreTopLevelFunctions boolean = false "ignore a sole top-level function"
+  let limits restriction_limits
+  let limit default(maximum, max)
+  when limits.statements > limit
+  when !(ignoreTopLevelFunctions && limits.function_depth == 0 && limits.top_functions == 1)
+  report at function_head
+  warn "{restriction_function_name} has too many statements ({limits.statements}). Maximum allowed is {limit}."
+}
+in ts_function_like rule complexity {
+  option max int(0..) = 20 "maximum cyclomatic complexity"
+  option maximum int(0..) | null = null "legacy maximum complexity"
+  option variant "classic" | "modified" = "classic" "how switches contribute"
+  let limits restriction_limits
+  let amount if variant == "classic" then limits.classic else limits.modified
+  let limit default(maximum, max)
+  when amount > limit
+  report at function_head
+  warn "{restriction_function_name} has a complexity of {amount}. Maximum allowed is {limit}."
+}
+in ts_static_block, ts_class_property.init rule complexity:implicit {
+  option max int(0..) = 20 "maximum cyclomatic complexity"
+  option maximum int(0..) | null = null "legacy maximum complexity"
+  option variant "classic" | "modified" = "classic" "how switches contribute"
+  let limits restriction_limits
+  let amount if layer is [ts_function, ts_arrow] then 1 else if variant == "classic" then limits.classic else limits.modified
+  let limit default(maximum, max)
+  when amount > limit
+  warn "{if layer == 'ts_static_block' then 'Class static block' else 'Class field initializer'} has a complexity of {amount}. Maximum allowed is {limit}."
+}
+in ts_if, ts_switch, ts_try, ts_do_while, ts_while, ts_with, ts_for, ts_for_in, ts_for_of rule max-depth {
+  option max int(0..) = 4 "maximum control-flow nesting"
+  option maximum int(0..) | null = null "legacy maximum nesting"
+  let limit default(maximum, max)
+  when !(layer == "ts_if" && parent == "ts_if" && field == "alternate")
+  when restriction_depth > limit
+  warn "Blocks are nested too deeply ({restriction_depth}). Maximum allowed is {limit}."
+}
+in ts_function, ts_arrow rule max-nested-callbacks {
+  option max int(0..) = 10 "maximum callback nesting"
+  option maximum int(0..) | null = null "legacy maximum callback nesting"
+  option checkConstructorCallCallbacks boolean = false "count callbacks passed to constructors"
+  let limits restriction_limits
+  let amount if checkConstructorCallCallbacks then limits.constructor_callbacks else limits.callbacks
+  let callback if checkConstructorCallCallbacks then limits.constructor_callback else limits.callback
+  let limit default(maximum, max)
+  when callback && amount > limit
+  report at function_head
+  warn "Too many nested callbacks ({amount}). Maximum allowed is {limit}."
+}
+in ts_program rule max-classes-per-file {
+  option max int(1..) = 1 "maximum classes"
+  option ignoreExpressions boolean = false "count only class declarations"
+  let limits restriction_limits
+  let amount if ignoreExpressions then limits.class_declarations else limits.classes
+  when amount > max
+  report at limits.offset
+  warn "File has too many classes ({amount}). Maximum allowed is {max}."
+}
+in ts_program rule max-lines {
+  option max int(0..) = 300 "maximum lines"
+  option skipComments boolean = false "exclude comment-only lines"
+  option skipBlankLines boolean = false "exclude blank lines"
+  let lines filter(restriction_lines, l => !(skipComments && l.comment || skipBlankLines && l.blank))
+  when len(lines) > max
+  report at first(slice(lines, max)).offset
+  warn "File has too many lines ({len(lines)}). Maximum allowed is {max}."
+}
+in ts_function_like rule max-lines-per-function {
+  option max int(0..) = 50 "maximum function lines"
+  option skipComments boolean = false "exclude comment-only lines"
+  option skipBlankLines boolean = false "exclude blank lines"
+  option IIFEs boolean = false "also check immediately invoked functions"
+  let limits restriction_limits
+  let lines filter(restriction_lines, l => !(skipComments && l.comment || skipBlankLines && l.blank))
+  when IIFEs || !limits.iife
+  when len(lines) > max
+  report at function_head
+  warn "{restriction_function_name} has too many lines ({len(lines)}). Maximum allowed is {max}."
+}
+
+macro restriction_directive(x) re_test(x, /^\s*(?:eslint(?:[- ]|$)|globals?\s|exported\s)/)
+in ts_program rule no-inline-comments {
+  option ignorePattern regex = "" "comments to ignore"
+  each comment in filter(restriction_comments, c => c.inline && !restriction_directive(c.text) && !(ignorePattern != "" && re_test(c.text, ignorePattern)))
+  report at comment.offset
+  warn "Unexpected comment inline with code."
+}
+in js_line_comment, js_block_comment rule no-warning-comments {
+  option terms string[] = ["todo", "fixme", "xxx"] "warning terms"
+  option location "start" | "anywhere" = "start" "where warning terms may occur"
+  option decoration string(1..1)[] = [] "characters ignored before a starting warning"
+  let body re_replace(re_replace(text, /^\/[\/*]/, ""), /\*\/$/, "")
+  let compact re_replace(trim(body), /\s+/, " ")
+  let short trim(default(re_find(compact, /^.{0,40}(?:\s|$)/), ""))
+  let display short (if len(compact) > len(short) then "..." else "")
+  when !(restriction_directive(body) && re_test(body, /\bno-warning-comments\b/))
+  each term in filter(terms, term => re_test(body, "(?i)" (if location == "start" then "^[\\s" re_escape(join(decoration, "")) "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else "")))
+  warn "Unexpected '{term}' comment: '{display}'."
+}
+schema restriction_comment_case {
+  ignorePattern: regex = ""
+  ignoreInlineComments: boolean = false
+  ignoreConsecutiveComments: boolean = false
+}
+in ts_program rule capitalized-comments {
+  option mode "always" | "never" = "always" "required initial letter case"
+  option ignorePattern regex = "" "starting comment text to ignore"
+  option ignoreInlineComments boolean = false "ignore comments surrounded by code"
+  option ignoreConsecutiveComments boolean = false "ignore comments following comments"
+  option line restriction_comment_case | null = null "line-comment overrides"
+  option block restriction_comment_case | null = null "block-comment overrides"
+  let line_options default(line, {ignorePattern: ignorePattern, ignoreInlineComments: ignoreInlineComments, ignoreConsecutiveComments: ignoreConsecutiveComments})
+  let block_options default(block, {ignorePattern: ignorePattern, ignoreInlineComments: ignoreInlineComments, ignoreConsecutiveComments: ignoreConsecutiveComments})
+  each comment in filter(restriction_comments, c => (if mode == "always" then c.lowercase else c.uppercase)
+    && !re_test(c.text, /^\s*(?:eslint|jshint\s+|jslint\s+|istanbul\s+|globals?\s+|exported\s+|jscs)/)
+    && !re_test(c.clean, /^\s*[^:/?#\s]+:\/\/[^?#]/)
+    && !((if c.block then block_options.ignoreInlineComments else line_options.ignoreInlineComments) && c.surrounded)
+    && !((if c.block then block_options.ignoreConsecutiveComments else line_options.ignoreConsecutiveComments) && c.consecutive)
+    && !((if c.block then block_options.ignorePattern else line_options.ignorePattern) != "" && re_test(c.clean, "^\\s*(?:" (if c.block then block_options.ignorePattern else line_options.ignorePattern) ")")))
+  report at comment.offset
+  warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
+}
+
+in ts_identifier, ts_private_name rule id-denylist {
+  option options string[] = [] "restricted identifiers"
+  let info restriction_name
+  when info.deny && contains(options, info.name)
+  warn "Identifier '{text}' is restricted."
+}
+in ts_identifier, ts_private_name rule id-length {
+  option min int = 2 "minimum identifier length"
+  option max int | null = null "maximum identifier length"
+  option properties "always" | "never" = "always" "check author-defined properties"
+  option exceptions string[] = [] "names exempt from length limits"
+  option exceptionPatterns regex[] = [] "name patterns exempt from length limits"
+  let info restriction_name
+  let amount graphemes(info.name)
+  when info.length && !(properties == "never" && info.length_property)
+  when !contains(exceptions, info.name) && !any(exceptionPatterns, p => re_test(info.name, p))
+  when amount < min || max != null && amount > max
+  warn if amount < min then "Identifier name '{text}' is too short (< {min})." else "Identifier name '{text}' is too long (> {max})."
+}
+in ts_identifier, ts_private_name rule id-match {
+  option mode regex = "^.+$" "required identifier pattern"
+  option properties boolean = false "check properties"
+  option classFields boolean = false "check class fields"
+  option onlyDeclarations boolean = false "check only declarations"
+  option ignoreDestructuring boolean = false "ignore existing destructured names"
+  let info restriction_name
+  when any(info.checks, c => c.properties == properties && c.classFields == classFields && c.onlyDeclarations == onlyDeclarations && c.ignoreDestructuring == ignoreDestructuring)
+  when !re_test(info.name, mode)
+  warn "Identifier '{text}' does not match the pattern '{mode}'."
+}
+schema restriction_global string | {name: string; message?: string}
+schema restriction_globals {
+  globals: restriction_global[]
+  checkGlobalObject: boolean = false
+  globalObjects: string[] = []
+}
+in ts_identifier rule no-restricted-globals {
+  option options (restriction_global | restriction_globals)[] = [] "restricted globals and global-object settings"
+  let config first(options)
+  let globals default(config.globals, options)
+  let matched find_last(globals, g => (if type_of(g) == "str" then g else g.name) == text)
+  when resolved == "global" && access != "type" && matched != null
+  when !(parent is [ts_type_reference, ts_qualified_name, ts_type_query])
+  warn "Unexpected use of '{text}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
+}
+in ts_member, ts_index rule no-restricted-globals:member {
+  option options (restriction_global | restriction_globals)[] = [] "restricted globals and global-object settings"
+  let config first(options)
+  let info restriction_global_member
+  let matched find_last(config.globals, g => (if type_of(g) == "str" then g else g.name) == info.property)
+  when config.checkGlobalObject && info != null && contains(["globalThis", "self", "window"] default(config.globalObjects, []), info.object) && matched != null
+  report at info.offset
+  warn "Unexpected use of '{info.property}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
+}
+schema restriction_property {
+  object?: string
+  property?: string
+  allowObjects?: string[]
+  allowProperties?: string[]
+  message?: string
+}
+macro restriction_property_match(c) default(find_last(options, o => o.object != null && o.object == c.object && (o.property == c.property || o.property == null) && !contains(default(o.allowProperties, []), c.property)), find_last(options, o => o.object == null && o.property == c.property && !contains(default(o.allowObjects, []), c.object)))
+in ts_member, ts_index, ts_object_pattern, ts_object rule no-restricted-properties {
+  option options restriction_property[] = [] "restricted object properties"
+  when layer != "ts_object" || write_site != null
+  each hit in map(filter(restriction_properties, c => restriction_property_match(c) != null), c => {
+    offset: c.offset,
+    object: c.object,
+    property: c.property,
+    objectRestriction: (restriction_property_match(c)).object != null,
+    message: (restriction_property_match(c)).message,
+    allowProperties: (restriction_property_match(c)).allowProperties,
+    allowObjects: (restriction_property_match(c)).allowObjects
+  })
+  report at hit.offset
+  warn (if hit.objectRestriction then "'{hit.object}.{hit.property}' is restricted from being used." (if hit.allowProperties != null then " Only these properties are allowed: {join(hit.allowProperties, ', ')}." else "") else "'{hit.property}' is restricted from being used." (if hit.allowObjects != null then " Property '{hit.property}' is only allowed on these objects: {join(hit.allowObjects, ', ')}." else "")) (if hit.message != null && hit.message != "" then " " hit.message else "")
+}
+schema restriction_default_exports {
+  direct: boolean = false
+  named: boolean = false
+  defaultFrom: boolean = false
+  namedFrom: boolean = false
+  namespaceFrom: boolean = false
+}
+macro restriction_default_export(kind) (if kind == "direct" then restrictDefaultExports.direct else if kind == "named" then restrictDefaultExports.named else if kind == "defaultFrom" then restrictDefaultExports.defaultFrom else if kind == "namedFrom" then restrictDefaultExports.namedFrom else restrictDefaultExports.namespaceFrom)
+in ts_export rule no-restricted-exports {
+  option restrictedNamedExports string[] = [] "restricted exported names"
+  option restrictedNamedExportsPattern regex = "" "restricted exported-name pattern"
+  option restrictDefaultExports restriction_default_exports = {} "restricted default-export forms"
+  each exported in filter(restriction_exports, e => e.kind != "direct" && contains(restrictedNamedExports, e.name) || e.name != "default" && restrictedNamedExportsPattern != "" && re_test(e.name, restrictedNamedExportsPattern) || e.name == "default" && restriction_default_export(e.kind))
+  report at exported.offset
+  warn if exported.kind != "direct" && (contains(restrictedNamedExports, exported.name) || exported.name != "default" && restrictedNamedExportsPattern != "" && re_test(exported.name, restrictedNamedExportsPattern)) then "'{exported.name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
+}
+
 }
