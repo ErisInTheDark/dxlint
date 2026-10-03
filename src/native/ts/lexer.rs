@@ -55,6 +55,12 @@ fn ident_part(b: u8) -> bool {
     ident_start(b) || b.is_ascii_digit()
 }
 
+/// Non-ASCII characters that are whitespace or line breaks to JavaScript,
+/// never part of a name (`f ()` is `f`, a line break, `()`).
+fn js_space(c: char) -> bool {
+    matches!(c, '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
 impl<'s> Lexer<'s> {
     pub fn new(src: &'s str) -> Self {
         let mut lx = Lexer { src, pos: 0, broken: None };
@@ -96,16 +102,13 @@ impl<'s> Lexer<'s> {
                     }
                 }
                 // Unicode spaces and line separators (NBSP, BOM, U+2028...).
-                0xc2 if b.get(self.pos + 1) == Some(&0xa0) => self.pos += 2,
-                0xef if b[self.pos..].starts_with(&[0xef, 0xbb, 0xbf]) => self.pos += 3,
-                0xe2 if b[self.pos..].starts_with(&[0xe2, 0x80]) && matches!(b.get(self.pos + 2), Some(0xa8 | 0xa9)) => {
-                    nl = true;
-                    self.pos += 3;
-                }
-                0xe2 if b[self.pos..].starts_with(&[0xe2, 0x80]) && matches!(b.get(self.pos + 2), Some(0x80..=0x8a | 0xaf)) => {
-                    self.pos += 3
-                }
-                0xe3 if b[self.pos..].starts_with(&[0xe3, 0x80, 0x80]) => self.pos += 3,
+                0x80.. => match self.src[self.pos..].chars().next() {
+                    Some(c) if js_space(c) => {
+                        nl |= matches!(c, '\u{2028}' | '\u{2029}');
+                        self.pos += c.len_utf8();
+                    }
+                    _ => break,
+                },
                 _ => break,
             }
         }
@@ -122,8 +125,14 @@ impl<'s> Lexer<'s> {
             let c = b[start];
             if ident_start(c) {
                 while self.pos < b.len() && ident_part(b[self.pos]) {
+                    let ch = if b[self.pos] >= 0x80 { self.src[self.pos..].chars().next() } else { None };
+                    if ch.is_some_and(js_space) {
+                        break;
+                    }
                     // `A` and `\u{1F600}` escapes inside identifiers.
-                    self.pos += if b[self.pos] == b'\\' && b.get(self.pos + 2) == Some(&b'{') {
+                    self.pos += if let Some(ch) = ch {
+                        ch.len_utf8()
+                    } else if b[self.pos] == b'\\' && b.get(self.pos + 2) == Some(&b'{') {
                         memchr::memchr(b'}', &b[self.pos..]).map_or(2, |n| n + 1)
                     } else if b[self.pos] == b'\\' {
                         2
@@ -216,7 +225,8 @@ impl<'s> Lexer<'s> {
         self.pos += 1;
         while self.pos < b.len() {
             match b[self.pos] {
-                b'\\' => self.pos += 2,
+                // A line continuation may end in `\r\n`.
+                b'\\' => self.pos += if b[self.pos + 1..].starts_with(b"\r\n") { 3 } else { 2 },
                 c if c == quote => {
                     self.pos += 1;
                     return Tok::Str;
@@ -305,5 +315,34 @@ impl<'s> Lexer<'s> {
         self.broken.get_or_insert(slash.start);
         self.pos = self.pos.min(b.len());
         Token { tok: Tok::Regex, start: slash.start, end: self.pos as u32, nl: slash.nl }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unicode_spaces_end_names_and_line_separators_break_lines() {
+        let src = "f\u{2028}()\u{202f}ünï\u{1680}x";
+        let mut lx = Lexer::new(src);
+        let mut toks = Vec::new();
+        loop {
+            let t = lx.next_token();
+            if t.tok == Tok::Eof {
+                break;
+            }
+            toks.push((&src[t.start as usize..t.end as usize], t.nl));
+        }
+        assert_eq!(toks, vec![("f", false), ("(", true), (")", false), ("ünï", false), ("x", false)]);
+    }
+
+    #[test]
+    fn strings_continue_over_crlf() {
+        let src = "'a\\\r\nb' x";
+        let mut lx = Lexer::new(src);
+        let t = lx.next_token();
+        assert_eq!((t.tok, &src[t.start as usize..t.end as usize]), (Tok::Str, "'a\\\r\nb'"));
+        assert!(lx.broken.is_none());
     }
 }

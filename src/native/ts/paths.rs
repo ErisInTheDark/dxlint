@@ -28,6 +28,9 @@ pub trait Domain {
     /// children first. Loops run until their state settles, so a node can
     /// be stepped more than once: the last time has its final state.
     fn step(&mut self, _s: &Syntax, _node: u32, _state: &mut Self::S) {}
+    /// Before an expression's children run (`x += await y` reads `x`
+    /// before the `await`, though `step` sees the target after the value).
+    fn before_expr(&mut self, _s: &Syntax, _node: u32, _state: &mut Self::S) {}
     /// Before a statement (or `case`) runs; `None` when no path reaches it.
     fn enter(&mut self, _s: &Syntax, _node: u32, _state: Option<&Self::S>) {}
 }
@@ -510,6 +513,7 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
             }
         }
         let mut st = st;
+        self.d.before_expr(s, node, &mut st);
         match kind {
             // Separate code paths (or no code at all).
             K::Function | K::Arrow => {}

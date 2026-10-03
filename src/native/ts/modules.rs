@@ -50,7 +50,16 @@ struct Config {
     /// Directories of referenced projects (`references`), whose
     /// declarations are part of this program.
     references: Vec<PathBuf>,
+    /// Boolean `compilerOptions` (`strict`, `noImplicitThis`, ...), the
+    /// nearest `extends` level winning.
+    flags: HashMap<String, bool>,
 }
+
+/// Options `strict` turns on unless they are set themselves.
+const STRICT_FAMILY: &[&str] = &[
+    "alwaysStrict", "noImplicitAny", "noImplicitThis", "strictBindCallApply", "strictBuiltinIteratorReturn",
+    "strictFunctionTypes", "strictNullChecks", "strictPropertyInitialization", "useUnknownInCatchVariables",
+];
 
 /// Everything visible without an import, for one tsconfig.
 #[derive(Default)]
@@ -420,6 +429,15 @@ impl Project {
         cached.get()
     }
 
+    /// A boolean compiler option of the tsconfig governing `file`: its own
+    /// setting, else `strict`'s for the options `strict` implies, else off.
+    pub fn strict_option(&self, file: FileId, name: &str) -> bool {
+        let path = self.path(file);
+        let Some(config) = path.parent().and_then(|d| self.config_for(d)) else { return false };
+        let flag = |n: &str| config.flags.get(n).copied();
+        flag(name).or_else(|| STRICT_FAMILY.contains(&name).then(|| flag("strict")).flatten()).unwrap_or(false)
+    }
+
     /// The global scope of the tsconfig governing `file`.
     pub fn globals(&self, file: FileId) -> Arc<Globals> {
         let path = self.path(file);
@@ -647,6 +665,11 @@ fn load_config(file: &Path) -> Option<Config> {
             }
         }
         if let Some(o) = json.get("compilerOptions") {
+            for (name, value) in o.as_object().into_iter().flatten() {
+                if let Some(on) = value.as_bool() {
+                    config.flags.entry(name.clone()).or_insert(on);
+                }
+            }
             if !have_paths {
                 if let Some(paths) = o.get("paths").and_then(|p| p.as_object()) {
                     have_paths = true;

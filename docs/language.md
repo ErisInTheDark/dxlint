@@ -376,6 +376,7 @@ so nested rules compose.
 | `name` | a field of the node, an option, a `let`, or a variable |
 | `option.key`, `x.key`, `f(...).key` | a record's value for `key` (`null` when missing) |
 | `map(xs, x => ...)` | a lambda, for `map`, `filter`, `find`, `find_last`, `all` and `any` |
+| `reduce(xs, init, (state, x) => ...)` | folds a list in order: each step sees the state the previous one gave |
 | `matcher` / `matcher.field` | the closest enclosing node of `matcher`, or its field |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
@@ -436,9 +437,11 @@ list. `null`, `false`, `0`, `""`, `[]` and `{}` are falsy.
 
 **Lambdas** walk lists, usually lists of records from an option: `map(xs, x
 => value)`, `filter(xs, x => test)`, `find(xs, x => test)` (first match or
-`null`), `find_last`, `all(xs, x => test)` and `any(xs, x => test)`. `keys`,
-`values` and `len` read records. A lambda sees everything the expression
-around it sees, plus its parameter:
+`null`), `find_last`, `all(xs, x => test)` and `any(xs, x => test)`.
+`reduce(xs, init, (state, x) => next)` carries a value through the list, for
+decisions that depend on earlier ones. `keys`, `values`, `get(record, key)`
+and `len` read records. A lambda sees everything the expression around it
+sees, plus its parameters:
 
 ```zlint
 let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.next, layer)).blankLine

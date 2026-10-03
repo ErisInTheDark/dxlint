@@ -371,8 +371,8 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// `{ key: value, ... }`
     Record(Vec<(Name, Expr)>),
-    /// `x => body`, as a function argument.
-    Lambda(Name, Box<Expr>),
+    /// `x => body` or `(a, b) => body`, as a function argument.
+    Lambda(Vec<Name>, Box<Expr>),
     /// `value.key` after a call or parentheses: a record's value.
     Key(Box<Expr>, Name),
     /// `name` or `layer.field`.

@@ -433,7 +433,7 @@ fn files_the_native_parser_cannot_read_say_so() {
 
 /// Writes `files` under a fresh directory in `target/` and lints `main`
 /// with `rules`, returning the messages.
-fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules: &str) -> Vec<String> {
+pub(crate) fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules: &str) -> Vec<String> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     for (path, text) in files {
@@ -447,6 +447,20 @@ fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules: &str) -> 
     let l = built.linter.unwrap();
     let text = std::fs::read_to_string(dir.join(main)).unwrap();
     l.lint(&dir.join(main), &text).into_iter().map(|d| d.message).collect()
+}
+
+#[test]
+fn strict_implies_its_family_unless_an_option_says_otherwise() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join("strict-option");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("base.json"), r#"{ "compilerOptions": { "strict": true, "noImplicitThis": true } }"#).unwrap();
+    std::fs::write(dir.join("tsconfig.json"), r#"{ "extends": "./base.json", "compilerOptions": { "noImplicitThis": false } }"#).unwrap();
+    let project = crate::native::ts::modules::Project::default();
+    let file = project.file_id(&dir.join("a.ts"));
+    assert!(project.strict_option(file, "strictNullChecks"), "implied by the base's strict");
+    assert!(!project.strict_option(file, "noImplicitThis"), "the nearer setting wins");
+    assert!(!project.strict_option(file, "exactOptionalPropertyTypes"), "not in strict's family");
 }
 
 #[test]
@@ -1118,6 +1132,18 @@ fn lambdas_map_filter_and_test_lists() {
         }
     "#);
     assert_eq!(rule_messages(&l, "ab"), vec!["each: AB|2,4|true||a, b"]);
+}
+
+#[test]
+fn reduce_folds_in_order_and_records_read_computed_keys() {
+    // Each step sees the previous state: a running maximum of corrected
+    // values, not of the originals.
+    let l = linter(r#"
+        in .t match word /[a-z]+/ {
+          rule fold info "{join(reduce([3, 1, 4], [], (seen, n) => seen [n + count(seen)]), ',')}|{get({ ab: 1 }, text)}|{index_of(['x', text], text)}|{index_of([], 1)}"
+        }
+    "#);
+    assert_eq!(rule_messages(&l, "ab"), vec!["fold: 3,2,6|1|1|-1"]);
 }
 
 #[test]

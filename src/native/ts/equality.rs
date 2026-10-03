@@ -142,7 +142,7 @@ impl NativeFile<'_> {
     }
 
     /// eslint's `isSameReference`.
-    fn same_reference(&self, a: u32, b: u32) -> bool {
+    pub(crate) fn same_reference(&self, a: u32, b: u32) -> bool {
         let s = &self.syntax;
         let (a, b) = (self.unparen(a), self.unparen(b));
         match (s.kind(a), s.kind(b)) {

@@ -378,6 +378,34 @@ impl Parser<'_> {
         Some(Expr { kind: ExprKind::Record(entries), span })
     }
 
+    /// The parameters of a lambda starting here, and how many tokens lead
+    /// up to its body (through the `=>`).
+    fn lambda_params(&mut self) -> Option<(Vec<Name>, usize)> {
+        let name = |t: &Token| Name { text: t.text.to_string(), span: t.span };
+        let first = self.ts.peek_raw(0)?.clone();
+        if first.kind == Tk::Ident {
+            return self.ts.peek_raw(1).is_some_and(|a| a.kind == Tk::Arrow).then(|| (vec![name(&first)], 2));
+        }
+        if first.kind != Tk::LParen {
+            return None;
+        }
+        let mut params = Vec::new();
+        let mut at = 1;
+        loop {
+            let t = self.ts.peek_raw(at)?.clone();
+            if t.kind != Tk::Ident {
+                return None;
+            }
+            params.push(name(&t));
+            match self.ts.peek_raw(at + 1)?.kind {
+                Tk::Comma => at += 2,
+                Tk::RParen => break,
+                _ => return None,
+            }
+        }
+        self.ts.peek_raw(at + 2).is_some_and(|a| a.kind == Tk::Arrow).then_some((params, at + 3))
+    }
+
     fn comma_list(&mut self, close: Tk, what: &str) -> Option<Vec<Expr>> {
         self.expr_depth += 1;
         let mut items = Vec::new();
@@ -387,15 +415,17 @@ impl Parser<'_> {
                 self.ts.next_raw();
                 break Some(items);
             }
-            // `x => body`: a lambda, for functions that take one.
-            let param = self.ts.peek_raw(0).cloned().filter(|t| t.kind == Tk::Ident);
-            if let Some(param) = param.filter(|_| self.ts.peek_raw(1).is_some_and(|a| a.kind == Tk::Arrow)) {
-                self.ts.next_raw();
-                self.ts.next_raw();
+            // `x => body` or `(a, b) => body`: a lambda, for functions that
+            // take one.
+            if let Some((params, skip)) = self.lambda_params() {
+                let start = self.ts.peek_raw(0).map(|t| t.span).expect("peeked");
+                for _ in 0..skip {
+                    self.ts.next_raw();
+                }
                 match self.expr() {
                     Some(body) => {
-                        let span = param.span.to(body.span);
-                        items.push(Expr { kind: ExprKind::Lambda(Name { text: param.text.to_string(), span: param.span }, Box::new(body)), span });
+                        let span = start.to(body.span);
+                        items.push(Expr { kind: ExprKind::Lambda(params, Box::new(body)), span });
                     }
                     None => break None,
                 }

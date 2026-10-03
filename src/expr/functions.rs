@@ -196,6 +196,14 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "get",
+        signature: "get(record, key)",
+        doc: "a record's value for a computed key (null when missing)",
+        min: 2,
+        max: 2,
+        call: |a| Ok(a[0].key(&a[1].text())),
+    },
+    Function {
         name: "values",
         signature: "values(record)",
         doc: "a record's values, in key order",
@@ -311,6 +319,14 @@ pub static FUNCTIONS: &[Function] = &[
                 v => v.text().contains(&*a[1].text()),
             }))
         },
+    },
+    Function {
+        name: "index_of",
+        signature: "index_of(list, value)",
+        doc: "position of the first item equal to value, from 0 (-1 when absent)",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::Num(a[0].items().iter().position(|i| i.loose_eq(&a[1])).map_or(-1.0, |i| i as f64))),
     },
     Function {
         name: "split",

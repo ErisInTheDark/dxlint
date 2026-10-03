@@ -75,7 +75,7 @@ impl NativeFile<'_> {
                 tokens.push("function".into());
             }
         }
-        let own_name = || s.get(func, F::Name).filter(|&n| kind == K::Function && s.is(n, K::Ident)).map(|n| format!("'{}'", s.text(n)));
+        let own_name = || s.get(func, F::Name).filter(|&n| kind == K::Function && s.is(n, K::Ident)).map(|n| format!("'{}'", super::statics::identifier_name(s.text(n))));
         match holder {
             Some(h) if private => tokens.push(s.text(s.get(h, F::Key)?).to_string()),
             Some(h) => {

@@ -93,6 +93,14 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
     })
 }
 
+/// An identifier as JavaScript reads it: `foo` is `foo`.
+pub fn identifier_name(text: &str) -> String {
+    if !text.contains('\\') {
+        return text.to_string();
+    }
+    super::regex::cook(&format!("\"{text}\"")).unwrap_or_else(|| text.to_string())
+}
+
 /// A member's or property's name when it is known statically: `a`, `"a"`,
 /// `1`, `[`a`]`; `None` for private names (`#a`) and other computed keys.
 pub fn property_name(s: &Syntax, node: u32) -> Option<String> {
@@ -105,7 +113,7 @@ pub fn property_name(s: &Syntax, node: u32) -> Option<String> {
         _ => return None,
     };
     match s.kind(key)? {
-        K::Ident => Some(s.text(key).to_string()),
+        K::Ident => Some(identifier_name(s.text(key))),
         K::PrivateName => None,
         K::Computed => literal_text(s, s.get(key, F::Expr)?),
         _ => literal_text(s, key),
@@ -115,6 +123,13 @@ pub fn property_name(s: &Syntax, node: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identifier_escapes_decode() {
+        assert_eq!(identifier_name("\\u0066oo"), "foo");
+        assert_eq!(identifier_name("b\\u{61}r"), "bar");
+        assert_eq!(identifier_name("plain"), "plain");
+    }
 
     #[test]
     fn numbers_read_and_print_like_javascript() {

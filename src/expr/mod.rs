@@ -109,6 +109,9 @@ pub enum CExpr {
     /// `map(list, x => body)` and friends; the body reads the item as the
     /// innermost `Param`.
     Each(Each, Box<CExpr>, Box<CExpr>),
+    /// `reduce(list, initial, (state, item) => next)`; the body reads the
+    /// state and the item as the two innermost `Param`s.
+    Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
 }
 
 /// Expression forms that are not plain functions, for `zlint functions`.
@@ -120,6 +123,7 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("find_last(list, x => test)", "the last item for which `test` is truthy, or null"),
     ("all(list, x => test)", "whether `test` is truthy for every item"),
     ("any(list, x => test)", "whether `test` is truthy for some item (`any(list)`: some item is truthy)"),
+    ("reduce(list, initial, (state, x) => next)", "folds the list in order: `state` starts as `initial` and becomes each `next`"),
 ];
 
 /// A function whose last argument is a lambda run on each item.
@@ -312,22 +316,45 @@ impl Scope<'_> {
                 entries.iter().map(|(k, v)| Some((k.text.as_str().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
             ),
             ExprKind::Key(base, key) => CExpr::Key(Box::new(self.compile(base, errors)?), key.text.as_str().into()),
-            ExprKind::Lambda(param, _) => {
-                errors.push(
-                    ConfigError::new(param.span, "a lambda (`x => ...`) only goes to `map`, `filter`, `find`, `find_last`, `all` or `any`"),
-                );
+            ExprKind::Lambda(..) => {
+                errors.push(ConfigError::new(
+                    e.span,
+                    "a lambda only goes to `map`, `filter`, `find`, `find_last`, `all`, `any` (`x => ...`) or `reduce` (`(state, x) => ...`)",
+                ));
                 return None;
+            }
+            // `reduce(list, initial, (state, item) => next)`.
+            ExprKind::Call(name, args) if name.text == "reduce" => {
+                let lambda = match args.as_slice() {
+                    [_, _, Expr { kind: ExprKind::Lambda(params, body), .. }] if params.len() == 2 => Some((params, body)),
+                    _ => None,
+                };
+                let Some((params, body)) = lambda else {
+                    errors.push(ConfigError::new(e.span, "`reduce` takes a list, an initial value and a lambda").note("usage: reduce(list, initial, (state, x) => next)"));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function("reduce"));
+                let list = self.compile(&args[0], errors)?;
+                let initial = self.compile(&args[1], errors)?;
+                let mut inner = self.clone();
+                inner.params.extend(params.iter().map(|p| p.text.clone()));
+                let body = inner.compile(body, errors)?;
+                CExpr::Reduce(Box::new(list), Box::new(initial), Box::new(body))
             }
             ExprKind::Call(name, args) if args.len() == 2 && matches!(args[1].kind, ExprKind::Lambda(..)) => {
                 let Some((fname, each)) = Each::named(&name.text) else {
                     errors.push(
                         ConfigError::new(name.span, format!("`{}` does not take a lambda", name.text))
-                            .note("lambdas go to `map`, `filter`, `find`, `find_last`, `all` and `any`"),
+                            .note("lambdas go to `map`, `filter`, `find`, `find_last`, `all`, `any` and `reduce`"),
                     );
                     return None;
                 };
                 self.note(name.span, Resolved::Function(fname));
-                let ExprKind::Lambda(param, body) = &args[1].kind else { unreachable!("matched") };
+                let ExprKind::Lambda(params, body) = &args[1].kind else { unreachable!("matched") };
+                let [param] = params.as_slice() else {
+                    errors.push(ConfigError::new(args[1].span, format!("`{fname}` takes a one-parameter lambda: `x => ...`")));
+                    return None;
+                };
                 let list = self.compile(&args[0], errors)?;
                 let mut inner = self.clone();
                 inner.params.push(param.text.clone());
@@ -1099,6 +1126,20 @@ impl<'a> Ctx<'a> {
                     v
                 };
                 each_over(*each, items, run)?
+            }
+            CExpr::Reduce(list, initial, body) => {
+                let mut state = self.eval(initial)?;
+                for item in self.eval(list)?.items() {
+                    self.memo.params.borrow_mut().extend([state, item]);
+                    let next = self.eval(body);
+                    {
+                        let mut params = self.memo.params.borrow_mut();
+                        let bound = params.len() - 2;
+                        params.truncate(bound);
+                    }
+                    state = next?;
+                }
+                state
             }
             CExpr::Relative(rel, inner) => match rel {
                 Relative::Children => {

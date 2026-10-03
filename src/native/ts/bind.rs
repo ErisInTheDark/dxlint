@@ -94,6 +94,9 @@ enum Use {
     /// `export { x }`, `export default x`, `export = x`: any meaning, and
     /// a value use when it is a value.
     Export,
+    /// `export type { x }`, `export { type x }`: any meaning, never a
+    /// value use.
+    TypeExport,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -174,11 +177,14 @@ pub fn bind(s: &Syntax) -> Bindings {
 /// The function whose own `this`/`arguments` a node at `id` sees: the
 /// nearest non-arrow function, method or class body.
 fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
-    let mut at = s.parent(id);
-    while let Some(n) = at {
+    let mut child = id;
+    while let Some(n) = s.parent(child) {
+        // A computed key (`[this.x]() {}`) runs where the class does.
+        let key = s.field(child) == Some(F::Key);
         match s.kind(n) {
-            Some(K::Function | K::Method | K::StaticBlock | K::ClassProp) => return Some(n),
-            _ => at = s.parent(n),
+            Some(K::Method | K::ClassProp) if !key => return Some(n),
+            Some(K::Function | K::StaticBlock) => return Some(n),
+            _ => child = n,
         }
     }
     None
@@ -844,7 +850,8 @@ impl<'t> Binder<'_, 't> {
                         Some(F::Decl | F::Expr) => self.walk(c, scope, Mode::Value),
                         Some(F::Specifier) if !reexport => {
                             if let Some(l) = s.get(c, F::Local) {
-                                self.reference(l, scope, Use::Export);
+                                let type_only = s.word(id, F::Kind) == Some("type") || s.word(c, F::Kind) == Some("type");
+                                self.reference(l, scope, if type_only { Use::TypeExport } else { Use::Export });
                             }
                         }
                         _ => {}
@@ -1030,12 +1037,12 @@ impl<'t> Binder<'_, 't> {
                     Use::Value | Use::Namespace | Use::Export => "read",
                     Use::Write => "write",
                     Use::ReadWrite => "read_write",
-                    Use::Type | Use::TypeOnly => "type",
+                    Use::Type | Use::TypeOnly | Use::TypeExport => "type",
                 },
             );
             let want = match use_ {
                 Use::Type => TYPE,
-                Use::Namespace | Use::Export => VALUE | TYPE,
+                Use::Namespace | Use::Export | Use::TypeExport => VALUE | TYPE,
                 _ => VALUE,
             };
             let mut at = Some(scope);
@@ -1050,7 +1057,7 @@ impl<'t> Binder<'_, 't> {
                 at = scopes[sc].info.parent;
             }
             let Some(decl) = found.map(|d| merged.get(&d).copied().unwrap_or(d)) else {
-                if !matches!(use_, Use::Type | Use::TypeOnly) {
+                if !matches!(use_, Use::Type | Use::TypeOnly | Use::TypeExport) {
                     unresolved.insert(ident);
                     if name == "arguments" {
                         if let Some(f) = this_owner(s, ident) {
@@ -1076,7 +1083,7 @@ impl<'t> Binder<'_, 't> {
                     b.uses += 1;
                     b.value_uses += u32::from(use_ != Use::Namespace);
                 }
-                Use::Type | Use::TypeOnly => b.uses += 1,
+                Use::Type | Use::TypeOnly | Use::TypeExport => b.uses += 1,
                 Use::Write => b.writes += 1,
                 Use::ReadWrite => {
                     b.uses += 1;
@@ -1089,5 +1096,20 @@ impl<'t> Binder<'_, 't> {
         let declaration_kinds = merged.iter().map(|(&d, first)| (d, merged_kinds.get(first).cloned().unwrap_or_default())).chain(merged_kinds.clone()).collect();
         let scopes = scopes.into_iter().map(|sc| sc.info).collect();
         Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions, scopes, decl_scope, ref_scope, merged }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn computed_class_keys_use_the_outer_this() {
+        let l = native_linter("rule no-extra-bind");
+        let lint = |text: &str| l.lint(Path::new("/root/a.js"), text).len();
+        assert_eq!(lint("var f = function () { class A { [this.x]() {} } }.bind(b);"), 0);
+        assert_eq!(lint("var f = function () { class A { [k] = this.x } }.bind(b);"), 1);
     }
 }

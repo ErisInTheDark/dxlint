@@ -2,7 +2,8 @@
 //! (with regexpp's messages), and what is questionable inside valid ones,
 //! each with where it is in the pattern.
 
-mod parse;
+/// The regex parser: rules needing a pattern's structure read its `Ast`.
+pub(crate) mod parse;
 mod sources;
 
 pub use parse::is_mark;

@@ -598,6 +598,11 @@ impl<'a> Parser<'a> {
             self.errors.push(ConfigError::new(name.span, format!("`{}` is a keyword and cannot name a macro", name.text)));
             return;
         }
+        // Macros replace every token of their name, everywhere after them.
+        if crate::expr::facts::fact(&name.text).is_some() {
+            self.errors.push(ConfigError::new(name.span, format!("`{}` is a fact; a macro of that name would hide it in every rule", name.text)));
+            return;
+        }
         let mut params: Vec<Rc<str>> = Vec::new();
         // Parameters are glued to the name: `macro f(a, b) ...`. A spaced
         // `(` starts a one-line body: `macro nl (if ... )`.
@@ -1587,6 +1592,12 @@ mod tests {
         let (_, errors, _) = parse_str("in x rule a {\n  when 1+2 > 0\n  when 1 -2 == -1\n  when 1 <=2\n  when text~ /x/\n}\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
         assert_eq!(all, vec!["put spaces around `+`", "put spaces around `-`", "put spaces around `<=`", "put spaces around `~`"]);
+    }
+
+    #[test]
+    fn macros_cannot_hide_facts() {
+        let (_, errors, _) = parse_str("macro reference_kind \"x\"\n");
+        assert_eq!(errors.len(), 1, "{errors:#?}");
     }
 
     #[test]
