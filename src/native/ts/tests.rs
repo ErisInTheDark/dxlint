@@ -49,8 +49,8 @@ fn precedence_and_associativity() {
 fn arrows_generics_and_casts() {
     assert_eq!(dump("f<T>(x);"), "expr_stmt(expr=call(callee=f type_arg=type_ref(name=T) arg=x))");
     assert_eq!(dump("a < b > c;"), "expr_stmt(expr=binary(left=binary(left=a op=< right=b) op=> right=c))");
-    assert_eq!(dump("(a, b): T => a;"), "expr_stmt(expr=arrow(param=param(name=a) param=param(name=b) return_type=type_ref(name=T) body=a))");
-    assert_eq!(dump("async x => x;"), "expr_stmt(expr=arrow(modifier=async param=param(name=x) body=x))");
+    assert_eq!(dump("(a, b): T => a;"), "expr_stmt(expr=arrow(param=param(name=a) param=param(name=b) return_type=type_ref(name=T) op==> body=a))");
+    assert_eq!(dump("async x => x;"), "expr_stmt(expr=arrow(modifier=async param=param(name=x) op==> body=x))");
     assert_eq!(dump("c ? (x) : y;"), "expr_stmt(expr=conditional(test=c consequent=paren(expr=x) alternate=y))");
     assert_eq!(dump("x as const;"), "expr_stmt(expr=as(expr=x type=const))");
     assert_eq!(dump("<T>x;"), "expr_stmt(expr=type_assertion(type=type_ref(name=T) expr=x))");
@@ -78,6 +78,14 @@ fn declarations_and_types() {
     assert_eq!(dump("let f: (a: number) => void;"), "var(kind=let decl=declarator(name=f type=fn_type(param=param(name=a type=number) return_type=void)))");
     assert_eq!(dump("import type { A, type B as C } from \"m\";"), "import(kind=type specifier=import_spec(imported=A) specifier=import_spec(kind=type imported=B local=C) from=\"m\")");
     assert_eq!(dump("function f(x: unknown): x is string;"), "function(name=f param=param(name=x type=unknown) return_type=type_predicate(name=x type=string))");
+}
+
+#[test]
+fn tokens_rules_point_at() {
+    // `catch` and `=>` are where eslint reports; `new X!(a)` keeps its args.
+    assert_eq!(dump("try {} catch (e) {}"), "try(block={} kind=catch param=e handler={})");
+    assert_eq!(dump("f(x => x);"), "expr_stmt(expr=call(callee=f arg=arrow(param=param(name=x) op==> body=x)))");
+    assert_eq!(dump("new X!(a);"), "expr_stmt(expr=new(callee=non_null(expr=X) arg=a))");
 }
 
 #[test]

@@ -376,6 +376,8 @@ match is `null`, and a field that matched several times is a list. `null`,
 | `parent_before` | the parent's text up to the node ("what came earlier in this statement") |
 | `parent_indent`, `parent_line` | leading whitespace and whole text of the line the parent starts on |
 | `prev_sibling`, `prev_gap` | the previous node of the same layer in the same parent, and the text between |
+| `gap_before` | the text between the previous child of the parent (of any layer) and the node: blank lines, comments, separators; `null` for the first child |
+| `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.arg` is `1`) |
 | `enclosing` | the innermost layer around the node's start, seeing through overlays (`"js_string"` inside a string) |
 | `indented` | the node's line starts inside a layer declared with `indent` |
 | `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
@@ -394,6 +396,28 @@ Regex functions take the full syntax of Rust's `regex` crate (no lookaround
 or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first
 match or `null`), `re_count(text, re)`, `re_replace(text, re, with)` (`$1`
 for groups) and `re_escape(text)` to build patterns from text.
+
+## Debugging rules
+
+- **`dbg(value, "label")`** returns `value` unchanged and prints
+  `file:line:col layer label = value` to stderr for every node it is
+  evaluated on. Wrap any part of a `when`, `let` or message to see what it
+  computes.
+- **`zlint eval <target> <expr> files...`** prints what an expression gives on
+  every node of a target, with the project's config: attributes, facts,
+  macros and options resolve as in a rule.
+
+  ```text
+  $ zlint eval ts_call.callee 'resolved' src/a.ts
+  src/a.ts:3:1 setTimeout => global
+  src/a.ts:4:5 this.load => null
+  ```
+- **`zlint tree file --at LINE:COL`** explains one position: the layers
+  covering it, then what every child matcher of the innermost one does there
+  (rules out the character, is ruled out by its prefilter, does not match,
+  matches to where, or runs past its layer), marking the one in the tree.
+  When a span went to the wrong layer (or to none), this names the matcher
+  that took it.
 
 ## Attributes
 
@@ -414,6 +438,10 @@ in ts_if.test rule too-complex warn "{ops} operators" { when ops > 2 }
   give `null`.
 - `parent.field` and `parent.name` read the parent layer's field or
   attribute (`in ts_call.arg rule ... { when parent.callee == "f" }`).
+- Native facts read the same way: `callee.resolved` is the fact of the
+  `callee` field's node, `parent.type_flags` the parent's.
+- `[] field.name` is always a list, whether the field matched none, one or
+  several nodes.
 - An attribute that depends on itself fails like any expression error.
 - Attributes also lift builtins onto fields: `in ts_ident let used uses`
   makes `local.used` readable from an import specifier.
@@ -449,23 +477,45 @@ layers have no pattern children (`in ts_call match x ...` is an error).
 | `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
 | `decl_import` | on an identifier that is or refers to an import: the module it comes from |
 | `decl_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
+| `resolved`, `ref_kind` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file), and the `decl_kind` of what it refers to |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
+| `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `type_param_defaults`, `type_params_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
+| `type_arg_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
+| `member_reads`, `member_writes`, `member_ctor_writes` | on a class property, method or parameter property: reads through `this` (or `x.#name`, or another instance's `private` member) inside the class, writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
+| `uses_this`, `uses_arguments`, `has_yield` | on a function or method: what its own body does (arrows inside count, nested functions do not) |
+| `super_calls` | on a constructor: `all`, `some` or `none` of the paths that leave it normally call `super()` |
+| `regex_problems` | on a regex literal or the pattern string of `RegExp(...)`: one problem per line: `empty_class`, `spaces:N`, `backref:<kind>:<backref>:<group>`, `misleading:<kind>` |
+| `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
+| `precision_lost` | on a number literal: not exactly representable as a double |
 
 Values and types are separate namespaces (`const X` does not hide an
 imported type `X`), and merged declarations (`interface X` + `const X`,
 overloads) are one binding.
 
-**Types** come from declarations, never from the checker's inference:
-annotations, return types, initializers and member chains, generic
-arguments fixed by an argument (`map(x => ...)`), `await`, `as`, `!`. Types
-are read from the files they are declared in (other project files,
-`node_modules` packages and `@types`, `declare module "x"`), with the
-nearest `tsconfig.json`'s `paths`, `lib`, `types` and `references` deciding
-what is visible. There is no control-flow narrowing or contextual inference;
-where a type cannot be told, `type` is null and rules stay quiet. Other
-files are read once per run and kept only as declaration summaries.
+**Types** come from declarations: annotations, return types, initializers
+and member chains, generic arguments fixed by an argument (`map(x => ...)`),
+`await`, `as`, `!`, object literals, `keyof`. Types are read from the files
+they are declared in (other project files, `node_modules` packages and
+`@types`, `declare module "x"`), with the nearest `tsconfig.json`'s `paths`,
+`lib`, `types` and `references` deciding what is visible. Other files are
+read once per run and kept only as declaration summaries; unannotated
+functions of the linted file itself are typed from their `return`s.
+
+- **Overloads** are chosen by argument types (a bounded assignability check:
+  primitives, literals, enums, unions, arrays, tuples, the same generic, and
+  small object types property by property). When the arguments cannot pick
+  between overloads that return different types, the call is unknown.
+- **Narrowing** is local and lazy: a reference's type is refined by the
+  conditions guarding it in the same function (`if`/`else`, `?:`, `&&`,
+  `||`, early `return`/`throw`) when they test it with `typeof`,
+  `=== null`/`undefined`, truthiness, `instanceof` or `Array.isArray`. An
+  assignment to it in between cancels the guards; anything else leaves the
+  declared type.
+
+Where a type cannot be told, `type` is null and rules stay quiet; there is
+no contextual inference beyond callback parameters.
 
 ## Configuring rules: `set`
 

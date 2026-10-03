@@ -467,6 +467,141 @@ fn declared_types_follow_imports_members_and_initializers() {
     assert_eq!(messages, vec!["Task<string>", "number", "never", "Store<string>"]);
 }
 
+/// The type of every expression statement in a single file.
+fn statement_types(text: &str) -> Vec<String> {
+    let l = native_linter("in ts_expr_stmt.expr rule t info \"{default(type, '?')}\"");
+    l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect()
+}
+
+#[test]
+fn narrowing_follows_guards_until_a_reassignment() {
+    let text = "\
+interface Foo { a: number }
+declare const b: string | number;
+declare const maybe: Foo | null;
+function f(x: Foo | undefined, y: string | undefined) {
+  if (x) { x; }
+  if (typeof b === \"string\") { b; } else { b; }
+  if (!x) return;
+  x;
+  if (y) { y = undefined; y; }
+  maybe && maybe;
+}
+";
+    // After `y = undefined` the guard no longer holds (zlint does not narrow
+    // by assignment): back to the declared type. `maybe && maybe` is the
+    // falsy part of the left plus the narrowed right.
+    assert_eq!(statement_types(text), vec!["Foo", "string", "number", "Foo", "undefined", "string | undefined", "null | Foo"]);
+}
+
+#[test]
+fn overloads_and_same_file_returns() {
+    let text = "\
+function over(x: string): string;
+function over(x: number): number;
+function over(x: any): any { return x; }
+function plain() { return 1; }
+function loop() { return loop(); }
+over(1);
+over(\"a\");
+plain();
+loop();
+";
+    // The implementation signature is not callable; unannotated functions
+    // of this file are typed from their returns (recursion: unknown).
+    assert_eq!(statement_types(text), vec!["number", "string", "number", "?"]);
+}
+
+#[test]
+fn redundant_type_arguments_use_mutual_assignability() {
+    let l = native_linter("in ts_call.type_arg or ts_type_ref.type_arg rule t info \"{text}:{type_arg_redundant}\" { when type_arg_redundant != null }");
+    let text = "\
+enum E { A, B }
+enum S { A = \"a\" }
+declare function make<T = number>(): T;
+declare function same<T>(x: T): T;
+class Box<T = string> {}
+make<E>();
+make<S>();
+make<string>();
+same<number>(1);
+let b: Box<string>;
+";
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
+    // A numeric enum and `number` are assignable both ways; a string enum is not.
+    assert_eq!(messages, vec!["E:default", "number:inferred", "string:default"]);
+}
+
+#[test]
+fn class_members_functions_and_constructors() {
+    let l = native_linter(
+        "in ts_class_prop rule m info \"{key}:{member_reads}/{member_writes}/{member_ctor_writes}\"\n\
+         in ts_function rule f info \"{name}:{uses_this}:{uses_arguments}:{has_yield}\"\n\
+         in ts_method rule c info \"{super_calls}\" { when super_calls != null }",
+    );
+    let text = "\
+class C {
+  private a = 1;
+  private b = 2;
+  #c = 3;
+  constructor() { this.b = 3; setTimeout(() => { this.a = 4; }); }
+  m(other: C) { other.b = 5; return this.#c; }
+}
+class D extends C { constructor(x: boolean) { if (x) { super(); } } }
+class E extends C { constructor() { super(); } }
+function p() { return this; }
+function q() { return () => arguments; }
+function* r() { yield 1; }
+";
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
+    assert_eq!(
+        messages,
+        vec![
+            // A callback in the constructor runs later; `other.b` is the same private member.
+            "a:0/1/0",
+            "b:0/1/1",
+            "#c:1/0/0",
+            "none",
+            "some",
+            "all",
+            "p:true:false:false",
+            "q:false:true:false",
+            "r:false:false:true",
+        ]
+    );
+}
+
+#[test]
+fn regexes_and_regexp_patterns() {
+    let l = native_linter(
+        "in ts_regex rule r info \"{regex_problems}\" { when regex_problems != \"\" }\n\
+         in ts_string rule s info \"{regex_error}\" { when regex_error != null }",
+    );
+    let text = "/a  b/;\n/(a)|\\1/;\nnew RegExp(\"(\");\nRegExp(\"a\", \"gg\");\nRegExp(\"ok\");\n";
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
+    assert_eq!(
+        messages,
+        vec![
+            "spaces:2",
+            "backref:disjunctive:\\1:(a)",
+            "Invalid regular expression: /(/: Unterminated group",
+            "Duplicate flags ('g') supplied to RegExp constructor",
+        ]
+    );
+}
+
+#[test]
+fn facts_of_fields_and_parents_and_sibling_builtins() {
+    let l = native_linter(
+        "in ts_call rule c info \"{callee}:{callee.resolved}\"\n\
+         in ts_call.arg rule a info \"{index}:{text}:{parent.type_flags == null}\"\n\
+         in ts_expr_stmt rule g info \"{default(gap_before, 'first')}\" { when index > 0 }",
+    );
+    let text = "import { f } from \"m\";\nf(a, b);\n\n// note\ng(c);\n";
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["f:import", "\n", "0:a:true", "1:b:true", "g:global", "\n\n// note\n", "0:c:true"]);
+}
+
 #[test]
 fn docs_follow_imports_through_barrels() {
     let messages = lint_project(

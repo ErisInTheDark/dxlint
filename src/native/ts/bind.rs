@@ -4,7 +4,7 @@
 //! counts, split by whether the use needs the runtime value: `typeof x` and
 //! computed keys inside types do not.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
@@ -38,7 +38,28 @@ pub struct Bindings {
     pub decls: HashMap<u32, Binding>,
     /// Referencing identifier -> the identifier that declares it.
     pub refs: HashMap<u32, u32>,
+    /// Value references that resolve to nothing in the file (globals).
+    pub unresolved: HashSet<u32>,
+    /// Class member declaration (property, method, parameter property) ->
+    /// accesses through `this` (or `x.#name`) inside its class.
+    pub members: HashMap<u32, MemberUses>,
+    /// Function-like node -> what its own body does ([`USES_THIS`], ...).
+    /// Arrow functions count toward the function around them.
+    pub functions: HashMap<u32, u8>,
 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct MemberUses {
+    pub reads: u32,
+    /// Writes outside the constructor (`this.x = `, `this.x++`, `delete`).
+    pub writes: u32,
+    /// Writes inside the constructor.
+    pub ctor_writes: u32,
+}
+
+pub const USES_THIS: u8 = 1;
+pub const USES_ARGUMENTS: u8 = 2;
+pub const HAS_YIELD: u8 = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Use {
@@ -77,16 +98,43 @@ struct Binder<'s, 't> {
     merged: HashMap<u32, u32>,
     /// What the next declarations are: their kind and declaring node.
     current: (&'static str, u32),
+    /// Class -> its members by name (`x`, `#x`) -> declaring node.
+    class_members: HashMap<u32, HashMap<&'t str, u32>>,
+    members: HashMap<u32, MemberUses>,
+    functions: HashMap<u32, u8>,
 }
 
 pub fn bind(s: &Syntax) -> Bindings {
-    let mut b =
-        Binder { s, scopes: Vec::new(), refs: Vec::new(), decls: HashMap::new(), owners: HashMap::new(), merged: HashMap::new(), current: ("", 0) };
+    let mut b = Binder {
+        s,
+        scopes: Vec::new(),
+        refs: Vec::new(),
+        decls: HashMap::new(),
+        owners: HashMap::new(),
+        merged: HashMap::new(),
+        current: ("", 0),
+        class_members: HashMap::new(),
+        members: HashMap::new(),
+        functions: HashMap::new(),
+    };
     let module = b.scope(None, true);
     for st in s.all(s.root(), F::Body).collect::<Vec<_>>() {
         b.walk(st, module, Mode::Value);
     }
     b.resolve()
+}
+
+/// The function whose own `this`/`arguments` a node at `id` sees: the
+/// nearest non-arrow function, method or class body.
+fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
+    let mut at = s.parent(id);
+    while let Some(n) = at {
+        match s.kind(n) {
+            Some(K::Function | K::Method | K::StaticBlock | K::ClassProp) => return Some(n),
+            _ => at = s.parent(n),
+        }
+    }
+    None
 }
 
 impl<'t> Binder<'_, 't> {
@@ -361,6 +409,138 @@ impl<'t> Binder<'_, 't> {
         }
     }
 
+    /// Registers a class's members: properties, methods and accessors by
+    /// key, and constructor parameter properties.
+    fn class_members(&mut self, class: u32) {
+        let s = self.s;
+        let mut names: HashMap<&'t str, u32> = HashMap::new();
+        for m in s.all(class, F::Member).filter(|&m| matches!(s.kind(m), Some(K::ClassProp | K::Method))) {
+            let Some(k) = s.get(m, F::Key).filter(|&k| matches!(s.kind(k), Some(K::Ident | K::PrivateName))) else { continue };
+            if s.text(k) == "constructor" {
+                for p in s.all(m, F::Param) {
+                    let property = s.all(p, F::Modifier).any(|w| matches!(s.text(w), "private" | "protected" | "public" | "readonly"));
+                    if let Some(n) = s.get(p, F::Name).filter(|&n| property && s.is(n, K::Ident)) {
+                        names.entry(s.text(n)).or_insert(p);
+                    }
+                }
+                continue;
+            }
+            // Getter and setter pairs are one member: the first.
+            names.entry(s.text(k)).or_insert(m);
+        }
+        self.class_members.insert(class, names);
+    }
+
+    /// Whether `class` declares member `name`; with `ts_private`, only a
+    /// `private` one.
+    fn declares(&self, class: u32, name: &str, ts_private: bool) -> bool {
+        self.class_members.get(&class).and_then(|m| m.get(name)).is_some_and(|&d| !ts_private || self.s.all(d, F::Modifier).any(|w| self.s.text(w) == "private"))
+    }
+
+    /// `this.x`, `obj.#x`, or `other.x` for a `private x` of an enclosing
+    /// class (only that class can reach it, so another instance's): a read
+    /// or write of that member.
+    fn member_access(&mut self, id: u32) {
+        let s = self.s;
+        let (Some(object), Some(prop)) = (s.get(id, F::Object), s.get(id, F::Property)) else { return };
+        let name = s.text(prop);
+        let hash = s.is(prop, K::PrivateName);
+        // Resolved by the enclosing class that declares it, not by `this`.
+        let private = !s.is(object, K::This);
+        if private && !hash && !self.enclosing_declares(id, name) {
+            return;
+        }
+        // The class: `this`'s (through arrows), or for `#x` the nearest
+        // enclosing class declaring it.
+        let mut at = s.parent(id);
+        let mut in_ctor = false;
+        let mut owner_fn = None;
+        // A callback inside the constructor runs later: not a constructor
+        // write.
+        let mut crossed_function = false;
+        let class = loop {
+            let Some(n) = at else { return };
+            match s.kind(n) {
+                Some(K::Function) if !private => return,
+                Some(K::Function | K::Arrow) => crossed_function = true,
+                Some(K::Method | K::ClassProp | K::StaticBlock) if owner_fn.is_none() => {
+                    owner_fn = Some(n);
+                    in_ctor = !crossed_function && s.is(n, K::Method) && s.get(n, F::Key).is_some_and(|k| s.text(k) == "constructor");
+                    if let Some(p) = s.parent(n).filter(|&p| s.is(p, K::Class)) {
+                        if !private || self.declares(p, name, !hash) {
+                            break p;
+                        }
+                    } else if !private {
+                        return;
+                    }
+                }
+                Some(K::Class) if private && self.declares(n, name, !hash) => break n,
+                _ => {}
+            }
+            at = s.parent(n);
+        };
+        let Some(&decl) = self.class_members.get(&class).and_then(|m| m.get(name)) else { return };
+        let (read, write) = self.access_kind(id);
+        let uses = self.members.entry(decl).or_default();
+        uses.reads += u32::from(read);
+        if write {
+            if in_ctor {
+                uses.ctor_writes += 1;
+            } else {
+                uses.writes += 1;
+            }
+        }
+    }
+
+    /// Some enclosing class declares a `private` member `name`.
+    fn enclosing_declares(&self, id: u32, name: &str) -> bool {
+        let mut at = self.s.parent(id);
+        while let Some(n) = at {
+            if self.s.is(n, K::Class) && self.declares(n, name, true) {
+                return true;
+            }
+            at = self.s.parent(n);
+        }
+        false
+    }
+
+    /// Whether an expression is read, written, or both where it stands.
+    fn access_kind(&self, id: u32) -> (bool, bool) {
+        let s = self.s;
+        let Some(p) = s.parent(id) else { return (true, false) };
+        let statement = |n: u32| s.parent(n).is_some_and(|g| s.is(g, K::ExprStmt));
+        match s.kind(p) {
+            Some(K::Assign) if s.field(id) == Some(F::Left) => {
+                let compound = s.word(p, F::Op) != Some("=");
+                (compound && !statement(p), true)
+            }
+            Some(K::Update) => (!statement(p), true),
+            Some(K::Unary) if s.word(p, F::Op) == Some("delete") => (false, true),
+            Some(K::Paren | K::NonNull) => self.access_kind(p),
+            // `this.x.y = v` / `this.x[k] = v` modify what `x` holds: as
+            // typescript-eslint's prefer-readonly counts it, a write too.
+            Some(K::Member | K::Index) if s.field(id) == Some(F::Object) => (true, self.access_kind(p).1),
+            // Destructuring targets.
+            Some(K::Array | K::Object | K::Prop | K::Spread | K::AssignPattern) if self.in_pattern(p) => (false, true),
+            Some(K::ForIn | K::ForOf) if s.field(id) == Some(F::Left) => (false, true),
+            _ => (true, false),
+        }
+    }
+
+    /// Inside the target of a destructuring assignment.
+    fn in_pattern(&self, mut id: u32) -> bool {
+        let s = self.s;
+        while let Some(p) = s.parent(id) {
+            match s.kind(p) {
+                Some(K::Array | K::Object | K::Prop | K::Spread | K::AssignPattern) => id = p,
+                Some(K::Assign) => return s.field(id) == Some(F::Left),
+                Some(K::ForIn | K::ForOf) => return s.field(id) == Some(F::Left),
+                _ => return false,
+            }
+        }
+        false
+    }
+
     /// The leftmost identifier of `A.B.C` (a qualified name or member chain).
     fn leftmost(&self, mut id: u32) -> u32 {
         loop {
@@ -453,6 +633,7 @@ impl<'t> Binder<'_, 't> {
                 self.type_params(id, inner);
                 self.walk_fields(id, inner, Mode::Value, &[F::Extends]);
                 self.walk_fields(id, inner, Mode::Type, &[F::TypeArg, F::Implements]);
+                self.class_members(id);
                 for m in s.all(id, F::Member).collect::<Vec<_>>() {
                     self.walk(m, inner, Mode::Value);
                 }
@@ -598,7 +779,21 @@ impl<'t> Binder<'_, 't> {
                     self.walk(v, scope, Mode::Value);
                 }
             }
-            K::Member => self.walk_fields(id, scope, mode, &[F::Object]),
+            K::Member => {
+                self.member_access(id);
+                self.walk_fields(id, scope, mode, &[F::Object]);
+            }
+            K::This => {
+                if let Some(f) = this_owner(s, id) {
+                    *self.functions.entry(f).or_default() |= USES_THIS;
+                }
+            }
+            K::Yield => {
+                if let Some(f) = this_owner(s, id) {
+                    *self.functions.entry(f).or_default() |= HAS_YIELD;
+                }
+                self.walk_fields(id, scope, mode, &[F::Arg]);
+            }
             K::Assign => {
                 let compound = s.word(id, F::Op) != Some("=");
                 if let Some(l) = s.get(id, F::Left) {
@@ -688,8 +883,9 @@ impl<'t> Binder<'_, 't> {
     }
 
     fn resolve(self) -> Bindings {
-        let Binder { s, scopes, refs, mut decls, owners, merged, .. } = self;
+        let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, .. } = self;
         let mut out_refs = HashMap::with_capacity(refs.len());
+        let mut unresolved = HashSet::new();
         for (ident, scope, use_) in refs {
             let name = s.text(ident);
             let want = match use_ {
@@ -708,7 +904,17 @@ impl<'t> Binder<'_, 't> {
                 }
                 at = scopes[sc].parent;
             }
-            let Some(decl) = found.map(|d| merged.get(&d).copied().unwrap_or(d)) else { continue };
+            let Some(decl) = found.map(|d| merged.get(&d).copied().unwrap_or(d)) else {
+                if !matches!(use_, Use::Type | Use::TypeOnly) {
+                    unresolved.insert(ident);
+                    if name == "arguments" {
+                        if let Some(f) = this_owner(s, ident) {
+                            *functions.entry(f).or_default() |= USES_ARGUMENTS;
+                        }
+                    }
+                }
+                continue;
+            };
             if decl == ident {
                 continue;
             }
@@ -735,6 +941,6 @@ impl<'t> Binder<'_, 't> {
             }
             out_refs.insert(ident, decl);
         }
-        Bindings { decls, refs: out_refs }
+        Bindings { decls, refs: out_refs, unresolved, members, functions }
     }
 }

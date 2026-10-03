@@ -55,14 +55,16 @@ kinds! {
     Continue = "ts_continue" [Label],
     Switch = "ts_switch" [Discriminant, Case],
     Case = "ts_case" [Test, Body],
-    Try = "ts_try" [Block, Param, Handler, Finalizer],
+    // `kind`: the `catch` keyword.
+    Try = "ts_try" [Block, Kind, Param, Handler, Finalizer],
     Labeled = "ts_labeled" [Label, Body],
     Empty = "ts_empty" [],
     Debugger = "ts_debugger" [],
     With = "ts_with" [Object, Body],
     // ---- functions and classes
     Function = "ts_function" [Modifier, Name, TypeParam, Param, ReturnType, Body],
-    Arrow = "ts_arrow" [Modifier, TypeParam, Param, ReturnType, Body],
+    // `op`: the `=>` token.
+    Arrow = "ts_arrow" [Modifier, TypeParam, Param, ReturnType, Op, Body],
     Param = "ts_param" [Decorator, Modifier, Name, Optional, Type, Init],
     Class = "ts_class" [Decorator, Modifier, Name, TypeParam, Extends, TypeArg, Implements, Member],
     Method = "ts_method" [Decorator, Modifier, Kind, Key, Optional, TypeParam, Param, ReturnType, Body],

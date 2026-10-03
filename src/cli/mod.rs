@@ -1,5 +1,6 @@
 //! Command line interface.
 
+mod eval;
 mod info;
 mod lint;
 mod render;
@@ -75,6 +76,23 @@ enum Command {
         /// Show every node, including nested brackets and escapes
         #[arg(long)]
         all: bool,
+        /// Explain one position (`12:5`): the layers covering it, and what
+        /// every candidate matcher does there
+        #[arg(long, value_name = "LINE:COL")]
+        at: Option<String>,
+        #[command(flatten)]
+        config: ConfigArg,
+    },
+    /// Evaluate an expression on every node of a layer, with the project's
+    /// config (attributes, facts and macros included)
+    Eval {
+        /// Target, as in `in <target> rule`: `ts_call`, `ts_call.callee`, `a or b`
+        target: String,
+        /// The expression (`type`, `callee.resolved`, `len(text) > 80`)
+        expr: String,
+        /// Files to evaluate in
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
         #[command(flatten)]
         config: ConfigArg,
     },
@@ -100,10 +118,14 @@ pub fn run() -> ExitCode {
             Ok(p) => info::rules(&p.linter),
             Err(code) => code,
         },
-        Some(Command::Tree { file, all, config }) => match load(&config) {
-            Ok(p) => info::tree(&p.linter, &file, all),
+        Some(Command::Tree { file, all, at, config }) => match load(&config) {
+            Ok(p) => match at {
+                Some(at) => info::explain(&p.linter, &file, &at),
+                None => info::tree(&p.linter, &file, all),
+            },
             Err(code) => code,
         },
+        Some(Command::Eval { target, expr, files, config }) => eval::run(&config, &target, &expr, &files),
         Some(Command::Functions) => info::functions(),
         Some(Command::Lsp) => crate::lsp::run(),
     }

@@ -189,7 +189,11 @@ impl<'s> Parser<'s> {
     }
 
     fn arrow_rest(&mut self, start: u32, mut kids: Kids) -> PResult<u32> {
+        let at = self.start();
         self.expect("=>")?;
+        // The `=>` token: where rules point at an arrow function's head.
+        let op = self.text_node(at, self.prev_end);
+        kids.add(Field::Op, op);
         let in_gen = std::mem::replace(&mut self.in_gen, false);
         let body = if self.is("{") { self.function_body() } else { self.assign() };
         self.in_gen = in_gen;
@@ -458,6 +462,13 @@ impl<'s> Parser<'s> {
                     self.member(cstart, callee, None, prop)
                 }
                 Tok::P("[") => self.index(cstart, callee, None)?,
+                // `new X!(args)`: the arguments still belong to `new`.
+                Tok::P("!") if !self.tok.nl => {
+                    self.bump();
+                    let mut kids = Kids::default();
+                    kids.add(Field::Expr, callee);
+                    self.finish(Kind::NonNull, cstart, kids)
+                }
                 Tok::Template | Tok::TemplateHead => {
                     let quasi = self.template()?;
                     let mut kids = Kids::default();

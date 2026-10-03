@@ -29,7 +29,9 @@ pub enum TypeSyn {
     Obj(Arc<Vec<Member>>),
     /// `typeof a.b`
     Query(Box<[Box<str>]>),
-    /// Anything the evaluator does not model (conditional, mapped, keyof).
+    /// `keyof T`
+    Keyof(Box<TypeSyn>),
+    /// Anything the evaluator does not model (conditional, mapped types).
     Other,
 }
 
@@ -55,6 +57,9 @@ pub struct Sig {
     /// `None`: not annotated.
     pub ret: Option<TypeSyn>,
     pub is_async: bool,
+    /// Where the declaring function starts, when it has a body: its file
+    /// can type unannotated returns from it.
+    pub body_at: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +95,10 @@ pub enum Init {
     Member(Box<Init>, Box<str>),
     Await(Box<Init>),
     Path(Box<[Box<str>]>),
+    /// A type the value widens to (`let x = 0`).
     Type(TypeSyn),
+    /// A literal type kept as is (`const x = 0`).
+    Literal(TypeSyn),
     Other,
 }
 
@@ -245,6 +253,9 @@ pub fn type_syn(v: &impl View, id: u32) -> TypeSyn {
         Some(K::TypeOperator) if v.get(id, F::Op).is_some_and(|o| v.text(o) == "readonly") => {
             v.get(id, F::Type).map_or(TypeSyn::Other, |t| type_syn(v, t))
         }
+        Some(K::TypeOperator) if v.get(id, F::Op).is_some_and(|o| v.text(o) == "keyof") => {
+            v.get(id, F::Type).map_or(TypeSyn::Other, |t| TypeSyn::Keyof(Box::new(type_syn(v, t))))
+        }
         Some(K::TemplateType) => TypeSyn::Kw("string".into()),
         _ => TypeSyn::Other,
     }
@@ -283,6 +294,7 @@ pub fn sig(v: &impl View, id: u32) -> Sig {
         params,
         ret: v.get(id, F::ReturnType).map(|r| type_syn(v, r)),
         is_async: v.has_word(id, F::Modifier, "async"),
+        body_at: v.get(id, F::Body).map(|_| v.start(id)),
     }
 }
 
@@ -445,6 +457,11 @@ impl<V: View> Builder<'_, V> {
                     decl.type_params.clear();
                     decl.ty = v.get(d, F::Type).map(|t| type_syn(v, t));
                     decl.init = v.get(d, F::Init).map(|i| init(v, i));
+                    // `const x = "a"` keeps its literal type.
+                    let literal = v.get(d, F::Init).filter(|&i| matches!(v.kind(i), Some(K::String | K::Number | K::Bool)));
+                    if let (Some(i), true) = (literal, v.get(s, F::Kind).is_some_and(|k| v.text(k) == "const")) {
+                        decl.init = Some(Init::Literal(TypeSyn::Lit(v.text(i).into())));
+                    }
                     ids.push(self.push(scope, decl));
                 }
             }
@@ -521,12 +538,14 @@ impl<V: View> Builder<'_, V> {
                     .into_iter()
                     .filter_map(|m| {
                         let name = v.get(m, F::Name)?;
+                        // String members make a string enum.
+                        let ty = v.get(m, F::Init).filter(|&i| v.is(i, K::String)).map(|i| TypeSyn::Lit(v.text(i).into()));
                         Some(Member {
                             name: key_name(v, name),
                             kind: MemberKind::Prop,
                             is_static: true,
                             optional: false,
-                            ty: None,
+                            ty,
                             sigs: Vec::new(),
                             init: None,
                         })

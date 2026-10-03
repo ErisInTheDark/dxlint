@@ -9,7 +9,7 @@ use crate::config::ast::{Parent, RuleDef, SetValue, Severity, Target as AstTarge
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
-use crate::expr::{Attr, CExpr, Ctx, Scope, Value, BUILTIN_VARS};
+use crate::expr::{Attr, CExpr, Ctx, Scope, Value};
 use crate::grammar::Grammar;
 use crate::path_globs::{wildcard, PathGlobs};
 use crate::pattern::Pat;
@@ -210,7 +210,7 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
 fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], errors: &mut Vec<ConfigError>) -> Vec<Attr> {
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
     for def in &config.attrs {
-        if BUILTIN_VARS.iter().any(|(b, _)| *b == def.name.text) {
+        if crate::expr::is_builtin(&def.name.text) {
             errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));
             continue;
         }

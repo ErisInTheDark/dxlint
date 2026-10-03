@@ -6,7 +6,7 @@ mod states;
 mod text;
 mod tree;
 
-pub use parse::{full_match, Edge, Node, Parser, ROOT, TEXT};
+pub use parse::{full_match, probe, Edge, Node, Parser, Probe, ROOT, TEXT};
 pub use tree::Tree;
 
 use std::collections::HashMap;

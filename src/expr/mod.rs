@@ -2,6 +2,7 @@
 //! resolved to fields, options and builtins), evaluated per node.
 
 pub mod case;
+pub mod facts;
 pub mod functions;
 mod re;
 pub mod value;
@@ -47,20 +48,14 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("layer", "name of the node's own layer"),
     ("enclosing", "innermost layer containing the node's start, looking past overlays (a comment, a string, ...)"),
     ("source", "the whole file's text"),
-    ("uses", "native layers: how often the name this identifier declares is used (null if it declares nothing)"),
-    ("value_uses", "native layers: uses that need the runtime value (not type positions, `typeof x` in types)"),
-    ("self_uses", "native layers: those uses inside the declaration itself (a function calling itself)"),
-    ("writes", "native layers: assignments to the name this identifier declares"),
-    ("decl_kind", "native layers: what this identifier's declaration is (`const`, `param`, `import`, `class`, `type`, ...)"),
-    ("exported", "native layers: the declaration is `export`ed"),
-    ("ambient", "native layers: the declaration is inside `declare` (no runtime code)"),
-    ("decl_import", "native layers: the module an identifier's binding is imported from (null if not imported)"),
-    ("decl_doc", "native layers: the JSDoc of the declaration an identifier is or refers to, followed into imported files"),
-    ("type", "native layers: the expression's declared type as text (`Promise<void>`, `never`); null when it cannot tell"),
-    ("type_members", "native layers: member names of the expression's type, inherited ones included (`then`, `[Symbol.dispose]`)"),
-    ("type_param_defaults", "native layers: on a call, `new`, type reference or class: each type parameter's default, printed (null where none)"),
-    ("type_params_inferred", "native layers: on a call or `new`: what the arguments would infer for each type parameter (null where unknown)"),
+    ("index", "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root"),
+    ("gap_before", "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child"),
 ];
+
+/// A built-in variable or native fact of that name.
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN_VARS.iter().any(|(b, _)| *b == name) || facts::fact(name).is_some()
+}
 
 #[derive(Debug)]
 pub enum CExpr {
@@ -74,6 +69,9 @@ pub enum CExpr {
     /// The closest ancestor of a matcher, or one of its fields.
     Ancestor(u32, Option<u16>),
     Builtin(usize),
+    /// A native fact ([`facts::FACTS`]) of the node, of a field (a list
+    /// when it repeats), or of the parent layer.
+    Fact(usize, FactOf),
     Opt(usize),
     Call(&'static Function, Vec<CExpr>),
     Not(Box<CExpr>),
@@ -90,6 +88,29 @@ pub enum CExpr {
     ParentField(u16),
     /// `parent.attr`
     ParentAttr(u16),
+    /// `dbg(value, "label")`
+    Dbg(Box<CExpr>, String),
+}
+
+/// Expression forms that are not plain functions, for `zlint functions`.
+pub const SPECIAL_FORMS: &[(&str, &str)] =
+    &[("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on")];
+
+/// A value as `dbg` prints it: strings quoted, lists bracketed.
+pub fn show(v: &Value) -> String {
+    match v {
+        Value::Str(s) => format!("{s:?}"),
+        Value::List(items) => format!("[{}]", items.iter().map(show).collect::<Vec<_>>().join(", ")),
+        Value::Null => "null".into(),
+        other => other.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FactOf {
+    Node,
+    Field(u16),
+    Parent,
 }
 
 /// A `let` attribute: its expression on each layer that defines it.
@@ -139,6 +160,23 @@ impl Scope<'_> {
                 CExpr::List(items.iter().map(|i| self.compile(i, errors)).collect::<Option<Vec<_>>>()?)
             }
             ExprKind::Var(path) => return self.var(path, e, errors),
+            // `dbg(value, "label")`: the value, printed per node to stderr.
+            ExprKind::Call(name, args) if name.text == "dbg" => {
+                if args.is_empty() || args.len() > 2 {
+                    errors.push(ConfigError::new(e.span, "`dbg` takes the value to show and an optional label").note("usage: dbg(value, \"label\")"));
+                    return None;
+                }
+                let label = match args.get(1).map(|a| self.compile(a, errors)) {
+                    Some(Some(CExpr::Const(Value::Str(s)))) => Some(s.to_string()),
+                    Some(Some(_)) => {
+                        errors.push(ConfigError::new(args[1].span, "the label of `dbg` must be a plain string"));
+                        return None;
+                    }
+                    Some(None) => return None,
+                    None => None,
+                };
+                CExpr::Dbg(Box::new(self.compile(&args[0], errors)?), label.unwrap_or_else(|| "dbg".into()))
+            }
             ExprKind::Call(name, args) => {
                 let Some(f) = functions::lookup(&name.text) else {
                     errors.push(
@@ -233,6 +271,9 @@ impl Scope<'_> {
                 if let Some(i) = BUILTIN_VARS.iter().position(|(b, _)| *b == name.text) {
                     return Some(CExpr::Builtin(i));
                 }
+                if let Some(i) = facts::fact(&name.text) {
+                    return Some(CExpr::Fact(i, FactOf::Node));
+                }
                 if let Some(m) = self.grammar.matcher(&name.text) {
                     return Some(CExpr::Ancestor(m, None));
                 }
@@ -241,7 +282,8 @@ impl Scope<'_> {
                     .iter()
                     .map(String::as_str)
                     .chain(self.fields.iter().map(|(f, _)| f.as_str()))
-                    .chain(BUILTIN_VARS.iter().map(|(b, _)| *b));
+                    .chain(BUILTIN_VARS.iter().map(|(b, _)| *b))
+                    .chain(facts::FACTS.iter().map(|f| f.name));
                 let mut err = ConfigError::new(name.span, format!("unknown name `{}`", name.text));
                 if let Some(best) = closest(&name.text, candidates) {
                     err = err.note(format!("did you mean `{best}`?"));
@@ -261,10 +303,19 @@ impl Scope<'_> {
                 if let (Some((_, label)), Some(attr), false) = (own_field, attr, ancestor_field) {
                     return Some(CExpr::FieldAttr(*label, attr as u16));
                 }
-                // `parent.x`: a field or attribute of the node's parent layer.
+                // `field.fact`: a native fact of one of the node's fields.
+                let fact = facts::fact(&field.text);
+                if let (Some((_, label)), Some(fact), None) = (own_field, fact, attr) {
+                    return Some(CExpr::Fact(fact, FactOf::Field(*label)));
+                }
+                // `parent.x`: a field, attribute or fact of the node's
+                // parent layer.
                 if layer.text == "parent" && self.grammar.matcher("parent").is_none() {
                     if let Some(a) = attr {
                         return Some(CExpr::ParentAttr(a as u16));
+                    }
+                    if let Some(fact) = fact {
+                        return Some(CExpr::Fact(fact, FactOf::Parent));
                     }
                     if let Some(label) = self.grammar.labels.get(&field.text) {
                         return Some(CExpr::ParentField(label));
@@ -479,43 +530,21 @@ impl<'a> Ctx<'a> {
                 Some(id) if !self.tree.is_root(id) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),
                 _ => Value::from(""),
             },
-            name @ ("uses" | "value_uses" | "self_uses" | "writes" | "decl_kind" | "exported" | "ambient") => {
-                match self.native.and_then(|n| n.binding(self.node)) {
-                    Some(b) => match name {
-                        "uses" => Value::from(b.uses as usize),
-                        "value_uses" => Value::from(b.value_uses as usize),
-                        "self_uses" => Value::from(b.self_uses as usize),
-                        "writes" => Value::from(b.writes as usize),
-                        "decl_kind" => Value::from(b.kind),
-                        "exported" => Value::Bool(b.exported),
-                        _ => Value::Bool(b.ambient),
-                    },
+            "index" => match (self.tree.parent(self.node), self.tree.label(self.node)) {
+                (Some(p), label) => Value::from(
+                    self.tree.node(p).children.iter().take_while(|e| e.node != self.node).filter(|e| Some(e.label) == label).count(),
+                ),
+                (None, _) => Value::Null,
+            },
+            "gap_before" => {
+                let prev = self.tree.parent(self.node).and_then(|p| {
+                    self.tree.node(p).children.iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
+                });
+                match prev {
+                    Some(c) => Value::from(&self.source[self.tree.node(c).end as usize..start]),
                     None => Value::Null,
                 }
             }
-            "decl_import" => match self.native.and_then(|n| n.import_of(self.node)) {
-                Some((from, _)) => Value::from(from),
-                None => Value::Null,
-            },
-            "decl_doc" => match self.native.and_then(|n| n.decl_doc(self.node)) {
-                Some(doc) => Value::from(doc),
-                None => Value::Null,
-            },
-            "type" => match self.native.and_then(|n| n.type_text(self.node)) {
-                Some(t) => Value::from(t),
-                None => Value::Null,
-            },
-            name @ ("type_param_defaults" | "type_params_inferred") => match self.native.and_then(|n| n.type_params(self.node)) {
-                Some((defaults, inferred)) => {
-                    let list = if name == "type_param_defaults" { defaults } else { inferred };
-                    Value::List(list.into_iter().map(|t| t.map_or(Value::Null, Value::from)).collect())
-                }
-                None => Value::Null,
-            },
-            "type_members" => match self.native.and_then(|n| n.type_members(self.node)) {
-                Some(names) => Value::List(names.into_iter().map(|n| Value::from(n.to_string())).collect()),
-                None => Value::Null,
-            },
             "line" => Value::from(self.lines.line_of(start) + 1),
             "col" => Value::from(self.lines.line_col(self.source, start).1 + 1),
             "file" => Value::from(self.file),
@@ -610,6 +639,33 @@ impl<'a> Ctx<'a> {
                 },
             },
             CExpr::Builtin(i) => self.builtin(*i),
+            CExpr::Dbg(inner, label) => {
+                let v = self.eval(inner)?;
+                let start = self.tree.node(self.node).start as usize;
+                let (line, col) = self.lines.line_col(self.source, start);
+                let layer = match self.tree.node(self.node).matcher {
+                    m if m == crate::grammar::ROOT || m == crate::grammar::TEXT => "",
+                    m => self.grammar.matchers[m as usize].name.as_str(),
+                };
+                eprintln!("{}:{}:{} {layer} {label} = {}", self.file, line + 1, col + 1, show(&v));
+                v
+            }
+            CExpr::Fact(i, of) => {
+                let Some(native) = self.native else { return Ok(Value::Null) };
+                let get = facts::FACTS[*i].get;
+                match of {
+                    FactOf::Node => get(native, self.node),
+                    FactOf::Parent => self.parent_layer().map_or(Value::Null, |p| get(native, p)),
+                    FactOf::Field(label) => {
+                        let mut values: Vec<Value> = self.tree.fields(self.node, *label).into_iter().map(|id| get(native, id)).collect();
+                        match values.len() {
+                            0 => Value::Null,
+                            1 => values.pop().expect("one"),
+                            _ => Value::List(values),
+                        }
+                    }
+                }
+            }
             CExpr::Attr(a) => self.attr(self.node, *a)?,
             CExpr::ParentField(label) => match self.parent_layer() {
                 Some(p) => self.field(p, *label),

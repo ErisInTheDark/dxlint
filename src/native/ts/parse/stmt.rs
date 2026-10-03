@@ -380,7 +380,11 @@ impl<'s> Parser<'s> {
         let mut kids = Kids::default();
         let b = self.block()?;
         kids.add(Field::Block, b);
+        let kstart = self.start();
         if self.eat_word("catch") {
+            // The `catch` keyword: where the clause starts.
+            let k = self.text_node(kstart, self.prev_end);
+            kids.add(Field::Kind, k);
             if self.eat("(") {
                 let p = self.binding()?;
                 kids.add(Field::Param, p);

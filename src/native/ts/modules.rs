@@ -70,7 +70,10 @@ pub struct Project {
     members: RwLock<HashMap<MembersKey, Arc<[Box<str>]>>>,
 }
 
-pub type MembersKey = (Vec<DeclRef>, Vec<String>);
+/// `(globals identity, declarations, printed type arguments)`: heritage
+/// resolves through a tsconfig's globals, so the same declaration can have
+/// different inherited members under different `lib` settings.
+pub type MembersKey = (usize, Vec<DeclRef>, Vec<String>);
 
 impl Project {
     pub fn file_id(&self, path: &Path) -> FileId {

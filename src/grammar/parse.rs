@@ -597,6 +597,62 @@ impl<'g, 't> Parser<'g, 't> {
     }
 }
 
+/// What a candidate child matcher does at one position (`zlint tree --at`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    /// Its first-byte set rules the byte out.
+    FirstByte,
+    /// Its two-byte or lookbehind prefilter rules the position out.
+    Prefilter,
+    NoMatch,
+    /// Matches, ending at this offset.
+    Match(usize),
+    /// Matches, but runs past the end of the layer it would sit in.
+    TooLong(usize),
+}
+
+/// Why the layer tree looks the way it does at `pos`: whether the scan of
+/// the containing layer (`parent`, `None` for the file root) even stops
+/// there, and what each of its child matchers would do. Overlays are
+/// searched separately and are not included.
+pub fn probe(g: &Grammar, lang: usize, text: &str, parent: Option<u32>, pos: usize, limit: usize) -> (bool, Vec<(u32, Probe)>) {
+    let mut p = Parser::new(g, lang, text);
+    let view = p.view;
+    let bytes = text.as_bytes();
+    if pos >= bytes.len() {
+        return (false, Vec::new());
+    }
+    let (list, scanned) = match parent {
+        None => (&view.root_children, view.root_prefilter.next(bytes, pos) == Some(pos)),
+        Some(m) => (&view.children[m as usize], view.child_first[m as usize].contains(bytes[pos])),
+    };
+    let out = list
+        .iter()
+        .map(|&c| {
+            let m = &g.matchers[c as usize];
+            let outcome = if !m.first.contains(bytes[pos]) {
+                Probe::FirstByte
+            } else if !may_start(m, bytes, pos) {
+                Probe::Prefilter
+            } else {
+                match p.call(c, pos) {
+                    Some(n) => {
+                        let end = p.nodes[n as usize].end as usize;
+                        if end <= limit {
+                            Probe::Match(end)
+                        } else {
+                            Probe::TooLong(end)
+                        }
+                    }
+                    None => Probe::NoMatch,
+                }
+            };
+            (c, outcome)
+        })
+        .collect();
+    (scanned, out)
+}
+
 /// Does `prog` match all of `text`? Powers `~` when no DFA can.
 pub fn full_match(g: &Grammar, lang: usize, prog: &Program, text: &str) -> bool {
     let mut p = Parser::new(g, lang, text);

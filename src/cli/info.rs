@@ -47,19 +47,133 @@ fn show(v: &zoomie_lint::expr::Value) -> String {
     }
 }
 
-pub fn tree(linter: &Linter, file: &Path, all: bool) -> ExitCode {
+/// A file's text and the language that owns it.
+fn read_source(linter: &Linter, file: &Path) -> Result<(String, usize), ExitCode> {
     let path = std::env::current_dir().unwrap_or_default().join(file);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) => {
             render::error(&format!("cannot read {}: {e}", file.display()));
-            return ExitCode::from(2);
+            return Err(ExitCode::from(2));
         }
     };
     let rel = linter.relative(&path);
     let Some(lang) = linter.grammar.lang_for(&rel) else {
         render::error(&format!("no `lang` owns {}", file.display()));
+        return Err(ExitCode::from(2));
+    };
+    Ok((text, lang))
+}
+
+fn node_name(g: &zoomie_lint::grammar::Grammar, tree: &Tree, lang: usize, id: u32) -> String {
+    if tree.is_root(id) {
+        format!(".{}", g.langs[lang].name)
+    } else if tree.is_text(id) {
+        String::new()
+    } else {
+        g.matchers[tree.node(id).matcher as usize].name.clone()
+    }
+}
+
+fn snippet(text: &str, start: usize, end: usize) -> String {
+    let mut s: String = text[start..end].chars().take(60).collect();
+    let shown = s.len();
+    s = s.replace('\r', "").replace('\n', "⏎").replace('\t', "→");
+    if end - start > shown {
+        s.push('…');
+    }
+    s
+}
+
+/// `zlint tree --at LINE:COL`: the layers covering a position, then what
+/// every child matcher of the innermost one does there, so a span that went
+/// to the wrong layer (or to none) can be traced to the matcher that took
+/// it or the prefilter that skipped it.
+pub fn explain(linter: &Linter, file: &Path, at: &str) -> ExitCode {
+    let (text, lang) = match read_source(linter, file) {
+        Ok(x) => x,
+        Err(code) => return code,
+    };
+    let lines = zoomie_lint::line_index::LineIndex::new(&text);
+    let parsed = at.split_once(':').and_then(|(l, c)| Some((l.trim().parse::<usize>().ok()?, c.trim().parse::<usize>().ok()?)));
+    let Some((line, col)) = parsed.filter(|&(l, c)| l >= 1 && c >= 1 && l <= lines.line_count()) else {
+        render::error(&format!("`--at` wants LINE:COL inside the file, got `{at}`"));
         return ExitCode::from(2);
+    };
+    let line_start = lines.line_start(line - 1);
+    let pos = text[line_start..].char_indices().nth(col - 1).map_or(text.len(), |(i, _)| line_start + i);
+    let g = &linter.grammar;
+    let tree = Tree::parse(g, lang, &text);
+
+    println!("{BOLD}layers at {line}:{col}{BOLD:#}");
+    let inner = tree.innermost_at(g, pos as u32, u32::MAX).unwrap_or(tree.root);
+    let mut path = vec![inner];
+    while let Some(p) = tree.parent(*path.last().expect("non-empty")) {
+        path.push(p);
+    }
+    for (depth, &id) in path.iter().rev().filter(|&&id| !tree.is_text(id)).enumerate() {
+        let n = tree.node(id);
+        let (l, c) = lines.line_col(&text, n.start as usize);
+        println!("{}{BOLD}{}{BOLD:#} {DIM}{}:{}{DIM:#} {}", "  ".repeat(depth), node_name(g, &tree, lang, id), l + 1, c + 1, snippet(&text, n.start as usize, n.end as usize));
+    }
+
+    // The layer whose scan decides what starts here: the innermost node that
+    // starts before `pos` (a node starting exactly here is the winner).
+    let mut container = inner;
+    while container != tree.root && tree.node(container).start as usize >= pos {
+        container = tree.parent(container).unwrap_or(tree.root);
+    }
+    let winner = tree
+        .node(container)
+        .children
+        .iter()
+        .map(|e| e.node)
+        .find(|&c| tree.node(c).start as usize == pos && !tree.is_text(c))
+        .map(|c| tree.node(c).matcher);
+    let parent = (!tree.is_root(container)).then(|| tree.node(container).matcher);
+    let limit = tree.node(container).end as usize;
+    let (scanned, candidates) = zoomie_lint::grammar::probe(g, lang, &text, parent, pos, limit);
+    let byte = text[pos..].chars().next().map_or("end of file".into(), |c| format!("{c:?}"));
+    println!("\n{BOLD}candidates{BOLD:#} {DIM}children of{DIM:#} {} {DIM}at{DIM:#} {byte}", node_name(g, &tree, lang, container));
+    if !scanned {
+        println!("  {DIM}the scan of this layer skips this position (no child can start with it){DIM:#}");
+    }
+    use zoomie_lint::grammar::Probe;
+    let best = candidates.iter().filter_map(|&(c, p)| if let Probe::Match(e) = p { Some((c, e)) } else { None }).max_by_key(|&(_, e)| e);
+    let ruled_out = candidates.iter().filter(|(_, p)| matches!(p, Probe::FirstByte)).count();
+    for (c, outcome) in candidates {
+        let name = &g.matchers[c as usize].name;
+        let what = match outcome {
+            Probe::FirstByte => format!("{DIM}cannot start with this character{DIM:#}"),
+            Probe::Prefilter => format!("{DIM}ruled out by its lookbehind / two-byte prefilter{DIM:#}"),
+            Probe::NoMatch => "no match".into(),
+            Probe::Match(e) => format!("matches {}", snippet(&text, pos, e)),
+            Probe::TooLong(e) => format!("matches {} {DIM}but runs past the layer's end{DIM:#}", snippet(&text, pos, e)),
+        };
+        let mark = if winner == Some(c) {
+            format!(" {BOLD}<- in the tree{BOLD:#}")
+        } else if winner.is_none() && best.is_some_and(|(b, _)| b == c) {
+            format!(" {BOLD}<- longest, yet not in the tree{BOLD:#}")
+        } else {
+            String::new()
+        };
+        if !matches!(outcome, Probe::FirstByte) {
+            println!("  {CYAN}{name}{CYAN:#} {what}{mark}");
+        }
+    }
+    if ruled_out > 0 {
+        println!("  {DIM}(+{ruled_out} matchers that cannot start with this character){DIM:#}");
+    }
+    if winner.is_none() && best.is_none() {
+        println!("  {DIM}nothing starts here: the text belongs to the layer above{DIM:#}");
+    }
+    ExitCode::SUCCESS
+}
+
+pub fn tree(linter: &Linter, file: &Path, all: bool) -> ExitCode {
+    let (text, lang) = match read_source(linter, file) {
+        Ok(x) => x,
+        Err(code) => return code,
     };
     let g = &linter.grammar;
     let tree = Tree::parse(g, lang, &text);
@@ -72,23 +186,13 @@ pub fn tree(linter: &Linter, file: &Path, all: bool) -> ExitCode {
             p = tree.parent(pp);
         }
         let node = tree.node(id);
-        let name = if tree.is_root(id) {
-            format!(".{}", g.langs[lang].name)
-        } else if tree.is_text(id) {
-            String::new()
-        } else {
-            g.matchers[node.matcher as usize].name.clone()
-        };
+        let name = node_name(g, &tree, lang, id);
         let label = tree.label(id).map(|l| format!("{}: ", g.labels.name(l))).unwrap_or_default();
         if !all && label.is_empty() && depth > 1 && is_noise(&name) {
             continue;
         }
         let (line, col) = lines.line_col(&text, node.start as usize);
-        let mut snippet: String = text[node.start as usize..node.end as usize].chars().take(60).collect();
-        snippet = snippet.replace('\r', "").replace('\n', "⏎").replace('\t', "→");
-        if (node.end - node.start) as usize > snippet.len() {
-            snippet.push('…');
-        }
+        let snippet = snippet(&text, node.start as usize, node.end as usize);
         println!(
             "{}{CYAN}{label}{CYAN:#}{BOLD}{name}{BOLD:#} {DIM}{}:{}{DIM:#} {snippet}",
             "  ".repeat(depth),
@@ -149,8 +253,14 @@ pub fn functions() -> ExitCode {
     for (name, doc) in BUILTIN_VARS {
         println!("  {CYAN}{name}{CYAN:#} {DIM}- {doc}{DIM:#}");
     }
+    for f in zoomie_lint::expr::facts::FACTS {
+        println!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.name, f.doc);
+    }
     println!("  {DIM}plus the node's fields by label, options by name, and `matcher` / `matcher.field` for ancestors{DIM:#}");
     println!("\n{BOLD}functions{BOLD:#}");
+    for (signature, doc) in zoomie_lint::expr::SPECIAL_FORMS {
+        println!("  {CYAN}{signature}{CYAN:#} {DIM}- {doc}{DIM:#}");
+    }
     for f in FUNCTIONS {
         println!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.signature, f.doc);
     }
