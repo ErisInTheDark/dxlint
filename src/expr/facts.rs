@@ -1,26 +1,40 @@
 //! Facts native front ends answer about a node (`uses`, `type`, ...): one
 //! registry entry each, read like built-in variables. On layers without a
 //! native front end they are null.
+//!
+//! The registry is this file's [`CORE`] list plus each topic module's own
+//! list ([`crate::native::ts::FACT_GROUPS`]), so topics add facts without
+//! touching a shared file.
+
+use std::sync::LazyLock;
 
 use crate::native::ts::facts::Facts;
 
 use super::Value;
 
+/// A fact. Topic modules read the file directly through
+/// [`Facts::with_file`]: `get: |f, n| f.with_file(my_fact, n)` with
+/// `fn my_fact(file: &NativeFile, node: u32) -> Value<'static>`.
 pub struct Fact {
     pub name: &'static str,
     pub doc: &'static str,
     pub get: fn(&dyn Facts, u32) -> Value<'static>,
 }
 
-fn opt<T>(v: Option<T>, f: impl FnOnce(T) -> Value<'static>) -> Value<'static> {
+/// `v`'s value, or null.
+pub fn opt<T>(v: Option<T>, f: impl FnOnce(T) -> Value<'static>) -> Value<'static> {
     v.map_or(Value::Null, f)
 }
 
-fn words(list: Vec<&'static str>) -> Value<'static> {
+/// A list of words.
+pub fn words(list: Vec<&'static str>) -> Value<'static> {
     Value::List(list.into_iter().map(Value::from).collect())
 }
 
-pub const FACTS: &[Fact] = &[
+/// Every fact: the core list, then each topic's.
+pub static FACTS: LazyLock<Vec<&'static Fact>> = LazyLock::new(|| CORE.iter().chain(crate::native::ts::FACT_GROUPS.iter().flat_map(|g| g.iter())).collect());
+
+const CORE: &[Fact] = &[
     Fact {
         name: "uses",
         doc: "native layers: how often the name this identifier declares is used (null if it declares nothing)",
@@ -367,6 +381,7 @@ pub const FACTS: &[Fact] = &[
 
 use crate::native::ts::facts as facts_bits;
 
+/// A fact's index in [`FACTS`].
 pub fn fact(name: &str) -> Option<usize> {
     FACTS.iter().position(|f| f.name == name)
 }

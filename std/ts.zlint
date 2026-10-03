@@ -22,3 +22,9 @@ group ts_statement ts_expression_statement, ts_variable_declaration, ts_return, 
 import .ts/scopes
 import .ts/problems
 import .ts/style
+import .ts/typed
+import .ts/layout
+import .ts/structure
+import .ts/scoping
+import .ts/suggestions
+import .ts/restrictions

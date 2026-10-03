@@ -24,6 +24,7 @@ mod statics;
 mod summary;
 pub mod syntax;
 mod tokens;
+pub mod topics;
 mod types;
 mod values;
 mod view;
@@ -35,6 +36,7 @@ use std::path::Path;
 use crate::grammar::Node;
 
 pub use regex::flags_error as regex_flags_error;
+pub use topics::FACT_GROUPS;
 pub use regex::is_mark as is_combining_mark;
 
 pub struct Parsed {

@@ -176,16 +176,6 @@ in ts_static_block.body rule no-empty-static-block {
   warn "Unexpected empty static block."
 }
 
-# The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
-in ts_identifier rule no-eval {
-  when text == "eval" && resolved == "global"
-  warn "eval can be harmful."
-}
-in ts_member.property rule no-eval:member {
-  when text == "eval" && re_test(parent.object, /^(globalThis|window|global|self)$/)
-  warn "eval can be harmful."
-}
-
 # ---- writes to what cannot (or should not) change ------------------------
 macro is_write (access == "write" || access == "read_write")
 in ts_identifier rule no-ex-assign {
@@ -383,32 +373,6 @@ in ts_declarator rule no-unassigned-vars {
   warn "'{name}' is always 'undefined' because it's never assigned."
 }
 
-# `.bind(x)` on a function that never uses `this` (or on an arrow).
-in ts_function, ts_arrow let function_uses_this uses_this
-in ts_parenthesized let function_uses_this expression.function_uses_this
-in ts_member let unneeded_bind property == "bind" && object.function_uses_this == false && parent == "ts_call" && count(parent.argument) == 1
-in ts_member.property rule no-extra-bind {
-  when parent.unneeded_bind
-  warn "The function binding is unnecessary."
-}
-
-# `!!x` and `Boolean(x)` where the value is already used as a boolean.
-macro is_double_negation (layer == "ts_unary" && re_test(text, /^!\s*!/))
-macro is_boolean_call (layer == "ts_call" && re_test(text, /^Boolean\s*\(/) && !re_test(text, /,/))
-macro boolean_cast_message (if is_double_negation then "Redundant double negation." else "Redundant Boolean call.")
-in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-extra-boolean-cast {
-  when is_double_negation || is_boolean_call
-  warn boolean_cast_message
-}
-in ts_unary.argument rule no-extra-boolean-cast:not {
-  when parent.operator == "!" && (is_double_negation || is_boolean_call)
-  warn boolean_cast_message
-}
-in ts_call.argument, ts_new.argument rule no-extra-boolean-cast:call {
-  when parent.callee == "Boolean" && index == 0 && (is_double_negation || is_boolean_call)
-  warn boolean_cast_message
-}
-
 # Writes to the built-in globals.
 in ts_identifier rule no-global-assign {
   option exceptions string[] = [] "read-only globals that may be modified"
@@ -425,29 +389,9 @@ in ts_identifier rule no-undef {
 # The operand of `typeof`, through parentheses.
 in ts_identifier, ts_parenthesized let under_typeof parent == "ts_unary" && parent.operator == "typeof" || parent == "ts_parenthesized" && parent.under_typeof == true
 
-in ts_new rule no-new-wrappers {
-  when re_test(callee, /^(String|Number|Boolean)$/) && callee.resolved == "global"
-  warn "Do not use {callee} as a constructor."
-}
-
 in ts_number rule no-octal {
   when re_test(text, /^0[0-9]/)
   warn "Octal literals should not be used."
-}
-
-in ts_string rule no-nonoctal-decimal-escape {
-  when re_test(text, /(?:^|[^\\])(?:\\\\)*\\[89]/)
-  warn "Don't use '{re_find(text, /\\[89]/)}' escape sequence."
-}
-
-# Comma operators, except in `for` heads and inside parentheses (twice
-# where the statement or arrow already has its own).
-in ts_parenthesized let is_arrow_body parent == "ts_arrow"
-in ts_sequence let sequence_allowed parent == "ts_for" || parent == "ts_parenthesized" && !parent.is_arrow_body
-in ts_sequence.expression rule no-sequences {
-  when index == 0 && !parent.sequence_allowed
-  report end
-  warn "Unexpected use of comma operator."
 }
 
 # Every hole, at its comma.
@@ -455,17 +399,6 @@ in ts_array let is_assignment_target parent == "ts_assignment" && parent.left ==
 in ts_hole rule no-sparse-arrays {
   when parent == "ts_array" && !parent.is_assignment_target
   warn "Unexpected comma in middle of array."
-}
-
-in ts_literal, ts_template let is_literal true
-in ts_throw rule no-throw-literal {
-  when argument != null && (argument.is_literal == true || argument == "undefined")
-  warn if argument == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
-}
-
-in ts_declarator rule no-undef-init {
-  when init == "undefined" && init.resolved == "global" && ts_variable_declaration.kind != "const" && is_identifier(name)
-  warn "It's not necessary to initialize '{name}' to undefined."
 }
 
 # `return`/`throw`/`break`/`continue` that leave a `finally` block.
@@ -479,31 +412,9 @@ in ts_labeled.label rule no-unused-labels {
   warn "'{text}:' is defined but never used."
 }
 
-# `catch (e) { throw e; }` does nothing.
-in ts_try let catch_only_rethrows parameter != null && is_identifier(parameter) && re_test(handler, "^\\x7B\\s*throw\\s+" re_escape(default(parameter,"")) "\\s*;?\\s*\\x7D$")
-in ts_try rule no-useless-catch {
-  when catch_only_rethrows && finalizer == null
-  warn "Unnecessary try/catch wrapper."
-}
-in ts_try.kind rule no-useless-catch:clause {
-  when parent.catch_only_rethrows && parent.finalizer != null
-  warn "Unnecessary catch clause."
-}
-
-in ts_call rule radix {
-  when count(argument) == 1 && (callee == "parseInt" && callee.resolved == "global" || re_test(callee, /^Number\s*\.\s*parseInt$/))
-  warn "Missing radix parameter."
-}
-
 in ts_function, ts_method rule require-yield {
   when contains(modifier, "*") && !has_yield && !re_test(default(body, ""), /^\{\s*\}$/)
   warn "This generator function does not have 'yield'."
-}
-
-in ts_identifier rule no-shadow-restricted-names {
-  when declaration_kind != null && re_test(text, /^(NaN|Infinity|undefined|eval|arguments)$/)
-  when !(text == "undefined" && re_test(declaration_kind, /^(var|let)$/) && ts_declarator.init == null)
-  warn "Shadowing of global property '{text}'."
 }
 
 in ts_number rule no-loss-of-precision {
@@ -594,47 +505,6 @@ in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no
   warn if ts_file then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
 }
 
-# ---- preferences -----------------------------------------------------------------
-in ts_with rule no-restricted-syntax:with warn "Using 'WithStatement' is not allowed."
-
-in ts_identifier rule prefer-rest-params {
-  when text == "arguments" && resolved == "global" && (ts_function != null || ts_method != null)
-  when !(parent == "ts_member" && index == 0)
-  warn "Use the rest parameters instead of 'arguments'."
-}
-
-# `f.apply(null, args)` / `o.f.apply(o, args)`.
-in ts_call {
-  let applied_function re_replace(callee, /\s*\.\s*apply$/, "")
-  let apply_receiver if re_test(applied_function, /\./) then re_replace(applied_function, /\.[^.]*$/, "") else null
-}
-in ts_array, ts_spread let is_array_like true
-in ts_call rule prefer-spread {
-  when re_test(callee, /\.\s*apply$/) && count(argument) == 2 && !any(compact(slice([] argument.is_array_like, 1)))
-  when if apply_receiver == null then re_test(first(argument), /^(null|undefined|void 0)$/) else normalize_space(first(argument)) == normalize_space(apply_receiver)
-  warn "Use the spread operator instead of '.apply()'."
-}
-
-in ts_object let is_object_literal true
-in ts_call rule prefer-object-spread {
-  when re_test(callee, /^Object\s*\.\s*assign$/) && count(argument) >= 1 && first([] argument.is_object_literal) == true && !re_test(text, /\.\.\./)
-  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{}}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
-}
-
-# String concatenation mixing literals and other values.
-in ts_string let has_string true
-in ts_template let has_string true
-in ts_string let all_literals true
-in ts_template let all_literals true
-in ts_binary {
-  let has_string operator == "+" && (left.has_string == true || right.has_string == true)
-  let all_literals operator == "+" && left.all_literals == true && right.all_literals == true
-}
-in ts_binary rule prefer-template {
-  when has_string && !all_literals && !(parent == "ts_binary" && parent.operator == "+")
-  warn "Unexpected string concatenation."
-}
-
 # ---- optional chaining where a short circuit throws -----------------------------
 in ts_member, ts_index let in_optional_chain optional != null || object.in_optional_chain == true
 in ts_call let in_optional_chain optional != null || callee.in_optional_chain == true
@@ -649,29 +519,7 @@ in optional_chain_user rule no-unsafe-optional-chaining {
   warn if r.arithmetic then "Unsafe arithmetic operation on optional chaining. It can result in NaN." else "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
 }
 
-# ---- variables -------------------------------------------------------------------
-# `let` never reassigned. With destructuring "all", a pattern only counts
-# when no name in it is reassigned: `let_writes` sums writes up the pattern and
-# `declarator_writes` hands the declarator's total back down.
-in ts_identifier let let_writes if declaration_kind == "let" then writes else 1
-in ts_object_pattern let let_writes sum(compact([] property.let_writes)) + default(rest.let_writes, 0)
-in ts_array_pattern let let_writes sum(compact([] element.let_writes))
-in ts_pattern_property let let_writes default(value.let_writes, key.let_writes)
-in ts_assignment_pattern let let_writes left.let_writes
-in ts_rest let let_writes argument.let_writes
 in ts_variable_declaration let declares_loop_variable parent == "ts_for_of" || parent == "ts_for_in"
-in ts_declarator {
-  let declarator_writes name.let_writes
-  let initialized init != null || parent.declares_loop_variable == true
-}
-in ts_object_pattern, ts_array_pattern, ts_pattern_property, ts_assignment_pattern, ts_rest {
-  let declarator_writes parent.declarator_writes
-  let initialized parent.initialized
-}
-in ts_identifier rule prefer-const {
-  when declaration_kind == "let" && writes == 0 && parent.declarator_writes == 0 && parent.initialized == true
-  warn "'{text}' is never reassigned. Use 'const' instead."
-}
 
 in ts_import rule no-unassigned-import {
   when default_import == null && namespace == null && count(specifier) == 0
@@ -735,62 +583,6 @@ in ts_call, ts_new rule no-invalid-regexp {
   when callee.global_value == "RegExp"
   when flags_problem != null || regex_pattern_error != null
   warn "{default(flags_problem, regex_pattern_error)}."
-}
-
-# ---- braces ------------------------------------------------------------------------
-# brace-style without single-line blocks: a function body written on one
-# line (`f(x => { y(); })`). The closing brace is reported where it is: the
-# fix puts it on its own line.
-in ts_function, ts_arrow, ts_method let owns_function_body true
-in ts_block let one_line_function_body parent.owns_function_body == true && count(body) > 0 && !contains(text, "\n")
-in ts_block rule brace-style:block-same-line {
-  when one_line_function_body
-  warn "Statement inside of curly braces should be on next line."
-}
-in ts_block rule brace-style:single-line-close {
-  when one_line_function_body
-  report change
-  fix as slice(text, 0, len(text) - 1) newline indent "}}"
-  warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
-}
-
-# curly "all": every body in braces.
-in ts_if.consequent rule curly:if {
-  when layer != "ts_block"
-  warn "Expected {{ after 'if' condition."
-}
-in ts_if.alternate rule curly:else {
-  when layer != "ts_block" && layer != "ts_if"
-  warn "Expected {{ after 'else'."
-}
-in ts_for.body, ts_while.body rule curly:loop {
-  when layer != "ts_block"
-  warn "Expected {{ after '{if parent == 'ts_for' then 'for' else 'while'}' condition."
-}
-in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body {
-  when layer != "ts_block"
-  warn "Expected {{ after '{if parent == 'ts_for_in' then 'for-in' else if parent == 'ts_for_of' then 'for-of' else 'do'}'."
-}
-
-# semi "always" on statements: each native statement owns its `;`
-# (.js/format's semi:never is the other choice).
-group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function
-in ts_export let semicolon_not_needed declaration != null
-in ts_variable_declaration let semicolon_not_needed re_test(parent, /^ts_for/)
-# Only bodiless ones: overload and abstract signatures.
-in ts_method, ts_function let semicolon_not_needed body != null
-in semicolon_statement rule semi:always {
-  when !ends_with(text, ";") && semicolon_not_needed != true
-  report change
-  fix as text ";"
-  warn "Missing semicolon."
-}
-
-# `new Foo` without an argument list.
-in ts_new rule new-parens {
-  when count(argument) == 0 && !re_test(text, /\)\s*$/)
-  fix as text "()"
-  warn "Missing '()' invoking a constructor."
 }
 
 # ---- whitespace and line breaks -------------------------------------------------

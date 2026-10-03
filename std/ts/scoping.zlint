@@ -1,0 +1,29 @@
+# .ts/scoping: eslint core and typescript-eslint rules about declarations,
+# scopes and names (shadowing, use before definition, naming, `this`),
+# on the native TypeScript layers and bindings.
+
+define {
+
+# `let` never reassigned. With destructuring "all", a pattern only counts
+# when no name in it is reassigned: `let_writes` sums writes up the pattern and
+# `declarator_writes` hands the declarator's total back down.
+in ts_identifier let let_writes if declaration_kind == "let" then writes else 1
+in ts_object_pattern let let_writes sum(compact([] property.let_writes)) + default(rest.let_writes, 0)
+in ts_array_pattern let let_writes sum(compact([] element.let_writes))
+in ts_pattern_property let let_writes default(value.let_writes, key.let_writes)
+in ts_assignment_pattern let let_writes left.let_writes
+in ts_rest let let_writes argument.let_writes
+in ts_declarator {
+  let declarator_writes name.let_writes
+  let initialized init != null || parent.declares_loop_variable == true
+}
+in ts_object_pattern, ts_array_pattern, ts_pattern_property, ts_assignment_pattern, ts_rest {
+  let declarator_writes parent.declarator_writes
+  let initialized parent.initialized
+}
+in ts_identifier rule prefer-const {
+  when declaration_kind == "let" && writes == 0 && parent.declarator_writes == 0 && parent.initialized == true
+  warn "'{text}' is never reassigned. Use 'const' instead."
+}
+
+}

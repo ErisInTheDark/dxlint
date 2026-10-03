@@ -10,7 +10,7 @@ mod prune;
 mod suppress;
 pub mod symbols;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

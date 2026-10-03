@@ -299,7 +299,7 @@ impl Symbols {
         for (name, doc) in BUILTIN_VARS {
             self.add(Kind::Builtin, name, doc.to_string(), format!("{doc}."));
         }
-        for f in facts::FACTS {
+        for f in facts::FACTS.iter() {
             self.add(Kind::Fact, f.name, f.doc.to_string(), format!("{}.", f.doc));
         }
         for f in functions::FUNCTIONS {

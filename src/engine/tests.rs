@@ -19,14 +19,17 @@ in .t, paren {
 }
 "#;
 
-fn linter(rules: &str) -> Linter {
+/// A linter for `rules` (no config errors allowed). Shared with other
+/// modules' tests, as are `errors`, `lint`, `native_linter` and
+/// `rule_messages`.
+pub(crate) fn linter(rules: &str) -> Linter {
     let src = format!("{LANG}\n{rules}");
     let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
     built.linter.expect("no errors")
 }
 
-fn errors(rules: &str) -> Vec<String> {
+pub(crate) fn errors(rules: &str) -> Vec<String> {
     let src = format!("{LANG}\n{rules}");
     build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"))
         .errors
@@ -35,7 +38,7 @@ fn errors(rules: &str) -> Vec<String> {
         .collect()
 }
 
-fn lint(l: &Linter, text: &str) -> Vec<Diagnostic> {
+pub(crate) fn lint(l: &Linter, text: &str) -> Vec<Diagnostic> {
     l.lint(Path::new("/root/file.t"), text)
 }
 
@@ -375,7 +378,8 @@ fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
     assert_eq!(fixed, "x (\n  a (\n    b\n  )\n)");
 }
 
-fn native_linter(rules: &str) -> Linter {
+/// `rules` after `import .ts`; lint with `l.lint(Path::new("/root/file.ts"), text)`.
+pub(crate) fn native_linter(rules: &str) -> Linter {
     let src = format!("import .ts\n{rules}");
     let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
@@ -868,7 +872,7 @@ fn whole_file_targets() {
 }
 
 /// The rules a config ends up with, and their messages on `text`.
-fn rule_messages(l: &Linter, text: &str) -> Vec<String> {
+pub(crate) fn rule_messages(l: &Linter, text: &str) -> Vec<String> {
     lint(l, text).into_iter().map(|d| format!("{}: {}", d.rule, d.message)).collect()
 }
 

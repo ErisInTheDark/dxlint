@@ -1,0 +1,154 @@
+# .ts/suggestions: eslint core "suggestion" rules (style and best
+# practice, not likely bugs) on the native TypeScript layers.
+
+define {
+
+# curly "all": every body in braces.
+in ts_if.consequent rule curly:if {
+  when layer != "ts_block"
+  warn "Expected {{ after 'if' condition."
+}
+in ts_if.alternate rule curly:else {
+  when layer != "ts_block" && layer != "ts_if"
+  warn "Expected {{ after 'else'."
+}
+in ts_for.body, ts_while.body rule curly:loop {
+  when layer != "ts_block"
+  warn "Expected {{ after '{if parent == 'ts_for' then 'for' else 'while'}' condition."
+}
+in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body {
+  when layer != "ts_block"
+  warn "Expected {{ after '{if parent == 'ts_for_in' then 'for-in' else if parent == 'ts_for_of' then 'for-of' else 'do'}'."
+}
+
+# The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
+in ts_identifier rule no-eval {
+  when text == "eval" && resolved == "global"
+  warn "eval can be harmful."
+}
+in ts_member.property rule no-eval:member {
+  when text == "eval" && re_test(parent.object, /^(globalThis|window|global|self)$/)
+  warn "eval can be harmful."
+}
+
+# `.bind(x)` on a function that never uses `this` (or on an arrow).
+in ts_function, ts_arrow let function_uses_this uses_this
+in ts_parenthesized let function_uses_this expression.function_uses_this
+in ts_member let unneeded_bind property == "bind" && object.function_uses_this == false && parent == "ts_call" && count(parent.argument) == 1
+in ts_member.property rule no-extra-bind {
+  when parent.unneeded_bind
+  warn "The function binding is unnecessary."
+}
+
+# `!!x` and `Boolean(x)` where the value is already used as a boolean.
+macro is_double_negation (layer == "ts_unary" && re_test(text, /^!\s*!/))
+macro is_boolean_call (layer == "ts_call" && re_test(text, /^Boolean\s*\(/) && !re_test(text, /,/))
+macro boolean_cast_message (if is_double_negation then "Redundant double negation." else "Redundant Boolean call.")
+in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-extra-boolean-cast {
+  when is_double_negation || is_boolean_call
+  warn boolean_cast_message
+}
+in ts_unary.argument rule no-extra-boolean-cast:not {
+  when parent.operator == "!" && (is_double_negation || is_boolean_call)
+  warn boolean_cast_message
+}
+in ts_call.argument, ts_new.argument rule no-extra-boolean-cast:call {
+  when parent.callee == "Boolean" && index == 0 && (is_double_negation || is_boolean_call)
+  warn boolean_cast_message
+}
+
+in ts_new rule no-new-wrappers {
+  when re_test(callee, /^(String|Number|Boolean)$/) && callee.resolved == "global"
+  warn "Do not use {callee} as a constructor."
+}
+
+in ts_string rule no-nonoctal-decimal-escape {
+  when re_test(text, /(?:^|[^\\])(?:\\\\)*\\[89]/)
+  warn "Don't use '{re_find(text, /\\[89]/)}' escape sequence."
+}
+
+# Comma operators, except in `for` heads and inside parentheses (twice
+# where the statement or arrow already has its own).
+in ts_parenthesized let is_arrow_body parent == "ts_arrow"
+in ts_sequence let sequence_allowed parent == "ts_for" || parent == "ts_parenthesized" && !parent.is_arrow_body
+in ts_sequence.expression rule no-sequences {
+  when index == 0 && !parent.sequence_allowed
+  report end
+  warn "Unexpected use of comma operator."
+}
+
+in ts_literal, ts_template let is_literal true
+in ts_throw rule no-throw-literal {
+  when argument != null && (argument.is_literal == true || argument == "undefined")
+  warn if argument == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+}
+
+in ts_declarator rule no-undef-init {
+  when init == "undefined" && init.resolved == "global" && ts_variable_declaration.kind != "const" && is_identifier(name)
+  warn "It's not necessary to initialize '{name}' to undefined."
+}
+
+# `catch (e) { throw e; }` does nothing.
+in ts_try let catch_only_rethrows parameter != null && is_identifier(parameter) && re_test(handler, "^\\x7B\\s*throw\\s+" re_escape(default(parameter,"")) "\\s*;?\\s*\\x7D$")
+in ts_try rule no-useless-catch {
+  when catch_only_rethrows && finalizer == null
+  warn "Unnecessary try/catch wrapper."
+}
+in ts_try.kind rule no-useless-catch:clause {
+  when parent.catch_only_rethrows && parent.finalizer != null
+  warn "Unnecessary catch clause."
+}
+
+in ts_call rule radix {
+  when count(argument) == 1 && (callee == "parseInt" && callee.resolved == "global" || re_test(callee, /^Number\s*\.\s*parseInt$/))
+  warn "Missing radix parameter."
+}
+
+in ts_identifier rule no-shadow-restricted-names {
+  when declaration_kind != null && re_test(text, /^(NaN|Infinity|undefined|eval|arguments)$/)
+  when !(text == "undefined" && re_test(declaration_kind, /^(var|let)$/) && ts_declarator.init == null)
+  warn "Shadowing of global property '{text}'."
+}
+
+# ---- preferences -----------------------------------------------------------------
+in ts_with rule no-restricted-syntax:with warn "Using 'WithStatement' is not allowed."
+
+in ts_identifier rule prefer-rest-params {
+  when text == "arguments" && resolved == "global" && (ts_function != null || ts_method != null)
+  when !(parent == "ts_member" && index == 0)
+  warn "Use the rest parameters instead of 'arguments'."
+}
+
+# `f.apply(null, args)` / `o.f.apply(o, args)`.
+in ts_call {
+  let applied_function re_replace(callee, /\s*\.\s*apply$/, "")
+  let apply_receiver if re_test(applied_function, /\./) then re_replace(applied_function, /\.[^.]*$/, "") else null
+}
+in ts_array, ts_spread let is_array_like true
+in ts_call rule prefer-spread {
+  when re_test(callee, /\.\s*apply$/) && count(argument) == 2 && !any(compact(slice([] argument.is_array_like, 1)))
+  when if apply_receiver == null then re_test(first(argument), /^(null|undefined|void 0)$/) else normalize_space(first(argument)) == normalize_space(apply_receiver)
+  warn "Use the spread operator instead of '.apply()'."
+}
+
+in ts_object let is_object_literal true
+in ts_call rule prefer-object-spread {
+  when re_test(callee, /^Object\s*\.\s*assign$/) && count(argument) >= 1 && first([] argument.is_object_literal) == true && !re_test(text, /\.\.\./)
+  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{}}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
+}
+
+# String concatenation mixing literals and other values.
+in ts_string let has_string true
+in ts_template let has_string true
+in ts_string let all_literals true
+in ts_template let all_literals true
+in ts_binary {
+  let has_string operator == "+" && (left.has_string == true || right.has_string == true)
+  let all_literals operator == "+" && left.all_literals == true && right.all_literals == true
+}
+in ts_binary rule prefer-template {
+  when has_string && !all_literals && !(parent == "ts_binary" && parent.operator == "+")
+  warn "Unexpected string concatenation."
+}
+
+}

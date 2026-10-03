@@ -1,9 +1,13 @@
 //! Everything the TypeScript front end knows about one file, computed on
 //! first use: rules that never ask for bindings never pay for them.
 
+use std::any::{Any, TypeId};
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
+
+use crate::expr::Value;
 
 use super::bind::{bind, Binding, Bindings};
 use super::check::Typing;
@@ -18,6 +22,8 @@ use super::syntax::Syntax;
 
 /// What rule expressions can ask the front end about a node.
 pub trait Facts {
+    /// `f` on the file itself (topic modules' facts).
+    fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static>;
     fn binding(&self, node: u32) -> Option<Binding>;
     fn import_of(&self, node: u32) -> Option<(String, String)>;
     fn decl_doc(&self, node: u32) -> Option<String>;
@@ -123,6 +129,10 @@ pub struct RegexFinding {
 pub type TypeParamFacts = (Vec<Option<String>>, Vec<Option<String>>);
 
 impl Facts for NativeFile<'_> {
+    fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static> {
+        f(self, node)
+    }
+
     fn binding(&self, node: u32) -> Option<Binding> {
         NativeFile::binding(self, node)
     }
@@ -472,6 +482,8 @@ pub struct NativeFile<'t> {
     reach: OnceCell<(Reach, HashMap<u32, u32>)>,
     supers: OnceCell<Supers>,
     pub(super) unused_members: OnceCell<HashMap<u32, (String, bool, bool)>>,
+    /// Topic modules' per-file results ([`NativeFile::cached`]).
+    topic_cache: RefCell<HashMap<TypeId, Rc<dyn Any>>>,
     typing: OnceCell<Typing<'t>>,
     /// `(module, name)` of imports -> their declaration's JSDoc.
     import_docs: RefCell<HashMap<(String, String), Option<String>>>,
@@ -489,9 +501,22 @@ impl<'t> NativeFile<'t> {
             reach: OnceCell::new(),
             supers: OnceCell::new(),
             unused_members: OnceCell::new(),
+            topic_cache: RefCell::new(HashMap::new()),
             typing: OnceCell::new(),
             import_docs: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// A topic module's whole-file result of type `T`, computed on first use
+    /// (one per type: give each analysis its own result type).
+    pub fn cached<T: 'static>(&self, init: impl FnOnce(&Self) -> T) -> Rc<T> {
+        let key = TypeId::of::<T>();
+        if let Some(v) = self.topic_cache.borrow().get(&key) {
+            return v.clone().downcast::<T>().expect("keyed by type");
+        }
+        let v: Rc<T> = Rc::new(init(self));
+        self.topic_cache.borrow_mut().insert(key, v.clone());
+        v
     }
 
     pub fn comments(&self) -> &[Comment] {

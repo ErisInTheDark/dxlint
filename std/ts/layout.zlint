@@ -1,0 +1,43 @@
+# .ts/layout: @stylistic spacing, punctuation and line-break rules on the
+# native TypeScript layers and token facts.
+
+define {
+
+# brace-style without single-line blocks: a function body written on one
+# line (`f(x => { y(); })`). The closing brace is reported where it is: the
+# fix puts it on its own line.
+in ts_function, ts_arrow, ts_method let owns_function_body true
+in ts_block let one_line_function_body parent.owns_function_body == true && count(body) > 0 && !contains(text, "\n")
+in ts_block rule brace-style:block-same-line {
+  when one_line_function_body
+  warn "Statement inside of curly braces should be on next line."
+}
+in ts_block rule brace-style:single-line-close {
+  when one_line_function_body
+  report change
+  fix as slice(text, 0, len(text) - 1) newline indent "}}"
+  warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
+}
+
+# semi "always" on statements: each native statement owns its `;`
+# (.js/format's semi:never is the other choice).
+group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function
+in ts_export let semicolon_not_needed declaration != null
+in ts_variable_declaration let semicolon_not_needed re_test(parent, /^ts_for/)
+# Only bodiless ones: overload and abstract signatures.
+in ts_method, ts_function let semicolon_not_needed body != null
+in semicolon_statement rule semi:always {
+  when !ends_with(text, ";") && semicolon_not_needed != true
+  report change
+  fix as text ";"
+  warn "Missing semicolon."
+}
+
+# `new Foo` without an argument list.
+in ts_new rule new-parens {
+  when count(argument) == 0 && !re_test(text, /\)\s*$/)
+  fix as text "()"
+  warn "Missing '()' invoking a constructor."
+}
+
+}

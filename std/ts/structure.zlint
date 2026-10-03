@@ -1,0 +1,6 @@
+# .ts/structure: @stylistic rules about the shape of code across lines:
+# indentation, parentheses, wrapping, comments' places, line lengths.
+
+define {
+
+}

@@ -1,0 +1,201 @@
+# .ts/typed: typescript-eslint rules that need type information, on the
+# native TypeScript layers and the type facts (`type`, `type_flags`,
+# `type_members`, ...). Where a type is unknown the rules stay quiet.
+
+define {
+
+macro thenable contains(default(type_members, []), "then")
+macro flags (default(type_flags, []))
+macro has_only_flags(fs, allowed) (count(fs) > 0 && count(unique(fs allowed)) == count(unique(allowed)))
+
+# A promise-valued statement that nothing awaits or handles.
+# `.catch(handler)` and `.then(ok, handler)` handle rejections; `.finally`
+# keeps what the chain before it did.
+in ts_member let chain_handles_rejection object.handles_rejection
+in ts_call let handles_rejection callee ~ /[\s\S]*\.catch/ && count(argument) >= 1 || callee ~ /[\s\S]*\.then/ && count(argument) >= 2 || callee ~ /[\s\S]*\.finally/ && callee.chain_handles_rejection == true
+in ts_expression_statement.expression rule no-floating-promises {
+  when layer != "ts_assignment" && layer != "ts_await" && !handles_rejection && thenable
+  warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
+}
+
+# `await` of something that is not a promise; promise aggregators of arrays
+# of non-promises.
+in ts_await.argument rule await-thenable {
+  when type != null && type != "any" && !thenable && !re_test(type, /\?/)
+  warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
+}
+in ts_array let is_promise_aggregator_argument parent.callee ~ /Promise\.(?:all|allSettled|race|any)/
+in ts_array.element rule await-thenable:aggregate {
+  when parent.is_promise_aggregator_argument && type != null && type != "any" && !thenable && !re_test(type, /\?/)
+  warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
+}
+in ts_call.argument rule await-thenable:iterable {
+  when parent.callee ~ /Promise\.(?:all|allSettled|race|any)/ && layer != "ts_array"
+  when type ~ /[A-Za-z0-9_.<>]+\[\]/ && !re_test(type, /\?|^any/) && !re_test(type, /^(?:Promise|PromiseLike)</)
+  warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
+}
+
+# no-unnecessary-type-arguments: the last explicit type argument is the type
+# parameter's default, or what the arguments infer anyway.
+in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument rule no-unnecessary-type-arguments {
+  when type_argument_redundant != null
+  warn if type_argument_redundant == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
+}
+
+# prefer-optional-chain: `a && a.b`, `!a || !a.b`, and comparisons whose
+# result does not change when the chain stops early (`a && a.b === 1`,
+# `!a || a.b !== 1`). Each operand says what it checks (`chain_subject`).
+macro member_path_pattern /^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$#][\w$]*)*$/
+in ts_identifier, ts_member, ts_this let chain_subject text
+in ts_identifier, ts_member, ts_this let chain_check_kind "plain"
+in ts_unary let chain_subject if operator == "!" && re_test(argument, member_path_pattern) then argument else null
+in ts_unary let chain_check_kind "not"
+in ts_logical let chain_subject right.chain_subject
+in ts_logical let chain_check_kind if operator == parent.operator then right.chain_check_kind else null
+in ts_binary {
+  let compares_nullish left ~ /undefined|null/ || right ~ /undefined|null/
+  let is_equality operator == "===" || operator == "=="
+  let is_inequality operator == "!==" || operator == "!="
+  let chain_check_kind if is_equality && !compares_nullish || is_inequality && compares_nullish then "cmp_and" else if is_inequality && !compares_nullish || is_equality && compares_nullish then "cmp_or" else null
+  let chain_subject null
+  let chain_compared_left left
+  let chain_compared_right right
+}
+macro extends_chain(base, chain) (re_test(chain, "^" re_escape(base) "(?:\\??\\.|\\[)"))
+# The checked value's type: optional chaining only says the same thing when
+# it is nullable and has no other falsy values (`false | X` stays as is).
+in ts_identifier, ts_member, ts_this let chain_type_flags type_flags
+in ts_unary let chain_type_flags argument.chain_type_flags
+in ts_logical let chain_type_flags right.chain_type_flags
+macro chain_type_allows(fs) (fs == null || contains(fs, "any") || !contains(fs, "boolean") && !contains(fs, "number") && !contains(fs, "string") && !contains(fs, "bigint"))
+# `a?.b !== x` differs from `!a || a.b !== x` when `x` may be undefined.
+in ts_binary let compared_value_flags if re_test(default(left, ""), /\./) then right.type_flags else left.type_flags
+in ts_logical rule prefer-optional-chain {
+  when left.chain_subject != null && left.chain_check_kind == (if operator == "&&" then "plain" else "not") && chain_type_allows(left.chain_type_flags)
+  # A chain that goes on to test something else is left alone.
+  when !(parent == "ts_logical" && parent.operator == operator && index == 0)
+  when !(re_test(default(right.chain_check_kind, ""), /^cmp/) && !(right.compared_value_flags != null && !contains(right.compared_value_flags, "nullable") && !contains(right.compared_value_flags, "any")))
+  when if operator == "&&" then right.chain_check_kind == "plain" && extends_chain(left.chain_subject, right.chain_subject) || right.chain_check_kind == "cmp_and" && (extends_chain(left.chain_subject, right.chain_compared_left) || extends_chain(left.chain_subject, right.chain_compared_right)) else right.chain_check_kind == "not" && extends_chain(left.chain_subject, right.chain_subject) || right.chain_check_kind == "cmp_or" && (extends_chain(left.chain_subject, right.chain_compared_left) || extends_chain(left.chain_subject, right.chain_compared_right))
+  warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
+}
+
+# ---- no-deprecated --------------------------------------------------------------
+# Imported names whose declaration's JSDoc has `@deprecated`, at the import
+# and at every use.
+in ts_identifier rule no-deprecated {
+  when imported_from != null && re_test(default(declaration_doc, ""), /(?m)^@deprecated\b/)
+  warn "Deprecated{if re_test(declaration_doc, /(?m)^@deprecated[ \t]*\S/) then ': ' trim(re_replace(re_find(declaration_doc, /(?m)^@deprecated[^\n]*(?:\n[^@\n][^\n]*)*/), /^@deprecated\s*/, '')) else '.'}"
+}
+
+# ---- more type-aware rules (type_flags) ----------------------------------------
+in ts_for_in rule no-for-in-array {
+  when has_only_flags(default(right.type_flags, []), ["array", "tuple", "union", "nullable", "undefined", "null"]) && contains(right.type_flags, "array")
+  warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
+}
+
+# checksVoidReturn off (wayward): conditions and spreads only.
+in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test rule no-misused-promises {
+  # Always a promise: `Promise | undefined` is a fair thing to test.
+  when contains(flags, "promise") && has_only_flags(flags, ["promise", "object", "union"])
+  warn "Expected non-Promise value in a boolean conditional."
+}
+
+in ts_binary {
+  let boolean_literal if re_test(right, /^(true|false)$/) then right else if re_test(left, /^(true|false)$/) then left else null
+  let other_side_flags if re_test(right, /^(true|false)$/) then left.type_flags else right.type_flags
+}
+in ts_binary rule no-unnecessary-boolean-literal-compare {
+  when re_test(operator, /^[!=]==?$/) && boolean_literal != null && has_only_flags(default(other_side_flags, []), ["boolean", "literal"])
+  warn if boolean_literal == "true" then "This expression unnecessarily compares a boolean value to a boolean instead of using it directly." else "This expression unnecessarily compares a boolean value to a boolean instead of negating it."
+}
+
+# Reported where the `${` starts (the end of the opening quasi).
+in ts_template let single_interpolation count(expression) == 1 && [] quasi == ["`${{", "}}`"] && has_only_flags(default(expression.type_flags, []), ["string", "literal"])
+in ts_template.quasi rule no-unnecessary-template-expression {
+  when index == 0 && parent.single_interpolation
+  report end
+  warn "Template literal expression is unnecessary and can be simplified."
+}
+
+# Receivers: what the object of `x.method(...)` is.
+in ts_member let receiver_flags object.type_flags
+macro receiver_is(kind) (contains(default(callee.receiver_flags, []), kind) && !contains(default(callee.receiver_flags, []), "unknown"))
+in ts_call {
+  let is_array_filter re_test(callee, /\.\s*filter$/) && receiver_is("array")
+  let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) == 1 && (receiver_is("array") || receiver_is("string"))
+}
+in ts_member let object_is_array_filter object.is_array_filter == true
+in ts_index rule prefer-find {
+  when object.is_array_filter == true && index == "0" && optional == null
+  warn "Prefer .find(...) instead of .filter(...)[0]."
+}
+in ts_call rule prefer-find:at {
+  when re_test(callee, /\.\s*at$/) && callee.object_is_array_filter == true && first([] argument) == "0"
+  warn "Prefer .find(...) instead of .filter(...)[0]."
+}
+
+in ts_binary rule prefer-includes {
+  when left.is_index_of == true && (re_test(operator, /^!==?$/) && right == "-1" || re_test(operator, /^===?$/) && right == "-1" || operator == ">" && right == "-1" || operator == ">=" && right == "0" || operator == "<" && right == "0")
+  warn "Use 'includes()' method instead."
+}
+
+# startsWith / endsWith written the long way, on strings.
+in ts_call {
+  let starts_ends_kind if receiver_is("string") && re_test(callee, /\.\s*indexOf$/) then "start_index" else if receiver_is("string") && re_test(callee, /\.\s*charAt$/) && first([] argument) == "0" then "start" else if receiver_is("string") && re_test(callee, /\.\s*(slice|substring)$/) && first([] argument) == "0" then "start" else if receiver_is("string") && re_test(callee, /\.\s*lastIndexOf$/) then "end_index" else if receiver_is("string") && re_test(callee, /\.\s*slice$/) && re_test(first([] argument), /^-/) && count(argument) == 1 then "end" else null
+  let regex_starts_test re_test(callee, /^\/\^[\w\s-]+\/\.\s*test$/) && count(argument) == 1 && contains(default(argument.type_flags, []), "string")
+  let regex_ends_test re_test(callee, /^\/[\w\s-]+\$\/\.\s*test$/) && count(argument) == 1 && contains(default(argument.type_flags, []), "string")
+}
+in ts_index let starts_ends_kind if contains(default(object.type_flags, []), "string") && index == "0" then "start" else if contains(default(object.type_flags, []), "string") && re_test(index, /\.length\s*-\s*1$/) then "end" else null
+in ts_binary rule prefer-string-starts-ends-with {
+  when re_test(operator, /^[!=]==?$/)
+  when left.starts_ends_kind == "start_index" && right == "0" || left.starts_ends_kind == "start" || left.starts_ends_kind == "end_index" && re_test(right, /\.length\s*-/) || left.starts_ends_kind == "end"
+  warn if re_test(default(left.starts_ends_kind, ""), /^end/) then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
+}
+in ts_call rule prefer-string-starts-ends-with:regex {
+  when regex_starts_test || regex_ends_test
+  warn if regex_ends_test then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
+}
+
+# Private members never written after construction.
+macro is_private(m) re_test(m, /\bprivate\b/)
+in ts_class_property rule prefer-readonly {
+  when (is_private(join([] modifier, " ")) || re_test(key, /^#/)) && !contains([] modifier, "readonly") && !contains([] modifier, "static") && member_writes == 0
+  # Computed keys and decorated members can be written where zlint cannot see.
+  when !re_test(key, /^\[/) && count(decorator) == 0
+  warn "Member '{key}' is never reassigned; mark it as `readonly`."
+}
+in ts_parameter rule prefer-readonly:parameter {
+  when member_writes == 0 && is_private(join([] modifier, " ")) && !contains([] modifier, "readonly")
+  warn "Member '{re_replace(text, /^(?:(?:private|public|protected|readonly|override)\s+)*/, '')}' is never reassigned; mark it as `readonly`."
+}
+
+# ---- the cheap type-checked trio ------------------------------------------------
+macro bad_in_string(fs) (contains(fs, "array") || contains(fs, "object") || contains(fs, "function") || contains(fs, "symbol") || contains(fs, "never"))
+macro stringifies_well(t) re_test(default(t, ""), /^(?:RegExp|Error|URL|URLSearchParams)$/)
+in ts_template.expression rule restrict-template-expressions {
+  when bad_in_string(flags) && !contains(flags, "any") && !stringifies_well(type)
+  warn "Invalid type \"{type}\" of template literal expression."
+}
+
+in ts_binary {
+  let adds_string contains(default(left.type_flags, []), "string") || contains(default(right.type_flags, []), "string")
+  let left_is_number has_only_flags(default(left.type_flags, []), ["number", "literal", "enum"])
+  let right_is_number has_only_flags(default(right.type_flags, []), ["number", "literal", "enum"])
+  let left_is_bigint has_only_flags(default(left.type_flags, []), ["bigint", "literal"])
+  let right_is_bigint has_only_flags(default(right.type_flags, []), ["bigint", "literal"])
+}
+in ts_binary.left, ts_binary.right rule restrict-plus-operands {
+  when parent.operator == "+" && parent.adds_string && bad_in_string(flags) && !contains(flags, "any") && !stringifies_well(type)
+  warn "Invalid operand for a '+' operation. Operands must each be a number or string, allowing a string + any of: `any`, `boolean`, `null`, `RegExp`, `undefined`. Got `{type}`."
+}
+in ts_binary rule restrict-plus-operands:numeric {
+  when operator == "+" && (left_is_bigint && right_is_number || left_is_number && right_is_bigint)
+  warn "Numeric '+' operations must either be both bigints or both numbers. Got `{if left_is_bigint then 'bigint' else 'number'}` + `{if right_is_bigint then 'bigint' else 'number'}`."
+}
+
+in ts_unary rule no-unsafe-unary-minus {
+  when operator == "-" && count(default(argument.type_flags, [])) > 0 && !contains(argument.type_flags, "any") && !contains(argument.type_flags, "unknown") && !contains(argument.type_flags, "number") && !contains(argument.type_flags, "bigint") && !contains(argument.type_flags, "enum")
+  warn "Argument of unary negation should be assignable to number | bigint but is {re_replace(default(argument.type, '?'), /^\"[\s\S]*\"$/, 'string')} instead."
+}
+
+}

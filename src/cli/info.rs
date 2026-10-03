@@ -292,7 +292,7 @@ pub fn functions() -> ExitCode {
     for (name, doc) in BUILTIN_VARS {
         println!("  {CYAN}{name}{CYAN:#} {DIM}- {doc}{DIM:#}");
     }
-    for f in zoomie_lint::expr::facts::FACTS {
+    for f in zoomie_lint::expr::facts::FACTS.iter() {
         println!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.name, f.doc);
     }
     println!("  {DIM}plus the node's fields by label, options by name, and `matcher` / `matcher.field` for ancestors{DIM:#}");
