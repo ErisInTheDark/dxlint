@@ -1,14 +1,29 @@
 //! Declaration, naming and return analyses (`std/ts/scoping`).
 
 mod bindings;
+mod atomic;
+mod callbacks;
+mod conventions;
+mod constness;
 mod globals;
+mod loops;
 mod names;
+mod receivers;
 mod returns;
 
 use crate::expr::facts::Fact;
 use crate::expr::Value;
 
 pub const FACTS: &[Fact] = &[
+    Fact { name: "scoping_const_binding", doc: "on a let declaration: unique-writer position, early reads and destructuring group eligibility", get: |f, n| f.with_file(constness::binding, n) },
+    Fact { name: "scoping_naming_candidate", doc: "on a declaration or member key: naming selector and semantic modifiers", get: |f, n| f.with_file(conventions::candidate, n) },
+    Fact { name: "scoping_naming_types", doc: "on a naming candidate: primitive, callable and array types after removing nullish parts", get: |f, n| f.with_file(conventions::types, n) },
+    Fact { name: "scoping_atomic_update", doc: "on an assignment: shared bindings written using a pre-suspension read", get: |f, n| f.with_file(atomic::updates, n) },
+    Fact { name: "scoping_this_context", doc: "on this: validity of its lexical receiver, with capitalised constructor exception", get: |f, n| f.with_file(receivers::context, n) },
+    Fact { name: "scoping_loop_captures", doc: "on a function: unsafe mutable bindings captured across loop iterations", get: |f, n| f.with_file(loops::captures, n) },
+    Fact { name: "scoping_unmodified_condition", doc: "on a condition reference: unmodified with grouped or independent conditional branches", get: |f, n| f.with_file(loops::unmodified_condition, n) },
+    Fact { name: "scoping_array_callback", doc: "on a function: array callback method, returns and fallthrough", get: |f, n| f.with_file(callbacks::array_callback, n) },
+    Fact { name: "scoping_arrow_callback", doc: "on a function: callback eligibility and lexical receiver binding", get: |f, n| f.with_file(callbacks::arrow_callback, n) },
     Fact { name: "param_property_write", doc: "on a parameter reference: a write to a property reached through that parameter", get: |f, n| f.with_file(bindings::param_property_write, n) },
     Fact { name: "scoping_receiver_use", doc: "on a class method or field: its own body uses this or super", get: |f, n| f.with_file(bindings::scoping_receiver_use, n) },
     Fact { name: "scoping_head_offset", doc: "on a call target: its reported name start; on an arrow: its operator start", get: |f, n| f.with_file(bindings::scoping_head_offset, n) },

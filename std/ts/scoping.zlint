@@ -4,25 +4,141 @@
 
 define {
 
-# `let` never reassigned. With destructuring "all", a pattern only counts
-# when no name in it is reassigned: `let_writes` sums writes up the pattern and
-# `declarator_writes` hands the declarator's total back down.
-in ts_identifier let let_writes if declaration_kind == "let" then writes else 1
-in ts_object_pattern let let_writes sum(compact([] property.let_writes)) + default(rest.let_writes, 0)
-in ts_array_pattern let let_writes sum(compact([] element.let_writes))
-in ts_pattern_property let let_writes default(value.let_writes, key.let_writes)
-in ts_assignment_pattern let let_writes left.let_writes
-in ts_rest let let_writes argument.let_writes
-in ts_declarator {
-  let declarator_writes name.let_writes
-  let initialized init != null || parent.declares_loop_variable == true
+in ts_identifier, ts_private_name, ts_string, ts_number rule naming-convention {
+  option options { selector: string | string[]; format?: string[] | null; modifiers?: string[]; types?: string[]; leadingUnderscore?: string; trailingUnderscore?: string; prefix?: string[]; suffix?: string[]; custom?: { regex: string; match: boolean }; filter?: string | { regex: string; match: boolean } }[] = []
+  let candidate scoping_naming_candidate
+  let naming_types scoping_naming_types
+  let naming_configs if len(options) > 0 then options else [
+    {selector: "default", format: ["camelCase"], leadingUnderscore: "allow", trailingUnderscore: "allow"},
+    {selector: "import", format: ["camelCase", "PascalCase"]},
+    {selector: "variable", format: ["camelCase", "UPPER_CASE"], leadingUnderscore: "allow", trailingUnderscore: "allow"},
+    {selector: "typeLike", format: ["PascalCase"]}
+  ]
+  let naming_matches filter(naming_configs, c => any(candidate.selectors, s => if type_of(c.selector) == "list" then contains(c.selector, s.name) else c.selector == s.name)
+    && all(c.modifiers, m => contains(candidate.modifiers, m))
+    && (c.types == null || !candidate.typed || any(c.types, t => contains(naming_types, t)))
+    && (c.filter == null || (if type_of(c.filter) == "str" then re_test(candidate.name, c.filter) else re_test(candidate.name, c.filter.regex) == c.filter.match)))
+  let naming_ranked map(naming_matches, c => {config: c, rank: max(map(filter(candidate.selectors, s => if type_of(c.selector) == "list" then contains(c.selector, s.name) else c.selector == s.name), s => s.rank))
+    + sum(map(filter(candidate.weights, w => contains(c.modifiers, w.name) || contains(c.types, w.name)), w => w.rank))
+    + (if c.filter != null then 1073741824 else 0)})
+  let naming_policy first(filter(naming_ranked, c => c.rank == max(map(naming_ranked, r => r.rank)))).config
+  let naming_original candidate.name
+  let naming_leading len(default(re_find(naming_original, /^_+/), ""))
+  let naming_lead_policy naming_policy.leadingUnderscore
+  let naming_lead_required if naming_lead_policy == "requireDouble" then 2 else if naming_lead_policy == "require" then 1 else 0
+  let naming_lead_error naming_lead_policy == "forbid" && naming_leading > 0 || naming_leading < naming_lead_required
+  let naming_lead_trim if contains(["requireDouble", "allowDouble"], naming_lead_policy) && naming_leading >= 2 then 2
+    else if naming_lead_policy == "allowSingleOrDouble" then min(naming_leading, 2)
+    else if contains(["require", "allow"], naming_lead_policy) then min(naming_leading, 1) else 0
+  let naming_after_lead slice(naming_original, naming_lead_trim)
+  let naming_trailing len(default(re_find(naming_after_lead, /_+$/), ""))
+  let naming_tail_policy naming_policy.trailingUnderscore
+  let naming_tail_required if naming_tail_policy == "requireDouble" then 2 else if naming_tail_policy == "require" then 1 else 0
+  let naming_tail_error naming_tail_policy == "forbid" && naming_trailing > 0 || naming_trailing < naming_tail_required
+  let naming_tail_trim if contains(["requireDouble", "allowDouble"], naming_tail_policy) && naming_trailing >= 2 then 2
+    else if naming_tail_policy == "allowSingleOrDouble" then min(naming_trailing, 2)
+    else if contains(["require", "allow"], naming_tail_policy) then min(naming_trailing, 1) else 0
+  let naming_after_tail slice(naming_after_lead, 0, len(naming_after_lead) - naming_tail_trim)
+  let naming_prefix first(filter(naming_policy.prefix, p => starts_with(naming_after_tail, p)))
+  let naming_prefix_error len(naming_policy.prefix) > 0 && naming_prefix == null
+  let naming_after_prefix slice(naming_after_tail, len(naming_prefix))
+  let naming_suffix first(filter(naming_policy.suffix, p => ends_with(naming_after_prefix, p)))
+  let naming_suffix_error len(naming_policy.suffix) > 0 && naming_suffix == null
+  let naming_processed slice(naming_after_prefix, 0, len(naming_after_prefix) - len(naming_suffix))
+  let naming_custom_error naming_policy.custom != null && re_test(naming_processed, naming_policy.custom.regex) != naming_policy.custom.match
+  let naming_formats_ok any(naming_policy.format, f => naming_processed == ""
+    || f == "camelCase" && slice(naming_processed, 0, 1) == lower(slice(naming_processed, 0, 1)) && !contains(naming_processed, "_")
+    || f == "PascalCase" && slice(naming_processed, 0, 1) == upper(slice(naming_processed, 0, 1)) && !contains(naming_processed, "_")
+    || f == "strictCamelCase" && slice(naming_processed, 0, 1) == lower(slice(naming_processed, 0, 1)) && !contains(naming_processed, "_") && !re_test(naming_processed, /\p{Lu}\p{Lu}/)
+    || f == "StrictPascalCase" && slice(naming_processed, 0, 1) == upper(slice(naming_processed, 0, 1)) && !contains(naming_processed, "_") && !re_test(naming_processed, /\p{Lu}\p{Lu}/)
+    || f == "snake_case" && naming_processed == lower(naming_processed) && !re_test(naming_processed, /^_|_$|__/)
+    || f == "UPPER_CASE" && naming_processed == upper(naming_processed) && !re_test(naming_processed, /^_|_$|__/))
+  let naming_format_error len(naming_policy.format) > 0 && (candidate.quotes || !naming_formats_ok)
+  when candidate != null && naming_policy != null
+  when naming_lead_error || naming_tail_error || naming_prefix_error || naming_suffix_error || naming_custom_error || naming_format_error
+  warn if naming_lead_error then
+    if naming_lead_policy == "forbid" then "{candidate.label} name `{naming_original}` must not have a leading underscore."
+    else "{candidate.label} name `{naming_original}` must have {if naming_lead_required == 2 then 'two' else 'one'} leading underscore(s)."
+    else if naming_tail_error then
+      if naming_tail_policy == "forbid" then "{candidate.label} name `{naming_original}` must not have a trailing underscore."
+      else "{candidate.label} name `{naming_original}` must have {if naming_tail_required == 2 then 'two' else 'one'} trailing underscore(s)."
+    else if naming_prefix_error then "{candidate.label} name `{naming_original}` must have one of the following prefixes: {join(naming_policy.prefix, ', ')}"
+    else if naming_suffix_error then "{candidate.label} name `{naming_original}` must have one of the following suffixes: {join(naming_policy.suffix, ', ')}"
+    else if naming_custom_error then "{candidate.label} name `{naming_original}` must {if naming_policy.custom.match then 'match' else 'not match'} the RegExp: /{replace(naming_policy.custom.regex, '/', '\\/')}/u"
+    else if naming_original != naming_processed then "{candidate.label} name `{naming_original}` trimmed as `{naming_processed}` must match one of the following formats: {join(naming_policy.format, ', ')}"
+    else "{candidate.label} name `{naming_original}` must match one of the following formats: {join(naming_policy.format, ', ')}"
 }
-in ts_object_pattern, ts_array_pattern, ts_pattern_property, ts_assignment_pattern, ts_rest {
-  let declarator_writes parent.declarator_writes
-  let initialized parent.initialized
+
+in ts_assignment rule require-atomic-updates {
+  option allowProperties boolean = false
+  each updated in filter(scoping_atomic_update, u => !u.property || !allowProperties)
+  warn if updated.property then "Possible race condition: `{updated.value}` might be assigned based on an outdated state of `{updated.name}`." else "Possible race condition: `{updated.name}` might be reassigned based on an outdated value of `{updated.name}`."
 }
+
+in ts_this rule no-invalid-this {
+  option capIsConstructor boolean = true
+  let context scoping_this_context
+  when !context.valid && !(capIsConstructor && context.constructor)
+  warn "Unexpected 'this'."
+}
+
+in ts_function rule prefer-arrow-callback {
+  option allowNamedFunctions boolean = false
+  option allowUnboundThis boolean = true
+  let callback scoping_arrow_callback
+  when callback != null && !(allowNamedFunctions && callback.named)
+  when !allowUnboundThis || !callback.this || callback.lexical
+  warn "Unexpected function expression."
+}
+
+in ts_identifier rule no-unmodified-loop-condition {
+  option checkConditionalExpressions boolean = false
+  let condition scoping_unmodified_condition
+  when if checkConditionalExpressions then condition.independent else condition.grouped
+  warn "'{text}' is not modified in this loop."
+}
+
+in ts_function, ts_arrow rule no-loop-func {
+  let captured scoping_loop_captures
+  when captured != null
+  warn "Function declared in a loop contains unsafe references to variable(s) {captured}."
+}
+
+in ts_function, ts_arrow rule array-callback-return {
+  option allowImplicit boolean = false
+  option checkForEach boolean = false
+  option allowVoid boolean = false
+  let callback scoping_array_callback
+  when callback != null && !callback.foreach && callback.falls
+  report at callback.offset
+  warn if callback.has_return then "{callback.method}() expects a value to be returned at the end of {callback.name}." else "{callback.method}() expects a return value from {callback.name}."
+}
+in ts_function, ts_arrow rule array-callback-return:return {
+  option allowImplicit boolean = false
+  option checkForEach boolean = false
+  option allowVoid boolean = false
+  let callback scoping_array_callback
+  each returned in filter(callback.returns, r => if callback.foreach then checkForEach && r.value && !(allowVoid && r.void) else !allowImplicit && !r.value)
+  report at returned.offset
+  warn if callback.foreach then "{callback.method}() expects no useless return value from {callback.name}." else "{callback.method}() expects a return value from {callback.name}."
+}
+in ts_arrow rule array-callback-return:concise {
+  option allowImplicit boolean = false
+  option checkForEach boolean = false
+  option allowVoid boolean = false
+  let callback scoping_array_callback
+  when callback.foreach && checkForEach && callback.concise && !(allowVoid && callback.void)
+  report at callback.offset
+  warn "{callback.method}() expects no useless return value from {callback.name}."
+}
+
 in ts_identifier rule prefer-const {
-  when declaration_kind == "let" && writes == 0 && parent.declarator_writes == 0 && parent.initialized == true
+  option destructuring "any" | "all" = "any"
+  option ignoreReadBeforeAssign boolean = false
+  let binding scoping_const_binding
+  when binding != null && !(ignoreReadBeforeAssign && binding.before)
+  when destructuring != "all" || binding.all && !(ignoreReadBeforeAssign && binding.all_before)
+  report at binding.offset
   warn "'{text}' is never reassigned. Use 'const' instead."
 }
 
@@ -183,7 +299,7 @@ in ts_identifier rule no-shadow {
   when !(ignoreFunctionTypeParameterNameValueShadow && shadowed.function_type)
   when !(ignoreOnInitialization && shadowed.initializing)
   when !shadowed.early || hoist == "all" || (hoist == "functions" || hoist == "functions-and-types") && shadowed.kind == "function" || (hoist == "types" || hoist == "functions-and-types") && contains(["type", "interface"], shadowed.kind)
-  warn if shadowed.global then "'{text}' is already a global variable." else "'{text}' is already declared in the upper scope on line {shadowed.line} column {shadowed.column}."
+  warn if shadowed.enum_member then "Enum members are added to the enum scope, so references to '{text}' in enum member initializers resolve to this member instead of the declaration in the upper scope on line {shadowed.line} column {shadowed.column}." else if shadowed.global then "'{text}' is already a global variable." else "'{text}' is already declared in the upper scope on line {shadowed.line} column {shadowed.column}."
 }
 
 in ts_identifier rule no-use-before-define {

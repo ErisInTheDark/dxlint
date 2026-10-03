@@ -246,7 +246,7 @@ pub(super) fn declaration_kind(s: &Syntax, id: u32) -> &'static str {
             Some(K::Var) => return match s.word(parent, F::Kind) {
                 Some("let") => "let",
                 Some("const") => "const",
-                Some("using") => "using",
+                Some("using" | "await using") => "using",
                 _ => "var",
             },
             Some(K::Function) => return "function",
@@ -406,6 +406,22 @@ pub(super) fn shadow(file: &NativeFile, id: u32) -> Value<'static> {
     }
     let enum_binding = crate::native::ts::bind::Binding { kind: "enum_member", ..Default::default() };
     let Some(binding) = b.decls.get(&canonical).or(enum_scope.map(|_| &enum_binding)) else { return Value::Null };
+    let declaration_file = file.path.file_name().and_then(|n| n.to_str())
+        .is_some_and(|n| [".d.ts", ".d.cts", ".d.mts"].iter().any(|suffix| n.ends_with(suffix)));
+    if declaration_file {
+        let mut cursor = s.parent(id);
+        while let Some(owner) = cursor {
+            if matches!(s.kind(owner), Some(K::Var | K::Class | K::Enum | K::Namespace | K::Function | K::Param)) {
+                if s.has_word(owner, F::Modifier, "declare")
+                    || s.is(owner, K::Function) && s.get(owner, F::Body).is_none()
+                {
+                    return Value::Null;
+                }
+                break;
+            }
+            cursor = s.parent(owner);
+        }
+    }
     let names = file.cached(scope_names);
     let mut cursor = if enum_scope.is_some() { Some(scope) } else { b.scopes[scope].parent };
     let mut outer = (named_function && id != canonical).then_some(canonical);
@@ -499,6 +515,7 @@ pub(super) fn shadow(file: &NativeFile, id: u32) -> Value<'static> {
     let (line, column) = outer.map(|o| location(s, o)).unwrap_or((1, 1));
     Value::Record(vec![
         ("global".into(), Value::Bool(builtin)),
+        ("enum_member".into(), Value::Bool(ts && enum_scope.is_some())),
         ("line".into(), Value::from(line)),
         ("column".into(), Value::from(column)),
         ("kind".into(), Value::from(outer.and_then(|o| b.decls.get(&o)).map(|b| b.kind).unwrap_or(""))),
@@ -536,6 +553,16 @@ fn initialization_callback(file: &NativeFile, mut scope: usize, declaration: u32
 fn inside(s: &Syntax, inner: u32, outer: u32) -> bool {
     let (i, o) = (s.tree.node(inner), s.tree.node(outer));
     o.start <= i.start && i.end <= o.end
+}
+
+pub(super) fn execution_scope(file: &NativeFile, node: u32, declaration: bool) -> usize {
+    let b = file.bindings();
+    let mut scope = if declaration { b.decl_scope.get(&node) } else { b.ref_scope.get(&node).or_else(|| b.decl_scope.get(&node)) }.copied().unwrap_or(0);
+    while !b.scopes[scope].function {
+        let Some(parent) = b.scopes[scope].parent else { break };
+        scope = parent;
+    }
+    scope
 }
 
 fn separate_context(file: &NativeFile, reference: u32, declaration: u32) -> bool {
@@ -739,5 +766,14 @@ mod tests {
         assert!(l.lint(path, "const value = consume(value => value);").is_empty());
         assert!(l.lint(path, "const { value = 0 } = consume(value => value);").is_empty());
         assert_eq!(l.lint(path, "const value = () => { consume(value => value); };").len(), 1);
+    }
+
+    #[test]
+    fn declaration_files_exempt_ambient_bindings_not_runtime_shadows() {
+        let l = native_linter("rule no-shadow { set builtinGlobals true }");
+        let code = "/* globals Thing */ declare class Thing {}";
+        assert!(l.lint(Path::new("/root/file.d.ts"), code).is_empty());
+        assert_eq!(l.lint(Path::new("/root/file.mts"), code).len(), 1);
+        assert_eq!(l.lint(Path::new("/root/file.d.ts"), "/* globals Thing */ declare class Thing {} function f(Thing: string) {}").len(), 1);
     }
 }

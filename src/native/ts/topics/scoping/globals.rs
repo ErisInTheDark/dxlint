@@ -38,15 +38,7 @@ pub(super) fn declarations(file: &NativeFile, node: u32) -> Value<'static> {
     }
     let s = &file.syntax;
     let b = file.bindings();
-    let exported = file.cached(|f| {
-        let names = f.comments().iter().filter(|c| c.block).flat_map(|c| {
-            c.body(f.syntax.src).trim_start().strip_prefix("exported")
-                .filter(|rest| rest.starts_with(char::is_whitespace))
-                .into_iter().flat_map(|rest| rest.split(|c: char| c.is_whitespace() || c == ','))
-                .filter(|name| !name.is_empty()).map(str::to_string)
-        }).collect();
-        ExportedNames(names)
-    });
+    let exported = file.cached(|f| ExportedNames(crate::native::ts::unused::exported_names(f)));
     let owners: Vec<u32> = if s.is(node, K::Var) { s.all(node, F::Decl).collect() } else { vec![node] };
     let mut entries = Vec::new();
     for owner in owners {
