@@ -71,4 +71,16 @@ impl<'t> Syntax<'t> {
     pub fn has_word(&self, id: u32, field: Field, word: &str) -> bool {
         self.all(id, field).any(|n| self.text(n) == word)
     }
+
+    /// `id` without the parentheses around it (ESTree has no parentheses,
+    /// so eslint's checks look through them).
+    pub fn unparen(&self, mut id: u32) -> u32 {
+        while self.is(id, Kind::Paren) {
+            match self.get(id, Field::Expr) {
+                Some(e) => id = e,
+                None => break,
+            }
+        }
+        id
+    }
 }

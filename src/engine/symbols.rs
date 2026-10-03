@@ -32,6 +32,8 @@ pub enum Kind {
     Keyword,
     /// An imported file.
     File,
+    /// A named option type (`schema name T`).
+    Schema,
 }
 
 impl Kind {
@@ -52,6 +54,7 @@ impl Kind {
             Kind::Relative => "relative",
             Kind::Keyword => "keyword",
             Kind::File => "file",
+            Kind::Schema => "schema",
         }
     }
 }
@@ -66,7 +69,8 @@ pub struct Symbol {
     pub summary: String,
     /// Markdown: for hover and `zlint describe`.
     pub doc: String,
-    /// A layer's fields (for completing `layer.`).
+    /// What completes after it: a layer's fields (`layer.`), an option's
+    /// literal values (`set option `).
     pub fields: Vec<String>,
 }
 
@@ -98,7 +102,8 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("when", "rule clause: `when expr`; every `when` must hold"),
     ("fix", "rule clause: `fix as expr`, what the node's text should be"),
     ("as", "`fix as expr`"),
-    ("option", "rule clause: `option name default [item shape] \"description\"`, set with `rule name { set option value }`"),
+    ("option", "rule clause: `option name <type> = <default> \"description\"`, set with `rule name { set option value }`. Types: `string`, `number`, `int`, `boolean`, `any`, `null`, `regex`, literals, `T[]`, `{ key: T }`, `a | b`, `int(0..)`, `T[1..]`, schema names"),
+    ("schema", "`schema name <type> \"description\"`: a named option type rules can share"),
     ("files", "rule clause: `files \"glob\" ...`, only these files"),
     ("report", "rule clause: `report node | change | end`, where diagnostics point"),
     ("drop", "`drop rule name`, `drop match x`, `drop in a match x`, `drop let x`, `drop in a let x`, `drop macro m`, `drop group g [members]`, `drop ignore \"glob\"`: remove a definition; whatever still uses it is an error at the `drop`"),
@@ -388,6 +393,7 @@ impl Symbols {
     }
 
     fn rules(&mut self, config: &Config, rules: &[Rule]) {
+        let schemas: crate::config::schema::Schemas = config.schemas.iter().map(|s| (s.name.text.clone(), s.clone())).collect();
         for r in rules {
             let state = if r.severity == crate::config::ast::Severity::Off {
                 format!("**off** (`rule {}` turns it on at {})", r.name, r.default_severity.as_str())
@@ -403,22 +409,24 @@ impl Symbols {
             }
             for o in &r.options {
                 let changed = if o.value != o.default { format!(" (default {})", crate::expr::show(&o.default)) } else { String::new() };
-                let _ = write!(doc, "\n- option `{}` = {}{changed}", o.name, crate::expr::show(&o.value));
+                let _ = write!(doc, "\n- option `{}`: `{}` = {}{changed}", o.name, o.schema, crate::expr::show(&o.value));
                 if let Some(d) = &o.description {
-                    let _ = write!(doc, ": {d}");
+                    let _ = write!(doc, ", {d}");
                 }
                 let key = format!("{}.{}", r.name, o.name);
                 let odoc = format!(
-                    "of rule `{}`: {}\n\nvalue {}, default {}{}\n\n`rule {} {{ set {} value }}` changes it",
+                    "of rule `{}`: {}\n\n```zlint\noption {} {}\n```\n\nvalue {}, default {}\n\n`rule {} {{ set {} value }}` changes it",
                     r.name,
                     o.description.as_deref().unwrap_or("no description"),
+                    o.name,
+                    o.schema,
                     crate::expr::show(&o.value),
                     crate::expr::show(&o.default),
-                    o.item.as_ref().map(|i| format!(", items like {}", crate::expr::show(i))).unwrap_or_default(),
                     r.name,
                     o.name
                 );
-                self.add(Kind::Option, &key, o.description.clone().unwrap_or_default(), odoc);
+                let id = self.add(Kind::Option, &key, o.description.clone().unwrap_or_else(|| o.schema.to_string()), odoc);
+                self.symbols[id].fields = o.schema.choices(&schemas).iter().map(|v| v.literal()).collect();
             }
             self.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
             self.def(Kind::Rule, &r.name, r.span);
@@ -543,9 +551,15 @@ impl Symbols {
                 }
             }
         }
+        for s in &config.schemas {
+            let doc = format!("```zlint\nschema {} {}\n```{}", s.name.text, s.schema, s.doc.as_ref().map(|d| format!("\n\n{d}")).unwrap_or_default());
+            self.add(Kind::Schema, &s.name.text, s.doc.clone().unwrap_or_else(|| s.schema.to_string()), doc);
+            self.def(Kind::Schema, &s.name.text, s.name.span);
+        }
         for u in &config.uses {
             match u {
                 Use::Macro(n) => self.use_of(n.span, Kind::Macro, &n.text),
+                Use::Schema(n) => self.use_of(n.span, Kind::Schema, &n.text),
                 Use::Layer(n) => {
                     let kind = if grammar.matcher(&n.text).is_some() { Kind::Layer } else { Kind::Group };
                     self.use_of(n.span, kind, &n.text);

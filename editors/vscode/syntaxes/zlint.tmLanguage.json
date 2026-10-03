@@ -49,6 +49,10 @@
         {
           "match": "\\b(option)\\s+([A-Za-z_]\\w*)",
           "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "variable.parameter.zlint" } }
+        },
+        {
+          "match": "\\b(schema)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "entity.name.type.zlint" } }
         }
       ]
     },
@@ -60,9 +64,10 @@
         { "include": "#sstring" },
         { "include": "#regex" },
         {
-          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|item|when|fix|files|report|let|native|forward|from)\\b",
+          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|schema|when|fix|files|report|let|native|forward|from)\\b",
           "name": "keyword.other.zlint"
         },
+        { "match": "\\b(string|number|int|boolean|any|regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.zlint" },
         { "match": "\\b(drop|override|define)\\b", "name": "keyword.other.modifier.zlint" },
         { "match": "\\b([A-Za-z_]\\w*)\\s*(=>)", "captures": { "1": { "name": "variable.parameter.zlint" }, "2": { "name": "storage.type.function.arrow.zlint" } } },
         { "match": "\\b([A-Za-z_]\\w*)(:)(?=\\s)", "captures": { "1": { "name": "variable.other.property.key.zlint" }, "2": { "name": "punctuation.separator.key-value.zlint" } } },

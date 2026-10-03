@@ -95,6 +95,32 @@ fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
     }
 }
 
+/// Extended grapheme clusters, approximately: what joins onto the character
+/// before it (joiners and what they join, marks, variation selectors,
+/// emoji modifiers and tags, the second half of a flag) starts none.
+fn grapheme_count(text: &str) -> usize {
+    let mut count = 0;
+    let mut joined = false;
+    let mut flag_half = false;
+    for c in text.chars() {
+        let v = c as u32;
+        let regional = (0x1F1E6..=0x1F1FF).contains(&v);
+        let extends = c == '\u{200D}'
+            || joined
+            || crate::native::ts::is_combining_mark(c)
+            || (0xFE00..=0xFE0F).contains(&v)
+            || (0x1F3FB..=0x1F3FF).contains(&v)
+            || (0xE0020..=0xE007F).contains(&v)
+            || regional && flag_half;
+        joined = c == '\u{200D}';
+        flag_half = regional && !flag_half;
+        if !extends {
+            count += 1;
+        }
+    }
+    count
+}
+
 fn fold_num<'s>(a: &[Value<'s>], pick: fn(f64, f64) -> f64) -> Result<Value<'s>, String> {
     let items: Vec<Value<'s>> = if a.len() == 1 { a[0].items() } else { a.to_vec() };
     let mut it = items.iter();
@@ -458,6 +484,36 @@ pub static FUNCTIONS: &[Function] = &[
         min: 1,
         max: 1,
         call: |a| Ok(Value::Bool(a[0].items().iter().any(Value::truthy))),
+    },
+    Function {
+        name: "regex_flags_error",
+        signature: "regex_flags_error(flags, allowed)",
+        doc: "what `RegExp`'s constructor says about `flags` (`u` with `v`, duplicates, unknown ones; extra `allowed` flags pass), as eslint's no-invalid-regexp words it; null when fine",
+        min: 1,
+        max: 2,
+        call: |a| {
+            let allowed: String = a.get(1).map(|v| v.items().iter().map(|x| x.text().into_owned()).collect()).unwrap_or_default();
+            Ok(match crate::native::ts::regex_flags_error(&a[0].text(), &allowed) {
+                Some(m) => Value::from(m),
+                None => Value::Null,
+            })
+        },
+    },
+    Function {
+        name: "graphemes",
+        signature: "graphemes(text)",
+        doc: "how many characters a reader sees in `text`: joined emoji (`👨‍👩‍👧‍👦`), flags, modifiers and combining marks count once",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::from(grapheme_count(&a[0].text()))),
+    },
+    Function {
+        name: "type_of",
+        signature: "type_of(x)",
+        doc: "what kind of value `x` is: `null`, `bool`, `num`, `str`, `list` or `record` (`==` treats `\"\"` and `null` alike; this does not)",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::from(a[0].type_name())),
     },
     Function {
         name: "abs",

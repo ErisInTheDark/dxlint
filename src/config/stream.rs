@@ -163,12 +163,16 @@ impl Stream {
         let inv = |kind: Tk| Token { kind, text: Rc::from(""), span: call.span };
         let mut out = Vec::with_capacity(def.body.len() + 2);
         out.push(inv(Tk::InvOpen));
-        for t in def.body.iter() {
-            match def.params.iter().position(|p| t.kind == Tk::Ident && *p == t.text) {
+        for (k, t) in def.body.iter().enumerate() {
+            // `x.name` reads a key: `name` is not the parameter there.
+            let after_dot = k > 0 && def.body[k - 1].kind == Tk::Dot && def.body[k - 1].touches(t);
+            match def.params.iter().position(|p| t.kind == Tk::Ident && *p == t.text && !after_dot) {
                 Some(i) => {
                     out.push(inv(Tk::InvOpen));
                     out.extend(args[i].iter().cloned());
-                    out.push(inv(Tk::InvClose));
+                    // Ends where the parameter did, so what touches it in
+                    // the body still does: `param.key`.
+                    out.push(Token { kind: Tk::InvClose, text: Rc::from(""), span: Span { start: t.span.end, ..t.span } });
                 }
                 None => out.push(t.clone()),
             }

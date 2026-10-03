@@ -4,7 +4,7 @@
 pub mod case;
 pub mod facts;
 pub mod functions;
-mod re;
+pub(crate) mod re;
 pub mod value;
 
 use std::cell::RefCell;
@@ -32,6 +32,8 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("indent_hangs", "that layer's inside starts on its opener line (`f(a,⏎ b)`)"),
     ("line", "1-based line of the node's start"),
     ("column", "1-based column of the node's start"),
+    ("offset", "byte offset of the node's start in the file (for `report at`)"),
+    ("end_offset", "byte offset of the node's end"),
     ("file", "the file's path, relative to the project root"),
     ("lang", "the file's language"),
     ("before", "text on the node's first line before the node"),
@@ -49,6 +51,7 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("enclosing", "innermost layer containing the node's start, looking past overlays (a comment, a string, ...)"),
     ("source", "the whole file's text"),
     ("index", "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root"),
+    ("field", "the field the node fills in its parent (`callee`, `argument`, `left`); null when it has none"),
     ("gap_before", "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child"),
 ];
 
@@ -488,6 +491,30 @@ impl Scope<'_> {
             );
             return None;
         }
+        // `attr.key`, `fact.key`: a record attribute or fact of the node
+        // itself (when the name is not a field, layer or relative).
+        let plain = path.len() > 1
+            && first.text != "parent"
+            && !self.fields.iter().any(|(f, _)| *f == first.text)
+            && self.grammar.matcher(&first.text).is_none()
+            && Relative::named(&first.text).is_none();
+        let own = if !plain {
+            None
+        } else if let Some(i) = self.attrs.iter().position(|a| *a == first.text) {
+            self.note(first.span, Resolved::Attr(first.text.clone()));
+            Some(CExpr::Attr(i as u16))
+        } else if let Some(i) = facts::fact(&first.text) {
+            self.note(first.span, Resolved::Fact(facts::FACTS[i].name));
+            Some(CExpr::Fact(i, FactOf::Node))
+        } else {
+            None
+        };
+        if let Some(mut value) = own {
+            for key in &path[1..] {
+                value = CExpr::Key(Box::new(value), key.text.as_str().into());
+            }
+            return Some(value);
+        }
         match path {
             [name] => {
                 let rule = || self.rule.unwrap_or_default().to_string();
@@ -652,9 +679,36 @@ pub struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
+    /// Binds the next outermost parameter (a rule's `each` item).
+    pub fn push_param(&self, v: Value<'a>) {
+        self.memo.params.borrow_mut().push(v);
+    }
+
+    pub fn pop_param(&self) {
+        self.memo.params.borrow_mut().pop();
+    }
+
+    /// `f` without the parameters bound around it: attributes and `let`s
+    /// are compiled outside every lambda and `each`, so their own lambdas
+    /// count from the bottom of the stack.
+    fn unbound<T>(&self, f: impl FnOnce() -> T) -> T {
+        let saved = std::mem::take(&mut *self.memo.params.borrow_mut());
+        let out = f();
+        *self.memo.params.borrow_mut() = saved;
+        out
+    }
+
     /// The value of attribute `attr` on `node` (null where no layer of the
     /// node defines it).
     fn attr(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
+        if self.memo.params.borrow().is_empty() {
+            self.attr_unbound(node, attr)
+        } else {
+            self.unbound(|| self.attr_unbound(node, attr))
+        }
+    }
+
+    fn attr_unbound(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
         if let Some(v) = self.memo.values.borrow().get(&(node, attr)) {
             return Ok(v.clone());
         }
@@ -817,6 +871,10 @@ impl<'a> Ctx<'a> {
                 ),
                 (None, _) => Value::Null,
             },
+            "field" => match self.tree.label(self.node) {
+                Some(l) => Value::from(self.grammar.labels.name(l)),
+                None => Value::Null,
+            },
             "gap_before" => {
                 let prev = self.tree.parent(self.node).and_then(|p| {
                     self.tree.node(p).children.iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
@@ -828,6 +886,8 @@ impl<'a> Ctx<'a> {
             }
             "line" => Value::from(self.lines.line_of(start) + 1),
             "column" => Value::from(self.lines.line_col(self.source, start).1 + 1),
+            "offset" => Value::from(start),
+            "end_offset" => Value::from(self.tree.node(self.node).end as usize),
             "file" => Value::from(self.file),
             "lang" => Value::from(self.grammar.langs[self.lang].name.as_str()),
             "before" => {
@@ -1018,7 +1078,7 @@ impl<'a> Ctx<'a> {
                 if let Some(v) = self.memo.locals.borrow().get(&key) {
                     return Ok(v.clone());
                 }
-                let v = self.eval(&exprs[*i as usize])?;
+                let v = self.unbound(|| self.eval(&exprs[*i as usize]))?;
                 self.memo.locals.borrow_mut().insert(key, v.clone());
                 v
             }

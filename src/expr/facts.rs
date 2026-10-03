@@ -98,6 +98,152 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| opt(f.resolved(n), Value::from),
     },
     Fact {
+        name: "global",
+        doc: "native layers: on an identifier referring to a global: how eslint configures it, `readonly` (the ECMAScript built-ins, `/* global x */`), `writable` (`/* global x: writable */`) or `off` (`/* global x: off */`); null when nothing declares it (or it is not a global)",
+        get: |f, n| opt(f.global(n), Value::from),
+    },
+    Fact {
+        name: "access",
+        doc: "native layers: on a referencing identifier: how it uses the name: `read`, `write` (`x = 1`, destructuring, `for (x of ...)`), `read_write` (`x += 1`, `x++`) or `type`",
+        get: |f, n| opt(f.access(n), Value::from),
+    },
+    Fact {
+        name: "write_site",
+        doc: "native layers: on a written identifier or member (`x`, `a.b`), or an array or object literal that is a destructuring target (`[a, b] = c`): the start offset of what writes it (the assignment, update, `delete` or `for` statement), for `report at`; null otherwise",
+        get: |f, n| opt(f.write_site(n), Value::from),
+    },
+    Fact {
+        name: "static_name",
+        doc: "native layers: on a property, method, class or enum member, `a.b` or `a[\"b\"]`: its name when known without running anything (`a`, `\"a\"` -> `a`, `0x1` -> `1`, `[`k`]` -> `k`; null for `#private` names), as eslint's `getStaticPropertyName`; on a literal: its value as text (`'\\x41'` -> `A`); null otherwise",
+        get: |f, n| opt(f.static_name(n), Value::from),
+    },
+    Fact {
+        name: "global_value",
+        doc: "native layers: on an expression: the global it stands for, followed as eslint's ReferenceTracker does: `Math`, `globalThis.Math`, `(Math)`, a variable only ever holding it (`const m = Math`), or a branch of `?:` / `||` that is one; null otherwise",
+        get: |f, n| opt(f.global_value(n), Value::from),
+    },
+    Fact {
+        name: "declaration_kinds",
+        doc: "native layers: on a declaring identifier: the kinds of every declaration merged with it (`class` and `interface` of one name: `[\"class\", \"interface\"]`)",
+        get: |f, n| opt(f.declaration_kinds(n), words),
+    },
+    Fact {
+        name: "literal_value",
+        doc: "native layers: on a literal (also `-1`, `+1`, parenthesised): `{ type, value }` with the JavaScript type (`string`, `number`, `bigint`, `boolean`, `null`, `regex`) and the value as text (`-0` for negative zero); null otherwise",
+        get: |f, n| opt(f.literal_value(n), |(t, v)| Value::Record(vec![("type".into(), Value::from(t)), ("value".into(), Value::from(v))])),
+    },
+    Fact {
+        name: "constant_truthiness",
+        doc: "native layers: on an expression: its truthiness can never change (eslint's `isConstant` in a boolean position: `true`, `{}`, `x || true`, `void x`)",
+        get: |f, n| Value::Bool(f.is_constant(n, true)),
+    },
+    Fact {
+        name: "constant_value",
+        doc: "native layers: on an expression: its value as a string or number can never change (eslint's `isConstant` outside boolean positions)",
+        get: |f, n| Value::Bool(f.is_constant(n, false)),
+    },
+    Fact {
+        name: "leaves_finally",
+        doc: "native layers: on `return`, `throw`, `break` or `continue`: it jumps out of a `finally` block (not just out of a loop, switch or label inside it)",
+        get: |f, n| Value::Bool(f.leaves_finally(n)),
+    },
+    Fact {
+        name: "contains_yield",
+        doc: "native layers: a `yield` inside the node, outside nested functions (on a `for` loop: outside its initializer)",
+        get: |f, n| Value::Bool(f.contains_yield(n)),
+    },
+    Fact {
+        name: "unparen_offset",
+        doc: "native layers: the offset of the node with the parentheses around it removed (where eslint, which has no parenthesis nodes, reports it), for `report at`",
+        get: |f, n| opt(f.unparen_offset(n), Value::from),
+    },
+    Fact {
+        name: "unexpected_multiline",
+        doc: "native layers: on a call, `a[b]`, tagged template or `a / b / g`: when a line break before its `(`, `[`, template or `/` lets the next line continue the expression (eslint's no-unexpected-multiline): `{ offset, kind }` with kind `function`, `property`, `taggedTemplate` or `division`",
+        get: |f, n| opt(f.unexpected_multiline(n), |(at, kind)| Value::Record(vec![("offset".into(), Value::from(at)), ("kind".into(), Value::from(kind))])),
+    },
+    Fact {
+        name: "optional_chain_risks",
+        doc: "native layers: the optional chains whose short-circuit `undefined` this node would trip on (eslint's no-unsafe-optional-chaining: called, destructured, spread, `in`, `extends`, `for of`...; also through `&&`, `||`, `??`, `?:`, `await`), as records `{ offset, arithmetic }` (`arithmetic` for `+`, `-`, `*`, ... that make `NaN`)",
+        get: |f, n| {
+            Value::List(
+                f.optional_chain_risks(n)
+                    .into_iter()
+                    .map(|(at, arith)| Value::Record(vec![("offset".into(), Value::from(at)), ("arithmetic".into(), Value::Bool(arith))]))
+                    .collect(),
+            )
+        },
+    },
+    Fact {
+        name: "self_assignments",
+        doc: "native layers: on an assignment (`=`, `&&=`, `||=`, `??=`): what it assigns to itself, also inside destructuring (`[a, b] = [a, b]`), as records `{ offset, name, member }` (`member` for `a.b = a.b`)",
+        get: |f, n| {
+            opt(f.self_assignments(n), |list| {
+                Value::List(
+                    list.into_iter()
+                        .map(|(at, name, member)| {
+                            Value::Record(vec![("offset".into(), Value::from(at)), ("name".into(), Value::from(name)), ("member".into(), Value::Bool(member))])
+                        })
+                        .collect(),
+                )
+            })
+        },
+    },
+    Fact {
+        name: "conditional_ancestor",
+        doc: "native layers: the layer of the `if`, loop or `?:` whose test holds the node (`ts_if`, `ts_while`, `ts_do_while`, `ts_for`, `ts_conditional`), not across functions; null outside tests",
+        get: |f, n| opt(f.conditional_ancestor(n), Value::from),
+    },
+    Fact {
+        name: "duplicate_condition",
+        doc: "native layers: on an `if`: an earlier branch of its `else if` chain already covers its test (eslint's no-dupe-else-if: by tokens, `&&`/`||` in any order, `a` covers `a && b`)",
+        get: |f, n| opt(f.duplicate_condition(n), Value::Bool),
+    },
+    Fact {
+        name: "duplicate_case",
+        doc: "native layers: on a `case`: an earlier case of its switch has the same test (by tokens, whatever the spacing and comments)",
+        get: |f, n| opt(f.duplicate_case(n), Value::Bool),
+    },
+    Fact {
+        name: "wrong_direction",
+        doc: "native layers: on a `for`: its update moves the counter away from where its test ends the loop (eslint's for-direction; steps are evaluated statically: `i -= -1`, `i += 1n`)",
+        get: |f, n| opt(f.wrong_direction(n), Value::Bool),
+    },
+    Fact {
+        name: "constant_comparison",
+        doc: "native layers: on a binary or logical expression: what eslint's no-constant-binary-expression finds, `{ kind, offset, detail }`: `constantShortCircuit` (detail `truthiness` / `nullishness`), `constantBinaryOperand` (detail: the other side, `left` / `right`), `alwaysNew`, `bothAlwaysNew`, at the operand it blames; null when nothing is constant",
+        get: |f, n| {
+            opt(f.constant_comparison(n, false), |(kind, at, detail)| {
+                Value::Record(vec![("kind".into(), Value::from(kind)), ("offset".into(), Value::from(at)), ("detail".into(), Value::from(detail))])
+            })
+        },
+    },
+    Fact {
+        name: "constant_relation",
+        doc: "native layers: on a binary expression: `<`, `<=`, `>`, `>=` between two literals (no-constant-binary-expression's `checkRelationalComparisons`)",
+        get: |f, n| Value::Bool(f.constant_comparison(n, true).is_some_and(|(kind, ..)| kind == "constantRelationalComparison")),
+    },
+    Fact {
+        name: "accessor",
+        doc: "native layers: on a function, arrow or method: `get` or `set` when it is a getter or setter, or the `get` / `set` of a property descriptor (`Object.defineProperty(o, k, { get() {} })`); null otherwise",
+        get: |f, n| opt(f.accessor(n), Value::from),
+    },
+    Fact {
+        name: "enclosing_accessor",
+        doc: "native layers: `accessor` of the nearest function, arrow or method around the node",
+        get: |f, n| opt(f.enclosing_accessor(n), Value::from),
+    },
+    Fact {
+        name: "duplicate_parameters",
+        doc: "native layers: on a function, arrow or method: the names its parameters declare more than once",
+        get: |f, n| opt(f.duplicate_parameters(n), |names| Value::List(names.into_iter().map(Value::from).collect())),
+    },
+    Fact {
+        name: "imported_name",
+        doc: "native layers: the name an identifier's binding imports (`default`, `*` for a namespace, or the export's name); null if not imported",
+        get: |f, n| opt(f.import_of(n), |(_, name)| Value::from(name)),
+    },
+    Fact {
         name: "reference_kind",
         doc: "native layers: on a referencing identifier: the kind of the declaration it resolves to (`const`, `parameter`, `catch`, ...; see `declaration_kind`)",
         get: |f, n| opt(f.ref_kind(n), Value::from),
@@ -134,18 +280,83 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         name: "super_calls",
-        doc: "native layers: on a constructor: `all`, `some` or `none` of the paths that leave it normally call `super()` (throwing paths need none)",
+        doc: "native layers: on the constructor of a class with `extends`: `all`, `some` or `none` of the paths that leave it normally (falling off the end, `return`) call `super()` (throwing paths need none; `return value` stands in for it)",
         get: |f, n| opt(f.super_calls(n), Value::from),
     },
     Fact {
-        name: "regex_error",
-        doc: "native layers: on the pattern string of `RegExp(...)`: the syntax error, as `Invalid regular expression: /p/: message` (or the bad flags); null when valid",
-        get: |f, n| opt(f.regex_error(n), Value::from),
+        name: "code_path",
+        doc: "native layers: what code path analysis (eslint's) says about the node: on a function, method, arrow, static block or the program: `falls_off` (its end is reachable) or `returns`; on a `case`: `falls_through` (its statements' end is reachable), `leaves` or `unreachable`; on a statement: `unreachable_run` (the first of a run of unreachable statements; see `unreachable_run_end`) or `unreachable`; on `this` / `super.x` in a derived constructor: `before_super` (some path has not called `super()` yet); on a `super()` call: `duplicate_super` (some path called it already) or `bad_super` (the class extends something that cannot be a constructor); null otherwise",
+        get: |f, n| opt(f.code_path(n), Value::from),
     },
     Fact {
-        name: "regex_problems",
-        doc: "native layers: on a regex literal or `RegExp(...)` pattern string: its problems, one per line: `empty_class` (literals), `spaces:N`, `backref:<nested|forward|backward|disjunctive|intoNegativeLookaround>:<backref>:<group>`, `misleading:<kind>`; empty when none",
-        get: |f, n| opt(f.regex_problems(n), |list| Value::from(list.join("\n"))),
+        name: "unused_member",
+        doc: "native layers: on a class member's name (a key, or a parameter property's name): nothing reads it, as typescript-eslint's class scope analyzer counts (writes only count for accessors). The member's kind: `hash` (`#x`), `private` (TypeScript `private`) or `public`; null when it is read",
+        get: |f, n| opt(f.unused_member(n), Value::from),
+    },
+    Fact {
+        name: "function_name",
+        doc: "native layers: on a function, arrow or method: how eslint names it in messages (`function 'f'`, `arrow function`, `static getter 'x'`, `private method #y`, `constructor`)",
+        get: |f, n| opt(f.function_name_with_kind(n), Value::from),
+    },
+    Fact {
+        name: "enclosing_function_name",
+        doc: "native layers: `function_name` of the nearest function, arrow or method around the node",
+        get: |f, n| opt(f.enclosing_function_name(n), Value::from),
+    },
+    Fact {
+        name: "function_head",
+        doc: "native layers: on a function, arrow or method: the offset eslint reports it at (its start, its property's start, or an arrow's `=>`), for `report at`",
+        get: |f, n| opt(f.function_head(n), Value::from),
+    },
+    Fact {
+        name: "return_values",
+        doc: "native layers: on a function, arrow or method: whether `all` or `some` of its own `return`s give a value; `bare` when all are `return;`, `none` when it has none",
+        get: |f, n| opt(f.return_values(n), Value::from),
+    },
+    Fact {
+        name: "unreachable_run_end",
+        doc: "native layers: on a statement that starts a run of unreachable statements: the offset where the run ends",
+        get: |f, n| opt(f.unreachable_run_end(n), Value::from),
+    },
+    Fact {
+        name: "regex_findings",
+        doc: "native layers: on a regex literal, or a call of the global `RegExp` (aliases too) with a pattern known statically: what eslint's regex rules find, as records `{ check, kind, data, offset, end }`. `check`: `empty_class` (literals), `control` (data: `\\x1f, \\x1e`), `spaces` (kind: how many), `backref` (kind: `nested`, `forward`, `backward`, `disjunctive`, `intoNegativeLookaround`; data: backreference, group, ` and another group`), `misleading` (kind: `surrogatePairWithoutUFlag`, `surrogatePair`, `combiningClass`, `emojiModifier`, `regionalIndicatorSymbol`, `zwj`) and `misleading_escaped` (what remains with escapes allowed). `offset`/`end`: where it is written, or the pattern argument when the pattern is computed",
+        get: |f, n| {
+            opt(f.regex_findings(n), |list| {
+                Value::List(
+                    list.into_iter()
+                        .map(|r| {
+                            Value::Record(vec![
+                                ("check".into(), Value::from(r.check)),
+                                ("kind".into(), Value::from(r.kind)),
+                                ("data".into(), Value::List(r.data.into_iter().map(Value::from).collect())),
+                                ("offset".into(), Value::from(r.offset)),
+                                ("end".into(), Value::from(r.end)),
+                            ])
+                        })
+                        .collect(),
+                )
+            })
+        },
+    },
+    Fact {
+        name: "regex_pattern",
+        doc: "native layers: on a regex site (see `regex_findings`): `{ flags, written, offset }`: its static flags (null when unknown), how the pattern is written (`regex`, `string`, `template` or `computed`) and where",
+        get: |f, n| {
+            opt(f.regex_site(n), |(flags, written, at)| {
+                Value::Record(vec![("flags".into(), opt(flags, Value::from)), ("written".into(), Value::from(written)), ("offset".into(), Value::from(at))])
+            })
+        },
+    },
+    Fact {
+        name: "regex_pattern_error",
+        doc: "native layers: on a call of the global `RegExp` with a string literal pattern: its syntax error (`Invalid regular expression: /p/u: message`); with flags that are not a string literal, only an error in every mode",
+        get: |f, n| opt(f.regex_pattern_error(n), Value::from),
+    },
+    Fact {
+        name: "regex_flags",
+        doc: "native layers: on a call of the global `RegExp`: its flags when written as a string literal (`\"\"` without any); null otherwise",
+        get: |f, n| opt(f.regex_call_flags(n).flatten(), Value::from),
     },
     Fact {
         name: "precision_lost",

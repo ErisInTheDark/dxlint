@@ -118,12 +118,12 @@ in ts_identifier rule no-deprecated {
 # ---- no-unused-vars (typescript-eslint) ----------------------------------------
 # Unused parameters are reported whatever comes after them (no "after-used").
 in ts_identifier rule no-unused-vars {
-  option vars_ignore "" "regex of variable names allowed to be unused"
-  option args_ignore "" "regex of parameter names allowed to be unused"
+  option varsIgnorePattern regex = "" "variable names allowed to be unused"
+  option argsIgnorePattern regex = "" "parameter names allowed to be unused"
   when uses != null && uses - self_uses == 0 && !exported && !ambient && !(file ~ /.*\.d\.ts/)
   when !contains(["function_name", "class_name", "type_parameter"], declaration_kind)
-  when if declaration_kind == "parameter" then args_ignore == "" || !re_test(text, args_ignore) else vars_ignore == "" || !re_test(text, vars_ignore)
-  warn "'{text}' is {if writes > 0 || declaration_kind ~ /var|let|const|using/ && ts_declarator.init != null then 'assigned a value' else 'defined'} but never used.{if declaration_kind == 'parameter' && args_ignore != '' then ' Allowed unused args must match /' args_ignore '/u.' else if declaration_kind != 'parameter' && declaration_kind != 'catch' && vars_ignore != '' then ' Allowed unused vars must match /' vars_ignore '/u.' else ''}"
+  when if declaration_kind == "parameter" then argsIgnorePattern == "" || !re_test(text, argsIgnorePattern) else varsIgnorePattern == "" || !re_test(text, varsIgnorePattern)
+  warn "'{text}' is {if writes > 0 || declaration_kind ~ /var|let|const|using/ && ts_declarator.init != null then 'assigned a value' else 'defined'} but never used.{if declaration_kind == 'parameter' && argsIgnorePattern != '' then ' Allowed unused args must match /' argsIgnorePattern '/u.' else if declaration_kind != 'parameter' && declaration_kind != 'catch' && varsIgnorePattern != '' then ' Allowed unused vars must match /' varsIgnorePattern '/u.' else ''}"
 }
 
 in ts_import rule consistent-type-imports {

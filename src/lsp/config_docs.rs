@@ -113,11 +113,16 @@ impl ConfigFile<'_> {
         } else if trimmed.starts_with("rule ") && !trimmed[5..].contains(char::is_whitespace) {
             // `rule ` without `in`: turns a defined rule on.
             self.of_kind(Kind::Rule).map(|(i, s)| item(i, s)).collect()
-        } else if trimmed.starts_with("set ") && !trimmed[4..].contains(char::is_whitespace) {
-            // `set ` inside `rule name { ... }`: that rule's options.
-            match enclosing_rule(&text[..line_start]) {
-                Some(rule) => self.of_kind(Kind::Option).filter_map(|(i, s)| s.name.strip_prefix(&format!("{rule}.")).map(|o| item_named(i, s, o))).collect(),
-                None => Vec::new(),
+        } else if let Some(rest) = trimmed.strip_prefix("set ") {
+            // `set ` inside `rule name { ... }`: that rule's options; after
+            // `set option `, the literal values its type takes.
+            match (enclosing_rule(&text[..line_start]), rest.split_once(char::is_whitespace)) {
+                (Some(rule), None) => self.of_kind(Kind::Option).filter_map(|(i, s)| s.name.strip_prefix(&format!("{rule}.")).map(|o| item_named(i, s, o))).collect(),
+                (Some(rule), Some((option, value))) if !value.contains(char::is_whitespace) => match self.symbols.get(Kind::Option, &format!("{rule}.{option}")) {
+                    Some(id) => self.symbols.symbols[id].fields.iter().map(|v| json!({ "label": v, "kind": 12, "detail": format!("value of {option}") })).collect(),
+                    None => Vec::new(),
+                },
+                _ => Vec::new(),
             }
         } else if let Some(layer) = dotted(before) {
             match self.symbols.get(Kind::Layer, layer) {
@@ -211,6 +216,7 @@ fn completion_kind(k: Kind) -> u8 {
         Kind::Relative => 6,
         Kind::Keyword => 14,
         Kind::File => 17,
+        Kind::Schema => 22,
     }
 }
 

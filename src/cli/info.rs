@@ -48,7 +48,7 @@ pub fn rules(linter: &Linter) -> ExitCode {
         for o in &f.options {
             let changed = if o.value != o.default { format!(" {DIM}(default {}){DIM:#}", show(&o.default)) } else { String::new() };
             let desc = o.description.as_deref().map(|d| format!(" {DIM}- {d}{DIM:#}")).unwrap_or_default();
-            println!("    {CYAN}{}{CYAN:#} = {}{changed}{desc}", o.name, show(&o.value));
+            println!("    {CYAN}{}{CYAN:#}{DIM}: {}{DIM:#} = {}{changed}{desc}", o.name, o.schema, show(&o.value));
         }
     }
     ExitCode::SUCCESS

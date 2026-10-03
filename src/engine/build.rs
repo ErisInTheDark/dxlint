@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use super::symbols::Symbols;
 use super::{InertRule, Linter, OptionSlot, Rule, Target};
-use super::options;
-use crate::config::ast::{Dropped, Parent, RuleDef, Severity, Target as AstTarget};
+use crate::config::ast::{Config, Dropped, Parent, RuleDef, Severity, Target as AstTarget, Use};
+use crate::config::schema::Schemas;
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
@@ -36,6 +36,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     // (merged before compiling); option values are set after.
     let option_values = configure(&mut config, &mut errors);
     super::prune::prune(&mut config);
+    let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
     let uses: Uses = RefCell::default();
     let mut attr_names: Vec<String> = Vec::new();
@@ -70,13 +71,13 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         // a layer it reads) is the library's business until it is turned on.
         if def.defined_only && !def.enabled() {
             let mut quiet = Vec::new();
-            match rule(def, &grammar, &attr_names, &uses, &mut quiet) {
+            match rule(def, &grammar, &schemas, &attr_names, &uses, &mut quiet) {
                 Some(r) if quiet.is_empty() && !def.broken => rules.push(r),
                 _ => inert.push(as_inert(def)),
             }
             continue;
         }
-        if let Some(r) = rule(def, &grammar, &attr_names, &uses, &mut errors).filter(|_| !def.broken) {
+        if let Some(r) = rule(def, &grammar, &schemas, &attr_names, &uses, &mut errors).filter(|_| !def.broken) {
             rules.push(r);
         }
     }
@@ -95,9 +96,12 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         };
         let Some(compiled) = Scope::constants(&grammar).compile(value, &mut errors) else { continue };
         match Ctx::eval_static(&compiled, &[]) {
-            Ok(v) => match options::check(&slot.default, slot.item.as_ref(), &v) {
-                Ok(()) => slot.value = v,
-                Err(problem) => errors.push(ConfigError::new(value.span, format!("option `{}.{}`: {problem}", f.name, slot.name))),
+            Ok(v) => match slot.schema.check(&v.into_owned(), &schemas) {
+                Ok(v) => slot.value = v,
+                Err(misfit) => errors.push(
+                    ConfigError::new(value.span, format!("option `{}` of `{}`: {misfit}", slot.name, f.name))
+                        .note(format!("`{}` takes {}", slot.name, slot.schema)),
+                ),
             },
             Err(err) => errors.push(ConfigError::new(value.span, format!("option values must be constants: {err}"))),
         }
@@ -225,6 +229,10 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             }
             if patch.report.is_some() {
                 def.report = patch.report;
+                def.report_at = None;
+            }
+            if let Some(at) = &patch.report_at {
+                def.report_at = Some(at.clone());
             }
             def.when.extend(patch.when.iter().cloned());
             def.locals.extend(patch.locals.iter().cloned());
@@ -306,7 +314,24 @@ fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String]
     attrs
 }
 
-fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> Option<Rule> {
+/// Named option schemas, after checking every schema name used refers to
+/// one.
+fn schemas(config: &Config, errors: &mut Vec<ConfigError>) -> Schemas {
+    let named: Schemas = config.schemas.iter().map(|s| (s.name.text.clone(), s.clone())).collect();
+    for u in &config.uses {
+        if let Use::Schema(name) = u {
+            if !named.contains_key(&name.text) {
+                errors.push(
+                    ConfigError::new(name.span, format!("unknown type `{}`", name.text))
+                        .suggest(&name.text, named.keys().map(String::as_str).chain(["string", "number", "int", "boolean", "any", "null", "regex"])),
+                );
+            }
+        }
+    }
+    named
+}
+
+fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> Option<Rule> {
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
@@ -327,27 +352,15 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut 
             errors.push(ConfigError::new(opt.name.span, format!("option `{}` is declared twice", opt.name.text)));
             continue;
         }
-        let Some(compiled) = Scope::constants(g).compile(&opt.default, errors) else { continue };
-        match Ctx::eval_static(&compiled, &[]) {
-            Ok(v) => {
-                let item = opt.item.as_ref().and_then(|i| {
-                    let compiled = Scope::constants(g).compile(i, errors)?;
-                    Ctx::eval_static(&compiled, &[]).map_err(|e| errors.push(ConfigError::new(i.span, format!("item shapes must be constants: {e}")))).ok()
-                });
-                if let Some(item) = &item {
-                    if let Value::List(items) = &v {
-                        for (n, x) in items.iter().enumerate() {
-                            if let Err(problem) = super::options::check(item, None, x) {
-                                errors.push(ConfigError::new(opt.default.span, format!("default item {n} does not fit the item shape: {problem}")));
-                            }
-                        }
-                    } else {
-                        errors.push(ConfigError::new(opt.item.as_ref().map(|i| i.span), "`item` describes the items of a list option"));
-                    }
-                }
-                options.push(OptionSlot { name: opt.name.text.clone(), description: opt.description.clone(), default: v.clone(), value: v, item })
-            }
-            Err(e) => errors.push(ConfigError::new(opt.default.span, format!("option defaults must be constants: {e}"))),
+        match opt.schema.check(&opt.default, schemas) {
+            Ok(v) => options.push(OptionSlot {
+                name: opt.name.text.clone(),
+                description: opt.description.clone(),
+                schema: opt.schema.clone(),
+                default: v.clone(),
+                value: v,
+            }),
+            Err(misfit) => errors.push(ConfigError::new(opt.default_span, format!("the default of option `{}` does not fit its type: {misfit}", opt.name.text))),
         }
     }
     let option_names: Vec<String> = options.iter().map(|o| o.name.clone()).collect();
@@ -371,12 +384,19 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut 
         scope.locals.push(name.text.clone());
     }
 
+    // `each x in list`: the list is per node; `x` is in scope for the rest
+    // (not for `let`s, which are kept per node).
+    let each = def.each.as_ref().and_then(|(_, list)| scope.compile(list, errors));
+    if let Some((name, _)) = &def.each {
+        scope.params.push(name.text.clone());
+    }
     let compile_all = |exprs: &[crate::config::ast::Expr], errors: &mut Vec<ConfigError>| -> Vec<CExpr> {
         exprs.iter().filter_map(|e| scope.compile(e, errors)).collect()
     };
     let when = compile_all(&def.when, errors);
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
     let fix = def.fix.as_ref().and_then(|s| scope.compile(s, errors));
+    let report_at = def.report_at.as_ref().and_then(|s| scope.compile(s, errors));
 
     let globs = |list: &[(String, crate::config::source::Span)], errors: &mut Vec<ConfigError>| {
         PathGlobs::new(list.iter().map(|(g, _)| g.as_str())).unwrap_or_else(|(glob, e)| {
@@ -410,6 +430,8 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut 
         message,
         fix,
         report: def.report.unwrap_or_default(),
+        report_at,
+        each,
     })
 }
 

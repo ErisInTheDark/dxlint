@@ -43,7 +43,7 @@ in js_mix_or_after_and.operator rule no-mixed-operators:or-left warn mix_message
 # Binary operators start the continuation line, assignments end the first.
 in js_code match js_operator_line_end /(?:&&|\|\||\?\?|===?|!==?|<=|>=|(?<!\+)\+(?!\+)|(?<!-)-(?![-=])|[*%\/]|\binstanceof|\bin|(?<![|&])[|&](?![|&=]))(?=[ \t]*(?:\/\/[^\r\n]*)?\r?\n)/
 in js_operator_line_end rule operator-linebreak:before warn "'{text}' should be placed at the beginning of the line." {
-  option style "before" "\"before\" or \"none\""
+  option style "before" | "none" = "before"
   when style == "before"
 }
 
@@ -53,7 +53,7 @@ in js_operator_line_end rule operator-linebreak:before warn "'{text}' should be 
 # in a declaration statement (brackets are children) followed by a name.
 in js_statement match js_declaration_comma /,(?=[ \t\r\n]*[\w$]+[ \t]*(?:[=,;:]|$))/
 in js_declaration_comma rule one-var warn "Split declarations into multiple statements." {
-  option style "consecutive" "\"never\" or \"consecutive\""
+  option style "never" | "consecutive" = "consecutive"
   when style == "never" && re_test(parent_text, /^[ \t]*(?:export[ \t]+)?(?:const|let|var)\b/)
   # Not inside type arguments: more `<` than (non-arrow) `>` so far.
   when re_count(parent_before, /</) <= re_count(parent_before, /(?:^|[^=])>/)

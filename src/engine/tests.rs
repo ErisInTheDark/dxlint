@@ -563,7 +563,7 @@ function* r() { yield 1; }
             "a:0/1/0",
             "b:0/1/1",
             "#c:1/0/0",
-            "none",
+            // Only constructors of derived classes call `super()`.
             "some",
             "all",
             "p:true:false:false",
@@ -576,18 +576,22 @@ function* r() { yield 1; }
 #[test]
 fn regexes_and_regexp_patterns() {
     let l = native_linter(
-        "in ts_regex rule r info \"{regex_problems}\" { when regex_problems != \"\" }\n\
-         in ts_string rule s info \"{regex_error}\" { when regex_error != null }",
+        "in ts_regex, ts_call, ts_new rule r info \"{f.check}:{f.kind}@{f.offset}\" { each f in default(regex_findings, []) }\n\
+         in ts_call, ts_new rule e info \"{default(regex_flags_error(default(regex_flags, ''), []), regex_pattern_error)}\" { when regex_pattern_error != null || regex_flags_error(default(regex_flags, ''), []) != null }",
     );
-    let text = "/a  b/;\n/(a)|\\1/;\nnew RegExp(\"(\");\nRegExp(\"a\", \"gg\");\nRegExp(\"ok\");\n";
+    // Literals, and patterns of `RegExp` (an alias too) written in strings:
+    // findings point into the string.
+    let text = "/a  b/;\n/(a)|\\1/;\nnew RegExp(\"(\");\nRegExp(\"a\", \"gg\");\nconst R = RegExp; R(\"x\\\\1(y)\");\n";
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
     assert_eq!(
         messages,
         vec![
-            "spaces:2",
-            "backref:disjunctive:\\1:(a)",
+            "spaces:2@2",
+            "backref:disjunctive@13",
             "Invalid regular expression: /(/: Unterminated group",
             "Duplicate flags ('g') supplied to RegExp constructor",
+            // At the `\\1` in the string.
+            "backref:forward@76",
         ]
     );
 }
@@ -758,7 +762,7 @@ fn options_defaults_sets_and_messages() {
     let l = linter(r#"
         over .t match line /^[^\n]+/ {
           rule long-line warn "max {max}" {
-            option max 10 "max chars"
+            option max int(0..) = 10 "max chars"
             when len(text) > max
           }
         }
@@ -1036,29 +1040,70 @@ fn library_layers_only_parse_while_something_needs_them() {
 }
 
 #[test]
-fn options_take_records_and_lists_shaped_like_their_defaults() {
+fn options_are_checked_against_their_types_and_records_get_defaults() {
     let l = linter(r#"
+        schema word_choice {
+          word: string = "*"  "which word"
+          say: string
+        }
         in .t match word /[a-z]+/ {
           rule pick warn "{find_last(config, c => c.word == text || c.word == '*').say}" {
-            option config [] item { word: "*", say: "" } "what to say about which word"
+            option config word_choice[] = [] "what to say about which word"
             when any(config, c => c.word == text || c.word == "*")
           }
         }
         rule pick {
           set config [
-            { word: "*", say: "any" },
+            { say: "any" },
             { word: "ab", say: "ab!" },
           ]
         }
     "#);
     assert_eq!(rule_messages(&l, "ab cd"), vec!["pick: ab!", "pick: any"]);
     let errs = errors(r#"
+        schema word_choice { word: string = "*" "which word"; say?: string }
         in .t match word /[a-z]+/ {
-          rule pick warn "x" { option config [] item { word: "*" } }
+          rule pick warn "x" { option config word_choice[] = [] }
+          rule count warn "x" { option max int(0..) = 2 }
+          rule mode warn "x" { option style "a" | "b" = "c" }
+          rule pattern warn "x" { option ignore regex = "" }
         }
-        rule pick { set config [{ word: 1 }, { what: "x" }] }
+        rule pick { set config [{ word: "x" }, { word: 1 }] }
+        rule count { set max -1 }
+        rule pattern { set ignore "(" }
     "#);
-    assert!(errs.iter().any(|e| e.contains("config`: [0].word is a num, expected a str")), "{errs:?}");
+    let has = |s: &str| errs.iter().any(|e| e.contains(s));
+    assert!(has("`[1].word` must be string, got 1 (which word)"), "{errs:?}");
+    assert!(has("`max` of `count`: must be int(0..), got -1"), "{errs:?}");
+    assert!(has("the default of option `style` does not fit its type"), "{errs:?}");
+    assert!(has("is not a valid regex"), "{errs:?}");
+    let old = errors(r#"
+        in .t match word /[a-z]+/ {
+          rule f warn "x" { option max 3 "old style" }
+          rule g warn "x" { option kind strng = "" }
+        }
+    "#);
+    assert!(old.iter().any(|e| e.contains("option `max` needs a default")), "{old:?}");
+    assert!(old.iter().any(|e| e.contains("unknown type `strng`")), "{old:?}");
+}
+
+#[test]
+fn each_reports_once_per_item_where_report_at_says() {
+    // A macro parameter named like a key is not substituted after `.`;
+    // `\u{..}` in a string is an escape, not a hole.
+    let l = linter(r#"
+        macro of(word) filter(words, w => w.word == word)
+        macro words [{ word: "ab", at: 1 }, { word: "cd", at: 0 }]
+        in .t match line /[a-z ]+/ {
+          rule pick warn "{w.word}{'\u{21}'}" {
+            each w in of("ab") of("cd")
+            report at offset + w.at
+          }
+        }
+    "#);
+    let diags = lint(&l, "xyz");
+    let found: Vec<(usize, &str)> = diags.iter().map(|d| (d.start, d.message.as_str())).collect();
+    assert_eq!(found, vec![(0, "cd!"), (1, "ab!")]);
 }
 
 #[test]
@@ -1199,11 +1244,11 @@ fn a_broken_pattern_is_one_error_not_one_per_use() {
 fn option_types_are_checked() {
     let errs = errors(r#"
         in .t match x /X/ {
-          rule f warn "x" { option max 3 }
+          rule f warn "x" { option max number = 3 }
         }
         rule f { set max "three" }
     "#);
-    assert!(errs.iter().any(|e| e.contains("is a str, expected a num")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("must be number, got \"three\"")), "{errs:?}");
 }
 
 #[test]

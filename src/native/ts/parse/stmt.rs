@@ -477,7 +477,7 @@ impl<'s> Parser<'s> {
             let s = self.token_text();
             kids.add(Field::Modifier, s);
         }
-        if (self.is_word("get") || self.is_word("set")) && self.word_is_modifier() {
+        if (self.is_word("get") || self.is_word("set")) && self.word_is_accessor() {
             let k = self.token_text();
             kids.add(Field::Kind, k);
         }

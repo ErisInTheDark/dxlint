@@ -6,10 +6,6 @@ define {
 
 # ---- banned things -----------------------------------------------------------
 
-in js_code match js_debugger /(?<![.\w$])debugger\b/
-in js_debugger rule no-debugger warn "Unexpected 'debugger' statement." {
-}
-
 in js_code match js_console /(?<![.\w$])console\.[\w$]+/
 in js_console rule no-console warn "Unexpected console statement." {
 }
@@ -19,35 +15,8 @@ in js_code match js_new_function /(?<![.\w$])(?:new[ \t]+)?Function[ \t]*\(|(?<!
 in js_new_function rule no-new-func warn "The Function constructor is eval." {
 }
 
-# `new Promise(async (resolve) => ...)`
-in js_code match js_async_executor /(?<![.\w$])new[ \t]+Promise[ \t]*(?:<[^>()]*>)?[ \t]*\([ \t]*async\b/
-in js_async_executor rule no-async-promise-executor warn "Promise executor functions should not be async." {
-}
-
-# ---- comparisons ---------------------------------------------------------------
-
-in js_code match js_nan_compare /(?:[=!]==?|[<>]=?)[ \t]*NaN\b|(?<![.\w$])NaN[ \t]*(?:[=!]==?|[<>]=?)|\bcase[ \t]+NaN[ \t]*:|\bswitch[ \t]*\([ \t]*NaN[ \t]*\)/
-in js_nan_compare rule use-isnan warn "Use the isNaN function to compare with NaN." {
-}
-
-# `typeof x === "strnig"`, either way round. Specialised strings, so the
-# comparison operator stays visible to other rules.
-match js_typeof_double_quoted like js_string /(?<=\btypeof[ \t]+[\w$.]+(?:\(\))?[ \t]*[=!]==?[ \t]*)"[^"\\\r\n]*"|"[^"\\\r\n]*"(?=[ \t]*[=!]==?[ \t]*typeof\b)/
-match js_typeof_single_quoted like js_single_string /(?<=\btypeof[ \t]+[\w$.]+(?:\(\))?[ \t]*[=!]==?[ \t]*)'[^'\\\r\n]*'|'[^'\\\r\n]*'(?=[ \t]*[=!]==?[ \t]*typeof\b)/
-in js_code match js_typeof_double_quoted
-in js_code match js_typeof_single_quoted
-in js_typeof_double_quoted, js_typeof_single_quoted rule valid-typeof warn "Invalid typeof comparison value." {
-  when !(text ~ /["'](?:undefined|object|boolean|number|string|function|symbol|bigint)["']/)
-}
-
-# no-constant-condition lives in .ts/problems (on the native layers).
-
-# `a = a`, also inside chains: `const x = a[k] = a[k]`
-in js_code match js_self_assign /(?<=(?:^|[;=(])[ \t]*)[\w$][\w$.]*(?:\[[^\]\r\n]*\])*[ \t]*=(?![=>])[ \t]*[\w$][\w$.]*(?:\[[^\]\r\n]*\])*(?=[ \t]*(?:[;)]|\r?\n|$))(?![ \t]*\r?\n[ \t]*[.?\[(+\-*\/%&|^=,:<>])/
-macro self_assign_side(n) re_replace(text, /^([^=]*?)[ \t]*=[ \t]*(.*)$/, n)
-in js_self_assign rule no-self-assign warn "'{self_assign_side('$2')}' is assigned to itself." {
-  when self_assign_side('$1') == self_assign_side('$2')
-}
+# use-isnan, valid-typeof, no-self-assign and no-constant-condition live in
+# .ts/problems (on the native layers).
 
 # ---- strings and regexes ---------------------------------------------------------
 
@@ -55,9 +24,7 @@ in js_string, js_single_string rule no-template-curly-in-string warn "Unexpected
   when text ~ /.*\$\{[^}\r\n]+\}.*/
 }
 
-in js_regex, js_regex_class match js_regex_control /\\x[01][0-9a-fA-F]|\\u00[01][0-9a-fA-F]|\\u\{0*[01]?[0-9a-fA-F]\}|[\x00-\x08\x0b\x0c\x0e-\x1f]/
-in js_regex_control rule no-control-regex warn "Unexpected control character(s) in regular expression: {text}." {
-}
+# no-control-regex lives in .ts/problems (on the native regex parser).
 
 # Escapes that mean the same as the bare character.
 in js_escape rule no-useless-escape warn "Unnecessary escape character: {text}." {
@@ -72,32 +39,11 @@ in js_regex_escape rule no-useless-escape:regex warn "Unnecessary escape charact
   when !(parent == "js_regex_class" && (text == "\\^" && parent_before == "[" || text == "\\-" && parent_before != "[" && !starts_with(after, "]")))
 }
 
-# ---- switch ----------------------------------------------------------------------
-
-# Case labels. The body of a case is the gap before the next label.
-in js_switch_body match js_case /^[ \t]*(?:case\b(?:[^:'"`\r\n]|'[^'\r\n]*'|"[^"\r\n]*")*|default[ \t]*):/
-macro case_body_raw re_replace(previous_gap, /\/\/[^\n]*|\/\*[\s\S]*?\*\/|\r/, "")
-macro case_body_code trim(case_body_raw)
-# Statements of a case body start at the indentation of its first own line;
-# deeper lines continue them, and lines opening with a bracket close them.
-macro case_indent re_replace(default(re_find(case_body_raw, /\n[ \t]*\S/), "\n§"), /^\n([ \t]*)\S$/, "$1")
-macro case_statements trim(re_replace(re_replace(case_body_code, "(?m)^" case_indent "[ \\t]+\\S[^\\n]*(?:\\n|$)", ""), /(?m)^[ \t]*[)\]}][^\n]*(?:\n|$)/, ""))
-in js_case rule no-fallthrough warn "Expected a 'break' statement before '{if re_test(text, /^\s*default/) then 'default' else 'case'}'." {
-  option allow_empty_case false "allow empty cases separated by blank lines"
-  # An empty case falls through silently only onto the very next line.
-  when previous_sibling != null && (case_body_code != "" || !allow_empty_case && re_test(previous_gap, /\n[ \t]*\r?\n/))
-  when !re_test(previous_gap, /(?i)falls?\s?through/)
-  when !re_test(case_statements, /(?m)(?:^|[;{:])[ \t]*(?:break|return|continue|throw)\b[^\n]*\z/)
-  # A nested switch with a default: assume every branch leaves.
-  when !(re_test(case_statements, /(?m)^[ \t]*switch\b[^\n]*\z/) && re_test(case_body_code, /\bdefault[ \t]*:/))
-}
+# no-fallthrough lives in .ts/problems (on the native code paths).
 
 # ---- TypeScript --------------------------------------------------------------------
 
-# `Function` used as a type.
-in js_code match js_function_type /(?<=(?:[:|&<]|=>|\b(?:as|extends|implements|keyof)|\btype[ \t]+[\w$]+(?:<[^=]*>)?[ \t]*=)[ \t]*)Function\b(?![\w$.(])/
-in js_function_type rule no-unsafe-function-type warn "The `Function` type accepts any function-like value." {
-}
+# no-unsafe-function-type lives in .ts/problems (on the native layers).
 
 in js_interface_body rule no-empty-interface warn "{if re_test(before, /\bextends\b/) then 'An interface declaring no members is equivalent to its supertype.' else 'An empty interface is equivalent to `{{}}`.'}" {
   when text ~ /\{\s*\}/

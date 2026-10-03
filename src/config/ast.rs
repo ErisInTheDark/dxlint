@@ -1,6 +1,8 @@
 //! Parsed (macro-expanded, import-flattened) configuration.
 
+use super::schema::{Schema, SchemaDef};
 use super::source::Span;
+use crate::expr::Value;
 use crate::pattern::Pat;
 
 #[derive(Clone, Debug)]
@@ -24,6 +26,8 @@ pub struct Config {
     pub natives: Vec<Name>,
     pub attrs: Vec<AttrDef>,
     pub forwards: Vec<ForwardDef>,
+    /// `schema name T`: option schemas rules share.
+    pub schemas: Vec<SchemaDef>,
     /// Names removed by `drop`: anything still using one is an error at
     /// the `drop`.
     pub dropped: Vec<Dropped>,
@@ -51,6 +55,8 @@ pub enum Use {
     Layer(Name),
     /// An import's path string and the file it loaded.
     Import(Span, super::source::FileId),
+    /// A named schema in an option's schema.
+    Schema(Name),
 }
 
 /// What `drop` removed.
@@ -203,13 +209,14 @@ pub enum Target {
     Lang(Name),
 }
 
+/// `option name schema = default "description"`
 #[derive(Debug)]
 pub struct OptionDef {
     pub name: Name,
-    pub default: Expr,
+    pub schema: Schema,
+    pub default: Value<'static>,
+    pub default_span: Span,
     pub description: Option<String>,
-    /// `option x [] item { ... }`: the shape every item of the list has.
-    pub item: Option<Expr>,
 }
 
 /// `in target rule name [severity [message]] [fix as expr] [{ clauses }]`
@@ -234,6 +241,12 @@ pub struct RuleDef {
     /// Where diagnostics point (`report node | change | end`); the whole
     /// node when not given.
     pub report: Option<Report>,
+    /// `report at <offset>`: where the diagnostic starts instead (a byte
+    /// offset, such as an ancestor's `offset`).
+    pub report_at: Option<Expr>,
+    /// `each name in list`: the rule runs once per item, with `name` bound
+    /// to it in `when`, the message, `fix` and `report at`.
+    pub each: Option<(Name, Expr)>,
     /// Part of the rule failed to parse: running the rest would check
     /// something else than what was written.
     pub broken: bool,
@@ -273,6 +286,8 @@ impl RuleDef {
             fix: None,
             locals: Vec::new(),
             report: None,
+            report_at: None,
+            each: None,
             broken: false,
         }
     }

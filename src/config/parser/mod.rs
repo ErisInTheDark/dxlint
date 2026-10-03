@@ -3,6 +3,7 @@
 
 mod expr;
 mod pattern;
+mod schema;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ use crate::pattern::Pat;
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
-    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define",
+    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each",
 ];
 
 /// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
@@ -283,6 +284,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "drop") => self.drop_item(),
             (Tk::Ident, "override") => self.override_item(ctx),
             (Tk::Ident, "define") => self.define_block(),
+            (Tk::Ident, "schema") => self.schema_item(),
             (Tk::Ident, "amend") => {
                 self.errors.push(
                     ConfigError::new(t.span, "`amend` is now part of `rule`").note("write `rule name { ... }`: its clauses add to the rule, and `set option value` sets options"),
@@ -298,7 +300,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, group, match, in/over ..., rule, indent, let, macro, import, ignore, native, define, drop, override",
+                        "items are: lang, group, match, in/over ..., rule, indent, let, macro, schema, import, ignore, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -1048,7 +1050,7 @@ impl<'a> Parser<'a> {
         self.overriding = Some(kw.span);
         self.item(ctx);
         if self.overriding.take().is_some() {
-            self.errors.push(ConfigError::new(kw.span, "`override` goes before a definition: `rule`, `match`, `let`, `macro` or `group`"));
+            self.errors.push(ConfigError::new(kw.span, "`override` goes before a definition: `rule`, `match`, `let`, `macro`, `group` or `schema`"));
         }
     }
 
@@ -1263,30 +1265,14 @@ impl<'a> Parser<'a> {
                         }
                         None => self.errors.push(
                             ConfigError::new(t.span, "`set` sets options of an existing rule: `rule name { set option value }`")
-                                .note("a definition declares them with `option name default \"description\"`"),
+                                .note("a definition declares them with `option name <schema> = <default> \"description\"`"),
                         ),
                     }
                 }
                 (Tk::Ident, "option") => {
                     self.bump();
-                    if let Some(name) = self.ident("an option name") {
-                        if let Some(default) = self.operand() {
-                            self.skip(false, true);
-                            // `item { ... }`: the shape of a list option's items.
-                            let item = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("item")) {
-                                self.ts.next_raw();
-                                self.operand()
-                            } else {
-                                None
-                            };
-                            self.skip(false, true);
-                            let description = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Str) {
-                                self.string("an option description").map(|(s, _)| s)
-                            } else {
-                                None
-                            };
-                            def.options.push(OptionDef { name, default, description, item });
-                        }
+                    if let Some(opt) = self.option_line() {
+                        def.options.push(opt);
                     }
                 }
                 (Tk::Ident, word) if Severity::NAMES.contains(&word) => {
@@ -1328,16 +1314,34 @@ impl<'a> Parser<'a> {
                 }
                 (Tk::Ident, "report") => {
                     self.bump();
-                    if let Some(what) = self.ident("`node`, `change` or `end`") {
+                    if let Some(what) = self.ident("`node`, `change`, `end` or `at`") {
                         match what.text.as_str() {
                             "node" => def.report = Some(Report::Node),
                             "change" => def.report = Some(Report::Change),
                             "end" => def.report = Some(Report::End),
+                            "at" => def.report_at = self.expr(),
                             other => self.errors.push(
                                 ConfigError::new(what.span, format!("unknown report target `{other}`")).note(
-                                    "`report node` points at the whole node, `report change` at what the fix changes, `report end` at the node's end",
+                                    "`report node` points at the whole node, `report change` at what the fix changes, `report end` at the node's end, `report at <offset>` at a byte offset",
                                 ),
                             ),
+                        }
+                    }
+                }
+                // `each name in list`: once per item.
+                (Tk::Ident, "each") => {
+                    self.bump();
+                    if let Some(name) = self.ident("a name for each item") {
+                        self.skip(false, true);
+                        if !self.ts.peek_raw(0).is_some_and(|t| t.is_ident("in")) {
+                            self.error_here(format!("expected `in`: `each {} in <list>`", name.text));
+                        } else {
+                            self.ts.next_raw();
+                            if def.each.is_some() {
+                                self.errors.push(ConfigError::new(name.span, format!("rule `{}` already has an `each`", def.name.text)));
+                            } else if let Some(list) = self.expr() {
+                                def.each = Some((name, list));
+                            }
                         }
                     }
                 }
@@ -1356,7 +1360,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.errors.push(
                         ConfigError::new(t.span, format!("expected a rule clause, found {}", t.describe()))
-                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, fix, option (or set, when configuring), files, ignore, report"),
+                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, each, fix, option (or set, when configuring), files, ignore, report"),
                     );
                     self.bump();
                 }
@@ -1441,7 +1445,7 @@ mod tests {
         let c = ok(r#"
             in fn.name rule fn-snake warn "names are snake_case" fix as snake_case(text)
             in line rule line-length {
-              option max 100 "max chars"
+              option max int(1..) = 100 "max chars"
               error "lines under {max}"
               when len(text) > max
             }
@@ -1549,7 +1553,7 @@ mod tests {
         let c = ok(r#"
             in x rule a warn "{text}" "!" fix as if c then text "=" else (text
               "-") {
-              option max 100 "max chars"
+              option max number = 100 "max chars"
               when len(text) + 1 "px" == "4px"
               files "src/**" "lib/**"
               ignore "a" "b"
@@ -1562,7 +1566,7 @@ mod tests {
         assert!(join(rule.message.as_ref().unwrap()));
         let Some(ExprKind::If(_, then, other)) = rule.fix.as_ref().map(|e| &e.kind) else { panic!("{:?}", rule.fix) };
         assert!(join(then) && join(other));
-        assert!(matches!(rule.options[0].default.kind, ExprKind::Num(_)) && rule.options[0].description.is_some());
+        assert!(rule.options[0].default == crate::expr::Value::Num(100.0) && rule.options[0].description.is_some());
         // `len(text) + 1` is one side of the join; the join is one side of `==`.
         let ExprKind::Binary(BinOp::Eq, lhs, _) = &rule.when[0].kind else { panic!("{:?}", rule.when[0]) };
         assert!(matches!(&lhs.kind, ExprKind::Binary(BinOp::Join, sum, _) if matches!(sum.kind, ExprKind::Binary(BinOp::Add, ..))));

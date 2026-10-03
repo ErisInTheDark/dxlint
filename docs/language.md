@@ -286,7 +286,7 @@ in todo_note rule todo-comment info "{text} left in a comment"
 in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 
 in line rule line-length {
-  option max 100 "what max means"
+  option max int(1..) = 100 "what max means"
   error "line is {len(text)} long"
   files "src/**"
   ignore "src/generated/**" "vendor/**"
@@ -334,10 +334,12 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | `when expr` | only nodes where `expr` is truthy; several `when`s must all hold, in order |
 | `let name expr` | a value computed once per node and usable by later clauses, the message and the fix |
 | `fix as expr` | what the node should be |
-| `option name default [item shape] "description"` | a configurable value; the default is a constant (records and lists too) and fixes the option's shape, see [Turning rules on](#turning-rules-on-and-configuring-them) |
+| `option name <type> = <default> "description"` | a configurable value of that type, see [Option types](#option-types) |
 | `files "glob" ...` | only these files |
 | `ignore "glob" ...` | not these files |
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
+| `report at expr` | diagnostics start at that byte offset (`offset` and `end_offset` are a node's own; native facts give others, such as `write_site`) |
+| `each name in list` | one diagnostic per item: `when`, the message, `fix` and `report at` see the item as `name` (`let`s stay per node) |
 
 A macro at the start of a body line is pasted as clauses.
 
@@ -660,15 +662,9 @@ rule padding-line-between-statements {
   A name nothing defines is an error with a suggestion, and says which
   language import defines it (`rule rs-indent` → "comes with `import .rs`").
   Rulesets skip rules of languages you did not import.
-- **Option values** have the shape of the option's default: the same type,
-  only keys the default record has, and list items like the default's first
-  item or the option's declared item shape. A mismatch names where it is:
-  `option config: [1].blankLine is a num, expected a str`. A rule declares
-  a list option's items with `item`:
-
-  ```zlint
-  option config [] item { blankLine: "any", prev: "*", next: "*" } "blank lines between statements"
-  ```
+- **Option values** must fit the option's [type](#option-types). A mismatch
+  says where: ``option `config` of `padding-line-between-statements`:
+  `[1].blankLine` must be "any" | "never" | "always", got "sometimes"``.
 
 - `define { ... }` defines without turning on: rules inside stay off until a
   `rule name` line turns them on. The built-in languages are written this
@@ -677,6 +673,48 @@ rule padding-line-between-statements {
   importing a language never changes what your own matchers match.
 - `zlint rules` lists every defined rule, the off ones with the severity
   they turn on at.
+
+## Option types
+
+Every option declares its type, in TypeScript-like syntax, and a default:
+`option name <type> = <default> "description"`. Named types (`schema`) are
+shared between rules.
+
+```zlint
+schema statement_kind "*" | "block-like" | "return" "a statement kind"
+schema statement_pair {
+  blankLine: "any" | "never" | "always"  "what goes between them"
+  prev: statement_kind | statement_kind[]
+  next: statement_kind | statement_kind[]
+  note?: string                          # optional: null when absent
+  max: int(0..) = 2                      # optional, with a default
+}
+
+in ts_program rule padding-line-between-statements {
+  option config statement_pair[] = [] "blank-line requirements"
+  option style "1tbs" | "stroustrup" | "allman" = "1tbs"
+  option ignore regex | null = null
+  ...
+}
+```
+
+| type | takes |
+|---|---|
+| `string`, `number`, `int`, `boolean`, `any`, `null` | values of that kind (`int`: whole numbers) |
+| `regex` | a string that is a valid regex |
+| `"x"`, `3`, `true` | exactly that value |
+| `a \| b` | either; a union may continue on a line starting with `\|` |
+| `T[]`, `T[1..]`, `T[..3]` | a list of `T`, with an optional length range |
+| `int(0..)`, `number(0..1)`, `string(1..)` | a number in a range, or a string of a length |
+| `{ key: T; ... }` | a record. `key: T` is required, `key?: T` is optional (null when absent), `key: T = value` is optional with that default. Keys are separated by lines, `,` or `;`, and a `"description"` can follow each |
+| `{ [key: string]: T }` | a record with any keys, each taking `T` (it may also list named keys) |
+| `(T)` | grouping: `("a" \| "b")[]` |
+| `name` | a `schema` |
+
+Checking a value fills in record defaults, so a rule can read every key
+(`c.word`) without `default(...)`. Defaults are literal values, and an
+option's default must fit its own type. `override schema name ...` replaces
+a named type.
 
 ## Changing imported definitions: `override`, `drop`
 

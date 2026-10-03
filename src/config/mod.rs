@@ -6,6 +6,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 mod parser;
+pub mod schema;
 pub mod source;
 pub mod std_lib;
 mod stream;

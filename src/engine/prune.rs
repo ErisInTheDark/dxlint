@@ -204,7 +204,7 @@ pub fn prune(config: &mut Config) {
 
 /// Names a rule's clauses mention.
 fn rule_names(r: &crate::config::ast::RuleDef, out: &mut HashSet<String>) {
-    for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(r.locals.iter().map(|(_, e)| e)) {
+    for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(&r.report_at).chain(r.each.as_ref().map(|(_, e)| e)).chain(r.locals.iter().map(|(_, e)| e)) {
         expr_names(e, out);
     }
 }

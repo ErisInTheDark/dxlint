@@ -99,19 +99,19 @@ in js_code, js_block_comment match js_blank_run /^(?:[ \t]*\r?\n)+/
 # break ends.
 macro blank_lines (re_count(text, /\n/) - (if re_test(before, /\S/) then 1 else 0))
 in js_blank_run, js_optional_body.blank, js_padding_bottom rule no-multiple-empty-lines warn "More than {max} blank line(s) not allowed." {
-  option max 2 "blank lines allowed in a row"
+  option max int(0..) = 2 "blank lines allowed in a row"
   report change
   when blank_lines > max
   fix as (if re_test(before, /\S/) then default(re_find(text, /^[ \t]*\r?\n/), "") else "") repeat(newline, max)
 }
 in js_blank_end rule no-multiple-empty-lines:eof warn "Too many blank lines at the end of file. Max of {max} allowed." {
-  option max 0 "blank lines allowed at the end of the file"
+  option max int(0..) = 0 "blank lines allowed at the end of the file"
   report change
   when count(lines(text)) > max
   fix as repeat(newline, max)
 }
 in js_blank_start rule no-multiple-empty-lines:bof warn "Too many blank lines at the beginning of file. Max of {max} allowed." {
-  option max 0 "blank lines allowed at the start of the file"
+  option max int(0..) = 0 "blank lines allowed at the start of the file"
   report change
   when count(lines(text)) > max
   fix as repeat(newline, max)
@@ -121,7 +121,7 @@ in js_blank_start rule no-multiple-empty-lines:bof warn "Too many blank lines at
 # brace's own text, anchored at its ends: lookbehinds would also see
 # braces inside comments.
 in braces rule padded-blocks:never-top warn "Block must not be padded by blank lines." {
-  option blocks "never" "\"never\" or \"ignore\""
+  option blocks "never" | "ignore" = "never"
   when (layer == "braces" || layer == "js_block") && blocks == "never"
   fix as re_replace(text, /^\{([ \t]*\r?\n)(?:[ \t]*\r?\n)+/, "{{$1")
 }
@@ -129,17 +129,17 @@ in braces rule padded-blocks:never-top warn "Block must not be padded by blank l
 # only whitespace is always its own.
 in braces match js_padding_bottom /(?<=\S)[ \t]*\r?\n(?:[ \t]*\r?\n)+(?=[ \t]*\})/
 in js_padding_bottom rule padded-blocks:never-bottom warn "Block must not be padded by blank lines." {
-  option blocks "never" "\"never\" or \"ignore\""
+  option blocks "never" | "ignore" = "never"
   when (parent == "braces" || parent == "js_block") && blocks == "never"
   fix as default(re_find(text, /^[ \t]*\r?\n/), newline)
 }
 in js_class_body rule padded-blocks:always-top warn "Block must be padded by blank lines." {
-  option classes "always" "\"always\" or \"ignore\""
+  option classes "always" | "ignore" = "always"
   when classes == "always"
   fix as re_replace(text, /^\{([ \t]*\r?\n)([ \t]*[^\s}])/, "{{$1$1$2")
 }
 in js_class_body rule padded-blocks:always-bottom warn "Block must be padded by blank lines." {
-  option classes "always" "\"always\" or \"ignore\""
+  option classes "always" | "ignore" = "always"
   report change
   when classes == "always"
   fix as re_replace(text, /([^\s{][ \t]*)(\r?\n)([ \t]*\})$/, "$1$2$2$3")
@@ -195,7 +195,7 @@ in js_var rule no-var warn "Unexpected var, use let or const instead." {
 
 in js_type_body match js_member_delimiter /[;,](?=[ \t]*(?:\/\/[^\r\n]*)?\r?\n)/
 in js_member_delimiter rule member-delimiter-style:multiline warn "Unexpected separator ({text})." {
-  option delimiter "none" "\"none\", \"semi\" or \"comma\""
+  option delimiter "none" | "semi" | "comma" = "none"
   when delimiter == "none"
   fix as ""
 }
@@ -205,13 +205,13 @@ in js_member_delimiter rule member-delimiter-style:multiline warn "Unexpected se
 in js_type_body match js_type_member /^[ \t]*(?=[^\s}\/@,;])/ until (/(?=[ \t]*[;,])/ or statement_end)
 group js_code js_type_member
 in js_type_member rule member-delimiter-style:missing warn "Expected a {delimiter} after this member." {
-  option delimiter "none" "\"none\", \"semi\" or \"comma\""
+  option delimiter "none" | "semi" | "comma" = "none"
   report change
   when delimiter != "none" && !re_test(after, /^[ \t]*[;,]/)
   fix as re_replace(text, /([ \t]*(?:\/\/[^\r\n]*)?)$/, (if delimiter == "semi" then ";" else ",") "$1")
 }
 in js_member_delimiter rule member-delimiter-style:wrong warn "Expected a {delimiter} instead of '{text}'." {
-  option delimiter "none" "\"none\", \"semi\" or \"comma\""
+  option delimiter "none" | "semi" | "comma" = "none"
   when delimiter == "semi" && text == "," || delimiter == "comma" && text == ";"
   fix as if delimiter == "semi" then ";" else ","
 }
@@ -219,25 +219,25 @@ in js_member_delimiter rule member-delimiter-style:wrong warn "Expected a {delim
 # ---- strings -------------------------------------------------------------
 
 in js_string rule quotes:double warn "Strings must use singlequote." {
-  option style "single" "\"single\" or \"double\""
+  option style "single" | "double" = "single"
   when style == "single" && len(text) >= 2 && ends_with(text, "\"")
   fix as "'" replace(replace(replace(slice(text, 1, -1), "\\\"", "\""), "\\'", "'"), "'", "\\'") "'"
 }
 in js_single_string rule quotes:single warn "Strings must use doublequote." {
-  option style "single" "\"single\" or \"double\""
-  option avoid_escape false "keep the other quote when it saves escapes"
+  option style "single" | "double" = "single"
+  option avoidEscape boolean = false "keep the other quote when it saves escapes"
   when style == "double" && len(text) >= 2 && ends_with(text, "'")
-  when !(avoid_escape && contains(text, "\""))
+  when !(avoidEscape && contains(text, "\""))
   fix as "\"" replace(replace(replace(slice(text, 1, -1), "\\'", "'"), "\\\"", "\""), "\"", "\\\"") "\""
 }
 
 # Template literals with nothing to interpolate, on one line, untagged.
 in js_template rule quotes:template warn "Strings must use {style}quote." {
-  option style "single" "\"single\" or \"double\""
-  option allow_template_literals true "allow `templates` that could be plain strings"
-  option avoid_escape false "keep the template when the quote would need escaping"
-  when !allow_template_literals && !contains(text, "$\{") && !contains(text, "\n")
-  when !(avoid_escape && contains(text, if style == "double" then "\"" else "'"))
+  option style "single" | "double" = "single"
+  option allowTemplateLiterals boolean = true "allow `templates` that could be plain strings"
+  option avoidEscape boolean = false "keep the template when the quote would need escaping"
+  when !allowTemplateLiterals && !contains(text, "$\{") && !contains(text, "\n")
+  when !(avoidEscape && contains(text, if style == "double" then "\"" else "'"))
   # Tagged templates stay; `return` / `typeof` / ... are not tags.
   when !re_test(before, /[\w$)\]][ \t]*$/) || re_test(before, /(?:^|[^\w$.])(?:return|typeof|case|yield|await|in|of|new|throw|void|else|do|instanceof)[ \t]*$/)
   fix as (if style == "double" then "\"" replace(replace(slice(text, 1, -1), "\\`", "`"), "\"", "\\\"") "\""
@@ -251,7 +251,7 @@ match js_quoted_double_key like js_string /(?<=(?:^|[{,])[ \t]*(?:readonly[ \t]+
 in js_members match js_quoted_key
 in js_members match js_quoted_double_key
 in js_quoted_key, js_quoted_double_key rule quote-props warn "Properties shouldn't be quoted as all quotes are redundant." {
-  option types true "also interface and type literal keys (eslint core checks objects only)"
+  option types boolean = true "also interface and type literal keys (eslint core checks objects only)"
   when types || parent != "js_type_member" && parent != "js_interface_body" && parent != "js_type_literal"
   when text ~ /['"][A-Za-z_$][\w$]*['"]/
   when !re_test(braces, /(?m)(?:^|[{,])[ \t]*(?:readonly[ \t]+)?['"](?:[^'"\r\n]*[^\w$'"\r\n][^'"\r\n]*|\d[^'"\r\n]*|)['"][ \t]*\??:/)
@@ -273,9 +273,9 @@ in js_comma_first rule comma-style warn "',' should be placed last." {
 # trailing comments and comment-only lines) must end with `,`.
 macro last_item_tail(close) /(?m)^([ \t]*(?:[^ \t\r\n\/](?:[^\/\r\n]|\/[^\/\r\n])*?)?[^,\s{(\[\/])((?:[ \t]+\/\/[^\r\n]*)?(?:\r?\n[ \t]*(?:\/\/[^\r\n]*)?)*\r?\n[ \t]*/ close /)\z/
 in braces rule comma-dangle warn "Missing trailing comma." {
-  option objects "always-multiline" "objects and destructuring"
-  option imports "always-multiline" "import and export lists"
-  option enums "always-multiline" "enum bodies"
+  option objects "always-multiline" | "ignore" = "always-multiline" "objects and destructuring"
+  option imports "always-multiline" | "ignore" = "always-multiline" "import and export lists"
+  option enums "always-multiline" | "ignore" = "always-multiline" "enum bodies"
   report change
   when contains(text, "\n")
   when if layer == "js_import_list" then imports == "always-multiline"
@@ -289,7 +289,7 @@ in braces rule comma-dangle warn "Missing trailing comma." {
   fix as re_replace(text, last_item_tail(/\}/), "$1,$2")
 }
 in brackets rule comma-dangle:array warn "Missing trailing comma." {
-  option arrays "always-multiline" "arrays and tuples"
+  option arrays "always-multiline" | "ignore" = "always-multiline" "arrays and tuples"
   report change
   when layer == "brackets" && arrays == "always-multiline" && contains(text, "\n")
   fix as re_replace(text, last_item_tail(/\]/), "$1,$2")
@@ -297,7 +297,7 @@ in brackets rule comma-dangle:array warn "Missing trailing comma." {
 # Call arguments and parameter lists: a paren after a callee or a function
 # name, or an arrow function's parameters. A rest parameter takes no comma.
 in parentheses rule comma-dangle:function warn "Missing trailing comma." {
-  option functions "ignore" "\"always-multiline\" or \"ignore\""
+  option functions "always-multiline" | "ignore" = "ignore"
   report change
   when functions == "always-multiline" && contains(text, "\n") && parent != "js_type_member"
   when re_test(before, /[\w$)\]>][ \t]*$/) && !re_test(before, /=>[ \t]*$|\b(?:if|for|while|switch|catch|with|return|typeof|void|await|yield|in|of|case|throw|delete|instanceof)[ \t]*$/) || re_test(after, /^[ \t]*(?::[^=;]*)?=>/)
@@ -435,13 +435,13 @@ in js_keyword_tight_before rule keyword-spacing:before warn "Expected space(s) b
 # `function foo (`, `function (`, method `foo (`
 in js_code match js_function_parenthesis /\bfunction\b[ \t]*\*?[ \t]*(?:[\w$]+[ \t]*)?(?:<[^>()]*>)?(?=\()/
 in js_function_parenthesis rule space-before-function-paren:function warn "Missing space before function parentheses." {
-  option style "always" "\"always\" or \"never\""
+  option style "always" | "never" = "always"
   report change
   fix as if style == "always" then trim_end(text) " " else trim_end(text)
 }
 in js_member, js_object, js_object_property, js_object_else match js_method_name /(?<=(?:^|[{,])[ \t]*(?:(?:public|private|protected|static|async|override|abstract|readonly|get|set)[ \t]+)*\*?[ \t]*)[#\w$]+[ \t]*(?:<[^>()]*>)?[ \t]*(?=\([^)]*\)[ \t]*(?::[^={;]*)?\{)/
 in js_method_name rule space-before-function-paren:method warn "Missing space before function parentheses." {
-  option style "always" "\"always\" or \"never\""
+  option style "always" | "never" = "always"
   report change
   when !(text ~ /(?:if|for|while|switch|catch)[ \t]*/)
   fix as if style == "always" then trim_end(text) " " else trim_end(text)
@@ -460,14 +460,14 @@ in js_yield_star rule yield-star-spacing warn "Missing space after *." fix as "y
 # `} else` vs `}\nelse`
 in js_statement_context match js_closing_keyword /(?<=\})[ \t]*(?:else|catch|finally)\b/
 in js_closing_keyword rule brace-style:stroustrup warn "Closing curly brace appears on the same line as the subsequent block." {
-  option style "stroustrup" "\"1tbs\" or \"stroustrup\""
+  option style "1tbs" | "stroustrup" = "stroustrup"
   when style == "stroustrup"
   report change
   fix as newline indent trim(text)
 }
 in js_statement_context match js_closing_keyword_newline /(?<=\}[ \t]*)\r?\n[ \t]*(?:else|catch|finally)\b/
 in js_closing_keyword_newline rule brace-style:1tbs warn "Closing curly brace does not appear on the same line as the subsequent block." {
-  option style "stroustrup" "\"1tbs\" or \"stroustrup\""
+  option style "1tbs" | "stroustrup" = "stroustrup"
   when style == "1tbs"
   report change
   fix as " " trim(text)

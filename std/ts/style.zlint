@@ -74,8 +74,9 @@ in ts_type_operator rule array-type:readonly {
   warn "Array type using 'readonly T[]' is forbidden for non-simple types. Use 'ReadonlyArray<T>' instead."
 }
 
+# The global wrapper types (not local types of those names).
 in ts_type_reference rule no-wrapper-object-types {
-  when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent != "ts_template_type"
+  when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent != "ts_template_type" && name.reference_kind == null
   warn "Prefer using the primitive `{lower(name)}` as a type name, rather than the upper-cased `{name}`."
 }
 
@@ -189,12 +190,14 @@ in ts_method_signature, ts_method, ts_call_signature rule adjacent-overload-sign
   warn "All {re_replace(overload_key, /^static /, '')} signatures should be adjacent."
 }
 
+# `new (): I` in interface `I` (type arguments aside), and `constructor()`
+# signatures in interfaces and type literals.
 in ts_call_signature rule no-misused-new {
-  when parent == "ts_interface" && kind == "new" && return_type == ts_interface.name
+  when parent == "ts_interface" && kind == "new" && re_replace(default(return_type, ""), /\s*<[\s\S]*$/, "") == ts_interface.name
   warn "Interfaces cannot be constructed, only classes."
 }
 in ts_method_signature rule no-misused-new:constructor {
-  when parent == "ts_interface" && key == "constructor"
+  when key == "constructor"
   warn "Interfaces cannot be constructed, only classes."
 }
 in ts_method rule no-misused-new:class {
@@ -253,7 +256,11 @@ in ts_assignment rule no-confusing-non-null-assertion:assign {
 }
 
 in ts_call rule no-require-imports {
-  when callee == "require" && callee.resolved == "global"
+  option allow string[] = [] "module paths (regexes) that may be required"
+  option allowAsImport boolean = false "allow `import x = require(...)`"
+  when callee == "require" && (callee.resolved == "global" || parent == "ts_import_equals")
+  when !(allowAsImport && parent == "ts_import_equals")
+  when !any(allow, p => re_test(default(first([] argument.literal_value).value, "\u{0}"), p) && first([] argument.literal_value).type == "string")
   warn "A `require()` style import is forbidden."
 }
 in ts_call rule no-var-requires {

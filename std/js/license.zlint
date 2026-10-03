@@ -17,29 +17,29 @@ over .js match js_lead_comment pre:/\A\s*/ head:(/\/\*[\s\S]*?\*\// or /\/\/[^\r
 over .js match js_lead_code /\A\s*/ code:/[^\s\/]|\/[^\/*]/
 
 in js_lead_comment.head, js_lead_code.code rule header:missing warn "Missing license header" {
-  option license "" "the license header"
-  option skip_files "" "regex of file paths without a header"
+  option license string = "" "the license header"
+  option skip_files regex = "" "file paths without a header"
   report change
   when license_wanted && (parent == "js_lead_code" || !license_like)
   fix as license_text newline newline text
 }
 in js_lead_comment.head rule header:invalid warn "Invalid license header" {
-  option license "" "the license header"
-  option skip_files "" "regex of file paths without a header"
+  option license string = "" "the license header"
+  option skip_files regex = "" "file paths without a header"
   when license_wanted && license_like && text != license_text
   fix as license_text
 }
 in js_lead_comment.pre rule header:before warn "Superfluous new lines before license header" {
-  option license "" "the license header"
-  option skip_files "" "regex of file paths without a header"
+  option license string = "" "the license header"
+  option skip_files regex = "" "file paths without a header"
   report end
   when license_wanted && contains(text, "\n")
   when js_lead_comment.head == license_text
   fix as ""
 }
 in js_lead_comment.post rule header:after warn "{if re_count(text, /\n/) > 2 then 'Superfluous new lines' else 'Missing new line'} after license header" {
-  option license "" "the license header"
-  option skip_files "" "regex of file paths without a header"
+  option license string = "" "the license header"
+  option skip_files regex = "" "file paths without a header"
   when license_wanted && re_count(text, /\n/) != 2 && text_after != ""
   when js_lead_comment.head == license_text
   fix as newline newline

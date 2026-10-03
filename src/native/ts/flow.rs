@@ -5,8 +5,8 @@
 //!   `=== null`, `instanceof`, `Array.isArray`, early `return`/`throw`).
 //!   Any other test leaves the type alone; an assignment to the reference
 //!   between a guard and the use cancels the guards above it.
-//! - completion: whether a statement always leaves its block, and whether
-//!   every path through a constructor calls `super()`.
+//! - completion: whether a statement always leaves its block (code paths
+//!   proper are in `paths`).
 
 use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
@@ -201,101 +201,6 @@ impl NativeFile<'_> {
             }
             _ => false,
         }
-    }
-
-    /// On a constructor: whether `all`, `some` or `none` of the paths that
-    /// leave it normally (falling off the end or `return`) call `super()`.
-    /// Paths that throw need no call.
-    pub(super) fn super_calls(&self, ctor: u32) -> Option<&'static str> {
-        let s = &self.syntax;
-        if !s.is(ctor, K::Method) || s.get(ctor, F::Key).is_none_or(|k| s.text(k) != "constructor") {
-            return None;
-        }
-        let body = s.get(ctor, F::Body)?;
-        let mut ends = Vec::new();
-        let fall = self.super_paths(body, vec![false], &mut ends);
-        ends.extend(fall);
-        Some(match (ends.contains(&true), ends.contains(&false)) {
-            (true, false) => "all",
-            (true, true) => "some",
-            _ => "none",
-        })
-    }
-
-    /// The states (`super()` called yet?) after `st` from each state
-    /// before it; states at `return`s go to `ends`.
-    fn super_paths(&self, st: u32, before: Vec<bool>, ends: &mut Vec<bool>) -> Vec<bool> {
-        let s = &self.syntax;
-        let dedup = |mut v: Vec<bool>| {
-            v.sort();
-            v.dedup();
-            v
-        };
-        match s.kind(st) {
-            Some(K::Block) => {
-                let mut states = before;
-                for c in s.all(st, F::Body).collect::<Vec<_>>() {
-                    if states.is_empty() {
-                        break;
-                    }
-                    states = self.super_paths(c, states, ends);
-                }
-                states
-            }
-            Some(K::Return) => {
-                let called = s.get(st, F::Arg).is_some_and(|a| self.calls_super(a));
-                ends.extend(before.into_iter().map(|b| b || called));
-                Vec::new()
-            }
-            Some(K::Throw) => Vec::new(),
-            Some(K::If) => {
-                let test = s.get(st, F::Test).is_some_and(|t| self.calls_super(t));
-                let before: Vec<bool> = before.into_iter().map(|b| b || test).collect();
-                let mut out = s.get(st, F::Consequent).map_or_else(|| before.clone(), |c| self.super_paths(c, before.clone(), ends));
-                out.extend(s.get(st, F::Alternate).map_or_else(|| before.clone(), |a| self.super_paths(a, before.clone(), ends)));
-                dedup(out)
-            }
-            // Loops may run zero times; their bodies only add states.
-            Some(K::For | K::ForIn | K::ForOf | K::While | K::DoWhile | K::Switch | K::Try | K::Labeled) => {
-                if s.is(st, K::DoWhile) {
-                    if let Some(b) = s.get(st, F::Body) {
-                        return dedup(self.super_paths(b, before, ends));
-                    }
-                }
-                let mut out = before.clone();
-                for (f, c) in s.kids(st).collect::<Vec<_>>() {
-                    match f {
-                        Some(F::Body | F::Block | F::Handler | F::Consequent) => out.extend(self.super_paths(c, before.clone(), ends)),
-                        Some(F::Case) => {
-                            for b in s.all(c, F::Body).collect::<Vec<_>>() {
-                                out.extend(self.super_paths(b, before.clone(), ends));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                dedup(out)
-            }
-            _ => {
-                let called = self.calls_super(st);
-                dedup(before.into_iter().map(|b| b || called).collect())
-            }
-        }
-    }
-
-    /// A `super(...)` call inside `node`, outside nested functions and
-    /// classes.
-    fn calls_super(&self, node: u32) -> bool {
-        let s = &self.syntax;
-        let mut stack = vec![node];
-        while let Some(n) = stack.pop() {
-            match s.kind(n) {
-                Some(K::Function | K::Arrow | K::Class | K::Method) if n != node => {}
-                Some(K::Call) if s.get(n, F::Callee).is_some_and(|c| s.is(c, K::Super)) => return true,
-                _ => stack.extend(s.kids(n).map(|(_, c)| c)),
-            }
-        }
-        false
     }
 
     /// `t` where `test` evaluated to `sense`.

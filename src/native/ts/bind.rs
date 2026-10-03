@@ -40,6 +40,17 @@ pub struct Bindings {
     pub refs: HashMap<u32, u32>,
     /// Value references that resolve to nothing in the file (globals).
     pub unresolved: HashSet<u32>,
+    /// Referencing identifier -> how it uses the name: `read`, `write`
+    /// (`x = 1`, destructuring, `for (x of ...)`), `read_write` (`x += 1`,
+    /// `x++`) or `type` (type positions, `typeof x` in a type).
+    pub access: HashMap<u32, &'static str>,
+    /// Written identifier or member (`x`, `a.b`, `a[b]`), or array or
+    /// object literal used as a destructuring target -> the node that writes
+    /// it: the assignment, update, `delete` or `for` statement.
+    pub write_sites: HashMap<u32, u32>,
+    /// Declaring identifier -> the kinds of every declaration merged into
+    /// its binding (`class` and `interface` of one name).
+    pub declaration_kinds: HashMap<u32, Vec<&'static str>>,
     /// Class member declaration (property, method, parameter property) ->
     /// accesses through `this` (or `x.#name`) inside its class.
     pub members: HashMap<u32, MemberUses>,
@@ -102,6 +113,11 @@ struct Binder<'s, 't> {
     class_members: HashMap<u32, HashMap<&'t str, u32>>,
     members: HashMap<u32, MemberUses>,
     functions: HashMap<u32, u8>,
+    write_sites: HashMap<u32, u32>,
+    /// The assignment (or update, `for`) whose target is being walked.
+    site: u32,
+    /// First declaration of a name -> the kinds of all its declarations.
+    merged_kinds: HashMap<u32, Vec<&'static str>>,
 }
 
 pub fn bind(s: &Syntax) -> Bindings {
@@ -116,6 +132,9 @@ pub fn bind(s: &Syntax) -> Bindings {
         class_members: HashMap::new(),
         members: HashMap::new(),
         functions: HashMap::new(),
+        write_sites: HashMap::new(),
+        site: 0,
+        merged_kinds: HashMap::new(),
     };
     let module = b.scope(None, true);
     for st in s.all(s.root(), F::Body).collect::<Vec<_>>() {
@@ -183,12 +202,14 @@ impl<'t> Binder<'_, 't> {
         let first = self.scopes[scope].names[name].first().map(|&(d, _)| d).filter(|&d| d != ident);
         if let Some(first) = first {
             self.merged.insert(ident, first);
+            self.merged_kinds.entry(first).or_default().push(kind);
             if let Some(b) = self.decls.get_mut(&first) {
                 b.exported |= exported;
                 b.ambient &= ambient;
             }
             return;
         }
+        self.merged_kinds.insert(ident, vec![kind]);
         self.decls.insert(ident, Binding { kind, exported, ambient, ..Binding::default() });
         // Uses inside the function a name declares are not uses (as ESLint
         // counts them): a function's own body, or a function initializer.
@@ -363,13 +384,22 @@ impl<'t> Binder<'_, 't> {
     fn assign_target(&mut self, id: u32, scope: usize) {
         let s = self.s;
         match s.kind(id) {
-            Some(K::Ident) => self.reference(id, scope, Use::Write),
+            Some(K::Ident) => {
+                self.write_sites.insert(id, self.site);
+                self.reference(id, scope, Use::Write)
+            }
+            Some(K::Member | K::Index) => {
+                self.write_sites.insert(id, self.site);
+                self.walk(id, scope, Mode::Value)
+            }
             Some(K::Array) => {
+                self.write_sites.insert(id, self.site);
                 for e in s.all(id, F::Element).collect::<Vec<_>>() {
                     self.assign_target(e, scope);
                 }
             }
             Some(K::Object) => {
+                self.write_sites.insert(id, self.site);
                 for p in s.all(id, F::Property).collect::<Vec<_>>() {
                     match (s.kind(p), s.get(p, F::Value)) {
                         (Some(K::Prop), Some(v)) if !(s.is(v, K::AssignPattern) && s.get(v, F::Left).is_none()) => {
@@ -378,6 +408,9 @@ impl<'t> Binder<'_, 't> {
                         }
                         (Some(K::Prop), v) => {
                             if let Some(k) = s.get(p, F::Key) {
+                                if s.is(k, K::Ident) {
+                                    self.write_sites.insert(k, self.site);
+                                }
                                 self.reference(k, scope, Use::Write);
                             }
                             if let Some(r) = v.and_then(|v| s.get(v, F::Right)) {
@@ -393,11 +426,14 @@ impl<'t> Binder<'_, 't> {
                     self.assign_target(a, scope);
                 }
             }
-            Some(K::AssignPattern) => {
+            // `[x = 1] = y`: a default, written as an assignment.
+            Some(K::AssignPattern) | Some(K::Assign) if s.word(id, F::Op).is_none_or(|op| op == "=") => {
                 if let Some(l) = s.get(id, F::Left) {
                     self.assign_target(l, scope);
                 }
+                let site = self.site;
                 self.walk_fields(id, scope, Mode::Value, &[F::Right]);
+                self.site = site;
             }
             Some(K::Paren | K::NonNull | K::As | K::Satisfies) => {
                 if let Some(e) = s.get(id, F::Expr) {
@@ -541,6 +577,17 @@ impl<'t> Binder<'_, 't> {
         false
     }
 
+    /// `id` without the parentheses, `!`, `as` and `satisfies` around it.
+    fn unwrapped(&self, mut id: u32) -> u32 {
+        while matches!(self.s.kind(id), Some(K::Paren | K::NonNull | K::As | K::Satisfies | K::TypeAssertion)) {
+            match self.s.get(id, F::Expr) {
+                Some(e) => id = e,
+                None => break,
+            }
+        }
+        id
+    }
+
     /// The leftmost identifier of `A.B.C` (a qualified name or member chain).
     fn leftmost(&self, mut id: u32) -> u32 {
         loop {
@@ -661,7 +708,10 @@ impl<'t> Binder<'_, 't> {
                 let inner = self.scope(Some(scope), false);
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {
                     match f {
-                        Some(F::Left) if !s.is(c, K::Var) => self.assign_target(c, inner),
+                        Some(F::Left) if !s.is(c, K::Var) => {
+                            self.site = id;
+                            self.assign_target(c, inner)
+                        }
                         Some(F::Modifier) => {}
                         _ => self.walk(c, inner, Mode::Value),
                     }
@@ -797,21 +847,43 @@ impl<'t> Binder<'_, 't> {
             K::Assign => {
                 let compound = s.word(id, F::Op) != Some("=");
                 if let Some(l) = s.get(id, F::Left) {
-                    if compound && s.is(l, K::Ident) {
-                        self.reference(l, scope, Use::ReadWrite);
+                    let target = self.unwrapped(l);
+                    if compound && matches!(s.kind(target), Some(K::Ident | K::Member | K::Index)) {
+                        self.write_sites.insert(target, id);
+                    }
+                    if compound && s.is(target, K::Ident) {
+                        self.reference(target, scope, Use::ReadWrite);
                     } else if compound {
                         self.walk(l, scope, Mode::Value);
                     } else {
+                        self.site = id;
                         self.assign_target(l, scope);
                     }
                 }
                 self.walk_fields(id, scope, Mode::Value, &[F::Right]);
             }
-            K::Update => match s.get(id, F::Arg) {
-                Some(a) if s.is(a, K::Ident) => self.reference(a, scope, Use::ReadWrite),
-                Some(a) => self.walk(a, scope, Mode::Value),
+            K::Update => match s.get(id, F::Arg).map(|a| (a, self.unwrapped(a))) {
+                Some((_, a)) if s.is(a, K::Ident) => {
+                    self.write_sites.insert(a, id);
+                    self.reference(a, scope, Use::ReadWrite)
+                }
+                Some((a, target)) => {
+                    if matches!(s.kind(target), Some(K::Member | K::Index)) {
+                        self.write_sites.insert(target, id);
+                    }
+                    self.walk(a, scope, Mode::Value)
+                }
                 None => {}
             },
+            K::Unary if s.word(id, F::Op) == Some("delete") => {
+                if let Some(a) = s.get(id, F::Arg) {
+                    let target = self.unwrapped(a);
+                    if matches!(s.kind(target), Some(K::Member | K::Index)) {
+                        self.write_sites.insert(target, id);
+                    }
+                    self.walk(a, scope, mode);
+                }
+            }
             K::TypeRef => {
                 if let Some(n) = s.get(id, F::Name) {
                     if s.is(n, K::Ident) {
@@ -886,11 +958,21 @@ impl<'t> Binder<'_, 't> {
     }
 
     fn resolve(self) -> Bindings {
-        let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, .. } = self;
+        let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, write_sites, merged_kinds, .. } = self;
         let mut out_refs = HashMap::with_capacity(refs.len());
         let mut unresolved = HashSet::new();
+        let mut access = HashMap::with_capacity(refs.len());
         for (ident, scope, use_) in refs {
             let name = s.text(ident);
+            access.insert(
+                ident,
+                match use_ {
+                    Use::Value | Use::Namespace => "read",
+                    Use::Write => "write",
+                    Use::ReadWrite => "read_write",
+                    Use::Type | Use::TypeOnly => "type",
+                },
+            );
             let want = match use_ {
                 Use::Type => TYPE,
                 Use::Namespace => VALUE | TYPE,
@@ -944,6 +1026,7 @@ impl<'t> Binder<'_, 't> {
             }
             out_refs.insert(ident, decl);
         }
-        Bindings { decls, refs: out_refs, unresolved, members, functions }
+        let declaration_kinds = merged.iter().map(|(&d, first)| (d, merged_kinds.get(first).cloned().unwrap_or_default())).chain(merged_kinds.clone()).collect();
+        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions }
     }
 }

@@ -468,6 +468,10 @@ impl Parser<'_> {
         };
         while i < bytes.len() {
             match bytes[i] {
+                // `\u{...}` is an escape, not a hole.
+                b'\\' if bytes.get(i + 1) == Some(&b'u') && bytes.get(i + 2) == Some(&b'{') => {
+                    i = raw[i..].find('}').map_or(bytes.len(), |n| i + n + 1);
+                }
                 b'\\' => i += 2,
                 b'{' if bytes.get(i + 1) == Some(&b'{') => {
                     lit.push_str(&self.decode_piece(&raw[seg_start..i], tok.span)?);

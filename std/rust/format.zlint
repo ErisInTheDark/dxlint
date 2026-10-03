@@ -295,7 +295,7 @@ macro expected_indent first(acceptable)
 
 macro describe_indent(whitespace) (if whitespace == "" then "none" else if !contains(whitespace, " ") then str(len(whitespace)) " tab(s)" else if !contains(whitespace, "\t") then str(len(whitespace)) " spaces" else "a mix of tabs and spaces")
 in rs_line rule rs-indent warn "Expected indentation of {describe_indent(expected_indent)}, found {describe_indent(line_indent)}." {
-  option unit "auto" "one level of indentation, or \"auto\" (tabs if the code around uses them, else 4 spaces)"
+  option unit "auto" | string = "auto" "one level of indentation, or \"auto\" (tabs if the code around uses them, else 4 spaces)"
   report change
   # Lines inside multi-line strings and block comments are their own business.
   when !re_test(enclosing, /string|comment|char/)

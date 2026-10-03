@@ -635,8 +635,13 @@ impl<'s> Parser<'s> {
     /// Is the current word a modifier (followed by a property name) rather
     /// than itself a property name?
     pub(super) fn word_is_modifier(&self) -> bool {
-        let n = self.peek();
-        !n.nl && matches!(n.tok, Tok::Ident | Tok::Str | Tok::Num | Tok::BigInt | Tok::PrivateName | Tok::P("[" | "*" | "{" | "#"))
+        !self.peek().nl && self.word_is_accessor()
+    }
+
+    /// `get` / `set` followed by a property name: an accessor, even across
+    /// a line break (only `async` may not have one after it).
+    pub(super) fn word_is_accessor(&self) -> bool {
+        matches!(self.peek().tok, Tok::Ident | Tok::Str | Tok::Num | Tok::BigInt | Tok::PrivateName | Tok::P("[" | "*" | "{" | "#"))
     }
 
     fn object_member(&mut self) -> PResult<u32> {
@@ -650,7 +655,7 @@ impl<'s> Parser<'s> {
             let s = self.token_text();
             mods.add(Field::Modifier, s);
         }
-        if (self.is_word("get") || self.is_word("set")) && self.word_is_modifier() {
+        if (self.is_word("get") || self.is_word("set")) && self.word_is_accessor() {
             let k = self.token_text();
             mods.add(Field::Kind, k);
         }

@@ -10,21 +10,21 @@ over .* match trailing_whitespace /[ \t]+$/ {
 
 over .* match line_text /^[^\r\n]+/ {
   rule max-line-length warn "line is {len(text)} characters long (max {max})" {
-    option max 120 "maximum line length, in characters"
+    option max int(1..) = 120 "maximum line length, in characters"
     when len(text) > max
   }
 }
 
 over .* match tab_indent /^ *\t[ \t]*/ {
   rule tab-indent warn "indent with spaces, not tabs" {
-    option width 4 "spaces per tab"
+    option width int(1..) = 4 "spaces per tab"
     fix as replace(text, "\t", repeat(" ", width))
   }
 }
 
 over .* match blank_run /\n(?:[ \t]*\r?\n){2,}/ {
   rule blank-lines warn "at most {max} blank lines in a row" {
-    option max 2 "blank lines allowed in a row"
+    option max int(0..) = 2 "blank lines allowed in a row"
     when len(split(text, "\n")) - 2 > max
     fix as "\n" repeat("\n", max)
   }

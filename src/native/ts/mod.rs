@@ -3,19 +3,29 @@
 
 mod bind;
 mod check;
+mod class_members;
+mod comments;
+mod constants;
 mod docs;
+mod equality;
 pub mod facts;
 mod flow;
+mod globals;
 pub mod kinds;
 mod lexer;
 pub mod modules;
 mod parse;
+mod paths;
 pub mod reads;
 mod regex;
 mod returns;
+mod roles;
+mod statics;
 mod summary;
 pub mod syntax;
+mod tokens;
 mod types;
+mod values;
 mod view;
 #[cfg(test)]
 mod tests;
@@ -23,6 +33,9 @@ mod tests;
 use std::path::Path;
 
 use crate::grammar::Node;
+
+pub use regex::flags_error as regex_flags_error;
+pub use regex::is_mark as is_combining_mark;
 
 pub struct Parsed {
     /// Nodes with `matcher` = [`kinds::Kind`] and edge labels =

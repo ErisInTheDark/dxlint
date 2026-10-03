@@ -5,7 +5,6 @@ pub mod cache;
 pub mod diagnostic;
 mod fix;
 mod inspect;
-mod options;
 mod profile;
 mod prune;
 mod suppress;
@@ -37,10 +36,9 @@ use suppress::Suppressions;
 pub struct OptionSlot {
     pub name: String,
     pub description: Option<String>,
+    pub schema: crate::config::schema::Schema,
     pub default: Value<'static>,
     pub value: Value<'static>,
-    /// The declared shape of a list option's items (`option x [] item {..}`).
-    pub item: Option<Value<'static>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +68,10 @@ pub struct Rule {
     /// What the node should look like (`fix expr`).
     fix: Option<CExpr>,
     report: Report,
+    /// `report at <offset>`
+    report_at: Option<CExpr>,
+    /// `each x in list`: the list; the other clauses see each item as `x`.
+    each: Option<CExpr>,
 }
 
 impl Rule {
@@ -254,8 +256,10 @@ impl Linter {
         if !suppressions.is_empty() {
             out.retain(|d| suppressions.allows(d, &lines));
         }
-        out.sort_by(|a, b| (a.start, a.end, &a.rule).cmp(&(b.start, b.end, &b.rule)));
-        out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.rule == b.rule);
+        // One rule may reach a node twice (through several targets): one
+        // report. Different messages at one place are different problems.
+        out.sort_by(|a, b| (a.start, a.end, &a.rule, &a.message).cmp(&(b.start, b.end, &b.rule, &b.message)));
+        out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.rule == b.rule && a.message == b.message);
         out
     }
 
@@ -286,8 +290,7 @@ impl Linter {
                         native,
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
-                    let found = self.apply(&self.rules[fi], &ctx);
-                    if let Some(d) = found {
+                    for d in self.apply_each(&self.rules[fi], &ctx) {
                         if let Some([edit]) = d.fix.as_deref() {
                             record_reindent(&mut reindented.borrow_mut(), run.text, run.lines, edit);
                         }
@@ -311,6 +314,26 @@ impl Linter {
                 }
             }
         }
+    }
+
+    /// The rule's diagnostics on one node: one, or one per `each` item.
+    fn apply_each(&self, f: &Rule, ctx: &Ctx) -> Vec<Diagnostic> {
+        let Some(list) = &f.each else { return self.apply(f, ctx).into_iter().collect() };
+        let items = match ctx.eval(list) {
+            Ok(v) => v.items(),
+            Err(e) => {
+                let node = ctx.tree.node(ctx.node);
+                let message = format!("rule `{}` failed here: {e}", f.name);
+                return vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, start: node.start as usize, end: node.end as usize, fix: None }];
+            }
+        };
+        let mut out = Vec::new();
+        for item in items {
+            ctx.push_param(item);
+            out.extend(self.apply(f, ctx));
+            ctx.pop_param();
+        }
+        out
     }
 
     fn apply(&self, f: &Rule, ctx: &Ctx) -> Option<Diagnostic> {
@@ -348,6 +371,19 @@ impl Linter {
             (Report::Change, Some(edit)) => (edit.start, edit.end),
             (Report::End, _) => (end, end),
             _ => (start, end),
+        };
+        let (start, end) = match &f.report_at {
+            Some(at) => match ctx.eval(at).and_then(|v| v.num()) {
+                Ok(n) => {
+                    let mut at = (n.max(0.0) as usize).min(ctx.source.len());
+                    while !ctx.source.is_char_boundary(at) {
+                        at -= 1;
+                    }
+                    (at, end.max(at))
+                }
+                Err(e) => return Some(failed(e)),
+            },
+            None => (start, end),
         };
         let fix = fix.map(|edit| vec![edit]);
         let message = match &f.message {

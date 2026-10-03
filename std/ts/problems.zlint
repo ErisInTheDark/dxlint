@@ -10,23 +10,25 @@ group ts_literal ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex
 
 # ---- for-direction -------------------------------------------------------------
 # `i < n; i--` and friends: the update moves the counter away from the end.
-in ts_binary {
-  let loop_direction if operator ~ /<=?/ then 1 else if operator ~ />=?/ then -1 else 0
-  let loop_test_left left
-  let loop_test_right right
-}
-in ts_update {
-  let updated_variable argument
-  let update_step if operator == "++" then 1 else -1
-}
-in ts_assignment {
-  let updated_variable left
-  let update_step if operator == "+=" && right ~ /[0-9.]+/ || operator == "-=" && right ~ /-\s*[0-9.]+/ then 1 else if operator == "-=" && right ~ /[0-9.]+/ || operator == "+=" && right ~ /-\s*[0-9.]+/ then -1 else 0
-}
 in ts_for rule for-direction {
-  when test != null && update != null
-  when default(test.loop_direction, 0) * default(update.update_step, 0) < 0 && test.loop_test_left == update.updated_variable || default(test.loop_direction, 0) * default(update.update_step, 0) > 0 && test.loop_test_right == update.updated_variable
+  when wrong_direction
   warn "The update clause in this loop moves the variable in the wrong direction."
+}
+
+# ---- banned things ---------------------------------------------------------
+in ts_debugger rule no-debugger warn "Unexpected 'debugger' statement."
+
+# A global (not shadowed, not switched off) of this name.
+macro is_global(name) (text == name && (global == "readonly" || global == "writable"))
+
+# `new Promise(async () => ...)`, also inside parentheses.
+in ts_new let promise_constructor callee.is_real_promise == true
+in ts_identifier let is_real_promise is_global("Promise")
+in ts_parenthesized let promise_executor_slot parent == "ts_new" && index == 0 && parent.promise_constructor || parent == "ts_parenthesized" && parent.promise_executor_slot == true
+in ts_arrow, ts_function rule no-async-promise-executor {
+  when contains(modifier, "async")
+  when parent == "ts_new" && index == 0 && parent.promise_constructor || parent == "ts_parenthesized" && parent.promise_executor_slot == true
+  warn "Promise executor functions should not be async."
 }
 
 # ---- small expression mistakes ---------------------------------------------
@@ -40,27 +42,103 @@ in ts_binary rule no-compare-neg-zero {
   warn "Do not use the '{operator}' operator to compare against -0."
 }
 
-# Assignments as conditions, unless wrapped in their own parentheses.
+# Assignments as conditions, unless wrapped in their own parentheses (a `?:`
+# test needs two pairs: it has none of its own). With "always", any
+# assignment inside a condition.
+in ts_assignment let is_assignment true
+in ts_parenthesized let wraps_assignment expression.is_assignment == true
 in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-cond-assign {
-  when layer == "ts_assignment"
+  option mode "except-parens" | "always" = "except-parens"
+  when mode == "except-parens"
+  when layer == "ts_assignment" || parent == "ts_conditional" && layer == "ts_parenthesized" && wraps_assignment == true
+  report at unparen_offset
   warn "Expected a conditional expression and instead saw an assignment."
+}
+in ts_assignment rule no-cond-assign:always {
+  option mode "except-parens" | "always" = "except-parens"
+  let where if conditional_ancestor == "ts_if" then "an 'if' statement" else if conditional_ancestor == "ts_while" then "a 'while' statement" else if conditional_ancestor == "ts_do_while" then "a 'do...while' statement" else if conditional_ancestor == "ts_for" then "a 'for' statement" else "ConditionalExpression"
+  when mode == "always" && conditional_ancestor != null
+  warn "Unexpected assignment within {where}."
+}
+
+# Comparisons with `NaN` (or `Number.NaN`, or a sequence ending in it).
+in ts_identifier let is_nan text == "NaN" && is_real_global
+in ts_member, ts_index let is_nan object == "Number" && object.is_real_global == true && static_name == "NaN"
+in ts_parenthesized let is_nan expression.is_nan == true
+in ts_sequence let is_nan last([] expression.is_nan) == true
+in ts_binary rule use-isnan {
+  when operator ~ /(?:[<>]|[!=]=)=?/ && (left.is_nan == true || right.is_nan == true)
+  warn "Use the isNaN function to compare with NaN."
+}
+in ts_switch rule use-isnan:switch {
+  option enforceForSwitchCase boolean = true "also `switch (NaN)` and `case NaN:`"
+  when enforceForSwitchCase && discriminant.is_nan == true
+  warn "'switch(NaN)' can never match a case clause. Use Number.isNaN instead of the switch."
+}
+in ts_case rule use-isnan:case {
+  option enforceForSwitchCase boolean = true "also `switch (NaN)` and `case NaN:`"
+  when enforceForSwitchCase && test.is_nan == true
+  warn "'case NaN' can never match. Use Number.isNaN before the switch."
+}
+in ts_call rule use-isnan:index-of {
+  option enforceForIndexOf boolean = false "also `indexOf(NaN)` and `lastIndexOf(NaN)`"
+  when enforceForIndexOf && (callee.static_name == "indexOf" || callee.static_name == "lastIndexOf") && count(argument) <= 2 && first([] argument.is_nan) == true
+  warn "Array prototype method '{callee.static_name}' cannot find NaN."
+}
+
+# `typeof x === "strnig"`, either way round.
+in ts_unary let is_typeof operator == "typeof"
+in ts_parenthesized let is_typeof expression.is_typeof == true
+in ts_binary {
+  let left_is_typeof left.is_typeof == true
+  let right_is_typeof right.is_typeof == true
+}
+macro valid_typeof_names ["symbol", "undefined", "object", "boolean", "number", "string", "function", "bigint"]
+in ts_binary.left, ts_binary.right rule valid-typeof {
+  option requireStringLiterals boolean = false "compare only with string literals"
+  let compared_with_typeof parent.operator ~ /[=!]==?/ && (if field == "left" then parent.right_is_typeof else parent.left_is_typeof)
+  when compared_with_typeof
+  when literal_value != null && (literal_value.type != "string" || !contains(valid_typeof_names, literal_value.value))
+    || is_global_undefined
+    || requireStringLiterals && literal_value == null && is_typeof != true
+  report at unparen_offset
+  warn if requireStringLiterals && literal_value == null then "Typeof comparisons should be to string literals." else "Invalid typeof comparison value."
+}
+in ts_identifier let is_global_undefined text == "undefined" && global == "readonly"
+in ts_parenthesized let is_global_undefined expression.is_global_undefined == true
+
+# `a = a`, also inside destructuring and members (`a.b = a.b`).
+in ts_assignment rule no-self-assign {
+  option props boolean = true "also members (`a.b = a.b`)"
+  each self in filter(self_assignments, x => props || !x.member)
+  report at self.offset
+  warn "'{self.name}' is assigned to itself."
 }
 
 # `if (true)`, `while (1)`, `do ... while (false)`, `false ? a : b`.
-group constant_values ts_literal, ts_object, ts_array, ts_arrow, ts_function, ts_class
-in constant_values let is_constant true
-in ts_template let is_constant count(expression) == 0
-in ts_unary let is_constant (operator == "!" || operator == "typeof" || operator == "void" || operator == "-" || operator == "+") && (argument.is_constant == true || operator == "typeof" || operator == "void")
-in ts_parenthesized let is_constant expression.is_constant == true
-in ts_identifier let is_constant text == "undefined" && resolved == "global"
 in ts_if.test, ts_conditional.test rule no-constant-condition {
-  when is_constant == true
+  when constant_truthiness
   warn "Unexpected constant condition."
 }
+# Loops that `yield` (generators) may loop forever on purpose.
 in ts_while.test, ts_do_while.test, ts_for.test rule no-constant-condition:loop {
-  option check_loops "allExceptWhileTrue" "\"all\", \"allExceptWhileTrue\" or \"none\""
-  when is_constant == true && check_loops != "none" && !(check_loops == "allExceptWhileTrue" && parent == "ts_while" && text == "true")
+  option checkLoops "all" | "allExceptWhileTrue" | "none" | true | false = "allExceptWhileTrue"
+  when constant_truthiness && checkLoops != "none" && checkLoops != false && !parent.contains_yield
+  when !(checkLoops == "allExceptWhileTrue" && parent == "ts_while" && re_test(text, /^[(\s]*true[)\s]*$/))
   warn "Unexpected constant condition."
+}
+
+# Comparisons and short circuits whose result cannot change.
+in ts_binary, ts_logical rule no-constant-binary-expression {
+  option checkRelationalComparisons boolean = false "also `<` and friends between two literals"
+  let c constant_comparison
+  when c != null || checkRelationalComparisons && constant_relation
+  report at if c != null then c.offset else offset
+  warn if c == null then "Unexpected constant relational comparison. Both sides of the `{operator}` are literal values."
+    else if c.kind == "constantShortCircuit" then "Unexpected constant {c.detail} on the left-hand side of a `{operator}` expression."
+    else if c.kind == "constantBinaryOperand" then "Unexpected constant binary expression. Compares constantly with the {c.detail}-hand side of the `{operator}`."
+    else if c.kind == "alwaysNew" then "Unexpected comparison to newly constructed object. These two values can never be equal."
+    else "Unexpected comparison of two newly constructed objects. These two values can never be equal."
 }
 
 in ts_unary rule no-delete-var {
@@ -69,26 +147,23 @@ in ts_unary rule no-delete-var {
 }
 
 # A condition every one of whose `||` parts an earlier branch already tested.
-in ts_logical let or_conditions if operator == "||" then default(left.or_conditions, [normalize_space(left)]) default(right.or_conditions, [normalize_space(right)]) else [normalize_space(text)]
-in ts_parenthesized let or_conditions default(expression.or_conditions, [normalize_space(expression)])
-in ts_if {
-  let own_conditions default(test.or_conditions, [normalize_space(test)])
-  let earlier_conditions if parent == "ts_if" && parent.alternate == text then default(parent.earlier_conditions, []) parent.own_conditions else []
-}
 in ts_if.test rule no-dupe-else-if {
-  when count(parent.earlier_conditions) > 0 && count(unique(parent.earlier_conditions parent.own_conditions)) == count(unique(parent.earlier_conditions))
+  when parent.duplicate_condition
+  report at unparen_offset
   warn "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the if-else-if chain."
 }
 
-in ts_case let case_test if test == null then null else normalize_space(test)
-in ts_switch let case_tests [] case.case_test
 in ts_case rule no-duplicate-case {
-  when case_test != null && contains(slice(default(parent.case_tests, []), 0, index), case_test)
+  when duplicate_case
   warn "Duplicate case label."
 }
 
+# As a parameter only with `allowObjectPatternsAsParameters` (also
+# defaulting to `{}`).
 in ts_object_pattern rule no-empty-pattern:object {
-  when count(property) == 0 && rest == null && parent != "ts_parameter"
+  option allowObjectPatternsAsParameters boolean = false "allow `function f({}) {}` and `({} = {}) => {}`"
+  when count(property) == 0 && rest == null
+  when !(allowObjectPatternsAsParameters && (parent == "ts_parameter" && parent.init == null || parent == "ts_parameter" && re_test(parent.init, /^\{\s*\}$/)))
   warn "Unexpected empty object pattern."
 }
 in ts_array_pattern rule no-empty-pattern:array {
@@ -111,9 +186,201 @@ in ts_member.property rule no-eval:member {
   warn "eval can be harmful."
 }
 
-in ts_assignment.left, ts_update.argument rule no-ex-assign {
-  when reference_kind == "catch"
+# ---- writes to what cannot (or should not) change ------------------------
+macro is_write (access == "write" || access == "read_write")
+in ts_identifier rule no-ex-assign {
+  when reference_kind == "catch" && is_write
   warn "Do not assign to the exception parameter."
+}
+in ts_identifier rule no-const-assign {
+  when (reference_kind == "const" || reference_kind == "using") && is_write
+  warn "'{text}' is constant."
+}
+in ts_identifier rule no-class-assign {
+  when (reference_kind == "class" || reference_kind == "class_name") && is_write
+  warn "'{text}' is a class."
+}
+in ts_identifier rule no-func-assign {
+  when (reference_kind == "function" || reference_kind == "function_name") && is_write
+  warn "'{text}' is a function."
+}
+in ts_identifier rule no-import-assign {
+  when reference_kind == "import" && is_write
+  report at write_site
+  warn "'{text}' is read-only."
+}
+# Members of a namespace import: `ns.x = 1`, `ns.x++`, `delete ns.x`.
+in ts_member, ts_index rule no-import-assign:member {
+  when write_site != null && object.imported_name == "*"
+  report at write_site
+  warn "The members of '{object}' are read-only."
+}
+# `Object.assign(ns, ...)`, `Reflect.set(ns, ...)` and the like.
+in ts_identifier let is_real_global global == "readonly" || global == "writable"
+in ts_member let on_real_global object.is_real_global == true || object.on_real_global == true
+in ts_parenthesized, ts_non_null let on_real_global expression.on_real_global == true
+in ts_call rule no-import-assign:call {
+  when callee.on_real_global == true
+  when re_test(re_replace(callee, /[\s()]/, ""), /^(?:Object\??\.(?:assign|defineProperty|defineProperties|freeze|setPrototypeOf)|Reflect\??\.(?:defineProperty|deleteProperty|set|setPrototypeOf))$/)
+  when first([] argument.imported_name) == "*"
+  warn "The members of '{first(argument)}' are read-only."
+}
+
+# ---- duplicates ----------------------------------------------------------------
+# Getters and setters of one name pair up; anything else of the same name
+# (in the same object, or the same static-ness of a class) is a duplicate.
+in ts_method let accessor_kind if kind == "get" || kind == "set" then kind else "init"
+in ts_property, ts_class_property let accessor_kind "init"
+macro duplicate_of(e) (e != null && e.name == static_name && (accessor_kind == "init" || e.kind == "init" || e.kind == accessor_kind))
+# (`""` is a name: `type_of` tells it from null.)
+macro has_static_name (type_of(static_name) == "str")
+# `__proto__: x` sets the prototype rather than defining a key.
+in ts_property let proto_setter static_name == "__proto__" && value != null && !starts_with(key, "[")
+in ts_method let proto_setter false
+in ts_property, ts_method let key_entry if !has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
+in ts_object let keyed [] property.key_entry
+in ts_property, ts_method let duplicate_key parent == "ts_object" && parent.write_site == null && key_entry != null && any(slice(parent.keyed, 0, index), e => duplicate_of(e))
+# At the name: inside the brackets of a computed key.
+macro at_key_name (offset + len(re_find(text, /^\[\s*/)))
+in ts_property.key, ts_method.key rule no-dupe-keys {
+  when parent.duplicate_key
+  report at at_key_name
+  warn "Duplicate key '{parent.static_name}'."
+}
+
+# Overload signatures (no body) are not members of their own. (`is_static`
+# comes from .ts/style.)
+in ts_method let member_entry if !has_static_name || body == null || static_name == "constructor" && !is_static && !starts_with(key, "[") then null else { name: static_name, kind: accessor_kind, static: is_static }
+in ts_class_property let member_entry if !has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
+in ts_class let member_entries [] member.member_entry
+in ts_method, ts_class_property let duplicate_member parent == "ts_class" && member_entry != null && any(slice(parent.member_entries, 0, index), e => duplicate_of(e) && e.static == is_static)
+in ts_method.key, ts_class_property.key rule no-dupe-class-members {
+  when parent.duplicate_member
+  report at at_key_name
+  warn "Duplicate name '{parent.static_name}'."
+}
+
+# Once per name, at the parameter list.
+in ts_function rule no-dupe-args {
+  each name in duplicate_parameters
+  report at offset + len(re_find(text, /^[^(]*/))
+  warn "Duplicate param '{name}'."
+}
+
+in ts_enum_member let enum_value init.literal_value
+in ts_enum let enum_values [] member.enum_value
+in ts_enum_member rule no-duplicate-enum-values {
+  when enum_value != null && any(slice(parent.enum_values, 0, index), v => v != null && v.type == enum_value.type && v.value == enum_value.value)
+  warn "Duplicate enum member value {if enum_value.value == '-0' then '0' else enum_value.value}."
+}
+
+in ts_class.name, ts_interface.name rule no-unsafe-declaration-merging {
+  when contains(declaration_kinds, "class") && contains(declaration_kinds, "interface")
+  warn "Unsafe declaration merging between classes and interfaces."
+}
+
+# ---- @ts- directives (ban-ts-comment) -----------------------------------------------
+schema ts_directive_setting boolean | "allow-with-description" | { descriptionFormat: string }
+# The directive and its description, as TypeScript reads them: `// @ts-x`
+# (`///` too for check/nocheck) or the last line of a block comment.
+macro ts_comment_body (if layer == "js_line_comment" then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, ""))
+macro ts_pragma (layer == "js_line_comment" && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/))
+macro ts_suppress (if layer == "js_line_comment" then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/))
+in js_line_comment, js_block_comment rule ban-ts-comment {
+  option ts_expect_error ts_directive_setting = "allow-with-description"
+  option ts_ignore ts_directive_setting = true
+  option ts_nocheck ts_directive_setting = true
+  option ts_check ts_directive_setting = false
+  option minimumDescriptionLength int(0..) = 3
+  let directive if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(check|nocheck)[\s\S]*$/, "$1") else if ts_suppress then re_replace(ts_comment_body, /^[\/*\s]*@ts-(expect-error|ignore)[\s\S]*$/, "$1") else null
+  let description if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(?:check|nocheck)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1") else re_replace(ts_comment_body, /^[\/*\s]*@ts-(?:expect-error|ignore)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1")
+  let setting if directive == "expect-error" then ts_expect_error else if directive == "ignore" then ts_ignore else if directive == "nocheck" then ts_nocheck else ts_check
+  let format if type_of(setting) == "record" then setting.descriptionFormat else null
+  let short graphemes(trim(description)) < minimumDescriptionLength
+  when directive != null
+  # `@ts-nocheck` only counts before the first statement.
+  when !(directive == "nocheck" && (re_test(re_replace(text_before, /\/\*[\s\S]*?\*\/|\/\/[^\n]*/, ""), /\S/) || re_test(after, /\S/)))
+  when setting == true || (setting == "allow-with-description" || format != null) && (short || format != null && !re_test(description, format))
+  warn if setting == true && directive == "ignore" then "Use \"@ts-expect-error\" instead of \"@ts-ignore\", as \"@ts-ignore\" will do nothing if the following line is error-free."
+    else if setting == true then "Do not use \"@ts-{directive}\" because it alters compilation errors."
+    else if short then "Include a description after the \"@ts-{directive}\" directive to explain why the @ts-{directive} is necessary. The description must be {minimumDescriptionLength} characters or longer."
+    else "The description for the \"@ts-{directive}\" directive must match the {format} format."
+}
+
+# `Function` as a type (not a local type of that name), also `implements
+# Function`.
+in ts_type_reference rule no-unsafe-function-type {
+  when name == "Function" && name.resolved == null && name.reference_kind == null
+  warn "The `Function` type accepts any function-like value.\nPrefer explicitly defining any function parameters and return type."
+}
+
+# ---- non-null assertions -----------------------------------------------------------
+in ts_parenthesized let under_non_null parent == "ts_non_null" || parent == "ts_parenthesized" && parent.under_non_null == true
+# The object or callee of `?.`, through parentheses.
+group optional_chain_head ts_non_null, ts_parenthesized
+in optional_chain_head let heads_optional_chain field == "object" && (parent == "ts_member" || parent == "ts_index") && parent.optional != null
+  || field == "callee" && parent == "ts_call" && parent.optional != null
+  || parent == "ts_parenthesized" && parent.heads_optional_chain == true
+in ts_non_null rule no-extra-non-null-assertion {
+  when parent == "ts_non_null" || parent == "ts_parenthesized" && parent.under_non_null == true || heads_optional_chain
+  fix as slice(text, 0, len(text) - 1)
+  warn "Forbidden extra non-null assertion."
+}
+# `x?.y!` (at the end of the chain), `(x?.y)!`.
+macro non_null_chain_message "Optional chain expressions can return undefined by design - using a non-null assertion is unsafe and wrong."
+in ts_non_null rule no-non-null-asserted-optional-chain {
+  when expression.in_optional_chain == true
+  when !((field == "object" || field == "callee") && (parent == "ts_member" || parent == "ts_index" || parent == "ts_call"))
+  warn non_null_chain_message
+}
+in ts_non_null.expression rule no-non-null-asserted-optional-chain:paren {
+  when layer == "ts_parenthesized" && wraps_optional_chain == true
+  report at unparen_offset
+  warn non_null_chain_message
+}
+
+# ---- accessors -------------------------------------------------------------------
+in ts_return rule no-setter-return {
+  when argument != null && enclosing_accessor == "set"
+  warn "Setter cannot return a value."
+}
+# `{ set: v => value }`: the arrow's value is its return.
+in ts_arrow.body rule no-setter-return:arrow {
+  when parent.accessor == "set" && layer != "ts_block"
+  warn "Setter cannot return a value."
+}
+
+# ---- calls that cannot work --------------------------------------------------------
+in ts_call, ts_new rule no-obj-calls {
+  when contains(["Atomics", "JSON", "Math", "Reflect", "Intl", "Temporal"], callee.global_value)
+  let called re_replace(re_replace(callee, /^[\s(]+|[\s)!]+$/, ""), /^.*[.\[]\s*['"`]?|['"`]?\s*\]$/, "")
+  warn if called == callee.global_value then "'{called}' is not a function." else "'{called}' is reference to '{callee.global_value}', which is not a function."
+}
+in ts_new rule no-new-native-nonconstructor {
+  when (callee == "Symbol" || callee == "BigInt") && callee.is_real_global == true
+  warn "`{callee}` cannot be called as a constructor."
+}
+
+# `x.hasOwnProperty(k)` borrows a method the object may not have.
+in ts_member.property, ts_index.index rule no-prototype-builtins {
+  when parent.called_member == true && contains(["hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"], parent.static_name)
+  warn "Do not access Object.prototype method '{parent.static_name}' from target object."
+}
+in ts_member, ts_index, ts_parenthesized let called_member field == "callee" && parent == "ts_call" || parent == "ts_parenthesized" && parent.called_member == true
+
+# `!a in b`: the `!` applies to `a` alone.
+in ts_binary.left rule no-unsafe-negation {
+  option enforceForOrderingRelations boolean = false "also `!a < b` and the other ordering operators"
+  when layer == "ts_unary" && re_test(text, /^!/)
+  when parent.operator == "in" || parent.operator == "instanceof" || enforceForOrderingRelations && contains(["<", ">", "<=", ">="], parent.operator)
+  warn "Unexpected negating the left operand of '{parent.operator}' operator."
+}
+
+# `let x;` that is read but never written.
+in ts_declarator rule no-unassigned-vars {
+  when init == null && is_identifier(name) && ts_variable_declaration.kind != "const"
+  when name.writes == 0 && name.uses > 0 && name.ambient == false && parent.declares_loop_variable != true
+  warn "'{name}' is always 'undefined' because it's never assigned."
 }
 
 # `.bind(x)` on a function that never uses `this` (or on an arrow).
@@ -143,11 +410,20 @@ in ts_call.argument, ts_new.argument rule no-extra-boolean-cast:call {
 }
 
 # Writes to the built-in globals.
-macro builtin_globals /^(AggregateError|Array|ArrayBuffer|Atomics|BigInt|BigInt64Array|BigUint64Array|Boolean|DataView|Date|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent|Error|escape|eval|EvalError|FinalizationRegistry|Float32Array|Float64Array|Function|globalThis|Infinity|Int16Array|Int32Array|Int8Array|Intl|isFinite|isNaN|Iterator|JSON|Map|Math|NaN|Number|Object|parseFloat|parseInt|Promise|Proxy|RangeError|ReferenceError|Reflect|RegExp|Set|SharedArrayBuffer|String|Symbol|SyntaxError|TypeError|Uint16Array|Uint32Array|Uint8Array|Uint8ClampedArray|undefined|unescape|URIError|WeakMap|WeakRef|WeakSet)$/
-in ts_assignment.left, ts_update.argument rule no-global-assign {
-  when layer == "ts_identifier" && resolved == "global" && re_test(text, builtin_globals)
+in ts_identifier rule no-global-assign {
+  option exceptions string[] = [] "read-only globals that may be modified"
+  when global == "readonly" && is_write && !contains(exceptions, text)
   warn "Read-only global '{text}' should not be modified."
 }
+
+in ts_identifier rule no-undef {
+  option typeof boolean = false "also report `typeof x` of an undeclared `x`"
+  when resolved == "global" && (global == null || global == "off") && access != "type"
+  when typeof || !under_typeof
+  warn "'{text}' is not defined."
+}
+# The operand of `typeof`, through parentheses.
+in ts_identifier, ts_parenthesized let under_typeof parent == "ts_unary" && parent.operator == "typeof" || parent == "ts_parenthesized" && parent.under_typeof == true
 
 in ts_new rule no-new-wrappers {
   when re_test(callee, /^(String|Number|Boolean)$/) && callee.resolved == "global"
@@ -174,12 +450,10 @@ in ts_sequence.expression rule no-sequences {
   warn "Unexpected use of comma operator."
 }
 
-# Reported at the first hole (where its comma is).
-in ts_hole let is_hole true
-in ts_array let holes [] element.is_hole
+# Every hole, at its comma.
 in ts_array let is_assignment_target parent == "ts_assignment" && parent.left == text || parent == "ts_for_of" || parent == "ts_for_in"
 in ts_hole rule no-sparse-arrays {
-  when parent == "ts_array" && !parent.is_assignment_target && !any(compact(slice(parent.holes, 0, index)))
+  when parent == "ts_array" && !parent.is_assignment_target
   warn "Unexpected comma in middle of array."
 }
 
@@ -195,20 +469,9 @@ in ts_declarator rule no-undef-init {
 }
 
 # `return`/`throw`/`break`/`continue` that leave a `finally` block.
-group finally_scope_statement ts_block, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_switch, ts_case, ts_try, ts_labeled, ts_return, ts_throw, ts_break, ts_continue
-in finally_scope_statement {
-  let is_finally_block layer == "ts_block" && parent == "ts_try" && parent.finalizer == text
-  let inside_finally is_finally_block || parent.inside_finally == true
-  # Unlabelled `break`/`continue` stay inside loops and switches.
-  let jump_leaves_finally if re_test(layer, /^ts_(for|for_in|for_of|while|do_while|switch)$/) then false else is_finally_block || parent.jump_leaves_finally == true
-}
-in ts_return, ts_throw rule no-unsafe-finally {
-  when parent.inside_finally == true
-  warn "Unsafe usage of {if layer == 'ts_return' then 'ReturnStatement' else 'ThrowStatement'}."
-}
-in ts_break, ts_continue rule no-unsafe-finally:jump {
-  when parent.jump_leaves_finally == true && label == null
-  warn "Unsafe usage of {if layer == 'ts_break' then 'BreakStatement' else 'ContinueStatement'}."
+in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
+  when leaves_finally
+  warn "Unsafe usage of {if layer == 'ts_return' then 'ReturnStatement' else if layer == 'ts_throw' then 'ThrowStatement' else if layer == 'ts_break' then 'BreakStatement' else 'ContinueStatement'}."
 }
 
 in ts_labeled.label rule no-unused-labels {
@@ -248,16 +511,87 @@ in ts_number rule no-loss-of-precision {
   warn "This number literal will lose precision at runtime."
 }
 
+# ---- code paths ------------------------------------------------------------------
+group code_path_statement ts_block, ts_break, ts_class, ts_continue, ts_debugger, ts_do_while, ts_expression_statement, ts_for_in, ts_for_of, ts_for, ts_if, ts_labeled, ts_return, ts_switch, ts_throw, ts_try, ts_while, ts_with, ts_export, ts_variable_declaration, ts_class_property
+in code_path_statement rule no-unreachable {
+  when code_path == "unreachable_run"
+  warn "Unreachable code."
+}
+
+in ts_method, ts_function, ts_arrow rule getter-return {
+  option allowImplicit boolean = false "a bare `return;` counts as returning"
+  when accessor == "get" && code_path == "falls_off"
+  report at function_head
+  warn if return_values == "none" || return_values == "bare" && !allowImplicit then "Expected to return a value in {function_name}." else "Expected {function_name} to always return a value."
+}
+in ts_return rule getter-return:bare {
+  option allowImplicit boolean = false "a bare `return;` counts as returning"
+  when argument == null && !allowImplicit && enclosing_accessor == "get"
+  warn "Expected to return a value in {enclosing_function_name}."
+}
+
+# `case` statements whose end is reachable run into the next case.
+in ts_case let case_path code_path
+in ts_case let has_body count(body) > 0
+in ts_switch {
+  let case_paths [] case.case_path
+  let case_bodies [] case.has_body
+}
+# The last comment before this case, or before the closing brace of a case
+# whose only statement is a block.
+macro last_comment(t) re_find(t, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/)
+macro block_case /^\s*(?:case\b[\s\S]*?|default\s*):\s*\{([\s\S]*)\}\s*$/
+macro previous_case_comment default(last_comment(if re_test(default(previous_sibling, ""), block_case) then re_replace(previous_sibling, block_case, "$1") else ""), last_comment(default(gap_before, "")))
+in ts_case rule no-fallthrough {
+  option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
+  option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
+  option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
+  let previous_path last(slice(parent.case_paths, 0, index))
+  let previous_has_body last(slice(parent.case_bodies, 0, index))
+  let comment_body trim(re_replace(default(previous_case_comment, ""), /^\/[*\/]|\*\/$/, ""))
+  let allowing previous_case_comment != null && re_test(comment_body, default(commentPattern, "(?i)falls?\\s?through")) && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
+  when index > 0 && previous_path == "falls_through" && (previous_has_body || !allowEmptyCase && re_count(default(gap_before, ""), /\n/) >= 2)
+  when !allowing
+  warn "Expected a 'break' statement before '{if test == null then 'default' else 'case'}'."
+}
+in ts_case rule no-fallthrough:unused-comment {
+  option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
+  option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
+  let gap default(gap_before, "")
+  let comment last_comment(gap)
+  let comment_body trim(re_replace(default(comment, ""), /^\/[*\/]|\*\/$/, ""))
+  when reportUnusedFallthroughComment && index > 0 && comment != null
+  when last(slice(parent.case_paths, 0, index)) == "leaves"
+  when re_test(comment_body, default(commentPattern, "(?i)falls?\\s?through")) && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
+  report at offset - len(gap) + len(re_replace(gap, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/, ""))
+  warn "Found a comment that would permit fallthrough, but case cannot fall through."
+}
+
 # ---- classes -------------------------------------------------------------------
 in ts_method.key rule constructor-super {
-  when text == "constructor" && ts_class.extends != null && ts_class.extends != "null"
+  when text == "constructor" && ts_class.extends != null
   when parent.super_calls == "none" || parent.super_calls == "some"
   warn if parent.super_calls == "none" then "Expected to call 'super()'." else "Lacked a call of 'super()' in some code paths."
 }
+in ts_call rule constructor-super:call {
+  when code_path == "duplicate_super" || code_path == "bad_super"
+  warn if code_path == "duplicate_super" then "Unexpected duplicate 'super()'." else "Unexpected 'super()' because 'super' is not a constructor."
+}
+in ts_this rule no-this-before-super {
+  when code_path == "before_super"
+  warn "'this' is not allowed before 'super()'."
+}
+in ts_member, ts_index rule no-this-before-super:super {
+  when code_path == "before_super"
+  warn "'super' is not allowed before 'super()'."
+}
 
-in ts_class_property, ts_method rule no-unused-private-class-members {
-  when re_test(default(key, ""), /^#/) && member_reads == 0
-  warn "'{key}' is defined but never used."
+# In TypeScript files, typescript-eslint's version (TS `private` members
+# too, its message); elsewhere eslint's (`#` members).
+macro ts_file re_test(file, /\.[cm]?tsx?$/)
+in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no-unused-private-class-members {
+  when unused_member == "hash" || unused_member == "private" && ts_file
+  warn if ts_file then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
 }
 
 # ---- preferences -----------------------------------------------------------------
@@ -306,20 +640,13 @@ in ts_member, ts_index let in_optional_chain optional != null || object.in_optio
 in ts_call let in_optional_chain optional != null || callee.in_optional_chain == true
 in ts_non_null let in_optional_chain expression.in_optional_chain == true
 in ts_parenthesized let wraps_optional_chain expression.in_optional_chain == true || expression.wraps_optional_chain == true
-in ts_spread let spread_in_object parent == "ts_object"
-macro optional_chain_short_circuits (in_optional_chain == true || wraps_optional_chain == true)
-macro optional_chain_message "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
-in ts_declarator.init rule no-unsafe-optional-chaining {
-  when optional_chain_short_circuits && re_test(parent.name, /^[\[{]/)
-  warn optional_chain_message
-}
-in ts_spread.argument, ts_for_of.right, ts_new.callee, ts_class.extends rule no-unsafe-optional-chaining:value {
-  when optional_chain_short_circuits && !(parent == "ts_spread" && parent.spread_in_object)
-  warn optional_chain_message
-}
-in ts_call.callee, ts_member.object, ts_index.object, ts_tagged_template.tag rule no-unsafe-optional-chaining:paren {
-  when wraps_optional_chain == true
-  warn optional_chain_message
+# Each optional chain whose `undefined` the node would trip on, at the chain.
+group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_with, ts_unary
+in optional_chain_user rule no-unsafe-optional-chaining {
+  option disallowArithmeticOperators boolean = false "also arithmetic (`a?.b + 1` is `NaN`)"
+  each r in filter(optional_chain_risks, x => disallowArithmeticOperators || !x.arithmetic)
+  report at r.offset
+  warn if r.arithmetic then "Unsafe arithmetic operation on optional chaining. It can result in NaN." else "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
 }
 
 # ---- variables -------------------------------------------------------------------
@@ -359,49 +686,55 @@ in ts_identifier rule no-unused-imports {
 }
 
 # ---- regular expressions ---------------------------------------------------------
-macro problem_in(problems, kind) re_find(default(problems, ""), kind "[^\n]*")
+# Literals and calls of the global `RegExp` (`regex_findings`): literals
+# report themselves, calls the call, except where eslint points inside.
+group regex_site ts_regex, ts_call, ts_new
+macro findings_of(check) filter(default(regex_findings, []), f => f.check == check)
 macro backreference_reason(kind) (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
-macro backreference_message(p) ("Backreference '" re_replace(p, /^backref:[^:]*:([^:]*):.*$/, "$1") "' will be ignored. It references group '" re_replace(p, /^backref:[^:]*:[^:]*:/, "") "' " backreference_reason(re_replace(p, /^backref:([^:]*):.*$/, "$1")) ".")
-macro character_class_message(p) (if p == "misleading:surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if p == "misleading:combiningClass" then "Unexpected combined character in character class." else if p == "misleading:emojiModifier" then "Unexpected modified Emoji in character class." else if p == "misleading:regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
-macro regex_spaces_message(p) ("Spaces are hard to count. Use {{" re_replace(p, /^spaces:/, "") "}}.")
+macro misleading_message(kind) (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
 in ts_regex rule no-empty-character-class {
-  when problem_in(regex_problems, "empty_class") != null
+  each f in findings_of("empty_class")
   warn "Empty class."
 }
-in ts_regex rule no-regex-spaces {
-  when problem_in(regex_problems, "spaces:") != null
-  warn regex_spaces_message(problem_in(regex_problems, "spaces:"))
-}
-in ts_regex rule no-useless-backreference {
-  when problem_in(regex_problems, "backref:") != null
-  warn backreference_message(problem_in(regex_problems, "backref:"))
-}
-in ts_regex rule no-misleading-character-class {
-  when problem_in(regex_problems, "misleading:") != null
-  warn character_class_message(problem_in(regex_problems, "misleading:"))
+
+# On literals, and on plain string patterns of `RegExp(...)` (at the string).
+in regex_site rule no-control-regex {
+  each f in findings_of("control")
+  when layer == "ts_regex" || regex_pattern.written == "string"
+  report at regex_pattern.offset
+  warn "Unexpected control character(s) in regular expression: {first(f.data)}."
 }
 
-# `RegExp(...)` with a literal pattern: reported on the call.
-in ts_call, ts_new {
-  let regex_argument_error first(compact([] argument.regex_error))
-  let regex_argument_problems join(compact([] argument.regex_problems), "\n")
+in regex_site rule no-useless-backreference {
+  each f in findings_of("backref")
+  warn "Backreference '{first(f.data)}' will be ignored. It references group '{first(slice(f.data, 1))}'{last(f.data)} {backreference_reason(f.kind)}."
 }
+
+# Each sequence where it is written (or at the pattern when it is
+# computed). With computed flags, nothing is known.
+in regex_site rule no-misleading-character-class {
+  option allowEscape boolean = false "allow combined characters written as escapes"
+  each f in findings_of(if allowEscape then "misleading_escaped" else "misleading")
+  when type_of(regex_pattern.flags) == "str" || layer == "ts_regex"
+  report at f.offset
+  warn misleading_message(f.kind)
+}
+
+# Literals, and `RegExp` calls with a string literal pattern and flags.
+in regex_site rule no-regex-spaces {
+  each f in findings_of("spaces")
+  when layer == "ts_regex" || regex_pattern.written == "string" && type_of(regex_flags) == "str"
+  warn "Spaces are hard to count. Use {{{f.kind}}}."
+}
+
+# The flags first (`RegExp` checks them first), then the pattern.
 in ts_call, ts_new rule no-invalid-regexp {
-  when regex_argument_error != null
-  warn "{regex_argument_error}."
-}
-in ts_call, ts_new rule no-regex-spaces:call {
-  when problem_in(regex_argument_problems, "spaces:") != null
-  warn regex_spaces_message(problem_in(regex_argument_problems, "spaces:"))
-}
-in ts_call, ts_new rule no-useless-backreference:call {
-  when problem_in(regex_argument_problems, "backref:") != null
-  warn backreference_message(problem_in(regex_argument_problems, "backref:"))
-}
-in ts_call, ts_new rule no-misleading-character-class:call {
-  when problem_in(regex_argument_problems, "misleading:") != null
-  warn character_class_message(problem_in(regex_argument_problems, "misleading:"))
+  option allowConstructorFlags string[] = [] "flags beyond the standard ones that are allowed"
+  let flags_problem if regex_flags == null then null else regex_flags_error(regex_flags, allowConstructorFlags)
+  when callee.global_value == "RegExp"
+  when flags_problem != null || regex_pattern_error != null
+  warn "{default(flags_problem, regex_pattern_error)}."
 }
 
 # ---- braces ------------------------------------------------------------------------
@@ -461,28 +794,32 @@ in ts_new rule new-parens {
 }
 
 # ---- whitespace and line breaks -------------------------------------------------
-in js_code, js_line_comment, js_block_comment, js_template, js_regex match js_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}]/
+# Runs of irregular spaces, and each irregular line terminator. A BOM
+# starting the file is not one.
+in js_code, js_line_comment, js_block_comment, js_template, js_regex, js_string, js_single_string match js_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
 in js_irregular_ws rule no-irregular-whitespace {
-  when !(line == 1 && column == 1)
+  option skipStrings boolean = true "allow it in strings"
+  option skipComments boolean = false "allow it in comments"
+  option skipRegExps boolean = false "allow it in regexes"
+  option skipTemplates boolean = false "allow it in templates"
+  option skipJSXText boolean = false "allow it in JSX text"
+  when !(offset == 0 && text == "\u{FEFF}")
+  when !(skipStrings && (parent == "js_string" || parent == "js_single_string"))
+  when !(skipComments && (parent == "js_line_comment" || parent == "js_block_comment"))
+  when !(skipRegExps && parent == "js_regex")
+  when !(skipTemplates && parent == "js_template")
   warn "Irregular whitespace not allowed."
 }
 
-# Reported at the end of what comes before the line break: the `(`, `[` or
-# template ESLint points at has no node of its own.
-in ts_call.callee rule no-unexpected-multiline:call {
-  when re_test(slice(parent_text, len(text)), /^[ \t]*\r?\n\s*\(/)
-  report end
-  warn "Unexpected newline between function and ( of function call."
-}
-in ts_index.object rule no-unexpected-multiline:index {
-  when re_test(slice(parent_text, len(text)), /^[ \t]*\r?\n\s*\[/)
-  report end
-  warn "Unexpected newline between object and [ of property access."
-}
-in ts_tagged_template.tag rule no-unexpected-multiline:template {
-  when re_test(slice(parent_text, len(text)), /^[ \t]*\r?\n/)
-  report end
-  warn "Unexpected newline between template tag and template literal."
+# At the `(`, `[`, template or `/` on the new line.
+in ts_call, ts_index, ts_tagged_template, ts_binary rule no-unexpected-multiline {
+  let m unexpected_multiline
+  when m != null
+  report at m.offset
+  warn if m.kind == "function" then "Unexpected newline between function and ( of function call."
+    else if m.kind == "property" then "Unexpected newline between object and [ of property access."
+    else if m.kind == "taggedTemplate" then "Unexpected newline between template tag and template literal."
+    else "Unexpected newline between numerator and division operator."
 }
 
 }
