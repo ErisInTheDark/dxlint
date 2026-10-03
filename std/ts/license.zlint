@@ -1,4 +1,4 @@
-# .js/license: license headers, modelled on eslint-plugin-license-header's
+# .ts/license: license headers, modelled on eslint-plugin-license-header's
 # `header`. The first comment before any code must be the header, alone on
 # line 1, followed by exactly one blank line. Turn each `header:*` part on
 # with the header text, with `\n` line breaks:

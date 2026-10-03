@@ -1,6 +1,6 @@
-# .js/flow: control flow, operators and statement layout, modelled on
-# eslint's rules. Imported by .js/format (uses its statement layer and
-# macros).
+# .ts/flow: control flow, operators and statement layout on the `js_*` text
+# layers, modelled on eslint's rules. Imported by .ts/format (uses its
+# statement layer and macros).
 
 define {
 

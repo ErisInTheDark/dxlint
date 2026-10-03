@@ -72,10 +72,23 @@ impl Parser<'_> {
         false
     }
 
+    /// Consumes a binary operator, which must stand apart from both
+    /// operands: `a - 1`, not `a-1` or `a -1`.
+    fn spaced_op(&mut self) -> Token {
+        let before = self.ts.last_span;
+        let op = self.ts.next_raw().expect("peeked");
+        let touches_before = before.is_some_and(|b| b.file == op.span.file && b.end == op.span.start);
+        let touches_after = self.ts.peek_raw(0).is_some_and(|next| op.touches(next));
+        if touches_before || touches_after {
+            self.errors.push(ConfigError::new(op.span, format!("put spaces around `{}`", op.text)));
+        }
+        op
+    }
+
     fn binary(&mut self, ops: &[(Tk, BinOp)], next: fn(&mut Self) -> Option<Expr>) -> Option<Expr> {
         let mut lhs = next(self)?;
         while let Some(op) = self.op_peek().and_then(|k| ops.iter().find(|(t, _)| *t == k).map(|(_, op)| *op)) {
-            self.ts.next_raw();
+            self.spaced_op();
             let rhs = next(self)?;
             let span = lhs.span.to(rhs.span);
             lhs = Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span };
@@ -105,7 +118,7 @@ impl Parser<'_> {
             Some(Tk::Gt) => BinOp::Gt,
             Some(Tk::Ge) => BinOp::Ge,
             Some(Tk::Tilde) => {
-                let tilde = self.ts.next_raw().expect("peeked");
+                let tilde = self.spaced_op();
                 self.expr_depth += 1;
                 let pat = self.pattern_item();
                 self.expr_depth -= 1;
@@ -115,7 +128,7 @@ impl Parser<'_> {
             }
             _ => return Some(lhs),
         };
-        self.ts.next_raw();
+        self.spaced_op();
         let rhs = self.e_join()?;
         let span = lhs.span.to(rhs.span);
         Some(Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span })

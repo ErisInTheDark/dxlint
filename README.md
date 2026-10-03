@@ -148,7 +148,7 @@ more than two `&&`/`||`".
 A config with mistakes still lints with every part that built: the errors
 are reported, and the run fails, but one typo never switches linting off.
 
-The built-in library ships languages (`.rs`, `.js`, `.ts`, `.py`, `.c`,
+The built-in library ships languages (`.rs`, `.ts` for JS and TS, `.py`, `.c`,
 `.toml`, `.md`, `.zlint`) with their rules (ports of eslint, @stylistic and
 typescript-eslint rules for JS/TS, topiary-style layout for Rust, and
 language-neutral hygiene), and rulesets (`rules:correctness`,

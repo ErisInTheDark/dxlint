@@ -566,6 +566,9 @@ impl Scope<'_> {
                 if let Some(best) = closest(&name.text, candidates) {
                     err = err.note(format!("did you mean `{best}`?"));
                 }
+                if name.text.contains('-') {
+                    err = err.note(format!("`-` inside a name is part of it; subtract with spaces: `{}`", name.text.replacen('-', " - ", 1)));
+                }
                 if !self.fields.is_empty() {
                     let fields: Vec<&str> = self.fields.iter().map(|(f, _)| f.as_str()).collect();
                     err = err.note(format!("fields here: {}", fields.join(", ")));

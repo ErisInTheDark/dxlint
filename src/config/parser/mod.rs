@@ -170,8 +170,8 @@ impl<'a> Parser<'a> {
         Some(Name { text: t.text.to_string(), span: t.span })
     }
 
-    /// Rule names may contain dashes (`no-dbg`) and, in `set`, `*` globs.
-    /// Pieces must touch: `no - dbg` is not a name.
+    /// Rule names may name a variant (`family:variant`) and, in `set`, hold
+    /// `*` globs (`style-*`). Pieces must touch: `a : b` is not a name.
     fn glued_name(&mut self, what: &str, allow_star: bool) -> Option<Name> {
         let first = self.peek()?;
         if !(first.kind == Tk::Ident || (allow_star && first.kind == Tk::Star)) {
@@ -1578,6 +1578,15 @@ mod tests {
         let (_, errors, _) = parse_str("in x rule a fix as text + \"!\"\nin x rule b fix text\nin x rule c { fix as [a] + 1 }\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
         assert_eq!(all, vec!["`+` adds numbers", "expected `as` after `fix`: `fix as <what the text should be>`", "`+` adds numbers"]);
+    }
+
+    #[test]
+    fn dashed_names_work_anywhere_and_binary_operators_need_spaces() {
+        let c = ok("macro m(rule-id) {\n  in x rule rule-id warn \"a\" { when -1 < len(text) - 2 * 3 && !false }\n}\nm(no-dbg)\n");
+        assert_eq!(c.rules[0].name.text, "no-dbg");
+        let (_, errors, _) = parse_str("in x rule a {\n  when 1+2 > 0\n  when 1 -2 == -1\n  when 1 <=2\n  when text~ /x/\n}\n");
+        let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(all, vec!["put spaces around `+`", "put spaces around `-`", "put spaces around `<=`", "put spaces around `~`"]);
     }
 
     #[test]

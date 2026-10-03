@@ -169,7 +169,7 @@ is loaded. So anything aimed at a group, even written earlier, reaches layers
 added later. That makes groups the extension point of a library:
 
 ```zlint
-# .js (built in)
+# .ts (built in)
 group js_code .js, parentheses, brackets, braces
 in js_code match js_string /"/ until /"/        # strings inside every code layer
 # your config, after importing it
@@ -370,7 +370,7 @@ so nested rules compose.
 | `"text {expr} more"` | template string; `{{` and `}}` for literal braces |
 | `'text'` | single-quoted string (handy inside `{...}`) |
 | `"""` ... `"""` | multi-line string, see below |
-| `42`, `1.5`, `true`, `false`, `null` | literals |
+| `42`, `1.5`, `7e-8`, `true`, `false`, `null` | literals |
 | `[a, b]` | list |
 | `{ key: value, ... }` | record (keys are names or strings) |
 | `name` | a field of the node, an option, a `let`, or a variable |
@@ -386,6 +386,11 @@ so nested rules compose.
 | `value is layer`, `value is [a, b]` | does the layer named by `value` (`layer`, `parent`, `previous.layer`...) count as one of these: itself, a specialisation, or a group member |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
+
+**Spacing.** Binary operators stand apart from both operands: `a - 1`,
+`x == 2`, `text ~ /re/`; `a -1` is an error. Unary `-` and `!` stay tight
+(`-1`, `!x`). A `-` between name characters belongs to the name
+(`no-dbg`, `rule-id`), so `offset-1` is one (unknown) name.
 
 **Joins** bind tighter than comparisons and looser than arithmetic:
 `len(x) + 1 "px"` is `"4px"`, and `a == "x" "y"` compares with `"xy"`. A join
@@ -757,7 +762,7 @@ drop ignore "static/**"
 
 | import | loads |
 |---|---|
-| `import .ts`, `.js`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.zlint` | a built-in language: its layers, and every rule written for it, off |
+| `import .ts`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.zlint` | a built-in language: its layers, and every rule written for it, off |
 | `import rules:recommended` | a built-in ruleset: `rule` lines turning on a category of rules |
 | `import some/path` | another `.zlint` file, relative to this one (`.zlint` is added when there is no extension; quotes are optional) |
 
@@ -769,8 +774,8 @@ and `final-newline`.
 
 | language | contents |
 |---|---|
-| `.rs`, `.js`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
-| `.ts` | `native ts` (with `.js`), the groups `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
+| `.rs`, `.ts`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code`, `js_code` etc. name all code layers) |
+| `.ts` | also `native ts` for every JS and TS file (parsed only when a rule needs a `ts_*` layer), the groups `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

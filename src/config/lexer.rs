@@ -112,7 +112,10 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                 i = memchr::memchr(b'\n', &bytes[i..]).map_or(bytes.len(), |n| i + n);
             }
             b'A'..=b'Z' | b'a'..=b'z' | b'_' => {
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                // A `-` between name characters belongs to the name
+                // (`no-dbg`), so subtraction is written `a - b`.
+                let name_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+                while i < bytes.len() && (name_char(bytes[i]) || bytes[i] == b'-' && bytes.get(i + 1).is_some_and(|&b| name_char(b))) {
                     i += 1;
                 }
                 // `import x` starting an item: x is a path, whatever
@@ -143,6 +146,16 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                     i += 1;
                     while i < bytes.len() && bytes[i].is_ascii_digit() {
                         i += 1;
+                    }
+                }
+                // `7e-8`: an exponent only when digits follow it.
+                if matches!(bytes.get(i), Some(b'e' | b'E')) {
+                    let digits = i + 1 + usize::from(matches!(bytes.get(i + 1), Some(b'+' | b'-')));
+                    if bytes.get(digits).is_some_and(u8::is_ascii_digit) {
+                        i = digits;
+                        while i < bytes.len() && bytes[i].is_ascii_digit() {
+                            i += 1;
+                        }
                     }
                 }
                 push(&mut out, Tk::Num, start, i, &text[start..i]);
@@ -390,6 +403,20 @@ mod tests {
         let paths: Vec<&str> = toks.iter().filter(|t| t.kind == Tk::Path).map(|t| &*t.text).collect();
         assert_eq!(paths, vec!["../a/b-c.zlint", "rules:recommended"]);
         assert!(toks.iter().any(|t| t.kind == Tk::Str), "quoted paths stay strings");
+    }
+
+    #[test]
+    fn names_hold_inner_dashes_and_numbers_take_exponents() {
+        let mut errors = Vec::new();
+        let toks = lex(FileId(0), "no-dbg x-1 a- b -c a--b 7e-8 2.5E+3 1em", 0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let pieces: Vec<(Tk, &str)> = toks.iter().map(|t| (t.kind, &*t.text)).collect();
+        use Tk::{Ident as I, Minus as M, Num as N};
+        assert_eq!(pieces, vec![
+            (I, "no-dbg"), (I, "x-1"), (I, "a"), (M, "-"), (I, "b"), (M, "-"), (I, "c"),
+            (I, "a"), (M, "-"), (M, "-"), (I, "b"),
+            (N, "7e-8"), (N, "2.5E+3"), (N, "1"), (I, "em"),
+        ]);
     }
 
     fn block(src: &str) -> (String, Vec<ConfigError>) {

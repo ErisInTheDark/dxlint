@@ -1,7 +1,7 @@
 # Example: a few JavaScript/TypeScript rules.
 # Try it: cd examples/js && zlint
 
-import .js
+import .ts
 
 # Built-in rules are defined but off: turn on the ones you want.
 rule arrow-parens {

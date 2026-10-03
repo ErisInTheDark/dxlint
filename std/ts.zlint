@@ -1,12 +1,47 @@
-# .ts: TypeScript and JavaScript syntax from zlint's native parser. Every
-# node kind is a `ts_*` layer with ESTree-style fields (`ts_if.test`,
-# `ts_call.callee`, `ts_binary.operator`); `zlint tree file.ts` shows them.
-# Files are only parsed this way when a rule targets a `ts_*` layer.
+# .ts: JavaScript and TypeScript, two ways.
+# - zlint's native parser: every node kind is a `ts_*` layer with
+#   ESTree-style fields (`ts_if.test`, `ts_call.callee`,
+#   `ts_binary.operator`); `zlint tree file.ts` shows them. Files are only
+#   parsed this way when a rule targets a `ts_*` layer.
+# - `js_*` text layers: brackets, strings, template literals (whose `${...}`
+#   holes are code again), comments and regex literals, found by regexes.
+#   `js_code` names every layer that holds code.
 #
 # Brings every JS/TS rule definition, all off: turn on what you want with
 # `rule name` lines, or a ruleset (`import rules:recommended`).
 
-import .js
+import .core
+
+lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts"
+
+group js_code .js, parentheses, brackets, braces, js_interpolation
+
+in js_code {
+  match parentheses
+  match brackets
+  match braces
+
+  match js_line_comment /\/\// until /$/
+  match js_block_comment /\/\*/ until /\*\//
+
+  match js_string /"/ until /"|$/
+  match js_single_string /'/ until /'|$/
+  match js_template /`/ until /`/ {
+    match js_interpolation /\$\{/ until /\}/
+  }
+}
+in js_string, js_single_string, js_template match js_escape /\\(?:\r\n|.|\n)/
+
+# A `/` starts a regex literal only where an expression can start: after an
+# operator, an opening bracket, or a keyword like `return`. Everywhere else
+# it is division.
+in js_code match js_regex (
+  /(?<=(?:^|[=(,:;!&|?{}\[+\-*%<>~^]|\b(?:return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await))[ \t]*)/
+  /\/(?![*\/])/ until /\/[dgimsuyv]*|$/
+) {
+  match js_regex_class /\[/ until /\]|$/
+}
+in js_regex, js_regex_class match js_regex_escape /\\./
 
 native ts
 
@@ -19,6 +54,8 @@ group ts_statement ts_expression_statement, ts_variable_declaration, ts_return, 
   ts_function, ts_class, ts_export, ts_import, ts_import_equals, ts_export_assignment, ts_type_alias,
   ts_interface, ts_enum, ts_namespace
 
+import .ts/format
+import .ts/license
 import .ts/scopes
 import .ts/problems
 import .ts/style

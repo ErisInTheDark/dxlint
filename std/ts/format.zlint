@@ -1,4 +1,5 @@
-# .js/format: stylistic JS/TS rules modelled on eslint's and @stylistic's.
+# .ts/format: stylistic rules on the `js_*` text layers, modelled on
+# eslint's and @stylistic's. Native ports in .ts/layout replace them.
 # Rule names are eslint rule names without the plugin prefix;
 # `family:variant` rules are parts of one eslint rule. All are off until
 # turned on: `rule semi:always`, `rule quotes:double { set style "double" }`.
@@ -700,6 +701,6 @@ in js_line_comment rule spaced-comment:line warn "Expected space or tab after '/
   fix as "// " slice(text, 2)
 }
 
-import .js/flow
+import .ts/flow
 
 }
