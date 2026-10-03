@@ -1,8 +1,10 @@
-# std/js: JavaScript and TypeScript structure: brackets, strings, template
+# .js: JavaScript and TypeScript structure: brackets, strings, template
 # literals (whose `${...}` holes are code again), comments and regex
-# literals. `js_code` names every layer that holds code.
+# literals. `js_code` names every layer that holds code. Brings the
+# pattern-based JS rule definitions (`.js/format`, `.js/license`,
+# `.js/problems`), all off.
 
-import "std/core"
+import .core
 
 lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts"
 
@@ -34,3 +36,7 @@ in js_code match js_regex (
   match js_regex_class /\[/ until /\]|$/
 }
 in js_regex, js_regex_class match js_regex_escape /\\./
+
+import .js/format
+import .js/license
+import .js/problems

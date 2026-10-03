@@ -1,0 +1,310 @@
+# .rs/format: Rust layout rules modelled on topiary's Rust formatting.
+# Topiary drops every space it is not told to keep, so most rules are "one
+# space here" or "no space there". Unlike topiary, macro arguments in
+# `(...)` and `[...]` are checked like other code (`vec![...]`,
+# `assert_eq!(...)`); `name! { ... }` bodies and attribute arguments are
+# leaves: nothing inside them is checked. `pub(crate)` stays tight. Rule
+# names start with `rs-`, apart from the language-neutral ones in
+# `.whitespace`.
+
+define {
+
+# ---- leaves ------------------------------------------------------------------
+
+match rs_attribute like brackets /(?<=#!?[ \t]*)\[/ until /\]/
+match rs_macro_brace like braces /(?<=\w![ \t]*(?:\w+[ \t]*)?)\{/ until /\}/
+in rs_code match rs_attribute
+in rs_code match rs_macro_brace
+macro in_leaf (rs_attribute != null || rs_macro_brace != null)
+
+# Things that end an operand: an identifier, literal, closing bracket or `?`.
+macro operand_end /[\w)\]}'"?]/
+
+# ---- whitespace ----------------------------------------------------------------
+
+# Topiary keeps whitespace-only lines as they are; `:blank` cleans them too.
+in rs_code match rs_trailing_space /(?<=\S)[ \t]+(?=\r?\n|\z)/
+in rs_trailing_space rule rs-no-trailing-spaces warn "Trailing whitespace." {
+  when !in_leaf
+  fix as ""
+}
+in rs_code match rs_blank_line_space /^[ \t]+(?=\r?\n)/
+in rs_blank_line_space rule rs-no-trailing-spaces:blank warn "Whitespace on a blank line." {
+  when !in_leaf
+  fix as ""
+}
+
+in rs_code match rs_multi_space /(?<=\S)[ \t]{2,}(?=\S)/
+in rs_multi_space rule rs-no-multi-spaces warn "Multiple spaces." {
+  when !in_leaf
+  fix as " "
+}
+
+in rs_code match rs_blank_run /^(?:[ \t]*\r?\n){2,}/
+in rs_blank_run rule rs-no-multiple-empty-lines warn "More than one blank line." {
+  report change
+  fix as re_find(text, /^[ \t]*\r?\n/)
+}
+# No blank lines before a closing brace or at the end of the file.
+in rs_code match rs_blank_before_close /(?<=\S[ \t]*\r?\n)(?:[ \t]*\r?\n)+(?=[ \t]*[}\]])/
+in rs_blank_before_close rule rs-no-blank-before-close warn "Blank line before a closing bracket." {
+  when !in_leaf
+  fix as ""
+}
+over .rust match rs_end /[^\n]\z|(?<=\n)(?:[ \t]*\r?\n)+\z/
+in rs_end rule rs-eol-last warn "The file must end in exactly one line break." {
+  fix as if ends_with(text, "\n") then "" else text newline
+}
+
+# ---- paths, fields, calls ---------------------------------------------------------
+
+# `a :: b`, `a . b`, `x ?`
+in rs_code match rs_path_space /[ \t]+::[ \t]*|(?<=\S)::[ \t]+/
+in rs_path_space rule rs-path-spacing warn "No spaces around `::`." {
+  when !in_leaf
+  fix as "::"
+}
+in rs_code match rs_dot_space /(?<=[\w)\]}?])[ \t]+\.(?=[\w])|(?<=[\w)\]}?]\.)[ \t]+(?=\w)/
+in rs_dot_space rule rs-dot-spacing warn "No spaces around `.`." {
+  when !in_leaf
+  fix as "."
+}
+in rs_code match rs_try_space /(?<=[\w)\]}])[ \t]+\?/
+in rs_try_space rule rs-try-spacing warn "No space before `?`." {
+  when !in_leaf
+  fix as "?"
+}
+
+# Keywords that may be followed by `(` or `[` with a space.
+macro rs_keyword_lead /\b(?:if|match|while|for|in|return|let|as|else|move|mut|ref|where|impl|dyn|fn|pub|unsafe|async|await|break|const|static|type|use|mod|struct|enum|trait|extern|crate|loop|yield)[ \t]+$/
+# `f (x)` -> `f(x)`, `a [i]` -> `a[i]`; `fn name (` keeps its space.
+in rs_code match rs_call_space /(?<=[\w)\]>])[ \t]+(?=[(\[])/
+in rs_call_space rule rs-call-spacing warn "No space before a call's `(` or an index's `[`." {
+  when !in_leaf && !re_test(before text, rs_keyword_lead) && !re_test(before, /\bfn[ \t]+\w+(?:<[^(){};]*>)?$|\b(?:Fn|FnMut|FnOnce)$|'\w+$|[=-]>$/)
+  fix as ""
+}
+# `fn name(` -> `fn name (`, and `Fn(T)` sugar -> `Fn (T)`.
+in rs_code match rs_function_name /(?<=\bfn[ \t]+)\w+(?:<[^(){};]*>)?(?=\()|\b(?:Fn|FnMut|FnOnce)(?=\()/
+in rs_function_name rule rs-fn-parenthesis-spacing warn "One space between a function's name and its parameters." {
+  report change
+  when !in_leaf
+  fix as text " "
+}
+
+# ---- brackets ------------------------------------------------------------------
+
+in rs_code match rs_parenthesis_inner_space /(?<=\()[ \t]+(?=[^\s)])|(?<=[^\s(])[ \t]+(?=\))/
+in rs_parenthesis_inner_space rule rs-parenthesis-spacing warn "No spaces just inside parentheses." {
+  when !in_leaf
+  fix as ""
+}
+
+# Array literals get a space inside; index and array types do not.
+# Also `&[1, 2]` and nested `[[0; 2]; 2]`; `x: &[u8]` is a type.
+match rs_array like brackets /(?<=(?:[=(,\[]|=>|\breturn|\bin)[ \t]*(?:&[ \t]*(?:mut[ \t]+)?)?)\[/ until /\]/
+in rs_code match rs_array
+in rs_array rule rs-array-spacing warn "Single-line arrays have a space inside the brackets." {
+  report change
+  when !in_leaf && !contains(text, "\n") && text != "[]"
+  fix as "[ " trim(slice(text, 1, -1)) " ]"
+}
+# Index brackets: `a[i]`, never `a[ i ]`.
+match rs_index like brackets /(?<=[\w)\]?])\[/ until /\]/
+in rs_code match rs_index
+in rs_code match rs_bracket_inner_space /(?<=\[)[ \t]+(?=[^\s\]])|(?<=[^\s\[])[ \t]+(?=\])/
+in rs_bracket_inner_space rule rs-bracket-spacing warn "No spaces just inside index brackets." {
+  when !in_leaf && parent == "rs_index"
+  fix as ""
+}
+
+# `x{` -> `x {`; single-line `{x}` -> `{ x }`; `{}` -> `{ }`.
+in braces rule rs-brace-spacing:before warn "One space before `\{`." {
+  report change
+  when !in_leaf && layer != "rs_macro_brace" && re_test(before, /[\w)>\]']$/)
+  fix as " " text
+}
+in braces rule rs-brace-spacing:inside warn "Single-line braces have one space inside." {
+  report change
+  when !in_leaf && layer != "rs_macro_brace" && !contains(text, "\n")
+  fix as if trim(slice(text, 1, -1)) == "" then "{{ }}" else "{{ " trim(slice(text, 1, -1)) " }}"
+}
+
+# `use a::{ b::c, d }`: a list holding paths, globs or nested lists has one
+# item per line.
+match rs_use_list like braces /(?<=\buse\b[^;]*::[ \t]*)\{/ until /\}/
+in rs_code match rs_use_list
+in rs_use_list match rs_use_list
+# Reported at each comma followed by another item on its line (commas of
+# nested lists belong to those lists). An overlay, so comma-spacing still
+# sees the comma.
+over rs_use_list match rs_use_comma /,(?=[ \t]*[^\s}\/])/
+in rs_use_comma rule rs-use-list-breaks warn "Use lists with paths have one item per line." {
+  when re_test(re_replace(re_replace(slice(parent_text, 1, -1), /\{[^{}]*\}/, "{{}}"), /\{[^{}]*\}/, "{{}}"), /::|\*|\{/)
+}
+
+# ---- punctuation ------------------------------------------------------------
+
+in rs_code match rs_comma_space_before /[ \t]+(?=,)/
+in rs_comma_space_before rule rs-comma-spacing:before warn "No space before `,`." {
+  when !in_leaf
+  fix as ""
+}
+in rs_code match rs_comma_tight /,(?=[^\s)\]}>,])/
+in rs_comma_tight rule rs-comma-spacing:after warn "One space after `,`." {
+  when !in_leaf
+  fix as ", "
+}
+in rs_code match rs_semicolon_space_before /(?<=\S)[ \t]+;/
+in rs_semicolon_space_before rule rs-semi-spacing warn "No space before `;`." {
+  when !in_leaf
+  fix as ";"
+}
+
+# `a : T` -> `a: T`, `a:T` -> `a: T` (not `::`).
+in rs_code match rs_colon_space_before /(?<=[\w)\]>'])[ \t]+:(?!:)/
+in rs_colon_space_before rule rs-colon-spacing:before warn "No space before `:`." {
+  when !in_leaf
+  fix as ":"
+}
+# Not `Token![:]`.
+in rs_code match rs_colon_tight /(?<![:\s\[]):(?![:\s\]])/
+in rs_colon_tight rule rs-colon-spacing:after warn "One space after `:`." {
+  when !in_leaf
+  fix as ": "
+}
+
+# ---- operators ------------------------------------------------------------------
+
+# `& x` -> `&x`, `& mut` -> `&mut`, `* const` -> `*const`; unary `!`, `-`, `*`.
+# A line-leading operator continues the previous line: not unary.
+in rs_code match rs_unary_space /(?<![\w)\]}'"?\r\n&*!-][ \t]*)(?:&&?|\*|!|-)[ \t]+(?=[\w&(\[*'"!|-])/
+in rs_unary_space rule rs-unary-spacing warn "No space after a unary operator or `&`." {
+  when !in_leaf
+  fix as trim(text)
+}
+
+# Binary operators and arrows: one space on each side. `<` and `>` are left
+# alone (generics), and so are `&` and `|` (references and closures).
+macro rs_infix_operators /(?:<<=|>>=|==|!=|<=|>=|&&|\|\||->|=>|[+\-*\/%^|&]=|=|\+|[*\/%^]|(?<=[\w)\]] ?)-)/
+in rs_code match rs_infix_tight /(?<=[\w)\]}'"?])(?:<<=|>>=|==|!=|<=|>=|&&|\|\||->|=>|[+\-*\/%^|&]=|=(?![=>])|\+(?<![0-9][eE]\+)|[*\/%^](?!=)|-(?<![0-9][eE]-)(?![>=]))[ \t]*(?=[\w(\[{"'&!*|.-])|(?<=[ \t])(?:<<=|>>=|==|!=|<=|>=|&&|\|\||->|=>|[+\-*\/%^|&]=|(?<![=!<>+\-*\/%^|&])=(?![=>])|\+(?!=)|[\/%^](?!=))(?=[\w(\["'&!|.-])/
+in rs_infix_tight rule rs-operator-spacing warn "Operator `{trim(text)}` needs a space on each side." {
+  report change
+  when !in_leaf
+  when text != trim(text) " " || !re_test(before, /[ \t]$/)
+  fix as (if re_test(before, /[ \t]$/) then "" else " ") trim(text) " "
+}
+# `)->T` style tight arrows after a parenthesis are covered above; `T>` before
+# `->` too. Generic brackets stay tight: `Vec< T >` -> `Vec<T>`.
+in rs_code match rs_generic_open_space /(?<=\w<)[ \t]+(?=[\w&'(\[])/
+in rs_generic_open_space rule rs-generic-spacing:open warn "No space after a generic's `<`." {
+  when !in_leaf
+  fix as ""
+}
+
+# ---- closures ------------------------------------------------------------------
+
+in rs_code match rs_closure_params /(?<=(?:[=(,{:]|=>|\bmove|\breturn)[ \t]*)\|[^|\r\n]*\|/
+in rs_closure_params rule rs-closure-spacing warn "Closure parameters sit tight inside their pipes." {
+  when !in_leaf
+  fix as "|" trim(slice(text, 1, -1)) "|"
+}
+# `|x|x + 1` -> `|x| x + 1`: the body's first character.
+in rs_code match rs_closure_tight /(?<=(?:[=(,{:]|=>|\bmove|\breturn)[ \t]*\|[^|\r\n]*\|)[^\s,)]/
+in rs_closure_tight rule rs-closure-spacing:after warn "One space after closure parameters." {
+  report change
+  when !in_leaf
+  fix as " " text
+}
+
+# ---- keywords ------------------------------------------------------------------
+
+# `if(x)`, `return(a, b)`, `move|x|`; `{` is brace-spacing's, and `impl<T>`
+# stays tight.
+in rs_code match rs_keyword_tight /(?<![\w.:#'$])(?:if|match|while|for|in|return|let|as|else|move|where|impl|dyn|unsafe|async|static|const|use|mod|struct|enum|trait|extern|fn|loop|ref)(?=[(\[|&*!"'-])/
+in rs_keyword_tight rule rs-keyword-spacing:after warn "One space after `{text}`." {
+  when !in_leaf
+  fix as text " "
+}
+in rs_code match rs_keyword_before /(?<=[)\]}])(?:else|as|in|where)\b/
+in rs_keyword_before rule rs-keyword-spacing:before warn "One space before `{text}`." {
+  when !in_leaf
+  fix as " " text
+}
+
+# ---- indentation -------------------------------------------------------------
+# Block indentation: one unit deeper than the line its bracket opened on; a
+# line starting with that bracket's closer sits at the opener's indentation.
+# Continuation lines (`.method()`, `&& b`, a line after `=`) get one more
+# unit. Unlike topiary, nothing else moves: no staircases, no counter-indents.
+
+in parentheses, brackets, braces indent
+
+# Each code line: its indentation and first character. An overlay, so the
+# character still belongs to whatever layer starts there.
+over rs_code match rs_line /^[ \t]*\S/
+
+macro line_indent slice(text, 0, -1)
+macro line_code text default(re_find(text_after, /^[^\r\n]*/), "")
+macro line_code_trimmed trim_start(line_code)
+# `auto`: a tab when the code around (the block's opener line, else the line
+# above) is indented with tabs, else 4 spaces. Never the line itself: a tab
+# line in a spaces file is the mistake.
+macro indent_unit (if unit != "auto" then unit else if starts_with(indent_anchor, "\t") || indent_anchor == "" && starts_with(previous_indent, "\t") then "\t" else "    ")
+# Lines in a block are one level deeper than the line the block opened on,
+# however many brackets opened there (`foo(Bar {` is one level, not two).
+# A block opened at the end of a continuation line (`for x in a⏎    .b()? {`)
+# may also be measured from the statement, one level up: both occur.
+macro opener_continues re_test(trim_start(indent_anchor_line), /^(?:\.[^.]|\?|&&|\|\||[+\-*\/%^][ \t]|=>|->)/)
+macro statement_anchor (if opener_continues && len(indent_anchor) >= len(indent_unit) then slice(indent_anchor, 0, len(indent_anchor) - len(indent_unit)) else indent_anchor)
+macro level_from(anchor) (if !indented then "" else if indent_closes then anchor else anchor indent_unit)
+macro block_level level_from(indent_anchor)
+macro statement_level level_from(statement_anchor)
+# The previous line without its trailing comment.
+macro previous_line_code trim(re_replace(default(previous_line, ""), /(?:^|\s)\/\/[^"]*$|\/\*.*\*\/\s*$/, ""))
+macro previous_indent default(re_find(default(previous_line, ""), /^[ \t]*/), "")
+# The previous line leaves its statement open: not after `;`, `,`, brackets,
+# attributes, comments or a blank line.
+macro previous_open previous_line_code != "" && !re_test(previous_line_code, /[;,{}()\[\]]$|^#|^\*|\*\/$/)
+macro starts_continuing re_test(line_code_trimmed, /^(?:\.[^.]|\?|&&|\|\||[+\-*\/%][ \t]|=>|->|as\b)/)
+# `where` bounds keep their extra unit across the commas between them.
+macro in_where previous_indent == block_level indent_unit && re_test(previous_line_code, /^(?:where[ \t]+)?[\w'][\w<>:' +?]*:[ \t][^;{}]*,$/)
+macro continues !indent_closes && !re_test(line_code_trimmed, /^(?:where\b|\{)/) && (starts_continuing || previous_open || in_where)
+macro continuation (if continues then indent_unit else "")
+# Operator lines (`&& b`, `^ salt`) and method chains inside a hanging
+# bracket (`Ok(chunks⏎    .collect())`): the codebase uses both flat and
+# indented forms, so the first line may pick either. The rest of a chain
+# always lines up with the line above it.
+macro operator_line /^(?:&&|\|\||[+\-*\/%^|&][ \t]|==|!=|<=|>=|[<>][ \t])/
+macro starts_operator re_test(line_code_trimmed, operator_line)
+# The previous line starts with the same operator (`&&` after `&&`): a nested
+# `== b` line in between does not count.
+macro previous_starts_operator re_find(trim_start(default(previous_line, "")), operator_line) == re_find(line_code_trimmed, operator_line)
+macro starts_dot re_test(line_code_trimmed, /^\.[^.]/)
+macro previous_starts_dot re_test(trim_start(default(previous_line, "")), /^\.[^.]/)
+macro is_comment starts_with(line_code_trimmed, "//")
+macro next_indent default(re_find(default(next_line, ""), /^[ \t]*/), "")
+# Every indentation this line may have; the first is the preferred one.
+macro acceptable (
+  if starts_operator && previous_starts_operator || starts_dot && previous_starts_dot then [previous_indent]
+  else if starts_operator || starts_dot && indent_hangs then [block_level indent_unit, block_level, statement_level indent_unit, statement_level]
+  else [block_level continuation, statement_level continuation]
+)
+# Comment lines may also follow the code line above or below them.
+macro allowed (if is_comment then acceptable [next_indent] (if previous_line_code != "" then [previous_indent] else []) else acceptable)
+macro expected_indent first(acceptable)
+
+macro describe_indent(whitespace) (if whitespace == "" then "none" else if !contains(whitespace, " ") then str(len(whitespace)) " tab(s)" else if !contains(whitespace, "\t") then str(len(whitespace)) " spaces" else "a mix of tabs and spaces")
+in rs_line rule rs-indent warn "Expected indentation of {describe_indent(expected_indent)}, found {describe_indent(line_indent)}." {
+  option unit "auto" "one level of indentation, or \"auto\" (tabs if the code around uses them, else 4 spaces)"
+  report change
+  # Lines inside multi-line strings and block comments are their own business.
+  when !re_test(enclosing, /string|comment|char/)
+  when !contains(allowed, line_indent)
+  fix as expected_indent slice(text, -1)
+}
+
+# `# [x]` -> `#[x]`, `#[x ]` -> `#[x]`
+in rs_code match rs_attribute_space /(?<=#!?)[ \t]+(?=\[)/
+in rs_attribute_space rule rs-attribute-spacing warn "No space between `#` and `[`." fix as ""
+
+}

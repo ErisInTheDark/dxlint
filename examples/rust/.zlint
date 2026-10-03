@@ -1,11 +1,10 @@
 # Example: Rust rules showing fields, lists and nested layers.
 # Try it: cd examples/rust && zlint
 
-import "std/rust"
-import "std/whitespace"
+import .rs
 
 # Flat `use a::{c, b}` lists stay sorted. Repeated fields are lists.
-in .rust, braces match rs_use_list /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ item:/[\w:]+/ (/,\s*/ item:/[\w:]+/)* /,?\s*\}/ {
+in .rust, braces match rs_flat_use_list /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ item:/[\w:]+/ (/,\s*/ item:/[\w:]+/)* /,?\s*\}/ {
   rule sorted-use-lists warn "keep `use` lists sorted" fix as "use {path}{{{join(sort(item), ', ')}}}"
 }
 

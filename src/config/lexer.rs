@@ -14,6 +14,11 @@ pub enum Tk {
     Str,
     /// `/.../`; text is the raw regex between the slashes.
     Regex,
+    /// What an unquoted `import` names: `.ts`, `rules:recommended`,
+    /// `../shared/rules`. Text is the raw word.
+    Path,
+    /// `=>`, between a lambda's parameter and its body.
+    Arrow,
     Num,
     LParen,
     RParen,
@@ -110,7 +115,25 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                 while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                     i += 1;
                 }
+                // `import x` starting an item: x is a path, whatever
+                // characters it uses (`no-unassigned-import` is a name).
+                let item_start = (start == 0 || matches!(bytes[start - 1], b' ' | b'\t' | b'\n' | b'\r' | b'{' | b';'))
+                    && out.last().is_none_or(|t| matches!(t.kind, Tk::Newline | Tk::LBrace | Tk::RBrace));
                 push(&mut out, Tk::Ident, start, i, &text[start..i]);
+                if item_start && &text[start..i] == "import" {
+                    let mut at = i;
+                    while at < bytes.len() && matches!(bytes[at], b' ' | b'\t') {
+                        at += 1;
+                    }
+                    if at > i && at < bytes.len() && !matches!(bytes[at], b'"' | b'\'' | b'\n' | b'\r' | b';' | b'#') {
+                        let path_start = at;
+                        while at < bytes.len() && !matches!(bytes[at], b' ' | b'\t' | b'\n' | b'\r' | b';' | b'#') {
+                            at += 1;
+                        }
+                        push(&mut out, Tk::Path, path_start, at, &text[path_start..at]);
+                        i = at;
+                    }
+                }
             }
             b'0'..=b'9' => {
                 while i < bytes.len() && bytes[i].is_ascii_digit() {
@@ -191,6 +214,7 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                 let two = bytes.get(i + 1).copied();
                 let (kind, len) = match (b, two) {
                     (b'=', Some(b'=')) => (Tk::EqEq, 2),
+                    (b'=', Some(b'>')) => (Tk::Arrow, 2),
                     (b'!', Some(b'=')) => (Tk::Ne, 2),
                     (b'<', Some(b'=')) => (Tk::Le, 2),
                     (b'>', Some(b'=')) => (Tk::Ge, 2),
@@ -356,7 +380,16 @@ mod tests {
 
     #[test]
     fn operators_prefer_longest_form() {
-        assert_eq!(kinds("a == c != d || e"), vec![Tk::Ident, Tk::EqEq, Tk::Ident, Tk::Ne, Tk::Ident, Tk::OrOr, Tk::Ident]);
+        assert_eq!(kinds("a == c != d || e => f"), vec![Tk::Ident, Tk::EqEq, Tk::Ident, Tk::Ne, Tk::Ident, Tk::OrOr, Tk::Ident, Tk::Arrow, Tk::Ident]);
+    }
+
+    #[test]
+    fn import_takes_a_bare_path() {
+        let mut errors = Vec::new();
+        let toks = lex(FileId(0), "import ../a/b-c.zlint # x\nimport rules:recommended\nimport \"q\"\nrule no-unassigned-import {}", 0, &mut errors);
+        let paths: Vec<&str> = toks.iter().filter(|t| t.kind == Tk::Path).map(|t| &*t.text).collect();
+        assert_eq!(paths, vec!["../a/b-c.zlint", "rules:recommended"]);
+        assert!(toks.iter().any(|t| t.kind == Tk::Str), "quoted paths stay strings");
     }
 
     fn block(src: &str) -> (String, Vec<ConfigError>) {

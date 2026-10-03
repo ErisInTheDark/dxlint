@@ -1,0 +1,488 @@
+# .ts/problems: ESLint core "possible problems" and typescript-eslint rules
+# on the native TypeScript layers. Messages and positions follow ESLint's.
+
+import .ts/helpers
+
+define {
+
+macro normalize_space(x) re_replace(x, /\s+/, " ")
+group ts_literal ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex
+
+# ---- for-direction -------------------------------------------------------------
+# `i < n; i--` and friends: the update moves the counter away from the end.
+in ts_binary {
+  let loop_direction if operator ~ /<=?/ then 1 else if operator ~ />=?/ then -1 else 0
+  let loop_test_left left
+  let loop_test_right right
+}
+in ts_update {
+  let updated_variable argument
+  let update_step if operator == "++" then 1 else -1
+}
+in ts_assignment {
+  let updated_variable left
+  let update_step if operator == "+=" && right ~ /[0-9.]+/ || operator == "-=" && right ~ /-\s*[0-9.]+/ then 1 else if operator == "-=" && right ~ /[0-9.]+/ || operator == "+=" && right ~ /-\s*[0-9.]+/ then -1 else 0
+}
+in ts_for rule for-direction {
+  when test != null && update != null
+  when default(test.loop_direction, 0) * default(update.update_step, 0) < 0 && test.loop_test_left == update.updated_variable || default(test.loop_direction, 0) * default(update.update_step, 0) > 0 && test.loop_test_right == update.updated_variable
+  warn "The update clause in this loop moves the variable in the wrong direction."
+}
+
+# ---- small expression mistakes ---------------------------------------------
+in ts_member rule no-caller {
+  when object == "arguments" && property ~ /callee|caller/
+  warn "Avoid arguments.{property}."
+}
+
+in ts_binary rule no-compare-neg-zero {
+  when operator ~ /===?|!==?|<=?|>=?/ && (re_test(left, /^-\s*0$/) || re_test(right, /^-\s*0$/))
+  warn "Do not use the '{operator}' operator to compare against -0."
+}
+
+# Assignments as conditions, unless wrapped in their own parentheses.
+in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-cond-assign {
+  when layer == "ts_assignment"
+  warn "Expected a conditional expression and instead saw an assignment."
+}
+
+# `if (true)`, `while (1)`, `do ... while (false)`, `false ? a : b`.
+group constant_values ts_literal, ts_object, ts_array, ts_arrow, ts_function, ts_class
+in constant_values let is_constant true
+in ts_template let is_constant count(expression) == 0
+in ts_unary let is_constant (operator == "!" || operator == "typeof" || operator == "void" || operator == "-" || operator == "+") && (argument.is_constant == true || operator == "typeof" || operator == "void")
+in ts_parenthesized let is_constant expression.is_constant == true
+in ts_identifier let is_constant text == "undefined" && resolved == "global"
+in ts_if.test, ts_conditional.test rule no-constant-condition {
+  when is_constant == true
+  warn "Unexpected constant condition."
+}
+in ts_while.test, ts_do_while.test, ts_for.test rule no-constant-condition:loop {
+  option check_loops "allExceptWhileTrue" "\"all\", \"allExceptWhileTrue\" or \"none\""
+  when is_constant == true && check_loops != "none" && !(check_loops == "allExceptWhileTrue" && parent == "ts_while" && text == "true")
+  warn "Unexpected constant condition."
+}
+
+in ts_unary rule no-delete-var {
+  when operator == "delete" && is_identifier(argument)
+  warn "Variables should not be deleted."
+}
+
+# A condition every one of whose `||` parts an earlier branch already tested.
+in ts_logical let or_conditions if operator == "||" then default(left.or_conditions, [normalize_space(left)]) default(right.or_conditions, [normalize_space(right)]) else [normalize_space(text)]
+in ts_parenthesized let or_conditions default(expression.or_conditions, [normalize_space(expression)])
+in ts_if {
+  let own_conditions default(test.or_conditions, [normalize_space(test)])
+  let earlier_conditions if parent == "ts_if" && parent.alternate == text then default(parent.earlier_conditions, []) parent.own_conditions else []
+}
+in ts_if.test rule no-dupe-else-if {
+  when count(parent.earlier_conditions) > 0 && count(unique(parent.earlier_conditions parent.own_conditions)) == count(unique(parent.earlier_conditions))
+  warn "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the if-else-if chain."
+}
+
+in ts_case let case_test if test == null then null else normalize_space(test)
+in ts_switch let case_tests [] case.case_test
+in ts_case rule no-duplicate-case {
+  when case_test != null && contains(slice(default(parent.case_tests, []), 0, index), case_test)
+  warn "Duplicate case label."
+}
+
+in ts_object_pattern rule no-empty-pattern:object {
+  when count(property) == 0 && rest == null && parent != "ts_parameter"
+  warn "Unexpected empty object pattern."
+}
+in ts_array_pattern rule no-empty-pattern:array {
+  when count(element) == 0
+  warn "Unexpected empty array pattern."
+}
+
+in ts_static_block.body rule no-empty-static-block {
+  when re_test(text, /^\{\s*\}$/)
+  warn "Unexpected empty static block."
+}
+
+# The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
+in ts_identifier rule no-eval {
+  when text == "eval" && resolved == "global"
+  warn "eval can be harmful."
+}
+in ts_member.property rule no-eval:member {
+  when text == "eval" && re_test(parent.object, /^(globalThis|window|global|self)$/)
+  warn "eval can be harmful."
+}
+
+in ts_assignment.left, ts_update.argument rule no-ex-assign {
+  when reference_kind == "catch"
+  warn "Do not assign to the exception parameter."
+}
+
+# `.bind(x)` on a function that never uses `this` (or on an arrow).
+in ts_function, ts_arrow let function_uses_this uses_this
+in ts_parenthesized let function_uses_this expression.function_uses_this
+in ts_member let unneeded_bind property == "bind" && object.function_uses_this == false && parent == "ts_call" && count(parent.argument) == 1
+in ts_member.property rule no-extra-bind {
+  when parent.unneeded_bind
+  warn "The function binding is unnecessary."
+}
+
+# `!!x` and `Boolean(x)` where the value is already used as a boolean.
+macro is_double_negation (layer == "ts_unary" && re_test(text, /^!\s*!/))
+macro is_boolean_call (layer == "ts_call" && re_test(text, /^Boolean\s*\(/) && !re_test(text, /,/))
+macro boolean_cast_message (if is_double_negation then "Redundant double negation." else "Redundant Boolean call.")
+in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-extra-boolean-cast {
+  when is_double_negation || is_boolean_call
+  warn boolean_cast_message
+}
+in ts_unary.argument rule no-extra-boolean-cast:not {
+  when parent.operator == "!" && (is_double_negation || is_boolean_call)
+  warn boolean_cast_message
+}
+in ts_call.argument, ts_new.argument rule no-extra-boolean-cast:call {
+  when parent.callee == "Boolean" && index == 0 && (is_double_negation || is_boolean_call)
+  warn boolean_cast_message
+}
+
+# Writes to the built-in globals.
+macro builtin_globals /^(AggregateError|Array|ArrayBuffer|Atomics|BigInt|BigInt64Array|BigUint64Array|Boolean|DataView|Date|decodeURI|decodeURIComponent|encodeURI|encodeURIComponent|Error|escape|eval|EvalError|FinalizationRegistry|Float32Array|Float64Array|Function|globalThis|Infinity|Int16Array|Int32Array|Int8Array|Intl|isFinite|isNaN|Iterator|JSON|Map|Math|NaN|Number|Object|parseFloat|parseInt|Promise|Proxy|RangeError|ReferenceError|Reflect|RegExp|Set|SharedArrayBuffer|String|Symbol|SyntaxError|TypeError|Uint16Array|Uint32Array|Uint8Array|Uint8ClampedArray|undefined|unescape|URIError|WeakMap|WeakRef|WeakSet)$/
+in ts_assignment.left, ts_update.argument rule no-global-assign {
+  when layer == "ts_identifier" && resolved == "global" && re_test(text, builtin_globals)
+  warn "Read-only global '{text}' should not be modified."
+}
+
+in ts_new rule no-new-wrappers {
+  when re_test(callee, /^(String|Number|Boolean)$/) && callee.resolved == "global"
+  warn "Do not use {callee} as a constructor."
+}
+
+in ts_number rule no-octal {
+  when re_test(text, /^0[0-9]/)
+  warn "Octal literals should not be used."
+}
+
+in ts_string rule no-nonoctal-decimal-escape {
+  when re_test(text, /(?:^|[^\\])(?:\\\\)*\\[89]/)
+  warn "Don't use '{re_find(text, /\\[89]/)}' escape sequence."
+}
+
+# Comma operators, except in `for` heads and inside parentheses (twice
+# where the statement or arrow already has its own).
+in ts_parenthesized let is_arrow_body parent == "ts_arrow"
+in ts_sequence let sequence_allowed parent == "ts_for" || parent == "ts_parenthesized" && !parent.is_arrow_body
+in ts_sequence.expression rule no-sequences {
+  when index == 0 && !parent.sequence_allowed
+  report end
+  warn "Unexpected use of comma operator."
+}
+
+# Reported at the first hole (where its comma is).
+in ts_hole let is_hole true
+in ts_array let holes [] element.is_hole
+in ts_array let is_assignment_target parent == "ts_assignment" && parent.left == text || parent == "ts_for_of" || parent == "ts_for_in"
+in ts_hole rule no-sparse-arrays {
+  when parent == "ts_array" && !parent.is_assignment_target && !any(compact(slice(parent.holes, 0, index)))
+  warn "Unexpected comma in middle of array."
+}
+
+in ts_literal, ts_template let is_literal true
+in ts_throw rule no-throw-literal {
+  when argument != null && (argument.is_literal == true || argument == "undefined")
+  warn if argument == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+}
+
+in ts_declarator rule no-undef-init {
+  when init == "undefined" && init.resolved == "global" && ts_variable_declaration.kind != "const" && is_identifier(name)
+  warn "It's not necessary to initialize '{name}' to undefined."
+}
+
+# `return`/`throw`/`break`/`continue` that leave a `finally` block.
+group finally_scope_statement ts_block, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_switch, ts_case, ts_try, ts_labeled, ts_return, ts_throw, ts_break, ts_continue
+in finally_scope_statement {
+  let is_finally_block layer == "ts_block" && parent == "ts_try" && parent.finalizer == text
+  let inside_finally is_finally_block || parent.inside_finally == true
+  # Unlabelled `break`/`continue` stay inside loops and switches.
+  let jump_leaves_finally if re_test(layer, /^ts_(for|for_in|for_of|while|do_while|switch)$/) then false else is_finally_block || parent.jump_leaves_finally == true
+}
+in ts_return, ts_throw rule no-unsafe-finally {
+  when parent.inside_finally == true
+  warn "Unsafe usage of {if layer == 'ts_return' then 'ReturnStatement' else 'ThrowStatement'}."
+}
+in ts_break, ts_continue rule no-unsafe-finally:jump {
+  when parent.jump_leaves_finally == true && label == null
+  warn "Unsafe usage of {if layer == 'ts_break' then 'BreakStatement' else 'ContinueStatement'}."
+}
+
+in ts_labeled.label rule no-unused-labels {
+  when !re_test(parent.body, "\\b(?:break|continue)\\s+" re_escape(text) "\\b")
+  warn "'{text}:' is defined but never used."
+}
+
+# `catch (e) { throw e; }` does nothing.
+in ts_try let catch_only_rethrows parameter != null && is_identifier(parameter) && re_test(handler, "^\\x7B\\s*throw\\s+" re_escape(default(parameter,"")) "\\s*;?\\s*\\x7D$")
+in ts_try rule no-useless-catch {
+  when catch_only_rethrows && finalizer == null
+  warn "Unnecessary try/catch wrapper."
+}
+in ts_try.kind rule no-useless-catch:clause {
+  when parent.catch_only_rethrows && parent.finalizer != null
+  warn "Unnecessary catch clause."
+}
+
+in ts_call rule radix {
+  when count(argument) == 1 && (callee == "parseInt" && callee.resolved == "global" || re_test(callee, /^Number\s*\.\s*parseInt$/))
+  warn "Missing radix parameter."
+}
+
+in ts_function, ts_method rule require-yield {
+  when contains(modifier, "*") && !has_yield && !re_test(default(body, ""), /^\{\s*\}$/)
+  warn "This generator function does not have 'yield'."
+}
+
+in ts_identifier rule no-shadow-restricted-names {
+  when declaration_kind != null && re_test(text, /^(NaN|Infinity|undefined|eval|arguments)$/)
+  when !(text == "undefined" && re_test(declaration_kind, /^(var|let)$/) && ts_declarator.init == null)
+  warn "Shadowing of global property '{text}'."
+}
+
+in ts_number rule no-loss-of-precision {
+  when precision_lost
+  warn "This number literal will lose precision at runtime."
+}
+
+# ---- classes -------------------------------------------------------------------
+in ts_method.key rule constructor-super {
+  when text == "constructor" && ts_class.extends != null && ts_class.extends != "null"
+  when parent.super_calls == "none" || parent.super_calls == "some"
+  warn if parent.super_calls == "none" then "Expected to call 'super()'." else "Lacked a call of 'super()' in some code paths."
+}
+
+in ts_class_property, ts_method rule no-unused-private-class-members {
+  when re_test(default(key, ""), /^#/) && member_reads == 0
+  warn "'{key}' is defined but never used."
+}
+
+# ---- preferences -----------------------------------------------------------------
+in ts_with rule no-restricted-syntax:with warn "Using 'WithStatement' is not allowed."
+
+in ts_identifier rule prefer-rest-params {
+  when text == "arguments" && resolved == "global" && (ts_function != null || ts_method != null)
+  when !(parent == "ts_member" && index == 0)
+  warn "Use the rest parameters instead of 'arguments'."
+}
+
+# `f.apply(null, args)` / `o.f.apply(o, args)`.
+in ts_call {
+  let applied_function re_replace(callee, /\s*\.\s*apply$/, "")
+  let apply_receiver if re_test(applied_function, /\./) then re_replace(applied_function, /\.[^.]*$/, "") else null
+}
+in ts_array, ts_spread let is_array_like true
+in ts_call rule prefer-spread {
+  when re_test(callee, /\.\s*apply$/) && count(argument) == 2 && !any(compact(slice([] argument.is_array_like, 1)))
+  when if apply_receiver == null then re_test(first(argument), /^(null|undefined|void 0)$/) else normalize_space(first(argument)) == normalize_space(apply_receiver)
+  warn "Use the spread operator instead of '.apply()'."
+}
+
+in ts_object let is_object_literal true
+in ts_call rule prefer-object-spread {
+  when re_test(callee, /^Object\s*\.\s*assign$/) && count(argument) >= 1 && first([] argument.is_object_literal) == true && !re_test(text, /\.\.\./)
+  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{}}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
+}
+
+# String concatenation mixing literals and other values.
+in ts_string let has_string true
+in ts_template let has_string true
+in ts_string let all_literals true
+in ts_template let all_literals true
+in ts_binary {
+  let has_string operator == "+" && (left.has_string == true || right.has_string == true)
+  let all_literals operator == "+" && left.all_literals == true && right.all_literals == true
+}
+in ts_binary rule prefer-template {
+  when has_string && !all_literals && !(parent == "ts_binary" && parent.operator == "+")
+  warn "Unexpected string concatenation."
+}
+
+# ---- optional chaining where a short circuit throws -----------------------------
+in ts_member, ts_index let in_optional_chain optional != null || object.in_optional_chain == true
+in ts_call let in_optional_chain optional != null || callee.in_optional_chain == true
+in ts_non_null let in_optional_chain expression.in_optional_chain == true
+in ts_parenthesized let wraps_optional_chain expression.in_optional_chain == true || expression.wraps_optional_chain == true
+in ts_spread let spread_in_object parent == "ts_object"
+macro optional_chain_short_circuits (in_optional_chain == true || wraps_optional_chain == true)
+macro optional_chain_message "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+in ts_declarator.init rule no-unsafe-optional-chaining {
+  when optional_chain_short_circuits && re_test(parent.name, /^[\[{]/)
+  warn optional_chain_message
+}
+in ts_spread.argument, ts_for_of.right, ts_new.callee, ts_class.extends rule no-unsafe-optional-chaining:value {
+  when optional_chain_short_circuits && !(parent == "ts_spread" && parent.spread_in_object)
+  warn optional_chain_message
+}
+in ts_call.callee, ts_member.object, ts_index.object, ts_tagged_template.tag rule no-unsafe-optional-chaining:paren {
+  when wraps_optional_chain == true
+  warn optional_chain_message
+}
+
+# ---- variables -------------------------------------------------------------------
+# `let` never reassigned. With destructuring "all", a pattern only counts
+# when no name in it is reassigned: `let_writes` sums writes up the pattern and
+# `declarator_writes` hands the declarator's total back down.
+in ts_identifier let let_writes if declaration_kind == "let" then writes else 1
+in ts_object_pattern let let_writes sum(compact([] property.let_writes)) + default(rest.let_writes, 0)
+in ts_array_pattern let let_writes sum(compact([] element.let_writes))
+in ts_pattern_property let let_writes default(value.let_writes, key.let_writes)
+in ts_assignment_pattern let let_writes left.let_writes
+in ts_rest let let_writes argument.let_writes
+in ts_variable_declaration let declares_loop_variable parent == "ts_for_of" || parent == "ts_for_in"
+in ts_declarator {
+  let declarator_writes name.let_writes
+  let initialized init != null || parent.declares_loop_variable == true
+}
+in ts_object_pattern, ts_array_pattern, ts_pattern_property, ts_assignment_pattern, ts_rest {
+  let declarator_writes parent.declarator_writes
+  let initialized parent.initialized
+}
+in ts_identifier rule prefer-const {
+  when declaration_kind == "let" && writes == 0 && parent.declarator_writes == 0 && parent.initialized == true
+  warn "'{text}' is never reassigned. Use 'const' instead."
+}
+
+in ts_import rule no-unassigned-import {
+  when default_import == null && namespace == null && count(specifier) == 0
+  warn "Imported module should be assigned"
+}
+
+in ts_identifier rule no-unused-imports {
+  when declaration_kind == "import" && uses == 0
+  # TypeScript counts `{@link X}` in JSDoc as a use.
+  when !re_test(source, "\\x7B@link(?:code|plain)?\\s+" re_escape(text) "\\b")
+  warn "'{text}' is defined but never used."
+}
+
+# ---- regular expressions ---------------------------------------------------------
+macro problem_in(problems, kind) re_find(default(problems, ""), kind "[^\n]*")
+macro backreference_reason(kind) (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
+macro backreference_message(p) ("Backreference '" re_replace(p, /^backref:[^:]*:([^:]*):.*$/, "$1") "' will be ignored. It references group '" re_replace(p, /^backref:[^:]*:[^:]*:/, "") "' " backreference_reason(re_replace(p, /^backref:([^:]*):.*$/, "$1")) ".")
+macro character_class_message(p) (if p == "misleading:surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if p == "misleading:combiningClass" then "Unexpected combined character in character class." else if p == "misleading:emojiModifier" then "Unexpected modified Emoji in character class." else if p == "misleading:regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
+macro regex_spaces_message(p) ("Spaces are hard to count. Use {{" re_replace(p, /^spaces:/, "") "}}.")
+
+in ts_regex rule no-empty-character-class {
+  when problem_in(regex_problems, "empty_class") != null
+  warn "Empty class."
+}
+in ts_regex rule no-regex-spaces {
+  when problem_in(regex_problems, "spaces:") != null
+  warn regex_spaces_message(problem_in(regex_problems, "spaces:"))
+}
+in ts_regex rule no-useless-backreference {
+  when problem_in(regex_problems, "backref:") != null
+  warn backreference_message(problem_in(regex_problems, "backref:"))
+}
+in ts_regex rule no-misleading-character-class {
+  when problem_in(regex_problems, "misleading:") != null
+  warn character_class_message(problem_in(regex_problems, "misleading:"))
+}
+
+# `RegExp(...)` with a literal pattern: reported on the call.
+in ts_call, ts_new {
+  let regex_argument_error first(compact([] argument.regex_error))
+  let regex_argument_problems join(compact([] argument.regex_problems), "\n")
+}
+in ts_call, ts_new rule no-invalid-regexp {
+  when regex_argument_error != null
+  warn "{regex_argument_error}."
+}
+in ts_call, ts_new rule no-regex-spaces:call {
+  when problem_in(regex_argument_problems, "spaces:") != null
+  warn regex_spaces_message(problem_in(regex_argument_problems, "spaces:"))
+}
+in ts_call, ts_new rule no-useless-backreference:call {
+  when problem_in(regex_argument_problems, "backref:") != null
+  warn backreference_message(problem_in(regex_argument_problems, "backref:"))
+}
+in ts_call, ts_new rule no-misleading-character-class:call {
+  when problem_in(regex_argument_problems, "misleading:") != null
+  warn character_class_message(problem_in(regex_argument_problems, "misleading:"))
+}
+
+# ---- braces ------------------------------------------------------------------------
+# brace-style without single-line blocks: a function body written on one
+# line (`f(x => { y(); })`). The closing brace is reported where it is: the
+# fix puts it on its own line.
+in ts_function, ts_arrow, ts_method let owns_function_body true
+in ts_block let one_line_function_body parent.owns_function_body == true && count(body) > 0 && !contains(text, "\n")
+in ts_block rule brace-style:block-same-line {
+  when one_line_function_body
+  warn "Statement inside of curly braces should be on next line."
+}
+in ts_block rule brace-style:single-line-close {
+  when one_line_function_body
+  report change
+  fix as slice(text, 0, len(text) - 1) newline indent "}}"
+  warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
+}
+
+# curly "all": every body in braces.
+in ts_if.consequent rule curly:if {
+  when layer != "ts_block"
+  warn "Expected {{ after 'if' condition."
+}
+in ts_if.alternate rule curly:else {
+  when layer != "ts_block" && layer != "ts_if"
+  warn "Expected {{ after 'else'."
+}
+in ts_for.body, ts_while.body rule curly:loop {
+  when layer != "ts_block"
+  warn "Expected {{ after '{if parent == 'ts_for' then 'for' else 'while'}' condition."
+}
+in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body {
+  when layer != "ts_block"
+  warn "Expected {{ after '{if parent == 'ts_for_in' then 'for-in' else if parent == 'ts_for_of' then 'for-of' else 'do'}'."
+}
+
+# semi "always" on statements: each native statement owns its `;`
+# (.js/format's semi:never is the other choice).
+group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function
+in ts_export let semicolon_not_needed declaration != null
+in ts_variable_declaration let semicolon_not_needed re_test(parent, /^ts_for/)
+# Only bodiless ones: overload and abstract signatures.
+in ts_method, ts_function let semicolon_not_needed body != null
+in semicolon_statement rule semi:always {
+  when !ends_with(text, ";") && semicolon_not_needed != true
+  report change
+  fix as text ";"
+  warn "Missing semicolon."
+}
+
+# `new Foo` without an argument list.
+in ts_new rule new-parens {
+  when count(argument) == 0 && !re_test(text, /\)\s*$/)
+  fix as text "()"
+  warn "Missing '()' invoking a constructor."
+}
+
+# ---- whitespace and line breaks -------------------------------------------------
+in js_code, js_line_comment, js_block_comment, js_template, js_regex match js_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}\u{FEFF}]/
+in js_irregular_ws rule no-irregular-whitespace {
+  when !(line == 1 && column == 1)
+  warn "Irregular whitespace not allowed."
+}
+
+# Reported at the end of what comes before the line break: the `(`, `[` or
+# template ESLint points at has no node of its own.
+in ts_call.callee rule no-unexpected-multiline:call {
+  when re_test(slice(parent_text, len(text)), /^[ \t]*\r?\n\s*\(/)
+  report end
+  warn "Unexpected newline between function and ( of function call."
+}
+in ts_index.object rule no-unexpected-multiline:index {
+  when re_test(slice(parent_text, len(text)), /^[ \t]*\r?\n\s*\[/)
+  report end
+  warn "Unexpected newline between object and [ of property access."
+}
+in ts_tagged_template.tag rule no-unexpected-multiline:template {
+  when re_test(slice(parent_text, len(text)), /^[ \t]*\r?\n/)
+  report end
+  warn "Unexpected newline between template tag and template literal."
+}
+
+}

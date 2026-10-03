@@ -35,13 +35,12 @@
           "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "entity.name.function.macro.zlint" } }
         },
         {
-          "match": "\\b(set)\\s+([\\w*:-]+)(?:(\\.)([A-Za-z_]\\w*))?",
-          "captures": {
-            "1": { "name": "keyword.other.zlint" },
-            "2": { "name": "entity.name.type.zlint" },
-            "3": { "name": "punctuation.accessor.zlint" },
-            "4": { "name": "variable.other.property.zlint" }
-          }
+          "match": "^\\s*(import)\\s+([^\\s#\"']+)",
+          "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "string.unquoted.path.zlint" } }
+        },
+        {
+          "match": "\\b(set)\\s+([A-Za-z_]\\w*)",
+          "captures": { "1": { "name": "keyword.other.zlint" }, "2": { "name": "variable.parameter.zlint" } }
         },
         {
           "match": "\\b(let)\\s+([A-Za-z_]\\w*)",
@@ -61,10 +60,12 @@
         { "include": "#sstring" },
         { "include": "#regex" },
         {
-          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|when|fix|files|report|let|native|forward|from)\\b",
+          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|item|when|fix|files|report|let|native|forward|from)\\b",
           "name": "keyword.other.zlint"
         },
-        { "match": "\\b(drop|override|amend)\\b", "name": "keyword.other.modifier.zlint" },
+        { "match": "\\b(drop|override|define)\\b", "name": "keyword.other.modifier.zlint" },
+        { "match": "\\b([A-Za-z_]\\w*)\\s*(=>)", "captures": { "1": { "name": "variable.parameter.zlint" }, "2": { "name": "storage.type.function.arrow.zlint" } } },
+        { "match": "\\b([A-Za-z_]\\w*)(:)(?=\\s)", "captures": { "1": { "name": "variable.other.property.key.zlint" }, "2": { "name": "punctuation.separator.key-value.zlint" } } },
         { "match": "\\b(until|or|is)\\b", "name": "keyword.operator.word.zlint" },
         { "match": "\\b(if|then|else|as)\\b", "name": "keyword.control.zlint" },
         { "match": "\\b(children|previous|next)\\b(?=\\.|\\s|\\)|$)", "name": "variable.language.zlint" },

@@ -1,5 +1,8 @@
-# std/whitespace: language-agnostic hygiene. Overlays on `.*` run over the
-# text of every declared language without hiding anything from other layers.
+# .whitespace: language-agnostic hygiene, brought by every language (through
+# `.core`), all off. Overlays on `.*` run over the text of every declared
+# language without hiding anything from other layers.
+
+define {
 
 over .* match trailing_whitespace /[ \t]+$/ {
   rule trailing-whitespace warn "no trailing whitespace" fix as ""
@@ -13,7 +16,7 @@ over .* match line_text /^[^\r\n]+/ {
 }
 
 over .* match tab_indent /^ *\t[ \t]*/ {
-  rule tab-indent off "indent with spaces, not tabs" {
+  rule tab-indent warn "indent with spaces, not tabs" {
     option width 4 "spaces per tab"
     fix as replace(text, "\t", repeat(" ", width))
   }
@@ -29,4 +32,6 @@ over .* match blank_run /\n(?:[ \t]*\r?\n){2,}/ {
 
 over .* match file_end /[^\n]\z|\n(?:\r?\n)+\z/ {
   rule final-newline warn "files end with exactly one newline" fix as if ends_with(text, "\n") then "\n" else text "\n"
+}
+
 }

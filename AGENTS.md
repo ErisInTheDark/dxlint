@@ -5,7 +5,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 ## Commands
 
 - test: `cargo test` (unit tests colocated; `tests/cli.rs`, `tests/lsp.rs` drive the binary)
-- self-lint: `cargo run --release --` (uses `zoomie.zlint`); must stay clean
+- self-lint: `cargo run --release --` (uses `.zlint`); must stay clean
 - perf check: `zlint --stats --no-cache <big file>`; compare before/after engine changes
 
 ## Layout
@@ -16,7 +16,9 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions, `.zlintcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
 - `src/native/ts`: TypeScript front end; `modules.rs` project (summaries, resolution, globals)
-- `std/*.zlint`: embedded std library (`src/config/std_lib.rs` lists modules)
+- `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
+- `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
+- `src/config/std_lib.rs` lists both
 
 ## Invariants
 
@@ -24,6 +26,8 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - matchers never match empty; no left recursion
 - memoised runs are pure per (matcher, position); `Dead` states rely on it
 - new expression functions: add one entry to `FUNCTIONS`
-- new std module: add to `std_lib.rs` and docs table
+- new std module or ruleset: add to `std_lib.rs` and docs table
+- std rules and their layers live in `define { }`; library layers parse only while needed (`engine/prune.rs`), so a needed layer's parents and pattern references must stay reachable
+- with every rule on (`rule *`), std must build without errors (`engine/tests.rs` checks)
 - native code reads the filesystem only through `native/ts/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`). Else `.zlintcache` replays stale results
 - lint output depends only on file text, config tokens and recorded reads

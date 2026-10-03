@@ -1,7 +1,7 @@
 # std/python: Python structure. Triple-quoted strings win over plain ones
 # because the longest match at a position wins.
 
-import "std/core"
+import .core
 
 lang python "*.py" "*.pyi" {
   match parentheses

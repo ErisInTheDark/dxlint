@@ -2,12 +2,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem::discriminant;
 use std::path::PathBuf;
 
 use super::symbols::Symbols;
-use super::{Linter, OptionSlot, Rule, Target};
-use crate::config::ast::{Dropped, Parent, RuleDef, SetValue, Severity, Target as AstTarget};
+use super::{InertRule, Linter, OptionSlot, Rule, Target};
+use super::options;
+use crate::config::ast::{Dropped, Parent, RuleDef, Severity, Target as AstTarget};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
@@ -31,7 +31,11 @@ pub struct Built {
 type Uses = RefCell<Vec<(crate::config::source::Span, crate::expr::Resolved)>>;
 
 pub fn build(loaded: Loaded, root: PathBuf) -> Built {
-    let Loaded { config, sources, mut errors, fingerprint } = loaded;
+    let Loaded { mut config, sources, mut errors, fingerprint } = loaded;
+    // `rule name ...` lines: which rules are on, and their extra clauses
+    // (merged before compiling); option values are set after.
+    let option_values = configure(&mut config, &mut errors);
+    super::prune::prune(&mut config);
     let grammar = Grammar::build(&config, &mut errors);
     let uses: Uses = RefCell::default();
     let mut attr_names: Vec<String> = Vec::new();
@@ -44,82 +48,58 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
-    // Rules that failed to build: already reported, so settings aimed at
-    // them are quietly dropped instead of reported again. (The parser keeps
-    // rule names unique.)
-    let mut broken: Vec<&str> = Vec::new();
+    let mut inert = Vec::new();
+    let as_inert = |def: &RuleDef| {
+        let targets: Vec<String> = def
+            .targets
+            .iter()
+            .map(|t| match t {
+                AstTarget::Matcher(n) => n.text.clone(),
+                AstTarget::Field(n, f) => format!("{}.{}", n.text, f.text),
+                AstTarget::Lang(n) => format!(".{}", n.text),
+            })
+            .collect();
+        InertRule { name: def.name.text.clone(), span: def.name.span, target_text: targets.join(", "), default_severity: def.severity.unwrap_or(Severity::Warn) }
+    };
     for def in &config.rules {
-        match rule(def, &grammar, &attr_names, &uses, &mut errors) {
-            Some(r) if !def.broken => rules.push(r),
-            _ => broken.push(&def.name.text),
+        if def.inert {
+            inert.push(as_inert(def));
+            continue;
+        }
+        // An off library rule that does not compile (the config redefined
+        // a layer it reads) is the library's business until it is turned on.
+        if def.defined_only && !def.enabled() {
+            let mut quiet = Vec::new();
+            match rule(def, &grammar, &attr_names, &uses, &mut quiet) {
+                Some(r) if quiet.is_empty() && !def.broken => rules.push(r),
+                _ => inert.push(as_inert(def)),
+            }
+            continue;
+        }
+        if let Some(r) = rule(def, &grammar, &attr_names, &uses, &mut errors).filter(|_| !def.broken) {
+            rules.push(r);
         }
     }
-
-    for set in &config.sets {
-        let matching: Vec<usize> = (0..rules.len()).filter(|&i| wildcard(&set.target.text, &rules[i].name)).collect();
-        if matching.is_empty() && (set.soft || broken.iter().any(|name| wildcard(&set.target.text, name))) {
-            continue;
-        }
-        if matching.is_empty() {
-            if let Some(d) = Dropped::find(&config.dropped, &set.target.text) {
-                errors.push(d.still_used(set.target.span));
-                continue;
-            }
-            errors.push(
-                ConfigError::new(set.target.span, format!("no rule matches `{}`", set.target.text))
-                    .suggest(&set.target.text, rules.iter().map(|f| f.name.as_str())),
-            );
-            continue;
-        }
-        let value = match &set.value {
-            SetValue::Severity(s) => {
-                for &i in &matching {
-                    rules[i].severity = *s;
-                }
-                continue;
-            }
-            SetValue::Expr(e) => {
-                let scope = Scope::constants(&grammar);
-                match scope.compile(e, &mut errors).map(|c| Ctx::eval_static(&c, &[])) {
-                    Some(Ok(v)) => v,
-                    Some(Err(err)) => {
-                        errors.push(ConfigError::new(e.span, format!("option values must be constants: {err}")));
-                        continue;
-                    }
-                    None => continue,
-                }
-            }
-        };
-        let mut any = false;
-        for &i in &matching {
-            let f = &mut rules[i];
-            if let Some(slot) = f.options.iter_mut().find(|o| o.name == set.key.text) {
-                any = true;
-                if !matches!(slot.default, Value::Null) && discriminant(&slot.default) != discriminant(&value) {
-                    errors.push(ConfigError::new(
-                        set.key.span,
-                        format!(
-                            "option `{}.{}` is a {}, but this value is a {}",
-                            f.name,
-                            slot.name,
-                            slot.default.type_name(),
-                            value.type_name()
-                        ),
-                    ));
-                    continue;
-                }
-                slot.value = value.clone();
-            }
-        }
-        if !any {
-            let names: Vec<&str> =
-                matching.iter().flat_map(|&i| rules[i].options.iter().map(|o| o.name.as_str())).collect();
-            let mut err = ConfigError::new(set.key.span, format!("no option `{}` on `{}`", set.key.text, set.target.text))
-                .suggest(&set.key.text, names.iter().copied());
-            if names.is_empty() {
-                err = err.note("this rule has no options; its severity can always be set (`set name off`)");
+    // Option values, in order; a rule that failed to build was reported.
+    for (rule_name, config_index, option_index) in &option_values {
+        let (name, value) = &config.configs[*config_index].options[*option_index];
+        let Some(f) = rules.iter_mut().find(|r| r.name == *rule_name) else { continue };
+        let Some(slot) = f.options.iter_mut().find(|o| o.name == name.text) else {
+            let mut err = ConfigError::new(name.span, format!("no option `{}` on `{}`", name.text, rule_name))
+                .suggest(&name.text, f.options.iter().map(|o| o.name.as_str()));
+            if f.options.is_empty() {
+                err = err.note("this rule has no options");
             }
             errors.push(err);
+            continue;
+        };
+        let Some(compiled) = Scope::constants(&grammar).compile(value, &mut errors) else { continue };
+        match Ctx::eval_static(&compiled, &[]) {
+            Ok(v) => match options::check(&slot.default, slot.item.as_ref(), &v) {
+                Ok(()) => slot.value = v,
+                Err(problem) => errors.push(ConfigError::new(value.span, format!("option `{}.{}`: {problem}", f.name, slot.name))),
+            },
+            Err(err) => errors.push(ConfigError::new(value.span, format!("option values must be constants: {err}"))),
         }
     }
 
@@ -142,7 +122,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     });
 
     let sources = std::sync::Arc::new(sources);
-    let symbols = std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, uses.into_inner(), sources.clone()));
+    let symbols = std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, &inert, uses.into_inner(), sources.clone()));
     // The rules as parsed, and where paths are relative to: what cached
     // results are only valid for.
     let fingerprint = {
@@ -176,6 +156,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         profile: None,
         grammar,
         rules,
+        inert,
         sources: sources.clone(),
         root,
         ignores,
@@ -188,6 +169,72 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         fingerprint,
     };
     Built { linter: Some(linter), errors, sources, symbols }
+}
+
+/// Applies `rule name ...` lines to the definitions, in order: turning
+/// rules on or off, replacing messages and fixes, adding clauses. Returns
+/// the option values to set once the rules are compiled, as (rule, config
+/// index, option index).
+fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) -> Vec<(String, usize, usize)> {
+    let mut values = Vec::new();
+    let configs = std::mem::take(&mut config.configs);
+    for (ci, c) in configs.iter().enumerate() {
+        let pattern = &c.patch.name;
+        let matching: Vec<usize> = (0..config.rules.len()).filter(|&i| wildcard(&pattern.text, &config.rules[i].name.text)).collect();
+        if matching.is_empty() {
+            if c.soft {
+                continue;
+            }
+            if let Some(d) = Dropped::find(&config.dropped, &pattern.text) {
+                errors.push(d.still_used(pattern.span));
+                continue;
+            }
+            let mut err = ConfigError::new(pattern.span, format!("no rule `{}`", pattern.text))
+                .suggest(&pattern.text, config.rules.iter().map(|r| r.name.text.as_str()));
+            if let Some(lang) = crate::config::std_lib::defining_language(&pattern.text) {
+                err = err.note(format!("`{}` comes with `import .{}`", pattern.text, crate::config::std_lib::short_name(lang)));
+            }
+            errors.push(err);
+            continue;
+        }
+        let patch = &c.patch;
+        for (oi, (name, _)) in c.options.iter().enumerate() {
+            let owners: Vec<usize> = matching.iter().copied().filter(|&i| config.rules[i].options.iter().any(|o| o.name.text == name.text)).collect();
+            if owners.is_empty() {
+                let names = matching.iter().flat_map(|&i| config.rules[i].options.iter().map(|o| o.name.text.as_str()));
+                errors.push(ConfigError::new(name.span, format!("no option `{}` on `{}`", name.text, pattern.text)).suggest(&name.text, names));
+            }
+            values.extend(owners.into_iter().map(|i| (config.rules[i].name.text.clone(), ci, oi)));
+        }
+        for &i in &matching {
+            let def = &mut config.rules[i];
+            match patch.severity {
+                Some(s) => def.configured = Some(s),
+                // `rule x`: on at its default, unless it already is on.
+                None if def.defined_only || def.configured == Some(Severity::Off) => {
+                    def.defined_only = false;
+                    def.configured = None;
+                }
+                None => {}
+            }
+            if let Some(m) = &patch.message {
+                def.message = Some(m.clone());
+            }
+            if let Some(f) = &patch.fix {
+                def.fix = Some(f.clone());
+            }
+            if patch.report.is_some() {
+                def.report = patch.report;
+            }
+            def.when.extend(patch.when.iter().cloned());
+            def.locals.extend(patch.locals.iter().cloned());
+            def.files.extend(patch.files.iter().cloned());
+            def.ignore.extend(patch.ignore.iter().cloned());
+            def.broken |= patch.broken;
+        }
+    }
+    config.configs = configs;
+    values
 }
 
 /// Labels available on a node of `target`.
@@ -267,7 +314,7 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut 
         targets.extend(resolved);
         texts.push(text);
     }
-    let target_text = texts.join(" or ");
+    let target_text = texts.join(", ");
     if targets.is_empty() {
         errors.push(ConfigError::new(def.name.span, format!("rule `{}` has nothing to check: its group is empty", def.name.text)));
         return None;
@@ -282,12 +329,24 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut 
         }
         let Some(compiled) = Scope::constants(g).compile(&opt.default, errors) else { continue };
         match Ctx::eval_static(&compiled, &[]) {
-            Ok(v) => options.push(OptionSlot {
-                name: opt.name.text.clone(),
-                description: opt.description.clone(),
-                default: v.clone(),
-                value: v,
-            }),
+            Ok(v) => {
+                let item = opt.item.as_ref().and_then(|i| {
+                    let compiled = Scope::constants(g).compile(i, errors)?;
+                    Ctx::eval_static(&compiled, &[]).map_err(|e| errors.push(ConfigError::new(i.span, format!("item shapes must be constants: {e}")))).ok()
+                });
+                if let Some(item) = &item {
+                    if let Value::List(items) = &v {
+                        for (n, x) in items.iter().enumerate() {
+                            if let Err(problem) = super::options::check(item, None, x) {
+                                errors.push(ConfigError::new(opt.default.span, format!("default item {n} does not fit the item shape: {problem}")));
+                            }
+                        }
+                    } else {
+                        errors.push(ConfigError::new(opt.item.as_ref().map(|i| i.span), "`item` describes the items of a list option"));
+                    }
+                }
+                options.push(OptionSlot { name: opt.name.text.clone(), description: opt.description.clone(), default: v.clone(), value: v, item })
+            }
             Err(e) => errors.push(ConfigError::new(opt.default.span, format!("option defaults must be constants: {e}"))),
         }
     }
@@ -337,7 +396,12 @@ fn rule(def: &RuleDef, g: &Grammar, attrs: &[String], uses: &Uses, errors: &mut 
         span: def.name.span,
         targets,
         target_text,
-        severity: def.severity.unwrap_or(Severity::Warn),
+        severity: match def.configured {
+            Some(s) => s,
+            None if def.defined_only => Severity::Off,
+            None => def.severity.unwrap_or(Severity::Warn),
+        },
+        default_severity: def.severity.unwrap_or(Severity::Warn),
         options,
         files,
         ignore,

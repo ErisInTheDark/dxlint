@@ -1,4 +1,4 @@
-//! Loaded configs. Each file is linted by its nearest `zoomie.zlint`; a
+//! Loaded configs. Each file is linted by its nearest `.zlint` config; a
 //! nested config fully replaces its parents for the files below it.
 
 use std::collections::{HashMap, HashSet};
@@ -104,7 +104,7 @@ impl Projects {
         path.file_name().is_some_and(|n| n == CONFIG_NAME) || self.by_dir.values().any(|p| p.files.contains(path))
     }
 
-    /// Configs that read `file`: itself if it is a `zoomie.zlint`, plus every
+    /// Configs that read `file`: itself if it is a `.zlint` config, plus every
     /// loaded config importing it.
     pub fn owners_of(&self, file: &Path) -> Vec<PathBuf> {
         let mut owners: Vec<PathBuf> =

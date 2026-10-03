@@ -1,9 +1,9 @@
-# std/zlint: the structure of .zlint files themselves, so zlint can lint
-# its own rules.
+# .zlint: the structure of .zlint files themselves (config files named
+# `.zlint` included), so zlint can lint its own rules.
 
-import "std/core"
+import .core
 
-lang zlint "*.zlint" {
+lang zlint "*.zlint" ".zlint" {
   match parentheses
   match brackets
   match braces
@@ -19,6 +19,8 @@ in zlint_code {
   match zlint_single_string /'/ until /'/
 }
 in zlint_string, zlint_single_string, zlint_block_string match zlint_escape /\\(?:.|\n)/
+# `import some/path`: a bare path, not a regex.
+in zlint_code match zlint_import_path /(?<=\bimport[ \t]+)[^\s#"']+/
 
 # Regex literals: `/` never means division in zlint.
 in zlint_code match zlint_regex /\// until /\/|$/ {

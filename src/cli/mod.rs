@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use zoomie_lint::config::source::{normalize_path, Disk, SourceProvider};
-use zoomie_lint::config::{self, CONFIG_NAME};
+use zoomie_lint::config;
 use zoomie_lint::engine::symbols::Symbols;
 use zoomie_lint::engine::{build, Linter};
 
@@ -28,7 +28,7 @@ pub struct Cli {
 
 #[derive(clap::Args, Clone)]
 pub struct ConfigArg {
-    /// Config file (default: the nearest zoomie.zlint above the current directory)
+    /// Config file (default: the nearest `.zlint` above the current directory)
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 }
@@ -147,7 +147,7 @@ pub struct Project {
 }
 
 /// Loads and builds the linter, printing any config errors. Uses the
-/// explicit `--config`, else the nearest `zoomie.zlint` upward. Only a
+/// explicit `--config`, else the nearest `.zlint` upward. Only a
 /// missing config is fatal: a broken one lints with what still works.
 pub fn load(arg: &ConfigArg) -> Result<Project, ExitCode> {
     let path = match &arg.config {
@@ -155,7 +155,7 @@ pub fn load(arg: &ConfigArg) -> Result<Project, ExitCode> {
         None => match config::find(&std::env::current_dir().unwrap_or_default()) {
             Some(p) => p,
             None => {
-                render::error(&format!("no {CONFIG_NAME} found in this directory or any parent; pass one with --config"));
+                render::error(&config::not_found_message(&std::env::current_dir().unwrap_or_default()));
                 return Err(ExitCode::from(2));
             }
         },

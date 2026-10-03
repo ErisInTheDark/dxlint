@@ -99,16 +99,25 @@ impl ConfigFile<'_> {
         let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
         let before = &text[line_start..offset];
         let trimmed = before.trim_start();
-        let items: Vec<Value> = if let Some(rest) = trimmed.strip_prefix("import \"") {
-            if rest.contains('"') {
+        let items: Vec<Value> = if let Some(rest) = trimmed.strip_prefix("import ") {
+            if rest.contains(char::is_whitespace) {
                 Vec::new()
             } else {
-                std_lib::names().map(|n| json!({ "label": format!("std/{n}"), "kind": 9 })).collect()
+                // Built-in languages and rulesets; anything else is a path.
+                let langs = std_lib::names().filter(|n| !n.contains('/') && *n != "core" && *n != "whitespace");
+                langs
+                    .map(|n| json!({ "label": format!(".{}", std_lib::short_name(n)), "kind": 9, "detail": format!("built-in language {n}, its rules defined and off") }))
+                    .chain(std_lib::rulesets().map(|n| json!({ "label": format!("rules:{n}"), "kind": 9, "detail": "built-in ruleset" })))
+                    .collect()
             }
-        } else if let Some(rest) = trimmed.strip_prefix("set ") {
-            match rest.split_once('.') {
-                Some((rule, _)) => self.of_kind(Kind::Option).filter_map(|(i, s)| s.name.strip_prefix(&format!("{rule}.")).map(|o| item_named(i, s, o))).collect(),
-                None => self.of_kind(Kind::Rule).map(|(i, s)| item(i, s)).collect(),
+        } else if trimmed.starts_with("rule ") && !trimmed[5..].contains(char::is_whitespace) {
+            // `rule ` without `in`: turns a defined rule on.
+            self.of_kind(Kind::Rule).map(|(i, s)| item(i, s)).collect()
+        } else if trimmed.starts_with("set ") && !trimmed[4..].contains(char::is_whitespace) {
+            // `set ` inside `rule name { ... }`: that rule's options.
+            match enclosing_rule(&text[..line_start]) {
+                Some(rule) => self.of_kind(Kind::Option).filter_map(|(i, s)| s.name.strip_prefix(&format!("{rule}.")).map(|o| item_named(i, s, o))).collect(),
+                None => Vec::new(),
             }
         } else if let Some(layer) = dotted(before) {
             match self.symbols.get(Kind::Layer, layer) {
@@ -156,6 +165,20 @@ fn dotted(before: &str) -> Option<&str> {
     let start = head.rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).map_or(0, |i| i + 1);
     let name = &head[start..];
     (!name.is_empty()).then_some(name)
+}
+
+/// The rule a `rule name ... {` block still open at the end of `text`
+/// configures (not a definition: those have an `in`).
+fn enclosing_rule(text: &str) -> Option<&str> {
+    let mut depth = 0i32;
+    for line in text.lines().rev() {
+        depth += line.matches('}').count() as i32 - line.matches('{').count() as i32;
+        if depth < 0 {
+            let mut words = line.split_whitespace();
+            return (words.next() == Some("rule")).then(|| words.next()).flatten();
+        }
+    }
+    None
 }
 
 fn item(_id: usize, s: &Symbol) -> Value {
@@ -227,12 +250,15 @@ fn std_dir() -> PathBuf {
     std::env::temp_dir().join(format!("zlint-std-{}", env!("CARGO_PKG_VERSION")))
 }
 
-/// A read-only file holding std module `std/name`'s text.
+/// A read-only file holding a built-in module's text (`std/ts/problems`,
+/// `rules/format`).
 fn std_copy(name: &str, text: &str) -> Option<PathBuf> {
-    let module = name.strip_prefix("std/")?;
-    let path = std_dir().join(format!("{module}.zlint"));
+    if !(name.starts_with("std/") || name.starts_with("rules/")) {
+        return None;
+    }
+    let path = std_dir().join(format!("{name}.zlint"));
     if std::fs::read_to_string(&path).ok().as_deref() != Some(text) {
-        std::fs::create_dir_all(std_dir()).ok()?;
+        std::fs::create_dir_all(path.parent()?).ok()?;
         // A stale read-only copy has to be writable again first.
         if let Ok(meta) = std::fs::metadata(&path) {
             let mut perms = meta.permissions();
@@ -250,10 +276,9 @@ fn std_copy(name: &str, text: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-/// `std/name` when `path` is one of the std copies.
+/// The built-in module's name (`std/ts/problems`) when `path` is one of the
+/// read-only copies.
 pub fn std_module(path: &Path) -> Option<String> {
-    if path.parent()? != std_dir() {
-        return None;
-    }
-    Some(format!("std/{}", path.file_stem()?.to_string_lossy()))
+    let rel = path.strip_prefix(std_dir()).ok()?.with_extension("");
+    Some(rel.to_string_lossy().replace('\\', "/"))
 }

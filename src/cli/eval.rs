@@ -15,7 +15,7 @@ use anstyle::Style;
 
 use super::{load_from, render, ConfigArg};
 use zoomie_lint::config::source::{normalize_path, Disk, SourceProvider};
-use zoomie_lint::config::{self, CONFIG_NAME};
+use zoomie_lint::config;
 use zoomie_lint::line_index::LineIndex;
 
 const RULE: &str = "zlint-eval";
@@ -45,7 +45,7 @@ pub fn run(arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> Exit
         None => match config::find(&cwd) {
             Some(p) => p,
             None => {
-                render::error(&format!("no {CONFIG_NAME} found in this directory or any parent; pass one with --config"));
+                render::error(&config::not_found_message(&cwd));
                 return ExitCode::from(2);
             }
         },

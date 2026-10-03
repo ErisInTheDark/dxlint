@@ -1,6 +1,6 @@
 # std/toml: TOML structure.
 
-import "std/core"
+import .core
 
 lang toml "*.toml" {
   match brackets

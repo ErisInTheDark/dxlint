@@ -14,7 +14,8 @@ pub struct Config {
     pub langs: Vec<LangDef>,
     pub matchers: Vec<MatcherDef>,
     pub rules: Vec<RuleDef>,
-    pub sets: Vec<SetDef>,
+    /// `rule name ...` without a context, in source order.
+    pub configs: Vec<RuleConfig>,
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
     pub groups: Vec<GroupDef>,
@@ -82,6 +83,8 @@ pub struct AttrDef {
     pub name: Name,
     pub targets: Vec<Name>,
     pub expr: Expr,
+    /// Written inside `define { ... }`: kept only while something needs it.
+    pub library: bool,
 }
 
 /// `in brace or fn.body indent`: lines inside these layers' `until` (or
@@ -90,6 +93,7 @@ pub struct AttrDef {
 pub struct IndentDef {
     /// A layer or group, optionally narrowed to one of its fields.
     pub targets: Vec<(Parent, Option<Name>)>,
+    pub library: bool,
 }
 
 /// `group name a or b`: adds members to a named, open list of layers. Every
@@ -98,6 +102,7 @@ pub struct IndentDef {
 pub struct GroupDef {
     pub name: Name,
     pub parents: Vec<Parent>,
+    pub library: bool,
 }
 
 /// `lang rust "*.rs" "*.rs.in"`
@@ -147,6 +152,9 @@ pub struct MatcherDef {
     /// of `base`'s children and overlays, wins ties against it, and counts as
     /// a `base` for rules and ancestor lookups.
     pub like: Option<Name>,
+    /// Written inside `define { ... }`: a library layer, which only takes
+    /// part in parsing while something needs it (see `engine::prune`).
+    pub library: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -200,6 +208,8 @@ pub struct OptionDef {
     pub name: Name,
     pub default: Expr,
     pub description: Option<String>,
+    /// `option x [] item { ... }`: the shape every item of the list has.
+    pub item: Option<Expr>,
 }
 
 /// `in target rule name [severity [message]] [fix as expr] [{ clauses }]`
@@ -227,12 +237,31 @@ pub struct RuleDef {
     /// Part of the rule failed to parse: running the rest would check
     /// something else than what was written.
     pub broken: bool,
+    /// Defined inside `define { ... }`: off until a `rule name` line turns
+    /// it on.
+    pub defined_only: bool,
+    /// The severity a `rule name severity` line gave it (its definition's
+    /// severity stays the default).
+    pub configured: Option<Severity>,
+    /// Off, and reads library layers nothing else needs: not compiled (see
+    /// `engine::prune`), only listed.
+    pub inert: bool,
+}
+
+impl RuleDef {
+    /// On after its configuration.
+    pub fn enabled(&self) -> bool {
+        self.configured.map_or(!self.defined_only, |s| s != Severity::Off)
+    }
 }
 
 impl RuleDef {
     /// A rule with nothing but its name and targets.
     pub fn new(name: Name, targets: Vec<Target>) -> Self {
         RuleDef {
+            defined_only: false,
+            configured: None,
+            inert: false,
             name,
             targets,
             severity: None,
@@ -256,6 +285,7 @@ pub struct ForwardDef {
     pub targets: Vec<Name>,
     pub attrs: Vec<Name>,
     pub field: Name,
+    pub library: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -269,21 +299,19 @@ pub enum Report {
     End,
 }
 
+/// `rule name [severity [message]] [{ set option value; clauses }]`
+/// without a context: turns existing rules on (at their default severity
+/// unless one is given), sets options and adds clauses. `name` may glob.
 #[derive(Debug)]
-pub enum SetValue {
-    Severity(Severity),
-    Expr(Expr),
-}
-
-/// `set rule.key value` or `set rule severity`; `rule` may be a glob like
-/// `style-*`.
-#[derive(Debug)]
-pub struct SetDef {
-    pub target: Name,
-    pub key: Name,
-    pub value: SetValue,
-    /// A glob some of whose rules were dropped later: matching nothing is
-    /// then not a mistake.
+pub struct RuleConfig {
+    /// The name or glob in `patch.name`; the severity, message, `fix` and
+    /// `report` replace the rule's own, `when`/`let`/`files`/`ignore` add.
+    pub patch: RuleDef,
+    /// `set name value` lines, in order.
+    pub options: Vec<(Name, Expr)>,
+    /// Matching nothing is not a mistake: built-in rulesets name rules of
+    /// languages that may not be imported, and a glob may have lost its
+    /// rules to a later `drop`.
     pub soft: bool,
 }
 
@@ -311,14 +339,14 @@ pub enum UnOp {
     Neg,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TemplatePart {
     Lit(String),
     /// A `{...}` hole and its source text.
     Expr(Expr, String),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ExprKind {
     Str(String),
     Template(Vec<TemplatePart>),
@@ -326,6 +354,12 @@ pub enum ExprKind {
     Bool(bool),
     Null,
     List(Vec<Expr>),
+    /// `{ key: value, ... }`
+    Record(Vec<(Name, Expr)>),
+    /// `x => body`, as a function argument.
+    Lambda(Name, Box<Expr>),
+    /// `value.key` after a call or parentheses: a record's value.
+    Key(Box<Expr>, Name),
     /// `name` or `layer.field`.
     Var(Vec<Name>),
     Call(Name, Vec<Expr>),
@@ -339,7 +373,7 @@ pub enum ExprKind {
     Is(Box<Expr>, Vec<Name>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,

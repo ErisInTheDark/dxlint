@@ -23,7 +23,7 @@ use crate::pattern::Pat;
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
-    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is",
+    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define",
 ];
 
 /// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
@@ -58,6 +58,8 @@ pub struct Parser<'a> {
     expr_depth: usize,
     /// Set by `override`: the next definition replaces an existing one.
     overriding: Option<Span>,
+    /// Inside `define { ... }`: rules are defined but off.
+    defining: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -71,6 +73,7 @@ impl<'a> Parser<'a> {
             config: Config::default(),
             expr_depth: 0,
             overriding: None,
+            defining: 0,
         }
     }
 
@@ -275,11 +278,17 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "let") => self.attr(ctx),
             (Tk::Ident, "forward") => self.forward(ctx),
             (Tk::Ident, "native") => self.native(),
-            (Tk::Ident, "set") => self.set(),
+            (Tk::Ident, "set") => self.old_set(),
             (Tk::Ident, "ignore") => self.ignore(),
             (Tk::Ident, "drop") => self.drop_item(),
             (Tk::Ident, "override") => self.override_item(ctx),
-            (Tk::Ident, "amend") => self.amend(),
+            (Tk::Ident, "define") => self.define_block(),
+            (Tk::Ident, "amend") => {
+                self.errors.push(
+                    ConfigError::new(t.span, "`amend` is now part of `rule`").note("write `rule name { ... }`: its clauses add to the rule, and `set option value` sets options"),
+                );
+                self.bump();
+            }
             (Tk::Ident, _) if self.ts.expand(&mut self.errors) => return,
             (Tk::Ident, name) if Dropped::find(&self.config.dropped, name).is_some() => {
                 let d = Dropped::find(&self.config.dropped, name).expect("found").clone();
@@ -289,7 +298,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, group, match, in/over ..., rule, indent, let, set, macro, import, ignore, native, drop, override, amend",
+                        "items are: lang, group, match, in/over ..., rule, indent, let, macro, import, ignore, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -352,7 +361,7 @@ impl<'a> Parser<'a> {
     fn indent(&mut self, ctx: Option<&Context>) {
         let kw = self.bump().expect("peeked");
         match ctx {
-            Some(c) if !c.overlay => self.config.indents.push(IndentDef { targets: c.parents.clone() }),
+            Some(c) if !c.overlay => self.config.indents.push(IndentDef { targets: c.parents.clone(), library: self.defining > 0 }),
             Some(_) => self.errors.push(ConfigError::new(kw.span, "`indent` needs `in`, not `over`")),
             None => self.errors.push(ConfigError::new(kw.span, "`indent` needs a context: `in <layer> indent`")),
         }
@@ -400,7 +409,7 @@ impl<'a> Parser<'a> {
                 format!("nothing to override: `{}` is not defined on `{}`", name.text, on.join("`, `")),
             ));
         }
-        self.config.attrs.push(AttrDef { name, targets, expr });
+        self.config.attrs.push(AttrDef { name, targets, expr, library: self.defining > 0 });
     }
 
     /// Removes these layers from every definition of attribute `name`;
@@ -461,7 +470,7 @@ impl<'a> Parser<'a> {
             }
         };
         if !targets.is_empty() {
-            self.config.forwards.push(ForwardDef { targets, attrs, field });
+            self.config.forwards.push(ForwardDef { targets, attrs, field, library: self.defining > 0 });
         }
     }
 
@@ -491,25 +500,58 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `import .ts` (a built-in language), `import rules:recommended` (a
+    /// built-in ruleset), or `import some/path` (a file, relative to this
+    /// one; quotes optional).
     fn import(&mut self) {
         let kw = self.bump().expect("peeked");
-        let Some((path, span)) = self.string("an import path") else { return };
+        self.skip(false, true);
+        let (path, span) = match self.ts.peek_raw(0).cloned() {
+            Some(t) if t.kind == Tk::Path => {
+                self.ts.next_raw();
+                (t.text.to_string(), t.span)
+            }
+            _ => match self.string("what to import: `.ts`, `rules:recommended` or a relative path") {
+                Some(p) => p,
+                None => return,
+            },
+        };
         self.end_of_item();
 
         if let Some(name) = path.strip_prefix("std/") {
-            let key = format!("std/{name}");
+            self.errors.push(
+                ConfigError::new(span, format!("built-in languages are imported as `.{name}` now"))
+                    .note(format!("write `import .{}`", std_lib::short_name(name))),
+            );
+            return;
+        }
+        let builtin = match path.strip_prefix('.') {
+            Some(name) if name.starts_with(|c: char| c.is_ascii_alphabetic()) => Some(("std", std_lib::long_name(name))),
+            _ => path.split_once(':').map(|(ns, name)| (ns, name.to_string())),
+        };
+        if let Some((namespace, name)) = builtin {
+            let (key, text) = match namespace {
+                "std" => (format!("std/{name}"), std_lib::get(&name)),
+                "rules" => (format!("rules/{name}"), std_lib::ruleset(&name)),
+                other => {
+                    self.errors.push(ConfigError::new(span, format!("unknown import namespace `{other}:`")).note("built-in rulesets are `rules:<name>`"));
+                    return;
+                }
+            };
             if !self.imported.insert(key.clone()) {
                 self.record_import(span, |f| f.name == key);
                 return;
             }
-            match std_lib::get(name) {
+            match text {
                 Some(text) => {
                     let id = self.push_source(key, None, text.to_string());
                     self.config.uses.push(Use::Import(span, id));
                 }
-                None => self.errors.push(
-                    ConfigError::new(span, format!("unknown std module `{path}`")).suggest(name, std_lib::names()),
+                None if namespace == "std" => self.errors.push(
+                    ConfigError::new(span, format!("unknown built-in language `{path}`"))
+                        .suggest(&name, std_lib::names().filter(|n| !n.contains('/'))),
                 ),
+                None => self.errors.push(ConfigError::new(span, format!("unknown ruleset `{path}`")).suggest(&name, std_lib::rulesets())),
             }
             return;
         }
@@ -520,7 +562,8 @@ impl<'a> Parser<'a> {
             return;
         };
         let mut full = base.join(&path);
-        if full.extension().is_none() {
+        // `.zlint` (a config file) is a whole name, not an extension.
+        if full.extension().is_none() && full.file_name().is_some_and(|n| n != super::CONFIG_NAME) {
             full.set_extension("zlint");
         }
         let full = normalize_path(&full);
@@ -663,7 +706,7 @@ impl<'a> Parser<'a> {
                 self.errors.push(ConfigError::new(name.span, format!("nothing to override: no group `{}`", name.text)));
             }
         }
-        self.config.groups.push(GroupDef { name, parents });
+        self.config.groups.push(GroupDef { name, parents, library: self.defining > 0 });
     }
 
     fn lang(&mut self) {
@@ -833,7 +876,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let own = Parent::Matcher(name.clone());
-        let def = MatcherDef { name, parents, overlay, pattern, like };
+        let def = MatcherDef { name, parents, overlay, pattern, like, library: self.defining > 0 };
         match overriding {
             Some(kw) if def.pattern.is_none() => {
                 self.errors.push(ConfigError::new(kw, "`override match` needs the new pattern: `override match name pattern`"));
@@ -856,21 +899,22 @@ impl<'a> Parser<'a> {
     fn rule(&mut self, ctx: Option<&Context>) {
         let overriding = self.overriding.take();
         let kw = self.bump().expect("peeked");
-        let Some(name) = self.glued_name("a rule name", false) else { return };
-        let targets: Vec<Target> = match ctx {
-            Some(c) => c.parents.iter().map(target_of).collect(),
-            None => {
-                self.errors.push(ConfigError::new(kw.span, "a rule needs a context: `in <layer> rule name ...`"));
-                return;
+        let Some(ctx) = ctx else {
+            if let Some(o) = overriding {
+                self.errors.push(ConfigError::new(o, "`override` replaces definitions: `override in <layer> rule name ...`"));
             }
+            return self.configure(kw);
         };
+        let Some(name) = self.glued_name("a rule name", false) else { return };
+        let targets: Vec<Target> = ctx.parents.iter().map(target_of).collect();
         let mut def = RuleDef::new(name, targets);
-        self.rule_tail(&mut def);
+        def.defined_only = self.defining > 0;
+        self.rule_tail(&mut def, None);
         let existing = self.config.rules.iter().position(|r| r.name.text == def.name.text);
         match (existing, overriding) {
             (Some(i), Some(_)) => {
-                // `set`s above configured the old rule.
-                self.forget_sets(&def.name.text);
+                // Configuration above went to the old rule.
+                self.forget_configs(&def.name.text);
                 self.config.rules[i] = def;
             }
             (Some(i), None) => {
@@ -879,7 +923,7 @@ impl<'a> Parser<'a> {
                     ConfigError::new(def.name.span, format!("rule `{}` is defined twice", def.name.text))
                         .related(first, "first defined here")
                         .note(format!(
-                            "`override in <layer> rule {0} ...` replaces it, `amend rule {0} {{ ... }}` changes it, `set {0}.option value` configures it",
+                            "`override in <layer> rule {0} ...` replaces it; `rule {0} {{ ... }}` (no `in`) configures it",
                             def.name.text
                         )),
                 );
@@ -895,9 +939,71 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `rule name [severity [message]] [{ ... }]` without a context: turns
+    /// existing rules on and configures them.
+    fn configure(&mut self, kw: Token) {
+        let Some(name) = self.glued_name("a rule name or glob", true) else { return };
+        let mut patch = RuleDef::new(name, Vec::new());
+        let mut options = Vec::new();
+        self.rule_tail(&mut patch, Some(&mut options));
+        if !patch.options.is_empty() {
+            self.errors.push(
+                ConfigError::new(patch.options[0].name.span, "`option` declares options in a definition")
+                    .note("in `rule name { ... }`, `set option value` sets them"),
+            );
+        }
+        // Built-in rulesets name rules of every language; only the imported
+        // ones exist.
+        let soft = self.sources.get(kw.span.file).name.starts_with("rules/");
+        self.config.configs.push(RuleConfig { patch, options, soft });
+    }
+
+    /// `define { ... }`: rules inside are defined but stay off until a
+    /// `rule name` line turns them on.
+    fn define_block(&mut self) {
+        let kw = self.bump().expect("peeked");
+        self.skip(false, true);
+        if !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+            self.error_here("expected `{` after `define`: `define { ... }`");
+            return;
+        }
+        self.ts.next_raw();
+        self.defining += 1;
+        loop {
+            match self.peek() {
+                None => {
+                    self.errors.push(ConfigError::new(kw.span, "unclosed `define {`"));
+                    break;
+                }
+                Some(t) if t.kind == Tk::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Some(_) => self.item(None),
+            }
+        }
+        self.defining -= 1;
+    }
+
+    /// `set` outside a rule block: the old spelling of `rule`.
+    fn old_set(&mut self) {
+        let kw = self.bump().expect("peeked");
+        let target = self.glued_name("a rule name or glob", true);
+        let hint = match target {
+            Some(t) if self.ts.peek_raw(0).is_some_and(|d| d.kind == Tk::Dot) => {
+                format!("write `rule {} {{ set option value }}`", t.text)
+            }
+            Some(t) => format!("write `rule {} <severity>`", t.text),
+            None => "write `rule name <severity>` or `rule name { set option value }`".into(),
+        };
+        // The item loop skips the rest of the line.
+        self.errors.push(ConfigError::new(kw.span, "`set` only sets options inside `rule name { ... }`").note(hint));
+    }
+
     /// Everything after a rule's name: `[severity [message]] [fix as expr]
     /// [{ clauses }]`. Marks the rule broken when any of it fails to parse.
-    fn rule_tail(&mut self, def: &mut RuleDef) {
+    /// `options` takes `set name value` lines (configuring, not defining).
+    fn rule_tail(&mut self, def: &mut RuleDef, options: Option<&mut Vec<(Name, Expr)>>) {
         let before = self.errors.len();
         self.skip(false, true);
         if let Some(severity) = self.peek_severity() {
@@ -914,7 +1020,7 @@ impl<'a> Parser<'a> {
             self.skip(false, true);
             if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
                 self.ts.next_raw();
-                self.rule_body(def);
+                self.rule_body(def, options);
             } else {
                 self.end_of_item();
             }
@@ -924,13 +1030,13 @@ impl<'a> Parser<'a> {
         def.broken |= self.errors.len() > before;
     }
 
-    /// A rule was replaced or dropped: `set`s naming it exactly configured
-    /// the old one and go; globs stay, and may now match nothing.
-    fn forget_sets(&mut self, rule: &str) {
-        self.config.sets.retain(|s| s.target.text != rule);
-        for s in &mut self.config.sets {
-            if crate::path_globs::wildcard(&s.target.text, rule) {
-                s.soft = true;
+    /// A rule was replaced or dropped: configuration naming it exactly went
+    /// to the old one and goes; globs stay, and may now match nothing.
+    fn forget_configs(&mut self, rule: &str) {
+        self.config.configs.retain(|c| c.patch.name.text != rule);
+        for c in &mut self.config.configs {
+            if crate::path_globs::wildcard(&c.patch.name.text, rule) {
+                c.soft = true;
             }
         }
     }
@@ -944,47 +1050,6 @@ impl<'a> Parser<'a> {
         if self.overriding.take().is_some() {
             self.errors.push(ConfigError::new(kw.span, "`override` goes before a definition: `rule`, `match`, `let`, `macro` or `group`"));
         }
-    }
-
-    /// `amend rule name [severity [message]] [fix as expr] [{ clauses }]`:
-    /// changes a rule in place. `when`, `files`, `ignore` and options add to
-    /// it; a severity, message, fix or `report` replaces its own.
-    fn amend(&mut self) {
-        let kw = self.bump().expect("peeked");
-        self.skip(false, true);
-        if !self.ts.peek_raw(0).is_some_and(|t| t.is_ident("rule")) {
-            self.error_here("expected `rule` after `amend`: `amend rule name { ... }`");
-            return;
-        }
-        self.ts.next_raw();
-        let Some(name) = self.glued_name("a rule name", false) else { return };
-        let mut patch = RuleDef::new(name, Vec::new());
-        self.rule_tail(&mut patch);
-        let Some(rule) = self.config.rules.iter_mut().find(|r| r.name.text == patch.name.text) else {
-            self.errors.push(
-                ConfigError::new(kw.span.to(patch.name.span), format!("nothing to amend: no rule `{}`", patch.name.text))
-                    .suggest(&patch.name.text, self.config.rules.iter().map(|r| r.name.text.as_str())),
-            );
-            return;
-        };
-        if patch.severity.is_some() {
-            rule.severity = patch.severity;
-        }
-        if patch.message.is_some() {
-            rule.message = patch.message;
-        }
-        if patch.fix.is_some() {
-            rule.fix = patch.fix;
-        }
-        if patch.report.is_some() {
-            rule.report = patch.report;
-        }
-        rule.when.extend(patch.when);
-        rule.locals.extend(patch.locals);
-        rule.files.extend(patch.files);
-        rule.ignore.extend(patch.ignore);
-        rule.options.extend(patch.options);
-        rule.broken |= patch.broken;
     }
 
     /// `drop rule name`, `drop match x`, `drop in a, b match x`, `drop let x`,
@@ -1017,7 +1082,7 @@ impl<'a> Parser<'a> {
                 }
                 self.config.rules.retain(|r| !gone.contains(&r.name.text));
                 for rule in gone {
-                    self.forget_sets(&rule);
+                    self.forget_configs(&rule);
                     self.config.dropped.push(Dropped { name: rule, span });
                 }
             }
@@ -1173,7 +1238,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn rule_body(&mut self, def: &mut RuleDef) {
+    fn rule_body(&mut self, def: &mut RuleDef, mut options: Option<&mut Vec<(Name, Expr)>>) {
         loop {
             let Some(t) = self.peek() else {
                 self.errors.push(ConfigError::new(def.name.span, format!("unclosed body of rule `{}`", def.name.text)));
@@ -1185,17 +1250,42 @@ impl<'a> Parser<'a> {
             }
             let before = self.errors.len();
             match (t.kind, &*t.text) {
+                // `set name value`: an option value (configuring only).
+                (Tk::Ident, "set") => {
+                    self.bump();
+                    match options.as_deref_mut() {
+                        Some(list) => {
+                            if let Some(name) = self.ident("an option name") {
+                                if let Some(value) = self.expr() {
+                                    list.push((name, value));
+                                }
+                            }
+                        }
+                        None => self.errors.push(
+                            ConfigError::new(t.span, "`set` sets options of an existing rule: `rule name { set option value }`")
+                                .note("a definition declares them with `option name default \"description\"`"),
+                        ),
+                    }
+                }
                 (Tk::Ident, "option") => {
                     self.bump();
                     if let Some(name) = self.ident("an option name") {
                         if let Some(default) = self.operand() {
+                            self.skip(false, true);
+                            // `item { ... }`: the shape of a list option's items.
+                            let item = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("item")) {
+                                self.ts.next_raw();
+                                self.operand()
+                            } else {
+                                None
+                            };
                             self.skip(false, true);
                             let description = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Str) {
                                 self.string("an option description").map(|(s, _)| s)
                             } else {
                                 None
                             };
-                            def.options.push(OptionDef { name, default, description });
+                            def.options.push(OptionDef { name, default, description, item });
                         }
                     }
                 }
@@ -1266,7 +1356,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.errors.push(
                         ConfigError::new(t.span, format!("expected a rule clause, found {}", t.describe()))
-                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, fix, option, files, ignore, report"),
+                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, fix, option (or set, when configuring), files, ignore, report"),
                     );
                     self.bump();
                 }
@@ -1277,33 +1367,6 @@ impl<'a> Parser<'a> {
                 self.end_of_item();
             }
         }
-    }
-
-    /// `set rule.option value`, or `set rule severity`. `rule` may glob.
-    fn set(&mut self) {
-        self.bump();
-        let Some(target) = self.glued_name("a rule name or glob", true) else { return };
-        self.skip(false, true);
-        let (key, value) = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Dot) {
-            self.ts.next_raw();
-            let Some(key) = self.ident("an option name") else { return };
-            let Some(e) = self.expr() else { return };
-            (key, SetValue::Expr(e))
-        } else {
-            let Some(level) = self.ident("a severity (`off`, `error`, ...) or `.option value`") else { return };
-            match Severity::parse(&level.text) {
-                Some(s) => (Name { text: "severity".into(), span: level.span }, SetValue::Severity(s)),
-                None => {
-                    self.errors.push(
-                        ConfigError::new(level.span, format!("unknown severity `{}`", level.text))
-                            .suggest(&level.text, Severity::NAMES.iter().copied()),
-                    );
-                    return;
-                }
-            }
-        };
-        self.end_of_item();
-        self.config.sets.push(SetDef { target, key, value, soft: false });
     }
 
     fn ignore(&mut self) {
@@ -1384,8 +1447,8 @@ mod tests {
             }
             in todo, .md rule todo-note info "{text} left"
             in x rule quiet
-            set line-length.max 120
-            set * warn
+            rule line-length { set max 120 }
+            rule * warn
         "#);
         assert_eq!(c.rules.len(), 4);
         assert!(matches!(c.rules[0].targets[..], [Target::Field(..)]));
@@ -1395,9 +1458,10 @@ mod tests {
         assert!(matches!(c.rules[2].targets[..], [Target::Matcher(_), Target::Lang(_)]));
         assert_eq!(c.rules[2].severity, Some(Severity::Info));
         assert!(c.rules[3].severity.is_none() && c.rules[3].message.is_none());
-        assert_eq!(c.sets.len(), 2);
-        assert_eq!(c.sets[1].target.text, "*");
-        assert!(matches!(c.sets[1].value, SetValue::Severity(Severity::Warn)));
+        assert_eq!(c.configs.len(), 2);
+        assert_eq!(c.configs[0].options.len(), 1);
+        assert_eq!(c.configs[1].patch.name.text, "*");
+        assert_eq!(c.configs[1].patch.severity, Some(Severity::Warn));
     }
 
     #[test]
@@ -1436,11 +1500,15 @@ mod tests {
     }
 
     #[test]
-    fn rules_need_a_context_and_matchers_take_no_fields() {
-        let (_, errors, _) = parse_str("rule lonely warn \"x\"\nin a.b match c /x/\nin a indent extra\n");
+    fn rules_without_a_context_configure_and_matchers_take_no_fields() {
+        let (c, errors, _) = parse_str("set x off\namend rule y {}\nrule lonely warn \"x\"\nin a.b match c /x/\nin a indent extra\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
-        assert_eq!(errors.len(), 3, "{all:#?}");
-        assert!(all[0].contains("needs a context") && all[1].contains("can use a field"), "{all:#?}");
+        // `rule` without `in` configures an existing rule; `set` and `amend`
+        // outside one say how they are written now.
+        assert_eq!((c.rules.len(), c.configs.len()), (0, 1));
+        assert_eq!(errors.len(), 4, "{all:#?}");
+        assert!(all[0].contains("`set` only sets options") && all[1].contains("`amend` is now part of `rule`") && all[2].contains("can use a field"), "{all:#?}");
+        assert!(errors[0].notes.iter().any(|n| n.contains("rule x <severity>")), "{:#?}", errors[0]);
     }
 
     #[test]

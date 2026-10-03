@@ -376,7 +376,7 @@ fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
 }
 
 fn native_linter(rules: &str) -> Linter {
-    let src = format!("import \"std/ts\"\n{rules}");
+    let src = format!("import .ts\n{rules}");
     let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
     built.linter.expect("no errors")
@@ -437,7 +437,7 @@ fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules: &str) -> 
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, text).unwrap();
     }
-    let src = format!("import \"std/ts\"\n{rules}");
+    let src = format!("import .ts\n{rules}");
     let built = build(config::load_text("test.zlint", &src, &Disk), dir.clone());
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
     let l = built.linter.unwrap();
@@ -631,7 +631,7 @@ fn parent_reads_the_parent_layers_fields_and_attributes() {
 
 #[test]
 fn native_layers_have_no_pattern_children() {
-    let src = "import \"std/ts\"\nin ts_call match x /x/\nmatch ts_if /y/\nin x let text 1\n";
+    let src = "import .ts\nin ts_call match x /x/\nmatch ts_if /y/\nin x let text 1\n";
     let errors: Vec<String> = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"))
         .errors
         .into_iter()
@@ -650,9 +650,9 @@ fn broken_parts_leave_the_rest_linting() {
         in w rule works warn "x"
         in missing rule broken warn "x"
         in w rule half-written warn "x" fix lower(text)
-        set works.nope 1
-        set broken error
-        set half-written error
+        rule works {{ set nope 1 }}
+        rule broken error
+        rule half-written error
     "#
     );
     let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
@@ -762,8 +762,7 @@ fn options_defaults_sets_and_messages() {
             when len(text) > max
           }
         }
-        set long-line.max 5
-        set long-line error
+        rule long-line error { set max 5 }
     "#);
     let diags = lint(&l, "123456\n12345\n");
     assert_eq!(diags.len(), 1);
@@ -874,7 +873,7 @@ fn override_replaces_definitions_in_place_and_forgets_their_settings() {
     let l = linter(r#"
         in .t match word /\b[a-z]+\b/
         in word rule shout warn "old {text}"
-        set shout error
+        rule shout error
         macro twice(x) x x
         override in word rule shout info "new {twice(text)}"
         override macro twice(x) x "+" x
@@ -913,11 +912,11 @@ fn drop_removes_definitions_and_reports_what_still_uses_them() {
         in word rule a warn "a"
         in word rule b:one warn "b1"
         in word rule b:two warn "b2"
-        set a error
-        set b:* error
+        rule a error
+        rule b:* error
         drop rule a
         drop rule b:*
-        set a warn
+        rule a warn
         drop match word
     "#
     );
@@ -978,10 +977,105 @@ fn drop_detaches_layers_groups_attributes_and_ignores() {
 }
 
 #[test]
-fn amend_adds_conditions_and_replaces_messages() {
+fn defined_rules_stay_off_until_a_rule_line_turns_them_on() {
+    let l = linter(r#"
+        define {
+          in .t match word /[a-z]+/
+          in word rule quiet error "quiet {text}"
+          in word rule shy warn "shy {text}"
+          in word rule loud:a info "a"
+          in word rule loud:b info "b"
+        }
+        rule loud:*
+        rule shy
+        rule shy hint
+        rule quiet
+        rule quiet off
+        rule quiet
+    "#);
+    let diags = lint(&l, "ab");
+    let got: Vec<(&str, Severity)> = diags.iter().map(|d| (d.rule.as_str(), d.severity)).collect();
+    // `rule x` turns on at the definition's severity, a severity alone keeps
+    // the message, and `off` then `rule x` turns it on again.
+    assert_eq!(got, vec![("loud:a", Severity::Info), ("loud:b", Severity::Info), ("quiet", Severity::Error), ("shy", Severity::Hint)]);
+    assert_eq!(diags[3].message, "shy ab");
+}
+
+#[test]
+fn configuring_works_before_the_definition_and_rulesets_skip_what_is_missing() {
+    let l = linter(r#"
+        rule late error
+        define {
+          in .t match word /[a-z]+/ { rule late warn "late" }
+        }
+    "#);
+    assert_eq!(lint(&l, "x")[0].severity, Severity::Error);
+    // A built-in ruleset names rules of languages not imported.
+    let src = format!("{LANG}\nimport rules:format\n");
+    let built = build(config::load_text("test.zlint", &src, &Disk), PathBuf::from("/root"));
+    assert!(built.errors.is_empty(), "{:#?}", built.errors);
+}
+
+#[test]
+fn library_layers_only_parse_while_something_needs_them() {
+    let src = r#"
+        define {
+          in .t match lib_word /[a-z]+/ { rule lib warn "lib" }
+          in .t match lib_other /[0-9]+/ { rule other warn "other" { when parent == "lib_word" } }
+        }
+        in .t match mine /[a-z]+/ { rule mine warn "mine" }
+    "#;
+    // Off, the library's layer does not take `ab` from `mine` (it would win
+    // the tie: it comes first).
+    assert_eq!(rule_messages(&linter(src), "ab"), vec!["mine: mine"]);
+    // On, it does; and the off rule reading pruned layers is listed, not lost.
+    let l = linter(&format!("{src}\nrule lib\n"));
+    assert_eq!(rule_messages(&l, "ab"), vec!["lib: lib"]);
+    let l = linter(src);
+    assert!(l.inert.iter().any(|r| r.name == "lib") && l.inert.iter().any(|r| r.name == "other"), "{:?}", l.inert.iter().map(|r| &r.name).collect::<Vec<_>>());
+}
+
+#[test]
+fn options_take_records_and_lists_shaped_like_their_defaults() {
+    let l = linter(r#"
+        in .t match word /[a-z]+/ {
+          rule pick warn "{find_last(config, c => c.word == text || c.word == '*').say}" {
+            option config [] item { word: "*", say: "" } "what to say about which word"
+            when any(config, c => c.word == text || c.word == "*")
+          }
+        }
+        rule pick {
+          set config [
+            { word: "*", say: "any" },
+            { word: "ab", say: "ab!" },
+          ]
+        }
+    "#);
+    assert_eq!(rule_messages(&l, "ab cd"), vec!["pick: ab!", "pick: any"]);
+    let errs = errors(r#"
+        in .t match word /[a-z]+/ {
+          rule pick warn "x" { option config [] item { word: "*" } }
+        }
+        rule pick { set config [{ word: 1 }, { what: "x" }] }
+    "#);
+    assert!(errs.iter().any(|e| e.contains("config`: [0].word is a num, expected a str")), "{errs:?}");
+}
+
+#[test]
+fn lambdas_map_filter_and_test_lists() {
+    let l = linter(r#"
+        in .t match word /[a-z]+/ {
+          rule each info "{join(map(split(text, ''), c => upper(c)), '')}|{join(filter([1, 2, 3, 4], n => n % 2 == 0), ',')}|{all([1, 2], n => n > 0)}|{find([1, 2, 3], n => n > 5)}|{keys({ a: 1, b: 2 })}"
+        }
+    "#);
+    assert_eq!(rule_messages(&l, "ab"), vec!["each: AB|2,4|true||a, b"]);
+}
+
+#[test]
+fn configuring_adds_conditions_and_replaces_messages() {
     let l = linter(r#"
         in .t match word /[a-z]+/ { rule w warn "word" }
-        amend rule w info "short {text}" { when len(text) < 3 }
+        rule w info "short {text}" { when len(text) < 3 }
     "#);
     let diags = lint(&l, "ab abcd");
     assert_eq!(rule_messages(&l, "ab abcd"), vec!["w: short ab"]);
@@ -1078,7 +1172,7 @@ fn config_errors_explain_themselves() {
         match loop2 loop /y/
         in nope rule f warn "x"
         in a.missing rule g warn "x"
-        set nobody off
+        rule nobody off
     "#);
     let all = errs.join("\n");
     assert!(all.contains("unknown matcher `parn`") && all.contains("did you mean `paren`?"), "{all}");
@@ -1086,7 +1180,7 @@ fn config_errors_explain_themselves() {
     assert!(all.contains("left recursion"), "{all}");
     assert!(all.contains("unknown matcher `nope`"), "{all}");
     assert!(all.contains("no field `missing`"), "{all}");
-    assert!(all.contains("no rule matches `nobody`"), "{all}");
+    assert!(all.contains("no rule `nobody`"), "{all}");
 }
 
 #[test]
@@ -1107,23 +1201,22 @@ fn option_types_are_checked() {
         in .t match x /X/ {
           rule f warn "x" { option max 3 }
         }
-        set f.max "three"
+        rule f { set max "three" }
     "#);
-    assert!(errs.iter().any(|e| e.contains("is a num")), "{errs:?}");
+    assert!(errs.iter().any(|e| e.contains("is a str, expected a num")), "{errs:?}");
 }
 
 #[test]
 fn std_library_parses_and_lints() {
     let src = r#"
-        import "std/rust"
-        import "std/js"
-        import "std/python"
-        import "std/c"
-        import "std/zlint"
-        import "std/markdown"
-        import "std/toml"
-        import "std/whitespace"
-        import "std/rust"
+        import .rs
+        import .ts
+        import .py
+        import .c
+        import .zlint
+        import .md
+        import .toml
+        import .rs
         in rs_code match dbg /\bdbg!/ {
           rule no-dbg warn "no dbg"
         }
@@ -1134,5 +1227,13 @@ fn std_library_parses_and_lints() {
     let text = "fn main() {\n    let s = \"dbg!(x)\"; // dbg!\n    let c = '\"'; dbg!(s);\n}\n";
     let diags = l.lint(Path::new("/root/src/main.rs"), text);
     let rules: Vec<&str> = diags.iter().map(|d| d.rule.as_str()).collect();
+    // Only the config's own rule: every built-in one is off.
     assert_eq!(rules, vec!["no-dbg"], "{diags:#?}");
+
+    // Every built-in rule and ruleset compiles when turned on.
+    let all = format!("{src}\nimport rules:correctness\nimport rules:suspicious\nimport rules:conventions\nimport rules:format\nimport rules:types\nimport rules:recommended\nrule *\n");
+    let built = build(config::load_text("test.zlint", &all, &Disk), PathBuf::from("/root"));
+    assert!(built.errors.is_empty(), "{:#?}", built.errors);
+    let l = built.linter.unwrap();
+    assert!(l.inert.is_empty() && l.rules.iter().all(|r| r.severity != Severity::Off));
 }

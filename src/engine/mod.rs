@@ -5,7 +5,9 @@ pub mod cache;
 pub mod diagnostic;
 mod fix;
 mod inspect;
+mod options;
 mod profile;
+mod prune;
 mod suppress;
 pub mod symbols;
 #[cfg(test)]
@@ -37,6 +39,8 @@ pub struct OptionSlot {
     pub description: Option<String>,
     pub default: Value<'static>,
     pub value: Value<'static>,
+    /// The declared shape of a list option's items (`option x [] item {..}`).
+    pub item: Option<Value<'static>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,7 +56,10 @@ pub struct Rule {
     pub span: Span,
     pub targets: Vec<Target>,
     pub target_text: String,
+    /// `Off` when the rule is defined but not turned on.
     pub severity: Severity,
+    /// The severity `rule name` (without one) turns it on at.
+    pub default_severity: Severity,
     pub options: Vec<OptionSlot>,
     files: PathGlobs,
     ignore: PathGlobs,
@@ -92,9 +99,19 @@ impl Rule {
     }
 }
 
+/// A rule that is off and reads library layers nothing else needs: listed,
+/// and turned on like any other, but not compiled while off.
+pub struct InertRule {
+    pub name: String,
+    pub span: Span,
+    pub target_text: String,
+    pub default_severity: Severity,
+}
+
 pub struct Linter {
     pub grammar: Grammar,
     pub rules: Vec<Rule>,
+    pub inert: Vec<InertRule>,
     pub sources: std::sync::Arc<SourceMap>,
     /// Paths are matched relative to this (the config file's directory).
     pub root: PathBuf,

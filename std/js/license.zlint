@@ -1,0 +1,48 @@
+# .js/license: license headers, modelled on eslint-plugin-license-header's
+# `header`. The first comment before any code must be the header, alone on
+# line 1, followed by exactly one blank line. Turn each `header:*` part on
+# with the header text, with `\n` line breaks:
+#
+#   rule header:* { set license "/*!\n * Copyright ...\n */" }
+
+define {
+
+macro license_text replace(license, "\n", newline)
+macro license_like re_test(text, /(?i)(?:Copyright|@license|SPDX-License-Identifier)\b/)
+macro license_wanted license != "" && (skip_files == "" || !re_test(file, skip_files))
+
+# The file's first comment, the space before it and the space after it.
+over .js match js_lead_comment pre:/\A\s*/ head:(/\/\*[\s\S]*?\*\// or /\/\/[^\r\n]*/) post:/\s*/
+# A file whose code starts before any comment.
+over .js match js_lead_code /\A\s*/ code:/[^\s\/]|\/[^\/*]/
+
+in js_lead_comment.head, js_lead_code.code rule header:missing warn "Missing license header" {
+  option license "" "the license header"
+  option skip_files "" "regex of file paths without a header"
+  report change
+  when license_wanted && (parent == "js_lead_code" || !license_like)
+  fix as license_text newline newline text
+}
+in js_lead_comment.head rule header:invalid warn "Invalid license header" {
+  option license "" "the license header"
+  option skip_files "" "regex of file paths without a header"
+  when license_wanted && license_like && text != license_text
+  fix as license_text
+}
+in js_lead_comment.pre rule header:before warn "Superfluous new lines before license header" {
+  option license "" "the license header"
+  option skip_files "" "regex of file paths without a header"
+  report end
+  when license_wanted && contains(text, "\n")
+  when js_lead_comment.head == license_text
+  fix as ""
+}
+in js_lead_comment.post rule header:after warn "{if re_count(text, /\n/) > 2 then 'Superfluous new lines' else 'Missing new line'} after license header" {
+  option license "" "the license header"
+  option skip_files "" "regex of file paths without a header"
+  when license_wanted && re_count(text, /\n/) != 2 && text_after != ""
+  when js_lead_comment.head == license_text
+  fix as newline newline
+}
+
+}

@@ -1,0 +1,275 @@
+# .ts/style: typescript-eslint stylistic and strict rules, plus import /
+# jsdoc / tslint ones, on the native TypeScript layers. Messages and
+# positions follow typescript-eslint's.
+#
+# `[] x` turns a field or field attribute into a list whether it matched
+# none, one or many nodes.
+
+import .ts/helpers
+
+define {
+
+macro modifiers (join([] modifier, " "))
+macro has_accessibility(m) re_test(m, /\b(?:public|private|protected)\b/)
+
+# ---- comments --------------------------------------------------------------------
+in js_line_comment, js_block_comment rule ban-tslint-comment {
+  when re_test(text, /^\/[\/*]\s*tslint:/)
+  warn "tslint comment detected: \"{text}\""
+}
+
+# `/// <reference types="x" />` in a file that also imports from "x".
+macro referenced_types re_replace(text, /^.*types\s*=\s*["']([^"']*)["'].*$/, "$1")
+in js_line_comment rule triple-slash-reference {
+  when re_test(text, /^\/\/\/\s*<reference\s+types\s*=/)
+  when re_test(source, "(?:import|from)\\s*[\"']" re_escape(referenced_types) "[\"']")
+  warn "Do not use a triple slash reference for " referenced_types ", use `import` style instead."
+}
+
+# JSDoc lines whose `*` is not one column right of the opening `/**`. The
+# matchers never take the `*` of the closing `*/` (the comment's own end).
+in js_block_comment match jsdoc_line /^[ \t]*\*(?!\/)/
+in js_block_comment match jsdoc_close_indent /^[ \t]+(?=\*\/)/
+# Blank lines inside the block have no `*` at all (.js/format's
+# `js_blank_run` already takes them).
+in js_blank_run rule check-alignment:blank {
+  when parent == "js_block_comment" && re_test(parent_text, /^\/\*\*[^*]/)
+  warn "Expected JSDoc block to be aligned."
+}
+# `/**` then anything but another `*` (`/*****` banners are not JSDoc).
+macro is_jsdoc re_test(parent_text, /^\/\*\*[^*]/)
+in jsdoc_line rule check-alignment {
+  when is_jsdoc && text != parent_indent " *"
+  warn "Expected JSDoc block to be aligned."
+}
+in jsdoc_close_indent rule check-alignment:close {
+  when is_jsdoc && text != parent_indent " "
+  warn "Expected JSDoc block to be aligned."
+}
+in js_block_comment match jsdoc_typed_tag /^[ \t]*\*[ \t]*@(?:param|arg|argument|returns?|property|prop|throws|yields)[ \t]+\{/
+in jsdoc_typed_tag rule no-types {
+  when is_jsdoc
+  warn "Types are not permitted on @{re_replace(text, /^.*@(\w+).*$/, '$1')}."
+}
+
+# ---- type syntax -------------------------------------------------------------------
+# array-type "array-simple": `T[]` for simple types, `Array<T>` otherwise.
+in ts_type_keyword let is_simple_type true
+in ts_type_reference let is_simple_type count(type_argument) == 0
+in ts_array_type {
+  let is_simple_type type.is_simple_type == true
+  let array_type_not_simple !(type.is_simple_type == true)
+}
+in ts_type_operator let readonly_array_not_simple operator == "readonly" && type.array_type_not_simple == true
+in ts_type_reference rule array-type:generic {
+  when re_test(name, /^(Array|ReadonlyArray)$/) && count(type_argument) == 1 && first([] type_argument.is_simple_type) == true
+  warn "Array type using '{text}' is forbidden for simple types. Use '{if name == 'ReadonlyArray' then 'readonly ' else ''}{type_argument}[]' instead."
+}
+in ts_array_type rule array-type:simple {
+  when array_type_not_simple && !(parent == "ts_type_operator" && parent.readonly_array_not_simple)
+  warn "Array type using 'T[]' is forbidden for non-simple types. Use 'Array<T>' instead."
+}
+in ts_type_operator rule array-type:readonly {
+  when readonly_array_not_simple
+  warn "Array type using 'readonly T[]' is forbidden for non-simple types. Use 'ReadonlyArray<T>' instead."
+}
+
+in ts_type_reference rule no-wrapper-object-types {
+  when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent != "ts_template_type"
+  warn "Prefer using the primitive `{lower(name)}` as a type name, rather than the upper-cased `{name}`."
+}
+
+# A type literal or interface that is only an index signature.
+in ts_index_signature let is_index_signature true
+in ts_type_literal rule consistent-indexed-object-style {
+  when count(member) == 1 && first([] member.is_index_signature) == true
+  warn "A record is preferred over an index signature."
+}
+in ts_interface rule consistent-indexed-object-style:interface {
+  when count(member) == 1 && first([] member.is_index_signature) == true && count(extends) == 0 && count(type_parameter) == 0
+  when !re_test(join([] member, "\n"), "\\b" re_escape(name) "\\b")
+  warn "A record is preferred over an index signature."
+}
+
+in ts_type_literal let is_type_literal true
+in ts_type_alias let aliases_type_literal type.is_type_literal == true
+in ts_type_alias.name rule consistent-type-definitions {
+  when parent.aliases_type_literal
+  warn "Use an `interface` instead of a `type`."
+}
+
+# Only a call signature: a function type says it better.
+in ts_call_signature let is_call_signature kind != "new"
+in ts_interface let only_call_signature count(member) == 1 && first([] member.is_call_signature) == true && count(extends) == 0
+in ts_type_literal let only_call_signature count(member) == 1 && first([] member.is_call_signature) == true
+in ts_call_signature rule prefer-function-type {
+  when parent.only_call_signature == true && !re_test(default(return_type, ""), /\bthis\b/)
+  warn if parent == "ts_interface" then "Interface only has a call signature, you should use a function type instead." else "Type literal only has a call signature, you should use a function type instead."
+}
+
+in ts_namespace rule prefer-namespace-keyword {
+  when kind == "module" && is_identifier(re_replace(name, /\..*$/, ""))
+  warn "Use 'namespace' instead of 'module' to declare custom TypeScript modules."
+}
+
+# ---- declarations --------------------------------------------------------------
+# no-inferrable-types (parameters ignored): annotations a literal already says.
+macro inferrable_type(t, v) (if t == "number" && re_test(v, /^(?:[-+]?\s*(?:\d[\d_]*\.?\d*(?:e[-+]?\d+)?|\.\d+|0x[\da-f_]+|0o[0-7_]+|0b[01_]+|Infinity|NaN)|Number\(.*\))$/) then "number" else if t == "string" && re_test(v, /^(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[\s\S]*`|String\([\s\S]*\))$/) then "string" else if t == "boolean" && re_test(v, /^(?:true|false|!.*|Boolean\(.*\))$/) then "boolean" else if t == "bigint" && re_test(v, /^(?:\d[\d_]*n|BigInt\(.*\))$/) then "bigint" else if t == "null" && v == "null" then "null" else if t == "undefined" && re_test(v, /^(?:undefined|void\s+0)$/) then "undefined" else if t == "RegExp" && re_test(v, /^(?:\/.*\/[a-z]*|new RegExp\(.*\)|RegExp\(.*\))$/) then "RegExp" else if t == "symbol" && re_test(v, /^Symbol\(.*\)$/) then "symbol" else null)
+in ts_declarator rule no-inferrable-types {
+  when type != null && init != null && inferrable_type(type, init) != null
+  warn "Type {inferrable_type(type, init)} trivially inferred from a {inferrable_type(type, init)} literal, remove type annotation."
+}
+# `readonly` (and optional) properties keep their annotation: it widens.
+in ts_class_property rule no-inferrable-types:property {
+  when type != null && init != null && inferrable_type(type, init) != null && !contains([] modifier, "readonly") && optional == null
+  warn "Type {inferrable_type(type, init)} trivially inferred from a {inferrable_type(type, init)} literal, remove type annotation."
+}
+
+# `const x: Map<K, V> = new Map()`: the arguments belong on the constructor.
+in ts_declarator, ts_class_property rule consistent-generic-constructors {
+  when type != null && init != null && re_test(type, /^[\w.$]+\s*</)
+  when re_test(init, "^new\\s+" re_escape(re_replace(type, /\s*<[\s\S]*$/, "")) "\\s*\\(") && !re_test(init, /^new\s+[\w.$]+\s*</)
+  warn "The generic type arguments should be specified as part of the constructor type arguments."
+}
+
+# ---- classes -------------------------------------------------------------------------
+in ts_class_property rule explicit-member-accessibility:property {
+  when !re_test(key, /^#/) && !has_accessibility(modifiers)
+  warn "Missing accessibility modifier on class property {key}."
+}
+in ts_method rule explicit-member-accessibility:method {
+  when parent == "ts_class" && !re_test(key, /^#/) && key != "constructor" && !has_accessibility(modifiers)
+  warn "Missing accessibility modifier on {if kind == 'get' then 'get property accessor' else if kind == 'set' then 'set property accessor' else 'method definition'} {key}."
+}
+in ts_parameter rule explicit-member-accessibility:parameter {
+  when re_test(modifiers, /\breadonly\b/) && !has_accessibility(modifiers) && parent == "ts_method"
+  warn "Missing accessibility modifier on parameter property {name}."
+}
+
+# Getters that return a literal: a readonly field says it better.
+in ts_method.key rule class-literal-property-style {
+  when parent.kind == "get" && !contains([] parent.modifier, "override") && re_test(default(parent.body, ""), /^\{\s*return\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`$]*`|-?\d[\d_.]*(?:e[-+]?\d+)?n?|true|false|null)\s*;?\s*\}$/)
+  when !re_test(join([] ts_class.member, "\n"), "\\bset\\s+" re_escape(text) "\\s*\\(")
+  warn "Literals should be exposed using readonly fields."
+}
+
+in ts_parameter let is_parameter_property re_test(modifiers, /\b(?:public|private|protected|readonly)\b/)
+in ts_class_property let is_static contains([] modifier, "static")
+in ts_method {
+  let is_static contains([] modifier, "static")
+  let is_empty_constructor key == "constructor" && !any(compact([] parameter.is_parameter_property))
+}
+in ts_class {
+  let members_static [] member.is_static
+  let members_empty_constructor [] member.is_empty_constructor
+}
+in ts_class.name rule no-extraneous-class {
+  when parent.extends == null && count(parent.decorator) == 0 && !re_test(join([] parent.modifier, " "), /\babstract\b/)
+  when count(parent.member) == 0 || !contains(parent.members_static, false) || count(parent.member) == 1 && first(parent.members_empty_constructor) == true
+  warn if count(parent.member) == 0 then "Unexpected empty class." else if count(parent.member) == 1 && first(parent.members_empty_constructor) == true then "Unexpected class with only a constructor." else "Unexpected class with only static properties."
+}
+
+# Constructors that do nothing a missing one would not.
+in ts_parameter let parameter_name re_replace(name, /\s+/, "")
+in ts_method rule no-useless-constructor {
+  # A public constructor of a derived class may widen a protected one.
+  when key == "constructor" && body != null && count(decorator) == 0 && !re_test(modifiers, /\b(?:private|protected)\b/)
+  when !(ts_class.extends != null && re_test(modifiers, /\bpublic\b/))
+  when !any(compact([] parameter.is_parameter_property)) && !re_test(join([] parameter, ","), /[=@{\[?]/)
+  when if ts_class.extends == null then re_test(body, /^\{\s*\}$/) else re_test(re_replace(body, /\s+/, ""), "^\\x7Bsuper\\((?:\\.\\.\\.arguments|" re_escape(join([] parameter.parameter_name, ",")) ")\\);?\\x7D$")
+  warn "Useless constructor."
+}
+
+in ts_method let overload_key if kind != "get" && kind != "set" && !re_test(default(key, ""), /^\[/) then (if contains([] modifier, "static") then "static " else "") key else null
+in ts_method_signature let overload_key if re_test(default(key, ""), /^\[/) then null else key
+in ts_call_signature let overload_key if kind == "new" then "new" else "call"
+in ts_interface, ts_type_literal, ts_class let overload_keys [] member.overload_key
+in ts_method_signature, ts_method, ts_call_signature rule adjacent-overload-signatures {
+  when overload_key != null && index > 0 && contains(slice(parent.overload_keys, 0, index), overload_key) && first(slice(parent.overload_keys, index - 1, index)) != overload_key
+  warn "All {re_replace(overload_key, /^static /, '')} signatures should be adjacent."
+}
+
+in ts_call_signature rule no-misused-new {
+  when parent == "ts_interface" && kind == "new" && return_type == ts_interface.name
+  warn "Interfaces cannot be constructed, only classes."
+}
+in ts_method_signature rule no-misused-new:constructor {
+  when parent == "ts_interface" && key == "constructor"
+  warn "Interfaces cannot be constructed, only classes."
+}
+in ts_method rule no-misused-new:class {
+  when key == "new" && body == null && return_type == ts_class.name
+  warn "Class cannot have method named `new`."
+}
+
+# ---- functions -----------------------------------------------------------------------
+# explicit-function-return-type (expressions and functions without type
+# parameters allowed): generic declarations need a return type.
+in ts_arrow let is_declared_function parent == "ts_declarator" || parent == "ts_class_property"
+in ts_function rule explicit-function-return-type {
+  when return_type == null && count(type_parameter) > 0 && re_test(parent, /^ts_(export|program|block|declarator|class_property)$/)
+  warn "Missing return type on function."
+}
+in ts_method rule explicit-function-return-type:method {
+  when parent == "ts_class" && return_type == null && count(type_parameter) > 0 && kind != "set" && key != "constructor"
+  warn "Missing return type on function."
+}
+in ts_arrow.operator rule explicit-function-return-type:arrow {
+  when parent.return_type == null && count(parent.type_parameter) > 0 && parent.is_declared_function == true
+  warn "Missing return type on function."
+}
+
+# explicit-module-boundary-types: what other modules see needs types.
+in ts_class, ts_variable_declaration, ts_function let is_exported parent == "ts_export"
+in ts_declarator let is_exported parent.is_exported == true && type == null
+in ts_arrow let is_exported parent == "ts_declarator" && parent.is_exported == true
+in ts_method let is_exported parent == "ts_class" && parent.is_exported == true && !re_test(modifiers, /\b(?:private|protected)\b/) && !re_test(default(key, ""), /^#/)
+in ts_function rule explicit-module-boundary-types {
+  when return_type == null && is_exported == true
+  warn "Missing return type on function."
+}
+in ts_method rule explicit-module-boundary-types:method {
+  when return_type == null && is_exported == true && kind != "set" && key != "constructor"
+  warn "Missing return type on function."
+}
+in ts_arrow.operator rule explicit-module-boundary-types:arrow {
+  when parent.return_type == null && parent.is_exported == true
+  warn "Missing return type on function."
+}
+in ts_parameter rule explicit-module-boundary-types:argument {
+  when type == null && init == null && is_identifier(name) && name != "this" && parent.is_exported == true && parent.kind != "set"
+  warn "Argument '{name}' should be typed."
+}
+
+# ---- expressions -----------------------------------------------------------------------
+in ts_non_null let is_non_null true
+in ts_binary rule no-confusing-non-null-assertion {
+  when (operator == "==" || operator == "===") && left.is_non_null == true
+  warn "Confusing combination of non-null assertion and equality test like `a! == b`, which looks very similar to `a !== b`."
+}
+in ts_assignment rule no-confusing-non-null-assertion:assign {
+  when operator == "=" && left.is_non_null == true
+  warn "Confusing combination of non-null assertion and assignment like `a! = b`, which looks very similar to `a != b`."
+}
+
+in ts_call rule no-require-imports {
+  when callee == "require" && callee.resolved == "global"
+  warn "A `require()` style import is forbidden."
+}
+in ts_call rule no-var-requires {
+  when callee == "require" && callee.resolved == "global" && re_test(parent, /^ts_(declarator|call|member|index|new|as|type_assertion)$/)
+  warn "Require statement not part of import statement."
+}
+
+# no-unused-expressions (no short circuits, ternaries or tagged templates).
+group standalone_expressions ts_call, ts_new, ts_assignment, ts_update, ts_await, ts_yield, ts_import_call
+in standalone_expressions let is_standalone_expression true
+in ts_unary let is_standalone_expression operator == "delete" || operator == "void"
+in ts_non_null, ts_parenthesized let is_standalone_expression expression.is_standalone_expression == true
+in ts_expression_statement rule no-unused-expressions {
+  when expression.is_standalone_expression != true
+  when !(re_test(expression, /^["']/) && index == 0 && (parent == "ts_program" || ts_function != null || ts_arrow != null || ts_method != null))
+  warn "Expected an assignment or function call and instead saw an expression."
+}
+
+}

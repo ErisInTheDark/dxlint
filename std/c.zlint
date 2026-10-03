@@ -2,7 +2,7 @@
 # Close enough for structure: // and /* */ comments, "strings", 'chars',
 # `raw` (Go) and """text blocks""".
 
-import "std/core"
+import .core
 
 lang c "*.c" "*.h" "*.cc" "*.cpp" "*.cxx" "*.hpp" "*.hh" "*.java" "*.cs" "*.go" "*.kt" "*.kts" "*.swift" "*.scala" "*.dart" {
   match parentheses

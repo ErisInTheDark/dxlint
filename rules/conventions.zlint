@@ -1,0 +1,34 @@
+# rules:conventions: one consistent way to write things. Turns on every such
+# rule of the imported languages, at its defaults.
+
+rule adjacent-overload-signatures
+rule array-type*
+rule ban-tslint-comment
+rule class-literal-property-style
+rule consistent-generic-constructors
+rule consistent-indexed-object-style*
+rule consistent-type-definitions
+rule consistent-type-imports
+rule curly*
+rule eqeqeq
+rule explicit-function-return-type*
+rule explicit-member-accessibility*
+rule explicit-module-boundary-types*
+rule no-confusing-non-null-assertion*
+rule no-console
+rule no-extraneous-class
+rule no-inferrable-types*
+rule no-unassigned-import
+rule no-undef-init
+rule no-useless-constructor
+rule no-var
+rule no-var-requires
+rule prefer-const
+rule prefer-function-type
+rule prefer-namespace-keyword
+rule prefer-object-spread
+rule prefer-rest-params
+rule prefer-spread
+rule prefer-template
+rule radix
+rule triple-slash-reference

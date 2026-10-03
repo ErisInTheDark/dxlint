@@ -97,20 +97,51 @@ pub enum CExpr {
     Is(Box<CExpr>, Vec<u32>),
     /// A rule's own `let` value, by slot.
     Local(u16),
+    /// `{ key: value }`
+    Record(Vec<(Box<str>, CExpr)>),
+    /// A lambda parameter, by depth (0 = outermost).
+    Param(u16),
+    /// `value.key` on a record.
+    Key(Box<CExpr>, Box<str>),
+    /// `map(list, x => body)` and friends; the body reads the item as the
+    /// innermost `Param`.
+    Each(Each, Box<CExpr>, Box<CExpr>),
 }
 
 /// Expression forms that are not plain functions, for `zlint functions`.
-pub const SPECIAL_FORMS: &[(&str, &str)] =
-    &[("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on")];
+pub const SPECIAL_FORMS: &[(&str, &str)] = &[
+    ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
+    ("map(list, x => value)", "the list of `value` for each item `x`"),
+    ("filter(list, x => test)", "the items for which `test` is truthy"),
+    ("find(list, x => test)", "the first item for which `test` is truthy, or null"),
+    ("find_last(list, x => test)", "the last item for which `test` is truthy, or null"),
+    ("all(list, x => test)", "whether `test` is truthy for every item"),
+    ("any(list, x => test)", "whether `test` is truthy for some item (`any(list)`: some item is truthy)"),
+];
+
+/// A function whose last argument is a lambda run on each item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Each {
+    Map,
+    Filter,
+    Find,
+    FindLast,
+    All,
+    Any,
+}
+
+impl Each {
+    const NAMES: &'static [(&'static str, Each)] =
+        &[("map", Each::Map), ("filter", Each::Filter), ("find", Each::Find), ("find_last", Each::FindLast), ("all", Each::All), ("any", Each::Any)];
+
+    fn named(name: &str) -> Option<(&'static str, Each)> {
+        Each::NAMES.iter().find(|(n, _)| *n == name).copied()
+    }
+}
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
 pub fn show(v: &Value) -> String {
-    match v {
-        Value::Str(s) => format!("{s:?}"),
-        Value::List(items) => format!("[{}]", items.iter().map(show).collect::<Vec<_>>().join(", ")),
-        Value::Null => "null".into(),
-        other => other.to_string(),
-    }
+    v.literal()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,9 +165,14 @@ pub struct AttrMemo<'a> {
     values: RefCell<HashMap<(u32, u16), Value<'a>>>,
     busy: RefCell<Vec<(u32, u16)>>,
     locals: RefCell<HashMap<(u32, u32, u16), Value<'a>>>,
+    /// Values of the lambda parameters being evaluated, outermost first.
+    /// Nothing memoised above can read them: attributes and `let`s are
+    /// written outside every lambda.
+    params: RefCell<Vec<Value<'a>>>,
 }
 
 /// What names mean inside one rule.
+#[derive(Clone)]
 pub struct Scope<'a> {
     pub grammar: &'a Grammar,
     /// Fields of the target node: label name -> label id.
@@ -148,6 +184,8 @@ pub struct Scope<'a> {
     pub attrs: &'a [String],
     /// The rule's own `let` values visible here, by slot.
     pub locals: Vec<String>,
+    /// Lambda parameters in scope, outermost first.
+    pub params: Vec<String>,
     /// The rule compiled (for its options and `let`s in `uses`).
     pub rule: Option<&'a str>,
     /// Where tooling collects how each name was read.
@@ -204,6 +242,7 @@ impl<'a> Scope<'a> {
             options_only: false,
             attrs: &[],
             locals: Vec::new(),
+            params: Vec::new(),
             rule: None,
             uses: None,
         }
@@ -265,6 +304,38 @@ impl Scope<'_> {
             }
             ExprKind::List(items) => {
                 CExpr::List(items.iter().map(|i| self.compile(i, errors)).collect::<Option<Vec<_>>>()?)
+            }
+            ExprKind::Record(entries) => CExpr::Record(
+                entries.iter().map(|(k, v)| Some((k.text.as_str().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
+            ),
+            ExprKind::Key(base, key) => CExpr::Key(Box::new(self.compile(base, errors)?), key.text.as_str().into()),
+            ExprKind::Lambda(param, _) => {
+                errors.push(
+                    ConfigError::new(param.span, "a lambda (`x => ...`) only goes to `map`, `filter`, `find`, `find_last`, `all` or `any`"),
+                );
+                return None;
+            }
+            ExprKind::Call(name, args) if args.len() == 2 && matches!(args[1].kind, ExprKind::Lambda(..)) => {
+                let Some((fname, each)) = Each::named(&name.text) else {
+                    errors.push(
+                        ConfigError::new(name.span, format!("`{}` does not take a lambda", name.text))
+                            .note("lambdas go to `map`, `filter`, `find`, `find_last`, `all` and `any`"),
+                    );
+                    return None;
+                };
+                self.note(name.span, Resolved::Function(fname));
+                let ExprKind::Lambda(param, body) = &args[1].kind else { unreachable!("matched") };
+                let list = self.compile(&args[0], errors)?;
+                let mut inner = self.clone();
+                inner.params.push(param.text.clone());
+                let body = inner.compile(body, errors)?;
+                CExpr::Each(each, Box::new(list), Box::new(body))
+            }
+            ExprKind::Call(name, _) if Each::named(&name.text).is_some_and(|(_, e)| e != Each::Any) => {
+                errors.push(
+                    ConfigError::new(e.span, format!("`{}` takes a list and a lambda", name.text)).note(format!("usage: {}(list, x => ...)", name.text)),
+                );
+                return None;
             }
             ExprKind::Var(path) => return self.var(path, e, errors),
             // `dbg(value, "label")`: the value, printed per node to stderr.
@@ -386,6 +457,30 @@ impl Scope<'_> {
 
     fn var(&self, path: &[crate::config::ast::Name], e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
         let first = &path[0];
+        // Values holding records: lambda parameters, options and `let`s;
+        // `.key` reads into them.
+        let rule = || self.rule.unwrap_or_default().to_string();
+        let value = if let Some(i) = self.params.iter().rposition(|p| *p == first.text) {
+            Some(CExpr::Param(i as u16))
+        } else if path.len() > 1 && !self.options_only {
+            if let Some(i) = self.locals.iter().position(|l| *l == first.text) {
+                self.note(first.span, Resolved::Local(rule(), first.text.clone()));
+                Some(CExpr::Local(i as u16))
+            } else if let Some(i) = self.options.iter().position(|o| *o == first.text) {
+                self.note(first.span, Resolved::Option(rule(), first.text.clone()));
+                Some(CExpr::Opt(i))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(mut value) = value {
+            for key in &path[1..] {
+                value = CExpr::Key(Box::new(value), key.text.as_str().into());
+            }
+            return Some(value);
+        }
         if self.options_only {
             errors.push(
                 ConfigError::new(first.span, format!("`{}` is not a constant", first.text))
@@ -927,6 +1022,21 @@ impl<'a> Ctx<'a> {
                 self.memo.locals.borrow_mut().insert(key, v.clone());
                 v
             }
+            CExpr::Record(entries) => {
+                Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), self.eval(v)?))).collect::<Result<_, String>>()?)
+            }
+            CExpr::Param(depth) => self.memo.params.borrow().get(*depth as usize).cloned().unwrap_or(Value::Null),
+            CExpr::Key(base, key) => self.eval(base)?.key(key),
+            CExpr::Each(each, list, body) => {
+                let items = self.eval(list)?.items();
+                let run = |item: &Value<'a>| -> Result<Value<'a>, String> {
+                    self.memo.params.borrow_mut().push(item.clone());
+                    let v = self.eval(body);
+                    self.memo.params.borrow_mut().pop();
+                    v
+                };
+                each_over(*each, items, run)?
+            }
             CExpr::Relative(rel, inner) => match rel {
                 Relative::Children => {
                     let kids: Vec<u32> = self.tree.node(self.node).children.iter().map(|e| e.node).collect();
@@ -974,6 +1084,8 @@ impl<'a> Ctx<'a> {
                 Value::from(s)
             }
             CExpr::List(items) => Value::List(items.iter().map(eval).collect::<Result<_, _>>()?),
+            CExpr::Record(entries) => Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), eval(v)?))).collect::<Result<_, String>>()?),
+            CExpr::Key(base, key) => eval(base)?.key(key),
             CExpr::Call(f, args) => {
                 let args = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
                 (f.call)(&args)?
@@ -1001,6 +1113,54 @@ impl<'a> Ctx<'a> {
             other => Ctx::eval_static(other, options).map(|v| v.text().into_owned()).unwrap_or_else(|_| "<dynamic>".into()),
         }
     }
+}
+
+/// Runs a lambda (`run`) over `items` for `map` and friends.
+fn each_over<'s>(each: Each, items: Vec<Value<'s>>, mut run: impl FnMut(&Value<'s>) -> Result<Value<'s>, String>) -> Result<Value<'s>, String> {
+    Ok(match each {
+        Each::Map => Value::List(items.iter().map(&mut run).collect::<Result<_, _>>()?),
+        Each::Filter => {
+            let mut out = Vec::new();
+            for item in items {
+                if run(&item)?.truthy() {
+                    out.push(item);
+                }
+            }
+            Value::List(out)
+        }
+        Each::Find => {
+            for item in items {
+                if run(&item)?.truthy() {
+                    return Ok(item);
+                }
+            }
+            Value::Null
+        }
+        Each::FindLast => {
+            for item in items.into_iter().rev() {
+                if run(&item)?.truthy() {
+                    return Ok(item);
+                }
+            }
+            Value::Null
+        }
+        Each::All => {
+            for item in &items {
+                if !run(item)?.truthy() {
+                    return Ok(Value::Bool(false));
+                }
+            }
+            Value::Bool(true)
+        }
+        Each::Any => {
+            for item in &items {
+                if run(item)?.truthy() {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            Value::Bool(false)
+        }
+    })
 }
 
 pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, String> {

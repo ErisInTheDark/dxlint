@@ -1,7 +1,8 @@
-# std/rust: Rust's structure. Strings, chars and comments are layers, so
+# .rs: Rust's structure. Strings, chars and comments are layers, so
 # brackets, quotes and comments inside them never confuse anything else.
+# Brings the Rust layout rule definitions (`.rs/format`), all off.
 
-import "std/core"
+import .core
 
 lang rust "*.rs" {
   match parentheses
@@ -29,3 +30,5 @@ in rs_code {
   # 'a' and '\n' are chars; 'a on its own is a lifetime and stays code.
   match rs_char /(?:\bb)?'(?:\\(?:u\{[0-9a-fA-F]{1,6}\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'/
 }
+
+import .rs/format

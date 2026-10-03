@@ -225,7 +225,26 @@ impl Parser<'_> {
         Some(Expr { kind: ExprKind::Unary(op, Box::new(inner)), span })
     }
 
+    /// A primary, then `.key` reads into what it gives (`find(xs, x => ...).name`).
     fn e_primary(&mut self) -> Option<Expr> {
+        let mut e = self.e_atom()?;
+        loop {
+            let dot = self.ts.peek_raw(0).cloned();
+            let key = self.ts.peek_raw(1).cloned();
+            match (dot, key, self.ts.last_span) {
+                (Some(d), Some(k), Some(last)) if d.kind == Tk::Dot && k.kind == Tk::Ident && last.end == d.span.start && d.touches(&k) => {
+                    self.ts.next_raw();
+                    self.ts.next_raw();
+                    let span = e.span.to(k.span);
+                    e = Expr { kind: ExprKind::Key(Box::new(e), Name { text: k.text.to_string(), span: k.span }), span };
+                }
+                _ => break,
+            }
+        }
+        Some(e)
+    }
+
+    fn e_atom(&mut self) -> Option<Expr> {
         let Some(t) = self.operand_peek() else {
             self.error_here("expected an expression, found end of file");
             return None;
@@ -251,6 +270,10 @@ impl Parser<'_> {
                 let items = self.comma_list(Tk::RBrack, "`]`")?;
                 let span = t.span.to(self.ts.last_span.unwrap_or(t.span));
                 Some(Expr { kind: ExprKind::List(items), span })
+            }
+            Tk::LBrace => {
+                self.ts.next_raw();
+                self.record(t)
             }
             Tk::LParen | Tk::InvOpen => {
                 self.ts.next_raw();
@@ -290,6 +313,58 @@ impl Parser<'_> {
         }
     }
 
+    /// `{ key: value, ... }` after its `{`. Keys are names or strings.
+    fn record(&mut self, open: Token) -> Option<Expr> {
+        self.expr_depth += 1;
+        let mut entries: Vec<(Name, Expr)> = Vec::new();
+        let result = loop {
+            self.skip(true, false);
+            let key = match self.ts.next_raw() {
+                Some(t) if t.kind == Tk::RBrace => break Some(()),
+                Some(t) if t.kind == Tk::Ident => Name { text: t.text.to_string(), span: t.span },
+                Some(t) if t.kind == Tk::Str => match decode_escapes(&t.text, t.span) {
+                    Ok(text) => Name { text, span: t.span },
+                    Err(e) => {
+                        self.errors.push(e);
+                        break None;
+                    }
+                },
+                other => {
+                    let span = other.map(|t| t.span).or(self.ts.last_span);
+                    self.errors.push(ConfigError::new(span, "expected a key (`name:`) or `}` in a record"));
+                    break None;
+                }
+            };
+            if entries.iter().any(|(k, _)| k.text == key.text) {
+                self.errors.push(ConfigError::new(key.span, format!("`{}` appears twice in this record", key.text)));
+                break None;
+            }
+            self.skip(true, false);
+            if !self.ts.peek_raw(0).is_some_and(|c| c.kind == Tk::Colon) {
+                self.error_here(format!("expected `:` after `{}`", key.text));
+                break None;
+            }
+            self.ts.next_raw();
+            let Some(value) = self.expr() else { break None };
+            entries.push((key, value));
+            self.skip(true, false);
+            match self.ts.peek_raw(0).map(|c| c.kind) {
+                Some(Tk::Comma) => {
+                    self.ts.next_raw();
+                }
+                Some(Tk::RBrace) => {}
+                _ => {
+                    self.error_here("expected `,` or `}`");
+                    break None;
+                }
+            }
+        };
+        self.expr_depth -= 1;
+        result?;
+        let span = open.span.to(self.ts.last_span.unwrap_or(open.span));
+        Some(Expr { kind: ExprKind::Record(entries), span })
+    }
+
     fn comma_list(&mut self, close: Tk, what: &str) -> Option<Vec<Expr>> {
         self.expr_depth += 1;
         let mut items = Vec::new();
@@ -299,9 +374,23 @@ impl Parser<'_> {
                 self.ts.next_raw();
                 break Some(items);
             }
-            match self.expr() {
-                Some(e) => items.push(e),
-                None => break None,
+            // `x => body`: a lambda, for functions that take one.
+            let param = self.ts.peek_raw(0).cloned().filter(|t| t.kind == Tk::Ident);
+            if let Some(param) = param.filter(|_| self.ts.peek_raw(1).is_some_and(|a| a.kind == Tk::Arrow)) {
+                self.ts.next_raw();
+                self.ts.next_raw();
+                match self.expr() {
+                    Some(body) => {
+                        let span = param.span.to(body.span);
+                        items.push(Expr { kind: ExprKind::Lambda(Name { text: param.text.to_string(), span: param.span }, Box::new(body)), span });
+                    }
+                    None => break None,
+                }
+            } else {
+                match self.expr() {
+                    Some(e) => items.push(e),
+                    None => break None,
+                }
             }
             self.skip(true, false);
             match self.ts.peek_raw(0).map(|c| c.kind) {

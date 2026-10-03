@@ -1,0 +1,49 @@
+# rules:format: layout and spacing, as eslint's and @stylistic's defaults
+# lay code out (and topiary's for Rust). Turns on every such rule of the
+# imported languages; rules whose port cannot follow the upstream default
+# yet are left out (comma-dangle, object-curly-spacing, arrow-parens,
+# dot-location, quote-props, operator-linebreak, one-var,
+# generator-star-spacing, lines-between-class-members,
+# padding-line-between-statements).
+
+rule array-bracket-spacing
+rule arrow-spacing*
+rule block-spacing*
+rule brace-style* {
+  set style "1tbs"
+}
+rule check-alignment*
+rule comma-spacing*
+rule comma-style
+rule computed-property-spacing
+rule eol-last
+rule key-spacing
+rule keyword-spacing*
+rule member-delimiter-style* {
+  set delimiter "semi"
+}
+rule new-parens
+rule no-floating-decimal*
+rule no-mixed-operators*
+rule no-multi-spaces
+rule no-multiple-empty-lines
+rule no-whitespace-before-property
+rule padded-blocks:always-top
+rule padded-blocks:always-bottom
+rule quotes* {
+  set style "double"
+}
+rule rest-spread-spacing
+rule semi:always
+rule semi-spacing*
+rule space-before-blocks
+rule space-before-function-paren*
+rule space-in-parens
+rule space-infix-ops
+rule spaced-comment*
+rule template-curly-spacing
+rule template-tag-spacing
+rule type-annotation-spacing
+rule yield-star-spacing
+
+rule rs-*

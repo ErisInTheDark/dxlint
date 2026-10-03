@@ -1,0 +1,20 @@
+# rules:types: rules that read declared types (zlint's own type evaluator:
+# no TypeScript needed). Turns on every such rule of the imported languages,
+# at its defaults.
+
+rule await-thenable*
+rule no-deprecated
+rule no-floating-promises
+rule no-for-in-array
+rule no-misused-promises
+rule no-unnecessary-boolean-literal-compare
+rule no-unnecessary-template-expression
+rule no-unnecessary-type-arguments
+rule no-unsafe-unary-minus
+rule prefer-find*
+rule prefer-includes
+rule prefer-optional-chain
+rule prefer-readonly*
+rule prefer-string-starts-ends-with*
+rule restrict-plus-operands*
+rule restrict-template-expressions

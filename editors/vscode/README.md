@@ -8,7 +8,7 @@ Runs `zlint lsp` and shows its results as you type:
 - quick fixes for fixable problems, plus "Fix all zlint problems in this file"
 - formatting (`Format Document`) applies every fix
 - `.zlint` syntax highlighting, and config errors shown live in the `.zlint` files, with links to related places ("first defined here", "still used here")
-- in `.zlint` files: hover on any name (rules with their final severity and option values, layers with their fields and rules, attributes, macros, groups, builtins, facts, functions, keywords), go to definition (std modules open read-only), find all references, completion and an outline
+- in `.zlint` files: completion of built-in languages and rulesets after `import `, of every defined rule after `rule `, and of a rule's options after `set ` in its block; hover on any name (rules with their final severity and option values, layers with their fields and rules, attributes, macros, groups, builtins, facts, functions, keywords), go to definition (std modules open read-only), find all references, completion and an outline
 - every diagnostic's rule code links to where the rule is defined
 - with `zlint.inspectHover`, hovering in a linted file shows the layers at the cursor and their facts: handy when writing rules
 
@@ -22,7 +22,7 @@ Runs `zlint lsp` and shows its results as you type:
 2. In this folder: `npm install`
 3. Open the folder in VS Code and press F5, or package it with `npx @vscode/vsce package` and install the `.vsix`
 
-The extension activates in workspaces that contain a `zoomie.zlint`.
+The extension activates in workspaces that contain a `.zlint` config.
 
 ## Settings
 

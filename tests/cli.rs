@@ -35,7 +35,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
     let dir = project(
         "cli-basic",
         &[
-            ("zoomie.zlint", "import \"rules/shout\"\nset no-shout error\n"),
+            (".zlint", "import rules/shout\nrule no-shout error\n"),
             ("rules/shout.zlint", RULES),
             ("src/a.t", "fine LOUD\nquiet # zlint-ignore\nNOPE # zlint-ignore no-shout\n"),
         ],
@@ -57,11 +57,11 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 
 #[test]
 fn cache_replays_results_and_relints_exactly_what_changed() {
-    let rules = "import \"std/ts\"\nin ts_identifier rule typed info \"{text}: {type}\" { when text == \"G\" || imported_from != null }\n";
+    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when text == \"G\" || imported_from != null }\n";
     let dir = project(
         "cli-cache",
         &[
-            ("zoomie.zlint", rules),
+            (".zlint", rules),
             ("tsconfig.json", "{}"),
             ("a/index.ts", "export const x: number = f();\nfunction f() { return 1 }\n"),
             ("b.ts", "import { x } from \"./a\";\nx;\nG;\n"),
@@ -108,9 +108,9 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
     assert!(global.last().is_some_and(|g| g == "G: number") && stats.contains("4 files (2 from cache)"), "{global:?} {stats}");
 
     // New rules start afresh (comments aside, which change nothing).
-    write("zoomie.zlint", &format!("# note\n{rules}"));
+    write(".zlint", &format!("# note\n{rules}"));
     assert!(run().1.contains("(4 from cache)"));
-    write("zoomie.zlint", &rules.replace("{text}: ", "{text} is "));
+    write(".zlint", &rules.replace("{text}: ", "{text} is "));
     let (renamed, stats) = run();
     assert!(renamed[0].starts_with("x is ") && stats.contains("(0 from cache)"), "{renamed:?} {stats}");
 }
@@ -134,7 +134,7 @@ fn describe_explains_names_and_config_goes_anywhere() {
 fn config_errors_point_into_the_imported_file() {
     let dir = project(
         "cli-config-error",
-        &[("zoomie.zlint", "import \"broken\"\n"), ("broken.zlint", "lang t \"*.t\"\nin nope rule x\n")],
+        &[(".zlint", "import broken\n"), ("broken.zlint", "lang t \"*.t\"\nin nope rule x\n")],
     );
     let out = zlint(&dir, &["check"]);
     assert_eq!(out.status.code(), Some(2));
@@ -144,8 +144,8 @@ fn config_errors_point_into_the_imported_file() {
 
 #[test]
 fn a_broken_config_still_lints_with_what_works() {
-    let config = format!("{RULES}in nope rule x\nset no-shout.max 3\n");
-    let dir = project("cli-partly-broken", &[("zoomie.zlint", config.as_str()), ("a.t", "LOUD\n")]);
+    let config = format!("{RULES}in nope rule x\nrule no-shout {{ set max 3 }}\n");
+    let dir = project("cli-partly-broken", &[(".zlint", config.as_str()), ("a.t", "LOUD\n")]);
     let out = zlint(&dir, &["--format", "jsonl"]);
     // The errors are printed and fail the run, but the working rule ran.
     assert_eq!(out.status.code(), Some(2));
@@ -175,4 +175,42 @@ fn unreadable_config_is_explained() {
     let out = zlint(&dir, &["--config", "nope.zlint"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+}
+
+#[test]
+fn configs_are_named_dot_zlint_and_import_each_other() {
+    // A config under its old name is pointed at, not silently ignored.
+    let dir = project("cli-old-name", &[("zoomie.zlint", RULES), ("a.t", "LOUD\n")]);
+    let out = zlint(&dir, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("rename it"), "{}", String::from_utf8_lossy(&out.stderr));
+
+    // A nested config builds on its parent's by importing it.
+    let dir = project("cli-dot-zlint", &[(".zlint", RULES), ("sub/.zlint", "import ../.zlint\nrule no-shout error\n"), ("sub/a.t", "LOUD\n")]);
+    let out = zlint(&dir.join("sub"), &["--format", "jsonl"]);
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout(&out).contains("\"severity\":\"error\""), "{}", stdout(&out));
+}
+
+#[test]
+fn built_in_rules_are_off_until_turned_on() {
+    let ts = "if (x = 1) {}\nvar y = 1;\n";
+    let lint = |name: &str, config: &str| {
+        let dir = project(name, &[(".zlint", config), ("a.ts", ts)]);
+        let out = zlint(&dir, &["--format", "jsonl"]);
+        let mut rules: Vec<String> = stdout(&out)
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("json")["rule"].as_str().unwrap_or_default().to_string())
+            .collect();
+        rules.sort();
+        (rules, String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    assert_eq!(lint("cli-off", "import .ts\n").0, Vec::<String>::new());
+    assert_eq!(lint("cli-one", "import .ts\nrule no-cond-assign\n").0, vec!["no-cond-assign"]);
+    // A ruleset turns on its category; `rule x off` takes one back.
+    let (rules, _) = lint("cli-ruleset", "import .ts\nimport rules:correctness\nimport rules:conventions\nrule no-var off\n");
+    assert!(rules.contains(&"no-cond-assign".to_string()) && !rules.contains(&"no-var".to_string()), "{rules:?}");
+    // A rule of a language not imported says which import brings it.
+    let (_, err) = lint("cli-hint", "import .ts\nrule rs-indent\n");
+    assert!(err.contains("comes with `import .rs`"), "{err}");
 }

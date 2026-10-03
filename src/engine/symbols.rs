@@ -82,12 +82,13 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("in", "`in a, b <item>`: the layers (or `layer.field`s, groups, `.lang`s) the item is about; `in a, b { ... }` for a block"),
     ("over", "`over a match x pattern`: an overlay, searched over `a`'s text without consuming it"),
     ("match", "`match name pattern`: a layer; `in parent match name` attaches an existing one"),
-    ("rule", "`in a rule name [severity [message]] [fix as expr] [{ clauses }]`"),
+    ("rule", "`in a rule name [severity [message]] [fix as expr] [{ clauses }]` defines a rule; `rule name [severity [message]] [{ set option value; clauses }]` (no `in`) turns an existing one on and configures it; names may glob (`semi:*`)"),
     ("let", "`in a let name expr`: an attribute of `a`'s nodes; inside a rule body, a value of the rule"),
-    ("set", "`set rule.option value`, `set rule severity`; rule names may glob (`semi:*`)"),
+    ("set", "in `rule name { ... }`: `set option value` sets one of the rule's options"),
+    ("define", "`define { ... }`: rules inside are defined but off until a `rule name` line turns them on"),
     ("group", "`group name a, b`: adds layers to an open, named list; everything aimed at the group reaches members added later, so libraries can be extended"),
     ("macro", "`macro name tokens`, `macro name(args) { lines }`: pasted where used"),
-    ("import", "`import \"path\"` or `import \"std/name\"`: paste another file here (once)"),
+    ("import", "`import .ts` (a built-in language, its rules defined but off), `import rules:recommended` (a built-in ruleset), `import some/path` (a file, relative to this one): pasted here, once"),
     ("ignore", "`ignore \"glob\" ...`: never lint these files"),
     ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
@@ -97,12 +98,11 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("when", "rule clause: `when expr`; every `when` must hold"),
     ("fix", "rule clause: `fix as expr`, what the node's text should be"),
     ("as", "`fix as expr`"),
-    ("option", "rule clause: `option name default \"description\"`, configurable with `set rule.name value`"),
+    ("option", "rule clause: `option name default [item shape] \"description\"`, set with `rule name { set option value }`"),
     ("files", "rule clause: `files \"glob\" ...`, only these files"),
     ("report", "rule clause: `report node | change | end`, where diagnostics point"),
     ("drop", "`drop rule name`, `drop match x`, `drop in a match x`, `drop let x`, `drop in a let x`, `drop macro m`, `drop group g [members]`, `drop ignore \"glob\"`: remove a definition; whatever still uses it is an error at the `drop`"),
     ("override", "`override <definition>`: replace the existing definition of that name, in its place"),
-    ("amend", "`amend rule name { ... }`: add `when`/`files`/`ignore`/`let`/options to a rule; a severity, message, fix or `report` replaces its own"),
     ("forward", "`in a forward x, y from field`: where `a` lacks attribute `x`, read it from `field`'s node"),
     ("from", "`forward x from field`"),
     ("is", "`value is a` / `value is [a, b]`: is the layer named by `value` one of these (or a specialisation, or in a group)?"),
@@ -131,6 +131,7 @@ impl Symbols {
         config: &Config,
         grammar: &Grammar,
         rules: &[Rule],
+        inert: &[super::InertRule],
         resolved: Vec<(Span, Resolved)>,
         sources: Arc<SourceMap>,
     ) -> Symbols {
@@ -138,6 +139,11 @@ impl Symbols {
         s.registry();
         s.layers(config, grammar);
         s.rules(config, rules);
+        for r in inert {
+            let doc = format!("checks `{}`, **off** (`rule {}` turns it on at {})", r.target_text, r.name, r.default_severity.as_str());
+            s.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
+            s.def(Kind::Rule, &r.name, r.span);
+        }
         s.attrs_and_macros(config);
         s.parser_uses(config, grammar);
         s.what_reads_layers(config, rules);
@@ -383,7 +389,12 @@ impl Symbols {
 
     fn rules(&mut self, config: &Config, rules: &[Rule]) {
         for r in rules {
-            let mut doc = format!("checks `{}`, severity **{}**", r.target_text, r.severity.as_str());
+            let state = if r.severity == crate::config::ast::Severity::Off {
+                format!("**off** (`rule {}` turns it on at {})", r.name, r.default_severity.as_str())
+            } else {
+                format!("on at **{}**", r.severity.as_str())
+            };
+            let mut doc = format!("checks `{}`, {state}", r.target_text);
             if let Some(m) = r.message_template() {
                 let _ = write!(doc, "\n\nmessage: {m}");
             }
@@ -398,11 +409,14 @@ impl Symbols {
                 }
                 let key = format!("{}.{}", r.name, o.name);
                 let odoc = format!(
-                    "of rule `{}`: {}\n\nvalue {}, default {}\n\n`set {key} value` changes it",
+                    "of rule `{}`: {}\n\nvalue {}, default {}{}\n\n`rule {} {{ set {} value }}` changes it",
                     r.name,
                     o.description.as_deref().unwrap_or("no description"),
                     crate::expr::show(&o.value),
-                    crate::expr::show(&o.default)
+                    crate::expr::show(&o.default),
+                    o.item.as_ref().map(|i| format!(", items like {}", crate::expr::show(i))).unwrap_or_default(),
+                    r.name,
+                    o.name
                 );
                 self.add(Kind::Option, &key, o.description.clone().unwrap_or_default(), odoc);
             }
@@ -431,11 +445,12 @@ impl Symbols {
                 }
             }
         }
-        for set in &config.sets {
-            if !set.target.text.contains('*') {
-                self.use_of(set.target.span, Kind::Rule, &set.target.text);
-                if set.key.text != "severity" {
-                    self.use_of(set.key.span, Kind::Option, &format!("{}.{}", set.target.text, set.key.text));
+        for c in &config.configs {
+            let name = &c.patch.name;
+            if !name.text.contains('*') {
+                self.use_of(name.span, Kind::Rule, &name.text);
+                for (option, _) in &c.options {
+                    self.use_of(option.span, Kind::Option, &format!("{}.{}", name.text, option.text));
                 }
             }
         }

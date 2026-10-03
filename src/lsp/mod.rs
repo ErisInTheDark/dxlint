@@ -1,6 +1,6 @@
 //! Language server. Open documents are linted on every change; the rest of
 //! the workspace is scanned in the background and streamed file by file.
-//! Each file uses its nearest `zoomie.zlint`. `.zlint` edits reload configs
+//! Each file uses its nearest `.zlint` config. `.zlint` edits reload configs
 //! live, with errors shown in place.
 
 mod config_docs;
@@ -63,7 +63,7 @@ struct Server {
     warned_no_config: bool,
     /// Open documents whose diagnostics are out of date.
     dirty: HashSet<PathBuf>,
-    /// Find every config again (startup, a `zoomie.zlint` created or deleted).
+    /// Find every config again (startup, a `.zlint` config created or deleted).
     rediscover: bool,
     /// Configs to reload.
     stale: HashSet<PathBuf>,

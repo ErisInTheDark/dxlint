@@ -1,17 +1,18 @@
 # zoomie-lint lints itself with this file.
 
-import "std/rust"
-import "std/zlint"
-import "std/markdown"
-import "std/toml"
-import "std/whitespace"
+import .rs
+import .zlint
+import .md
+import .toml
 
 # Examples are deliberately broken; they have their own configs.
 ignore "examples"
 
-# Long lines are a judgement call here, not a rule.
-set max-line-length off
-set tab-indent warn
+# Hygiene everywhere. Long lines are a judgement call here, not a rule.
+rule trailing-whitespace
+rule tab-indent
+rule blank-lines
+rule final-newline
 
 # ---- rust ---------------------------------------------------------------
 
@@ -53,7 +54,8 @@ in rs_line_comment, rs_block_comment match todo_note /\b(?:TODO|FIXME|XXX)\b/ {
 # ---- zlint --------------------------------------------------------------
 
 in zlint_code {
-  match zlint_rule /\brule[ \t]+/ name:/[\w-]+/
+  # Globs (`rule rs-*`) are not names.
+  match zlint_rule /\brule[ \t]+/ name:/[\w-]+(?![\w*-])/
   match zlint_matcher /\bmatch[ \t]+/ name:/\w+/
 }
 in zlint_rule.name rule rule-names warn "rule names are kebab-case" fix as kebab_case(text)

@@ -11,6 +11,8 @@ pub enum Value<'s> {
     Num(f64),
     Str(Cow<'s, str>),
     List(Vec<Value<'s>>),
+    /// `{ key: value }`, keys in written order.
+    Record(Vec<(Box<str>, Value<'s>)>),
 }
 
 impl<'s> Value<'s> {
@@ -21,6 +23,7 @@ impl<'s> Value<'s> {
             Value::Num(_) => "num",
             Value::Str(_) => "str",
             Value::List(_) => "list",
+            Value::Record(_) => "record",
         }
     }
 
@@ -31,6 +34,32 @@ impl<'s> Value<'s> {
             Value::Num(n) => *n != 0.0,
             Value::Str(s) => !s.is_empty(),
             Value::List(l) => !l.is_empty(),
+            Value::Record(r) => !r.is_empty(),
+        }
+    }
+
+    /// A record's value for `key` (null when missing, or not a record).
+    pub fn key(&self, key: &str) -> Value<'s> {
+        match self {
+            Value::Record(entries) => entries.iter().find(|(k, _)| &**k == key).map_or(Value::Null, |(_, v)| v.clone()),
+            _ => Value::Null,
+        }
+    }
+
+    /// The value as zlint source: `"a"`, `[1, { k: true }]`.
+    pub fn literal(&self) -> String {
+        match self {
+            Value::Null => "null".into(),
+            Value::Str(s) => format!("{:?}", s.as_ref()),
+            Value::List(items) => format!("[{}]", items.iter().map(Value::literal).collect::<Vec<_>>().join(", ")),
+            Value::Record(entries) => {
+                if entries.is_empty() {
+                    return "{}".into();
+                }
+                let body: Vec<String> = entries.iter().map(|(k, v)| format!("{k}: {}", v.literal())).collect();
+                format!("{{ {} }}", body.join(", "))
+            }
+            other => other.to_string(),
         }
     }
 
@@ -50,6 +79,7 @@ impl<'s> Value<'s> {
             Value::Num(n) => Value::Num(n),
             Value::Str(s) => Value::Str(Cow::Owned(s.into_owned())),
             Value::List(items) => Value::List(items.into_iter().map(Value::into_owned).collect()),
+            Value::Record(entries) => Value::Record(entries.into_iter().map(|(k, v)| (k, v.into_owned())).collect()),
         }
     }
 
@@ -60,6 +90,7 @@ impl<'s> Value<'s> {
             Value::Str(s) => s.trim().parse().map_err(|_| format!("expected a number, got \"{s}\"")),
             Value::Null => Ok(0.0),
             Value::List(_) => Err("expected a number, got a list".into()),
+            Value::Record(_) => Err("expected a number, got a record".into()),
         }
     }
 
@@ -79,6 +110,9 @@ impl<'s> Value<'s> {
             (Value::Null, Value::Str(s)) | (Value::Str(s), Value::Null) => s.is_empty(),
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::List(a), Value::List(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.loose_eq(y)),
+            (Value::Record(a), Value::Record(b)) => {
+                a.len() == b.len() && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v.loose_eq(v2)))
+            }
             (Value::Null, Value::Null) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Num(a), Value::Num(b)) => a == b,
@@ -113,6 +147,7 @@ impl fmt::Display for Value<'_> {
                 }
                 Ok(())
             }
+            Value::Record(_) => f.write_str(&self.literal()),
         }
     }
 }

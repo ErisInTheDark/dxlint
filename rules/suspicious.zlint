@@ -1,0 +1,31 @@
+# rules:suspicious: code that is likely a mistake, or does nothing. Turns on
+# every such rule of the imported languages, at its defaults.
+
+rule no-caller
+rule no-delete-var
+rule no-empty-interface
+rule no-empty-static-block
+rule no-eval*
+rule no-extra-bind
+rule no-extra-boolean-cast*
+rule no-global-assign
+rule no-misused-new*
+rule no-new-func
+rule no-new-wrappers
+rule no-nonoctal-decimal-escape
+rule no-octal
+rule no-regex-spaces*
+rule no-require-imports
+rule no-restricted-syntax:with
+rule no-sequences
+rule no-shadow-restricted-names
+rule no-template-curly-in-string
+rule no-throw-literal
+rule no-unsafe-function-type
+rule no-unused-expressions
+rule no-unused-imports
+rule no-unused-labels
+rule no-useless-catch*
+rule no-useless-escape*
+rule no-wrapper-object-types
+rule require-yield

@@ -1,0 +1,4 @@
+# .ts/helpers: helpers shared by the native TypeScript rule definitions.
+
+# A plain identifier, nothing else (`x`, `$el`, not `a.b` or `f()`).
+macro is_identifier(x) re_test(x, /^[A-Za-z_$][\w$]*$/)

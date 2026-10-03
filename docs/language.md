@@ -3,11 +3,15 @@
 A `.zlint` file describes **layers** (what the text is made of) and **rules**
 (what the text should look like). zlint parses every file into a tree of
 layers using only fast regex-style matching, then runs rules on the nodes
-they check.
+they check. A project's config is a file named `.zlint`; zlint uses the
+nearest one above the files it lints.
 
 ```zlint
-import "std/rust"
+import .rs                       # Rust's layers, and its built-in rules (all off)
 
+rule rs-indent                   # turn a built-in rule on
+
+# ...or write your own:
 in rs_code match rs_function /\bfn[ \t]+/ name:identifier
 in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 ```
@@ -21,8 +25,8 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 - [Debugging rules](#debugging-rules)
 - [Attributes](#attributes)
 - [Native layers (TypeScript)](#native-layers-typescript)
-- [Configuring rules: `set`](#configuring-rules-set)
-- [Changing imported definitions: `override`, `amend`, `drop`](#changing-imported-definitions-override-amend-drop)
+- [Turning rules on and configuring them](#turning-rules-on-and-configuring-them)
+- [Changing imported definitions: `override`, `drop`](#changing-imported-definitions-override-drop)
 - [Imports and macros](#imports-and-macros)
 - [Suppressing diagnostics](#suppressing-diagnostics)
 - [Editor and tooling](#editor-and-tooling)
@@ -40,14 +44,15 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `over A match name pattern` | an overlay: searched over `A`'s text without consuming it |
 | `group name A, B` | add layers to a named group, usable wherever a layer list is |
 | `in A, B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
-| `in A rule name ...` | a rule checking `A`'s nodes, see [Rules](#rules) |
+| `in A rule name ...` | define a rule checking `A`'s nodes (and turn it on), see [Rules](#rules) |
+| `rule name [severity] [{ ... }]` | turn an existing rule on, off, or configure it, see [Turning rules on](#turning-rules-on-and-configuring-them) |
+| `define { items }` | items inside define; their rules stay off until turned on |
 | `in A let name expr` | an attribute computed for `A`'s nodes, see [Attributes](#attributes) |
 | `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |
 | `native ts` | TypeScript/JavaScript syntax as `ts_*` layers, see [Native layers](#native-layers-typescript) |
-| `set name.option value`, `set name severity` | configure an existing rule |
-| `override <definition>`, `amend rule name { ... }`, `drop ...` | replace, patch or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-amend-drop) |
+| `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "glob"` | never lint matching files |
-| `import "path"` | paste another `.zlint` file here |
+| `import .ts`, `import rules:recommended`, `import some/path` | a built-in language, a built-in ruleset, or another `.zlint` file, see [Imports](#imports-and-macros) |
 | `macro name tokens`, `macro name(args) { lines }` | define a macro |
 
 `#` starts a comment, and `#` lines right above a definition are its
@@ -164,7 +169,7 @@ is loaded. So anything aimed at a group, even written earlier, reaches layers
 added later. That makes groups the extension point of a library:
 
 ```zlint
-# std/js.zlint
+# .js (built in)
 group js_code .js, parentheses, brackets, braces
 in js_code match js_string /"/ until /"/        # strings inside every code layer
 # your config, after importing it
@@ -291,7 +296,10 @@ in line rule line-length {
 ```
 
 A rule is `rule name [severity [message]] [fix as expr] [{ clauses }]` in a
-context (`in ...` or a block).
+context (`in ...` or a block). That defines it; in your own config it is on
+right away, at its severity. Without a context, `rule name ...` turns an
+existing rule on or configures it instead (see
+[Turning rules on](#turning-rules-on-and-configuring-them)).
 
 **Targets.** A rule checks every node of its context's layers: a matcher (and
 its specialisations), a field (`in m.field rule`), a group (every member),
@@ -307,10 +315,10 @@ body line (`warn "..."`). The message can use everything an expression can
 values filled in and other holes left as written.
 
 **Names.** A rule name may be `family:variant` (`semi:never`,
-`no-multiple-empty-lines:eof`): several rules that make up one. `set semi:*
-off` reaches every variant, and suppressing `semi` suppresses the whole
-family. A second `rule` with a name already in use is an error; use
-[`override`](#changing-imported-definitions-override-amend-drop) to replace one.
+`no-multiple-empty-lines:eof`): several rules that make up one. `rule
+semi:* off` reaches every variant, and suppressing `semi` suppresses the
+whole family. A second definition with a name already in use is an error;
+use [`override`](#changing-imported-definitions-override-drop) to replace one.
 
 **Fix.** `fix as expr` says what the node *should* be. If its text differs from
 the node's text, the rule reports the node and offers the fix. If they are
@@ -326,7 +334,7 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | `when expr` | only nodes where `expr` is truthy; several `when`s must all hold, in order |
 | `let name expr` | a value computed once per node and usable by later clauses, the message and the fix |
 | `fix as expr` | what the node should be |
-| `option name value "description"` | a configurable value, see [`set`](#configuring-rules-set); `value` is one literal (or `( ... )`) |
+| `option name default [item shape] "description"` | a configurable value; the default is a constant (records and lists too) and fixes the option's shape, see [Turning rules on](#turning-rules-on-and-configuring-them) |
 | `files "glob" ...` | only these files |
 | `ignore "glob" ...` | not these files |
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
@@ -362,7 +370,10 @@ so nested rules compose.
 | `"""` ... `"""` | multi-line string, see below |
 | `42`, `1.5`, `true`, `false`, `null` | literals |
 | `[a, b]` | list |
+| `{ key: value, ... }` | record (keys are names or strings) |
 | `name` | a field of the node, an option, a `let`, or a variable |
+| `option.key`, `x.key`, `f(...).key` | a record's value for `key` (`null` when missing) |
+| `map(xs, x => ...)` | a lambda, for `map`, `filter`, `find`, `find_last`, `all` and `any` |
 | `matcher` / `matcher.field` | the closest enclosing node of `matcher`, or its field |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
@@ -402,17 +413,29 @@ ending in `\` continues on the next without a line break. Escapes and
 `{holes}` work as in `"..."`, and `"` needs no escaping:
 
 ```zlint
-set header:*.license """
-  /*!
-   * Copyright 2025 Someone. Modification and/or \
-  distribution is prohibited.
-   */
-  """
+rule header:* error {
+  set license """
+    /*!
+     * Copyright 2025 Someone. Modification and/or \
+    distribution is prohibited.
+     */
+    """
+}
 ```
 
-**Values** are `null`, booleans, numbers, text and lists. A field that did not
-match is `null`, and a field that matched several times is a list. `null`,
-`false`, `0`, `""` and `[]` are falsy.
+**Values** are `null`, booleans, numbers, text, lists and records. A field
+that did not match is `null`, and a field that matched several times is a
+list. `null`, `false`, `0`, `""`, `[]` and `{}` are falsy.
+
+**Lambdas** walk lists, usually lists of records from an option: `map(xs, x
+=> value)`, `filter(xs, x => test)`, `find(xs, x => test)` (first match or
+`null`), `find_last`, `all(xs, x => test)` and `any(xs, x => test)`. `keys`,
+`values` and `len` read records. A lambda sees everything the expression
+around it sees, plus its parameter:
+
+```zlint
+let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.next, layer)).blankLine
+```
 
 **Variables.**
 
@@ -465,8 +488,8 @@ for groups) and `re_escape(text)` to build patterns from text.
 ## Debugging rules
 
 - **`zlint describe <name>`** explains any name in the config: a rule (final
-  severity, options with their values, targets, where it is defined and
-  `set`), a layer (pattern, parents, fields, rules and attributes on it), a
+  severity or that it is off, options with their values, targets, where it
+  is defined and configured), a layer (pattern, parents, fields, rules and attributes on it), a
   group (its final members), an attribute, macro, builtin, fact, function or
   keyword, with every place it is used. Misspelt names get a suggestion.
 - **`dbg(value, "label")`** returns `value` unchanged and prints
@@ -499,7 +522,7 @@ nodes' attributes through fields and neighbours, so they can fold a tree
 bottom-up:
 
 ```zlint
-import "std/ts"
+import .ts
 in ts_logical let operators 1 + sum(children.operators)
 in ts_parenthesized forward operators from expression
 in ts_call let operators sum(argument.operators)
@@ -532,7 +555,7 @@ attribute: it stays next to its rule.
 
 ## Native layers (TypeScript)
 
-`import "std/ts"` (or `native ts` with your own JS language) parses
+`import .ts` (or `native ts` with your own JS language) parses
 `.ts`/`.tsx`/`.js`/`.mjs`/`.cjs` files with zlint's own TypeScript parser and
 turns its syntax tree into `ts_*` layers: `ts_if` with fields `test`,
 `consequent`, `alternate`; `ts_call` with `callee`, `type_argument`,
@@ -541,8 +564,8 @@ on (ESTree names, abbreviations spelled out; `zlint tree file.ts` shows any
 file). Rules on them work like any rule:
 
 ```zlint
-import "std/ts"
-in ts_call rule no-eval warn "no eval" { when callee == "eval" }
+import .ts
+in ts_call rule my-no-eval warn "no eval" { when callee == "eval" }
 in ts_if.test, ts_while.test rule assign-in-condition warn "assignment in a condition" {
   when layer is ts_assignment
 }
@@ -602,28 +625,69 @@ functions of the linted file itself are typed from their `return`s.
 Where a type cannot be told, `type` is null and rules stay quiet; there is
 no contextual inference beyond callback parameters.
 
-## Configuring rules: `set`
+## Turning rules on and configuring them
+
+Importing a language brings every rule written for it, **off**. You turn on
+exactly the ones you want; a built-in ruleset (`import rules:recommended`)
+is a shortcut that turns on a whole category, and anything it turned on can
+be turned off again.
 
 ```zlint
-set max-line-length.max 100
-set max-line-length error
-set style-* off                      # `*` globs over rule names
+import .ts
+
+rule no-cond-assign                  # on, at its default severity
+rule eqeqeq error                    # on, as an error
+rule semi:always info "no ;"         # a severity and a new message
+rule style-* off                     # `*` globs over rule names
+rule brace-style:* {                 # options are set in a block
+  set style "stroustrup"
+}
+rule padding-line-between-statements {
+  set config [
+    { blankLine: "always", prev: "*", next: "return" },
+  ]
+  ignore "scripts/**"                # clauses add to the rule
+}
 ```
 
-Option values must be constants of the same type as the option's default.
-Every rule's severity can be set.
+- `rule name` without `in` configures an existing rule: it turns it on at
+  its default severity (unless it is on already), `rule name <severity>`
+  sets the severity, a message after the severity replaces the rule's own,
+  and `rule name off` turns it off.
+- In the block, `set option value` sets an option; `when`, `let`, `files`
+  and `ignore` add to the rule; `fix as` and `report` replace its own.
+- These lines may come before or after the definition; they apply in order.
+  A name nothing defines is an error with a suggestion, and says which
+  language import defines it (`rule rs-indent` → "comes with `import .rs`").
+  Rulesets skip rules of languages you did not import.
+- **Option values** have the shape of the option's default: the same type,
+  only keys the default record has, and list items like the default's first
+  item or the option's declared item shape. A mismatch names where it is:
+  `option config: [1].blankLine is a num, expected a str`. A rule declares
+  a list option's items with `item`:
 
-## Changing imported definitions: `override`, `amend`, `drop`
+  ```zlint
+  option config [] item { blankLine: "any", prev: "*", next: "*" } "blank lines between statements"
+  ```
 
-An imported ruleset is a starting point. Its importer can replace, patch or
-remove anything in it, in order: each of these sees everything above it
-(imports included), and everything below sees the result.
+- `define { ... }` defines without turning on: rules inside stay off until a
+  `rule name` line turns them on. The built-in languages are written this
+  way. Layers and attributes defined inside `define` take part in parsing
+  only while something needs them (a turned-on rule, or your own items), so
+  importing a language never changes what your own matchers match.
+- `zlint rules` lists every defined rule, the off ones with the severity
+  they turn on at.
+
+## Changing imported definitions: `override`, `drop`
+
+An imported ruleset is a starting point. Its importer can replace or remove
+anything in it, in order: each of these sees everything above it (imports
+included), and everything below sees the result.
 
 ```zlint
-import "../rules/ts-problems"
+import ../rules/ts-problems
 
 override in ts_call rule no-eval error "eval is banned here" { when callee == "eval" }
-amend rule no-floating-promises { ignore "scripts/**" }
 override macro newline "\n"
 drop rule no-console                     # the name is free again
 drop rule semi:*                         # rule names take globs
@@ -639,32 +703,50 @@ drop ignore "static/**"
 - **`override`** goes in front of a definition (`rule`, `match`, `let`,
   `macro` or `group`) and replaces the existing one, which must exist.
   A plain second definition is an error that points at the first and
-  suggests `override`. An overridden rule keeps its place, and `set`s above
-  the override are dropped with the old rule. `override match x pattern`
-  replaces the whole definition, parents included, so write
-  `override in A match x ...` to keep it in `A`.
-- **`amend rule name { ... }`** patches a rule in place: `when`, `let`,
-  `option`, `files` and `ignore` clauses are added, and a severity, message,
-  `fix` or `report` replaces the old one.
+  suggests `override`. An overridden rule keeps its place, and `rule` lines
+  above the override are dropped with the old rule. `override match x
+  pattern` replaces the whole definition, parents included, so write
+  `override in A match x ...` to keep it in `A`. Overriding a built-in rule
+  (`override in my_layer rule no-console ...`) replaces it with your own.
 - **`drop`** removes a definition. Whatever still uses it (rules, `let`s,
-  patterns, `like` bases, group members, children, expressions, `set`s
+  patterns, `like` bases, group members, children, expressions, `rule` lines
   below) is an error **at the `drop`**, with a link to each use, so the fix
   sits in your file: drop or override those too.
 
 ## Imports and macros
 
-`import "path"` pastes another file's items in place. Paths are relative to
-the importing file, `.zlint` is added when there is no extension, and every
-file is imported at most once. `import "std/rust"` loads the built-in
-library:
+`import` pastes something's items in place, once:
 
-| module | contents |
+| import | loads |
 |---|---|
-| `std/core` | `parentheses`, `brackets`, `braces` (nesting), `whitespace`, `space`, `identifier`, `number`, and the `newline` macro (the file's own line break) |
-| `std/rust`, `std/js`, `std/python`, `std/c`, `std/toml`, `std/zlint` | languages with brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
-| `std/ts` | `native ts` (with `std/js`) and the groups `ts_function_like`, `ts_loop`, `ts_statement` |
-| `std/markdown` | code fences, inline code, HTML comments |
-| `std/whitespace` | `trailing-whitespace`, `max-line-length`, `tab-indent`, `blank-lines`, `final-newline` |
+| `import .ts`, `.js`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.zlint` | a built-in language: its layers, and every rule written for it, off |
+| `import rules:recommended` | a built-in ruleset: `rule` lines turning on a category of rules |
+| `import some/path` | another `.zlint` file, relative to this one (`.zlint` is added when there is no extension; quotes are optional) |
+
+Every language also brings the shared building blocks: `parentheses`,
+`brackets`, `braces` (nesting), `whitespace`, `space`, `identifier`, `number`,
+the `newline` macro (the file's own line break), and the language-neutral
+rules `trailing-whitespace`, `max-line-length`, `tab-indent`, `blank-lines`
+and `final-newline`.
+
+| language | contents |
+|---|---|
+| `.rs`, `.js`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
+| `.ts` | `native ts` (with `.js`), the groups `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
+| `.rs` | also the `rs-*` layout rules |
+| `.md` | code fences, inline code, HTML comments |
+
+| ruleset | turns on |
+|---|---|
+| `rules:correctness` | code that is almost certainly wrong (`no-cond-assign`, `use-isnan`, `valid-typeof`, ...) |
+| `rules:suspicious` | likely mistakes, or code that does nothing (`no-fallthrough`, `no-self-assign`, ...) |
+| `rules:conventions` | one consistent way to write things (`prefer-const`, `eqeqeq`, ...) |
+| `rules:format` | layout and spacing, as eslint's and @stylistic's defaults lay code out, and the `rs-*` rules |
+| `rules:types` | rules that read declared types (`no-floating-promises`, ...) |
+| `rules:recommended` | what eslint and typescript-eslint recommend without type information |
+
+A `.zlint` file is a config file: `import ../.zlint` builds on the config
+of the directory above.
 
 Macros paste tokens: they generate zlint code, not text.
 
@@ -707,8 +789,9 @@ well as the files they lint:
   attributes, macros, builtins, facts, functions and keywords
 - **go to definition** (std modules open as read-only copies), **find all
   references** across imports and macro bodies, **completion** by context
-  (layers after `in`, fields after `layer.`, rules after `set`, options after
-  `set rule.`, modules inside `import "`) and an **outline**
+  (layers after `in`, fields after `layer.`, every defined rule after `rule `,
+  the rule's options after `set ` in its block, languages and rulesets after
+  `import `) and an **outline**
 - config errors in place, with links to related spots ("first defined
   here", "still used here")
 - every diagnostic's rule code links to where the rule is defined
@@ -722,6 +805,9 @@ that cost the most interpreter steps and the rules that cost the most time.
 Matchers that compile to a DFA never show up there; slow ones are usually
 nullable, use fields, or have no leading literal or lookaround to tell zlint
 where they can start.
+
+Built-in rules that are off cost nothing: the layers only they need are not
+even parsed.
 
 **`.zlintcache`.** zlint keeps each file's results beside the config and
 reuses them while the file's text is unchanged and so is everything its lint

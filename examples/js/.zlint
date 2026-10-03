@@ -1,28 +1,24 @@
 # Example: a few JavaScript/TypeScript rules.
 # Try it: cd examples/js && zlint
 
-import "std/js"
-import "std/whitespace"
+import .js
+
+# Built-in rules are defined but off: turn on the ones you want.
+rule arrow-parens
 
 in js_code {
   # `==` -> `===`. The operator is a field, so the fix only touches it.
   match js_loose_eq /[^=!<>]/ op:/[!=]=/ /[^=]/
 
-  # console.log anywhere except in scripts/.
-  match js_console /\bconsole\.(?:log|debug)\b/ {
-    rule no-console warn "remove `{text}`" {
+  # console.log anywhere except in scripts/: our own take on the built-in
+  # no-console, so it replaces it.
+  match js_console_log /\bconsole\.(?:log|debug)\b/ {
+    override rule no-console warn "remove `{text}`" {
       ignore "scripts/**"
     }
   }
-
-  # Arrow functions with one plain parameter drop the parens: (x) => x
-  match js_arrow params:parentheses /\s*=>/
 }
 in js_loose_eq.op rule strict-equality warn "use `{text}=` instead of `{text}`" fix as text "="
-in js_arrow.params rule arrow-parens warn "no parens around a single arrow parameter" {
-  when text ~ /\(\s*[A-Za-z_$][\w$]*\s*\)/
-  fix as trim(slice(text, 1, -1))
-}
 
 # Searched only inside comments.
 in js_line_comment, js_block_comment match js_todo /\bTODO\b/ {

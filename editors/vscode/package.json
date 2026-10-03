@@ -8,13 +8,14 @@
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Linters", "Formatters", "Programming Languages"],
   "main": "./extension.js",
-  "activationEvents": ["workspaceContains:**/zoomie.zlint", "onLanguage:zlint"],
+  "activationEvents": ["workspaceContains:**/.zlint", "onLanguage:zlint"],
   "contributes": {
     "languages": [
       {
         "id": "zlint",
         "aliases": ["zlint", "zoomie-lint"],
         "extensions": [".zlint"],
+        "filenames": [".zlint"],
         "configuration": "./language-configuration.json"
       }
     ],

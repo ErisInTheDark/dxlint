@@ -146,14 +146,39 @@ pub static FUNCTIONS: &[Function] = &[
     Function {
         name: "len",
         signature: "len(value)",
-        doc: "characters in a text, or items in a list",
+        doc: "characters in a text, items in a list, or keys in a record",
         min: 1,
         max: 1,
         call: |a| {
             Ok(Value::from(match &a[0] {
                 Value::List(l) => l.len(),
+                Value::Record(r) => r.len(),
                 v => v.text().chars().count(),
             }))
+        },
+    },
+    Function {
+        name: "keys",
+        signature: "keys(record)",
+        doc: "a record's keys, in order",
+        min: 1,
+        max: 1,
+        call: |a| match &a[0] {
+            Value::Record(r) => Ok(Value::List(r.iter().map(|(k, _)| Value::from(k.to_string())).collect())),
+            Value::Null => Ok(Value::List(Vec::new())),
+            v => Err(format!("expected a record, got a {}", v.type_name())),
+        },
+    },
+    Function {
+        name: "values",
+        signature: "values(record)",
+        doc: "a record's values, in key order",
+        min: 1,
+        max: 1,
+        call: |a| match &a[0] {
+            Value::Record(r) => Ok(Value::List(r.iter().map(|(_, v)| v.clone()).collect())),
+            Value::Null => Ok(Value::List(Vec::new())),
+            v => Err(format!("expected a record, got a {}", v.type_name())),
         },
     },
     text_fn!("lower", "lowercase text", |s| s.to_lowercase()),

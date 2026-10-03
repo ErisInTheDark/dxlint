@@ -1,4 +1,4 @@
-# std/core: building blocks shared by every language.
+# .core: building blocks shared by every language (each imports it).
 #
 # Brackets are layers whose `until` middle lets their children eat nested
 # content, so `(a, f(")"))` closes at the right parenthesis. Languages attach
@@ -23,3 +23,6 @@ match number /\b\d[\d_]*(?:\.\d+)?/
 
 # The line break this file uses, for fixes that add lines.
 macro newline (if contains(source, "\r\n") then "\r\n" else "\n")
+
+# Language-neutral hygiene rules, defined (off) for every language.
+import .whitespace

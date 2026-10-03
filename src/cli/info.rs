@@ -19,12 +19,27 @@ const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
 const CYAN: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
 
+/// `zlint rules`: every rule the config defines, the ones that are off
+/// included (with the severity `rule name` turns them on at).
 pub fn rules(linter: &Linter) -> ExitCode {
-    let mut rules: Vec<_> = linter.rules.iter().collect();
-    rules.sort_by(|a, b| a.name.cmp(&b.name));
-    for f in rules {
+    enum Row<'a> {
+        Compiled(&'a zoomie_lint::engine::Rule),
+        Inert(&'a zoomie_lint::engine::InertRule),
+    }
+    let mut rows: Vec<(&str, Row)> = linter.rules.iter().map(|r| (r.name.as_str(), Row::Compiled(r))).collect();
+    rows.extend(linter.inert.iter().map(|r| (r.name.as_str(), Row::Inert(r))));
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    let off = |default: Severity| format!("{DIM}off (default {}){DIM:#}", default.as_str());
+    for (_, row) in rows {
+        let f = match row {
+            Row::Inert(r) => {
+                println!("{BOLD}{}{BOLD:#} {} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}", r.name, off(r.default_severity), r.target_text);
+                continue;
+            }
+            Row::Compiled(f) => f,
+        };
         let sev = render::severity_style(f.severity);
-        let sev_text = if f.severity == Severity::Off { format!("{DIM}off{DIM:#}") } else { format!("{sev}{}{sev:#}", f.severity.as_str()) };
+        let sev_text = if f.severity == Severity::Off { off(f.default_severity) } else { format!("{sev}{}{sev:#}", f.severity.as_str()) };
         let fix = if f.has_fix() { format!(" {DIM}fixable{DIM:#}") } else { String::new() };
         println!("{BOLD}{}{BOLD:#} {sev_text} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}{fix}", f.name, f.target_text);
         if let Some(d) = f.message_template() {
@@ -231,7 +246,7 @@ pub fn tree(linter: &Linter, file: &Path, all: bool) -> ExitCode {
 }
 
 fn is_noise(name: &str) -> bool {
-    matches!(name, "paren" | "brack" | "brace") || name.ends_with("escape")
+    matches!(name, "parentheses" | "brackets" | "braces") || name.ends_with("escape")
 }
 
 /// `--profile`: the most expensive matchers and rules, on stderr.

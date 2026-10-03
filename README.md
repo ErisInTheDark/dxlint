@@ -5,7 +5,7 @@ language, `.zlint`. Think tree-sitter queries, but you build the tree
 yourself out of regexes, and only describe the parts you care about.
 
 ```zlint
-import "std/rust"
+import .rs
 
 # A layer: function names, found anywhere in Rust code (never in strings
 # or comments, because those are layers of their own).
@@ -28,9 +28,13 @@ warn: `doThing` should be snake_case [fn-snake-case] (fixable)
 
 - **Two ideas, small language.** *Matchers* build layers out of regexes, and
   *rules* say what a layer should look like. Everything else is
-  configuration (`set`), reuse (`import`, `macro`) and file selection.
-- **Defaults you fully control.** Import a ruleset, then `set` its options,
-  `override` or `amend` any rule, matcher, attribute or macro, or `drop` it;
+  configuration (`rule name ...`), reuse (`import`, `macro`) and file
+  selection.
+- **Built-in rules, all yours to pick.** Importing a language (`import .ts`)
+  brings every rule written for it, off: turn on exactly the ones you want
+  (`rule no-cond-assign`), or a whole ruleset (`import rules:recommended`)
+  and take some back. Options take records and lists, so eslint's richer
+  options carry over. `override` or `drop` anything an import defines;
   anything left depending on a dropped name is reported at the `drop`.
 - **Brackets, quotes and escapes come for free.** A string is a layer whose
   escapes are child layers. A bracket group is a layer whose nested groups and
@@ -50,14 +54,17 @@ warn: `doThing` should be snake_case [fn-snake-case] (fixable)
 cargo build --release          # binary: target/release/zlint
 ```
 
-Put a `zoomie.zlint` at your project root. zlint finds the nearest one above
-the current directory, and paths in it are relative to its directory.
+Put a `.zlint` at your project root. zlint finds the nearest one above the
+current directory, and paths in it are relative to its directory.
 
 ```zlint
-import "std/rust"
-import "std/whitespace"
+import .ts
+import rules:recommended
 
-set max-line-length.max 100
+rule eqeqeq error
+rule max-line-length {
+  set max 100
+}
 ignore "vendor" "src/generated/**"
 ```
 
@@ -69,7 +76,7 @@ ignore "vendor" "src/generated/**"
 | `zlint --stats` | timing and throughput (and how many files came from `.zlintcache`) |
 | `zlint --no-cache` | lint every file, ignoring `.zlintcache` |
 | `zlint check` | validate the config only |
-| `zlint rules` | list rules with severities, options and messages |
+| `zlint rules` | list every defined rule (off ones too) with severities, options and messages |
 | `zlint describe <name>` | explain any name in the config (rule, layer, group, attribute, macro, fact...) and where it is used |
 | `zlint tree <file>` | print the layer tree (handy while writing matchers) |
 | `zlint functions` | list expression functions and variables |
@@ -113,8 +120,9 @@ in call.arguments rule long-calls {
   warn "`{call.name}` has {len(text)} characters of arguments"
 }
 
-set long-calls.max 120                              # configure existing rules
-set long-calls error
+rule long-calls error {                             # configure existing rules
+  set max 120
+}
 ```
 
 Layers can be specialised (`match js_object like braces ...` wins ties against
@@ -128,7 +136,7 @@ lookahead and lookbehind, and rule expressions have line context
 (`children.x`, `previous.x`, `next.x`), layer tests (`parent is [ts_block,
 ts_program]`), rule-local `let`s and `re_*` functions.
 
-For TypeScript and JavaScript, `import "std/ts"` adds zlint's own parser:
+For TypeScript and JavaScript, `import .ts` adds zlint's own parser:
 the real syntax tree as `ts_*` layers, scopes (`uses`, `value_uses`),
 cross-file facts (`declaration_doc`) and declared types (`type`,
 `type_members`) read from your tsconfig, `lib` and `@types` files, without
@@ -140,11 +148,13 @@ more than two `&&`/`||`".
 A config with mistakes still lints with every part that built: the errors
 are reported, and the run fails, but one typo never switches linting off.
 
-The standard library ships languages (`std/rust`, `std/js`, `std/python`,
-`std/c`, `std/toml`, `std/markdown`, `std/zlint`), bracket nesting
-(`std/core`), and hygiene rules (`std/whitespace`). See
-[examples/](examples) for complete configs, and [zoomie.zlint](zoomie.zlint)
-for the rules this repository lints itself with.
+The built-in library ships languages (`.rs`, `.js`, `.ts`, `.py`, `.c`,
+`.toml`, `.md`, `.zlint`) with their rules (ports of eslint, @stylistic and
+typescript-eslint rules for JS/TS, topiary-style layout for Rust, and
+language-neutral hygiene), and rulesets (`rules:correctness`,
+`rules:suspicious`, `rules:conventions`, `rules:format`, `rules:types`,
+`rules:recommended`). See [examples/](examples) for complete configs, and
+[.zlint](.zlint) for the rules this repository lints itself with.
 
 Suppress with a comment anywhere: `zlint-ignore`, `zlint-ignore rule-name`,
 `zlint-ignore-start` ... `zlint-ignore-end`, or `zlint-ignore-file`.
@@ -175,10 +185,10 @@ Release build, 16 threads, files from this repository's own sources:
 
 | workload | time | throughput |
 |---|---|---|
-| 1,521 files (8.7 MiB), full `zoomie.zlint` | ~72 ms | ~120 MiB/s |
+| 1,521 files (8.7 MiB), full self-lint config | ~72 ms | ~120 MiB/s |
 | one 27 MiB file, Rust structure (strings, comments, brackets) + a rule | ~640 ms | ~42 MiB/s |
-| one 27 MiB file, `std/whitespace` | ~490 ms | ~55 MiB/s |
-| one 27 MiB file, full `zoomie.zlint` | ~1.2 s | ~23 MiB/s |
+| one 27 MiB file, the whitespace rules | ~490 ms | ~55 MiB/s |
+| one 27 MiB file, full self-lint config | ~1.2 s | ~23 MiB/s |
 
 A single file is parsed on one thread. Files are linted in parallel.
 
@@ -195,6 +205,7 @@ Where the speed comes from:
    two bytes, and `*` fast-forwarding to the next byte where anything could
    start.
 4. **Only what is needed.** Overlays no rule looks at are never searched,
+   built-in layers only rules that are off would need are not built at all,
    expression values borrow from the source instead of copying, and warm DFA
    caches are pooled across files.
 
@@ -206,8 +217,9 @@ Where the speed comes from:
 | `src/pattern` | pattern AST, regex parser, compiler, DFA bridge, prefilters |
 | `src/grammar` | layers per language, the parser that builds trees |
 | `src/expr` | rule expressions, values, functions |
-| `src/engine` | the linter: rules, fixes, suppressions, `.zlintcache`, the symbol index behind `describe` and hover |
+| `src/engine` | the linter: rules, configuring them, pruning unused library layers, fixes, suppressions, `.zlintcache`, the symbol index behind `describe` and hover |
 | `src/native` | the TypeScript front end: parser, scopes, types, the project's files |
 | `src/cli`, `src/lsp` | the binary |
-| `std/` | the standard library (`import "std/..."`) |
+| `std/` | built-in languages and their rule definitions (`import .ts`) |
+| `rules/` | built-in rulesets (`import rules:recommended`) |
 | `editors/vscode` | VS Code extension |

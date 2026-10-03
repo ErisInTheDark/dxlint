@@ -1,0 +1,32 @@
+# rules:correctness: code that is almost certainly wrong. Turns on every
+# such rule of the imported languages, at its defaults; rules of languages
+# not imported are skipped. `rule name off` after the import takes one back.
+
+rule constructor-super
+rule for-direction
+rule no-async-promise-executor
+rule no-compare-neg-zero
+rule no-cond-assign
+rule no-constant-condition*
+rule no-control-regex
+rule no-debugger
+rule no-dupe-else-if
+rule no-duplicate-case
+rule no-empty-character-class
+rule no-empty-pattern*
+rule no-ex-assign
+rule no-fallthrough
+rule no-invalid-regexp
+rule no-irregular-whitespace
+rule no-loss-of-precision
+rule no-misleading-character-class*
+rule no-self-assign
+rule no-sparse-arrays
+rule no-unexpected-multiline*
+rule no-unsafe-finally*
+rule no-unsafe-optional-chaining*
+rule no-unused-private-class-members
+rule no-unused-vars
+rule no-useless-backreference*
+rule use-isnan
+rule valid-typeof
