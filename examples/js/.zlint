@@ -4,7 +4,9 @@
 import .js
 
 # Built-in rules are defined but off: turn on the ones you want.
-rule arrow-parens
+rule arrow-parens {
+  set style "as-needed"
+}
 
 in js_code {
   # `==` -> `===`. The operator is a field, so the fix only touches it.

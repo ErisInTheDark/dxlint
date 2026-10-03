@@ -86,7 +86,31 @@ macro js_keyed js_object, js_object_property, js_object_else, js_interface_body,
 # ---- files ---------------------------------------------------------------
 
 over .js match js_end /[^\n]\z/
-in js_end rule eol-last warn "Newline required at end of file but not found." fix as text "\n"
+in js_end rule eol-last warn "Newline required at end of file but not found." {
+  option mode "always" | "never" = "always" "whether files end in a newline"
+  when mode == "always"
+  report at end_offset
+  fix as text "\n"
+}
+over .js match js_final_newlines /(?:\r?\n)+\z/
+in js_final_newlines rule eol-last:never warn "Newline not allowed at end of file." {
+  option mode "always" | "never" = "always" "whether files end in a newline"
+  when mode == "never"
+  report at end_offset - (if ends_with(text, "\r\n") then 2 else 1)
+  fix as ""
+}
+
+# Overlay the whole source so comment lines are seen; exclude template text
+# because its whitespace changes the literal value.
+over .js match js_trailing_spaces /[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]+(?=\r?\n|\z)/
+in js_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allowed." {
+  option skipBlankLines boolean = false "ignore whitespace-only lines"
+  option ignoreComments boolean = false "ignore comment lines"
+  when !(skipBlankLines && !re_test(before, /\S/))
+  when !(ignoreComments && (enclosing is [js_line_comment, js_block_comment] || starts_with(before, "#!")))
+  when enclosing != "js_template"
+  fix as ""
+}
 
 # ---- blank lines ---------------------------------------------------------
 
@@ -184,7 +208,7 @@ in js_semicolon_before_brace rule semi:never-brace warn "Extra semicolon." {
   fix as ""
 }
 
-in js_statement_context match js_var /(?<=^[ \t]*|[;{][ \t]*|\bfor[ \t]*\([ \t]*)\bvar\b/
+in js_code match js_var /(?<![.\w$])\bvar\b(?![ \t]*:)/
 # `declare global { var x }` is the only way to declare a global.
 in js_var rule no-var warn "Unexpected var, use let or const instead." {
   when js_global_body == null
@@ -261,9 +285,34 @@ in js_quoted_key, js_quoted_double_key rule quote-props warn "Properties shouldn
 # ---- commas --------------------------------------------------------------
 
 in js_code match js_comma_space_before /[ \t]+(?=,)/
-in js_comma_space_before rule comma-spacing:before warn "There should be no space before ','." fix as ""
+in js_comma_space_before rule comma-spacing:before warn "There should be no space before ','." {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  when !before
+  when !re_test(before, /[\[,][ \t]*$/)
+  fix as ""
+}
 in js_code match js_comma_no_space_after /,(?=[^ \t\r\n)\]},])/
-in js_comma_no_space_after rule comma-spacing:after warn "A space is required after ','." fix as ", "
+in js_comma_no_space_after rule comma-spacing:after warn "A space is required after ','." {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  when after
+  fix as ", "
+}
+in js_code match js_comma_no_space_before /[^ \t\r\n](?=,)/
+in js_comma_no_space_before rule comma-spacing:missing-before warn "A space is required before ','." {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  when before
+  fix as text " "
+}
+in js_code match js_comma_space_after /(?<=,)[ \t]+(?=\S)/
+in js_comma_space_after rule comma-spacing:unexpected-after warn "There should be no space after ','." {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  when !after
+  fix as ""
+}
 
 in js_code match js_comma_first /(?<=\n[ \t]*),/
 in js_comma_first rule comma-style warn "',' should be placed last." {
@@ -308,7 +357,71 @@ in parentheses rule comma-dangle:function warn "Missing trailing comma." {
 # ---- spacing ---------------------------------------------------------------
 
 in js_code match js_parenthesis_inner_space /(?<=\()[ \t]+(?=[^ \t\r\n)])|(?<=[^ \t\r\n(])[ \t]+(?=\))/
-in js_parenthesis_inner_space rule space-in-parens warn "There should be no space inside this paren." fix as ""
+in js_parenthesis_inner_space rule space-in-parens:open-space warn "There should be no space after this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  when ends_with(before, "(")
+  when !starts_with(after, "//")
+  let next if starts_with(after, "{{") then "{{}}" else if starts_with(after, "[") then "[]" else if starts_with(after, "(") then "()" else if starts_with(after, ")") then "empty" else ""
+  when (mode == "never") != contains(exceptions, next)
+  fix as ""
+}
+in js_parenthesis_inner_space rule space-in-parens:close-space warn "There should be no space before this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  when starts_with(after, ")")
+  let prev if ends_with(before, "}}") then "{{}}" else if ends_with(before, "]") then "[]" else if ends_with(before, ")") then "()" else if ends_with(before, "(") then "empty" else ""
+  when (mode == "never") != contains(exceptions, prev)
+  fix as ""
+}
+over parentheses match js_paren_open_tight /(?<=\()[^ \t\r\n)]/
+over parentheses match js_paren_close_tight /[^ \t\r\n(](?=\))/
+in js_paren_open_tight rule space-in-parens:missing-open warn "There must be a space after this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  let next if text == "{{" then "{{}}" else if text == "[" then "[]" else if text == "(" then "()" else ""
+  when (mode == "always") != contains(exceptions, next)
+  report at offset - 1
+  fix as " " text
+}
+in js_paren_close_tight rule space-in-parens:missing-close warn "There must be a space before this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  let prev if text == "}}" then "{{}}" else if text == "]" then "[]" else if text == ")" then "()" else ""
+  when (mode == "always") != contains(exceptions, prev)
+  report at end_offset
+  fix as text " "
+}
+over parentheses match js_paren_empty_spaced /(?<=\()[ \t]+\)/
+over parentheses match js_paren_empty_tight /(?<=\()\)/
+in js_paren_empty_spaced rule space-in-parens:empty-open-space warn "There should be no space after this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  when (mode == "never") != contains(exceptions, "empty")
+  report at offset
+  fix as ")"
+}
+in js_paren_empty_spaced rule space-in-parens:empty-close-space warn "There should be no space before this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  when (mode == "never") != contains(exceptions, "empty")
+  report at offset
+  fix as ")"
+}
+in js_paren_empty_tight rule space-in-parens:empty-missing-open warn "There must be a space after this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  when mode == "never" && contains(exceptions, "empty")
+  report at offset - 1
+  fix as " )"
+}
+in js_paren_empty_tight rule space-in-parens:empty-missing-close warn "There must be a space before this paren." {
+  option mode "always" | "never" = "never" "spacing inside parentheses"
+  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
+  when mode == "never" && contains(exceptions, "empty")
+  report at offset
+  fix as " )"
+}
 
 in brackets match js_bracket_inner_space /(?<=\[)[ \t]+(?=[^ \t\r\n\]])|(?<=[^ \t\r\n\[])[ \t]+(?=\])/
 in js_bracket_inner_space rule array-bracket-spacing warn "There should be no space inside this bracket." {
@@ -326,8 +439,30 @@ in js_multi_space rule no-multi-spaces warn "Multiple spaces found." fix as " "
 in js_code match js_space_before_property /(?<=[\w$)\]])[ \t]+(?=\??\.[\w$#])/
 in js_space_before_property rule no-whitespace-before-property warn "Unexpected whitespace before property." fix as ""
 
-in js_code match js_dot_line_end /(?<![.\d])\.(?=[ \t]*\r?\n)/
+in js_code match js_dot_line_end /(?<![?.\d])\.(?=[ \t]*\r?\n)/
 in js_dot_line_end rule dot-location warn "Expected dot to be on same line as property." {
+  option style "object" | "property" = "property" "line for a member-access dot"
+  when style == "property"
+}
+in js_code match js_dot_line_start /(?<=\n[ \t]*)\.(?=[\w$#])/
+in js_dot_line_start rule dot-location:object warn "Expected dot to be on same line as object." {
+  option style "object" | "property" = "property" "line for a member-access dot"
+  when style == "object"
+}
+in js_code match js_optional_dot_line_start /(?<=\n[ \t]*)\?\.(?=[\w$#])/
+in js_optional_dot_line_start rule dot-location:optional-object warn "Expected dot to be on same line as object." {
+  option style "object" | "property" = "property" "line for a member-access dot"
+  when style == "object"
+}
+in js_code match js_dot_after_comment /(?<=\n[ \t]*\/\*[^*]*\*\/[ \t]*)\.(?=[\w$#])/
+in js_dot_after_comment rule dot-location:comment-object warn "Expected dot to be on same line as object." {
+  option style "object" | "property" = "property" "line for a member-access dot"
+  when style == "object"
+}
+in js_code match js_dot_before_comment /(?<![?.\d])\.(?=[ \t]*\/\*[^*]*\*\/[ \t]*\r?\n)/
+in js_dot_before_comment rule dot-location:comment-property warn "Expected dot to be on same line as property." {
+  option style "object" | "property" = "property" "line for a member-access dot"
+  when style == "property"
 }
 
 in js_code match js_float_leading_dot /(?<![\w$.)\]])\.\d/
@@ -339,28 +474,112 @@ in js_code match js_spread_space /\.\.\.[ \t]+/
 in js_spread_space rule rest-spread-spacing warn "Unexpected whitespace after spread operator." fix as "..."
 
 in js_code match js_semicolon_space_before /(?<=\S)[ \t]+;/
-in js_semicolon_space_before rule semi-spacing:before warn "Unexpected whitespace before semicolon." fix as ";"
-in parentheses match js_semicolon_no_space_after /;(?=[^\s;)])/
-in js_semicolon_no_space_after rule semi-spacing:after warn "Missing whitespace after semicolon." fix as "; "
+in js_semicolon_space_before rule semi-spacing:before warn "Unexpected whitespace before semicolon." {
+  option before boolean = false "space before semicolon"
+  option after boolean = true "space after semicolon"
+  when !before
+  fix as ";"
+}
+over parentheses match js_semicolon_no_space_after /;(?=[^\s;)])/
+in js_semicolon_no_space_after rule semi-spacing:after warn "Missing whitespace after semicolon." {
+  option before boolean = false "space before semicolon"
+  option after boolean = true "space after semicolon"
+  when after
+  fix as "; "
+}
+over js_code match js_semicolon_no_space_before /(?<=\S);/
+in js_semicolon_no_space_before rule semi-spacing:missing-before warn "Missing whitespace before semicolon." {
+  option before boolean = false "space before semicolon"
+  option after boolean = true "space after semicolon"
+  when before
+  fix as " ;"
+}
+in js_code match js_semicolon_space_after /(?<=;)[ \t]+(?=[^\s;)])/
+in js_semicolon_space_after rule semi-spacing:unexpected-after warn "Unexpected whitespace after semicolon." {
+  option before boolean = false "space before semicolon"
+  option after boolean = true "space after semicolon"
+  when !after
+  fix as ""
+}
 
-in js_interpolation match js_interpolation_space /(?<=\$\{)[ \t]+|[ \t]+(?=\}\z)/
-in js_interpolation_space rule template-curly-spacing warn "Unexpected space inside template braces." fix as ""
+in js_interpolation match js_interpolation_space /(?<=\$\{)[ \t]+|[ \t]+(?=\})/
+in js_interpolation_space rule template-curly-spacing:after warn "Unexpected space(s) after '${{'." {
+  option mode "always" | "never" = "never" "spacing inside template substitutions"
+  when mode == "never" && ends_with(before, "${{")
+  fix as ""
+}
+in js_interpolation_space rule template-curly-spacing:before warn "Unexpected space(s) before '}}'." {
+  option mode "always" | "never" = "never" "spacing inside template substitutions"
+  when mode == "never" && starts_with(after, "}}")
+  fix as ""
+}
+over js_interpolation match js_interpolation_open_tight /(?<=\$\{)[^ \t\r\n}]/
+over js_interpolation match js_interpolation_close_tight /[^ \t\r\n{](?=\})/
+in js_interpolation_open_tight rule template-curly-spacing:missing-after warn "Expected space(s) after '${{'." {
+  option mode "always" | "never" = "never" "spacing inside template substitutions"
+  when mode == "always"
+  report at offset - 2
+  fix as " " text
+}
+in js_interpolation_close_tight rule template-curly-spacing:missing-before warn "Expected space(s) before '}}'." {
+  option mode "always" | "never" = "never" "spacing inside template substitutions"
+  when mode == "always"
+  report at end_offset
+  fix as text " "
+}
 
 in js_code match js_tag_space /(?<=[\w$)\]])(?<!\b(?:return|typeof|case|yield|await|in|of|new|throw|void|else|do|instanceof|extends|keyof|infer|is|as|satisfies|readonly|unique|asserts)[ \t]*)[ \t]+(?=`)/
-in js_tag_space rule template-tag-spacing warn "Unexpected space between template tag and template literal." fix as ""
+in js_tag_space rule template-tag-spacing warn "Unexpected space between template tag and template literal." {
+  option style "always" | "never" = "never" "spacing after a template tag"
+  when style == "never"
+  fix as ""
+}
 
 # Arrows: `a => b`, never `a=>b`.
-in js_code match js_arrow_tight_before /(?<=[^\s(])=>/
-in js_arrow_tight_before rule arrow-spacing:before warn "Missing space before =>." fix as " =>"
-in js_code match js_arrow_tight_after /=>(?=[^\s])/
-in js_arrow_tight_after rule arrow-spacing:after warn "Missing space after =>." fix as "=> "
+over js_code match js_arrow_tight_before /(?<=[^\s(])=>/
+in js_arrow_tight_before rule arrow-spacing:before warn "Missing space before =>." {
+  option before boolean = true "require space before the arrow"
+  option after boolean = true "require space after the arrow"
+  when before
+  report at offset - 1
+  fix as " =>"
+}
+over js_code match js_arrow_tight_after /=>(?=[^\s])/
+in js_arrow_tight_after rule arrow-spacing:after warn "Missing space after =>." {
+  option before boolean = true "require space before the arrow"
+  option after boolean = true "require space after the arrow"
+  when after
+  report at end_offset
+  fix as "=> "
+}
+over js_code match js_arrow_space_before /[ \t\r\n]+(?==>)/
+over js_code match js_arrow_space_after /(?<==>)[ \t\r\n]+(?=\S)/
+in js_arrow_space_before rule arrow-spacing:unexpected-before warn "Unexpected space before =>." {
+  option before boolean = true "require space before the arrow"
+  option after boolean = true "require space after the arrow"
+  when !before
+  report at offset - 1
+  fix as ""
+}
+in js_arrow_space_after rule arrow-spacing:unexpected-after warn "Unexpected space after =>." {
+  option before boolean = true "require space before the arrow"
+  option after boolean = true "require space after the arrow"
+  when !after
+  report at end_offset
+  fix as ""
+}
 
 # `(x) => x` -> `x => x`
 in js_code match js_arrow_single params:parentheses /[ \t]*=>/
-in js_arrow_single.params rule arrow-parens warn "Unexpected parentheses around single function argument." {
-  when text ~ /\([ \t]*[A-Za-z_$][\w$]*[ \t]*\)/
+in js_arrow_single.params rule arrow-parens warn if requireForBlockBody then "Unexpected parentheses around single function argument having a body with no curly braces." else "Unexpected parentheses around single function argument." {
+  option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
+  option requireForBlockBody boolean = false "keep parentheses with a block body"
+  when style == "as-needed"
+  when text ~ /\(\s*[A-Za-z_$][\w$]*\s*,?\s*\)/
   when !re_test(before, /(?:>|[\w$])[ \t]*$/) || re_test(before, /\basync[ \t]*$/)
-  fix as trim(slice(text, 1, -1))
+  when !(requireForBlockBody && re_test(parent, /=>\s*\{/))
+  report at offset + len(default(re_find(text, /^\(\s*/), "("))
+  fix as trim(re_replace(slice(text, 1, -1), /,\s*$/, ""))
 }
 
 # `{ a }` with spaces in object literals, patterns and import lists.

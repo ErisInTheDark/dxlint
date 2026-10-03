@@ -3,6 +3,216 @@
 
 define {
 
+schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
+drop rule comma-dangle*
+in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature rule comma-dangle {
+  option style trailing_comma_mode = "never" "trailing comma policy"
+  option arrays trailing_comma_mode | null = null "array policy"
+  option objects trailing_comma_mode | null = null "object policy"
+  option functions trailing_comma_mode | null = null "parameter and argument policy"
+  option imports trailing_comma_mode | null = null "named import policy"
+  option exports trailing_comma_mode | null = null "named export policy"
+  option importAttributes trailing_comma_mode | null = null "import attribute policy"
+  option dynamicImports trailing_comma_mode | null = null "dynamic import policy"
+  option enums trailing_comma_mode | null = null "enum policy"
+  option generics trailing_comma_mode | null = null "type parameter policy"
+  option tuples trailing_comma_mode | null = null "tuple policy"
+  each dangle_check in map(trailing_comma_sites, s => {
+    site: s,
+    mode: if s.kind == "arrays" then default(arrays, style) else if s.kind == "objects" then default(objects, style) else if s.kind == "functions" then default(functions, style) else if s.kind == "imports" then default(imports, style) else if s.kind == "exports" then default(exports, style) else if s.kind == "dynamicImports" then default(dynamicImports, style) else if s.kind == "enums" then default(enums, style) else if s.kind == "generics" then default(generics, style) else if s.kind == "tuples" then default(tuples, style) else "never"
+  })
+  when dangle_check.mode != "ignore"
+  when if dangle_check.mode == "always" || dangle_check.mode == "always-multiline" && dangle_check.site.multiline then
+    dangle_check.site.trailing != dangle_check.site.allowed
+    else dangle_check.site.trailing && !(dangle_check.mode == "only-multiline" && dangle_check.site.multiline) && !dangle_check.site.tsx_single
+  report at dangle_check.site.offset
+  fix as slice(text, 0, dangle_check.site.offset - offset) (if dangle_check.site.trailing then "" else ",") slice(text, dangle_check.site.offset - offset + (if dangle_check.site.trailing then 1 else 0))
+  warn if dangle_check.site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
+}
+
+drop rule no-whitespace-before-property
+in ts_member, ts_index, ts_indexed_access, ts_qualified_name, ts_import_type rule no-whitespace-before-property {
+  when property_spacing != null && property_spacing.spaced
+  warn "Unexpected whitespace before property {property_spacing.name}."
+}
+
+drop rule block-spacing*
+in ts_block, ts_static_block, ts_switch, ts_enum rule block-spacing {
+  option style "always" | "never" = "always" "spaces inside non-empty blocks"
+  each delimiter_site in filter(delimiter_spacing_sites, s => s.spaced != (style == "always") && !(style == "never" && s.line_comment))
+  report at delimiter_site.offset
+  fix as slice(text, 0, delimiter_site.start - offset) (if style == "always" then " " else "") slice(text, delimiter_site.end - offset)
+  warn if style == "always" then "Requires a space {delimiter_site.side} '{delimiter_site.token}'." else "Unexpected space(s) {delimiter_site.side} '{delimiter_site.token}'."
+}
+
+drop rule computed-property-spacing*
+in ts_computed_key, ts_index, ts_indexed_access rule computed-property-spacing {
+  option style "always" | "never" = "never" "spaces inside computed property brackets"
+  option enforceForClassMembers boolean = true "check computed class members"
+  each delimiter_site in filter(delimiter_spacing_sites, s => s.spaced != (style == "always") && (!s.class_member || enforceForClassMembers))
+  report at delimiter_site.offset
+  fix as slice(text, 0, delimiter_site.start - offset) (if style == "always" then " " else "") slice(text, delimiter_site.end - offset)
+  warn if style == "always" then "A space is required {delimiter_site.side} '{delimiter_site.token}'." else "There should be no space {delimiter_site.side} '{delimiter_site.token}'."
+}
+
+schema star_mode "before" | "after" | "both" | "neither" | { before?: boolean; after?: boolean }
+
+drop rule yield-star-spacing
+in ts_yield rule yield-star-spacing {
+  option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
+  option before boolean | null = null "override space before star"
+  option after boolean | null = null "override space after star"
+  each star_site in filter(star_spacing_sites, s => s.spaced != (if s.side == "before" then default(before, mode == "before" || mode == "both") else default(after, mode == "after" || mode == "both")))
+  report at star_site.offset
+  warn if star_site.spaced then "Unexpected space {star_site.side} *." else "Missing space {star_site.side} *."
+}
+
+drop rule generator-star-spacing*
+in ts_function, ts_method rule generator-star-spacing {
+  option mode "before" | "after" | "both" | "neither" = "before" "spacing around generator star"
+  option before boolean | null = null "override space before star"
+  option after boolean | null = null "override space after star"
+  option named star_mode | null = null "named function override"
+  option anonymous star_mode | null = null "anonymous function override"
+  option method star_mode | null = null "method override"
+  option shorthand star_mode | null = null "object method override"
+  let star_kind first(star_spacing_sites).kind
+  let star_override if star_kind == "named" then named else if star_kind == "anonymous" then anonymous else if star_kind == "shorthand" then default(shorthand, method) else method
+  let resolved_mode if type_of(star_override) == "str" then star_override else mode
+  let wants_before if type_of(star_override) == "str" then resolved_mode == "before" || resolved_mode == "both" else default(star_override.before, default(before, resolved_mode == "before" || resolved_mode == "both"))
+  let wants_after if type_of(star_override) == "str" then resolved_mode == "after" || resolved_mode == "both" else default(star_override.after, default(after, resolved_mode == "after" || resolved_mode == "both"))
+  each star_site in filter(star_spacing_sites, s => s.separated != (if s.side == "before" then wants_before else wants_after))
+  report at star_site.offset
+  warn if star_site.separated then "Unexpected space {star_site.side} *." else "Missing space {star_site.side} *."
+}
+
+in ts_function, ts_arrow, ts_class, ts_interface, ts_type_alias, ts_method, ts_call, ts_new, ts_tagged_template, ts_type_reference, ts_function_type, ts_method_signature, ts_call_signature rule type-generic-spacing {
+  option before boolean = false "space before generic brackets"
+  option after boolean = false "space after generic brackets"
+  each generic_site in filter(generic_spacing_sites, s => s.spaced != (if s.side == "before" then before else if s.side == "after" then after else false))
+  report at generic_site.start
+  warn "Generic spaces mismatch"
+}
+
+in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary-ops {
+  option words boolean = true "spaces after word operators"
+  option nonwords boolean = false "spaces around symbolic unary operators"
+  option overrides { [key: string]: boolean } = {} "spacing by operator"
+  let unary_gap unary_spacing
+  when unary_gap != null
+  let wants_space if unary_gap.word then words else nonwords
+  when wants_space != unary_gap.separated
+  when !(wants_space && unary_gap.first_bang) && !(unary_gap.word && !wants_space && !unary_gap.removable)
+  warn if unary_gap.word then
+    if wants_space then "Unary word operator '{unary_gap.operator}' must be followed by whitespace." else "Unexpected space after unary word operator '{unary_gap.operator}'."
+    else if wants_space then
+      if unary_gap.prefix then "Unary operator '{unary_gap.operator}' must be followed by whitespace." else "Space is required before unary operator '{unary_gap.operator}'."
+    else if unary_gap.prefix then "Unexpected space after unary operator '{unary_gap.operator}'." else "Unexpected space before unary operator '{unary_gap.operator}'."
+}
+
+drop rule rest-spread-spacing
+in ts_rest, ts_spread rule rest-spread-spacing {
+  option style "always" | "never" = "never" "spacing after rest and spread"
+  let spread_gap spread_spacing
+  when spread_gap != null && spread_gap.spaced != (style == "always")
+  report at if style == "always" then offset else spread_gap.start
+  fix as slice(text, 0, spread_gap.start - offset) (if style == "always" then " " else "") slice(text, spread_gap.end - offset)
+  warn if style == "always" then "Expected whitespace after {spread_gap.kind} operator." else "Unexpected whitespace after {spread_gap.kind} operator."
+}
+
+in ts_case rule switch-colon-spacing {
+  option before boolean = false "space before case colon"
+  option after boolean = true "space after case colon"
+  each colon_site in filter(switch_colon_sites, s => (if s.side == "before" then before else after) != s.spaced)
+  report at colon_site.offset
+  warn if colon_site.side == "before" && before || colon_site.side == "after" && after then "Expected space(s) {colon_site.side} this colon." else "Unexpected space(s) {colon_site.side} this colon."
+}
+
+in ts_program rule no-extra-semi {
+  each extra_semi in extra_semicolons
+  report at extra_semi
+  warn "Unnecessary semicolon."
+}
+
+in ts_program rule semi-style {
+  option style "last" | "first" = "last" "semicolon line position"
+  each semi_site in filter(semicolon_style_sites, s => if style == "last" || s.for_header then s.previous_line else !s.last_child && s.next_line)
+  report at semi_site.offset
+  warn if style == "last" || semi_site.for_header then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
+}
+
+drop rule semi-spacing:*
+in ts_program rule semi-spacing {
+  option before boolean = false "space before semicolon"
+  option after boolean = true "space after semicolon"
+  each semi_site in filter(semicolon_spacing_sites, s => s.spaced != (if s.side == "before" then before else after))
+  report at semi_site.offset
+  warn if semi_site.spaced then "Unexpected whitespace {semi_site.side} semicolon." else "Missing whitespace {semi_site.side} semicolon."
+}
+
+drop rule comma-spacing:*
+in ts_program rule comma-spacing {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  each comma_site in filter(comma_spacing_sites, s => (if s.side == "before" then before else after) != s.spaced && !(s.line_comment && !after))
+  report at comma_site.offset
+  fix as slice(text, 0, comma_site.start - offset) (if comma_site.side == "before" && before || comma_site.side == "after" && after then " " else "") slice(text, comma_site.end - offset)
+  warn if comma_site.side == "before" && before || comma_site.side == "after" && after then "A space is required {comma_site.side} ','." else "There should be no space {comma_site.side} ','."
+}
+
+in ts_call, ts_new, ts_import_call rule function-call-spacing {
+  option mode "always" | "never" = "never" "spacing before invocation parentheses"
+  option allowNewlines boolean = false "allow line breaks before invocation parentheses"
+  option optionalChain { before: boolean = true; after: boolean = true } = { before: true, after: true } "spacing around optional invocation punctuation"
+  let call_gap call_spacing
+  when call_gap != null
+  let bad_newline mode == "always" && !allowNewlines && call_gap.line_break
+  let bad_space if mode == "never" then call_gap.spaced
+    else if call_gap.optional then call_gap.prefix_spaced != optionalChain.before || call_gap.suffix_spaced != optionalChain.after
+    else !call_gap.spaced
+  when bad_newline || bad_space
+  report at call_gap.start
+  warn if bad_newline then "Unexpected newline between function name and paren."
+    else if mode == "never" || call_gap.optional && (!optionalChain.before && call_gap.prefix_spaced || !optionalChain.after && call_gap.suffix_spaced) then "Unexpected whitespace between function name and paren."
+    else "Missing space between function name and paren."
+}
+
+# Named tuple members use `name?: Type`.
+in ts_tuple_member rule type-named-tuple-spacing:optional {
+  when re_test(text, /^[\w$]+\s+\?/) || re_test(text, /^[\w$]+\?\s+:/)
+  fix as re_replace(text, /^([\w$]+)\s*\?\s*:/, "$1?:")
+  warn "Unexpected space between '?' and the ':'."
+}
+in ts_tuple_member rule type-named-tuple-spacing:before {
+  when re_test(text, /^[\w$]+\s+\??\s*:/)
+  fix as re_replace(text, /^([\w$]+)\s+(\??)\s*:/, "$1$2:")
+  warn "Unexpected space before the ':'."
+}
+in ts_tuple_member rule type-named-tuple-spacing:after {
+  let prefix re_find(text, /^[\w$]+\s*\??\s*:\s*/)
+  when prefix != null && !ends_with(prefix, ": ")
+  fix as re_replace(text, /^([\w$]+\s*\??\s*):\s*/, "$1: ")
+  warn "Expected a space after the ':'."
+}
+
+in ts_arrow.parameter rule arrow-parens:missing {
+  option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
+  option requireForBlockBody boolean = false "keep parentheses with a block body"
+  let prev token_neighbours.before
+  when count(parent.parameter) == 1 && text ~ /[A-Za-z_$][\w$]*/
+  when prev.text != "(" || prev.start < token_neighbours.parent_start
+  when style == "always" || requireForBlockBody && starts_with(parent.body, "{{")
+  fix as "(" text ")"
+  warn if requireForBlockBody && starts_with(parent.body, "{{") then "Expected parentheses around arrow function argument having a body with curly braces." else "Expected parentheses around arrow function argument."
+}
+
+in ts_tagged_template rule template-tag-spacing:missing {
+  option style "always" | "never" = "never" "spacing after a template tag"
+  when style == "always" && re_test(text, /^[^`]*[^\s]`/)
+  fix as re_replace(text, /^([^`]*[^\s])`/, "$1 `")
+  warn "Missing space between template tag and template literal."
+}
+
 # brace-style without single-line blocks: a function body written on one
 # line (`f(x => { y(); })`). The closing brace is reported where it is: the
 # fix puts it on its own line.
@@ -33,11 +243,15 @@ in semicolon_statement rule semi:always {
   warn "Missing semicolon."
 }
 
-# `new Foo` without an argument list.
+# Empty constructor argument lists belong to this new expression, not its callee.
 in ts_new rule new-parens {
-  when count(argument) == 0 && !re_test(text, /\)\s*$/)
-  fix as text "()"
-  warn "Missing '()' invoking a constructor."
+  option style "always" | "never" = "always" "empty constructor parentheses"
+  let call_gap call_spacing
+  when count(argument) == 0
+  when (call_gap != null) != (style == "always")
+  report at offset
+  fix as if style == "always" then text "()" else "(" slice(text, 0, call_gap.end - offset) slice(text, call_gap.end - offset + 1, len(text) - 1) ")"
+  warn if style == "always" then "Missing '()' invoking a constructor." else "Unnecessary '()' invoking a constructor with no arguments."
 }
 
 }
