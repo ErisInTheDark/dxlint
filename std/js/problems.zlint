@@ -6,15 +6,6 @@ define {
 
 # ---- banned things -----------------------------------------------------------
 
-in js_code match js_console /(?<![.\w$])console\.[\w$]+/
-in js_console rule no-console warn "Unexpected console statement." {
-}
-
-# `new Function(...)`, `Function(...)`, `Function.call(...)`
-in js_code match js_new_function /(?<![.\w$])(?:new[ \t]+)?Function[ \t]*\(|(?<![.\w$])Function\.(?:call|apply|bind)\b/
-in js_new_function rule no-new-func warn "The Function constructor is eval." {
-}
-
 # use-isnan, valid-typeof, no-self-assign and no-constant-condition live in
 # .ts/problems (on the native layers).
 

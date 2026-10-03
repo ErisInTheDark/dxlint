@@ -40,21 +40,12 @@ in ts_member.property rule no-extra-bind {
   warn "The function binding is unnecessary."
 }
 
-# `!!x` and `Boolean(x)` where the value is already used as a boolean.
-macro is_double_negation (layer == "ts_unary" && re_test(text, /^!\s*!/))
-macro is_boolean_call (layer == "ts_call" && re_test(text, /^Boolean\s*\(/) && !re_test(text, /,/))
-macro boolean_cast_message (if is_double_negation then "Redundant double negation." else "Redundant Boolean call.")
-in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-extra-boolean-cast {
-  when is_double_negation || is_boolean_call
-  warn boolean_cast_message
-}
-in ts_unary.argument rule no-extra-boolean-cast:not {
-  when parent.operator == "!" && (is_double_negation || is_boolean_call)
-  warn boolean_cast_message
-}
-in ts_call.argument, ts_new.argument rule no-extra-boolean-cast:call {
-  when parent.callee == "Boolean" && index == 0 && (is_double_negation || is_boolean_call)
-  warn boolean_cast_message
+in ts_unary, ts_call rule no-extra-boolean-cast {
+  option enforceForInnerExpressions boolean = false "check casts nested inside boolean expressions"
+  option enforceForLogicalOperands boolean = false "check casts nested inside logical expressions"
+  let cast_info redundant_boolean_cast
+  when cast_info != null && (cast_info.mode == 0 || cast_info.mode == 1 && enforceForLogicalOperands || enforceForInnerExpressions)
+  warn if cast_info.negation then "Redundant double negation." else "Redundant Boolean call."
 }
 
 in ts_new rule no-new-wrappers {
@@ -77,10 +68,9 @@ in ts_sequence.expression rule no-sequences {
   warn "Unexpected use of comma operator."
 }
 
-in ts_literal, ts_template let is_literal true
 in ts_throw rule no-throw-literal {
-  when argument != null && (argument.is_literal == true || argument == "undefined")
-  warn if argument == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+  when thrown_error != null
+  warn thrown_error
 }
 
 in ts_declarator rule no-undef-init {
@@ -88,20 +78,19 @@ in ts_declarator rule no-undef-init {
   warn "It's not necessary to initialize '{name}' to undefined."
 }
 
-# `catch (e) { throw e; }` does nothing.
-in ts_try let catch_only_rethrows parameter != null && is_identifier(parameter) && re_test(handler, "^\\x7B\\s*throw\\s+" re_escape(default(parameter,"")) "\\s*;?\\s*\\x7D$")
 in ts_try rule no-useless-catch {
-  when catch_only_rethrows && finalizer == null
+  when catch_rethrows && finalizer == null
   warn "Unnecessary try/catch wrapper."
 }
 in ts_try.kind rule no-useless-catch:clause {
-  when parent.catch_only_rethrows && parent.finalizer != null
+  when parent.catch_rethrows && parent.finalizer != null
   warn "Unnecessary catch clause."
 }
 
 in ts_call rule radix {
-  when count(argument) == 1 && (callee == "parseInt" && callee.resolved == "global" || re_test(callee, /^Number\s*\.\s*parseInt$/))
-  warn "Missing radix parameter."
+  option mode ("always" | "as-needed") = "always" "legacy radix policy"
+  when parse_int_callee != null && radix_error != null
+  warn radix_error
 }
 
 in ts_identifier rule no-shadow-restricted-names {
@@ -131,10 +120,9 @@ in ts_call rule prefer-spread {
   warn "Use the spread operator instead of '.apply()'."
 }
 
-in ts_object let is_object_literal true
 in ts_call rule prefer-object-spread {
-  when re_test(callee, /^Object\s*\.\s*assign$/) && count(argument) >= 1 && first([] argument.is_object_literal) == true && !re_test(text, /\.\.\./)
-  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{}}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
+  when global_method_callee == "Object.assign" && object_assign_spread
+  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{ foo: bar }}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
 }
 
 # String concatenation mixing literals and other values.
@@ -149,6 +137,221 @@ in ts_binary {
 in ts_binary rule prefer-template {
   when has_string && !all_literals && !(parent == "ts_binary" && parent.operator == "+")
   warn "Unexpected string concatenation."
+}
+
+in ts_case rule default-case-last {
+  when test == null && index < count(parent.case) - 1
+  warn "Default clause should be the last clause."
+}
+
+in ts_call, ts_new rule no-array-constructor {
+  when global_callee == "Array" && count(type_argument) == 0
+  when count(argument) != 1 || re_test(first(argument), /^\.\.\./)
+  warn "The array literal notation [] is preferable."
+}
+
+in ts_call, ts_new rule no-object-constructor {
+  when global_callee == "Object" && count(argument) == 0
+  warn "The object literal notation {{}} is preferable."
+}
+
+in ts_expression_statement.expression rule no-new {
+  when layer == "ts_new"
+  warn "Do not use 'new' for side effects."
+}
+
+in ts_binary rule no-self-compare {
+  when re_test(operator, /^(?:===?|!==?|>=?|<=?)$/)
+  when self_comparison
+  warn "Comparing to itself is potentially pointless."
+}
+
+in ts_with rule no-with warn "Unexpected use of 'with' statement."
+
+in ts_member, ts_index rule no-proto {
+  when static_name == "__proto__"
+  warn "The '__proto__' property is deprecated."
+}
+
+in ts_member, ts_index rule no-iterator {
+  when static_name == "__iterator__"
+  warn "Reserved name '__iterator__'."
+}
+
+in ts_string, ts_template rule no-script-url {
+  when literal_value.type == "string" && re_test(literal_value.value, /(?i)^javascript:/)
+  when parent != "ts_tagged_template"
+  warn "Script URL is a form of eval."
+}
+
+in ts_binary rule no-eq-null {
+  when (operator == "==" || operator == "!=") && (left == "null" || right == "null")
+  warn "Use '===' to compare with null."
+}
+
+in ts_call rule symbol-description {
+  when callee == "Symbol" && callee.resolved == "global" && count(argument) == 0
+  warn "Expected Symbol to have a description."
+}
+
+in ts_call rule prefer-numeric-literals {
+  when count(argument) == 2 && parse_int_callee != null
+  when first([] argument.literal_value).type == "string"
+  when contains(["2", "8", "16"], last(argument))
+  warn "Use {if last(argument) == '2' then 'binary' else if last(argument) == '8' then 'octal' else 'hexadecimal'} literals instead of {parse_int_callee}()."
+}
+
+in ts_string let octal_escape re_find(re_find(text, /(?:^|[^\\])(?:\\\\)*\\(?:[0-3][0-7]{1,2}|[4-7][0-7]|0[89]|[1-7])/), /\\(?:[0-3][0-7]{1,2}|[4-7][0-7]|0[89]|[1-7])$/)
+in ts_string rule no-octal-escape {
+  when octal_escape != null
+  warn "Don't use octal: '{if re_test(octal_escape, /^\\0[89]$/) then '\\0' else octal_escape}'. Use '\\u....' instead."
+}
+
+in ts_import_specifier rule no-useless-rename:import {
+  option ignoreImport boolean = false "ignore unnecessarily renamed imports"
+  when !ignoreImport && useless_rename != null
+  warn "Import {useless_rename} unnecessarily renamed."
+}
+
+in ts_export_specifier rule no-useless-rename:export {
+  option ignoreExport boolean = false "ignore unnecessarily renamed exports"
+  when !ignoreExport && useless_rename != null
+  warn "Export {useless_rename} unnecessarily renamed."
+}
+
+in ts_pattern_property, ts_property rule no-useless-rename:destructuring {
+  option ignoreDestructuring boolean = false "ignore unnecessarily renamed destructuring assignments"
+  when !ignoreDestructuring && useless_rename != null
+  warn "Destructuring assignment {useless_rename} unnecessarily renamed."
+}
+
+in ts_binary rule no-useless-concat {
+  when useless_concat != null
+  report at useless_concat
+  warn "Unexpected string concatenation of literals."
+}
+
+in ts_conditional rule no-unneeded-ternary {
+  when (consequent == "true" || consequent == "false") && (alternate == "true" || alternate == "false")
+  warn "Unnecessary use of boolean literals in conditional expression."
+}
+
+in ts_conditional rule no-unneeded-ternary:default-assignment {
+  option defaultAssignment boolean = true "allow conditional expressions used as default assignments"
+  when !defaultAssignment && is_identifier(test) && test == consequent
+  warn "Unnecessary use of conditional expression for default assignment."
+}
+
+in ts_member, ts_index rule no-console {
+  option allow string[] = [] "console methods to allow"
+  when object == "console" && object.resolved == "global" && !contains(allow, static_name)
+  warn if count(allow) == 0 then "Unexpected console statement." else "Unexpected console statement. Only these console methods are allowed: {join(allow, ', ')}."
+}
+
+in ts_member, ts_index let global_function_method object == "Function" && object.resolved == "global" && contains(["apply", "bind", "call"], static_name)
+in ts_parenthesized let global_function_method expression.global_function_method
+in ts_call, ts_new rule no-new-func {
+  when callee == "Function" && callee.resolved == "global" || callee.global_function_method == true
+  warn "The Function constructor is eval."
+}
+
+in ts_method, ts_method_signature rule accessor-pairs {
+  option getWithoutSet boolean = false "require a setter for each getter"
+  option setWithoutGet boolean = true "require a getter for each setter"
+  option enforceForClassMembers boolean = true "check class accessors"
+  option enforceForTSTypes boolean = false "check type accessors"
+  when accessor_pair != null && !accessor_pair.paired
+  when accessor_pair.scope == "object" || accessor_pair.scope == "class" && enforceForClassMembers || accessor_pair.scope == "type" && enforceForTSTypes
+  when accessor_pair.kind == "get" && getWithoutSet || accessor_pair.kind == "set" && setWithoutGet
+  report at accessor_pair.offset
+  warn "{if accessor_pair.kind == 'set' then 'Getter' else 'Setter'} is not present for {if accessor_pair.scope == 'class' then 'class ' else if accessor_pair.scope == 'type' then 'type ' else ''}{accessor_pair.name}."
+}
+
+in ts_object rule accessor-pairs:descriptor {
+  option getWithoutSet boolean = false "require a setter for each getter"
+  option setWithoutGet boolean = true "require a getter for each setter"
+  when property_descriptor != null
+  when setWithoutGet && property_descriptor.set && !property_descriptor.get || getWithoutSet && property_descriptor.get && !property_descriptor.set
+  warn "{if property_descriptor.set then 'Getter' else 'Setter'} is not present in property descriptor."
+}
+
+in ts_method, ts_method_signature rule grouped-accessor-pairs {
+  option mode ("anyOrder" | "getBeforeSet" | "setBeforeGet") = "anyOrder" "accessor order"
+  option enforceForTSTypes boolean = false "check type accessors"
+  let group_info accessor_pair.grouping
+  when accessor_pair.scope != "type" || enforceForTSTypes
+  when group_info != null && (group_info.gap || mode == "getBeforeSet" && !group_info.getter_first || mode == "setBeforeGet" && group_info.getter_first)
+  report at accessor_pair.offset
+  warn if group_info.gap then "Accessor pair {group_info.former} and {accessor_pair.name} should be grouped." else "Expected {accessor_pair.name} to be before {group_info.former}."
+}
+
+in ts_property, ts_method rule object-shorthand {
+  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
+  option avoidQuotes boolean = false "keep string-literal keys in long form"
+  option ignoreConstructors boolean = false "ignore capitalised method names"
+  option methodsIgnorePattern string = "" "method names to ignore"
+  option avoidExplicitReturnArrows boolean = false "prefer methods to block-bodied arrows without lexical captures"
+  let shorthand_info object_shorthand_member
+  when shorthand_info != null && !shorthand_info.proto
+  let needs_longform shorthand_info.concise && (mode == "never" || shorthand_info.method && avoidQuotes && shorthand_info.quoted)
+  let needs_method !shorthand_info.concise && (mode == "always" || mode == "methods") && (shorthand_info.function || avoidExplicitReturnArrows && shorthand_info.arrow) && !(ignoreConstructors && shorthand_info.constructor) && !(avoidQuotes && shorthand_info.quoted) && !(methodsIgnorePattern != "" && shorthand_info.name != null && re_test(shorthand_info.name, methodsIgnorePattern))
+  let needs_property !shorthand_info.concise && (mode == "always" || mode == "properties") && !shorthand_info.computed && shorthand_info.redundant && !shorthand_info.function && !shorthand_info.annotated && !(avoidQuotes && shorthand_info.quoted)
+  when needs_longform || needs_method || needs_property
+  warn if needs_longform then
+    if shorthand_info.method then
+      if mode == "never" then "Expected longform method syntax." else "Expected longform method syntax for string literal keys."
+    else "Expected longform property syntax."
+  else if needs_method then "Expected method shorthand."
+  else "Expected property shorthand."
+}
+
+in ts_object rule object-shorthand:consistent {
+  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
+  when mode == "consistent" || mode == "consistent-as-needed"
+  when object_shorthand_consistency == "mixed" || mode == "consistent-as-needed" && object_shorthand_consistency == "redundant"
+  warn if object_shorthand_consistency == "mixed" then "Unexpected mix of shorthand and non-shorthand properties." else "Expected shorthand for all properties."
+}
+
+in ts_call rule prefer-exponentiation-operator {
+  when global_method_callee == "Math.pow"
+  warn "Use the '**' operator instead of 'Math.pow'."
+}
+
+in ts_property, ts_pattern_property, ts_method, ts_class_property rule no-useless-computed-key {
+  option enforceForClassMembers boolean = true "check class member keys"
+  when useless_computed_key != null && (!useless_computed_key.class || enforceForClassMembers)
+  warn "Unnecessarily computed property [{useless_computed_key.text}] found."
+}
+
+in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
+  option boolean boolean = true "check boolean conversions"
+  option number boolean = true "check number conversions"
+  option string boolean = true "check string conversions"
+  option disallowTemplateShorthand boolean = false "check single-expression templates"
+  option allow string[] = [] "shorthand operators to allow"
+  let coercion_info implicit_coercion
+  when coercion_info != null
+  when coercion_info.kind == "boolean" && boolean || coercion_info.kind == "number" && number || coercion_info.kind == "string" && string || coercion_info.kind == "template" && disallowTemplateShorthand
+  when coercion_info.kind == "template" || !contains(allow, coercion_info.operator)
+  warn "Unexpected implicit coercion encountered. Use `{coercion_info.recommendation}` instead."
+}
+
+in ts_parameter rule default-param-last {
+  when default_parameter_before_required
+  warn "Default parameters should be last."
+}
+
+in ts_function, ts_arrow rule func-style {
+  option style ("declaration" | "expression") = "expression" "function syntax policy"
+  option allowArrowFunctions boolean = false "allow arrow expressions"
+  option allowTypeAnnotation boolean = false "allow annotated function variables"
+  option overrides { namedExports: "" | "declaration" | "expression" | "ignore" } = { namedExports: "" } "named export policy"
+  let function_info function_style
+  when function_info != null && !function_info.exempt
+  let requested_style if function_info.exported && overrides.namedExports != "" then overrides.namedExports else style
+  when requested_style == "expression" && function_info.declaration || requested_style == "declaration" && !function_info.declaration && !(function_info.arrow && (allowArrowFunctions || function_info.captures)) && !(allowTypeAnnotation && function_info.annotated)
+  report at function_info.offset
+  warn "Expected a function {requested_style}."
 }
 
 }
