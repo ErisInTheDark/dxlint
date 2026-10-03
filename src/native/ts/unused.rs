@@ -197,7 +197,7 @@ pub fn globals_fact(file: &NativeFile, node: u32) -> Value<'static> {
 }
 
 /// Names of `/* exported a, b */` comments.
-fn exported_names(file: &NativeFile) -> HashSet<String> {
+pub(super) fn exported_names(file: &NativeFile) -> HashSet<String> {
     let src = file.syntax.src;
     let mut out = HashSet::new();
     for c in file.comments().iter().filter(|c| c.block) {
@@ -279,24 +279,8 @@ impl Analysis<'_, '_> {
         false
     }
 
-    /// eslint's variable scope: the function (or static block, field
-    /// initializer, program) whose `var`s would hold the node.
     fn variable_scope(&self, id: u32) -> u32 {
-        let s = self.s;
-        let mut child = id;
-        let mut at = s.parent(id);
-        while let Some(n) = at {
-            match s.kind(n) {
-                // A declaration's name belongs to the scope around it.
-                Some(K::Function | K::Class) if s.field(child) == Some(F::Name) => {}
-                Some(K::Function | K::Arrow | K::Method | K::StaticBlock | K::Program) => return n,
-                Some(K::ClassProp) if s.field(child) == Some(F::Init) => return n,
-                _ => {}
-            }
-            child = n;
-            at = s.parent(n);
-        }
-        child
+        variable_scope(self.s, id)
     }
 
     fn is_function(&self, id: u32) -> bool {
@@ -653,8 +637,28 @@ fn is_statement(s: &Syntax, id: u32, kind: K) -> bool {
     }
 }
 
+/// eslint's variable scope: the function (or static block, field
+/// initializer, program) whose `var`s would hold the node; also where its
+/// code path starts.
+pub(super) fn variable_scope(s: &Syntax, id: u32) -> u32 {
+    let mut child = id;
+    let mut at = s.parent(id);
+    while let Some(n) = at {
+        match s.kind(n) {
+            // A declaration's name belongs to the scope around it.
+            Some(K::Function | K::Class) if s.field(child) == Some(F::Name) => {}
+            Some(K::Function | K::Arrow | K::Method | K::StaticBlock | K::Program) => return n,
+            Some(K::ClassProp) if s.field(child) == Some(F::Init) => return n,
+            _ => {}
+        }
+        child = n;
+        at = s.parent(n);
+    }
+    child
+}
+
 /// The identifiers a binding pattern declares, in order.
-fn pattern_names(s: &Syntax, pat: u32, out: &mut Vec<u32>) {
+pub(super) fn pattern_names(s: &Syntax, pat: u32, out: &mut Vec<u32>) {
     match s.kind(pat) {
         Some(K::Ident) => out.push(pat),
         Some(K::ObjectPattern) => {

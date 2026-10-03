@@ -18,6 +18,10 @@ use super::syntax::Syntax;
 
 pub trait Domain {
     type S: Clone + PartialEq;
+    /// Also enter a `finally` with the state from the try block's first
+    /// throwing node (eslint's path past the `catch`; no-useless-assignment
+    /// relies on it). The state then continues after the `try` statement.
+    const FINALLY_FROM_FIRST_THROW: bool = false;
     /// Where paths meet.
     fn join(&self, a: &Self::S, b: &Self::S) -> Self::S;
     /// After `node` (an expression, or a statement's own effect) ran, its
@@ -414,6 +418,7 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
         // As eslint models it: the first thing in the block that can throw
         // may have thrown (with the state from before it).
         let first = if tracked { self.first_throw.pop().flatten().flatten() } else { None };
+        let past_catch = if D::FINALLY_FROM_FIRST_THROW && handler.is_some() { first.clone() } else { None };
         if handler.is_none() {
             if let Some(x) = first.clone() {
                 jumps.push((Jump::Throw, x));
@@ -440,6 +445,7 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
             jumps.extend(out.jumps);
         }
         let Some(fin) = s.get(node, F::Finalizer) else { return Out { normal, jumps } };
+        let normal = if past_catch.is_some() { self.join(normal, past_catch) } else { normal };
         // The finally block runs on every way out, and continues each only
         // if it completes itself. The jumps' paths and the normal one are
         // kept apart (walked separately), as eslint keeps their segments.

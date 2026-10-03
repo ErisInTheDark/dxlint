@@ -1,0 +1,6 @@
+# .ts/jsx: @stylistic's JSX rules (spacing, wrapping, props, closing tags),
+# on the native `ts_jsx_*` layers.
+
+define {
+
+}

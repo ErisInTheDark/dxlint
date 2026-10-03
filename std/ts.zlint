@@ -28,3 +28,4 @@ import .ts/structure
 import .ts/scoping
 import .ts/suggestions
 import .ts/restrictions
+import .ts/jsx

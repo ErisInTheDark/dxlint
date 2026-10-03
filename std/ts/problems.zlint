@@ -505,6 +505,12 @@ in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no
   warn if ts_file then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
 }
 
+# Disallow variable assignments when the value is not used
+in ts_identifier rule no-useless-assignment {
+  when useless_assignment
+  warn "The value assigned to '{text}' is not used in subsequent statements."
+}
+
 # ---- optional chaining where a short circuit throws -----------------------------
 in ts_member, ts_index let in_optional_chain optional != null || object.in_optional_chain == true
 in ts_call let in_optional_chain optional != null || callee.in_optional_chain == true

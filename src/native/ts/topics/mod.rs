@@ -5,6 +5,7 @@
 
 use crate::expr::facts::Fact;
 
+pub mod jsx;
 pub mod layout;
 pub mod restrictions;
 pub mod scoping;
@@ -14,4 +15,4 @@ pub mod ts_style;
 pub mod typed;
 
 /// Every family's facts (after the core list in `expr::facts`).
-pub const FACT_GROUPS: &[&[Fact]] = &[layout::FACTS, structure::FACTS, typed::FACTS, ts_style::FACTS, scoping::FACTS, suggestions::FACTS, restrictions::FACTS];
+pub const FACT_GROUPS: &[&[Fact]] = &[layout::FACTS, structure::FACTS, typed::FACTS, ts_style::FACTS, scoping::FACTS, suggestions::FACTS, restrictions::FACTS, jsx::FACTS];

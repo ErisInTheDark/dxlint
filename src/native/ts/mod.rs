@@ -6,6 +6,7 @@ mod check;
 mod class_members;
 mod comments;
 mod constants;
+pub mod dead_stores;
 mod docs;
 mod equality;
 pub mod facts;

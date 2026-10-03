@@ -172,6 +172,11 @@ const CORE: &[Fact] = &[
         get: |f, n| f.with_file(crate::native::ts::unused::var_fact, n),
     },
     Fact {
+        name: "useless_assignment",
+        doc: "native layers: on an identifier being assigned (`x = 1`, `let x = 1`, `x++`), true when no code path reads that value before it is overwritten or its function ends (eslint's no-useless-assignment, with its exceptions: variables nothing reads, read from other functions, exported, or assigned in a `try` block)",
+        get: |f, n| f.with_file(crate::native::ts::dead_stores::fact, n),
+    },
+    Fact {
         name: "unused_globals",
         doc: "native layers: on the program, `/* global */` comment names nothing reads, as records `{ name, offset }` (offset of the name in the comment)",
         get: |f, n| f.with_file(crate::native::ts::unused::globals_fact, n),

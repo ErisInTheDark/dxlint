@@ -27,6 +27,7 @@ static FILES: &[(&str, &str)] = &[
     ("ts/scoping", include_str!("../../std/ts/scoping.zlint")),
     ("ts/suggestions", include_str!("../../std/ts/suggestions.zlint")),
     ("ts/restrictions", include_str!("../../std/ts/restrictions.zlint")),
+    ("ts/jsx", include_str!("../../std/ts/jsx.zlint")),
     ("python", include_str!("../../std/python.zlint")),
     ("c", include_str!("../../std/c.zlint")),
     ("zlint", include_str!("../../std/zlint.zlint")),
