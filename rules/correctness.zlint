@@ -26,7 +26,7 @@ rule no-unexpected-multiline*
 rule no-unsafe-finally*
 rule no-unsafe-optional-chaining*
 rule no-unused-private-class-members
-rule no-unused-vars
+rule no-unused-vars*
 rule no-useless-backreference*
 rule use-isnan
 rule valid-typeof

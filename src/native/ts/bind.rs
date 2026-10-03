@@ -57,6 +57,15 @@ pub struct Bindings {
     /// Function-like node -> what its own body does ([`USES_THIS`], ...).
     /// Arrow functions count toward the function around them.
     pub functions: HashMap<u32, u8>,
+    pub scopes: Vec<ScopeInfo>,
+    /// Declaring identifier (merged ones too) -> the scope it declares in.
+    pub decl_scope: HashMap<u32, usize>,
+    /// Referencing identifier -> the scope it appears in.
+    pub ref_scope: HashMap<u32, usize>,
+    /// Later declaring identifier of a merged name (`var a; var a;`,
+    /// overloads, `class X` + `interface X`) -> the first, which owns the
+    /// binding.
+    pub merged: HashMap<u32, u32>,
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -82,6 +91,9 @@ enum Use {
     ReadWrite,
     /// The left of `A.B` in a type or `import x = A.B`: any meaning.
     Namespace,
+    /// `export { x }`, `export default x`, `export = x`: any meaning, and
+    /// a value use when it is a value.
+    Export,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,9 +103,20 @@ enum Mode {
     TypeOnly,
 }
 
+/// A scope: indexes into [`Bindings::scopes`]; the first is the file's.
+#[derive(Clone, Copy, Debug)]
+pub struct ScopeInfo {
+    pub parent: Option<usize>,
+    /// Where `var` lands: the file, a function (or method, arrow), a static
+    /// block or a namespace body.
+    pub function: bool,
+    /// What opens it: the program, a function-like, block, class, `for`,
+    /// `switch`, catch clause, namespace body or type construct.
+    pub node: u32,
+}
+
 struct Scope<'t> {
-    parent: Option<usize>,
-    function: bool,
+    info: ScopeInfo,
     names: HashMap<&'t str, Vec<(u32, u8)>>,
 }
 
@@ -118,6 +141,9 @@ struct Binder<'s, 't> {
     site: u32,
     /// First declaration of a name -> the kinds of all its declarations.
     merged_kinds: HashMap<u32, Vec<&'static str>>,
+    decl_scope: HashMap<u32, usize>,
+    /// Inside a conditional type's `extends`: where `infer X` declares.
+    infer_scope: Option<usize>,
 }
 
 pub fn bind(s: &Syntax) -> Bindings {
@@ -135,8 +161,10 @@ pub fn bind(s: &Syntax) -> Bindings {
         write_sites: HashMap::new(),
         site: 0,
         merged_kinds: HashMap::new(),
+        decl_scope: HashMap::new(),
+        infer_scope: None,
     };
-    let module = b.scope(None, true);
+    let module = b.scope(None, true, s.root());
     for st in s.all(s.root(), F::Body).collect::<Vec<_>>() {
         b.walk(st, module, Mode::Value);
     }
@@ -157,14 +185,14 @@ fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
 }
 
 impl<'t> Binder<'_, 't> {
-    fn scope(&mut self, parent: Option<usize>, function: bool) -> usize {
-        self.scopes.push(Scope { parent, function, names: HashMap::new() });
+    fn scope(&mut self, parent: Option<usize>, function: bool, node: u32) -> usize {
+        self.scopes.push(Scope { info: ScopeInfo { parent, function, node }, names: HashMap::new() });
         self.scopes.len() - 1
     }
 
     fn function_scope(&self, mut scope: usize) -> usize {
-        while !self.scopes[scope].function {
-            match self.scopes[scope].parent {
+        while !self.scopes[scope].info.function {
+            match self.scopes[scope].info.parent {
                 Some(p) => scope = p,
                 None => break,
             }
@@ -184,6 +212,7 @@ impl<'t> Binder<'_, 't> {
         }
         let name = s.text(ident);
         self.scopes[scope].names.entry(name).or_default().push((ident, space));
+        self.decl_scope.insert(ident, scope);
         let (kind, owner) = self.current;
         // The statement: a declarator's `var`, or the declaration itself.
         let stmt = if s.is(owner, K::Declarator) { s.parent(owner).unwrap_or(owner) } else { owner };
@@ -350,8 +379,10 @@ impl<'t> Binder<'_, 't> {
             self.walk(d, scope, Mode::Value);
         }
         for p in s.all(id, F::Param).collect::<Vec<_>>() {
+            // A parameter's decorators run outside the function.
+            let outer = self.scopes[scope].info.parent.unwrap_or(scope);
             for d in s.all(p, F::Decorator).collect::<Vec<_>>() {
-                self.walk(d, scope, Mode::Value);
+                self.walk(d, outer, Mode::Value);
             }
             if let Some(n) = s.get(p, F::Name) {
                 self.as_("parameter", p);
@@ -636,7 +667,7 @@ impl<'t> Binder<'_, 't> {
                         self.declare(scope, n, VALUE);
                     }
                 }
-                let inner = self.scope(Some(scope), true);
+                let inner = self.scope(Some(scope), true, id);
                 if !decl {
                     if let Some(n) = name {
                         self.as_("function_name", id);
@@ -646,7 +677,7 @@ impl<'t> Binder<'_, 't> {
                 self.function_parts(id, inner);
             }
             K::Arrow | K::FnType | K::CallSig => {
-                let inner = self.scope(Some(scope), true);
+                let inner = self.scope(Some(scope), true, id);
                 self.function_parts(id, inner);
             }
             K::Method | K::MethodSig => {
@@ -655,7 +686,7 @@ impl<'t> Binder<'_, 't> {
                 }
                 let key_mode = if kind == K::MethodSig { Mode::Type } else { Mode::Value };
                 self.key(id, scope, key_mode);
-                let inner = self.scope(Some(scope), true);
+                let inner = self.scope(Some(scope), true, id);
                 self.function_parts(id, inner);
             }
             K::Class => {
@@ -670,7 +701,7 @@ impl<'t> Binder<'_, 't> {
                 for d in s.all(id, F::Decorator).collect::<Vec<_>>() {
                     self.walk(d, scope, Mode::Value);
                 }
-                let inner = self.scope(Some(scope), false);
+                let inner = self.scope(Some(scope), false, id);
                 if !decl {
                     if let Some(n) = name {
                         self.as_("class_name", id);
@@ -694,7 +725,7 @@ impl<'t> Binder<'_, 't> {
                 self.walk_fields(id, scope, Mode::Value, &[F::Init]);
             }
             K::Block | K::StaticBlock => {
-                let inner = self.scope(Some(scope), kind == K::StaticBlock);
+                let inner = self.scope(Some(scope), kind == K::StaticBlock, id);
                 let body: Vec<u32> = if kind == K::Block {
                     s.all(id, F::Body).collect()
                 } else {
@@ -705,7 +736,7 @@ impl<'t> Binder<'_, 't> {
                 }
             }
             K::For | K::ForIn | K::ForOf => {
-                let inner = self.scope(Some(scope), false);
+                let inner = self.scope(Some(scope), false, id);
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {
                     match f {
                         Some(F::Left) if !s.is(c, K::Var) => {
@@ -719,7 +750,7 @@ impl<'t> Binder<'_, 't> {
             }
             K::Switch => {
                 self.walk_fields(id, scope, Mode::Value, &[F::Discriminant]);
-                let inner = self.scope(Some(scope), false);
+                let inner = self.scope(Some(scope), false, id);
                 for c in s.all(id, F::Case).collect::<Vec<_>>() {
                     for (_, x) in s.kids(c).collect::<Vec<_>>() {
                         self.walk(x, inner, Mode::Value);
@@ -729,7 +760,7 @@ impl<'t> Binder<'_, 't> {
             K::Try => {
                 self.walk_fields(id, scope, Mode::Value, &[F::Block, F::Finalizer]);
                 if let Some(h) = s.get(id, F::Handler) {
-                    let inner = self.scope(Some(scope), false);
+                    let inner = self.scope(Some(scope), false, h);
                     if let Some(p) = s.get(id, F::Param) {
                         self.as_("catch", p);
                         self.declare_pattern(p, inner, VALUE);
@@ -745,7 +776,7 @@ impl<'t> Binder<'_, 't> {
                     self.as_(if kind == K::Interface { "interface" } else { "type" }, id);
                     self.declare(scope, n, TYPE);
                 }
-                let inner = self.scope(Some(scope), false);
+                let inner = self.scope(Some(scope), false, id);
                 self.type_params(id, inner);
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {
                     if matches!(f, Some(F::Extends | F::Member | F::Type)) {
@@ -769,7 +800,7 @@ impl<'t> Binder<'_, 't> {
                     self.declare(scope, n, VALUE | TYPE);
                 }
                 if let Some(b) = s.get(id, F::Body) {
-                    let inner = self.scope(Some(scope), true);
+                    let inner = self.scope(Some(scope), true, b);
                     for st in s.all(b, F::Body).collect::<Vec<_>>() {
                         self.walk(st, inner, Mode::Value);
                     }
@@ -807,16 +838,23 @@ impl<'t> Binder<'_, 't> {
                 let reexport = s.get(id, F::From).is_some();
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {
                     match f {
+                        // `export default X` and `export { X }` export any
+                        // meaning of `X` (a type too).
+                        Some(F::Expr) if s.is(s.unparen(c), K::Ident) => self.reference(s.unparen(c), scope, Use::Export),
                         Some(F::Decl | F::Expr) => self.walk(c, scope, Mode::Value),
                         Some(F::Specifier) if !reexport => {
                             if let Some(l) = s.get(c, F::Local) {
-                                self.reference(l, scope, Use::Value);
+                                self.reference(l, scope, Use::Export);
                             }
                         }
                         _ => {}
                     }
                 }
             }
+            K::ExportAssign => match s.get(id, F::Expr).map(|e| s.unparen(e)) {
+                Some(e) if s.is(e, K::Ident) => self.reference(e, scope, Use::Export),
+                _ => self.walk_fields(id, scope, Mode::Value, &[F::Expr]),
+            },
             K::Labeled => self.walk_fields(id, scope, Mode::Value, &[F::Body]),
             K::Break | K::Continue | K::MetaProperty | K::QualifiedName => {}
             K::Prop => {
@@ -903,23 +941,36 @@ impl<'t> Binder<'_, 't> {
                 self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
             }
             K::ImportType => self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]),
-            K::TypePredicate | K::TupleMember => self.walk_fields(id, scope, Mode::Type, &[F::Type]),
+            // `x is T` names parameter `x` (only the checker needs it).
+            K::TypePredicate => {
+                if let Some(n) = s.get(id, F::Name).filter(|&n| s.is(n, K::Ident)) {
+                    self.reference(n, scope, Use::TypeOnly);
+                }
+                self.walk_fields(id, scope, Mode::Type, &[F::Type]);
+            }
+            K::TupleMember => self.walk_fields(id, scope, Mode::Type, &[F::Type]),
             K::Infer => {
                 if let Some(tp) = s.get(id, F::TypeParam) {
                     if let Some(n) = s.get(tp, F::Name) {
                         self.as_("type_parameter", tp);
-                        self.declare(scope, n, TYPE);
+                        self.declare(self.infer_scope.unwrap_or(scope), n, TYPE);
                     }
                     self.walk_fields(tp, scope, Mode::Type, &[F::Constraint]);
                 }
             }
+            // `infer X` anywhere in `extends` (even inside a function type)
+            // declares `X` for the true branch.
             K::ConditionalType => {
-                let inner = self.scope(Some(scope), false);
-                self.walk_fields(id, inner, Mode::Type, &[F::Check, F::Extends, F::Consequent]);
+                let inner = self.scope(Some(scope), false, id);
+                self.walk_fields(id, inner, Mode::Type, &[F::Check]);
+                let outer_infer = self.infer_scope.replace(inner);
+                self.walk_fields(id, inner, Mode::Type, &[F::Extends]);
+                self.infer_scope = outer_infer;
+                self.walk_fields(id, inner, Mode::Type, &[F::Consequent]);
                 self.walk_fields(id, scope, Mode::Type, &[F::Alternate]);
             }
             K::Mapped => {
-                let inner = self.scope(Some(scope), false);
+                let inner = self.scope(Some(scope), false, id);
                 if let Some(tp) = s.get(id, F::TypeParam) {
                     if let Some(n) = s.get(tp, F::Name) {
                         self.as_("type_parameter", tp);
@@ -946,7 +997,9 @@ impl<'t> Binder<'_, 't> {
                     // A member's `.property` is a name, not a use; object
                     // literal and pattern properties are code.
                     let member_name = f == F::Property && kind == K::Member;
-                    if member_name || matches!(f, F::Key | F::Name | F::Label | F::Imported | F::Exported | F::Op | F::Kind | F::Modifier | F::Optional | F::Quasi) {
+                    // A tagged template's `quasi` is a whole template.
+                    let text = f == F::Quasi && !s.is(c, K::Template);
+                    if member_name || text || matches!(f, F::Key | F::Name | F::Label | F::Imported | F::Exported | F::Op | F::Kind | F::Modifier | F::Optional) {
                         continue;
                     }
                     let child_mode = if type_kind
@@ -963,16 +1016,18 @@ impl<'t> Binder<'_, 't> {
     }
 
     fn resolve(self) -> Bindings {
-        let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, write_sites, merged_kinds, .. } = self;
+        let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, write_sites, merged_kinds, decl_scope, .. } = self;
         let mut out_refs = HashMap::with_capacity(refs.len());
         let mut unresolved = HashSet::new();
         let mut access = HashMap::with_capacity(refs.len());
+        let mut ref_scope = HashMap::with_capacity(refs.len());
         for (ident, scope, use_) in refs {
+            ref_scope.insert(ident, scope);
             let name = s.text(ident);
             access.insert(
                 ident,
                 match use_ {
-                    Use::Value | Use::Namespace => "read",
+                    Use::Value | Use::Namespace | Use::Export => "read",
                     Use::Write => "write",
                     Use::ReadWrite => "read_write",
                     Use::Type | Use::TypeOnly => "type",
@@ -980,7 +1035,7 @@ impl<'t> Binder<'_, 't> {
             );
             let want = match use_ {
                 Use::Type => TYPE,
-                Use::Namespace => VALUE | TYPE,
+                Use::Namespace | Use::Export => VALUE | TYPE,
                 _ => VALUE,
             };
             let mut at = Some(scope);
@@ -992,7 +1047,7 @@ impl<'t> Binder<'_, 't> {
                         break;
                     }
                 }
-                at = scopes[sc].parent;
+                at = scopes[sc].info.parent;
             }
             let Some(decl) = found.map(|d| merged.get(&d).copied().unwrap_or(d)) else {
                 if !matches!(use_, Use::Type | Use::TypeOnly) {
@@ -1017,9 +1072,9 @@ impl<'t> Binder<'_, 't> {
                 b.self_uses += 1;
             }
             match use_ {
-                Use::Value | Use::Namespace => {
+                Use::Value | Use::Namespace | Use::Export => {
                     b.uses += 1;
-                    b.value_uses += u32::from(use_ == Use::Value);
+                    b.value_uses += u32::from(use_ != Use::Namespace);
                 }
                 Use::Type | Use::TypeOnly => b.uses += 1,
                 Use::Write => b.writes += 1,
@@ -1032,6 +1087,7 @@ impl<'t> Binder<'_, 't> {
             out_refs.insert(ident, decl);
         }
         let declaration_kinds = merged.iter().map(|(&d, first)| (d, merged_kinds.get(first).cloned().unwrap_or_default())).chain(merged_kinds.clone()).collect();
-        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions }
+        let scopes = scopes.into_iter().map(|sc| sc.info).collect();
+        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions, scopes, decl_scope, ref_scope, merged }
     }
 }

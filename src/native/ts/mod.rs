@@ -26,6 +26,7 @@ pub mod syntax;
 mod tokens;
 pub mod topics;
 mod types;
+pub mod unused;
 mod values;
 mod view;
 #[cfg(test)]

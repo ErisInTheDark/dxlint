@@ -28,14 +28,19 @@ pub fn is_builtin(name: &str) -> bool {
 pub struct Globals {
     /// From `/* global */` comments (the last setting of a name wins).
     declared: HashMap<String, &'static str>,
+    /// Comment-declared names with the offset of their first mention, in
+    /// order.
+    pub mentions: Vec<(String, u32)>,
 }
 
 impl Globals {
     pub fn new(src: &str, comments: &[Comment]) -> Self {
         let mut declared = HashMap::new();
+        let mut mentions: Vec<(String, u32)> = Vec::new();
         for c in comments.iter().filter(|c| c.block) {
             let body = c.body(src).trim_start();
-            let Some(rest) = body.strip_prefix("globals").or_else(|| body.strip_prefix("global")) else { continue };
+            let body_at = body.as_ptr() as usize - src.as_ptr() as usize;
+            let Some(rest): Option<&str> = body.strip_prefix("globals").or_else(|| body.strip_prefix("global")) else { continue };
             if !rest.starts_with(char::is_whitespace) {
                 continue;
             }
@@ -58,10 +63,15 @@ impl Globals {
                 };
                 if !name.is_empty() {
                     declared.insert(name.to_string(), setting);
+                    if !mentions.iter().any(|(n, _)| n == name) {
+                        let rest_at = body_at + body.len() - rest.len();
+                        let at = name_offset(rest, name).map_or(c.start, |i| (rest_at + i) as u32);
+                        mentions.push((name.to_string(), at));
+                    }
                 }
             }
         }
-        Globals { declared }
+        Globals { declared, mentions }
     }
 
     /// The setting of global `name`, or `None` when nothing declares it.
@@ -77,6 +87,18 @@ impl Globals {
     pub fn in_comment(&self, name: &str) -> bool {
         self.declared.contains_key(name)
     }
+}
+
+/// Where `name` stands as a whole item in a directive's text (between
+/// spaces, commas and a `:value`).
+fn name_offset(body: &str, name: &str) -> Option<usize> {
+    let sep = |c: Option<char>| c.is_none_or(|c| c.is_whitespace() || c == ',');
+    body.match_indices(name).map(|(i, _)| i).find(|&i| {
+        sep(body[..i].chars().next_back()) && {
+            let after = body[i + name.len()..].chars().next();
+            sep(after) || after == Some(':')
+        }
+    })
 }
 
 #[cfg(test)]

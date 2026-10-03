@@ -121,10 +121,15 @@ impl<'s> Lexer<'s> {
         } else {
             let c = b[start];
             if ident_start(c) {
-                self.pos += 1;
                 while self.pos < b.len() && ident_part(b[self.pos]) {
-                    // `A` escapes inside identifiers.
-                    self.pos += if b[self.pos] == b'\\' { 2 } else { 1 };
+                    // `A` and `\u{1F600}` escapes inside identifiers.
+                    self.pos += if b[self.pos] == b'\\' && b.get(self.pos + 2) == Some(&b'{') {
+                        memchr::memchr(b'}', &b[self.pos..]).map_or(2, |n| n + 1)
+                    } else if b[self.pos] == b'\\' {
+                        2
+                    } else {
+                        1
+                    };
                 }
                 self.pos = self.pos.min(b.len());
                 Tok::Ident

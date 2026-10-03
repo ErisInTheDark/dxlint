@@ -519,17 +519,16 @@ impl<'t> NativeFile<'t> {
         v
     }
 
-    /// eslint's `sourceType`: `commonjs` for `.cjs`/`.cts`; for `.js`/`.jsx`
-    /// `module` when the file imports or exports, else `script`; otherwise
-    /// `module`.
+    /// eslint's `sourceType`: `commonjs` for `.cjs`/`.cts`, `module` for
+    /// `.mjs`/`.mts`; other files are modules when they import or export
+    /// (as TypeScript decides), else scripts.
     pub fn source_type(&self) -> &'static str {
         let s = &self.syntax;
         match self.path.extension().and_then(|e| e.to_str()) {
             Some("cjs" | "cts") => "commonjs",
-            Some("js" | "jsx") if !s.all(s.root(), Field::Body).any(|n| matches!(s.kind(n), Some(Kind::Import | Kind::Export))) => {
-                "script"
-            }
-            _ => "module",
+            Some("mjs" | "mts") => "module",
+            _ if s.all(s.root(), Field::Body).any(|n| matches!(s.kind(n), Some(Kind::Import | Kind::Export | Kind::ExportAssign | Kind::ImportEquals))) => "module",
+            _ => "script",
         }
     }
 

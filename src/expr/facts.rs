@@ -167,8 +167,18 @@ const CORE: &[Fact] = &[
         get: |f, n| Value::Bool(f.contains_yield(n)),
     },
     Fact {
+        name: "unused_var",
+        doc: "native layers: on a variable's first declaring identifier, no-unused-vars' view of it (eslint's in `.js`, typescript-eslint's in `.ts`): `used`, `exported`, `silent` (never reported), `def` (`variable`, `parameter`, `catch`: which ignore pattern applies), `array_element`, `array_target`, `setter`, `before_used_param` (\"after-used\" keeps it), `rest_sibling`, `static_block`, `using`, `global` (script top level), `action` (`defined` or `assigned a value`), `only_type`, `offset` (where to report) and `ignored_offset` (where \"marked as ignored but is used\" points); null elsewhere",
+        get: |f, n| f.with_file(crate::native::ts::unused::var_fact, n),
+    },
+    Fact {
+        name: "unused_globals",
+        doc: "native layers: on the program, `/* global */` comment names nothing reads, as records `{ name, offset }` (offset of the name in the comment)",
+        get: |f, n| f.with_file(crate::native::ts::unused::globals_fact, n),
+    },
+    Fact {
         name: "source_type",
-        doc: "native layers: the file's eslint `sourceType`: `commonjs` (`.cjs`, `.cts`), `script` (`.js`/`.jsx` without imports or exports) or `module`; the same on every node",
+        doc: "native layers: the file's eslint `sourceType`: `commonjs` (`.cjs`, `.cts`), `module` (`.mjs`, `.mts`, or any file that imports or exports) or `script`; the same on every node",
         get: |f, n| f.with_file(|file, _| Value::from(file.source_type()), n),
     },
     Fact {

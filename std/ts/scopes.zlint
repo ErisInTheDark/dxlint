@@ -3,15 +3,52 @@
 
 define {
 
-# ---- no-unused-vars (typescript-eslint) ----------------------------------------
-# Unused parameters are reported whatever comes after them (no "after-used").
+# ---- no-unused-vars -------------------------------------------------------------
+# eslint's in `.js` files, typescript-eslint's in `.ts` (`unused_var` decides
+# what counts as a use either way); the options apply as both do.
 in ts_identifier rule no-unused-vars {
+  option vars "all" | "local" = "all" "`local`: skip the global scope of scripts"
   option varsIgnorePattern regex = "" "variable names allowed to be unused"
+  option args "all" | "after-used" | "none" = "after-used" "`after-used`: only parameters after the last used one"
   option argsIgnorePattern regex = "" "parameter names allowed to be unused"
-  when uses != null && uses - self_uses == 0 && !exported && !ambient && !(file ~ /.*\.d\.ts/)
-  when !contains(["function_name", "class_name", "type_parameter"], declaration_kind)
-  when if declaration_kind == "parameter" then argsIgnorePattern == "" || !re_test(text, argsIgnorePattern) else varsIgnorePattern == "" || !re_test(text, varsIgnorePattern)
-  warn "'{text}' is {if writes > 0 || declaration_kind ~ /var|let|const|using/ && ts_declarator.init != null then 'assigned a value' else 'defined'} but never used.{if declaration_kind == 'parameter' && argsIgnorePattern != '' then ' Allowed unused args must match /' argsIgnorePattern '/u.' else if declaration_kind != 'parameter' && declaration_kind != 'catch' && varsIgnorePattern != '' then ' Allowed unused vars must match /' varsIgnorePattern '/u.' else ''}"
+  option caughtErrors "all" | "none" = "all" "check `catch` parameters"
+  option caughtErrorsIgnorePattern regex = "" "`catch` parameter names allowed to be unused"
+  option destructuredArrayIgnorePattern regex = "" "array destructuring element names allowed to be unused"
+  option ignoreRestSiblings boolean = false "skip siblings of a rest property (`{ a, ...rest }`)"
+  option ignoreClassWithStaticInitBlock boolean = false "skip classes with a `static {}` block"
+  option ignoreUsingDeclarations boolean = false "skip `using` declarations"
+  option reportUsedIgnorePattern boolean = false "report names that match an ignore pattern but are used"
+  option enableAutofixRemoval { imports?: boolean } = {} "typescript-eslint: fix options (no effect on reports)"
+  let u unused_var
+  when u != null && !(vars == "local" && u.global)
+  let ignored if destructuredArrayIgnorePattern != "" && (u.array_element || u.array_target) && re_test(text, destructuredArrayIgnorePattern) then "array"
+    else if u.def == "catch" && caughtErrors == "none" || u.def == "parameter" && (u.setter || args == "none") || ignoreClassWithStaticInitBlock && u.static_block then "silenced"
+    else if u.def == "catch" && caughtErrorsIgnorePattern != "" && re_test(text, caughtErrorsIgnorePattern) then "catch"
+    else if u.def == "parameter" && argsIgnorePattern != "" && re_test(text, argsIgnorePattern) then "parameter"
+    else if u.def == "variable" && varsIgnorePattern != "" && re_test(text, varsIgnorePattern) then "variable"
+    else null
+  let used_ignored ignored != null && ignored != "silenced" && reportUsedIgnorePattern && u.used
+  when used_ignored || ignored == null && !u.used && !u.exported && !u.silent
+    && !(args == "after-used" && u.before_used_param)
+    && !(ignoreUsingDeclarations && u.using) && !(ignoreRestSiblings && u.rest_sibling)
+  # The pattern a report mentions: the one its declaration's kind uses.
+  let kind if used_ignored then ignored else if destructuredArrayIgnorePattern != "" && u.array_element then "array" else u.def
+  let pattern if kind == "array" then destructuredArrayIgnorePattern else if kind == "catch" then caughtErrorsIgnorePattern
+    else if kind == "parameter" then argsIgnorePattern else varsIgnorePattern
+  let names if kind == "array" then "elements of array destructuring" else if kind == "catch" then "caught errors"
+    else if kind == "parameter" then "args" else "vars"
+  report at if used_ignored then u.ignored_offset else u.offset
+  warn if used_ignored then "'{text}' is marked as ignored but is used{if pattern != '' then '. Used ' names ' must not match /' pattern '/u' else ''}."
+    else "'{text}' is {u.action} but {if u.only_type then 'only used as a type' else 'never used'}{if pattern != '' then '. Allowed unused ' names ' must match /' pattern '/u' else ''}."
+}
+
+# `/* global a */` names nothing reads.
+in ts_program rule no-unused-vars:globals {
+  option vars "all" | "local" = "all" "`local`: skip the global scope of scripts"
+  when vars == "all"
+  each g in unused_globals
+  report at g.offset
+  warn "'{g.name}' is defined but never used."
 }
 
 }

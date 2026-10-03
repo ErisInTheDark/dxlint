@@ -361,7 +361,7 @@ impl<'s> Parser<'s> {
                     let targs = self.try_parse(|p| {
                         let mut targs = Kids::default();
                         p.type_args(&mut targs, Field::TypeArg)?;
-                        if matches!(p.tok.tok, Tok::P("(") | Tok::Template | Tok::TemplateHead) {
+                        if matches!(p.tok.tok, Tok::P("(") | Tok::Template | Tok::TemplateHead) || p.instantiation_ends() {
                             Ok(targs)
                         } else {
                             p.fail("not type arguments")
@@ -369,6 +369,11 @@ impl<'s> Parser<'s> {
                     });
                     match targs {
                         Some(targs) if self.is("(") => self.call(start, e, None, targs)?,
+                        // `f<T>;`: an instantiation expression.
+                        Some(mut targs) if !matches!(self.tok.tok, Tok::Template | Tok::TemplateHead) => {
+                            targs.0.insert(0, crate::grammar::Edge { label: Field::Expr as u16, node: e });
+                            self.finish(Kind::Instantiation, start, targs)
+                        }
                         Some(mut targs) => {
                             let quasi = self.template()?;
                             targs.0.insert(0, crate::grammar::Edge { label: Field::Tag as u16, node: e });
@@ -382,6 +387,24 @@ impl<'s> Parser<'s> {
             };
         }
         Ok(e)
+    }
+
+    /// After `f<T>`: the token ends an instantiation expression (TypeScript's
+    /// `canFollowTypeArgumentsInExpression`): a line break, a binary
+    /// operator or anything that cannot start an expression, but not
+    /// `<`, `>`, `+` or `-` (`a < b > c` stays comparisons).
+    fn instantiation_ends(&self) -> bool {
+        let starts_expression = match self.tok.tok {
+            Tok::P(p) => matches!(p, "(" | "[" | "{" | "!" | "~" | "++" | "--" | "/" | "/=" | "@" | "..." | "#"),
+            Tok::Eof => false,
+            _ => true,
+        };
+        match self.tok.tok {
+            Tok::P("<" | ">" | "+" | "-") => false,
+            Tok::P(op) => self.tok.nl || binary_op(op).is_some() || !starts_expression,
+            Tok::Ident => self.tok.nl || matches!(self.cur(), "instanceof" | "in" | "as" | "satisfies"),
+            _ => self.tok.nl || !starts_expression,
+        }
     }
 
     /// The name after `.`: any word, or a private name.

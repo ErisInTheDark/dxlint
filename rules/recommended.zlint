@@ -38,7 +38,7 @@ rule no-unsafe-optional-chaining*
 rule no-unused-expressions
 rule no-unused-labels
 rule no-unused-private-class-members
-rule no-unused-vars
+rule no-unused-vars*
 rule no-useless-backreference*
 rule no-useless-catch*
 rule no-useless-escape*
