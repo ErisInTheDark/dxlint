@@ -934,6 +934,11 @@ impl<'t> Binder<'_, 't> {
                 self.walk_fields(id, scope, Mode::Type, &[F::Type]);
             }
             K::Computed => self.walk_fields(id, scope, mode, &[F::Expr]),
+            // The opening name is a use (components); the closing one not.
+            K::JsxElement => {
+                self.walk_fields(id, scope, Mode::Value, &[F::Name, F::Property, F::Body]);
+                self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
+            }
             _ => {
                 let type_kind = kind as u16 >= K::TypeRef as u16;
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {

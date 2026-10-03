@@ -247,6 +247,22 @@ impl<'s> Lexer<'s> {
         closed
     }
 
+    /// Where JSX text starting at `from` ends: the next `{` or `<`, if any.
+    pub fn jsx_text_end(&self, from: usize) -> Option<usize> {
+        memchr::memchr2(b'{', b'<', &self.bytes()[from..]).map(|n| from + n)
+    }
+
+    /// The end of a JSX name part starting at `from`: identifier
+    /// characters and `-`.
+    pub fn jsx_name_end(&self, from: usize) -> usize {
+        let b = self.bytes();
+        let mut end = from;
+        while end < b.len() && (ident_part(b[end]) || b[end] == b'-') {
+            end += 1;
+        }
+        end
+    }
+
     /// Re-reads a `}` token as the continuation of a template.
     pub fn rescan_template(&mut self, close_brace: Token) -> Token {
         self.pos = close_brace.start as usize + 1;

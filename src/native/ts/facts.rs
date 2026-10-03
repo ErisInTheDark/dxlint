@@ -519,6 +519,20 @@ impl<'t> NativeFile<'t> {
         v
     }
 
+    /// eslint's `sourceType`: `commonjs` for `.cjs`/`.cts`; for `.js`/`.jsx`
+    /// `module` when the file imports or exports, else `script`; otherwise
+    /// `module`.
+    pub fn source_type(&self) -> &'static str {
+        let s = &self.syntax;
+        match self.path.extension().and_then(|e| e.to_str()) {
+            Some("cjs" | "cts") => "commonjs",
+            Some("js" | "jsx") if !s.all(s.root(), Field::Body).any(|n| matches!(s.kind(n), Some(Kind::Import | Kind::Export))) => {
+                "script"
+            }
+            _ => "module",
+        }
+    }
+
     pub fn comments(&self) -> &[Comment] {
         self.comments.get_or_init(|| comments(&self.syntax))
     }

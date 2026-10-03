@@ -4,7 +4,11 @@ use crate::grammar::TEXT;
 
 /// `kind(field=child ...)` with leaves as their text, for compact asserts.
 fn dump(src: &str) -> String {
-    let p = parse(src, false).unwrap_or_else(|(at, e)| panic!("{e} at {at}: {}", &src[at as usize..]));
+    dump_as(src, false)
+}
+
+fn dump_as(src: &str, jsx: bool) -> String {
+    let p = parse(src, jsx).unwrap_or_else(|(at, e)| panic!("{e} at {at}: {}", &src[at as usize..]));
     let mut out = String::new();
     let root = &p.nodes[p.root as usize];
     for (i, e) in root.children.iter().enumerate() {
@@ -82,6 +86,18 @@ fn arrows_generics_and_casts() {
         dump("a?.b!.c?.(d);"),
         "expression_statement(expression=call(callee=member(object=non_null(expression=member(object=a optional=?. property=b)) property=c) optional=?. argument=d))"
     );
+}
+
+#[test]
+fn jsx() {
+    // Text is raw (quotes and apostrophes), components are references,
+    // intrinsic and namespaced names and closing names are plain names.
+    assert_eq!(
+        dump_as(r#"<a.B x="it's \" {...p} svg:y={1}>don't {v}<C/><></></a.B>;"#, true),
+        r#"expression_statement(expression=jsx_element(name=member(object=a property=B) property=jsx_attribute(name=x value="it's \") property=jsx_spread_attribute(argument=p) property=jsx_attribute(name=svg:y value=jsx_expression(expression=1)) body=don't  body=jsx_expression(expression=v) body=jsx_element(name=C) body=<></> closing=a.B))"#
+    );
+    assert_eq!(dump_as("<T,>(x: T) => x;", true).split('(').nth(1), Some("expression=arrow"));
+    assert!(parse("<a></b>;", true).is_err());
 }
 
 #[test]

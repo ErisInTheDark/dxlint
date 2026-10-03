@@ -167,6 +167,11 @@ const CORE: &[Fact] = &[
         get: |f, n| Value::Bool(f.contains_yield(n)),
     },
     Fact {
+        name: "source_type",
+        doc: "native layers: the file's eslint `sourceType`: `commonjs` (`.cjs`, `.cts`), `script` (`.js`/`.jsx` without imports or exports) or `module`; the same on every node",
+        get: |f, n| f.with_file(|file, _| Value::from(file.source_type()), n),
+    },
+    Fact {
         name: "unparen_offset",
         doc: "native layers: the offset of the node with the parentheses around it removed (where eslint, which has no parenthesis nodes, reports it), for `report at`",
         get: |f, n| opt(f.unparen_offset(n), Value::from),

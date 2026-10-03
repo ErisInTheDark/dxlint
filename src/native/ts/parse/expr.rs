@@ -154,7 +154,7 @@ impl<'s> Parser<'s> {
             });
             return Ok(saved_ok);
         }
-        if self.is("(") || (self.is("<") && !self.jsx) {
+        if self.is("(") || (self.is("<") && (!self.jsx || self.jsx_generic_arrow_ahead())) {
             return Ok(self.try_parse(|p| {
                 let mut kids = Kids::default();
                 p.arrow_head(&mut kids)?;
@@ -436,7 +436,7 @@ impl<'s> Parser<'s> {
         Ok(())
     }
 
-    fn spread(&mut self) -> PResult<u32> {
+    pub(super) fn spread(&mut self) -> PResult<u32> {
         let start = self.start();
         self.expect("...")?;
         let arg = self.assign_in()?;
@@ -525,7 +525,7 @@ impl<'s> Parser<'s> {
                 self.decorators(&mut kids)?;
                 self.class(start, kids)
             }
-            Tok::P("<") if self.jsx => self.fail("JSX is not supported yet"),
+            Tok::P("<") if self.jsx => self.jsx_element(),
             Tok::Ident => match self.cur() {
                 "function" => self.function(start, Kids::default()),
                 "class" => self.class(start, Kids::default()),

@@ -5,6 +5,7 @@
 //! function types.
 
 mod expr;
+mod jsx;
 mod stmt;
 mod types;
 

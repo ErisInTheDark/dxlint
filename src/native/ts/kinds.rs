@@ -23,6 +23,7 @@ fields! {
     DefaultImport = "default_import", Namespace = "namespace", Imported = "imported", Local = "local",
     Exported = "exported", Quasi = "quasi", Tag = "tag", Constraint = "constraint", Default = "default",
     Check = "check", Optional = "optional", Modifier = "modifier", Decorator = "decorator", Qualifier = "qualifier",
+    Closing = "closing",
 }
 
 macro_rules! kinds {
@@ -132,7 +133,21 @@ kinds! {
     MetaProperty = "ts_meta_property" [],
     ImportCall = "ts_import_call" [Arg],
     Instantiation = "ts_instantiation" [Expr, TypeArg],
-    // ---- types
+    // ---- JSX
+    // `name`: a component (`Foo`, `a.b`: identifiers and members, which
+    // reference bindings) or a `ts_jsx_name` (`div`, `a-b`, `a:b`), as
+    // eslint-scope sees them; `property`: attributes; `body`: children;
+    // `closing`: the closing tag's name.
+    JsxElement = "ts_jsx_element" [Name, TypeArg, Property, Body, Closing],
+    JsxFragment = "ts_jsx_fragment" [Body],
+    JsxAttribute = "ts_jsx_attribute" [Name, Value],
+    JsxSpreadAttribute = "ts_jsx_spread_attribute" [Arg],
+    // `{expression}` as a child or attribute value; `{}` and `{/* c */}`
+    // have no expression.
+    JsxExpression = "ts_jsx_expression" [Expr],
+    JsxText = "ts_jsx_text" [],
+    JsxName = "ts_jsx_name" [],
+    // ---- types (every kind from here on is a type)
     TypeRef = "ts_type_reference" [Name, TypeArg],
     QualifiedName = "ts_qualified_name" [Left, Right],
     TypeParam = "ts_type_parameter" [Modifier, Name, Constraint, Default],
