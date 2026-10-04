@@ -43,36 +43,6 @@ pub fn global_callee(file: &NativeFile, node: u32) -> Value<'static> {
     }
 }
 
-pub fn useless_call(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(callee) = s.get(node, F::Callee).map(|n| s.unparen(n)).filter(|&n| s.is(n, K::Member)) else { return Value::Null };
-    let Some(name) = s.word(callee, F::Property) else { return Value::Null };
-    let args: Vec<_> = s.all(node, F::Arg).collect();
-    if !(name == "call" && !args.is_empty() || name == "apply" && args.len() == 2 && s.is(s.unparen(args[1]), K::Array)) { return Value::Null }
-    let Some(applied) = s.get(callee, F::Object).map(|n| s.unparen(n)) else { return Value::Null };
-    if unchanged_receiver(file, applied, args[0]) { Value::from(name.to_owned()) } else { Value::Null }
-}
-
-fn unchanged_receiver(file: &NativeFile, applied: u32, argument: u32) -> bool {
-    let s = &file.syntax;
-    let argument = s.unparen(argument);
-    if matches!(s.kind(applied), Some(K::Member | K::Index)) {
-        s.get(applied, F::Object).is_some_and(|owner| file.equal_tokens(owner, argument))
-    } else {
-        s.is(argument, K::Null) || s.is(argument, K::Ident) && s.text(argument) == "undefined"
-            || s.is(argument, K::Unary) && s.word(argument, F::Op) == Some("void")
-    }
-}
-
-pub fn variadic_apply(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(callee) = s.get(node, F::Callee).map(|n| s.unparen(n))
-        .filter(|&n| statics::property_name(s, n).as_deref() == Some("apply")) else { return Value::Bool(false) };
-    let args: Vec<_> = s.all(node, F::Arg).collect();
-    if args.len() != 2 || matches!(s.kind(s.unparen(args[1])), Some(K::Array | K::Spread)) { return Value::Bool(false) }
-    Value::Bool(s.get(callee, F::Object).map(|n| s.unparen(n)).is_some_and(|applied| unchanged_receiver(file, applied, args[0])))
-}
-
 pub fn extended_native(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let prototype = if s.is(node, K::Assign) {

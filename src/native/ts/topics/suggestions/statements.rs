@@ -140,68 +140,6 @@ pub fn switch_default(file: &NativeFile, node: u32) -> Value<'static> {
     ])
 }
 
-pub fn extra_label(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(label) = s.get(node, F::Label) else { return Value::Null };
-    let mut current = s.parent(node);
-    while let Some(n) = current {
-        if matches!(s.kind(n), Some(K::Function | K::Method | K::Arrow)) { break }
-        if matches!(s.kind(n), Some(K::For | K::ForIn | K::ForOf | K::While | K::DoWhile | K::Switch)) {
-            let matching = s.parent(n).filter(|&p| s.is(p, K::Labeled)).and_then(|p| s.get(p, F::Label))
-                .is_some_and(|name| s.text(name) == s.text(label));
-            return if matching { Value::record(vec![
-                ("name".into(), Value::from(s.text(label).to_owned())),
-                ("offset".into(), Value::Num(f64::from(s.tree.node(label).start))),
-            ]) } else { Value::Null };
-        }
-        if s.is(n, K::Labeled) && s.get(n, F::Label).is_some_and(|name| s.text(name) == s.text(label)) { break }
-        current = s.parent(n);
-    }
-    Value::Null
-}
-
-pub fn await_loop(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if s.is(node, K::ForOf) && !s.has_word(node, F::Modifier, "await")
-        || s.is(node, K::Var) && s.word(node, F::Kind) != Some("await using") { return Value::Bool(false) }
-    let mut current = node;
-    while let Some(parent) = s.parent(current) {
-        if matches!(s.kind(parent), Some(K::Function | K::Method | K::Arrow))
-            || s.is(parent, K::ForOf) && s.has_word(parent, F::Modifier, "await") { break }
-        let field = s.field(current);
-        let looped = match s.kind(parent) {
-            Some(K::For) => matches!(field, Some(F::Body | F::Test | F::Update)),
-            Some(K::ForIn | K::ForOf) => field == Some(F::Body) || field == Some(F::Left) && s.word(current, F::Kind) == Some("await using"),
-            Some(K::While | K::DoWhile) => matches!(field, Some(F::Body | F::Test)),
-            _ => false,
-        };
-        if looped { return Value::Bool(true) }
-        current = parent;
-    }
-    Value::Bool(false)
-}
-
-pub fn returning_assignment(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let parenthesized = s.parent(node).is_some_and(|p| s.is(p, K::Paren));
-    let mut current = node;
-    while let Some(parent) = s.parent(current) {
-        let arrow = s.is(parent, K::Arrow);
-        if s.is(parent, K::Return) || arrow && s.field(current) == Some(F::Body) {
-            return Value::record(vec![
-                ("arrow".into(), Value::Bool(arrow)),
-                ("parenthesized".into(), Value::Bool(parenthesized)),
-                ("offset".into(), Value::Num(f64::from(s.tree.node(parent).start))),
-            ]);
-        }
-        if matches!(s.kind(parent), Some(K::Function | K::Method | K::Arrow | K::Class | K::Block | K::StaticBlock
-            | K::ExprStmt | K::Var | K::If | K::For | K::ForIn | K::ForOf | K::While | K::DoWhile | K::Switch
-            | K::Throw | K::With | K::Labeled | K::Try | K::Export)) { break }
-        current = parent;
-    }
-    Value::Null
-}
-
 pub fn sequence_context(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let mut outer = node;

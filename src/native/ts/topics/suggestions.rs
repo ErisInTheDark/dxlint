@@ -1,9 +1,6 @@
 //! eslint core suggestion rules (`std/ts/suggestions`, `std/js/problems`).
 
 use crate::expr::facts::Fact;
-use crate::expr::Value;
-use super::super::facts::NativeFile;
-use super::super::kinds::{Field as F, Kind as K};
 
 pub(crate) mod expressions;
 mod accessors;
@@ -35,20 +32,14 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "unicode_regex_flags", doc: "native layers: known literal or global RegExp flags, including missing flags as empty, excluding spread patterns", get: |f, n| f.with_file(regex::unicode_flags, n) },
     Fact { name: "eval_usage", doc: "native layers: direct or indirect eval reference, optional-call status and identifier/property report offset", get: |f, n| f.with_file(expressions::eval_usage, n) },
     Fact { name: "sequence_context", doc: "native layers: comma position and explicit-parenthesis intent outside exempt for init/update sequences", get: |f, n| f.with_file(statements::sequence_context, n) },
-    Fact { name: "variadic_apply", doc: "native layers: apply with a variable argument array and unchanged function receiver", get: |f, n| f.with_file(expressions::variadic_apply, n) },
     Fact { name: "extended_native", doc: "native layers: global builtin prototype being extended by assignment or Object property definition, or null", get: |f, n| f.with_file(expressions::extended_native, n) },
     Fact { name: "empty_function", doc: "native layers: uncommented empty function category, display name, TypeScript exceptions and body offset", get: |f, n| f.with_file(functions::empty_function, n) },
-    Fact { name: "useless_call", doc: "native layers: unnecessary call/apply with an unchanged receiver, or null", get: |f, n| f.with_file(expressions::useless_call, n) },
-    Fact { name: "returning_assignment", doc: "native layers: assignment contained in a return or concise arrow, parenthesis exemption and report offset", get: |f, n| f.with_file(statements::returning_assignment, n) },
     Fact { name: "missing_switch_default", doc: "native layers: final trailing comment text and presence for a nonempty switch missing default, or null", get: |f, n| f.with_file(statements::switch_default, n) },
-    Fact { name: "unnecessary_label", doc: "native layers: redundant break/continue label name and report offset, or null", get: |f, n| f.with_file(statements::extra_label, n) },
-    Fact { name: "await_in_loop", doc: "native layers: await evaluated repeatedly by a loop, excluding function and async iteration boundaries", get: |f, n| f.with_file(statements::await_loop, n) },
     Fact { name: "empty_statement_block", doc: "native layers: empty non-function block or switch without comments, catch status and report offset", get: |f, n| f.with_file(statements::empty_block, n) },
     Fact { name: "lone_statement_block", doc: "native layers: redundant block diagnostic, preserving lexical bindings except an only nested child", get: |f, n| f.with_file(statements::lone_block, n) },
     Fact { name: "function_style", doc: "native layers: function declaration/variable form, export policy, overload and arrow exceptions, and report offset", get: |f, n| f.with_file(functions::style, n) },
     Fact { name: "implicit_coercion", doc: "native layers: shorthand conversion kind, operator, and explicit recommendation", get: |f, n| f.with_file(coercion::coercion, n) },
     Fact { name: "redundant_boolean_cast", doc: "native layers: cast kind and minimum context policy (0 direct, 1 logical, 2 inner)", get: |f, n| f.with_file(coercion::boolean_cast, n) },
-    Fact { name: "self_comparison", doc: "native layers: comparison operands have identical tokens, ignoring comments and surrounding parentheses", get: |f, n| f.with_file(self_comparison, n) },
     Fact { name: "global_callee", doc: "native layers: an unshadowed, enabled global identifier called by this call or constructor, through parentheses", get: |f, n| f.with_file(expressions::global_callee, n) },
     Fact { name: "global_method_callee", doc: "native layers: global object and static method called, through parentheses and unwritten aliases", get: |f, n| f.with_file(expressions::global_method_callee, n) },
     Fact { name: "parse_int_callee", doc: "native layers: the source spelling of an unshadowed parseInt or Number.parseInt callee, through parentheses", get: |f, n| f.with_file(expressions::parse_int_callee, n) },
@@ -60,14 +51,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "object_shorthand_member", doc: "native layers: object member shorthand eligibility, constructor and annotation exceptions, and arrow lexical safety", get: |f, n| f.with_file(objects::shorthand, n) },
     Fact { name: "object_shorthand_consistency", doc: "native layers: mixed shorthand forms or all-redundant long forms in an object literal", get: |f, n| f.with_file(objects::consistency, n) },
 ];
-
-fn self_comparison(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let same = s.is(node, K::Binary)
-        && s.get(node, F::Left).zip(s.get(node, F::Right))
-            .is_some_and(|(left, right)| file.equal_tokens(left, right));
-    Value::Bool(same)
-}
 
 #[cfg(test)]
 mod tests {
