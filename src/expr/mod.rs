@@ -35,23 +35,19 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("offset", "byte offset of the node's start in the file (for `report at`)"),
     ("end_offset", "byte offset of the node's end"),
     ("file", "the file's path, relative to the project root"),
-    ("lang", "the file's language"),
     ("before", "text on the node's first line before the node"),
     ("after", "text on the node's last line after the node"),
     ("previous_line", "the whole line before the node's first line (null on the first line)"),
     ("next_line", "the whole line after the node's last line (null on the last line)"),
-    ("parent", "name of the layer the node sits in (`.lang` for the file root)"),
+    ("parent", "the node this one sits in, within its layer (the file for top nodes; null for the file); test it with `parent is a`"),
     ("parent_text", "text of the layer the node sits in"),
     ("parent_before", "text of the layer the node sits in, up to the node"),
     ("text_before", "all of the file before the node"),
     ("text_after", "all of the file after the node"),
     ("previous_sibling", "text of the previous node of the same layer in the same parent (null if none)"),
     ("previous_gap", "text between that previous sibling and this node (null if none)"),
-    ("layer", "name of the node's own layer"),
-    ("enclosing", "innermost layer containing the node's start, looking past overlays (a comment, a string, ...)"),
     ("source", "the whole file's text"),
     ("index", "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root"),
-    ("field", "the field the node fills in its parent (`callee`, `argument`, `left`); null when it has none"),
     ("gap_before", "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child"),
     ("node", "the node itself as a node value (reads as its text): for `walk`, `report at`, and `.x` reads later (`right.node`, `parent.node`)"),
 ];
@@ -96,9 +92,8 @@ pub enum CExpr {
     Dbg(Box<CExpr>, String),
     /// `children.x`, `previous.x`, `next.x`: `x` evaluated on those nodes.
     Relative(Relative, Box<CExpr>),
-    /// `value is a`: does the layer named by value specialise one of these
-    /// matchers?
-    Is(Box<CExpr>, Vec<u32>),
+    /// `value is a, b.field, layer l, .lang`: does the node pass one?
+    Is(Box<CExpr>, Vec<IsTest>),
     /// A rule's own `let` value, by slot.
     Local(u16),
     /// `{ key: value }`
@@ -141,6 +136,11 @@ pub enum CExpr {
     /// `containing(layer)`: the innermost node of these matchers, in any
     /// named layer, whose span holds this node's (not the node itself).
     Containing(Vec<u32>),
+    /// `kind_name(n)`: the node's kind as text (`.lang` for the file).
+    KindName(Box<CExpr>),
+    /// The first value when it is a node, else the second (an `is`
+    /// subject: `next_token` is a node read, or the fact's tag).
+    Coalesce(Box<CExpr>, Box<CExpr>),
     /// `base.a.b`: on node values the compiled read of `a.b`; on records
     /// those keys.
     Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
@@ -156,10 +156,24 @@ pub enum CExpr {
     Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
 }
 
+/// One alternative of an `is` test.
+#[derive(Debug)]
+pub enum IsTest {
+    /// Of one of these matchers (or a specialisation).
+    Kind(Vec<u32>),
+    /// In this field of a node of one of these matchers.
+    Field(Vec<u32>, u16),
+    /// In this named layer.
+    Layer(u16),
+    /// In a file of this language.
+    Lang(usize),
+}
+
 /// Expression forms that are not plain functions, for `zlint functions`.
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
+    ("kind_name(node)", "a node's kind as text (`ts_call`; `.lang` for the file), for messages: test kinds with `is`"),
     ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none)"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
     ("overlapping(layer, from?, to?)", "the nodes of a layer or group anywhere in the file whose span overlaps the node's (or the byte range `from..to`), in source order (`ts_line` and the comments or strings on it)"),
@@ -199,7 +213,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -522,6 +536,15 @@ impl Scope<'_> {
                     CExpr::Descendants(ids)
                 }
             }
+            // `kind_name(n)`: a node's kind as text, for messages.
+            ExprKind::Call(name, args) if name.text == "kind_name" && self.grammar.function("kind_name").is_none() => {
+                let [arg] = args.as_slice() else {
+                    errors.push(ConfigError::new(e.span, "`kind_name` takes one node").note("usage: kind_name(parent)"));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function("kind_name"));
+                CExpr::KindName(Box::new(self.compile(arg, errors)?))
+            }
             // `walk(roots, n => next)`: every node reachable from the roots.
             ExprKind::Call(name, args) if name.text == "walk" && self.grammar.function("walk").is_none() => {
                 let lambda = match args.as_slice() {
@@ -659,31 +682,55 @@ impl Scope<'_> {
                 CExpr::If(Box::new(c?), Box::new(a?), Box::new(b?))
             }
             ExprKind::Is(value, names) => {
-                let value = self.compile(value, errors)?;
-                let mut ids = Vec::new();
-                for name in names {
-                    if let Some(m) = self.grammar.matcher(&name.text) {
-                        self.note(name.span, Resolved::Layer(name.text.clone()));
-                        ids.push(m);
-                    } else if let Some(members) = self.grammar.group(&name.text) {
-                        self.note(name.span, Resolved::Group(name.text.clone()));
-                        for member in members {
-                            if let crate::config::ast::Parent::Matcher(n) = member {
-                                ids.extend(self.grammar.matcher(&n.text));
-                            }
+                // The subject as a node: a path reads its node (`alternate`,
+                // `parent`, `previous`, `n`); anything else is a value.
+                // Not a node there (a fact's kind tag): the value itself.
+                let plain = self.compile(value, errors)?;
+                let value = match &value.kind {
+                    ExprKind::Var(path) if path.last().is_some_and(|n| n.text != "node") => {
+                        let mut with_node = path.clone();
+                        with_node.push(crate::config::ast::Name { text: "node".into(), span: value.span });
+                        let mut quiet = Vec::new();
+                        let as_node = Expr { kind: ExprKind::Var(with_node), span: value.span };
+                        match self.compile(&as_node, &mut quiet).filter(|_| quiet.is_empty()) {
+                            Some(c) => CExpr::Coalesce(Box::new(c), Box::new(plain)),
+                            None => plain,
                         }
-                    } else if let Some(d) = Dropped::find(&self.grammar.dropped, &name.text) {
-                        errors.push(d.still_used(name.span));
-                        return None;
-                    } else {
-                        errors.push(
-                            ConfigError::new(name.span, format!("unknown layer or group `{}`", name.text))
-                                .suggest(&name.text, self.grammar.matchers.iter().map(|m| m.name.as_str())),
-                        );
-                        return None;
                     }
+                    _ => plain,
+                };
+                let mut tests = Vec::new();
+                for name in names {
+                    use crate::config::ast::IsName;
+                    let test = match name {
+                        IsName::Kind(n) => IsTest::Kind(self.kinds(n, errors)?),
+                        IsName::Field(n, f) => {
+                            let Some(label) = self.grammar.labels.get(&f.text) else {
+                                errors.push(ConfigError::new(f.span, format!("no layer has a field `{}`", f.text)));
+                                return None;
+                            };
+                            IsTest::Field(self.kinds(n, errors)?, label)
+                        }
+                        IsName::Layer(l) => match self.grammar.layers.iter().position(|x| *x == l.text) {
+                            Some(at) => IsTest::Layer(at as u16),
+                            None => {
+                                errors.push(
+                                    ConfigError::new(l.span, format!("no layer `{}`", l.text)).suggest(&l.text, self.grammar.layers.iter().map(String::as_str)),
+                                );
+                                return None;
+                            }
+                        },
+                        IsName::Lang(l) => match self.grammar.lang(&l.text) {
+                            Some(at) => IsTest::Lang(at),
+                            None => {
+                                errors.push(ConfigError::new(l.span, format!("unknown language `.{}`", l.text)));
+                                return None;
+                            }
+                        },
+                    };
+                    tests.push(test);
                 }
-                CExpr::Is(Box::new(value), ids)
+                CExpr::Is(Box::new(value), tests)
             }
             ExprKind::Test(value, pat) => {
                 let value = self.compile(value, errors)?;
@@ -709,6 +756,32 @@ impl Scope<'_> {
                 }
             }
         })
+    }
+
+    /// The matchers a kind or group name stands for.
+    fn kinds(&self, name: &crate::config::ast::Name, errors: &mut Vec<ConfigError>) -> Option<Vec<u32>> {
+        if let Some(m) = self.grammar.matcher(&name.text) {
+            self.note(name.span, Resolved::Layer(name.text.clone()));
+            return Some(vec![m]);
+        }
+        if let Some(members) = self.grammar.group(&name.text) {
+            self.note(name.span, Resolved::Group(name.text.clone()));
+            return Some(
+                members
+                    .iter()
+                    .filter_map(|m| match m {
+                        crate::config::ast::Parent::Matcher(n) => self.grammar.matcher(&n.text),
+                        _ => None,
+                    })
+                    .collect(),
+            );
+        }
+        errors.push(match Dropped::find(&self.grammar.dropped, &name.text) {
+            Some(d) => d.still_used(name.span),
+            None => ConfigError::new(name.span, format!("unknown layer or group `{}`", name.text))
+                .suggest(&name.text, self.grammar.matchers.iter().map(|m| m.name.as_str())),
+        });
+        None
     }
 
     /// `opener` / `closer` as the head of a path: the group of that name,
@@ -955,6 +1028,12 @@ impl Scope<'_> {
                     errors.push(ConfigError::new(field.span, format!("no field or attribute `{}`", field.text)));
                     return None;
                 }
+                // `node.parent`, `declaration.x`: read on that value.
+                if self.grammar.matcher(&layer.text).is_none() && own_field.is_none() {
+                    if let Some(value) = self.node_part(layer) {
+                        return Some(self.member(value, field));
+                    }
+                }
                 let Some(m) = self.grammar.matcher(&layer.text) else {
                     let dropped = Dropped::find(&self.grammar.dropped, &layer.text).or_else(|| Dropped::find(&self.grammar.dropped, &field.text));
                     errors.push(match dropped {
@@ -1151,6 +1230,17 @@ impl<'a> Ctx<'a> {
         Ok(value)
     }
 
+    /// Is `a` an ancestor of `b`?
+    fn is_ancestor(&self, a: u32, mut b: u32) -> bool {
+        while let Some(p) = self.tree.parent(b) {
+            if p == a {
+                return true;
+            }
+            b = p;
+        }
+        false
+    }
+
     /// The file's nodes of these matchers, indexed once per file.
     fn layer_spans(&self, ids: &[u32]) -> std::rc::Rc<LayerSpans> {
         if let Some(s) = self.memo.spans.borrow().get(ids) {
@@ -1314,10 +1404,6 @@ impl<'a> Ctx<'a> {
                 ),
                 (None, _) => Value::Null,
             },
-            "field" => match self.tree.label(self.node) {
-                Some(l) => Value::from(self.grammar.labels.name(l)),
-                None => Value::Null,
-            },
             "gap_before" => {
                 let prev = self.tree.parent(self.node).and_then(|p| {
                     self.tree.node(p).children.iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
@@ -1332,7 +1418,6 @@ impl<'a> Ctx<'a> {
             "offset" => Value::from(start),
             "end_offset" => Value::from(self.tree.node(self.node).end as usize),
             "file" => Value::from(self.file),
-            "lang" => Value::from(self.grammar.langs[self.lang].name.as_str()),
             "before" => {
                 let line_start = self.lines.line_start(self.lines.line_of(start));
                 Value::from(&self.source[line_start..start])
@@ -1362,8 +1447,8 @@ impl<'a> Ctx<'a> {
                 }
             }
             "parent" => match self.parent_layer() {
-                Some(id) if !self.tree.is_root(id) => Value::from(self.grammar.matchers[self.tree.node(id).matcher as usize].name.as_str()),
-                _ => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),
+                Some(id) => Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id))),
+                None => Value::Null,
             },
             "text_before" => Value::from(&self.source[..start]),
             "text_after" => Value::from(&self.source[self.tree.node(self.node).end as usize..]),
@@ -1383,22 +1468,8 @@ impl<'a> Ctx<'a> {
                 Some(id) => Value::from(&self.source[self.tree.node(id).start as usize..start]),
                 None => Value::Null,
             },
-            "layer" => {
-                if self.tree.is_root(self.node) {
-                    Value::from(format!(".{}", self.grammar.langs[self.lang].name))
-                } else if self.tree.is_text(self.node) {
-                    // Labelled text is a field, not a layer.
-                    Value::Null
-                } else {
-                    Value::from(self.grammar.matchers[self.tree.node(self.node).matcher as usize].name.as_str())
-                }
-            }
             "source" => Value::from(self.source),
             "node" => Value::Node(self.node, std::borrow::Cow::Borrowed(self.node_text(self.node))),
-            "enclosing" => match self.tree.innermost_at(self.grammar, start as u32, self.node) {
-                Some(id) if !self.tree.is_root(id) => Value::from(self.grammar.matchers[self.tree.node(id).matcher as usize].name.as_str()),
-                _ => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),
-            },
             other => unreachable!("builtin {other}"),
         }
     }
@@ -1563,6 +1634,18 @@ impl<'a> Ctx<'a> {
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
             }
+            CExpr::Coalesce(a, b) => match self.eval(a)? {
+                v @ Value::Node(..) => v,
+                _ => self.eval(b)?,
+            },
+            CExpr::KindName(n) => match self.eval(n)? {
+                Value::Node(id, _) => match self.tree.node(id).matcher {
+                    ROOT => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),
+                    TEXT => Value::Null,
+                    m => Value::from(self.grammar.matchers[m as usize].name.as_str()),
+                },
+                _ => Value::Null,
+            },
             CExpr::Containing(ids) => {
                 let spans = self.layer_spans(ids);
                 let me = self.tree.node(self.node);
@@ -1571,7 +1654,10 @@ impl<'a> Ctx<'a> {
                 while i > 0 && spans.max_end[i - 1] >= me.end {
                     i -= 1;
                     let (s, e, id) = spans.nodes[i];
-                    if e >= me.end && id != self.node && best.is_none_or(|(bs, be, _)| e - s < be - bs) {
+                    // Smallest span; on a tie the deeper node (a program and
+                    // its only class can share one).
+                    let better = best.is_none_or(|(bs, be, b)| e - s < be - bs || e - s == be - bs && self.is_ancestor(b, id));
+                    if e >= me.end && id != self.node && better {
                         best = Some((s, e, id));
                     }
                 }
@@ -1631,7 +1717,10 @@ impl<'a> Ctx<'a> {
                 let on = |v: &Value<'a>| -> Result<Value<'a>, String> {
                     match (v, part) {
                         (Value::Node(id, _), Some(part)) => Ctx { node: *id, ..*self }.eval(part),
-                        (Value::Record(_), _) => Ok(keys.iter().fold(v.clone(), |v, k| v.key(k))),
+                        // `rec.owner.node`: a node held in a record is itself.
+                        (Value::Record(_), _) => {
+                            Ok(keys.iter().fold(v.clone(), |v, k| if &**k == "node" && matches!(v, Value::Node(..)) { v } else { v.key(k) }))
+                        }
                         _ => Ok(Value::Null),
                     }
                 };
@@ -1702,14 +1791,30 @@ impl<'a> Ctx<'a> {
             }
             CExpr::Test(value, prog) => Value::Bool(full_match(self.grammar, self.lang, prog, &self.eval(value)?.text())),
             CExpr::TestDfa(value, dfa) => Value::Bool(dfa.is_match(self.eval(value)?.text().as_bytes())),
-            CExpr::Is(value, ids) => {
-                let name = self.eval(value)?;
-                let m = match &name {
-                    Value::Null => None,
-                    Value::Node(id, _) => Some(self.tree.node(*id).matcher),
-                    v => self.grammar.matcher(&v.text()),
+            CExpr::Is(value, tests) => {
+                let v = self.eval(value)?;
+                let node = match &v {
+                    Value::Node(id, _) => Some(*id),
+                    _ => None,
                 };
-                Value::Bool(m.is_some_and(|m| ids.iter().any(|&t| self.grammar.is_a(m, t))))
+                let is_a = |m: u32, ids: &[u32]| m != ROOT && m != TEXT && ids.iter().any(|&t| self.grammar.is_a(m, t));
+                // Facts about things that are not nodes (tokens) tag them with
+                // a kind: a kind text, or a record's `kind`.
+                let tagged = match &v {
+                    Value::Str(_) => self.grammar.matcher(&v.text()),
+                    Value::Record(_) => self.grammar.matcher(&v.key("kind").text()),
+                    _ => None,
+                };
+                Value::Bool(tests.iter().any(|t| match (t, node) {
+                    (IsTest::Lang(l), _) => *l == self.lang,
+                    (IsTest::Kind(ids), None) => tagged.is_some_and(|m| is_a(m, ids)),
+                    (_, None) => false,
+                    (IsTest::Kind(ids), Some(id)) => is_a(self.tree.node(id).matcher, ids),
+                    (IsTest::Field(ids, label), Some(id)) => {
+                        self.tree.label(id) == Some(*label) && self.tree.owner(id).is_some_and(|o| is_a(self.tree.node(o).matcher, ids))
+                    }
+                    (IsTest::Layer(l), Some(id)) => self.tree.layer_of(id) == Some(*l),
+                }))
             }
             CExpr::Local(i) => {
                 let Some((rule, exprs, targets)) = self.locals else { return Err("a rule's `let` outside the rule".into()) };

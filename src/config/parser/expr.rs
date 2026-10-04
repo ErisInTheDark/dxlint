@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use super::super::ast::{BinOp, Expr, ExprKind, Name, TemplatePart, UnOp};
+use super::super::ast::{BinOp, Expr, ExprKind, IsName, Name, TemplatePart, UnOp};
 use super::super::error::ConfigError;
 use super::super::lexer::{decode_escapes, lex, Tk, Token};
 use super::super::source::Span;
@@ -106,6 +106,11 @@ impl Parser<'_> {
     }
 
     fn e_cmp(&mut self) -> Option<Expr> {
+        // `is a`, `not a` alone: about the node itself.
+        if let Some(t) = self.ts.peek_raw(0).filter(|t| t.is_ident("is") || t.is_ident("not")).cloned() {
+            let lhs = Expr { kind: ExprKind::Var(vec![Name { text: "node".into(), span: t.span }]), span: t.span };
+            return self.is_test(lhs);
+        }
         let lhs = self.e_join()?;
         let next = self.op_peek();
         if next == Some(Tk::Ident) && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("is") || t.is_ident("not")) {
@@ -135,8 +140,40 @@ impl Parser<'_> {
         Some(Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span })
     }
 
-    /// `value is name`, `value is (a, b)`, or the same with `not`, after
-    /// `value`. Parentheses with commas make a group in place.
+    /// One `is` alternative starting at token `t`: `name`, `name.field`,
+    /// `layer name` or `.lang`.
+    fn is_name(&mut self, t: Token) -> Option<IsName> {
+        let glued = |p: &mut Self, prev: &Token| p.ts.peek_raw(0).is_some_and(|n| prev.touches(n));
+        if t.kind == Tk::Dot {
+            return match self.ts.next_raw() {
+                Some(l) if l.kind == Tk::Ident && t.touches(&l) => Some(IsName::Lang(Name { text: l.text.to_string(), span: t.span.to(l.span) })),
+                _ => {
+                    self.errors.push(ConfigError::new(t.span, "expected a language right after `.`, like `.rust`"));
+                    None
+                }
+            };
+        }
+        let name = Name { text: t.text.to_string(), span: t.span };
+        if name.text == "layer" && self.ts.peek_raw(0).is_some_and(|n| n.kind == Tk::Ident) {
+            let l = self.ts.next_raw().expect("peeked");
+            return Some(IsName::Layer(Name { text: l.text.to_string(), span: l.span }));
+        }
+        if glued(self, &t) && self.ts.peek_raw(0).is_some_and(|d| d.kind == Tk::Dot) {
+            let dot = self.ts.next_raw().expect("peeked");
+            return match self.ts.next_raw() {
+                Some(f) if f.kind == Tk::Ident && dot.touches(&f) => Some(IsName::Field(name, Name { text: f.text.to_string(), span: f.span })),
+                _ => {
+                    self.errors.push(ConfigError::new(dot.span, "expected a field name right after `.`, like `ts_if.test`"));
+                    None
+                }
+            };
+        }
+        Some(IsName::Kind(name))
+    }
+
+    /// `value is name`, `value is (a, b.field, layer l, .lang)`, or the same
+    /// with `not`, after `value`. Parentheses with commas make a group in
+    /// place.
     fn is_test(&mut self, lhs: Expr) -> Option<Expr> {
         let kw = self.ts.next_raw().expect("peeked");
         self.skip(false, true);
@@ -149,7 +186,7 @@ impl Parser<'_> {
                     match self.ts.next_raw() {
                         Some(t) if t.kind == Tk::RParen => break,
                         Some(t) if t.kind == Tk::Comma => {}
-                        Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
+                        Some(t) if matches!(t.kind, Tk::Ident | Tk::Dot) => names.push(self.is_name(t)?),
                         other => {
                             let span = other.map(|t| t.span).or(self.ts.last_span);
                             self.errors.push(ConfigError::new(span, format!("expected layer or group names in `{} (a, b)`", kw.text)));
@@ -164,7 +201,7 @@ impl Parser<'_> {
                 return None;
             }
             _ => match self.ts.next_raw() {
-                Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
+                Some(t) if matches!(t.kind, Tk::Ident | Tk::Dot) => names.push(self.is_name(t)?),
                 other => {
                     let span = other.map(|t| t.span).or(Some(kw.span));
                     self.errors.push(

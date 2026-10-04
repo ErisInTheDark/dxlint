@@ -95,8 +95,6 @@ pub trait Facts {
     fn optional_chain_risks(&self, node: u32) -> Vec<(usize, bool)>;
     /// On an assignment: what it assigns to itself, `(offset, text, member)`.
     fn self_assignments(&self, node: u32) -> Option<Vec<(usize, String, bool)>>;
-    /// The kind of statement or `?:` whose test holds the node.
-    fn conditional_ancestor(&self, node: u32) -> Option<&'static str>;
     /// On an `if`: an earlier branch of its chain covers its test.
     fn duplicate_condition(&self, node: u32) -> Option<bool>;
     /// On a `case`: an earlier case of its switch has the same test.
@@ -342,10 +340,6 @@ impl Facts for NativeFile<'_> {
                 .map(|(n, member)| (s.tree.node(n).start as usize, s.text(n).split_whitespace().collect::<String>(), member))
                 .collect()
         })
-    }
-
-    fn conditional_ancestor(&self, node: u32) -> Option<&'static str> {
-        Some(self.syntax.kind(NativeFile::conditional_ancestor(self, node)?)?.name())
     }
 
     fn duplicate_condition(&self, node: u32) -> Option<bool> {

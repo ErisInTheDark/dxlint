@@ -15,7 +15,7 @@ in ts_union, ts_intersection let structure_first_type_offset first(type.offset)
 in ts_type_alias let structure_start offset
 in ts_unary let structure_typeof operator == "typeof"
 in ts_parenthesized let structure_typeof default(expression.structure_typeof, false)
-in ts_parenthesized let structure_single_conditional expression.layer is ts_conditional
+in ts_parenthesized let structure_single_conditional expression is ts_conditional
 
 @macro structure_mixed_operator_rule(name, position) {
   in ts_binary, ts_logical rule name {
@@ -27,7 +27,7 @@ in ts_parenthesized let structure_single_conditional expression.layer is ts_cond
     when child_operator != outer_operator
     when !allowSamePrecedence || precedence != parent.precedence
     when any(groups, operators => contains(operators, child_operator) && contains(operators, outer_operator))
-    let child_first field == "left" || field == "test"
+    let child_first is (ts_node.left, ts_node.test)
     let left_operator if child_first then child_operator else outer_operator
     let right_operator if child_first then outer_operator else child_operator
     report at position
@@ -37,10 +37,10 @@ in ts_parenthesized let structure_single_conditional expression.layer is ts_cond
 
 in ts_call, ts_new, ts_import_call let structure_argument_count count(argument)
 in ts_function, ts_call let structure_iife_wrapped parent is ts_parenthesized
-  || parent is (ts_if, ts_while, ts_do_while) && field == "test"
-  || parent is ts_switch && field == "discriminant"
-  || parent is ts_with && field == "object"
-  || parent is (ts_call, ts_new, ts_import_call) && field == "argument" && parent.structure_argument_count == 1 && next_token is ts_close_paren
+  || is (ts_if.test, ts_while.test, ts_do_while.test)
+  || is ts_switch.discriminant
+  || is ts_with.object
+  || is (ts_call.argument, ts_new.argument, ts_import_call.argument) && parent.structure_argument_count == 1 && next_token is ts_close_paren
 in ts_function let structure_iife_callee { direct: true, prototype: false, wrapped: structure_iife_wrapped }
 in ts_parenthesized let structure_iife_callee expression.structure_iife_callee
 in ts_member, ts_index let structure_iife_callee if (object.structure_iife_callee).direct && contains(["call", "apply"], static_name) then { direct: false, prototype: true, wrapped: (object.structure_iife_callee).wrapped } else null
@@ -137,7 +137,7 @@ fn structure_is_directive(body) = re_test(body, /^(?:eslint|jscs|\/ <reference|\
 
 in ts_program layer text match structure_hashbang /\A#![^\n\r\u{2028}\u{2029}]*/
 group structure_comment ts_comment, structure_hashbang
-in structure_comment let structure_comment_body if layer is ts_block_comment then slice(text, 2, len(text) - 2) else slice(text, 2)
+in structure_comment let structure_comment_body if is ts_block_comment then slice(text, 2, len(text) - 2) else slice(text, 2)
 in structure_comment let structure_directive structure_is_directive(trim_start(structure_comment_body))
 in ts_comment let structure_comment_beside trim(byte_slice(source, position(offset).js_line_start, offset)) != ""
 
@@ -208,7 +208,7 @@ in ts_line rule multiline-comment-style:alignment {
 }
 
 fn structure_line_comments_join(source, previous, next) = previous != null && next != null
-  && previous.layer is ts_line_comment && next.layer is ts_line_comment
+  && previous is ts_line_comment && next is ts_line_comment
   && previous.structure_style_eligible && next.structure_style_eligible && previous.end_offset <= next.offset
   && position(next.offset).js_line == position(previous.end_offset).js_line + 1
   && trim(byte_slice(source, previous.end_offset, next.offset)) == ""
@@ -313,7 +313,7 @@ in ts_program rule unicode-bom {
 }
 
 in ts_regex rule wrap-regex {
-  when parent == "ts_member" && field == "object"
+  when is ts_member.object
   warn "Wrap the regexp literal in parens to disambiguate the slash."
 }
 
@@ -430,8 +430,8 @@ group structure_statement ts_break, ts_class, ts_continue, ts_debugger, ts_do_wh
 group structure_declaration_parent ts_program, ts_block, ts_if, ts_for, ts_for_in, ts_for_of,
   ts_while, ts_do_while, ts_labeled, ts_with, ts_export
 group structure_suppress_statement_entry ts_do_while, ts_for, ts_for_in, ts_for_of, ts_if, ts_labeled, ts_while
-@macro structure_statement_type(layer, name) {
-  in layer let structure_statement_type name
+@macro structure_statement_type(target, name) {
+  in target let structure_statement_type name
 }
 @structure_statement_type(ts_break, "BreakStatement")
 @structure_statement_type(ts_continue, "ContinueStatement")
@@ -454,7 +454,7 @@ group structure_suppress_statement_entry ts_do_while, ts_for, ts_for_in, ts_for_
 in ts_class let structure_statement_type if parent is structure_declaration_parent then "ClassDeclaration" else null
 in ts_function let structure_statement_type if parent is structure_declaration_parent then "FunctionDeclaration" else null
 in ts_export let structure_statement_type if kind == "default" then "ExportDefaultDeclaration" else if kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration"
-in structure_statement let structure_statement_enter !(parent is structure_suppress_statement_entry && field != "alternate" || parent is ts_export && parent.kind != "*")
+in structure_statement let structure_statement_enter !(parent is structure_suppress_statement_entry && not ts_node.alternate || parent is ts_export && parent.kind != "*")
 in structure_statement let structure_statement_exit offset + byte_len(trim_end(trim_end(trim_end(text), ";")))
 
 in ts_line rule max-statements-per-line {
@@ -527,8 +527,8 @@ in structure_comment rule name {
   option allowModuleEnd boolean = false "allow comments at module ends"
   let allowedStart compact([if allowClassStart == true then "Class" else null, if allowObjectStart then "Object" else null, if allowArrayStart then "Array" else null, if allowInterfaceStart then "Interface" else null, if allowTypeStart then "Type" else null, if allowEnumStart then "Enum" else null, if allowModuleStart then "Module" else null])
   let allowedEnd compact([if allowClassEnd == true then "Class" else null, if allowObjectEnd then "Object" else null, if allowArrayEnd then "Array" else null, if allowInterfaceEnd then "Interface" else null, if allowTypeEnd then "Type" else null, if allowEnumEnd then "Enum" else null, if allowModuleEnd then "Module" else null])
-  when if before then (if layer is ts_block_comment then beforeBlockComment else beforeLineComment)
-    else (if layer is structure_hashbang then afterHashbangComment else if layer is ts_block_comment then afterBlockComment else afterLineComment)
+  when if before then (if is ts_block_comment then beforeBlockComment else beforeLineComment)
+    else (if is structure_hashbang then afterHashbangComment else if is ts_block_comment then afterBlockComment else afterLineComment)
   when !(applyDefaultIgnorePatterns && structure_directive) && (ignorePattern == "" || !re_test(structure_comment_body, ignorePattern))
   when !structure_inline
   let row if before then structure_first_row else structure_last_row
@@ -583,7 +583,7 @@ in ts_call rule newline-per-chained-call {
 
 in ts_arrow.body rule implicit-arrow-linebreak {
   option mode "beside" | "below" = "beside"
-  when layer != "ts_block"
+  when not ts_block
   let broken re_test(parent_before, /=>[\s\S]*\n/)
   when mode == "beside" && broken || mode == "below" && !broken
   warn if mode == "beside" then "Expected no linebreak before this expression." else "Expected a linebreak before this expression."
@@ -592,7 +592,7 @@ in ts_arrow.body rule implicit-arrow-linebreak {
 in ts_arrow rule no-confusing-arrow {
   option allowParens boolean = true "parentheses disambiguate a conditional body"
   option onlyOneSimpleParam boolean = false "check only single identifier parameters"
-  when body.layer is ts_conditional || !allowParens && body.layer is ts_parenthesized && body.structure_single_conditional
+  when body is ts_conditional || !allowParens && body is ts_parenthesized && body.structure_single_conditional
   when !onlyOneSimpleParam || count(parameter) == 1 && re_test(first(parameter), /^[A-Za-z_$][\w$]*$/)
   warn "Arrow function used ambiguously with a conditional expression."
 }
@@ -600,10 +600,10 @@ in ts_arrow rule no-confusing-arrow {
 in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule nonblock-statement-body-position {
   option mode "beside" | "below" | "any" = "beside"
   option overrides { if?: "beside" | "below" | "any"; else?: "beside" | "below" | "any"; while?: "beside" | "below" | "any"; do?: "beside" | "below" | "any"; for?: "beside" | "below" | "any" } = {} "position by statement"
-  let kind if parent == "ts_if" then (if field == "alternate" then "else" else "if") else if parent == "ts_while" then "while" else if parent == "ts_do_while" then "do" else "for"
+  let kind if parent is ts_if then (if is ts_if.alternate then "else" else "if") else if parent is ts_while then "while" else if parent is ts_do_while then "do" else "for"
   let style default(if kind == "if" then overrides.if else if kind == "else" then overrides.else else if kind == "while" then overrides.while else if kind == "do" then overrides.do else overrides.for, mode)
   let broken re_test(parent_before, /\n[ \t]*$/)
-  when layer != "ts_block" && !(kind == "else" && layer == "ts_if")
+  when not ts_block && !(kind == "else" && is ts_if)
   when style != "any" && (style == "beside" && broken || style == "below" && !broken)
   warn if style == "beside" then "Expected no linebreak before this statement." else "Expected a linebreak before this statement."
 }

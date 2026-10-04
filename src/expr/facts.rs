@@ -262,11 +262,6 @@ const CORE: &[Fact] = &[
         },
     },
     Fact {
-        name: "conditional_ancestor",
-        doc: "native layers: the layer of the `if`, loop or `?:` whose test holds the node (`ts_if`, `ts_while`, `ts_do_while`, `ts_for`, `ts_conditional`), not across functions; null outside tests",
-        get: |f, n| opt(f.conditional_ancestor(n), Value::from),
-    },
-    Fact {
         name: "duplicate_condition",
         doc: "native layers: on an `if`: an earlier branch of its `else if` chain already covers its test (eslint's no-dupe-else-if: by tokens, `&&`/`||` in any order, `a` covers `a && b`)",
         get: |f, n| opt(f.duplicate_condition(n), Value::Bool),
@@ -455,7 +450,7 @@ const CORE: &[Fact] = &[
     },
     Fact {
         name: "first_token",
-        doc: "native layers: the node's first code token: `{text, layer, start, end}` (`layer` as `previous_token` names it: `ts_identifier`, `ts_number`, `ts_open_paren`...)",
+        doc: "native layers: the node's first code token: `{text, kind, start, end}`; `is` tests its kind (`first_token is ts_identifier`)",
         get: |f, n| f.with_file(|file, n| edge_token(file, n, false), n),
     },
     Fact {

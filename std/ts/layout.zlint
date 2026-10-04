@@ -55,7 +55,7 @@ fn layout_padding_top_space(gap) = layout_comma_space(slice(gap, len(layout_padd
 fn layout_padding_tail_space(gap) = default(re_find(gap, if starts_with(layout_padding_last_comment(gap), "//") then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/), "")
 fn layout_padding_bottom_space(gap) = layout_padding_tail_space(slice(gap, 0, len(gap) - len(layout_padding_attached_end(gap))))
 fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
-fn layout_padding_mode(style, blocks, switches, classes, kind) = if style != null then style else if blocks == null && switches == null && classes == null then "always" else if kind == "ts_class" then classes else if kind == "ts_switch" then switches else blocks
+fn layout_padding_mode(style, blocks, switches, classes, owner) = if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
 macro layout_padding_options {
   option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
   option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
@@ -91,19 +91,19 @@ in ts_program rule no-multi-spaces {
   warn "Multiple spaces found before '{multiple_gap.display}'."
 }
 
-in ts_string let layout_quote_fixed_string (parent is ts_property || parent is ts_pattern_property || parent is ts_method || parent is ts_class_property || parent is ts_method_signature || parent is ts_property_signature) && field == "key" || (parent is ts_import || parent is ts_export) && (field == "from" || field == "namespace") || parent is ts_import_specifier && field == "imported" || parent is ts_export_specifier || (parent is ts_namespace || parent is ts_enum_member) && field == "name" || parent is ts_import_type && field == "argument"
+in ts_string let layout_quote_fixed_string is (ts_property.key, ts_pattern_property.key, ts_method.key, ts_class_property.key, ts_method_signature.key, ts_property_signature.key, ts_import.from, ts_export.from, ts_import.namespace, ts_export.namespace, ts_import_specifier.imported, ts_namespace.name, ts_enum_member.name, ts_import_type.argument) || parent is ts_export_specifier
 in ts_literal_type let layout_quote_import_argument parent is ts_import_type && offset == parent.argument.offset
 in ts_call let layout_quote_external_module parent is ts_import_equals && offset == parent.value.offset
 in ts_program let layout_quote_prologue true
 in ts_block let layout_quote_prologue (parent is ts_function || parent is ts_arrow || parent is ts_method) && offset == parent.body.offset
-in ts_expression_statement let layout_quote_directive default(parent.layout_quote_prologue, false) && expression.layer is ts_string && (previous == null || default(previous.layout_quote_directive, false))
-in ts_template let layout_quote_template_feature count(expression) > 0 || parent is ts_tagged_template && field == "quasi" || re_test(text, /(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]/)
+in ts_expression_statement let layout_quote_directive default(parent.layout_quote_prologue, false) && expression is ts_string && (previous == null || default(previous.layout_quote_directive, false))
+in ts_template let layout_quote_template_feature count(expression) > 0 || is ts_tagged_template.quasi || re_test(text, /(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]/)
 in ts_string, ts_template rule quotes {
   option style "double" | "single" | "backtick" = "double" "string delimiters"
   option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
   option allowTemplateLiterals "never" | "avoidEscape" | "always" | boolean = "never" "allow unused template delimiters"
   option ignoreStringLiterals boolean = false "check templates only"
-  let quote_template layer is ts_template
+  let quote_template is ts_template
   let quote_fixed default(layout_quote_fixed_string, false) || parent is ts_expression_statement && parent.layout_quote_directive || parent is ts_literal_type && default(parent.layout_quote_import_argument, false) || parent is ts_call && default(parent.layout_quote_external_module, false)
   let quote_delimiter if style == "single" then "'" else if style == "double" then "\"" else "`"
   let quote_alternate if style == "double" then "'" else "\""
@@ -158,7 +158,7 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
   option markers string[] = [] "comment prefix markers"
   option line { exceptions?: string[]; markers?: string[] } = {} "line-comment options"
   option block { exceptions?: string[]; markers?: string[]; balanced?: boolean } = {} "block-comment options"
-  let comment_block layer is ts_block_comment
+  let comment_block is ts_block_comment
   let comment_body byte_slice(text, 2, byte_len(text) - (if comment_block then 2 else 0))
   let comment_options if comment_block then block else line
   let comment_markers if comment_options.markers != null then comment_options.markers else markers
@@ -255,7 +255,7 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
   layout_padding_options
   when opener.ts_open_brace.offset != null
   when layout_padding_content
-  let padding_mode layout_padding_mode(style, blocks, switches, classes, layer)
+  let padding_mode layout_padding_mode(style, blocks, switches, classes, node)
   when padding_mode != null
   when !(allowSingleLineBlocks && layout_padding_single)
   let padding_space layout_padding_top_space(opener.ts_open_brace.space_after.text)
@@ -269,7 +269,7 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
   layout_padding_options
   when closer.ts_close_brace.offset != null
   when layout_padding_content
-  let padding_mode layout_padding_mode(style, blocks, switches, classes, layer)
+  let padding_mode layout_padding_mode(style, blocks, switches, classes, node)
   when padding_mode != null
   when !(allowSingleLineBlocks && layout_padding_single)
   let padding_space layout_padding_bottom_space(closer.ts_close_brace.space_before.text)
@@ -492,7 +492,7 @@ in ts_unary, ts_update, ts_await, ts_yield let layout_unary_operand argument.nod
 in ts_new let layout_unary_operand callee.node
 in ts_non_null let layout_unary_operand expression.node
 in ts_yield let layout_unary_delegate operator == "*"
-in ts_unary let layout_unary_double_bang operator == "!" && argument.layer is ts_unary && argument.operator == "!"
+in ts_unary let layout_unary_double_bang operator == "!" && argument is ts_unary && argument.operator == "!"
 in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary-ops {
   option words boolean = true "spaces after word operators"
   option nonwords boolean = false "spaces around symbolic unary operators"
@@ -504,8 +504,8 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
   let unary_operator unary_token.text
   let unary_word contains(["typeof", "void", "delete", "new", "await", "yield"], unary_operator)
   let unary_separated if unary_prefix then unary_token.end != unary_argument.start else unary_argument.end != unary_token.start
-  let unary_joinable unary_argument.layer not (ts_identifier, ts_keyword, ts_this, ts_super, ts_boolean, ts_null, ts_yield, ts_number, ts_bigint)
-  let unary_override if layer is ts_non_null then "ts-non-null" else unary_operator
+  let unary_joinable unary_argument not (ts_identifier, ts_keyword, ts_this, ts_super, ts_boolean, ts_null, ts_yield, ts_number, ts_bigint)
+  let unary_override if is ts_non_null then "ts-non-null" else unary_operator
   let wants_space default(get(overrides, unary_override), default(get(overrides, unary_operator), if unary_word then words else nonwords))
   when wants_space != unary_separated
   when !(wants_space && layout_unary_double_bang == true) && !(unary_word && !wants_space && !unary_joinable)
@@ -542,8 +542,8 @@ in ts_colon rule switch-colon-spacing:after {
 }
 
 in ts_empty, ts_semicolon rule no-extra-semi {
-  when layer is ts_empty && parent not (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_if, ts_labeled, ts_with)
-    || layer is ts_semicolon && parent is ts_class
+  when is ts_empty && parent not (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_if, ts_labeled, ts_with)
+    || is ts_semicolon && parent is ts_class
   warn "Unnecessary semicolon."
 }
 

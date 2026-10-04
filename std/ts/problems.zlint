@@ -24,10 +24,10 @@ macro is_global(name) (text == name && (global == "readonly" || global == "writa
 # `new Promise(async () => ...)`, also inside parentheses.
 in ts_new let promise_constructor callee.is_real_promise == true
 in ts_identifier let is_real_promise is_global("Promise")
-in ts_parenthesized let promise_executor_slot parent == "ts_new" && index == 0 && parent.promise_constructor || parent == "ts_parenthesized" && parent.promise_executor_slot == true
+in ts_parenthesized let promise_executor_slot parent is ts_new && index == 0 && parent.promise_constructor || parent is ts_parenthesized && parent.promise_executor_slot == true
 in ts_arrow, ts_function rule no-async-promise-executor {
   when contains(modifier, "async")
-  when parent == "ts_new" && index == 0 && parent.promise_constructor || parent == "ts_parenthesized" && parent.promise_executor_slot == true
+  when parent is ts_new && index == 0 && parent.promise_constructor || parent is ts_parenthesized && parent.promise_executor_slot == true
   warn "Promise executor functions should not be async."
 }
 
@@ -50,13 +50,13 @@ in ts_parenthesized let wraps_assignment expression.is_assignment == true
 in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test rule no-cond-assign {
   option mode "except-parens" | "always" = "except-parens"
   when mode == "except-parens"
-  when layer == "ts_assignment" || parent == "ts_conditional" && layer == "ts_parenthesized" && wraps_assignment == true
+  when is ts_assignment || parent is ts_conditional && is ts_parenthesized && wraps_assignment == true
   report at unparen_offset
   warn "Expected a conditional expression and instead saw an assignment."
 }
 in ts_assignment rule no-cond-assign:always {
   option mode "except-parens" | "always" = "except-parens"
-  let where if conditional_ancestor == "ts_if" then "an 'if' statement" else if conditional_ancestor == "ts_while" then "a 'while' statement" else if conditional_ancestor == "ts_do_while" then "a 'do...while' statement" else if conditional_ancestor == "ts_for" then "a 'for' statement" else "ConditionalExpression"
+  let where if conditional_ancestor is ts_if then "an 'if' statement" else if conditional_ancestor is ts_while then "a 'while' statement" else if conditional_ancestor is ts_do_while then "a 'do...while' statement" else if conditional_ancestor is ts_for then "a 'for' statement" else "ConditionalExpression"
   when mode == "always" && conditional_ancestor != null
   warn "Unexpected assignment within {where}."
 }
@@ -96,7 +96,7 @@ in ts_binary {
 macro valid_typeof_names ["symbol", "undefined", "object", "boolean", "number", "string", "function", "bigint"]
 in ts_binary.left, ts_binary.right rule valid-typeof {
   option requireStringLiterals boolean = false "compare only with string literals"
-  let compared_with_typeof parent.operator ~ /[=!]==?/ && (if field == "left" then parent.right_is_typeof else parent.left_is_typeof)
+  let compared_with_typeof parent.operator ~ /[=!]==?/ && (if is ts_node.left then parent.right_is_typeof else parent.left_is_typeof)
   when compared_with_typeof
   when literal_value != null && (literal_value.type != "string" || !contains(valid_typeof_names, literal_value.value))
     || is_global_undefined
@@ -124,7 +124,7 @@ in ts_if.test, ts_conditional.test rule no-constant-condition {
 in ts_while.test, ts_do_while.test, ts_for.test rule no-constant-condition:loop {
   option checkLoops "all" | "allExceptWhileTrue" | "none" | true | false = "allExceptWhileTrue"
   when constant_truthiness && checkLoops != "none" && checkLoops != false && !parent.contains_yield
-  when !(checkLoops == "allExceptWhileTrue" && parent == "ts_while" && re_test(text, /^[(\s]*true[)\s]*$/))
+  when !(checkLoops == "allExceptWhileTrue" && parent is ts_while && re_test(text, /^[(\s]*true[)\s]*$/))
   warn "Unexpected constant condition."
 }
 
@@ -163,7 +163,7 @@ in ts_case rule no-duplicate-case {
 in ts_object_pattern rule no-empty-pattern:object {
   option allowObjectPatternsAsParameters boolean = false "allow `function f({}) {}` and `({} = {}) => {}`"
   when count(property) == 0 && rest == null
-  when !(allowObjectPatternsAsParameters && (parent == "ts_parameter" && parent.init == null || parent == "ts_parameter" && re_test(parent.init, /^\{\s*\}$/)))
+  when !(allowObjectPatternsAsParameters && (parent is ts_parameter && parent.init == null || parent is ts_parameter && re_test(parent.init, /^\{\s*\}$/)))
   warn "Unexpected empty object pattern."
 }
 in ts_array_pattern rule no-empty-pattern:array {
@@ -229,7 +229,7 @@ in ts_property let proto_setter static_name == "__proto__" && value != null && !
 in ts_method let proto_setter false
 in ts_property, ts_method let key_entry if !has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
 in ts_object let keyed [] property.key_entry
-in ts_property, ts_method let duplicate_key parent == "ts_object" && parent.write_site == null && key_entry != null && any(slice(parent.keyed, 0, index), e => duplicate_of(e))
+in ts_property, ts_method let duplicate_key parent is ts_object && parent.write_site == null && key_entry != null && any(slice(parent.keyed, 0, index), e => duplicate_of(e))
 # At the name: inside the brackets of a computed key.
 macro at_key_name (offset + len(re_find(text, /^\[\s*/)))
 in ts_property.key, ts_method.key rule no-dupe-keys {
@@ -243,7 +243,7 @@ in ts_property.key, ts_method.key rule no-dupe-keys {
 in ts_method let member_entry if !has_static_name || body == null || static_name == "constructor" && !is_static && !starts_with(key, "[") then null else { name: static_name, kind: accessor_kind, static: is_static }
 in ts_class_property let member_entry if !has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
 in ts_class let member_entries [] member.member_entry
-in ts_method, ts_class_property let duplicate_member parent == "ts_class" && member_entry != null && any(slice(parent.member_entries, 0, index), e => duplicate_of(e) && e.static == is_static)
+in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && any(slice(parent.member_entries, 0, index), e => duplicate_of(e) && e.static == is_static)
 in ts_method.key, ts_class_property.key rule no-dupe-class-members {
   when parent.duplicate_member
   report at at_key_name
@@ -273,9 +273,9 @@ in ts_class.name, ts_interface.name rule no-unsafe-declaration-merging {
 schema ts_directive_setting boolean | "allow-with-description" | { descriptionFormat: string }
 # The directive and its description, as TypeScript reads them: `// @ts-x`
 # (`///` too for check/nocheck) or the last line of a block comment.
-in ts_comment let ts_comment_body if layer is ts_line_comment then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, "")
-in ts_comment let ts_pragma layer is ts_line_comment && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/)
-in ts_comment let ts_suppress if layer is ts_line_comment then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/)
+in ts_comment let ts_comment_body if is ts_line_comment then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, "")
+in ts_comment let ts_pragma is ts_line_comment && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/)
+in ts_comment let ts_suppress if is ts_line_comment then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/)
 in ts_comment rule ban-ts-comment {
   option ts_expect_error ts_directive_setting = "allow-with-description"
   option ts_ignore ts_directive_setting = true
@@ -306,14 +306,14 @@ in ts_type_reference rule no-unsafe-function-type {
 }
 
 # ---- non-null assertions -----------------------------------------------------------
-in ts_parenthesized let under_non_null parent == "ts_non_null" || parent == "ts_parenthesized" && parent.under_non_null == true
+in ts_parenthesized let under_non_null parent is ts_non_null || parent is ts_parenthesized && parent.under_non_null == true
 # The object or callee of `?.`, through parentheses.
 group optional_chain_head ts_non_null, ts_parenthesized
-in optional_chain_head let heads_optional_chain field == "object" && (parent == "ts_member" || parent == "ts_index") && parent.optional != null
-  || field == "callee" && parent == "ts_call" && parent.optional != null
-  || parent == "ts_parenthesized" && parent.heads_optional_chain == true
+in optional_chain_head let heads_optional_chain is (ts_member.object, ts_index.object) && parent.optional != null
+  || is ts_call.callee && parent.optional != null
+  || parent is ts_parenthesized && parent.heads_optional_chain == true
 in ts_non_null rule no-extra-non-null-assertion {
-  when parent == "ts_non_null" || parent == "ts_parenthesized" && parent.under_non_null == true || heads_optional_chain
+  when parent is ts_non_null || parent is ts_parenthesized && parent.under_non_null == true || heads_optional_chain
   fix as slice(text, 0, len(text) - 1)
   warn "Forbidden extra non-null assertion."
 }
@@ -321,11 +321,11 @@ in ts_non_null rule no-extra-non-null-assertion {
 macro non_null_chain_message "Optional chain expressions can return undefined by design - using a non-null assertion is unsafe and wrong."
 in ts_non_null rule no-non-null-asserted-optional-chain {
   when expression.in_optional_chain == true
-  when !((field == "object" || field == "callee") && (parent == "ts_member" || parent == "ts_index" || parent == "ts_call"))
+  when not (ts_member.object, ts_index.object, ts_call.callee)
   warn non_null_chain_message
 }
 in ts_non_null.expression rule no-non-null-asserted-optional-chain:paren {
-  when layer == "ts_parenthesized" && wraps_optional_chain == true
+  when is ts_parenthesized && wraps_optional_chain == true
   report at unparen_offset
   warn non_null_chain_message
 }
@@ -337,7 +337,7 @@ in ts_return rule no-setter-return {
 }
 # `{ set: v => value }`: the arrow's value is its return.
 in ts_arrow.body rule no-setter-return:arrow {
-  when parent.accessor == "set" && layer != "ts_block"
+  when parent.accessor == "set" && not ts_block
   warn "Setter cannot return a value."
 }
 
@@ -357,12 +357,12 @@ in ts_member.property, ts_index.index rule no-prototype-builtins {
   when parent.called_member == true && contains(["hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable"], parent.static_name)
   warn "Do not access Object.prototype method '{parent.static_name}' from target object."
 }
-in ts_member, ts_index, ts_parenthesized let called_member field == "callee" && parent == "ts_call" || parent == "ts_parenthesized" && parent.called_member == true
+in ts_member, ts_index, ts_parenthesized let called_member is ts_call.callee || parent is ts_parenthesized && parent.called_member == true
 
 # `!a in b`: the `!` applies to `a` alone.
 in ts_binary.left rule no-unsafe-negation {
   option enforceForOrderingRelations boolean = false "also `!a < b` and the other ordering operators"
-  when layer == "ts_unary" && re_test(text, /^!/)
+  when is ts_unary && re_test(text, /^!/)
   when parent.operator == "in" || parent.operator == "instanceof" || enforceForOrderingRelations && contains(["<", ">", "<=", ">="], parent.operator)
   warn "Unexpected negating the left operand of '{parent.operator}' operator."
 }
@@ -388,7 +388,7 @@ in ts_identifier rule no-undef {
   warn "'{text}' is not defined."
 }
 # The operand of `typeof`, through parentheses.
-in ts_identifier, ts_parenthesized let under_typeof parent == "ts_unary" && parent.operator == "typeof" || parent == "ts_parenthesized" && parent.under_typeof == true
+in ts_identifier, ts_parenthesized let under_typeof parent is ts_unary && parent.operator == "typeof" || parent is ts_parenthesized && parent.under_typeof == true
 
 in ts_number rule no-octal {
   when re_test(text, /^0[0-9]/)
@@ -396,16 +396,16 @@ in ts_number rule no-octal {
 }
 
 # Every hole, at its comma.
-in ts_array let is_assignment_target parent == "ts_assignment" && parent.left == text || parent == "ts_for_of" || parent == "ts_for_in"
+in ts_array let is_assignment_target parent is ts_assignment && parent.left == text || parent is (ts_for_of, ts_for_in)
 in ts_hole rule no-sparse-arrays {
-  when parent == "ts_array" && !parent.is_assignment_target
+  when parent is ts_array && !parent.is_assignment_target
   warn "Unexpected comma in middle of array."
 }
 
 # `return`/`throw`/`break`/`continue` that leave a `finally` block.
 in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
   when leaves_finally
-  warn "Unsafe usage of {if layer == 'ts_return' then 'ReturnStatement' else if layer == 'ts_throw' then 'ThrowStatement' else if layer == 'ts_break' then 'BreakStatement' else 'ContinueStatement'}."
+  warn "Unsafe usage of {if is ts_return then 'ReturnStatement' else if is ts_throw then 'ThrowStatement' else if is ts_break then 'BreakStatement' else 'ContinueStatement'}."
 }
 
 in ts_labeled.label rule no-unused-labels {
@@ -526,7 +526,7 @@ in optional_chain_user rule no-unsafe-optional-chaining {
   warn if r.arithmetic then "Unsafe arithmetic operation on optional chaining. It can result in NaN." else "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
 }
 
-in ts_variable_declaration let declares_loop_variable parent == "ts_for_of" || parent == "ts_for_in"
+in ts_variable_declaration let declares_loop_variable parent is (ts_for_of, ts_for_in)
 
 in ts_import rule no-unassigned-import {
   when default_import == null && namespace == null && count(specifier) == 0
@@ -556,7 +556,7 @@ in ts_regex rule no-empty-character-class {
 # On literals, and on plain string patterns of `RegExp(...)` (at the string).
 in regex_site rule no-control-regex {
   each f in findings_of("control")
-  when layer == "ts_regex" || regex_pattern.written == "string"
+  when is ts_regex || regex_pattern.written == "string"
   report at regex_pattern.offset
   warn "Unexpected control character(s) in regular expression: {first(f.data)}."
 }
@@ -571,7 +571,7 @@ in regex_site rule no-useless-backreference {
 in regex_site rule no-misleading-character-class {
   option allowEscape boolean = false "allow combined characters written as escapes"
   each f in findings_of(if allowEscape then "misleading_escaped" else "misleading")
-  when type_of(regex_pattern.flags) == "str" || layer == "ts_regex"
+  when type_of(regex_pattern.flags) == "str" || is ts_regex
   report at f.offset
   warn misleading_message(f.kind)
 }
@@ -579,7 +579,7 @@ in regex_site rule no-misleading-character-class {
 # Literals, and `RegExp` calls with a string literal pattern and flags.
 in regex_site rule no-regex-spaces {
   each f in findings_of("spaces")
-  when layer == "ts_regex" || regex_pattern.written == "string" && type_of(regex_flags) == "str"
+  when is ts_regex || regex_pattern.written == "string" && type_of(regex_flags) == "str"
   warn "Spaces are hard to count. Use {{{f.kind}}}."
 }
 

@@ -67,7 +67,7 @@ fn expr_names(e: &Expr, out: &mut HashSet<String>) {
         }
         ExprKind::Is(value, names) => {
             expr_names(value, out);
-            out.extend(names.iter().map(|n| n.text.clone()));
+            out.extend(names.iter().filter_map(|n| n.kind()).map(|n| n.text.clone()));
         }
     }
 }

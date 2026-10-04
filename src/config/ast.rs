@@ -411,9 +411,32 @@ pub enum ExprKind {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value ~ pattern`: does the whole value match?
     Test(Box<Expr>, Box<Pat>),
-    /// `layer is a`, `parent is (a, b)`: is the named layer one of these
-    /// (or a specialisation of one, or in one of these groups)?
-    Is(Box<Expr>, Vec<Name>),
+    /// `is a`, `parent is (a, b)`, `is a.field`, `n is layer lines`,
+    /// `is .rust`: does the node pass one of these tests?
+    Is(Box<Expr>, Vec<IsName>),
+}
+
+/// One alternative of an `is` test.
+#[derive(Clone, Debug)]
+pub enum IsName {
+    /// Of this kind (a specialisation, a group member).
+    Kind(Name),
+    /// `a.field`: in that field of a node of kind `a`.
+    Field(Name, Name),
+    /// `layer name`: in that named layer.
+    Layer(Name),
+    /// `.lang`: in a file of that language.
+    Lang(Name),
+}
+
+impl IsName {
+    /// The kind or group named, if any.
+    pub fn kind(&self) -> Option<&Name> {
+        match self {
+            IsName::Kind(n) | IsName::Field(n, _) => Some(n),
+            IsName::Layer(_) | IsName::Lang(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

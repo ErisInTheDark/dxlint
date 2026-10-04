@@ -2,16 +2,16 @@
 
 define {
 
-fn member_display_name(name, layer) = if name != "" && contains(["ts_string", "ts_number", "ts_bigint", "ts_boolean", "ts_null"], layer) && !re_test(name, /^[\p{Alphabetic}_$][\p{Alphabetic}\p{Number}_$]*$/) then '"' name '"' else name
+fn member_display_name(name, key) = if name != "" && key is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null) && !re_test(name, /^[\p{Alphabetic}_$][\p{Alphabetic}\p{Number}_$]*$/) then '"' name '"' else name
 fn public_modifier_offset(xs, positions, head) = if contains(xs, "public") then first(slice(positions, index_of(xs, "public"), index_of(xs, "public") + 1)) else head
 in ts_decorator let after_decorator space_after.end
 in ts_computed_key {
-  let member_key_layer expression.layer
+  let member_key_node expression.node
   let member_key_text expression
   let member_key_offset expression.offset
 }
-in ts_method, ts_class_property, ts_method_signature let style_member_name member_display_name(default(static_name, default(key.member_key_text, key)), default(key.member_key_layer, key.layer))
-in ts_parameter let style_member_name member_display_name(name, name.layer)
+in ts_method, ts_class_property, ts_method_signature let style_member_name member_display_name(default(static_name, default(key.member_key_text, key)), default(key.member_key_node, key.node))
+in ts_parameter let style_member_name member_display_name(name, name.node)
 in ts_method, ts_class_property let style_key_offset default(key.member_key_offset, key.offset)
 in ts_parameter let style_key_offset name.offset
 in ts_method, ts_class_property, ts_parameter let style_head_offset default(last([] decorator.after_decorator), offset)
@@ -32,7 +32,7 @@ in ts_method rule explicit-member-accessibility:method {
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
   let check default(if key == "constructor" then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods, accessibility)
   let shape style_member
-  when parent == "ts_class" && !re_test(key, /^#/) && !contains(ignoredMethodNames, shape.name)
+  when parent is ts_class && !re_test(key, /^#/) && !contains(ignoredMethodNames, shape.name)
   when check == "explicit" && !has_accessibility(modifiers) || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on {if kind == 'get' then 'get property accessor' else if kind == 'set' then 'set property accessor' else 'method definition'} {shape.name}."
@@ -43,7 +43,7 @@ in ts_parameter rule explicit-member-accessibility:parameter {
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
   let check default(overrides.parameterProperties, accessibility)
   let shape style_member
-  when contains([] modifier, "readonly") && parent == "ts_method"
+  when contains([] modifier, "readonly") && parent is ts_method
   when check == "explicit" && !has_accessibility(modifiers) || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on parameter property {shape.name}."
@@ -55,12 +55,12 @@ in ts_template let member_literal count(expression) == 0
 in ts_tagged_template let member_literal quasi.member_literal
 in ts_parenthesized let member_literal expression.member_literal
 in ts_return let returned_member_literal argument.member_literal == true
-in ts_block let first_member_literal first([] body.returned_member_literal) == true && first([] body.layer) == "ts_return"
+in ts_block let first_member_literal first([] body.returned_member_literal) == true && first([] body.node) is ts_return
 in ts_computed_key let member_static_name expression.static_string
 in ts_method, ts_class_property let member_static_name default(static_name, key.member_static_name)
 in ts_method let setter_member_name if kind == "set" then member_static_name else null
-in ts_member, ts_index let written_this_member if object.layer == "ts_this" && write_site != null then static_name else null
-in style_tree_node let constructor_write_names if layer is (ts_function, ts_arrow, ts_method, ts_class) then [] else [] written_this_member reduce([] children.constructor_write_names, [], (names, child) => names child)
+in ts_member, ts_index let written_this_member if object is ts_this && write_site != null then static_name else null
+in style_tree_node let constructor_write_names if is (ts_function, ts_arrow, ts_method, ts_class) then [] else [] written_this_member reduce([] children.constructor_write_names, [], (names, child) => names child)
 in ts_method let constructor_member_writes if key == "constructor" then body.constructor_write_names else []
 in ts_class let constructor_member_writes reduce([] member.constructor_member_writes, [], (names, child) => names child)
 in ts_class let setter_member_names [] member.setter_member_name
@@ -99,7 +99,7 @@ in ts_class rule no-extraneous-class {
   let shape class_shape
   when extends == null && !(allowWithDecorator && count(decorator) > 0) && shape != null
   when !(shape == "empty" && allowEmpty || shape == "constructor" && allowConstructorOnly || shape == "static" && allowStaticOnly)
-  report at if name != null && re_test(parent, /^ts_(program|export|block|namespace)$/) then name.unparen_offset else offset
+  report at if name != null && parent is (ts_program, ts_export, ts_block, ts_namespace) then name.unparen_offset else offset
   warn if shape == "empty" then "Unexpected empty class." else if shape == "constructor" then "Unexpected class with only a constructor." else "Unexpected class with only static properties."
 }
 

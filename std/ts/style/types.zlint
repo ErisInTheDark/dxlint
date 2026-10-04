@@ -51,7 +51,7 @@ in ts_type_reference rule array-type:generic {
 in ts_array_type rule array-type:simple {
   option default ("array" | "array-simple" | "generic") = "array" "Mutable array notation."
   option readonly string = "" "Readonly array notation; empty uses default."
-  when !(parent == "ts_type_operator" && parent.operator == "readonly")
+  when !(parent is ts_type_operator && parent.operator == "readonly")
   when default == "generic" || default == "array-simple" && array_type_not_simple
   let shown if type.is_simple_type == true then type else "T"
   warn "Array type using '{shown}[]' is forbidden{if default == 'array-simple' then ' for non-simple types' else ''}. Use 'Array<{shown}>' instead."
@@ -68,7 +68,7 @@ in ts_type_operator rule array-type:readonly {
 
 # The global wrapper types (not local types of those names).
 in ts_type_reference rule no-wrapper-object-types {
-  when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent != "ts_template_type" && name.reference_kind == null
+  when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent not ts_template_type && name.reference_kind == null
   warn "Prefer using the primitive `{lower(name)}` as a type name, rather than the upper-cased `{name}`."
 }
 
@@ -80,7 +80,7 @@ in ts_identifier let binding_initialised_end if parent is ts_declarator then par
 in ts_identifier let binding_write_end if access == "write" || access == "read_write" then end_offset else null
 in ts_identifier let binding_assignment_history if declaration == null then null else { initialised: declaration.binding_initialised_end, writes: [] declaration.references.binding_write_end }
 in ts_parenthesized forward binding_assignment_history from expression
-in ts_non_null, ts_parenthesized let nullish_left if parent is ts_parenthesized then parent.nullish_left else parent is ts_logical && parent.operator == "??" && field == "left"
+in ts_non_null, ts_parenthesized let nullish_left if parent is ts_parenthesized then parent.nullish_left else is ts_logical.left && parent.operator == "??"
 fn assigned_before(history, end) = history == null || history.initialised != null && history.initialised < end || any(history.writes, n => n != null && n < end)
 in ts_non_null rule no-non-null-asserted-nullish-coalescing {
   when nullish_left && assigned_before(expression.binding_assignment_history, end_offset)
@@ -92,20 +92,20 @@ in ts_type_parameter rule no-unnecessary-type-constraint {
   warn "Constraining the generic type `{name}` to `{constraint}` does nothing and is unnecessary."
 }
 
-in ts_function let function_declaration { name: name, kind: layer, body: body != null }
-in ts_method let function_declaration { name: key, kind: layer, body: body != null }
+in ts_function let function_declaration { name: name, node: node, body: body != null }
+in ts_method let function_declaration { name: key, node: node, body: body != null }
 in ts_export forward function_declaration from declaration
-in style_tree_node let function_siblings if layer == "ts_export" then parent.function_siblings else [] children.function_declaration
-in ts_function, ts_method let overload_implementation body != null && any(parent.function_siblings, d => d.kind == layer && d.name == function_declaration.name && !d.body)
-in style_tree_node let function_overload_context if layer is (ts_function, ts_method) then overload_implementation else parent.function_overload_context
+in style_tree_node let function_siblings if is ts_export then parent.function_siblings else [] children.function_declaration
+in ts_function, ts_method let overload_implementation body != null && any(parent.function_siblings, d => (d.node is ts_function) == (is ts_function) && d.name == function_declaration.name && !d.body)
+in style_tree_node let function_overload_context if is (ts_function, ts_method) then overload_implementation else parent.function_overload_context
 in ts_type_keyword let void_keyword text == "void"
 in ts_type_reference let has_void_argument any([] type_argument.void_keyword, v => v == true)
-in style_tree_node let void_union_member if layer == "ts_type_keyword" then contains(["void", "never"], text) else if layer == "ts_type_reference" then has_void_argument else false
+in style_tree_node let void_union_member if is ts_type_keyword then contains(["void", "never"], text) else if is ts_type_reference then has_void_argument else false
 in ts_union let valid_void_union all([] type.void_union_member, t => t == true)
 in ts_type_keyword rule no-invalid-void-type {
   option allowAsThisParameter boolean = false "Allow void as the type of a this parameter."
   option allowInGenericTypeArguments boolean | string[] = true "Allow void in generic arguments, or only named generic types."
-  let context if field == "return_type" then "return" else if field == "type_argument" then (if parent is ts_type_reference then "generic" else if parent is ts_call then "other" else "generic-other") else if parent is ts_type_parameter && field == "default" then "default" else if parent is ts_parameter && parent.name == "this" then "this" else if parent is ts_union then (if parent.valid_void_union || parent.function_overload_context == true then "return" else "union") else "other"
+  let context if is ts_node.return_type then "return" else if is ts_node.type_argument then (if parent is ts_type_reference then "generic" else if parent is ts_call then "other" else "generic-other") else if is ts_type_parameter.default then "default" else if parent is ts_parameter && parent.name == "this" then "this" else if parent is ts_union then (if parent.valid_void_union || parent.function_overload_context == true then "return" else "union") else "other"
   let generic_name re_replace(default(parent.name, ""), /\s+/, "")
   let generic_allowed allowInGenericTypeArguments == true || type_of(allowInGenericTypeArguments) == "list" && contains(map(allowInGenericTypeArguments, n => re_replace(n, /\s+/, "")), generic_name)
   when text == "void" && context != "return"
@@ -113,7 +113,7 @@ in ts_type_keyword rule no-invalid-void-type {
   warn if context == "generic" && type_of(allowInGenericTypeArguments) == "list" then generic_name " may not have void as a type argument." else if allowInGenericTypeArguments && allowAsThisParameter then "void is only valid as a return type or generic type argument or the type of a `this` parameter." else if allowInGenericTypeArguments && context == "union" then "void is not valid as a constituent in a union type" else if allowInGenericTypeArguments then "void is only valid as a return type or generic type argument." else if allowAsThisParameter then "void is only valid as return type or type of `this` parameter." else "void is only valid as a return type."
 }
 
-in ts_parameter let rest_function_parameter name.layer == "ts_rest" && parent is (ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type)
+in ts_parameter let rest_function_parameter name is ts_rest && parent is (ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type)
 in ts_type_operator let rest_array_wrapper operator == "readonly" && parent.rest_function_parameter == true
 in ts_type_reference let rest_array_wrapper contains(["Array", "ReadonlyArray"], name) && parent.rest_function_parameter == true
 in style_tree_node let rest_array_argument parent.rest_function_parameter == true || parent.rest_array_wrapper == true
@@ -140,7 +140,7 @@ in style_tree_node let namespace_declared namespace_is_declared == true || paren
 in ts_namespace rule no-namespace {
   option allowDeclarations boolean = false "Allow namespaces within declarations."
   option allowDefinitionFiles boolean = true "Allow namespaces in definition files."
-  when kind != "global" && name != "global" && !re_test(name, /^["']/) && parent != "ts_namespace"
+  when kind != "global" && name != "global" && !re_test(name, /^["']/) && parent not ts_namespace
   when !(allowDefinitionFiles && re_test(file, /\.d\.[cm]?ts$/)) && !(allowDeclarations && namespace_declared)
   warn "ES2015 module syntax is preferred over namespaces."
 }
@@ -196,15 +196,15 @@ in ts_declarator.name rule no-this-alias {
   option allowDestructuring boolean = true "Allow destructuring this."
   option allowedNames string[] = [] "Names allowed to alias this."
   when parent.init == "this"
-  when !(allowDestructuring && layer != "ts_identifier") && !contains(allowedNames, text)
-  warn if layer == "ts_identifier" then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
+  when !(allowDestructuring && not ts_identifier) && !contains(allowedNames, text)
+  warn if is ts_identifier then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
 }
 in ts_assignment.left rule no-this-alias:assignment {
   option allowDestructuring boolean = true "Allow destructuring this."
   option allowedNames string[] = [] "Names allowed to alias this."
   when parent.right == "this"
-  when !(allowDestructuring && layer != "ts_identifier") && !contains(allowedNames, text)
-  warn if layer == "ts_identifier" then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
+  when !(allowDestructuring && not ts_identifier) && !contains(allowedNames, text)
+  warn if is ts_identifier then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
 }
 
 in ts_import_specifier let type_only_specifier kind == "type"
@@ -233,19 +233,19 @@ in ts_as, ts_type_assertion rule consistent-type-assertions {
   option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
   option objectLiteralTypeAssertions ("allow" | "allow-as-parameter" | "never") = "allow" "When object literal assertions are allowed."
   option arrayLiteralTypeAssertions ("allow" | "allow-as-parameter" | "never") = "allow" "When array literal assertions are allowed."
-  when layer == "ts_as" && assertionStyle != "as" || layer == "ts_type_assertion" && assertionStyle != "angle-bracket"
+  when is ts_as && assertionStyle != "as" || is ts_type_assertion && assertionStyle != "angle-bracket"
   when !(assertionStyle == "never" && type == "const")
   warn if assertionStyle == "never" then "Do not use any type assertions." else if assertionStyle == "as" then "Use 'as {type}' instead of '<{type}>'." else "Use '<{type}>' instead of 'as {type}'."
 }
 in ts_template let tagged_substitution parent is ts_tagged_template
-in ts_as, ts_type_assertion, ts_parenthesized let assertion_argument_context if parent is ts_parenthesized then parent.assertion_argument_context else parent is (ts_new, ts_call, ts_throw, ts_assignment_pattern, ts_jsx_expression) || parent is ts_parameter && field == "init" || parent is ts_template && parent.tagged_substitution
+in ts_as, ts_type_assertion, ts_parenthesized let assertion_argument_context if parent is ts_parenthesized then parent.assertion_argument_context else parent is (ts_new, ts_call, ts_throw, ts_assignment_pattern, ts_jsx_expression) || is ts_parameter.init || parent is ts_template && parent.tagged_substitution
 in ts_as, ts_type_assertion rule consistent-type-assertions:literal {
   option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
   option objectLiteralTypeAssertions ("allow" | "allow-as-parameter" | "never") = "allow" "When object literal assertions are allowed."
   option arrayLiteralTypeAssertions ("allow" | "allow-as-parameter" | "never") = "allow" "When array literal assertions are allowed."
   let literal_kind expression.assertion_literal_kind
   let literal_mode if literal_kind == "array" then arrayLiteralTypeAssertions else objectLiteralTypeAssertions
-  when layer == "ts_as" && assertionStyle == "as" || layer == "ts_type_assertion" && assertionStyle == "angle-bracket"
+  when is ts_as && assertionStyle == "as" || is ts_type_assertion && assertionStyle == "angle-bracket"
   when literal_kind != null && type != "any" && type != "unknown" && type != "const"
   when literal_mode == "never" || literal_mode == "allow-as-parameter" && !assertion_argument_context
   warn if literal_kind == "array" then "Always prefer const x: T[] = [ ... ]." else "Always prefer const x: T = {{ ... }}."
@@ -259,8 +259,8 @@ in ts_parameter rule parameter-properties {
   when prefer == "class-property" && parameter_modifiers != "" && !contains(allow, parameter_modifiers)
   warn "Property {name} should be declared as a class property."
 }
-in ts_member let plain_this_property object.layer == "ts_this" && property.layer == "ts_identifier"
-in ts_assignment let parameter_assignment_name if left.plain_this_property == true && right.layer == "ts_identifier" then right else null
+in ts_member let plain_this_property object is ts_this && property is ts_identifier
+in ts_assignment let parameter_assignment_name if left.plain_this_property == true && right is ts_identifier then right else null
 in ts_expression_statement let leading_parameter_assignment if expression.parameter_assignment_name != null && (previous == null || previous.leading_parameter_assignment != null) then expression.parameter_assignment_name else null
 in ts_block let leading_parameter_assignments [] body.leading_parameter_assignment
 in ts_parameter let convertible_parameter if init == null && parameter_modifiers == "" then { name: name, annotation: type } else null
@@ -271,7 +271,7 @@ fn property_conversion_matches(constructors, name, annotation) = any(constructor
 in ts_class_property rule parameter-properties:class {
   option allow string[] = [] "Parameter property modifiers to allow."
   option prefer ("class-property" | "parameter-property") = "class-property" "Preferred property declaration."
-  when prefer == "parameter-property" && key.layer == "ts_identifier" && init == null && !contains(allow, parameter_modifiers)
+  when prefer == "parameter-property" && key is ts_identifier && init == null && !contains(allow, parameter_modifiers)
   when property_conversion_matches(parent.property_conversion_constructors, key, type)
   warn "Property {key} should be declared as a parameter property."
 }
@@ -303,14 +303,14 @@ in ts_type_literal rule no-empty-object-type {
   option allowInterfaces ("always" | "never" | "with-single-extends") = "never" "When to allow empty interfaces."
   option allowObjectTypes ("always" | "never") = "never" "When to allow empty object types."
   option allowWithName string = "" "Allow matching interface and type alias names."
-  when allowObjectTypes != "always" && count(member) == 0 && parent != "ts_intersection"
-  when !(allowWithName != "" && parent == "ts_type_alias" && re_test(parent.name, allowWithName))
+  when allowObjectTypes != "always" && count(member) == 0 && parent not ts_intersection
+  when !(allowWithName != "" && parent is ts_type_alias && re_test(parent.name, allowWithName))
   warn empty_object_message("The `{{}}` (\"empty object\") type", "allowObjectTypes")
 }
 
 # A type literal or interface that is only an index signature.
 in ts_type_alias, ts_interface let indexed_type_name name.offset
-in style_tree_node let indexed_type_scope if layer is (ts_type_alias, ts_interface) then indexed_type_name else if layer is (ts_index_signature, ts_property_signature, ts_parameter, ts_declarator, ts_class_property, ts_method, ts_function, ts_function_type, ts_call_signature, ts_method_signature) then null else parent.indexed_type_scope
+in style_tree_node let indexed_type_scope if is (ts_type_alias, ts_interface) then indexed_type_name else if is (ts_index_signature, ts_property_signature, ts_parameter, ts_declarator, ts_class_property, ts_method, ts_function, ts_function_type, ts_call_signature, ts_method_signature) then null else parent.indexed_type_scope
 in ts_identifier let indexed_syntax_refs [] declaration.offset
 in ts_type_literal, ts_interface let indexed_syntax_refs reduce([] member.indexed_type_refs, [], (ids, child) => ids child)
 in ts_type_alias, ts_index_signature, ts_mapped_type, ts_parenthesized_type let indexed_syntax_refs default(type.indexed_type_refs, [])
@@ -318,18 +318,18 @@ in ts_union, ts_intersection, ts_indexed_access, ts_conditional_type, ts_type_re
 in style_tree_node let indexed_type_refs default(indexed_syntax_refs, [])
 in ts_type_alias, ts_interface let indexed_type_entry { id: name.offset, refs: indexed_type_refs }
 in style_tree_node let indexed_type_entries [] indexed_type_entry reduce([] children.indexed_type_entries, [], (entries, child) => entries child)
-in style_tree_node let indexed_type_graph if layer == "ts_program" then indexed_type_entries else parent.indexed_type_graph
+in style_tree_node let indexed_type_graph if is ts_program then indexed_type_entries else parent.indexed_type_graph
 fn expand_graph_refs(graph, ids) = unique(ids reduce(filter(graph, entry => contains(ids, entry.id)), [], (refs, entry) => refs entry.refs))
 fn expanded_graph_state(previous_state, ids, target) = { ids: ids, done: ids == previous_state.ids || contains(ids, target) }
 fn type_reaches(graph, ids, target) = target != null && contains(reduce(graph, { ids: ids, done: contains(ids, target) }, (state, entry) => if state.done then state else expanded_graph_state(state, expand_graph_refs(graph, state.ids), target)).ids, target)
-in ts_parameter let indexed_parameter name.layer == "ts_identifier" && type != null
+in ts_parameter let indexed_parameter name is ts_identifier && type != null
 in ts_index_signature let indexed_signature type != null && any([] parameter.indexed_parameter, p => p == true)
 in ts_type_literal, ts_interface let record_shape count(member) == 1 && first([] member.indexed_signature) == true
 in ts_identifier let indexed_type_uses [] references.access
 in ts_type_operator let indexed_keyof operator == "keyof"
 in ts_type_parameter let indexed_key_parameter name != null && !contains(name.indexed_type_uses, "type") && constraint.indexed_keyof != true
 in ts_mapped_type let record_shape type_parameter.indexed_key_parameter == true
-in ts_type_literal, ts_interface, ts_mapped_type let indexed_record_eligible record_shape && !type_reaches(indexed_type_graph, if layer == "ts_mapped_type" then parent.indexed_type_refs else indexed_type_refs, indexed_type_scope)
+in ts_type_literal, ts_interface, ts_mapped_type let indexed_record_eligible record_shape && !type_reaches(indexed_type_graph, if is ts_mapped_type then parent.indexed_type_refs else indexed_type_refs, indexed_type_scope)
 in ts_type_literal rule consistent-indexed-object-style {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
@@ -366,7 +366,7 @@ in ts_interface.name rule consistent-type-definitions:interface {
 }
 
 # Only a call signature: a function type says it better.
-in style_tree_node let function_this_offset if layer == "ts_type_literal" then null else if layer == "ts_type_keyword" && text == "this" then offset else first(compact(children.function_this_offset))
+in style_tree_node let function_this_offset if is ts_type_literal then null else if is ts_type_keyword && text == "this" then offset else first(compact(children.function_this_offset))
 in ts_type_reference let function_base name == "Function"
 in ts_interface let function_type_container { name: name, kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
 in ts_type_literal let function_type_container { name: "", kind: "Type literal", eligible: count(member) == 1, this: null }

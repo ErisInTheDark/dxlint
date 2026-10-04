@@ -28,7 +28,7 @@ in format_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allo
   option skipBlankLines boolean = false "ignore whitespace-only lines"
   option ignoreComments boolean = false "ignore comment lines"
   when !(skipBlankLines && re_test(parent.text, /^[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]*(?:\r\n|[\r\n\u{2028}\u{2029}])?\z/))
-  when !(ignoreComments && (starts_with(parent.text, "#!") || any(overlapping(ts_comment), comment => comment.layer is ts_line_comment || position(comment.end_offset).js_line > position(offset).js_line)))
+  when !(ignoreComments && (starts_with(parent.text, "#!") || any(overlapping(ts_comment), comment => comment is ts_line_comment || position(comment.end_offset).js_line > position(offset).js_line)))
   when !any(overlapping(ts_template), template => any(template.quasi.node, quasi => offset >= quasi.offset && end_offset <= quasi.end_offset))
   fix as ""
 }
@@ -37,7 +37,7 @@ in format_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allo
 
 # No blank lines between a header and its single-statement body.
 in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
-  when layer not ts_block && !space_before.comments && space_before.blank_lines > 0
+  when not ts_block && !space_before.comments && space_before.blank_lines > 0
   let optional_header default(re_find(space_before.text, /^[ \t]*/), "")
   let optional_indent default(re_find(space_before.text, /[ \t]*\z/), "")
   report change
@@ -96,8 +96,8 @@ in ts_array, ts_array_pattern rule array-bracket-spacing {
   let array_arrays arraysInArrays != null && arraysInArrays != array_spaced
   let array_first first(element.node)
   let array_last last(element.node)
-  let array_open_wants array_spaced != (array_single || array_objects && array_first.layer is (ts_object, ts_object_pattern) || array_arrays && array_first.layer is (ts_array, ts_array_pattern))
-  let array_close_wants array_spaced != (array_single || array_objects && array_last.layer is (ts_object, ts_object_pattern) || array_arrays && array_last.layer is (ts_array, ts_array_pattern))
+  let array_open_wants array_spaced != (array_single || array_objects && array_first is (ts_object, ts_object_pattern) || array_arrays && array_first is (ts_array, ts_array_pattern))
+  let array_close_wants array_spaced != (array_single || array_objects && array_last is (ts_object, ts_object_pattern) || array_arrays && array_last is (ts_array, ts_array_pattern))
   let array_edges [
     { open: true, gap: array_open.space_after, wanted: array_open_wants, position: if array_open_wants then array_open.offset else array_open.end_offset },
     { open: false, gap: array_close.space_before, wanted: array_close_wants, position: if array_close_wants then array_close.offset else array_close.space_before.start }
@@ -151,7 +151,7 @@ in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected s
   option style "always" | "never" = "never" "spacing after a template tag"
   let tag_gap quasi.space_before
   let tag_comments filter(overlapping(ts_comment), comment => comment.offset >= tag_gap.start && comment.end_offset <= tag_gap.end)
-  let tag_line_comment any(tag_comments, comment => comment.layer is ts_line_comment)
+  let tag_line_comment any(tag_comments, comment => comment is ts_line_comment)
 }
 in ts_tagged_template rule template-tag-spacing warn "Unexpected space between template tag and template literal." {
   @format_template_tag
@@ -212,13 +212,13 @@ in ts_arrow.operator, ts_punctuator rule arrow-spacing:unexpected-after warn "Un
   option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
   option requireForBlockBody boolean = false "keep parentheses with a block body"
 }
-in ts_parameter let format_arrow_plain name.layer is ts_identifier && optional == null && type == null && init == null && count(modifier) == 0 && count(decorator) == 0
+in ts_parameter let format_arrow_plain name is ts_identifier && optional == null && type == null && init == null && count(modifier) == 0 && count(decorator) == 0
 in ts_arrow.parameter rule arrow-parens:missing {
   @format_arrow_parens
   let arrow_previous token_neighbours.before
   when count(parent.parameter) == 1
   when arrow_previous.text != "(" || arrow_previous.start < parent.offset
-  let arrow_block style == "as-needed" && requireForBlockBody && parent.body.layer is ts_block
+  let arrow_block style == "as-needed" && requireForBlockBody && parent.body is ts_block
   when style == "always" || arrow_block
   fix as "(" text ")"
   warn if arrow_block then "Expected parentheses around arrow function argument having a body with curly braces." else "Expected parentheses around arrow function argument."
@@ -226,7 +226,7 @@ in ts_arrow.parameter rule arrow-parens:missing {
 in ts_arrow rule arrow-parens {
   @format_arrow_parens
   when style == "as-needed"
-  let arrow_block requireForBlockBody && body.layer is ts_block
+  let arrow_block requireForBlockBody && body is ts_block
   when count(parameter) == 1 && !arrow_block && return_type == null && count(type_parameter) == 0
   let arrow_parameter first(parameter.node)
   when arrow_parameter.format_arrow_plain
@@ -276,14 +276,14 @@ in ts_mapped_type let format_object_tail default(type.format_curly_tail, type.no
   let curly_spaced default(get(overrides, curly_kind), style) == "always"
   let curly_arrays arraysInObjects != null && arraysInObjects != (style == "always")
   let curly_objects objectsInObjects != null && objectsInObjects != (style == "always")
-  let curly_empty if curly_attributes then (if layer is ts_open_brace then next_token is ts_close_brace else previous_token is ts_open_brace) else parent.format_object_empty
+  let curly_empty if curly_attributes then (if is ts_open_brace then next_token is ts_close_brace else previous_token is ts_open_brace) else parent.format_object_empty
 }
 in ts_open_brace rule object-curly-spacing:open {
   @format_object_curly_options
   when !curly_empty
   let curly_gap re_find(space_after.text, /^\s*/)
   when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
-  let curly_required if curly_arrays && (parent is ts_mapped_type || first(parent.member.layer) is ts_index_signature) then !curly_spaced else curly_spaced
+  let curly_required if curly_arrays && (parent is ts_mapped_type || first(parent.member.node) is ts_index_signature) then !curly_spaced else curly_spaced
   when (curly_gap != "") != curly_required
   when curly_required || !space_after.comments || position(offset).js_line == position(paired_token.start).js_line
   report at if curly_required then offset else end_offset
@@ -296,7 +296,7 @@ in ts_close_brace rule object-curly-spacing:close {
   let curly_gap re_find(space_before.text, /\s*$/)
   when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
   let curly_tail if parent is (ts_object, ts_object_pattern) then default(last(parent.property.format_curly_tail), last(parent.property.node)) else if parent is ts_mapped_type then parent.format_object_tail else default(last(parent.member.format_curly_tail), last(parent.member.node))
-  let curly_required if !space_before.comments && (curly_arrays && previous_token is ts_close_bracket && curly_tail.layer is (ts_array, ts_tuple_type) || curly_objects && previous_token is ts_close_brace && curly_tail.layer is (ts_object, ts_object_pattern, ts_mapped_type, ts_type_literal)) then !curly_spaced else curly_spaced
+  let curly_required if !space_before.comments && (curly_arrays && previous_token is ts_close_bracket && curly_tail is (ts_array, ts_tuple_type) || curly_objects && previous_token is ts_close_brace && curly_tail is (ts_object, ts_object_pattern, ts_mapped_type, ts_type_literal)) then !curly_spaced else curly_spaced
   when (curly_gap != "") != curly_required
   report at if curly_required then offset else offset - byte_len(curly_gap)
   fix space_before as if curly_required then " " else ""
@@ -315,9 +315,9 @@ in ts_open_brace rule object-curly-spacing:empty {
 # Keys and annotation colons belong to their property or member.
 group format_key_owner ts_property, ts_pattern_property, ts_property_signature, ts_index_signature, ts_class_property
 in ts_parenthesized, ts_computed_key let format_key_text default(expression.format_key_text, expression.text)
-in ts_property, ts_pattern_property, ts_property_signature, ts_class_property let format_key_label if key.layer is ts_computed_key then key.format_key_text else default(key.literal_value.value, key.text)
+in ts_property, ts_pattern_property, ts_property_signature, ts_class_property let format_key_label if key is ts_computed_key then key.format_key_text else default(key.literal_value.value, key.text)
 in ts_index_signature let format_key_label byte_slice(text, 0, opener.ts_open_bracket.paired_token.end - offset)
-in ts_property, ts_pattern_property let format_key_computed key.layer is ts_computed_key
+in ts_property, ts_pattern_property let format_key_computed key is ts_computed_key
 @macro format_key_spacing {
   when parent is format_key_owner
   when !(parent is (ts_property_signature, ts_index_signature, ts_class_property) && position(parent.offset).js_line != position(offset).js_line)
@@ -350,14 +350,14 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
   option before boolean = true "space before keywords"
   option after boolean = true "space after keywords"
   option overrides { [keyword: string]: format_keyword_policy } = {} "spacing by keyword"
-  let keyword_value if parent is ts_for_of && field == "modifier" then "for" else if parent is ts_variable_declaration && starts_with(text, "await") then "await" else text
-  let keyword_label if parent is ts_for_of && parent.modifier != null && (text == "for" || field == "modifier") then "for await" else keyword_value
+  let keyword_value if is ts_for_of.modifier then "for" else if parent is ts_variable_declaration && starts_with(text, "await") then "await" else text
+  let keyword_label if parent is ts_for_of && parent.modifier != null && (text == "for" || is ts_for_of.modifier) then "for await" else keyword_value
   let keyword_policy get(overrides, keyword_value)
   let keyword_module parent is (ts_import, ts_export, ts_import_specifier, ts_export_specifier) && contains(["import", "export", "from", "as", "type"], text)
   let keyword_statement parent is (ts_debugger, ts_with, ts_break, ts_continue, ts_return, ts_throw, ts_try, ts_if, ts_switch, ts_case, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_while, ts_static_block) && contains(["debugger", "with", "break", "continue", "return", "throw", "try", "catch", "finally", "if", "else", "switch", "case", "default", "do", "for", "in", "of", "while", "static", "await"], text)
   let keyword_modifier parent is (ts_method, ts_class_property) && (contains(["get", "set", "async", "accessor"], text) && offset < parent.key.offset || text == "static" && offset == parent.offset)
-  let keyword_around keyword_statement || keyword_module || keyword_modifier || parent is ts_variable_declaration && field == "kind" || parent is ts_class && text == "extends" || parent is ts_export && text == "default" || parent is (ts_import, ts_export) && text == "with" || parent is (ts_as, ts_satisfies) && contains(["as", "satisfies"], text) || layer is (ts_debugger, ts_break, ts_continue, ts_return) && contains(["debugger", "break", "continue", "return"], text)
-  let keyword_leading parent is (ts_function, ts_arrow, ts_class) && contains(["function", "async", "class"], text) && offset == parent.offset || parent is ts_unary && contains(["typeof", "void", "delete"], text) || parent is (ts_new, ts_await, ts_yield) && contains(["new", "await", "yield"], text) || layer is (ts_super, ts_this) || layer is ts_yield && text == "yield"
+  let keyword_around keyword_statement || keyword_module || keyword_modifier || is ts_variable_declaration.kind || parent is ts_class && text == "extends" || parent is ts_export && text == "default" || parent is (ts_import, ts_export) && text == "with" || parent is (ts_as, ts_satisfies) && contains(["as", "satisfies"], text) || is (ts_debugger, ts_break, ts_continue, ts_return) && contains(["debugger", "break", "continue", "return"], text)
+  let keyword_leading parent is (ts_function, ts_arrow, ts_class) && contains(["function", "async", "class"], text) && offset == parent.offset || parent is ts_unary && contains(["typeof", "void", "delete"], text) || parent is (ts_new, ts_await, ts_yield) && contains(["new", "await", "yield"], text) || is (ts_super, ts_this) || is ts_yield && text == "yield"
 }
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule keyword-spacing:before {
   @format_keyword_options
@@ -384,7 +384,7 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts
   when next_token is (ts_regex, ts_string, ts_template, ts_private_name) || re_test(token_neighbours.after.text, if keyword_module then /^[{*]$/ else /^(?:[(\[{<~!]|\+\+?|--?)$/)
   when !re_test(token_neighbours.after.text, /^\}/)
   when space_after.spaced != keyword_required
-  report at if !keyword_required then end_offset else if parent is ts_for_of && field == "modifier" then parent.offset else offset
+  report at if !keyword_required then end_offset else if is ts_for_of.modifier then parent.offset else offset
   fix space_after as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) after \"{keyword_label}\"." else "Unexpected space(s) after \"{keyword_label}\"."
 }

@@ -113,19 +113,19 @@ match rs_index like brackets /(?<=[\w)\]?])\[/ until /\]/
 in rs_code match rs_index
 in rs_code match rs_bracket_inner_space /(?<=\[)[ \t]+(?=[^\s\]])|(?<=[^\s\[])[ \t]+(?=\])/
 in rs_bracket_inner_space rule rs-bracket-spacing warn "No spaces just inside index brackets." {
-  when !in_leaf && parent == "rs_index"
+  when !in_leaf && parent is rs_index
   fix as ""
 }
 
 # `x{` -> `x {`; single-line `{x}` -> `{ x }`; `{}` -> `{ }`.
 in braces rule rs-brace-spacing:before warn "One space before `\{`." {
   report change
-  when !in_leaf && layer != "rs_macro_brace" && re_test(before, /[\w)>\]']$/)
+  when !in_leaf && not rs_macro_brace && re_test(before, /[\w)>\]']$/)
   fix as " " text
 }
 in braces rule rs-brace-spacing:inside warn "Single-line braces have one space inside." {
   report change
-  when !in_leaf && layer != "rs_macro_brace" && !contains(text, "\n")
+  when !in_leaf && not rs_macro_brace && !contains(text, "\n")
   fix as if trim(slice(text, 1, -1)) == "" then "{{ }}" else "{{ " trim(slice(text, 1, -1)) " }}"
 }
 
@@ -239,9 +239,10 @@ in rs_keyword_before rule rs-keyword-spacing:before warn "One space before `{tex
 
 in parentheses, brackets, braces indent
 
-# Each code line: its indentation and first character. An overlay, so the
-# character still belongs to whatever layer starts there.
+# Each code line: its indentation and first character. Its own layer, so the
+# character still belongs to whatever node starts there.
 in rs_code layer lines match rs_line /^[ \t]*\S/
+group rs_strings_and_comments rs_line_comment, rs_block_comment, rs_string, rs_raw_string, rs_raw_string_hash, rs_raw_string_double_hash, rs_char
 
 macro line_indent slice(text, 0, -1)
 macro line_code text default(re_find(text_after, /^[^\r\n]*/), "")
@@ -298,7 +299,7 @@ in rs_line rule rs-indent warn "Expected indentation of {describe_indent(expecte
   option unit "auto" | string = "auto" "one level of indentation, or \"auto\" (tabs if the code around uses them, else 4 spaces)"
   report change
   # Lines inside multi-line strings and block comments are their own business.
-  when !re_test(enclosing, /string|comment|char/)
+  when containing(rs_strings_and_comments) == null
   when !contains(allowed, line_indent)
   fix as expected_indent slice(text, -1)
 }

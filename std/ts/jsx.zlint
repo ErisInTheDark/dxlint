@@ -31,9 +31,9 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-indent-props {
   warn "Expected indentation of {expected} {if selected == 'tab' then 'tab' else 'space'} {if expected == 1 then 'character' else 'characters'} but found {actual}."
 }
 in ts_node {
-  let jsx_child_leading layer is ts_jsx_text && re_test(text, "^" jsx_space_regex() "*\n")
-  let jsx_child_trailing layer is ts_jsx_text && re_test(text, "\n" jsx_space_regex() "*$")
-  let jsx_child_row layer not ts_jsx_text || jsx_trim_space(text) != ""
+  let jsx_child_leading is ts_jsx_text && re_test(text, "^" jsx_space_regex() "*\n")
+  let jsx_child_trailing is ts_jsx_text && re_test(text, "\n" jsx_space_regex() "*$")
+  let jsx_child_row not ts_jsx_text || jsx_trim_space(text) != ""
   let jsx_child_first_line position(offset).js_line + (if jsx_child_leading then 1 else 0)
   let jsx_child_last_line position(end_offset).js_line - (if jsx_child_trailing then 1 else 0)
   let jsx_child_previous_row if previous == null then null else if previous.jsx_child_row then {first: previous.jsx_child_first_line, last: previous.jsx_child_last_line} else previous.jsx_child_previous_row
@@ -46,7 +46,7 @@ in ts_jsx_element {
   let jsx_child_descriptor if !re_test(name, /[.:]/) then name else replace(text, "\n", "")
   let jsx_child_newline_eligible true
 }
-in ts_jsx_expression let jsx_child_newline_eligible expression.layer not ts_spread && !starts_with(jsx_trim_space(text), "{{/*")
+in ts_jsx_expression let jsx_child_newline_eligible expression not ts_spread && !starts_with(jsx_trim_space(text), "{{/*")
 in ts_jsx_expression, ts_jsx_fragment, ts_jsx_text let jsx_child_descriptor replace(text, "\n", "")
 in ts_jsx_text {
   let jsx_child_preceding_eligible previous.jsx_child_newline_eligible == true
@@ -59,8 +59,8 @@ in ts_jsx_element, ts_jsx_fragment {
   let jsx_child_last last([] body.node)
   let jsx_child_single_line_allowed (position(jsx_child_last.end_offset).js_line - position(jsx_child_first.offset).js_line == 0 && !jsx_child_first.jsx_child_leading && !jsx_child_last.jsx_child_trailing) || (position(jsx_child_last.end_offset).js_line - position(jsx_child_first.offset).js_line == 2 && jsx_child_first.jsx_child_leading && jsx_child_last.jsx_child_trailing)
   let jsx_child_single count(body) == 1 && jsx_child_first.jsx_child_multiline == false && position(offset).js_line == position(end_offset).js_line
-  let jsx_child_literal count(body) == 1 && jsx_child_first.layer is ts_jsx_text
-  let jsx_child_has_jsx any([] body.node, item => item.layer is (ts_jsx_element, ts_jsx_fragment))
+  let jsx_child_literal count(body) == 1 && jsx_child_first is ts_jsx_text
+  let jsx_child_has_jsx any([] body.node, item => item is (ts_jsx_element, ts_jsx_fragment))
 }
 fn jsx_child_group_contains(row, line) = row.first == line || row.last == line
 in ts_node rule jsx-one-expression-per-line {
@@ -72,7 +72,7 @@ in ts_node rule jsx-one-expression-per-line {
   let first_wrong jsx_child_previous_row != null && jsx_child_group_contains(jsx_child_previous_row, first_line) || first_line == opening_line || first_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, first_line))
   let last_wrong jsx_child_previous_row != null && jsx_child_group_contains(jsx_child_previous_row, last_line) || last_line == opening_line || last_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, last_line))
   let single_group_wrong index == first(parent.jsx_child_rows).index && first_line == opening_line || index == last(parent.jsx_child_rows).index && last_line == closing_line
-  when parent is (ts_jsx_element, ts_jsx_fragment) && field == "body" && jsx_child_row
+  when is (ts_jsx_element.body, ts_jsx_fragment.body) && jsx_child_row
   when !(allow == "non-jsx" && !parent.jsx_child_has_jsx || allow == "single-child" && parent.jsx_child_single || allow == "literal" && parent.jsx_child_single && parent.jsx_child_literal || allow == "single-line" && parent.jsx_child_single_line_allowed)
   when if allow == "single-line" && parent.jsx_child_one_group then single_group_wrong else first_wrong || last_wrong
   report at {start: offset, end: parent.end_offset}
@@ -83,7 +83,7 @@ in ts_node rule jsx-newline {
   option allowMultilines boolean = false "keep blank lines around multiline children"
   let multiline previous.jsx_child_preceding_multiline == true || jsx_child_next_multiline
   let blank re_test(previous.text, "\n" jsx_space_regex() "*\n")
-  when parent is (ts_jsx_element, ts_jsx_fragment) && field == "body" && previous.layer is ts_jsx_text && previous.jsx_child_preceding_eligible
+  when is (ts_jsx_element.body, ts_jsx_fragment.body) && previous is ts_jsx_text && previous.jsx_child_preceding_eligible
   when if allowMultilines && multiline then !blank else blank == prevent
   report at {start: offset, end: parent.end_offset}
   warn if allowMultilines && multiline then "Multiline JSX elements should start in a new line" else if prevent then "JSX element should not start in a new line" else "JSX element should start in a new line"
@@ -103,9 +103,9 @@ in ts_jsx_element let jsx_wrap_element true
 in ts_parenthesized let jsx_wrap_element expression.jsx_wrap_element == true
 in ts_jsx_expression let jsx_prop_expression parent is ts_jsx_attribute
 in ts_parenthesized, ts_jsx_element, ts_jsx_fragment, ts_conditional {
-  let jsx_wrap_context if parent is ts_parenthesized then parent.jsx_wrap_context else if parent is ts_declarator && field == "init" then "declaration" else if parent is ts_assignment && field == "right" then "assignment" else if parent is ts_return && field == "argument" then "return" else if parent is ts_arrow && field == "body" then "arrow" else if parent is ts_logical && field == "right" then "logical" else if parent is ts_conditional && contains(["consequent", "alternate"], field) then "condition" else if parent is ts_jsx_expression && field == "expression" && parent.jsx_prop_expression then "prop" else if jsx_wrap_element && parent is ts_property && field == "value" then "propertyValue" else null
+  let jsx_wrap_context if parent is ts_parenthesized then parent.jsx_wrap_context else if is ts_declarator.init then "declaration" else if is ts_assignment.right then "assignment" else if is ts_return.argument then "return" else if is ts_arrow.body then "arrow" else if is ts_logical.right then "logical" else if is (ts_conditional.consequent, ts_conditional.alternate) then "condition" else if is ts_jsx_expression.expression && parent.jsx_prop_expression then "prop" else if jsx_wrap_element && is ts_property.value then "propertyValue" else null
   let jsx_wrap_fallback if parent is ts_parenthesized then parent.jsx_wrap_fallback else if parent is ts_conditional then parent.jsx_wrap_context else null
-  let jsx_call_argument if parent is ts_parenthesized then parent.jsx_call_argument else parent is (ts_call, ts_new) && field == "argument"
+  let jsx_call_argument if parent is ts_parenthesized then parent.jsx_call_argument else is (ts_call.argument, ts_new.argument)
 }
 in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
   option declaration jsx_wrap_mode = "parens" "variable initializer wrapping"
@@ -142,26 +142,26 @@ in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment ru
   option props "always" | "never" | "ignore" | null = null "attribute literal brace policy"
   option children "always" | "never" | "ignore" | null = null "child literal brace policy"
   option propElementValues "always" | "never" | "ignore" = "ignore" "JSX element attribute brace policy"
-  let attribute parent is ts_jsx_attribute && field == "value"
-  let child parent is (ts_jsx_element, ts_jsx_fragment) && field == "body"
-  let expression_node layer is ts_jsx_expression
+  let attribute is ts_jsx_attribute.value
+  let child is (ts_jsx_element.body, ts_jsx_fragment.body)
+  let expression_node is ts_jsx_expression
   let inner jsx_presence_expression_inner
-  let element_value attribute && (layer is ts_jsx_element || inner.layer is ts_jsx_element)
+  let element_value attribute && (is ts_jsx_element || inner is ts_jsx_element)
   let selected default(if attribute then props else children, mode)
-  let string inner.layer is ts_string
-  let template inner.layer is ts_template && count(inner.expression) == 0
+  let string inner is ts_string
+  let template inner is ts_template && count(inner.expression) == 0
   let value default(inner.literal_value.value, "")
   let spelling if template then slice(inner.text, 1, len(inner.text) - 1) else inner.text
   let escape contains(spelling, "\\") || jsx_presence_entities(spelling) != spelling || child && re_test(spelling, /[{}<>]/)
   let comment jsx_presence_comments > 0
-  let removable if element_value then true else if !comment && string then !escape && !contains(value, "/*") && (!attribute || !jsx_presence_whitespace(value)) && (attribute || !jsx_presence_edge(value)) && (child || !re_test(value, /['"]/)) else if !comment && template then !escape && !contains(spelling, "\n") && !jsx_presence_edge(spelling) && !re_test(value, /['"]/) else !comment && inner.layer is (ts_jsx_element, ts_jsx_fragment)
-  let adjacent previous.layer is ts_jsx_expression || next.layer is ts_jsx_expression
+  let removable if element_value then true else if !comment && string then !escape && !contains(value, "/*") && (!attribute || !jsx_presence_whitespace(value)) && (attribute || !jsx_presence_edge(value)) && (child || !re_test(value, /['"]/)) else if !comment && template then !escape && !contains(spelling, "\n") && !jsx_presence_edge(spelling) && !re_test(value, /['"]/) else !comment && inner is (ts_jsx_element, ts_jsx_fragment)
+  let adjacent previous is ts_jsx_expression || next is ts_jsx_expression
   let space_expression string && jsx_presence_whitespace(value)
-  let unnecessary removable && !(child && (adjacent || space_expression && (count(parent.body) == 1 || previous.layer is ts_jsx_element || next.layer is ts_jsx_element)))
+  let unnecessary removable && !(child && (adjacent || space_expression && (count(parent.body) == 1 || previous is ts_jsx_element || next is ts_jsx_element)))
   let raw_line_break jsx_break(text) && jsx_trim_space(text) == ""
   let missing element_value || !raw_line_break && jsx_trim_space(jsx_presence_entities(text)) != ""
   when attribute || child
-  when expression_node || element_value || layer is (ts_string, ts_jsx_text)
+  when expression_node || element_value || is (ts_string, ts_jsx_text)
   when if element_value then (if expression_node then propElementValues == "never" else propElementValues != "ignore") else if expression_node then selected == "never" && unnecessary else selected == "always" && missing
   warn if expression_node then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
 }
@@ -174,7 +174,7 @@ fn jsx_utf16_length(text) = len(text) + re_count(text, /[\u{10000}-\u{10ffff}]/)
 fn jsx_break(text) = re_test(text, /[\n\r\u{2028}\u{2029}]/)
 fn jsx_edge_space(text, opening) = default(re_find(text, if opening then "^" jsx_space_regex() "*" else jsx_space_regex() "*$"), "")
 in ts_jsx_expression {
-  let jsx_brace_container expression.layer not ts_spread
+  let jsx_brace_container expression not ts_spread
   let jsx_brace_attribute parent is ts_jsx_attribute
   let jsx_brace_single !jsx_break(default(expression, slice(text, 1, len(text) - 1)))
 }
@@ -188,7 +188,7 @@ in ts_jsx_expression, ts_jsx_spread_attribute {
   let jsx_brace_left_break opener.ts_open_brace.space_after.line_break
 }
 in ts_open_brace, ts_close_brace {
-  let jsx_brace_open layer is ts_open_brace
+  let jsx_brace_open is ts_open_brace
   let jsx_brace_gap if jsx_brace_open then space_after.text else space_before.text
   let jsx_brace_edge jsx_edge_space(jsx_brace_gap, jsx_brace_open)
   let jsx_brace_direction if jsx_brace_open then "after" else "before"
@@ -232,7 +232,7 @@ in ts_open_brace rule jsx-curly-newline:after {
 in ts_close_brace rule jsx-curly-newline:before {
   @jsx_curly_newline_body
 }
-in ts_jsx_attribute let jsx_tag_last_token_start if value.layer is ts_string then value.offset else end_offset
+in ts_jsx_attribute let jsx_tag_last_token_start if value is ts_string then value.offset else end_offset
 in ts_jsx_spread_attribute let jsx_tag_last_token_start end_offset
 in ts_jsx_element {
   let jsx_tag_last_prop last([] property.node)
@@ -241,8 +241,8 @@ in ts_jsx_element {
 in ts_open_angle, ts_close_angle, ts_punctuator {
   let jsx_tag_opening offset >= parent.jsx_syntax.opening.start && offset < parent.jsx_syntax.opening.end
   let jsx_tag_self_slash parent is ts_jsx_element && parent.jsx_syntax.self_closing && text == "/" && space_after.end == parent.jsx_syntax.opening.end - 1
-  let jsx_tag_kind if parent not ts_jsx_element then null else if layer is ts_open_angle && offset == parent.jsx_syntax.opening.start then "afterOpening" else if layer is ts_open_angle && offset == parent.jsx_syntax.closing.start then "closingSlash" else if layer is ts_punctuator && text == "/" && space_before.start == parent.jsx_syntax.closing.start + 1 then "afterOpening" else if jsx_tag_self_slash then "closingSlash" else if layer is ts_close_angle && (end_offset == parent.jsx_syntax.opening.end && !parent.jsx_syntax.self_closing || end_offset == parent.jsx_syntax.closing.end) then "beforeClosing" else null
-  let jsx_tag_gap_after layer is ts_open_angle || jsx_tag_kind == "afterOpening" || jsx_tag_self_slash
+  let jsx_tag_kind if parent not ts_jsx_element then null else if is ts_open_angle && offset == parent.jsx_syntax.opening.start then "afterOpening" else if is ts_open_angle && offset == parent.jsx_syntax.closing.start then "closingSlash" else if is ts_punctuator && text == "/" && space_before.start == parent.jsx_syntax.closing.start + 1 then "afterOpening" else if jsx_tag_self_slash then "closingSlash" else if is ts_close_angle && (end_offset == parent.jsx_syntax.opening.end && !parent.jsx_syntax.self_closing || end_offset == parent.jsx_syntax.closing.end) then "beforeClosing" else null
+  let jsx_tag_gap_after is ts_open_angle || jsx_tag_kind == "afterOpening" || jsx_tag_self_slash
   let jsx_tag_gap if jsx_tag_gap_after then space_after else space_before
   let jsx_tag_span if jsx_tag_opening then parent.jsx_syntax.opening else parent.jsx_syntax.closing
 }
@@ -289,7 +289,7 @@ in ts_close_angle, ts_punctuator rule jsx-closing-bracket-location {
   let fallback !aligned && (contains(space_before.text, "/*") || contains(space_before.text, "//")) && contains(["after-tag", "after-props"], selected)
   let placement if fallback then "line-aligned" else selected
   let expected_column if fallback then jsx_indent(parent.jsx_line_prefix) + 1 else aligned_column
-  when parent is ts_jsx_element && (jsx_tag_self_slash || layer is ts_close_angle && !parent.jsx_syntax.self_closing && end_offset == parent.jsx_syntax.opening.end)
+  when parent is ts_jsx_element && (jsx_tag_self_slash || is ts_close_angle && !parent.jsx_syntax.self_closing && end_offset == parent.jsx_syntax.opening.end)
   when type_of(selected) == "str" && !(if fallback then expected_column == here.js_column else aligned)
   report at {start: offset, end: parent.end_offset}
   warn "The closing bracket must be {if placement == 'after-tag' then 'placed after the opening tag' else if placement == 'after-props' then 'placed after the last prop' else if placement == 'props-aligned' then 'aligned with the last prop' else if placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if expected_column != null then ' (expected column ' expected_column (if last_prop != null && last_line == here.js_line then ' on the next line)' else ')') else ''}"
@@ -315,7 +315,7 @@ in ts_jsx_element rule jsx-self-closing-comp {
   option component boolean = true "check components"
   option html boolean = true "check intrinsic elements"
   let content jsx_items(body)
-  let empty len(content) == 0 || len(content) == 1 && first(jsx_items(body.layer)) is ts_jsx_text && contains(first(content), "\n") && jsx_strip_space(first(content)) == "" && !re_test(first(content), /\u{a0}/)
+  let empty len(content) == 0 || len(content) == 1 && first(jsx_items(body.node)) is ts_jsx_text && contains(first(content), "\n") && jsx_strip_space(first(content)) == "" && !re_test(first(content), /\u{a0}/)
   when closing != null && empty && (component && !jsx_intrinsic_name && !contains(jsx_name_spelling, ":") || html && jsx_intrinsic_name)
   warn "Empty components are self-closing"
 }
@@ -335,7 +335,7 @@ in ts_jsx_element rule jsx-shorthand-fragment {
   warn "Use shorthand fragment syntax `<>...</>` instead of `<{jsx_name_spelling}>...</{jsx_name_spelling}>`."
 }
 in ts_jsx_attribute rule jsx-shorthand-boolean {
-  when value.layer is ts_jsx_expression && value.jsx_boolean_true == true
+  when value is ts_jsx_expression && value.jsx_boolean_true == true
   warn "Omit the value for boolean attributes."
 }
 in ts_boolean let jsx_boolean_true text == "true"
@@ -345,7 +345,7 @@ fn jsx_contains_quote(text, double) = contains(text, if double then '"' else "'"
 in ts_jsx_attribute.value rule jsx-quotes {
   option mode "prefer-double" | "prefer-single" = "prefer-double" "preferred attribute quote"
   let double mode == "prefer-double"
-  when layer is ts_string
+  when is ts_string
   when slice(text, 0, 1) != (if double then '"' else "'") && !jsx_contains_quote(slice(text, 1, len(text) - 1), double)
   warn "Unexpected usage of {if mode == 'prefer-double' then 'singlequote' else 'doublequote'}."
 }

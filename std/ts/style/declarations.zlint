@@ -13,7 +13,7 @@ in ts_null let primitive_inference ["bigint", "null"]
 in ts_regex let primitive_inference ["bigint", "RegExp"]
 in ts_template let primitive_inference ["string"]
 in ts_identifier let primitive_inference if contains(["Infinity", "NaN"], text) then ["number"] else if text == "undefined" then ["undefined"] else []
-in ts_call let primitive_inference if callee.layer == "ts_identifier" then primitive_call_types(callee) else []
+in ts_call let primitive_inference if callee is ts_identifier then primitive_call_types(callee) else []
 in ts_new let primitive_inference if callee == "RegExp" then ["RegExp"] else []
 in ts_number, ts_string, ts_bigint, ts_boolean, ts_null, ts_regex, ts_template, ts_identifier, ts_call, ts_new let primitive_direct primitive_inference
 in ts_unary let primitive_inference if operator == "!" then ["boolean"] else if operator == "void" then ["undefined"] else if operator == "-" then filter(argument.primitive_direct, t => contains(["bigint", "number"], t)) else if operator == "+" && contains(argument.primitive_direct, "number") then ["number"] else []
@@ -41,12 +41,12 @@ in ts_parameter rule no-inferrable-types:parameter {
 }
 
 # `const x: Map<K, V> = new Map()`: the arguments belong on the constructor.
-in ts_new let constructor_arguments if callee.layer == "ts_identifier" then { name: callee, count: count(type_argument) } else null
+in ts_new let constructor_arguments if callee is ts_identifier then { name: callee, count: count(type_argument) } else null
 in ts_parenthesized forward constructor_arguments from expression
-in ts_type_reference let annotation_arguments if name.layer == "ts_identifier" then { name: name, count: count(type_argument), typed_array: contains(["Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray"], name) && name.reference_kind == null } else null
+in ts_type_reference let annotation_arguments if name is ts_identifier then { name: name, count: count(type_argument), typed_array: contains(["Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray"], name) && name.reference_kind == null } else null
 in ts_declarator, ts_class_property, ts_parameter rule consistent-generic-constructors {
   option mode ("constructor" | "type-annotation") = "constructor" "Preferred location for generic arguments."
-  when layer != "ts_parameter" || parent is (ts_function, ts_method)
+  when not ts_parameter || parent is (ts_function, ts_method)
   let construction init.constructor_arguments
   let annotation type.annotation_arguments
   when construction != null

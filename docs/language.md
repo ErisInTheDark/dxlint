@@ -150,8 +150,8 @@ attached first wins.
 
 **Specialisation (`like`).** `match js_object like braces ...` is a kind of
 `braces`: it keeps every child and named-layer child of `braces`, wins ties against it,
-and counts as `braces` for rules (`in braces rule` sees it, with `layer`
-naming the specialisation), for `is` tests and for ancestor lookups (`braces`
+and counts as `braces` for rules (`in braces rule` sees it; `is obj` tells
+the specialisation), for `is` tests and for ancestor lookups (`braces`
 in an expression finds the closest one). Use it to tell kinds of one shape
 apart without re-describing them:
 
@@ -409,9 +409,9 @@ so nested rules compose.
 | `reduce(xs, init, (state, x) => ...)` | folds a list in order: each step sees the state the previous one gave |
 | `matcher` / `matcher.x` | the closest enclosing node of `matcher`, or anything read on it (`ts_function.name`, `ts_class.offset`, `ts_function.my_attr`) |
 | `parent.x` | anything read on the layer the node sits in (`parent.offset`, `parent.depth`) |
-| `field.layer`, `field.offset`, `field.attr`, `field.fact`, `field.link` | a builtin, attribute, fact or link read on the node in one of this node's fields (a list for several) |
+| `field.node`, `field.offset`, `field.attr`, `field.fact`, `field.link` | a builtin, attribute, fact or link read on the node in one of this node's fields (a list for several) |
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
-| `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.layer`) |
+| `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.offset`) |
 | `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
@@ -422,7 +422,9 @@ so nested rules compose.
 | `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
-| `value is layer`, `value is (a, b)`, `value not (a, b)` | does the layer named by `value` (`layer`, `parent`, `previous.layer`...) count as one of these: itself, a specialisation, or a group member (`not`: none of them) |
+| `is a`, `x is a`, `x is (a, b)`, `x not (a, b)` | is the node (`x` alone: this node; or a field, `parent`, `previous`, a link, a node value) of one of these kinds: itself, a specialisation, or a group member (`not`: none of them) |
+| `is a.field` | does the node sit in that field of a node of kind `a` (`is ts_if.alternate`) |
+| `is layer name`, `is .lang` | is the node in that named layer; is the file in that language |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
 
@@ -443,15 +445,19 @@ or inside brackets:
 
 ```zlint
 let wants_blank_after is_conditional
-  || layer is (ts_break, ts_continue, ts_throw)
+  || is (ts_break, ts_continue, ts_throw)
   || spans_lines && declares != null
 ```
 
-**`is`** compares layer identity, not text: `layer is ts_loop` holds for every
-member of the `ts_loop` group, and `parent is braces` for any specialisation
-of `braces`. Several names go in parentheses, a group in place:
-`parent is (ts_block, ts_program)`. `not` is the inverse: `next_token not
-(ts_closer, ts_comma)`. Unknown names are config errors.
+**`is`** tests what a node is; kinds are never compared as text. `is
+ts_loop` (no subject: this node) holds for every member of the `ts_loop`
+group, and `parent is braces` for any specialisation of `braces`. Several
+go in parentheses, a group in place: `parent is (ts_block, ts_program)`;
+`is ts_if.test` means "in the `test` field of a `ts_if`"; `is layer lines`
+tests the layer and `is .rust` the file's language. `not` is the inverse:
+`next_token not (ts_closer, ts_comma)`. A value that is not a node is never
+any kind. Unknown names are config errors. `kind_name(n)` gives a node's
+kind as text, for messages.
 
 **Multi-line strings** start with `"""` at the end of a line and end with
 `"""` on a line of its own. That closing line's indentation is removed from
@@ -483,7 +489,7 @@ and `len` read records. A lambda sees everything the expression around it
 sees, plus its parameters:
 
 ```zlint
-let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.next, layer)).blankLine
+let wanted find_last(config, c => matches(c.prev, previous) && matches(c.next, node)).blankLine
 ```
 
 **Variables.**
@@ -491,21 +497,19 @@ let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.n
 | name | value |
 |---|---|
 | `text` | the node's text |
-| `layer` | the node's own matcher name (a specialisation's own name) |
+| `node` | the node itself, as a node value |
 | `indent` | leading whitespace of the node's first line |
 | `line`, `column` | 1-based position of the node |
 | `file` | path relative to the config |
-| `lang` | the file's language |
 | `before`, `after` | the rest of the node's first line before it, and of its last line after it |
 | `previous_line`, `next_line` | the whole lines around the node (`null` at the file's edges); `previous_line` as its indentation fix leaves it |
 | `text_before`, `text_after`, `source` | everything before the node, after it, and the whole file |
-| `parent`, `parent_text` | the layer the node sits in, and its text |
+| `parent`, `parent_text` | the node this one sits in (in its layer; the file for top nodes), and its text |
 | `parent_before` | the parent's text up to the node ("what came earlier in this statement") |
 | `parent_indent`, `parent_line` | leading whitespace and whole text of the line the parent starts on |
 | `previous_sibling`, `previous_gap` | the previous node of the same layer in the same parent, and the text between |
 | `gap_before` | the text between the previous child of the parent (of any layer) and the node: blank lines, comments, separators; `null` for the first child |
 | `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.argument` is `1`) |
-| `enclosing` | the innermost default-layer node around the node's start, read from any layer (`"rs_string"` inside a string) |
 | `indented` | the node's line starts inside a layer declared with `indent` |
 | `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
 | `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
@@ -519,7 +523,8 @@ let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.n
 | `previous.x`, `next.x` | `x` of the previous or next node in the same field of the same parent (`null` at the edges) |
 | `children`, `previous`, `next` alone | their text |
 
-`x` can be a field, an attribute, a fact or a builtin (`previous.layer`).
+`x` can be a field, an attribute, a fact or a builtin (`previous.offset`); test
+the neighbour itself with `is` (`previous is ts_comma`).
 
 **Functions.** `zlint functions` lists them all. Highlights: `len`, `lower`,
 `upper`, `snake_case`, `camel_case`, `pascal_case`, `kebab_case`,
@@ -624,7 +629,7 @@ file). Rules on them work like any rule:
 import .ts
 in ts_call rule my-no-eval warn "no eval" { when callee == "eval" }
 in ts_if.test, ts_while.test rule assign-in-condition warn "assignment in a condition" {
-  when layer is ts_assignment
+  when is ts_assignment
 }
 ```
 
@@ -706,7 +711,7 @@ is wrong, messages) is written in the rule.
 | `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
 | `precision_lost` | on a number literal: not exactly representable as a double |
 | `identifier_name` | on an identifier or private name: the name as JavaScript reads it (`foo` is `foo`) |
-| `first_token`, `last_token` | the node's first / last code token: `{text, layer, start, end}` |
+| `first_token`, `last_token` | the node's first / last code token: `{text, kind, start, end}`; test it with `is` (`first_token is ts_identifier`) |
 | `paired_token` | on a node starting with `(`, `[` or `{` (a bracket token node, or `(a)`), or else ending with `)`, `]` or `}`: the matching bracket, as `first_token` |
 | `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
 

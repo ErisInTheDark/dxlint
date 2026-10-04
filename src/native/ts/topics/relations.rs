@@ -32,6 +32,12 @@ pub const LINKS: &[Link] = &[
         get: |f, n| f.nodes_of(scope, n),
     },
     Link {
+        name: "conditional_ancestor",
+        doc: "native layers: the `if`, loop or `?:` whose test holds the node, not across functions; null outside tests",
+        many: false,
+        get: |f, n| f.nodes_of(|file, node| file.conditional_ancestor(node).into_iter().collect(), n),
+    },
+    Link {
         name: "writer",
         doc: "native layers: on a written identifier, member or pattern, the node writing it (assignment, update, `delete`, `for` statement); null when not written",
         many: false,

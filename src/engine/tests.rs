@@ -137,7 +137,7 @@ fn context_blocks_give_every_line_their_layers() {
           }
           match brk /\[/ until /\]/ {
             match word /\w+/ {
-              rule words warn "{text} in {parent}"
+              rule words warn "{text} in {kind_name(parent)}"
             }
           }
         }
@@ -256,7 +256,7 @@ fn specialisations_inherit_children_and_win_ties() {
           match obj
         }
         in blk match item /\w+/ {
-          rule items warn "{text} in {parent}"
+          rule items warn "{text} in {kind_name(parent)}"
         }
         in blk rule blocks warn "{if before ~ /.*=\s*/ then 'object' else 'block'}"
     "#);
@@ -269,15 +269,17 @@ fn specialisations_inherit_children_and_win_ties() {
 
 #[test]
 fn layers_are_separate_trees_related_by_position() {
-    // `enclosing` and `containing` read the other trees by position; a
-    // layer node's parent is its layer's root, never the node searched.
+    // `containing` reads the other trees by position; a layer node's parent
+    // is its layer's root (the file), never the node searched; `is layer`
+    // tests the layer.
     let l = linter(r#"
+        group spots comment, str, paren
         in .t, paren layer marks match bad /BAD/ {
-          rule where warn "{enclosing}|{containing(paren)}|{parent}"
+          rule where warn "{kind_name(containing(spots))}|{kind_name(parent)}|{is layer marks}|{is bad}|{parent is paren}"
         }
     "#);
     let messages: Vec<String> = lint(&l, "BAD // BAD\n(BAD \"BAD\")").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, vec![".t||.t", "comment||.t", "paren|(BAD \"BAD\")|.t", "str|(BAD \"BAD\")|.t"]);
+    assert_eq!(messages, vec!["|.t|true|true|false", "comment|.t|true|true|false", "paren|.t|true|true|false", "str|.t|true|true|false"]);
 }
 
 #[test]
@@ -696,7 +698,7 @@ fn pattern_layers_live_inside_native_layers() {
     let l = native_linter(r#"
         in ts_comment match todo /TODO/
         in ts_string match esc /\\./
-        in todo rule t info "{parent}@{offset}"
+        in todo rule t info "{kind_name(parent)}@{offset}"
         in esc rule e info "{text} in {parent.text}"
     "#);
     let messages: Vec<String> =
@@ -706,7 +708,7 @@ fn pattern_layers_live_inside_native_layers() {
     // rules, in the same tree (one parse).
     let l = native_linter(r#"
         in .js match semi_run /;;+/
-        in semi_run rule s info "{parent}"
+        in semi_run rule s info "{kind_name(parent)}"
         in ts_empty rule e info "empty"
     "#);
     let mut messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;;;").into_iter().map(|d| d.message).collect();
@@ -1098,7 +1100,7 @@ fn library_layers_only_parse_while_something_needs_them() {
     let src = r#"
         define {
           in .t match lib_word /[a-z]+/ { rule lib warn "lib" }
-          in .t match lib_other /[0-9]+/ { rule other warn "other" { when parent == "lib_word" } }
+          in .t match lib_other /[0-9]+/ { rule other warn "other" { when parent is lib_word } }
         }
         in .t match mine /[a-z]+/ { rule mine warn "mine" }
     "#;
@@ -1207,8 +1209,8 @@ fn facts_called_with_arguments_see_them_only_during_the_call() {
 #[test]
 fn tokens_are_layers_under_the_node_that_owns_them() {
     let l = native_linter(r#"
-        in ts_comma rule c info "{parent}:{space_before.spaced}/{space_after.spaced}:{next_token}" fix space_after as " "
-        in ts_keyword rule k info "{text}<{parent}"
+        in ts_comma rule c info "{kind_name(parent)}:{space_before.spaced}/{space_after.spaced}:{next_token}" fix space_after as " "
+        in ts_keyword rule k info "{text}<{kind_name(parent)}"
     "#);
     let text = "f(a ,b, [1,,2]);\nreturn;";
     let diags = l.lint(Path::new("/root/a.ts"), text);
@@ -1279,7 +1281,7 @@ fn paths_reach_ancestors_parents_fields_and_nodes() {
         in ts_identifier let marked text == "a"
         in ts_function let fname name
         fn is_marked(n) = n.marked
-        in ts_call rule c info "{ts_function.offset}|{parent.layer}|{callee.object.layer}|{callee.property}|{callee.object.declaration.offset}|{ts_function.fname}|{position(end_offset).line}|{byte_slice(source, offset + 4, end_offset - 1)}|{join(token_texts, ' ')}"
+        in ts_call rule c info "{ts_function.offset}|{kind_name(parent)}|{kind_name(callee.object.node)}|{callee.property}|{callee.object.declaration.offset}|{ts_function.fname}|{position(end_offset).line}|{byte_slice(source, offset + 4, end_offset - 1)}|{join(token_texts, ' ')}"
         in ts_identifier rule r info "{first(references).offset}:{is_marked(first(references))}" { when count(references) > 0 }
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "function f(a) {\n  a.b('é');\n}").into_iter().map(|d| d.message).collect();
@@ -1303,7 +1305,7 @@ fn node_values_walk_and_read_paths() {
     let l = native_linter(r#"
         in ts_identifier let sources [] references.writer.right.node
         in ts_variable_declaration rule w info "{join(map(walk([] declaration.name.node, n => n.sources), n => n.text), ',')}"
-        in ts_call rule p info "{node.callee.object.layer}|{node.callee.property}"
+        in ts_call rule p info "{kind_name(node.callee.object.node)}|{node.callee.property}"
         in ts_bigint rule b info "{literal_value.value}"
         in ts_string rule j info "{position(offset).line}:{position(offset).js_line}:{position(end_offset).js_column}"
     "#);
@@ -1322,7 +1324,7 @@ fn trivia_layers_and_descendants() {
     // children) holds them: never inside strings, regex or template text.
     // Lines lie over the file, their JS line break included.
     let l = native_linter(r#"
-        in ts_comment rule c info "{parent}:{text}"
+        in ts_comment rule c info "{kind_name(parent)}:{text}"
         in ts_line rule l info "{position(offset).js_line}:{trim(text)}:{byte_len(text)}"
     "#);
     let messages: Vec<String> = l
@@ -1331,7 +1333,7 @@ fn trivia_layers_and_descendants() {
         .map(|d| d.message)
         .collect();
     assert_eq!(messages, ["1:f(/* a */ 1); // b:20", "ts_call:/* a */", "ts_program:// b", "2:let s = '//x';:17", "3:x:2"]);
-    let l = native_linter(r#"in ts_comment rule c info "{parent}:{text}""#);
+    let l = native_linter(r#"in ts_comment rule c info "{kind_name(parent)}:{text}""#);
     let messages: Vec<String> = l
         .lint(Path::new("/root/a.tsx"), "x = `// no ${ /* yes */ y }`;\nr = /\\/\\/x/;\nv = <a>// no</a>;")
         .into_iter()
@@ -1339,8 +1341,8 @@ fn trivia_layers_and_descendants() {
         .collect();
     assert_eq!(messages, ["ts_template:/* yes */"]);
     let l = native_linter(r#"
-        in ts_program rule d info "{join(map(descendants(ts_function_like), n => n.layer), ',')}"
-        in ts_new rule t info "{first_token.layer}:{last_token.text}"
+        in ts_program rule d info "{join(map(descendants(ts_function_like), n => kind_name(n)), ',')}"
+        in ts_new rule t info "{first_token is ts_keyword}:{last_token.text}"
         in ts_try rule y info "{type}"
     "#);
     let messages: Vec<String> = l
@@ -1348,17 +1350,17 @@ fn trivia_layers_and_descendants() {
         .into_iter()
         .map(|d| d.message)
         .collect();
-    assert_eq!(messages, ["ts_function,ts_arrow", "ts_keyword:)", "any"]);
+    assert_eq!(messages, ["ts_function,ts_arrow", "true:)", "any"]);
 }
 
 #[test]
 fn node_values_step_to_their_parent() {
     let l = native_linter(r#"
-        fn grand(n) = n.parent.parent.layer
-        in ts_identifier rule p info "{node.parent.layer}/{grand(node)}" { when text == "a" }
+        fn grand(n) = kind_name(n.parent.parent)
+        in ts_identifier rule p info "{kind_name(node.parent)}/{grand(node)}/{node.parent.parent is ts_expression_statement}" { when text == "a" }
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f(a);").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["ts_call/ts_expression_statement"]);
+    assert_eq!(messages, ["ts_call/ts_expression_statement/true"]);
 }
 
 #[test]
@@ -1389,13 +1391,13 @@ fn library_attributes_read_only_inside_functions_are_kept() {
     // A `define`d attribute reached only through a `fn` body's `n.x`.
     let l = native_linter(r#"
         define {
-          in ts_member let lib_object_layer object.layer
+          in ts_member let lib_object_node object.node
         }
-        fn object_layer(n) = n.lib_object_layer
-        in ts_member rule m info "{object_layer(node)}"
+        fn object_named(n) = n.lib_object_node is ts_identifier
+        in ts_member rule m info "{object_named(node)}"
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a.b;").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["ts_identifier"]);
+    assert_eq!(messages, ["true"]);
 }
 
 #[test]
@@ -1411,9 +1413,9 @@ fn bracket_reads_in_attributes_attach_their_tokens() {
 #[test]
 fn selecting_token_kinds_keeps_what_neighbour_reads_see() {
     // Only commas are targeted, but a comma's previous token is still there.
-    let l = native_linter(r#"in ts_comma rule c info "{previous.layer}""#);
+    let l = native_linter(r#"in ts_comma rule c info "{previous is ts_open_paren}""#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f(a, b);").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["ts_open_paren"]);
+    assert_eq!(messages, ["true"]);
     let l = native_linter(r#"in ts_call rule c info "{count(children)}"
         in ts_comma rule d info "d""#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f(a, b);").into_iter().map(|d| d.message).collect();
@@ -1462,9 +1464,9 @@ fn own_brackets_and_variant_families() {
 
 #[test]
 fn builtins_read_on_a_fields_nodes() {
-    let l = native_linter("in ts_if rule i info \"{alternate.layer}@{alternate.offset}|{[] consequent.layer}\"");
+    let l = native_linter("in ts_if rule i info \"{alternate is ts_if}@{alternate.offset}|{map([] consequent.node, c => kind_name(c))}\"");
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "if (a) b; else if (c) d;").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["ts_if@15|ts_expression_statement", "@|ts_expression_statement"]);
+    assert_eq!(messages, ["true@15|ts_expression_statement", "false@|ts_expression_statement"]);
 }
 
 #[test]
@@ -1523,7 +1525,7 @@ fn configuring_adds_conditions_and_replaces_messages() {
 #[test]
 fn children_and_siblings_read_neighbouring_nodes() {
     let l = native_linter(r#"
-        in ts_call rule kids info "{join([] children.layer, ',')}"
+        in ts_call rule kids info "{join(map(children.node, c => kind_name(c)), ',')}"
         in ts_call.argument rule around info "{default(previous, '-')}<{text}>{default(next, '-')}"
         in ts_expression_statement rule first info "first" { when previous == null && index == 0 }
     "#);
@@ -1534,16 +1536,17 @@ fn children_and_siblings_read_neighbouring_nodes() {
 }
 
 #[test]
-fn is_tests_layer_names_against_layers_groups_and_specialisations() {
+fn is_tests_kinds_groups_specialisations_fields_and_languages() {
     let l = linter(r#"
         match word /[a-z]+/
         match shout like word /[A-Z]+/
         group things word, paren
         in .t, paren match word
         in .t, paren match shout
-        in word rule w info "{layer is word}/{layer is (paren, shout)}/{layer not (paren, shout)}/{parent is things}"
+        in .t match pair /\[/ inner:word /\]/
+        in word rule w info "{is word}/{is (paren, shout)}/{not (paren, shout)}/{parent is things}/{is pair.inner}/{is .t}"
     "#);
-    assert_eq!(rule_messages(&l, "ab (CD)"), vec!["w: true/false/true/false", "w: true/true/false/true"]);
+    assert_eq!(rule_messages(&l, "ab (CD) [ef]"), vec!["w: true/false/true/false/false/true", "w: true/true/false/true/false/true", "w: true/false/true/false/true/true"]);
 }
 
 #[test]

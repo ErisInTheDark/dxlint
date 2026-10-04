@@ -17,24 +17,24 @@ group ordering_target ordering_container, ordering_member_node
 in ordering_container let ordering_is_container true
 in ts_method, ts_class_property, ts_property_signature, ts_index_signature let ordering_modifiers [] modifier
 in ts_method, ts_class_property let ordering_decorated count(decorator) > 0
-in ts_method let ordering_kind if parent == "ts_class" && !contains([] modifier, "static") && key.layer != "ts_computed_key" && static_name == "constructor" then "constructor" else if kind == "get" || kind == "set" then kind else "method"
+in ts_method let ordering_kind if parent is ts_class && !contains([] modifier, "static") && key not ts_computed_key && static_name == "constructor" then "constructor" else if kind == "get" || kind == "set" then kind else "method"
 in ts_method_signature let ordering_kind if kind == "get" || kind == "set" then kind else "method"
 in ts_call_signature let ordering_kind if kind == "new" then "constructor" else "call-signature"
 in ts_class_property let ordering_kind if contains([] modifier, "accessor") then "accessor" else if init.returned_function == true then "method" else if contains([] modifier, "readonly") then "readonly-field" else "field"
 in ts_property_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-field" else "field"
 in ts_index_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-signature" else "signature"
 in ts_static_block let ordering_kind "static-initialization"
-in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_key { text: default(static_name, default(key.member_key_text, key)), private: key.layer == "ts_private_name" }
-in ts_parameter let ordering_parameter_name if name.layer == "ts_identifier" then name else null
+in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_key { text: default(static_name, default(key.member_key_text, key)), private: key is ts_private_name }
+in ts_parameter let ordering_parameter_name if name is ts_identifier then name else null
 in ts_index_signature let ordering_name default(first([] parameter.ordering_parameter_name), "(index signature)")
 in ts_call_signature let ordering_name if kind == "new" then "new" else "call"
 in ts_static_block let ordering_name "static block"
 in ts_method, ts_method_signature, ts_class_property, ts_property_signature let ordering_name if ordering_kind == "constructor" then "constructor" else if ordering_key.private then re_replace(ordering_key.text, /^#+/, "") else ordering_key.text
 in ts_method let ordering_skip body == null && !contains([] modifier, "abstract")
 in ts_class_property let ordering_initialiser init != null
-in ts_member let ordering_this_dependency if object.layer == "ts_this" then re_replace(property, /^#+/, "") else null
-in ts_index let ordering_this_dependency if object.layer == "ts_this" then index.static_string else null
-in style_tree_node let ordering_dependencies if layer is (ts_function, ts_arrow, ts_method, ts_class) then [] else unique([] ordering_this_dependency reduce([] children.ordering_dependencies, [], (names, child) => names child))
+in ts_member let ordering_this_dependency if object is ts_this then re_replace(property, /^#+/, "") else null
+in ts_index let ordering_this_dependency if object is ts_this then index.static_string else null
+in style_tree_node let ordering_dependencies if is (ts_function, ts_arrow, ts_method, ts_class) then [] else unique([] ordering_this_dependency reduce([] children.ordering_dependencies, [], (names, child) => names child))
 in ts_class_property let ordering_initialiser_dependencies default(init.ordering_dependencies, [])
 fn ordering_specific_groups(kind, access, scope, decorated) = (
   (if decorated && contains(["readonly-field", "field", "method", "accessor", "get", "set"], kind) then [access "-decorated-" kind, "decorated-" kind] (if kind == "readonly-field" then [access "-decorated-field", "decorated-field"] else []) else [])
@@ -47,9 +47,9 @@ fn ordering_member_groups(kind, xs, private_key, decorated, class_member) = (
   [kind] (if kind == "readonly-field" then ["field"] else if kind == "readonly-signature" then ["signature"] else [])
 )
 in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_optional_member optional != null
-in ordering_member_node let ordering_member { index: index, name: default(ordering_name, ""), optional: ordering_optional_member == true, groups: ordering_member_groups(default(ordering_kind, ""), default(ordering_modifiers, []), ordering_key.private == true, ordering_decorated == true, parent == "ts_class"), skip: ordering_skip == true, init: ordering_initialiser == true, dependencies: default(ordering_initialiser_dependencies, []) }
+in ordering_member_node let ordering_member { index: index, name: default(ordering_name, ""), optional: ordering_optional_member == true, groups: ordering_member_groups(default(ordering_kind, ""), default(ordering_modifiers, []), ordering_key.private == true, ordering_decorated == true, parent is ts_class), skip: ordering_skip == true, init: ordering_initialiser == true, dependencies: default(ordering_initialiser_dependencies, []) }
 in ordering_container let ordering_members [] member.ordering_member
-in ordering_container let ordering_owner { layer: layer, expression: parent not (ts_program, ts_block, ts_export, ts_namespace), members: ordering_members }
+in ordering_container let ordering_owner { node: node, expression: parent not (ts_program, ts_block, ts_export, ts_namespace), members: ordering_members }
 fn ordering_optional(rows, mode, changed) = if !contains(["optional-first", "required-first"], mode) || changed == null then { split: null, bad: null } else { split: changed.index, bad: if first(rows).optional != (mode == "optional-first") then first(rows).index else if any(rows, row => row.index > changed.index && row.optional != changed.optional) then changed.index else null }
 fn ordering_rank(row, types) = if row.skip || types == null then null else first(compact(map(row.groups, group_name => if any(types, group => contains(group, group_name)) then index_of(types, find(types, group => contains(group, group_name))) else null)))
 fn ordering_group_state(before_state, rank, bad) = if rank == null then before_state else { ranks: if bad || last(before_state.ranks) == rank then before_state.ranks else before_state.ranks [rank], bad: before_state.bad || bad }
@@ -71,7 +71,7 @@ in ordering_target rule member-ordering {
   option typeLiterals member_order_config = null "Type literal ordering."
   let standard_types standard_member_order()
   let owner if ordering_is_container == true then ordering_owner else parent.ordering_owner
-  let specific_order if owner.layer == "ts_interface" then interfaces else if owner.layer == "ts_type_literal" then typeLiterals else if owner.expression then classExpressions else classes
+  let specific_order if owner.node is ts_interface then interfaces else if owner.node is ts_type_literal then typeLiterals else if owner.expression then classExpressions else classes
   let selected_order if specific_order != null then specific_order else default
   let ordering_config if selected_order == null then { memberTypes: standard_types } else selected_order
   let ordering_types if type_of(ordering_config) == "list" then ordering_config else if ordering_config.memberTypes != null then ordering_config.memberTypes else if specific_order == null then standard_types else null

@@ -156,12 +156,12 @@ fn exact_nodes(file: &NativeFile<'_>) -> ExactNodes {
     ExactNodes(map)
 }
 
-/// A code token as a value: `{text, layer, start, end}`.
+/// A code token as a value: `{text, kind, start, end}` (`is` reads its kind).
 fn token_record(file: &NativeFile<'_>, t: &Token) -> Value<'static> {
-    let layer = token_layer(file, t).map_or(Value::Null, |k| Value::from(k.name()));
+    let kind = token_layer(file, t).map_or(Value::Null, |k| Value::from(k.name()));
     Value::record(vec![
         ("text".into(), Value::from(file.syntax.src[t.start as usize..t.end as usize].to_string())),
-        ("layer".into(), layer),
+        ("kind".into(), kind),
         ("start".into(), Value::from(t.start as usize)),
         ("end".into(), Value::from(t.end as usize)),
     ])

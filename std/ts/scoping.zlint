@@ -153,12 +153,12 @@ in ts_function rule func-names {
   warn if policy == "never" then "Unexpected named {function_name}." else "Unexpected unnamed {function_name}."
 }
 
-in ts_parenthesized let scoping_unparen_kind default(expression.scoping_unparen_kind, expression.layer)
+in ts_parenthesized let scoping_unparen_node default(expression.scoping_unparen_node, expression.node)
 in ts_parenthesized let scoping_unparen_text default(expression.scoping_unparen_text, expression)
 in ts_identifier let scoping_assignment_name text
 in ts_member let scoping_assignment_name static_name
 in ts_index let scoping_assignment_name
-  if default(index.scoping_unparen_kind, index.layer) == "ts_string" then static_name else null
+  if default(index.scoping_unparen_node, index.node) is ts_string then static_name else null
 in ts_member, ts_index let scoping_assignment_property true
 in ts_parenthesized forward scoping_assignment_name, scoping_assignment_property from expression
 in ts_member, ts_index let scoping_property_object default(object.scoping_unparen_text, object)
@@ -169,20 +169,20 @@ in ts_string let scoping_string_value literal_value.value
 in ts_parenthesized forward scoping_string_value from expression
 in ts_call let scoping_descriptor_kind callee.scoping_descriptor_method
 in ts_call let scoping_descriptor_name first(slice([] argument.scoping_string_value, 1, 2))
-in ts_object let scoping_descriptors parent == "ts_call" && contains(["defineProperties", "create"], parent.scoping_descriptor_kind)
+in ts_object let scoping_descriptors parent is ts_call && contains(["defineProperties", "create"], parent.scoping_descriptor_kind)
 in ts_property let scoping_descriptor_holder
-  if parent.scoping_descriptors then {name: if key.layer == "ts_identifier" then key else null} else null
+  if parent.scoping_descriptors then {name: if key is ts_identifier then key else null} else null
 in ts_object let scoping_descriptor_context
-  if parent == "ts_call" && parent.scoping_descriptor_kind == "defineProperty" then {name: parent.scoping_descriptor_name}
+  if parent is ts_call && parent.scoping_descriptor_kind == "defineProperty" then {name: parent.scoping_descriptor_name}
   else parent.scoping_descriptor_holder
-in ts_computed_key let scoping_match_key_kind expression.layer
+in ts_computed_key let scoping_match_key_node expression.node
 in ts_declarator let scoping_name_destination
-  {target: if name.layer == "ts_identifier" then name else null, property: false, commonjs: false, offset: offset}
+  {target: if name is ts_identifier then name else null, property: false, commonjs: false, offset: offset}
 in ts_assignment let scoping_name_destination
   {target: left.scoping_assignment_name, property: left.scoping_assignment_property,
     commonjs: left.static_name == "exports" && left.scoping_property_object == "module", offset: offset}
 in ts_property, ts_class_property let scoping_name_destination
-  {target: if contains(["ts_identifier", "ts_string"], default(key.scoping_match_key_kind, key.layer)) then static_name else null,
+  {target: if default(key.scoping_match_key_node, key.node) is (ts_identifier, ts_string) then static_name else null,
     property: true, commonjs: false, descriptor: if static_name == "value" then parent.scoping_descriptor_context else null, offset: offset}
 in ts_parenthesized let scoping_name_destination parent.scoping_name_destination
 in ts_function rule func-name-matching {
@@ -215,16 +215,16 @@ in ts_identifier, ts_private_name rule camelcase {
 in ts_block let scoping_block_meaningful default(first([] body.scoping_following_meaningful), false)
 in ts_return let scoping_bare_return argument == null
 in ts_statement let scoping_meaningful
-  if layer == "ts_block" then scoping_block_meaningful
-  else !(layer is (ts_function, ts_break)) && !scoping_bare_return
+  if is ts_block then scoping_block_meaningful
+  else !(is (ts_function, ts_break)) && !scoping_bare_return
 in ts_statement let scoping_following_meaningful scoping_meaningful || next.scoping_following_meaningful
-in ts_statement let scoping_following_break layer == "ts_break" || next.scoping_following_break
-in ts_case let scoping_case_exit first([] body.scoping_following_break) || next.layer == null
+in ts_statement let scoping_following_break is ts_break || next.scoping_following_break
+in ts_case let scoping_case_exit first([] body.scoping_following_break) || next.node == null
 in ts_statement, ts_case let scoping_return_tail
   if parent is ts_function_like then true
-  else if parent is ts_loop || parent == "ts_try" && field == "finalizer" then false
+  else if parent is ts_loop || is ts_try.finalizer then false
   else if parent is (ts_block, ts_case) then
-    !next.scoping_following_meaningful && (parent != "ts_case" || parent.scoping_case_exit) && parent.scoping_return_tail
+    !next.scoping_following_meaningful && (parent not ts_case || parent.scoping_case_exit) && parent.scoping_return_tail
   else parent.scoping_return_tail
 in ts_return rule no-useless-return {
   when argument == null && !contains(["unreachable", "unreachable_run"], code_path) && scoping_return_tail
@@ -274,17 +274,17 @@ in ts_parenthesized forward scoping_promise_callee, scoping_void_expression from
 in ts_parenthesized let scoping_expression_offset default(expression.scoping_expression_offset, expression.offset)
 in ts_new let scoping_promise_new callee.scoping_promise_callee
 in ts_function, ts_arrow, ts_parenthesized let scoping_executor_argument
-  if parent == "ts_parenthesized" then parent.scoping_executor_argument
-  else parent == "ts_new" && field == "argument" && index == 0 && parent.scoping_promise_new
+  if parent is ts_parenthesized then parent.scoping_executor_argument
+  else is ts_new.argument && index == 0 && parent.scoping_promise_new
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_program, ts_case let scoping_executor_body
-  if layer is ts_function_like then default(scoping_executor_argument, false)
-  else if layer is (ts_program, ts_static_block) then false
+  if is ts_function_like then default(scoping_executor_argument, false)
+  else if is (ts_program, ts_static_block) then false
   else parent.scoping_executor_body
 
 in ts_return let scoping_executor_result
   if scoping_executor_body && argument != null then {void: argument.scoping_void_expression, offset: offset} else null
 in ts_arrow let scoping_executor_result
-  if scoping_executor_argument && body.layer != "ts_block" then
+  if scoping_executor_argument && body not ts_block then
     {void: body.scoping_void_expression, offset: default(body.scoping_expression_offset, body.offset)} else null
 in ts_return, ts_arrow rule no-promise-executor-return {
   option allowVoid boolean = false "allow explicit void return expressions"
@@ -300,25 +300,25 @@ in ts_identifier rule block-scoped-var {
 }
 
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_program, ts_case let scoping_declaration_body
-  if layer == "ts_program" then "program"
-  else if layer == "ts_static_block" then "class static block body"
-  else if layer is ts_function_like then "function body"
+  if is ts_program then "program"
+  else if is ts_static_block then "class static block body"
+  else if is ts_function_like then "function body"
   else parent.scoping_declaration_body
 in ts_program, ts_static_block let scoping_body_root true
 in ts_block let scoping_body_root parent is (ts_function_like, ts_static_block)
-in ts_block let scoping_static_body parent == "ts_static_block"
+in ts_block let scoping_static_body parent is ts_static_block
 fn scoping_var_step(prior, variable, prefix, static_body) =
   if prior == 2 then 2 else if variable then 1 else if prior == 0 && prefix && !static_body then 0 else 2
-in ts_expression_statement let scoping_var_directive expression.layer == "ts_string"
-in ts_export let scoping_export_variable declaration.layer == "ts_variable_declaration"
+in ts_expression_statement let scoping_var_directive expression is ts_string
+in ts_export let scoping_export_variable declaration is ts_variable_declaration
 in ts_statement let scoping_var_prefix scoping_var_step(default(previous.scoping_var_prefix, 0),
-  layer == "ts_variable_declaration" || scoping_export_variable,
-  layer == "ts_import" || scoping_var_directive,
-  parent == "ts_static_block" || parent.scoping_static_body)
+  is ts_variable_declaration || scoping_export_variable,
+  is ts_import || scoping_var_directive,
+  parent is ts_static_block || parent.scoping_static_body)
 in ts_export let scoping_export_top parent.scoping_body_root && scoping_var_prefix != 2
 in ts_variable_declaration rule vars-on-top {
   when kind == "var"
-  when !(if parent == "ts_export" then parent.scoping_export_top else parent.scoping_body_root && scoping_var_prefix != 2)
+  when !(if parent is ts_export then parent.scoping_export_top else parent.scoping_body_root && scoping_var_prefix != 2)
   warn "All 'var' declarations must be at the top of the function scope."
 }
 
@@ -326,14 +326,14 @@ in ts_function rule no-inner-declarations {
   option mode "functions" | "both" = "functions"
   option blockScopedFunctions "allow" | "disallow" = "allow"
   when parent is (ts_program, ts_block, ts_export, ts_if, ts_labeled, ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_case)
-  when !parent.scoping_body_root && parent != "ts_export"
+  when !parent.scoping_body_root && parent not ts_export
   when !(blockScopedFunctions == "allow" && parent.scoping_strict_code)
   warn "Move function declaration to {default(parent.scoping_declaration_body, 'program')} root."
 }
 in ts_variable_declaration rule no-inner-declarations:variable {
   option mode "functions" | "both" = "functions"
   option blockScopedFunctions "allow" | "disallow" = "allow"
-  when mode == "both" && kind == "var" && !parent.scoping_body_root && parent != "ts_export"
+  when mode == "both" && kind == "var" && !parent.scoping_body_root && parent not ts_export
   warn "Move variable declaration to {default(parent.scoping_declaration_body, 'program')} root."
 }
 
@@ -356,17 +356,17 @@ in ts_program rule no-redeclare:global {
 in ts_this let scoping_captures_this true
 in ts_parenthesized forward scoping_captures_this from expression
 in ts_assignment let scoping_assigns_this operator == "=" && right.scoping_captures_this
-in ts_identifier let scoping_initialised_alias parent == "ts_declarator" && parent.init != null
+in ts_identifier let scoping_initialised_alias parent is ts_declarator && parent.init != null
 in ts_identifier let scoping_alias_initialised
   any(declarations, d => d.scope == scope && d.scoping_initialised_alias)
   || any(declarations, d => any(d.references, r => r.scope == scope && r.writer.scoping_assigns_this))
 in ts_declarator let scoping_alias_context
-  if name.layer == "ts_identifier" then {
+  if name is ts_identifier then {
     name: name, this: init.scoping_captures_this, valid: init.scoping_captures_this, value: init != null,
     assigned: init != null || name.scoping_alias_initialised
   } else null
 in ts_assignment let scoping_alias_context
-  if left.layer == "ts_identifier" then {
+  if left is ts_identifier then {
     name: left, this: right.scoping_captures_this, valid: scoping_assigns_this, value: right != null, assigned: right != null
   } else null
 in ts_declarator, ts_assignment rule consistent-this {
@@ -439,11 +439,11 @@ in ts_identifier rule no-implicit-globals:readonly {
 }
 
 in ts_variable_declaration rule no-case-declarations {
-  when parent == "ts_case" && kind != "var"
+  when parent is ts_case && kind != "var"
   warn "Unexpected lexical declaration in case block."
 }
 in ts_function, ts_class rule no-case-declarations:declaration {
-  when parent == "ts_case"
+  when parent is ts_case
   warn "Unexpected lexical declaration in case block."
 }
 
@@ -469,8 +469,8 @@ in ts_return rule no-constructor-return {
 }
 
 in ts_variable_declaration {
-  let scoping_loop_head parent == "ts_for" && field == "init" || (parent == "ts_for_in" || parent == "ts_for_of") && field == "left"
-  let scoping_iteration_binding (parent == "ts_for_in" || parent == "ts_for_of") && field == "left"
+  let scoping_loop_head is (ts_for.init, ts_for_in.left, ts_for_of.left)
+  let scoping_iteration_binding is (ts_for_in.left, ts_for_of.left)
 }
 in ts_declarator rule init-declarations {
   option mode "always" | "never" = "always"
@@ -495,7 +495,7 @@ in ts_method rule class-methods-use-this {
   option ignoreOverrideMethods boolean = false "ignore overriding methods"
   option ignoreClassesWithImplements "all" | "public-fields" | null = null "ignore methods implementing interfaces"
   option ignoreClassesThatImplementAnInterface boolean | "public-fields" = false "typescript-eslint interface exception"
-  when parent == "ts_class" && body != null && !contains(modifier, "static") && static_name != "constructor"
+  when parent is ts_class && body != null && !contains(modifier, "static") && static_name != "constructor"
   when !scoping_receiver_use && !contains(exceptMethods, default(static_name, key))
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)
@@ -509,7 +509,7 @@ in ts_class_property rule class-methods-use-this:field {
   option ignoreOverrideMethods boolean = false "ignore overriding methods"
   option ignoreClassesWithImplements "all" | "public-fields" | null = null "ignore methods implementing interfaces"
   option ignoreClassesThatImplementAnInterface boolean | "public-fields" = false "typescript-eslint interface exception"
-  when enforceForClassFields && parent == "ts_class" && !contains(modifier, "static")
+  when enforceForClassFields && parent is ts_class && !contains(modifier, "static")
   when init.function_name != null && !scoping_receiver_use
   when !contains(exceptMethods, default(static_name, key))
   when !(ignoreOverrideMethods && contains(modifier, "override"))

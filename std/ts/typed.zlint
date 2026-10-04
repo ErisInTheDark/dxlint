@@ -71,7 +71,7 @@ in ts_identifier {
 in ts_member, ts_index {
   let eval_name static_name
   let eval_core_root if object.eval_core_root != null && static_name == object.eval_core_root then object.eval_core_root else null
-  let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object.layer == "ts_identifier" && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
+  let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object is ts_identifier && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
   let eval_constructor builtin_type("FunctionConstructor") || contains(default(type_flags, []), "any") || type_opaque
 }
 in ts_member let eval_bind_member property == "bind"
@@ -92,11 +92,11 @@ in typed_simple_expression, ts_binary {
   let eval_callback callable || builtin_type("Function")
 }
 in typed_simple_expression {
-  let eval_string layer is (ts_string, ts_template)
+  let eval_string is (ts_string, ts_template)
     || static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"])
 }
 in ts_call {
-  let eval_callback callable || builtin_type("Function") || callee.eval_bind_member == true || callee.layer == "ts_identifier" && callee == "bind"
+  let eval_callback callable || builtin_type("Function") || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
   let eval_string static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"]) || callee.global_value == "String" && first([] argument.static_string) != null
 }
 in ts_binary let eval_string static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"]) || operator == "+" && (left.eval_string == true || right.eval_string == true)
@@ -256,7 +256,7 @@ in ts_union, ts_intersection {
 in ts_union, ts_intersection rule no-duplicate-type-constituents {
   option ignoreIntersections boolean = false "Ignore intersection types."
   option ignoreUnions boolean = false "Ignore union types."
-  when !(ignoreIntersections && layer == "ts_intersection") && !(ignoreUnions && layer == "ts_union")
+  when !(ignoreIntersections && is ts_intersection) && !(ignoreUnions && is ts_union)
   each duplicate_constituent in default(duplicate_type_constituents, [])
   when duplicate_constituent.previous != null
   report at duplicate_constituent.offset
@@ -295,7 +295,7 @@ in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversi
 in ts_member let chain_handles_rejection object.handles_rejection
 in ts_call let handles_rejection callee ~ /[\s\S]*\.catch/ && count(argument) >= 1 || callee ~ /[\s\S]*\.then/ && count(argument) >= 2 || callee ~ /[\s\S]*\.finally/ && callee.chain_handles_rejection == true
 in ts_expression_statement.expression rule no-floating-promises {
-  when layer != "ts_assignment" && layer != "ts_await" && !handles_rejection && thenable
+  when not (ts_assignment, ts_await) && !handles_rejection && thenable
   warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
 }
 
@@ -309,11 +309,11 @@ in ts_member, ts_index let promise_aggregate_member object.global_value == "Prom
 in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
 in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
-  when layer != "ts_hole" && parent.is_promise_aggregator_argument && nonawaitable_type == true
+  when not ts_hole && parent.is_promise_aggregator_argument && nonawaitable_type == true
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_call.argument rule await-thenable:iterable {
-  when parent.is_promise_aggregator == true && layer != "ts_array" && nonawaitable_iterable == true
+  when parent.is_promise_aggregator == true && not ts_array && nonawaitable_iterable == true
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_for_of rule await-thenable:for-of {
@@ -363,7 +363,7 @@ in ts_binary let compared_value_flags if re_test(default(left, ""), /\./) then r
 in ts_logical rule prefer-optional-chain {
   when left.chain_subject != null && left.chain_check_kind == (if operator == "&&" then "plain" else "not") && chain_type_allows(left.chain_type_flags)
   # A chain that goes on to test something else is left alone.
-  when !(parent == "ts_logical" && parent.operator == operator && index == 0)
+  when !(parent is ts_logical && parent.operator == operator && index == 0)
   when !(re_test(default(right.chain_check_kind, ""), /^cmp/) && !(right.compared_value_flags != null && !contains(right.compared_value_flags, "nullable") && !contains(right.compared_value_flags, "any")))
   when if operator == "&&" then right.chain_check_kind == "plain" && extends_chain(left.chain_subject, right.chain_subject) || right.chain_check_kind == "cmp_and" && (extends_chain(left.chain_subject, right.chain_compared_left) || extends_chain(left.chain_subject, right.chain_compared_right)) else right.chain_check_kind == "not" && extends_chain(left.chain_subject, right.chain_subject) || right.chain_check_kind == "cmp_or" && (extends_chain(left.chain_subject, right.chain_compared_left) || extends_chain(left.chain_subject, right.chain_compared_right))
   warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
@@ -462,7 +462,7 @@ in ts_parameter rule prefer-readonly:parameter {
 # ---- the cheap type-checked trio ------------------------------------------------
 macro bad_in_string(fs) (contains(fs, "array") || contains(fs, "object") || contains(fs, "function") || contains(fs, "symbol") || contains(fs, "never"))
 macro stringifies_well(t) re_test(default(t, ""), /^(?:RegExp|Error|URL|URLSearchParams)$/)
-in ts_template let tagged_template parent == "ts_tagged_template"
+in ts_template let tagged_template parent is ts_tagged_template
 in ts_template.expression rule restrict-template-expressions {
   option allowAny boolean = true "Allow any values"
   option allowArray boolean = false "Allow arrays whose elements can be interpolated"
@@ -502,7 +502,7 @@ in ts_unary rule no-unsafe-unary-minus {
 
 in ts_member, ts_index let object_array_type object.array_type
 in ts_parenthesized let object_array_type expression.object_array_type
-in ts_member, ts_index let array_literal_object object.layer == "ts_array"
+in ts_member, ts_index let array_literal_object object is ts_array
 in ts_parenthesized let array_literal_object expression.array_literal_object
 in ts_unary rule no-array-delete {
   when operator == "delete" && (argument.array_literal_object == true || argument.object_array_type == true)
