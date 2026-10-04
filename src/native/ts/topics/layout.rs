@@ -9,7 +9,6 @@ use crate::native::ts::lexer::{Tok, Token};
 use crate::native::ts::tokens::{gap_has_space, lex, lex_comments};
 
 mod punctuation;
-mod operators;
 mod delimiters;
 mod lists;
 mod lines;
@@ -42,11 +41,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(delimiters::member_delimiter_sites, n),
     },
     Fact {
-        name: "comment_contents",
-        doc: "native program: {kind,body,offset,side} begin/end lexical comment sites, excluding hashbang and opaque string/template/JSX text spans",
-        get: |f, n| f.with_file(comment_contents, n),
-    },
-    Fact {
         name: "empty_line_runs",
         doc: "native program: {kind,count,offsets} runs of empty lines; kind bof/eof/middle, offsets line starts, final editor newline ignored and template quasi lines protected",
         get: |f, n| f.with_file(lines::empty_line_runs, n),
@@ -55,11 +49,6 @@ pub const FACTS: &[Fact] = &[
         name: "token_neighbours",
         doc: "native layers: adjacent tokens as before/after records {text,start,end,gap,spaced,same_line,line_break}; gap retains comments, spaced counts whitespace outside comments, line_break includes comment line breaks; parent_start is the parent's byte offset",
         get: |f, n| f.with_file(token_neighbours, n),
-    },
-    Fact {
-        name: "unary_spacing",
-        doc: "native unary/update/new/await/yield/non-null: {operator,word,prefix,start,end,separated,removable,first_bang,override_key}; separation counts comments, removable preserves token boundaries",
-        get: |f, n| f.with_file(operators::unary_spacing, n),
     },
     Fact {
         name: "generic_spacing_sites",
@@ -166,26 +155,6 @@ fn spacing_owner(kind: K) -> &'static str {
     }
 }
 
-fn comment_contents(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    if !file.syntax.is(node, K::Program) {
-        return Value::list(Vec::new());
-    }
-    let lexed = file.cached(lex_comments);
-    Value::list(lexed.0.iter().filter_map(|token| {
-        let block = match token.tok {
-            Tok::P("/*") => true,
-            Tok::P("//") => false,
-            _ => return None,
-        };
-        let end = token.end as usize - if block { 2 } else { 0 };
-        Some(["begin", "end"].map(|side| Value::record(vec![
-            ("kind".into(), Value::from(if block { "block" } else { "line" })),
-            ("body".into(), Value::from(file.syntax.src[token.start as usize + 2..end].to_owned())),
-            ("offset".into(), Value::from(token.start as usize)),
-            ("side".into(), Value::from(side)),
-        ])))
-    }).flatten().collect())
-}
 fn edge(src: &str, token: Option<&Token>, start: usize, end: usize) -> Value<'static> {
     let Some(token) = token else { return Value::Null };
     let token_start = token.start as usize;
