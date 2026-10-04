@@ -1,0 +1,94 @@
+# .ts/style/signatures: internal part of .ts/style.
+
+define {
+
+fn signature_key_shape(layer, name) = if layer == "ts_private_name" then "private" else if contains(["ts_identifier", "ts_string", "ts_number", "ts_bigint", "ts_boolean", "ts_null"], layer) then (if starts_with(name, '"') then "quoted" else "normal") else "expression"
+in ts_function let overload_identity if name != null then { name: name, shape: "normal", static: null, call: false } else null
+in ts_method, ts_method_signature let overload_identity { name: style_member_name, shape: signature_key_shape(default(key.member_key_layer, key.layer), style_member_name), static: if layer == "ts_method" then is_static else null, call: false }
+in ts_call_signature let overload_identity { name: if kind == "new" then "new" else "call", shape: "normal", static: null, call: kind != "new" }
+in ts_export forward overload_identity from declaration
+in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export let overload_entry { identity: overload_identity, start: offset }
+in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let overload_entries [] children.overload_entry
+fn earlier_overload(entries, identity, start) = any(entries, e => e.start < start && e.identity == identity)
+in ts_function, ts_method, ts_method_signature, ts_call_signature, ts_export rule adjacent-overload-signatures {
+  when parent is (ts_program, ts_block, ts_class, ts_interface, ts_type_literal)
+  when overload_identity != null && overload_identity != previous.overload_identity
+  when earlier_overload(parent.overload_entries, overload_identity, offset)
+  let identity overload_identity
+  warn "All {if identity.static == true then 'static ' else ''}{identity.name} signatures should be adjacent."
+}
+
+# `new (): I` in interface `I` (type arguments aside), and `constructor()`
+# signatures in interfaces and type literals.
+in ts_call_signature rule no-misused-new {
+  when parent == "ts_interface" && kind == "new" && re_replace(default(return_type, ""), /\s*<[\s\S]*$/, "") == ts_interface.name
+  warn "Interfaces cannot be constructed, only classes."
+}
+in ts_method_signature rule no-misused-new:constructor {
+  when key == "constructor"
+  warn "Interfaces cannot be constructed, only classes."
+}
+in ts_method rule no-misused-new:class {
+  when key == "new" && body == null && return_type == ts_class.name
+  warn "Class cannot have method named `new`."
+}
+
+# ---- functions -----------------------------------------------------------------------
+in ts_parenthesized_type let unified_inner_type type.unified_bare_type
+in ts_parenthesized let unified_inner_type expression.unified_bare_type
+in style_tree_node let unified_bare_type default(unified_inner_type, text)
+in ts_identifier, ts_this let unified_parameter_name text
+in ts_rest let unified_parameter_name argument.unified_parameter_name
+in ts_parameter let unified_parameter { index: index, offset: offset, line: line, name: name.unified_parameter_name, rest: name.layer == "ts_rest", optional: optional != null, type: type.unified_bare_type, raw_type: type, union: default(type.unified_union_members, []) }
+in ts_type_parameter let unified_type_parameter { name: name, constraint: constraint.unified_bare_type }
+in ts_type_parameter let unified_type_name name
+in ts_type_reference let unified_outer_type name
+in ts_array_type, ts_parenthesized_type let unified_outer_type type.unified_outer_type
+in ts_parameter let unified_outer_type type.unified_outer_type
+in ts_union let unified_union_children reduce([] type.unified_union_members, [], (members, child) => members child)
+in ts_parenthesized_type let unified_union_children type.unified_union_members
+in ts_parenthesized let unified_union_children expression.unified_union_members
+in style_tree_node let unified_union_members default(unified_union_children, [{ text: text, wrap: layer is (ts_function_type, ts_conditional_type) }])
+fn unified_union(members) = join(map(reduce(members, [], (unique_members, member) => if any(unique_members, previous_member => previous_member.text == member.text) then unique_members else unique_members [member]), member => if member.wrap then "(" member.text ")" else member.text), " | ")
+fn unified_doc(prefix) = if re_test(prefix, /\/\*[\s\S]*?\*\/[ \t\r\n]*(?:\/\/[^\n]*(?:\n|$)[ \t\r\n]*)*$/) then re_replace(prefix, /[\s\S]*\/\*([\s\S]*?)\*\/[ \t\r\n]*(?:\/\/[^\n]*(?:\n|$)[ \t\r\n]*)*$/, "$1") else null
+in ts_export let unified_doc unified_doc(text_before)
+in style_tree_node let unified_after_line line + count(split(text, "\n")) - 1 + count(split(default(space_after.text, ""), "\n")) - 1
+in style_tree_node let unified_next_offset space_after.end
+in ts_method let unified_head { offset: key.unified_next_offset, line: key.unified_after_line }
+in ts_function let unified_key if body == null then default(name, "default") else null
+in ts_method let unified_key if body == null && kind != "get" && kind != "set" && key != null then { layer: key.layer, name: key, static: contains([] modifier, "static") } else null
+in ts_method_signature let unified_key if kind != "get" && kind != "set" && key != null then { layer: key.layer, name: key, static: false } else null
+in ts_call_signature let unified_key default(kind, "call")
+in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_signature if unified_key == null then null else { key: unified_key, offset: offset, head: default(unified_head, { offset: offset, line: line }), parameters: [] parameter.unified_parameter, types: [] type_parameter.unified_type_parameter, result: return_type.unified_bare_type, outer: [] parameter.unified_outer_type, doc: if parent == "ts_export" then parent.unified_doc else unified_doc(text_before) }
+in ts_export let unified_signature declaration.unified_signature
+in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let unified_signatures [] children.unified_signature
+in ts_export let unified_signatures parent.unified_signatures
+in ts_program, ts_class, ts_interface, ts_type_literal let unified_scope true
+in ts_block let unified_scope parent == "ts_namespace"
+in ts_export let unified_scope parent.unified_scope
+in ts_class, ts_interface let unified_outer_names [] type_parameter.unified_type_name
+in ts_program, ts_block, ts_type_literal let unified_outer_names []
+in ts_export let unified_outer_names parent.unified_outer_names
+fn unified_parameter_at(signature, at) = first(slice(signature.parameters, at, at + 1))
+fn unified_sigils(a, b) = a.rest == b.rest && a.optional == b.optional
+fn unified_difference(a, b) = if unified_sigils(a, b) && !a.rest then { offset: b.offset, other_line: a.line, ending: " taking `" unified_union(a.union b.union) "`." } else null
+fn unified_equal_length(a, b, differences) = if count(differences) == 0 then { offset: b.head.offset, other_line: a.head.line, ending: " with identical parameters." } else if count(differences) == 1 then unified_difference(first(differences), unified_parameter_at(b, first(differences).index)) else null
+fn unified_shorter(short, long) = if last(short.parameters).rest == true || !all(short.parameters, p => p.type == unified_parameter_at(long, p.index).type) || !all(slice(long.parameters, count(short.parameters) + 1, count(long.parameters)), p => p.optional || p.rest) then null else { offset: last(long.parameters).offset, other_line: short.head.line, ending: " with " (if last(long.parameters).rest then "a rest" else "an optional") " parameter." }
+fn unified_parameter_difference(a, b) = if count(a.parameters) == count(b.parameters) then unified_equal_length(a, b, filter(a.parameters, p => !unified_sigils(p, unified_parameter_at(b, p.index)) || p.type != unified_parameter_at(b, p.index).type)) else if (first(a.parameters).name == "this") != (first(b.parameters).name == "this") then null else if count(a.parameters) < count(b.parameters) then unified_shorter(a, b) else unified_shorter(b, a)
+fn unified_comparison(a, b, outer_names) = if a.result != b.result || any(a.outer, name => contains(outer_names, name)) != any(b.outer, name => contains(outer_names, name)) || a.types != b.types || first(a.parameters).name == "this" && first(a.parameters).raw_type == "void" || first(b.parameters).name == "this" && first(b.parameters).raw_type == "void" then null else unified_parameter_difference(a, b)
+fn unified_names(a, b) = all(slice(a.parameters, 0, count(b.parameters)), p => p.rest != unified_parameter_at(b, p.index).rest || p.name == unified_parameter_at(b, p.index).name)
+fn unified_pair(a, b, outer_names, group_count) = { difference: unified_comparison(a, b, outer_names), names: unified_names(a, b), docs: a.doc == b.doc, count: group_count }
+group unified_signature_node ts_function, ts_method, ts_method_signature, ts_call_signature
+in unified_signature_node rule unified-signatures {
+  option ignoreDifferentlyNamedParameters boolean = false "Ignore overloads with different parameter names."
+  option ignoreOverloadsWithDifferentJSDoc boolean = false "Ignore overloads with different block comments."
+  let signature unified_signature
+  when signature != null && parent.unified_scope == true
+  let group filter(parent.unified_signatures, candidate => candidate.key == signature.key)
+  let pairs map(filter(group, candidate => candidate.offset > signature.offset), candidate => unified_pair(signature, candidate, parent.unified_outer_names, count(group)))
+  each pair in filter(pairs, p => p.difference != null && (!ignoreDifferentlyNamedParameters || p.names) && (!ignoreOverloadsWithDifferentJSDoc || p.docs))
+  report at pair.difference.offset
+  warn "{if pair.count == 2 then 'These overloads' else 'This overload and the one on line ' pair.difference.other_line} can be combined into one signature{pair.difference.ending}"
+}
+
+}

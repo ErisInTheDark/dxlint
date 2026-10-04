@@ -1,0 +1,50 @@
+# .ts/style/comments: internal part of .ts/style.
+
+define {
+
+# ---- comments --------------------------------------------------------------------
+in ts_comment rule ban-tslint-comment {
+  when re_test(text, /^\/[\/*]\s*tslint:/)
+  warn "tslint comment detected: \"{text}\""
+}
+
+# Only directives before the first code token are triple-slash references.
+in ts_line_comment rule triple-slash-reference {
+  option lib ("always" | "never") = "always" "When lib directives are allowed."
+  option path ("always" | "never") = "never" "When path directives are allowed."
+  option types ("always" | "never" | "prefer-import") = "prefer-import" "When types directives are allowed."
+  let directive re_replace(text, /^\/\/\/\s*<reference\s*(types|path|lib)\s*=[\s\S]*$/, "$1")
+  let module re_replace(text, /^\/\/\/\s*<reference\s*(?:types|path|lib)\s*=\s*["'|](.*)["'|][\s\S]*$/, "$1")
+  when re_test(text, /^\/\/\/\s*<reference\s*(?:types|path|lib)\s*=\s*["'|].*["'|]/)
+  when re_test(slice(source, 0, offset), /^(?:\s|\/\/[^\r\n]*(?:\r?\n|$)|\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/)*$/)
+  when directive == "lib" && lib == "never" || directive == "path" && path == "never" || directive == "types" && (types == "never" || types == "prefer-import" && re_test(source, "(?:import|from|require\\s*\\()\\s*[\"']" re_escape(module) "[\"']"))
+  warn "Do not use a triple slash reference for {module}, use `import` style instead."
+}
+
+# JSDoc lines whose `*` is not one column right of the opening `/**`. The
+# matchers never take the `*` of the closing `*/` (the comment's own end).
+in ts_block_comment match jsdoc_line /^[ \t]*\*(?!\/)/
+in ts_block_comment match jsdoc_close_indent /^[ \t]+(?=\*\/)/
+in ts_block_comment match jsdoc_blank_run /^(?:[ \t]*\r?\n)+/
+# Blank lines inside the block have no `*` at all.
+in jsdoc_blank_run rule check-alignment:blank {
+  when re_test(parent_text, /^\/\*\*[^*]/)
+  warn "Expected JSDoc block to be aligned."
+}
+# `/**` then anything but another `*` (`/*****` banners are not JSDoc).
+macro is_jsdoc re_test(parent_text, /^\/\*\*[^*]/)
+in jsdoc_line rule check-alignment {
+  when is_jsdoc && text != parent_indent " *"
+  warn "Expected JSDoc block to be aligned."
+}
+in jsdoc_close_indent rule check-alignment:close {
+  when is_jsdoc && text != parent_indent " "
+  warn "Expected JSDoc block to be aligned."
+}
+in ts_block_comment match jsdoc_typed_tag /^[ \t]*\*[ \t]*@(?:param|arg|argument|returns?|property|prop|throws|yields)[ \t]+\{/
+in jsdoc_typed_tag rule no-types {
+  when is_jsdoc
+  warn "Types are not permitted on @{re_replace(text, /^.*@(\w+).*$/, '$1')}."
+}
+
+}

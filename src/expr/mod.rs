@@ -1548,7 +1548,9 @@ impl<'a> Ctx<'a> {
                 let spans = self.layer_spans(ids);
                 let (start, end) = match range {
                     Some(r) => {
-                        let at = |e: &CExpr| self.eval(e).and_then(|v| v.num()).map(|n| n.max(0.0) as u32);
+                        // Clamped to the file: out-of-range bounds overlap nothing past it.
+                        let len = self.source.len() as f64;
+                        let at = |e: &CExpr| self.eval(e).and_then(|v| v.num()).map(|n| n.clamp(0.0, len) as u32);
                         (at(&r.0)?, at(&r.1)?)
                     }
                     None => {
@@ -1556,7 +1558,7 @@ impl<'a> Ctx<'a> {
                         (me.start, me.end)
                     }
                 };
-                let end = end.max(start + 1);
+                let end = end.max(start.saturating_add(1));
                 // Candidates start before our end; scan back while some
                 // earlier node can still reach our start.
                 let mut i = spans.nodes.partition_point(|&(s, _, _)| s < end);

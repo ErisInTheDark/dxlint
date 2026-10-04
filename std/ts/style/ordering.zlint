@@ -1,0 +1,110 @@
+# .ts/style/ordering: internal part of .ts/style.
+
+define {
+
+# ---- classes -------------------------------------------------------------------------
+fn standard_member_scopes(kind) = join(map(["static", "decorated", "instance", "abstract"], scope => join(map(filter(["public", "protected", "private", "#private"], access => !(scope == "abstract" && contains(["private", "#private"], access) || scope == "decorated" && access == "#private")), access => access "-" scope "-" kind), " ")), " ")
+fn standard_member_group(kind) = if kind == "static-initialization" then kind else (if kind == "constructor" then "" else standard_member_scopes(kind) " ") join(map(filter(["public", "protected", "private", "#private"], access => kind != "constructor" || access != "#private"), access => access "-" kind), " ") " " (if kind == "constructor" then "" else join(map(["static", "instance", "abstract", "decorated"], scope => scope "-" kind), " ") " ") kind
+fn standard_member_order() = split("signature call-signature " join(map(["field", "static-initialization", "constructor", "accessor", "get", "set", "method"], kind => standard_member_group(kind)), " "), " ")
+schema member_order_config null | "never" | (string | string[])[] | {
+  memberTypes?: "never" | (string | string[])[]
+  order?: "alphabetically" | "alphabetically-case-insensitive" | "as-written" | "natural" | "natural-case-insensitive"
+  optionalityOrder?: "optional-first" | "required-first"
+}
+group ordering_container ts_class, ts_interface, ts_type_literal
+group ordering_member_node ts_method, ts_class_property, ts_method_signature, ts_property_signature, ts_call_signature, ts_index_signature, ts_static_block, ts_empty
+group ordering_target ordering_container, ordering_member_node
+in ordering_container let ordering_is_container true
+in ts_method, ts_class_property, ts_property_signature, ts_index_signature let ordering_modifiers [] modifier
+in ts_method, ts_class_property let ordering_decorated count(decorator) > 0
+in ts_method let ordering_kind if parent == "ts_class" && !contains([] modifier, "static") && key.layer != "ts_computed_key" && static_name == "constructor" then "constructor" else if kind == "get" || kind == "set" then kind else "method"
+in ts_method_signature let ordering_kind if kind == "get" || kind == "set" then kind else "method"
+in ts_call_signature let ordering_kind if kind == "new" then "constructor" else "call-signature"
+in ts_class_property let ordering_kind if contains([] modifier, "accessor") then "accessor" else if init.returned_function == true then "method" else if contains([] modifier, "readonly") then "readonly-field" else "field"
+in ts_property_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-field" else "field"
+in ts_index_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-signature" else "signature"
+in ts_static_block let ordering_kind "static-initialization"
+in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_key { text: default(static_name, default(key.member_key_text, key)), private: key.layer == "ts_private_name" }
+in ts_parameter let ordering_parameter_name if name.layer == "ts_identifier" then name else null
+in ts_index_signature let ordering_name default(first([] parameter.ordering_parameter_name), "(index signature)")
+in ts_call_signature let ordering_name if kind == "new" then "new" else "call"
+in ts_static_block let ordering_name "static block"
+in ts_method, ts_method_signature, ts_class_property, ts_property_signature let ordering_name if ordering_kind == "constructor" then "constructor" else if ordering_key.private then re_replace(ordering_key.text, /^#+/, "") else ordering_key.text
+in ts_method let ordering_skip body == null && !contains([] modifier, "abstract")
+in ts_class_property let ordering_initialiser init != null
+in ts_member let ordering_this_dependency if object.layer == "ts_this" then re_replace(property, /^#+/, "") else null
+in ts_index let ordering_this_dependency if object.layer == "ts_this" then index.static_string else null
+in style_tree_node let ordering_dependencies if layer is (ts_function, ts_arrow, ts_method, ts_class) then [] else unique([] ordering_this_dependency reduce([] children.ordering_dependencies, [], (names, child) => names child))
+in ts_class_property let ordering_initialiser_dependencies default(init.ordering_dependencies, [])
+fn ordering_specific_groups(kind, access, scope, decorated) = (
+  (if decorated && contains(["readonly-field", "field", "method", "accessor", "get", "set"], kind) then [access "-decorated-" kind, "decorated-" kind] (if kind == "readonly-field" then [access "-decorated-field", "decorated-field"] else []) else [])
+  (if !contains(["readonly-signature", "signature", "static-initialization"], kind) then
+    (if kind != "constructor" then [access "-" scope "-" kind, scope "-" kind] (if kind == "readonly-field" then [access "-" scope "-field", scope "-field"] else []) else [])
+    [access "-" kind] (if kind == "readonly-field" then [access "-field"] else [])
+  else []))
+fn ordering_member_groups(kind, xs, private_key, decorated, class_member) = (
+  (if class_member then ordering_specific_groups(kind, default(first(filter(["public", "protected", "private"], access => contains(xs, access))), if private_key then "#private" else "public"), if contains(xs, "static") then "static" else if contains(xs, "abstract") then "abstract" else "instance", decorated) else [])
+  [kind] (if kind == "readonly-field" then ["field"] else if kind == "readonly-signature" then ["signature"] else [])
+)
+in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_optional_member optional != null
+in ordering_member_node let ordering_member { index: index, name: default(ordering_name, ""), optional: ordering_optional_member == true, groups: ordering_member_groups(default(ordering_kind, ""), default(ordering_modifiers, []), ordering_key.private == true, ordering_decorated == true, parent == "ts_class"), skip: ordering_skip == true, init: ordering_initialiser == true, dependencies: default(ordering_initialiser_dependencies, []) }
+in ordering_container let ordering_members [] member.ordering_member
+in ordering_container let ordering_owner { layer: layer, expression: parent not (ts_program, ts_block, ts_export, ts_namespace), members: ordering_members }
+fn ordering_optional(rows, mode, changed) = if !contains(["optional-first", "required-first"], mode) || changed == null then { split: null, bad: null } else { split: changed.index, bad: if first(rows).optional != (mode == "optional-first") then first(rows).index else if any(rows, row => row.index > changed.index && row.optional != changed.optional) then changed.index else null }
+fn ordering_rank(row, types) = if row.skip || types == null then null else first(compact(map(row.groups, group_name => if any(types, group => contains(group, group_name)) then index_of(types, find(types, group => contains(group, group_name))) else null)))
+fn ordering_group_state(before_state, rank, bad) = if rank == null then before_state else { ranks: if bad || last(before_state.ranks) == rank then before_state.ranks else before_state.ranks [rank], bad: before_state.bad || bad }
+fn ordering_group_next(before_state, rank) = ordering_group_state(before_state, rank, rank != null && last(before_state.ranks) != null && rank < last(before_state.ranks))
+fn ordering_fallback_group(before_state, at, rank, has_next, next_rank) = if has_next && (before_state.started && rank == before_state.rank || rank == next_rank) then if before_state.started && rank == before_state.rank then before_state.group else at else null
+fn ordering_fallback_next(before_state, at, rank, has_next, next_rank) = if ordering_fallback_group(before_state, at, rank, has_next, next_rank) == null then before_state else { started: true, rank: rank, group: ordering_fallback_group(before_state, at, rank, has_next, next_rank) }
+fn ordering_in_route(row, route) = if route.fallback then row.fallback == route.group else row.partition == route.partition && (route.rank == null || row.rank == route.rank)
+fn ordering_alpha_bad(name, previous_name, order) = name != "" && name != previous_name && (if re_test(order, /^natural/) then compare_text(name, previous_name, true, re_test(order, /case-insensitive$/)) <= 0 else compare_text(name, previous_name, false, re_test(order, /case-insensitive$/)) < 0)
+fn ordering_alpha_result(row, route, previous_state, bad, blocked) = { route: route, name: row.name, index: row.index, previous: previous_state.name, bad: bad && !blocked, accept: row.name != "" && !blocked }
+fn ordering_alpha_check(row, route, previous_state, rows, order) = ordering_alpha_result(row, route, previous_state, ordering_alpha_bad(row.name, previous_state.name, order), ordering_alpha_bad(row.name, previous_state.name, order) && row.init && any(rows, earlier => earlier.index >= previous_state.index && earlier.index < row.index && ordering_in_route(earlier, route) && earlier.init && contains(row.dependencies, earlier.name)))
+fn ordering_alpha_state(states, result) = if !result.accept then states else filter(states, state => state.id != result.route.id) [{ id: result.route.id, name: result.name, index: result.index }]
+fn ordering_alpha_next(row, routes, states, rows, order) = reduce(map(routes, route => ordering_alpha_check(row, route, default(find(states, state => state.id == route.id), { name: "", index: 0 }), rows, order)), states, (current_states, result) => ordering_alpha_state(current_states, result))
+fn ordering_alpha_messages(results) = reduce(filter(results, result => result.bad), [], (messages, result) => messages map(slice([0, 1], 0, result.route.copies), ignored => "Member " result.name " should be declared before member " result.previous "."))
+in ordering_target rule member-ordering {
+  option default member_order_config = null "Default ordering; null uses the standard member groups."
+  option classes member_order_config = null "Class declaration ordering."
+  option classExpressions member_order_config = null "Class expression ordering."
+  option interfaces member_order_config = null "Interface ordering."
+  option typeLiterals member_order_config = null "Type literal ordering."
+  let standard_types standard_member_order()
+  let owner if ordering_is_container == true then ordering_owner else parent.ordering_owner
+  let specific_order if owner.layer == "ts_interface" then interfaces else if owner.layer == "ts_type_literal" then typeLiterals else if owner.expression then classExpressions else classes
+  let selected_order if specific_order != null then specific_order else default
+  let ordering_config if selected_order == null then { memberTypes: standard_types } else selected_order
+  let ordering_types if type_of(ordering_config) == "list" then ordering_config else if ordering_config.memberTypes != null then ordering_config.memberTypes else if specific_order == null then standard_types else null
+  let settings { enabled: selected_order != "never", types: if type_of(ordering_types) == "list" then map(ordering_types, group => if type_of(group) == "list" then group else [group]) else null, order: ordering_config.order, optionality: ordering_config.optionalityOrder }
+  let optionality ordering_optional(owner.members, settings.optionality, find(owner.members, row => row.optional != first(owner.members).optional))
+  let rank ordering_rank(ordering_member, settings.types)
+  let partition if optionality.split != null && optionality.bad == null && ordering_member.index >= optionality.split then 1 else 0
+  let group_state ordering_group_next(if previous.partition == partition then default(previous.group_state, { ranks: [], bad: false }) else { ranks: [], bad: false }, rank)
+  let before_group if previous.partition == partition then default(previous.group_state, { ranks: [], bad: false }) else { ranks: [], bad: false }
+  let group_bad rank != null && last(before_group.ranks) != null && rank < last(before_group.ranks)
+  let group_status if ordering_member == null then null else { partition: partition, bad: group_bad }
+  let group_statuses [] children.group_status
+  let bad_partitions unique(map(filter(if ordering_is_container == true then group_statuses else parent.group_statuses, status => status.bad), status => status.partition))
+  # Upstream fallback omits the final member and retains its last selected rank across gaps.
+  let fallback_state ordering_fallback_next(default(previous.fallback_state, { started: false, rank: null, group: null }), ordering_member.index, rank, next.ordering_member != null, next.rank)
+  let before_fallback default(previous.fallback_state, { started: false, rank: null, group: null })
+  let fallback if next.ordering_member != null && (before_fallback.started && rank == before_fallback.rank || rank == next.rank) then if before_fallback.started && rank == before_fallback.rank then before_fallback.group else ordering_member.index else null
+  let order_row if ordering_member == null then null else { index: ordering_member.index, name: ordering_member.name, init: ordering_member.init, dependencies: ordering_member.dependencies, rank: rank, partition: partition, fallback: fallback }
+  let container_rows [] children.order_row
+  let rows if ordering_is_container == true then container_rows else parent.container_rows
+  let alpha_enabled contains(["alphabetically", "alphabetically-case-insensitive", "natural", "natural-case-insensitive"], settings.order)
+  let alpha_routes (
+    (if alpha_enabled && (settings.types == null || rank != null && !contains(bad_partitions, partition)) then [{ id: ["normal", partition, rank], fallback: false, group: null, partition: partition, rank: rank, copies: 1 }] else [])
+    (if alpha_enabled && settings.types != null && count(bad_partitions) > 0 && fallback != null then [{ id: ["fallback", fallback], fallback: true, group: fallback, partition: null, rank: null, copies: count(bad_partitions) }] else []))
+  let alpha_states ordering_alpha_next(order_row, alpha_routes, default(previous.alpha_states, []), rows, settings.order)
+  let alpha_before default(previous.alpha_states, [])
+  let alpha_results map(alpha_routes, route => ordering_alpha_check(order_row, route, default(find(alpha_before, state => state.id == route.id), { name: "", index: 0 }), rows, settings.order))
+  let higher_rank min(filter(before_group.ranks, prior_rank => prior_rank > rank))
+  let group_label join(map(first(slice(settings.types, higher_rank, higher_rank + 1)), name => re_replace(name, /-/, " ")), ", ")
+  when ordering_member != null && parent is ordering_container && settings.enabled
+  let messages if optionality.bad != null then if ordering_member.index == optionality.bad then ["Member " ordering_member.name " should be declared after all " (if settings.optionality == "optional-first" then "optional" else "required") " members."] else [] else (if group_bad then ["Member " ordering_member.name " should be declared before all " group_label " definitions."] else []) ordering_alpha_messages(alpha_results)
+  each message in messages
+  warn message
+}
+
+}
