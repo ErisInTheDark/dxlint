@@ -7,13 +7,13 @@ mod metadata;
 mod tags;
 #[cfg(test)]
 mod children;
+#[cfg(test)]
 mod presence;
 #[cfg(test)]
 mod indent;
 
 pub const FACTS: &[Fact] = &[
     Fact { name: "jsx_syntax", doc: "native JSX elements/fragments: opening and closing tag spans {start, end}, and self_closing", get: |f, n| f.with_file(metadata::syntax, n) },
-    Fact { name: "jsx_brace_presence", doc: "native JSX expressions/text/attribute values: brace policy context, removable expressions and wrap-worthy literals", get: |f, n| f.with_file(presence::policy, n) },
 ];
 
 #[cfg(test)]

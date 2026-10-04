@@ -481,21 +481,30 @@ in ts_program rule max-classes-per-file {
   report at default(first([] body.offset), 0)
   warn "File has too many classes ({amount}). Maximum allowed is {max}."
 }
+fn restriction_line_previous(items, item) = last(slice(items, index_of(items, item) - 1, index_of(items, item)))
+fn restriction_line_comment_gap(source, items, item, start, end) = byte_slice(source, max(start, default(restriction_line_previous(items, item).end_offset, start)), max(start, min(end, item.offset)))
+in ts_line {
+  let restriction_line_comments overlapping(ts_comment)
+  let restriction_line_blank trim(text) == ""
+  let restriction_line_comment count(restriction_line_comments) > 0 && all(restriction_line_comments, item => trim(restriction_line_comment_gap(source, restriction_line_comments, item, offset, end_offset)) == "") && trim(byte_slice(source, min(end_offset, max(offset, last(restriction_line_comments).end_offset)), end_offset)) == ""
+}
+in ts_program, ts_function_like let restriction_line_rows overlapping(ts_line)
 in ts_program rule max-lines {
   option max int(0..) = 300 "maximum lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
-  let lines filter(restriction_lines, l => !(skipComments && l.comment || skipBlankLines && l.blank))
-  when len(lines) > max
-  report at first(slice(lines, max)).offset
-  warn "File has too many lines ({len(lines)}). Maximum allowed is {max}."
+  let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
+  let amount if source == "" && !skipBlankLines then 1 else len(lines)
+  when amount > max
+  report at default(first(slice(lines, max)).offset, offset)
+  warn "File has too many lines ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like rule max-lines-per-function {
   option max int(0..) = 50 "maximum function lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
   option IIFEs boolean = false "also check immediately invoked functions"
-  let lines filter(restriction_lines, l => !(skipComments && l.comment || skipBlankLines && l.blank))
+  let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
   when IIFEs || !restriction_iife
   when len(lines) > max
   report at function_head
@@ -503,13 +512,32 @@ in ts_function_like rule max-lines-per-function {
 }
 
 macro restriction_directive(x) re_test(x, /^\s*(?:eslint(?:[- ]|$)|globals?\s|exported\s)/)
-in ts_program rule no-inline-comments {
+in ts_program {
+  let restriction_comment_catalog descendants(ts_comment)
+  let restriction_comment_line_catalog descendants(ts_line)
+}
+in ts_comment {
+  let restriction_comment_body slice(text, 2, if layer is ts_block_comment then len(text) - 2 else len(text))
+  let restriction_comment_clean replace(restriction_comment_body, "*", "")
+  let restriction_comment_lowercase re_test(restriction_comment_clean, /^\s*\p{Lowercase}/)
+  let restriction_comment_uppercase re_test(restriction_comment_clean, /^\s*\p{Uppercase}/)
+  let restriction_comment_prefix byte_slice(source, position(offset).js_line_start, offset)
+  let restriction_comment_line_end first(slice(ts_program.restriction_comment_line_catalog, position(end_offset).js_line - 1, position(end_offset).js_line)).end_offset
+  let restriction_comment_suffix byte_slice(source, end_offset, restriction_comment_line_end)
+  let restriction_comment_preamble trim(restriction_comment_prefix) != ""
+  let restriction_comment_postamble trim(restriction_comment_suffix) != ""
+  let restriction_comment_empty_jsx parent is ts_jsx_expression && parent.expression == null && (!restriction_comment_preamble || trim(restriction_comment_prefix) == "{{") && (!restriction_comment_postamble || trim(restriction_comment_suffix) == "}}")
+  let restriction_comment_index index_of(ts_program.restriction_comment_catalog, node)
+  let restriction_comment_previous last(slice(ts_program.restriction_comment_catalog, restriction_comment_index - 1, restriction_comment_index))
+  let restriction_comment_consecutive restriction_comment_previous != null && trim(byte_slice(source, restriction_comment_previous.end_offset, offset)) == ""
+}
+in ts_comment rule no-inline-comments {
   option ignorePattern regex = "" "comments to ignore"
-  each comment in filter(restriction_comments, c => c.inline && !restriction_directive(c.text) && !(ignorePattern != "" && re_test(c.text, ignorePattern)))
-  report at comment.offset
+  when (restriction_comment_preamble || restriction_comment_postamble) && !restriction_comment_empty_jsx && !restriction_directive(restriction_comment_body) && !(ignorePattern != "" && re_test(restriction_comment_body, ignorePattern))
+  report at {start: offset, end: ts_program.end_offset}
   warn "Unexpected comment inline with code."
 }
-in js_line_comment, js_block_comment rule no-warning-comments {
+in ts_comment rule no-warning-comments {
   option terms string[] = ["todo", "fixme", "xxx"] "warning terms"
   option location "start" | "anywhere" = "start" "where warning terms may occur"
   option decoration string(1..1)[] = [] "characters ignored before a starting warning"
@@ -518,7 +546,8 @@ in js_line_comment, js_block_comment rule no-warning-comments {
   let short trim(default(re_find(compact, /^.{0,40}(?:\s|$)/), ""))
   let display short (if len(compact) > len(short) then "..." else "")
   when !(restriction_directive(body) && re_test(body, /\bno-warning-comments\b/))
-  each term in filter(terms, term => re_test(body, "(?i)" (if location == "start" then "^[\\s" re_escape(join(decoration, "")) "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else "")))
+  @each term in terms
+  when re_test(body, "(?i)" (if location == "start" then "^[\\s" re_escape(join(decoration, "")) "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else ""))
   warn "Unexpected '{term}' comment: '{display}'."
 }
 schema restriction_comment_case {
@@ -526,7 +555,7 @@ schema restriction_comment_case {
   ignoreInlineComments: boolean = false
   ignoreConsecutiveComments: boolean = false
 }
-in ts_program rule capitalized-comments {
+in ts_comment rule capitalized-comments {
   option mode "always" | "never" = "always" "required initial letter case"
   option ignorePattern regex = "" "starting comment text to ignore"
   option ignoreInlineComments boolean = false "ignore comments surrounded by code"
@@ -535,13 +564,14 @@ in ts_program rule capitalized-comments {
   option block restriction_comment_case | null = null "block-comment overrides"
   let line_options default(line, {ignorePattern: ignorePattern, ignoreInlineComments: ignoreInlineComments, ignoreConsecutiveComments: ignoreConsecutiveComments})
   let block_options default(block, {ignorePattern: ignorePattern, ignoreInlineComments: ignoreInlineComments, ignoreConsecutiveComments: ignoreConsecutiveComments})
-  each comment in filter(restriction_comments, c => (if mode == "always" then c.lowercase else c.uppercase)
-    && !re_test(c.text, /^\s*(?:eslint|jshint\s+|jslint\s+|istanbul\s+|globals?\s+|exported\s+|jscs)/)
-    && !re_test(c.clean, /^\s*[^:/?#\s]+:\/\/[^?#]/)
-    && !((if c.block then block_options.ignoreInlineComments else line_options.ignoreInlineComments) && c.surrounded)
-    && !((if c.block then block_options.ignoreConsecutiveComments else line_options.ignoreConsecutiveComments) && c.consecutive)
-    && !((if c.block then block_options.ignorePattern else line_options.ignorePattern) != "" && re_test(c.clean, "^\\s*(?:" (if c.block then block_options.ignorePattern else line_options.ignorePattern) ")")))
-  report at comment.offset
+  let options if layer is ts_block_comment then block_options else line_options
+  when (if mode == "always" then restriction_comment_lowercase else restriction_comment_uppercase)
+    && !re_test(restriction_comment_body, /^\s*(?:eslint|jshint\s+|jslint\s+|istanbul\s+|globals?\s+|exported\s+|jscs)/)
+    && !re_test(restriction_comment_clean, /^\s*[^:/?#\s]+:\/\/[^?#]/)
+    && !(options.ignoreInlineComments && restriction_comment_preamble && restriction_comment_postamble)
+    && !(options.ignoreConsecutiveComments && restriction_comment_consecutive)
+    && !(options.ignorePattern != "" && re_test(restriction_comment_clean, "^\\s*(?:" options.ignorePattern ")"))
+  report at {start: offset, end: ts_program.end_offset}
   warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
 }
 

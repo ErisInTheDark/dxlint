@@ -5,12 +5,6 @@ use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::lexer::{Lexer, Tok};
 use crate::expr::Value;
 
-// JavaScript whitespace includes BOM, not Unicode NEL.
-pub(super) fn space(ch: char) -> bool {
-    matches!(ch, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}'
-        | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
-}
-
 pub(super) fn bounds(file: &NativeFile, node: u32) -> (usize, Option<usize>) {
     let s = &file.syntax;
     let own = s.tree.node(node);

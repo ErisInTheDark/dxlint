@@ -129,15 +129,41 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
   when !space_before.line_break || next_token not ts_comma && !space_after.line_break
   warn "Missing line break around JSX"
 }
+fn jsx_presence_whitespace(value) = value != "" && jsx_trim_space(value) == ""
+fn jsx_presence_edge(value) = re_test(value, "^" jsx_space_regex() "|" jsx_space_regex() "$")
+fn jsx_presence_entities(value) = re_replace(value, /&[a-zA-Z0-9#]+;/, "")
+in ts_parenthesized let jsx_presence_inner default(expression.jsx_presence_inner, expression.node)
+in ts_jsx_expression {
+  let jsx_presence_expression_inner default(expression.jsx_presence_inner, expression.node)
+  let jsx_presence_comments count(descendants(ts_comment))
+}
 in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment rule jsx-curly-brace-presence {
   option mode "always" | "never" | "ignore" = "never" "default brace policy"
   option props "always" | "never" | "ignore" | null = null "attribute literal brace policy"
   option children "always" | "never" | "ignore" | null = null "child literal brace policy"
   option propElementValues "always" | "never" | "ignore" = "ignore" "JSX element attribute brace policy"
-  let info jsx_brace_presence
-  let selected default(if info.scope == "props" then props else children, mode)
-  when info != null && (if info.scope == "element" then (if info.expression then propElementValues == "never" else propElementValues != "ignore") else if info.expression then selected == "never" && info.unnecessary else selected == "always" && info.missing)
-  warn if info.expression then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
+  let attribute parent is ts_jsx_attribute && field == "value"
+  let child parent is (ts_jsx_element, ts_jsx_fragment) && field == "body"
+  let expression_node layer is ts_jsx_expression
+  let inner jsx_presence_expression_inner
+  let element_value attribute && (layer is ts_jsx_element || inner.layer is ts_jsx_element)
+  let selected default(if attribute then props else children, mode)
+  let string inner.layer is ts_string
+  let template inner.layer is ts_template && count(inner.expression) == 0
+  let value default(inner.literal_value.value, "")
+  let spelling if template then slice(inner.text, 1, len(inner.text) - 1) else inner.text
+  let escape contains(spelling, "\\") || jsx_presence_entities(spelling) != spelling || child && re_test(spelling, /[{}<>]/)
+  let comment jsx_presence_comments > 0
+  let removable if element_value then true else if !comment && string then !escape && !contains(value, "/*") && (!attribute || !jsx_presence_whitespace(value)) && (attribute || !jsx_presence_edge(value)) && (child || !re_test(value, /['"]/)) else if !comment && template then !escape && !contains(spelling, "\n") && !jsx_presence_edge(spelling) && !re_test(value, /['"]/) else !comment && inner.layer is (ts_jsx_element, ts_jsx_fragment)
+  let adjacent previous.layer is ts_jsx_expression || next.layer is ts_jsx_expression
+  let space_expression string && jsx_presence_whitespace(value)
+  let unnecessary removable && !(child && (adjacent || space_expression && (count(parent.body) == 1 || previous.layer is ts_jsx_element || next.layer is ts_jsx_element)))
+  let raw_line_break jsx_break(text) && jsx_trim_space(text) == ""
+  let missing element_value || !raw_line_break && jsx_trim_space(jsx_presence_entities(text)) != ""
+  when attribute || child
+  when expression_node || element_value || layer is (ts_string, ts_jsx_text)
+  when if element_value then (if expression_node then propElementValues == "never" else propElementValues != "ignore") else if expression_node then selected == "never" && unnecessary else selected == "always" && missing
+  warn if expression_node then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
 }
 
 fn jsx_space_regex() = /[\t\n\u{b}\u{c}\r \u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]/
