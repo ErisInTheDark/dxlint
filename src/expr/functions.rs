@@ -98,7 +98,8 @@ fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
 /// `byte_slice(text, from, to?)`: by byte offsets (what `offset` and native
 /// spans count), not characters; negative counts from the end.
 fn byte_slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
-    let s = text(&a[0]);
+    // Borrowed: only the part is copied (the text is often the whole file).
+    let s = a[0].text();
     let len = s.len();
     let resolve = |i: f64| if i < 0.0 { len.saturating_sub((-i) as usize) } else { (i as usize).min(len) };
     let from = resolve(a[1].num()?);

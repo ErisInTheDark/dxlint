@@ -1310,6 +1310,28 @@ fn trivia_layers_and_descendants() {
 }
 
 #[test]
+fn descendants_of_trivia_bring_their_nodes() {
+    // No rule targets `ts_line`: reading it through `descendants` is enough.
+    let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}""#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;\nb;\nc;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["3"]);
+    // `overlapping`: the comments and strings on each line, nothing else.
+    let l = native_linter(r#"in ts_line rule o info "{index}:{join(map(overlapping(ts_comment), c => c.text), '|')}:{count(overlapping(ts_string))}""#);
+    let messages: Vec<String> =
+        l.lint(Path::new("/root/a.ts"), "a; /* x\ny */ 'q';\nb; // z\nc;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["0:/* x\ny */:0", "1:/* x\ny */:1", "2:// z:0", "3::0"]);
+}
+
+#[test]
+fn bracket_tokens_know_their_pair() {
+    // One import owns two brace pairs: each bracket knows its own partner.
+    let l = native_linter(r#"in ts_open_brace, ts_close_brace rule p info "{text}{paired_token.text}@{paired_token.start}""#);
+    let messages: Vec<String> =
+        l.lint(Path::new("/root/a.ts"), "import { a } from 'b' with { type: 'json' };").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["{}@11", "}{@7", "{}@42", "}{@27"]);
+}
+
+#[test]
 fn library_attributes_read_only_inside_functions_are_kept() {
     // A `define`d attribute reached only through a `fn` body's `n.x`.
     let l = native_linter(r#"

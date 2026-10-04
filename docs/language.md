@@ -403,6 +403,7 @@ so nested rules compose.
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
 | `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.layer`) |
 | `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
+| `overlapping(layer)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's, in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
 | `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
 | `f(a, b)` | function call |
@@ -682,6 +683,7 @@ is wrong, messages) is written in the rule.
 | `precision_lost` | on a number literal: not exactly representable as a double |
 | `identifier_name` | on an identifier or private name: the name as JavaScript reads it (`foo` is `foo`) |
 | `first_token`, `last_token` | the node's first / last code token: `{text, layer, start, end}` |
+| `paired_token` | on a node starting with `(`, `[` or `{` (a bracket token node, or `(a)`), or else ending with `)`, `]` or `}`: the matching bracket, as `first_token` |
 | `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
 
 Values and types are separate namespaces (`const X` does not hide an

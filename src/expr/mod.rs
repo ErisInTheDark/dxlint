@@ -135,6 +135,9 @@ pub enum CExpr {
     /// `descendants(layer)`: nodes under this one of these matchers (or
     /// their specialisations), in source order.
     Descendants(Vec<u32>),
+    /// `overlapping(layer)`: nodes of these matchers anywhere in the file
+    /// whose span overlaps this node's, in source order.
+    Overlapping(Vec<u32>),
     /// `base.a.b`: on node values the compiled read of `a.b`; on records
     /// those keys.
     Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
@@ -155,6 +158,7 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
+    ("overlapping(layer)", "the nodes of a layer or group anywhere in the file whose span overlaps the node's, in source order (`ts_line` and the comments or strings on it)"),
     ("walk(roots, n => next)", "the nodes reachable from `roots` (nodes) by `next` (nodes, or a list of them), each once, in visiting order, roots included"),
     ("map(list, x => value)", "the list of `value` for each item `x`"),
     ("filter(list, x => test)", "the items for which `test` is truthy"),
@@ -191,7 +195,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -229,6 +233,16 @@ pub struct AttrMemo<'a> {
     /// Where JavaScript lines start (also after U+2028 and U+2029), for
     /// `position(offset).js_line`.
     js_lines: std::cell::OnceCell<Vec<usize>>,
+    /// For `overlapping(layer)`: the file's nodes of those matchers by
+    /// start, with the running maximum end.
+    spans: RefCell<HashMap<Vec<u32>, std::rc::Rc<LayerSpans>>>,
+}
+
+/// Nodes of some layers sorted by start; `max_end[i]` is the furthest end
+/// among the first `i + 1`, so overlap searches stop early.
+struct LayerSpans {
+    nodes: Vec<(u32, u32, u32)>,
+    max_end: Vec<u32>,
 }
 
 /// What names mean inside one rule.
@@ -255,9 +269,9 @@ pub struct Scope<'a> {
     pub defining: Option<String>,
     /// Where tooling collects how each name was read.
     pub uses: Option<&'a RefCell<Vec<(crate::config::source::Span, Resolved)>>>,
-    /// Where the bracket layers `opener.x` / `closer.x` read are collected
-    /// (files then need those token nodes).
-    pub brackets: Option<&'a RefCell<Vec<u32>>>,
+    /// Where layers read by name are collected (`opener.x`, `closer.x`,
+    /// `descendants(x)`): token and trivia nodes exist only when needed.
+    pub layer_reads: Option<&'a RefCell<Vec<u32>>>,
 }
 
 /// How the compiler read a name: what hover, go to definition and
@@ -317,7 +331,7 @@ impl<'a> Scope<'a> {
             function: None,
             defining: None,
             uses: None,
-            brackets: None,
+            layer_reads: None,
         }
     }
 
@@ -455,7 +469,9 @@ impl Scope<'_> {
                 CExpr::Reduce(Box::new(list), Box::new(initial), Box::new(body))
             }
             // `descendants(layer)`: nodes of a layer or group under this one.
-            ExprKind::Call(name, args) if name.text == "descendants" && self.grammar.function("descendants").is_none() => {
+            // `overlapping(layer)`: nodes of a layer or group sharing some of
+            // this node's span (anywhere in the file).
+            ExprKind::Call(name, args) if matches!(name.text.as_str(), "descendants" | "overlapping") && self.grammar.function(&name.text).is_none() => {
                 let layer = match args.as_slice() {
                     [Expr { kind: ExprKind::Var(path), .. }] if path.len() == 1 => Some(&path[0]),
                     _ => None,
@@ -469,15 +485,19 @@ impl Scope<'_> {
                         }).collect(),
                     ),
                 });
+                let overlapping = name.text == "overlapping";
                 let Some(ids) = ids else {
-                    errors.push(ConfigError::new(e.span, "`descendants` takes a layer or group name").note("usage: descendants(ts_export)"));
+                    errors.push(ConfigError::new(e.span, format!("`{}` takes a layer or group name", name.text)).note(format!("usage: {}(ts_comment)", name.text)));
                     return None;
                 };
-                self.note(name.span, Resolved::Function("descendants"));
+                self.note(name.span, Resolved::Function(if overlapping { "overlapping" } else { "descendants" }));
+                if let Some(reads) = self.layer_reads {
+                    reads.borrow_mut().extend(&ids);
+                }
                 if let Some(l) = layer {
                     self.note(l.span, if ids.len() == 1 && self.grammar.matcher(&l.text).is_some() { Resolved::Layer(l.text.clone()) } else { Resolved::Group(l.text.clone()) });
                 }
-                CExpr::Descendants(ids)
+                if overlapping { CExpr::Overlapping(ids) } else { CExpr::Descendants(ids) }
             }
             // `walk(roots, n => next)`: every node reachable from the roots.
             ExprKind::Call(name, args) if name.text == "walk" && self.grammar.function("walk").is_none() => {
@@ -840,8 +860,8 @@ impl Scope<'_> {
                     _ => (members(&layer.text).expect("checked"), second, &path[2..]),
                 };
                 let inner = self.relative_part(field, errors)?;
-                if let Some(brackets) = self.brackets {
-                    brackets.borrow_mut().extend(&ids);
+                if let Some(reads) = self.layer_reads {
+                    reads.borrow_mut().extend(&ids);
                 }
                 let mut value = CExpr::OwnChild(layer.text == "closer", ids, Box::new(inner));
                 for key in keys {
@@ -1099,6 +1119,32 @@ impl<'a> Ctx<'a> {
         let value = value?;
         self.memo.values.borrow_mut().insert((node, attr), value.clone());
         Ok(value)
+    }
+
+    /// The file's nodes of these matchers, indexed once per file.
+    fn layer_spans(&self, ids: &[u32]) -> std::rc::Rc<LayerSpans> {
+        if let Some(s) = self.memo.spans.borrow().get(ids) {
+            return s.clone();
+        }
+        let mut nodes = Vec::new();
+        let mut stack = vec![self.tree.root];
+        while let Some(id) = stack.pop() {
+            let n = self.tree.node(id);
+            if n.matcher != ROOT && n.matcher != TEXT && ids.iter().any(|&m| self.grammar.is_a(n.matcher, m)) {
+                nodes.push((n.start, n.end, id));
+            }
+            stack.extend(n.children.iter().map(|e| e.node));
+        }
+        nodes.sort_unstable();
+        let mut max_end = Vec::with_capacity(nodes.len());
+        let mut far = 0;
+        for &(s, e, _) in &nodes {
+            far = far.max(e.max(s + 1));
+            max_end.push(far);
+        }
+        let spans = std::rc::Rc::new(LayerSpans { nodes, max_end });
+        self.memo.spans.borrow_mut().insert(ids.to_vec(), spans.clone());
+        spans
     }
 
     /// Leading whitespace of `line`, as fixed when it lies above the node.
@@ -1480,6 +1526,24 @@ impl<'a> Ctx<'a> {
                 }
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
+            }
+            CExpr::Overlapping(ids) => {
+                let spans = self.layer_spans(ids);
+                let me = self.tree.node(self.node);
+                let (start, end) = (me.start, me.end.max(me.start + 1));
+                // Candidates start before our end; scan back while some
+                // earlier node can still reach our start.
+                let mut i = spans.nodes.partition_point(|&(s, _, _)| s < end);
+                let mut found = Vec::new();
+                while i > 0 && spans.max_end[i - 1] > start {
+                    i -= 1;
+                    let (s, e, id) = spans.nodes[i];
+                    if e.max(s + 1) > start && id != self.node {
+                        found.push(id);
+                    }
+                }
+                found.reverse();
+                Value::list(found.into_iter().map(|id| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
             }
             CExpr::Walk(roots, next) => {
                 let mut seen = std::collections::HashSet::new();

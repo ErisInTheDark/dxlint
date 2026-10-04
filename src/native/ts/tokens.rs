@@ -209,6 +209,71 @@ fn exact_nodes(file: &NativeFile<'_>) -> ExactNodes {
     ExactNodes(map)
 }
 
+/// A code token as a value: `{text, layer, start, end}`.
+fn token_record(file: &NativeFile<'_>, t: &Token) -> Value<'static> {
+    let layer = token_layer(file, t).map_or(Value::Null, |k| Value::from(k.name()));
+    Value::record(vec![
+        ("text".into(), Value::from(file.syntax.src[t.start as usize..t.end as usize].to_string())),
+        ("layer".into(), layer),
+        ("start".into(), Value::from(t.start as usize)),
+        ("end".into(), Value::from(t.end as usize)),
+    ])
+}
+
+/// The first (`last`: last) code token inside a node.
+pub(crate) fn edge(file: &NativeFile<'_>, node: u32, last: bool) -> Value<'static> {
+    let n = file.syntax.tree.node(node);
+    let lexed = file.cached(lex);
+    let from = lexed.0.partition_point(|t| t.start < n.start);
+    let to = lexed.0.partition_point(|t| t.end <= n.end);
+    let inside = lexed.0.get(from..to.max(from)).unwrap_or_default();
+    let Some(t) = (if last { inside.last() } else { inside.first() }) else { return Value::Null };
+    token_record(file, t)
+}
+
+/// Matching brackets of a file: each bracket's start -> its partner's index.
+struct BracketPairs(HashMap<u32, usize>);
+
+fn bracket_pairs(file: &NativeFile<'_>) -> BracketPairs {
+    let lexed = file.cached(lex);
+    let mut pairs = HashMap::new();
+    let mut open: Vec<usize> = Vec::new();
+    for (i, t) in lexed.0.iter().enumerate() {
+        let want = match t.tok {
+            Tok::P("(" | "[" | "{") => {
+                open.push(i);
+                continue;
+            }
+            Tok::P(")") => "(",
+            Tok::P("]") => "[",
+            Tok::P("}") => "{",
+            _ => continue,
+        };
+        // An unmatched closer (recovered syntax) pairs with nothing.
+        if let Some(at) = open.iter().rposition(|&o| lexed.0[o].tok == Tok::P(want)) {
+            let o = open[at];
+            open.truncate(at);
+            pairs.insert(lexed.0[o].start, i);
+            pairs.insert(t.start, o);
+        }
+    }
+    BracketPairs(pairs)
+}
+
+/// The bracket matching the one a node starts with (a bracket token node,
+/// `(a)`), or else the one it ends with.
+pub(crate) fn paired(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+    let n = file.syntax.tree.node(node);
+    let lexed = file.cached(lex);
+    let pairs = file.cached(bracket_pairs);
+    let at = |offset: u32| pairs.0.get(&offset).copied();
+    let partner = at(n.start).or_else(|| {
+        let last = lexed.0.partition_point(|t| t.end <= n.end).checked_sub(1)?;
+        (lexed.0[last].end == n.end).then(|| at(lexed.0[last].start)).flatten()
+    });
+    partner.map_or(Value::Null, |i| token_record(file, &lexed.0[i]))
+}
+
 /// A gap between tokens: its text, whether whitespace (outside comments)
 /// separates them, line breaks, blank lines and comments.
 pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
