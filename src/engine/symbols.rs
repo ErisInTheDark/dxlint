@@ -150,6 +150,9 @@ impl Symbols {
             s.def(Kind::Rule, &r.name, r.span);
         }
         s.attrs_and_macros(config);
+        for f in &config.functions {
+            s.def(Kind::Function, &f.name.text, f.name.span);
+        }
         s.parser_uses(config, grammar);
         s.what_reads_layers(config, rules);
         for (span, r) in resolved {
@@ -164,6 +167,7 @@ impl Symbols {
                 Resolved::Group(name) => (Kind::Group, name),
                 Resolved::Relative(name) => (Kind::Relative, name.to_string()),
                 Resolved::Function(name) => (Kind::Function, name.to_string()),
+                Resolved::UserFunction(name) => (Kind::Function, name),
             };
             s.use_of(span, key.0, &key.1);
         }

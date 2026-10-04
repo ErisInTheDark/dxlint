@@ -33,8 +33,18 @@ pub struct Config {
     pub dropped: Vec<Dropped>,
     /// Every macro definition, overridden ones included (for tooling).
     pub macros: Vec<MacroInfo>,
+    /// `fn name(params) = body`: pure functions rules call.
+    pub functions: Vec<FnDef>,
     /// Uses only the parser sees (for tooling).
     pub uses: Vec<Use>,
+}
+
+/// `fn name(a, b) = body`: computes a value from its arguments alone.
+#[derive(Clone, Debug)]
+pub struct FnDef {
+    pub name: Name,
+    pub params: Vec<Name>,
+    pub body: Expr,
 }
 
 /// `macro name(params) body`, as written.

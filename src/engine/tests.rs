@@ -480,6 +480,8 @@ fn strict_implies_its_family_unless_an_option_says_otherwise() {
     assert!(project.strict_option(file, "strictNullChecks"), "implied by the base's strict");
     assert!(!project.strict_option(file, "noImplicitThis"), "the nearer setting wins");
     assert!(!project.strict_option(file, "exactOptionalPropertyTypes"), "not in strict's family");
+    let flags = project.compiler_flags(file);
+    assert!(flags.contains(&("strictNullChecks".into(), true)) && flags.contains(&("noImplicitThis".into(), false)));
 }
 
 #[test]
@@ -1166,6 +1168,32 @@ fn facts_called_with_arguments_see_them_only_during_the_call() {
     let l = native_linter("in ts_identifier rule u warn \"{uses}/{uses()}\" { when uses != null }");
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "let a = 1; a;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["1/1"]);
+}
+
+#[test]
+fn config_functions_compute_from_their_arguments() {
+    let l = linter(r#"
+        fn twice(x) = x * 2
+        fn fact(n) = if n <= 1 then 1 else n * fact(n - 1)
+        fn shout(words) = join(map(words, w => upper(w) "!"), " ")
+        in .t match word /[a-z]+/ {
+          rule f info "{twice(len(text))}|{fact(4)}|{shout([text, 'x'])}"
+        }
+    "#);
+    assert_eq!(rule_messages(&l, "ab"), vec!["f: 4|24|AB! X!"]);
+}
+
+#[test]
+fn config_functions_see_no_node_and_take_no_builtin_names() {
+    for (src, wanted) in [
+        ("fn f(x) = text\n", "`text` is not a parameter of `f`"),
+        ("fn upper(x) = x\n", "`upper` is a built-in function or fact; pick another name"),
+        ("fn g(x) = x\nin .t match w /a/ { rule r info \"{g(1, 2)}\" }\n", "`g` takes 1 argument(s), got 2"),
+    ] {
+        let built = build(config::load_text("test.zlint", &format!("lang t \"*.t\"\n{src}"), &Disk), PathBuf::from("/root"));
+        let messages: Vec<&str> = built.errors.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(messages, [wanted], "{src}");
+    }
 }
 
 #[test]

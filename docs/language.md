@@ -585,9 +585,9 @@ Files are only parsed this way when an active rule targets a `ts_*` layer,
 and a file the parser cannot read gets one warning instead of rules. Native
 layers have no pattern children (`in ts_call match x ...` is an error).
 
-**Facts.** Native layers add builtins (null elsewhere). A fact that depends
-on a rule's settings takes them as arguments, like a function:
-`member_order(memberTypes, order)`.
+**Facts.** Native layers add builtins (null elsewhere): properties of the
+code any rule may ask about. What a rule makes of them (its options, what
+is wrong, messages) is written in the rule.
 
 | name | value |
 |---|---|
@@ -795,6 +795,18 @@ and `final-newline`.
 
 A `.zlint` file is a config file: `import ../.zlint` builds on the config
 of the directory above.
+
+**Functions** compute a value from their arguments, for logic several rules
+share. A body sees its parameters and nothing of the node: pass in what it
+needs. Functions may call each other and themselves.
+
+```zlint
+fn indent_width(line) = len(line) - len(trim_start(line))
+fn rank(order, group) = index_of(order, group)
+in ts_class_body rule late-member warn "out of order" {
+  when rank(["field", "method"], kind) < rank(["field", "method"], previous.kind)
+}
+```
 
 Macros paste tokens: they generate zlint code, not text.
 

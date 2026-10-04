@@ -112,6 +112,8 @@ pub enum CExpr {
     /// `fact(args)` on the node: the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>),
+    /// A config `fn`, by index in [`Grammar::functions`], with its arguments.
+    UserCall(u32, Vec<CExpr>),
     /// `reduce(list, initial, (state, item) => next)`; the body reads the
     /// state and the item as the two innermost `Param`s.
     Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
@@ -149,6 +151,15 @@ impl Each {
     }
 }
 
+/// How deep config `fn`s may call each other (and themselves).
+const MAX_CALL_DEPTH: u32 = 256;
+
+/// Whether `name(...)` already means something built in: a function, a
+/// special form or a fact.
+pub fn is_builtin_call(name: &str) -> bool {
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg") || facts::fact(name).is_some()
+}
+
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
 pub fn show(v: &Value) -> String {
     v.literal()
@@ -179,6 +190,8 @@ pub struct AttrMemo<'a> {
     /// Nothing memoised above can read them: attributes and `let`s are
     /// written outside every lambda.
     params: RefCell<Vec<Value<'a>>>,
+    /// Config `fn` calls in progress (recursion is bounded).
+    calls: std::cell::Cell<u32>,
 }
 
 /// What names mean inside one rule.
@@ -198,6 +211,9 @@ pub struct Scope<'a> {
     pub params: Vec<String>,
     /// The rule compiled (for its options and `let`s in `uses`).
     pub rule: Option<&'a str>,
+    /// The `fn` whose body this is: it sees its parameters and nothing of
+    /// any node (with `options_only`).
+    pub function: Option<&'a str>,
     /// Where tooling collects how each name was read.
     pub uses: Option<&'a RefCell<Vec<(crate::config::source::Span, Resolved)>>>,
 }
@@ -220,6 +236,8 @@ pub enum Resolved {
     Group(String),
     Relative(&'static str),
     Function(&'static str),
+    /// A config `fn`.
+    UserFunction(String),
 }
 
 /// A node next to the current one, for `children.x`, `previous.x`,
@@ -254,8 +272,14 @@ impl<'a> Scope<'a> {
             locals: Vec::new(),
             params: Vec::new(),
             rule: None,
+            function: None,
             uses: None,
         }
+    }
+
+    /// For a `fn`'s body: its parameters and constants only.
+    pub fn function_body(grammar: &'a Grammar, name: &'a str, params: Vec<String>) -> Self {
+        Scope { params, function: Some(name), ..Scope::constants(grammar) }
     }
 
     fn note(&self, span: crate::config::source::Span, what: Resolved) {
@@ -389,8 +413,20 @@ impl Scope<'_> {
                 self.note(name.span, Resolved::Function("dbg"));
                 CExpr::Dbg(Box::new(self.compile(&args[0], errors)?), label.unwrap_or_else(|| "dbg".into()))
             }
+            // A config `fn`.
+            ExprKind::Call(name, args) if self.grammar.function(&name.text).is_some() => {
+                let i = self.grammar.function(&name.text).expect("checked");
+                let arity = self.grammar.functions[i].arity;
+                if args.len() != arity {
+                    errors.push(ConfigError::new(e.span, format!("`{}` takes {arity} argument(s), got {}", name.text, args.len())));
+                    return None;
+                }
+                self.note(name.span, Resolved::UserFunction(name.text.clone()));
+                let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
+                CExpr::UserCall(i as u32, args)
+            }
             // `fact(args)`: a native analysis that takes the rule's values.
-            ExprKind::Call(name, args) if functions::lookup(&name.text).is_none() && facts::fact(&name.text).is_some() => {
+            ExprKind::Call(name, args) if !self.options_only && functions::lookup(&name.text).is_none() && facts::fact(&name.text).is_some() => {
                 let i = facts::fact(&name.text).expect("checked");
                 self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
                 let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
@@ -520,6 +556,13 @@ impl Scope<'_> {
                 value = CExpr::Key(Box::new(value), key.text.as_str().into());
             }
             return Some(value);
+        }
+        if let Some(function) = self.function {
+            errors.push(
+                ConfigError::new(first.span, format!("`{}` is not a parameter of `{function}`", first.text))
+                    .note("a function computes from its arguments alone: pass in what it needs"),
+            );
+            return None;
         }
         if self.options_only {
             errors.push(
@@ -1046,6 +1089,21 @@ impl<'a> Ctx<'a> {
                         }
                     }
                 }
+            }
+            CExpr::UserCall(i, args) => {
+                let f = &self.grammar.functions[*i as usize];
+                let Some(body) = f.body.get() else { return Ok(Value::Null) };
+                let args = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
+                if self.memo.calls.get() >= MAX_CALL_DEPTH {
+                    return Err(format!("`{}` calls itself too deeply", f.name));
+                }
+                // The body sees its arguments as its only parameters.
+                let saved = std::mem::replace(&mut *self.memo.params.borrow_mut(), args);
+                self.memo.calls.set(self.memo.calls.get() + 1);
+                let v = self.eval(body);
+                self.memo.calls.set(self.memo.calls.get() - 1);
+                *self.memo.params.borrow_mut() = saved;
+                v?
             }
             CExpr::FactCall(i, args) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };

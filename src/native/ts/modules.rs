@@ -436,6 +436,21 @@ impl Project {
         flag(name).or_else(|| STRICT_FAMILY.contains(&name).then(|| flag("strict")).flatten()).unwrap_or(false)
     }
 
+    /// Every boolean compiler option in effect for `file`: those the
+    /// tsconfig sets, and `strict`'s family as it implies them.
+    pub fn compiler_flags(&self, file: FileId) -> Vec<(String, bool)> {
+        let path = self.path(file);
+        let set = path.parent().and_then(|d| self.config_for(d)).map(|c| c.flags.clone()).unwrap_or_default();
+        let mut out: Vec<(String, bool)> = set.into_iter().collect();
+        for name in STRICT_FAMILY {
+            if !out.iter().any(|(n, _)| n == name) {
+                out.push((name.to_string(), self.strict_option(file, name)));
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// A boolean compiler option as the tsconfig governing `file` sets it
     /// (`None` when unset or there is no tsconfig).
     pub fn compiler_flag(&self, file: FileId, name: &str) -> Option<bool> {

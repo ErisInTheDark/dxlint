@@ -152,6 +152,22 @@ pub struct Grammar {
     /// What the config `drop`ped: unknown names that were dropped are
     /// reported at their `drop`.
     pub dropped: Vec<Dropped>,
+    /// The config's `fn`s, by index; bodies are compiled once every
+    /// function is known (they may call each other).
+    pub functions: Vec<UserFn>,
+}
+
+/// A config `fn`: its name, its arity and its compiled body.
+pub struct UserFn {
+    pub name: String,
+    pub arity: usize,
+    pub body: std::sync::OnceLock<crate::expr::CExpr>,
+}
+
+impl Grammar {
+    pub fn function(&self, name: &str) -> Option<usize> {
+        self.functions.iter().position(|f| f.name == name)
+    }
 }
 
 /// Per-matcher lazy DFA caches for one parser.
@@ -465,6 +481,7 @@ impl Grammar {
             by_name,
             cache_pool: Mutex::new(Vec::new()),
             dropped: config.dropped.clone(),
+            functions: user_functions(config, errors),
         }
     }
 
@@ -599,6 +616,23 @@ fn resolve_indents(
 }
 
 /// DFAs for pure matchers and guards, and `*` fast-forward stop sets.
+/// The config's functions; a name taken twice, or by a built-in function
+/// or fact, is an error (the later definition is left out).
+fn user_functions(config: &Config, errors: &mut Vec<ConfigError>) -> Vec<UserFn> {
+    let mut out: Vec<UserFn> = Vec::new();
+    for def in &config.functions {
+        let name = &def.name.text;
+        if crate::expr::is_builtin_call(name) {
+            errors.push(ConfigError::new(def.name.span, format!("`{name}` is a built-in function or fact; pick another name")));
+        } else if out.iter().any(|f| f.name == *name) {
+            errors.push(ConfigError::new(def.name.span, format!("function `{name}` is defined twice")));
+        } else {
+            out.push(UserFn { name: name.clone(), arity: def.params.len(), body: std::sync::OnceLock::new() });
+        }
+    }
+    out
+}
+
 fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) {
     // A DFA cannot skip an empty match to find a longer one, so patterns
     // that could match empty always run on the interpreter.

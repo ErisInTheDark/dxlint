@@ -418,12 +418,11 @@ const CORE: &[Fact] = &[
         get: |f, n| opt(f.precision_lost(n), Value::Bool),
     },
     Fact {
-        name: "compiler_option",
-        doc: "native layers: `compiler_option(\"name\")`: a boolean tsconfig compiler option for this file (`strict` counts for the options it implies); false when unset",
+        name: "compiler_options",
+        doc: "native layers: the file's boolean tsconfig compiler options (`compiler_options.strictNullChecks`), `strict` filling in the options it implies; unset ones are null",
         get: |f, n| f.with_file(|file, _| {
-            let name = args().first().map(|v| v.text().into_owned()).unwrap_or_default();
             let id = file.project.file_id(file.path);
-            Value::Bool(file.project.strict_option(id, &name))
+            Value::Record(file.project.compiler_flags(id).into_iter().map(|(k, v)| (k.into_boxed_str(), Value::Bool(v))).collect())
         }, n),
     },
 ];

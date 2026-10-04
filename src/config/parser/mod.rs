@@ -270,6 +270,7 @@ impl<'a> Parser<'a> {
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
             (Tk::Ident, "macro") => self.macro_def(),
+            (Tk::Ident, "fn") => self.fn_def(),
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "in" | "over") => self.context_item(),
@@ -300,7 +301,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, group, match, in/over ..., rule, indent, let, macro, schema, import, ignore, native, define, drop, override",
+                        "items are: lang, group, match, in/over ..., rule, indent, let, fn, macro, schema, import, ignore, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -588,6 +589,35 @@ impl<'a> Parser<'a> {
         if let Some((id, _)) = self.sources.files().find(|(_, f)| is(f)) {
             self.config.uses.push(Use::Import(span, id));
         }
+    }
+
+    /// `fn name(a, b) = body`. The parameters touch the name, as a call's
+    /// arguments do.
+    fn fn_def(&mut self) {
+        self.bump();
+        let Some(name) = self.ident("a function name") else { return };
+        let mut params = Vec::new();
+        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LParen && t.span.start == name.span.end) {
+            self.ts.next_raw();
+            loop {
+                match self.ts.next_raw() {
+                    Some(t) if t.kind == Tk::RParen => break,
+                    Some(t) if t.kind == Tk::Comma || t.kind == Tk::Newline => {}
+                    Some(t) if t.kind == Tk::Ident => params.push(Name { text: t.text.to_string(), span: t.span }),
+                    other => {
+                        let span = other.map(|t| t.span).or(self.ts.last_span);
+                        self.errors.push(ConfigError::new(span, "expected parameter names in `fn name(a, b) = ...`"));
+                        return;
+                    }
+                }
+            }
+        }
+        if self.expect(Tk::Eq, "`=` before the function's body").is_none() {
+            return;
+        }
+        let Some(body) = self.expr() else { return };
+        self.config.functions.push(FnDef { name, params, body });
+        self.end_of_item();
     }
 
     fn macro_def(&mut self) {

@@ -39,6 +39,14 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
     let uses: Uses = RefCell::default();
+    for def in &config.functions {
+        let Some(i) = grammar.function(&def.name.text) else { continue };
+        let params = def.params.iter().map(|p| p.text.clone()).collect();
+        let scope = Scope { uses: Some(&uses), ..Scope::function_body(&grammar, &def.name.text, params) };
+        if let Some(body) = scope.compile(&def.body, &mut errors) {
+            let _ = grammar.functions[i].body.set(body);
+        }
+    }
     let mut attr_names: Vec<String> = Vec::new();
     for def in &config.attrs {
         if !attr_names.contains(&def.name.text) {
