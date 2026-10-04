@@ -230,35 +230,6 @@ pub fn thrown_error(file: &NativeFile, node: u32) -> Value<'static> {
     message.map_or(Value::Null, Value::from)
 }
 
-fn module_name(file: &NativeFile, node: u32) -> Option<String> {
-    let s = &file.syntax;
-    let node = s.unparen(node);
-    match s.kind(node)? {
-        K::Ident => super::super::super::regex::cook(&format!("\"{}\"", s.text(node))),
-        K::String => statics::literal_text(s, node),
-        _ => None,
-    }
-}
-
-pub fn useless_rename(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let pair = match s.kind(node) {
-        Some(K::ImportSpec) => s.get(node, F::Imported).zip(s.get(node, F::Local)),
-        Some(K::ExportSpec) => s.get(node, F::Local).zip(s.get(node, F::Exported)),
-        Some(K::PatternProp) => s.get(node, F::Key).zip(s.get(node, F::Value)),
-        Some(K::Prop) if s.parent(node).is_some_and(|parent| file.write_site(parent).is_some()) => s.get(node, F::Key).zip(s.get(node, F::Value)),
-        _ => None,
-    };
-    let Some((key, value)) = pair else { return Value::Null };
-    let mut value = s.unparen(value);
-    if matches!(s.kind(value), Some(K::AssignPattern | K::Assign)) {
-        let Some(left) = s.get(value, F::Left) else { return Value::Null };
-        value = s.unparen(left);
-    }
-    let Some(name) = module_name(file, key) else { return Value::Null };
-    if module_name(file, value).as_deref() == Some(&name) { Value::from(name) } else { Value::Null }
-}
-
 pub fn useless_concat(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     if !s.is(node, K::Binary) || s.word(node, F::Op) != Some("+") { return Value::Null }

@@ -66,6 +66,23 @@ in ts_property, ts_pattern_property let computed_exception parent is ts_object &
 in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.write_site == null && static_name == "__proto__"
 in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
 
+in ts_identifier let module_name_info { name: identifier_name }
+in ts_string let module_name_info { name: get(literal_value, "value") }
+in ts_parenthesized forward module_name_info, module_default_info from expression
+in ts_assignment_pattern, ts_assignment let module_default_info left.module_name_info
+fn aliases_same(a, b) = a != null && b != null && a.name == b.name
+
+in ts_unary let signed_numeric_literal operator == "-" && default(argument.unwrapped_layer, argument.layer) is (ts_number, ts_bigint)
+in ts_template let static_template count(expression) == 0
+in ts_parenthesized forward signed_numeric_literal, static_template, range_terms from expression
+in ts_binary let left_literal default(left.unwrapped_layer, left.layer) is ts_literal || left.signed_numeric_literal == true || left.static_template == true
+in ts_binary let right_literal default(right.unwrapped_layer, right.layer) is ts_literal || right.signed_numeric_literal == true || right.static_template == true
+in ts_binary let range_terms if !contains(["<", "<="], operator) then null else { left_key: left.reference_key, right_key: right.reference_key, left_literal: left_literal, right_literal: right_literal, left_value: left.literal_value, right_value: right.literal_value }
+fn yoda_ordered(a_literal, a, b_literal, b) = if !a_literal && !b_literal then false else if !a_literal || !b_literal then true else a != null && b != null && js_compare(a, b) != null && js_compare(a, b) <= 0
+fn yoda_range_pair(a, b, op) = a != null && b != null && (if op == "&&" then a.right_key != null && a.right_key == b.left_key && yoda_ordered(a.left_literal, a.left_value, b.right_literal, b.right_value) else op == "||" && a.left_key != null && a.left_key == b.right_key && yoda_ordered(a.right_literal, a.right_value, b.left_literal, b.left_value))
+in ts_logical let logical_range (parent is ts_parenthesized || field == "test" && parent is (ts_if, ts_while, ts_do_while, ts_for)) && yoda_range_pair(left.range_terms, right.range_terms, operator)
+in ts_parenthesized let logical_range parent is ts_logical && parent.logical_range == true
+
 macro suggestion_curly_policy {
   option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
   option style ("consistent" | null) = null "consistent braces throughout if chains"
@@ -256,20 +273,24 @@ in ts_string rule no-octal-escape {
 
 in ts_import_specifier rule no-useless-rename:import {
   option ignoreImport boolean = false "ignore unnecessarily renamed imports"
-  when !ignoreImport && useless_rename != null
-  warn "Import {useless_rename} unnecessarily renamed."
+  let original_name imported.module_name_info
+  when !ignoreImport && aliases_same(original_name, local.module_name_info)
+  warn "Import {original_name.name} unnecessarily renamed."
 }
 
 in ts_export_specifier rule no-useless-rename:export {
   option ignoreExport boolean = false "ignore unnecessarily renamed exports"
-  when !ignoreExport && useless_rename != null
-  warn "Export {useless_rename} unnecessarily renamed."
+  let original_name local.module_name_info
+  when !ignoreExport && aliases_same(original_name, exported.module_name_info)
+  warn "Export {original_name.name} unnecessarily renamed."
 }
 
 in ts_pattern_property, ts_property rule no-useless-rename:destructuring {
   option ignoreDestructuring boolean = false "ignore unnecessarily renamed destructuring assignments"
-  when !ignoreDestructuring && useless_rename != null
-  warn "Destructuring assignment {useless_rename} unnecessarily renamed."
+  let original_name key.module_name_info
+  when layer is ts_pattern_property || parent.write_site != null
+  when !ignoreDestructuring && aliases_same(original_name, default(value.module_default_info, value.module_name_info))
+  warn "Destructuring assignment {original_name.name} unnecessarily renamed."
 }
 
 in ts_binary rule no-useless-concat {
@@ -591,9 +612,9 @@ in ts_binary rule yoda {
   option mode ("never" | "always") = "never" "literal comparison side"
   option exceptRange boolean = false "allow parenthesised ordered range checks"
   option onlyEquality boolean = false "apply only to equality operators"
-  let comparison_info comparison_orientation
-  when comparison_info != null && (!onlyEquality || comparison_info.equality) && !(exceptRange && comparison_info.range)
-  when if mode == "always" then comparison_info.right && !comparison_info.left else comparison_info.left && !comparison_info.right
+  when contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], operator)
+  when (!onlyEquality || contains(["==", "==="], operator)) && !(exceptRange && parent.logical_range == true)
+  when if mode == "always" then right_literal && !left_literal else left_literal && !right_literal
   warn "Expected literal to be on the {if mode == 'always' then 'left' else 'right'} side of {operator}."
 }
 

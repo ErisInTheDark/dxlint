@@ -1,4 +1,4 @@
-//! Assignment shorthand and comparison orientation.
+//! Logical assignment shorthand policies.
 
 use super::super::super::facts::{Facts, NativeFile};
 use super::super::super::kinds::{Field as F, Kind as K};
@@ -101,59 +101,4 @@ pub fn logical_assignment(file: &NativeFile, node: u32) -> Value<'static> {
     })();
     let Some((kind, op)) = found else { return Value::Null };
     Value::record(vec![("kind".into(), Value::from(kind)), ("operator".into(), Value::from(format!("{op}=")))])
-}
-
-fn literal(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    let node = s.unparen(node);
-    matches!(s.kind(node), Some(K::String | K::Number | K::BigInt | K::Bool | K::Null | K::Regex))
-        || s.is(node, K::Template) && s.all(node, F::Expr).next().is_none()
-        || s.is(node, K::Unary) && s.word(node, F::Op) == Some("-")
-            && s.get(node, F::Arg).is_some_and(|n| matches!(s.kind(s.unparen(n)), Some(K::Number | K::BigInt)))
-}
-
-fn ordered(file: &NativeFile, left: u32, right: u32) -> bool {
-    if !literal(file, left) && !literal(file, right) { return false }
-    if !literal(file, left) || !literal(file, right) { return true }
-    let s = &file.syntax;
-    let Some((a, b)) = statics::literal_value(s, s.unparen(left)).zip(statics::literal_value(s, s.unparen(right))) else { return false };
-    if a.0 == "string" && b.0 == "string" { return a.1.encode_utf16().cmp(b.1.encode_utf16()).is_le() }
-    let number = |(kind, value): (&str, String)| match kind {
-        "null" => Some(0.0),
-        "boolean" => Some(if value == "true" { 1.0 } else { 0.0 }),
-        "string" if value.trim().is_empty() => Some(0.0),
-        _ => statics::number(value.trim()),
-    };
-    number(a).zip(number(b)).is_some_and(|(a, b)| a <= b)
-}
-
-fn range(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    let Some(parent) = s.parent(node) else { return false };
-    let parent = if s.is(parent, K::Paren) { s.parent(parent).unwrap_or(parent) } else { parent };
-    if !s.is(parent, K::Logical) { return false }
-    let wrapped = s.parent(parent).is_some_and(|n| s.is(n, K::Paren)
-        || s.field(parent) == Some(F::Test) && matches!(s.kind(n), Some(K::If | K::While | K::DoWhile | K::For)));
-    if !wrapped { return false }
-    let Some((a, b)) = s.get(parent, F::Left).zip(s.get(parent, F::Right)).map(|(a, b)| (s.unparen(a), s.unparen(b))) else { return false };
-    if ![a, b].into_iter().all(|n| s.is(n, K::Binary) && matches!(s.word(n, F::Op), Some("<" | "<="))) { return false }
-    let Some((al, ar, bl, br)) = s.get(a, F::Left).zip(s.get(a, F::Right))
-        .zip(s.get(b, F::Left).zip(s.get(b, F::Right))).map(|((al, ar), (bl, br))| (al, ar, bl, br)) else { return false };
-    match s.word(parent, F::Op) {
-        Some("&&") => file.same_reference(ar, bl) && ordered(file, al, br),
-        Some("||") => file.same_reference(al, br) && ordered(file, ar, bl),
-        _ => false,
-    }
-}
-
-pub fn comparison_orientation(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some((left, right)) = s.get(node, F::Left).zip(s.get(node, F::Right)) else { return Value::Null };
-    let Some(op) = s.word(node, F::Op).filter(|op| matches!(*op, "==" | "===" | "!=" | "!==" | "<" | ">" | "<=" | ">=")) else { return Value::Null };
-    Value::record(vec![
-        ("left".into(), Value::Bool(literal(file, left))),
-        ("right".into(), Value::Bool(literal(file, right))),
-        ("equality".into(), Value::Bool(matches!(op, "==" | "==="))),
-        ("range".into(), Value::Bool(range(file, node))),
-    ])
 }
