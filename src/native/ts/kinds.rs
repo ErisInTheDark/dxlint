@@ -121,7 +121,8 @@ kinds! {
     Unary = "ts_unary" [Op, Arg],
     Update = "ts_update" [Op, Arg],
     Await = "ts_await" [Arg],
-    Yield = "ts_yield" [Arg],
+    // `operator`: the `*` of `yield*`.
+    Yield = "ts_yield" [Op, Arg],
     Binary = "ts_binary" [Left, Op, Right],
     Logical = "ts_logical" [Left, Op, Right],
     Assign = "ts_assignment" [Left, Op, Right],

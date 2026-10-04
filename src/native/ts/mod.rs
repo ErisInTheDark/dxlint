@@ -21,7 +21,7 @@ pub mod reads;
 mod regex;
 mod returns;
 mod roles;
-mod statics;
+pub(crate) mod statics;
 mod summary;
 pub mod syntax;
 pub(crate) mod tokens;

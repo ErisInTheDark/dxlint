@@ -184,6 +184,50 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "compare_text",
+        signature: "compare_text(a, b, natural?, insensitive?)",
+        doc: "-1, 0 or 1: text order by UTF-16 unit, as sorting rules compare names (`natural`: `a2` before `a10`; `insensitive`: ignoring case)",
+        min: 2,
+        max: 4,
+        call: |a| {
+            let flag = |i: usize| a.get(i).is_some_and(Value::truthy);
+            let order = crate::native::ts::statics::compare_names(&a[0].text(), &a[1].text(), flag(3), flag(2));
+            Ok(Value::Num(order as i8 as f64))
+        },
+    },
+    Function {
+        name: "js_compare",
+        signature: "js_compare(a, b)",
+        doc: "-1, 0 or 1 as JavaScript's `<` orders two literal values (`literal_value` records or plain values): two strings by UTF-16 unit, otherwise as numbers; null when unordered (NaN)",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let typed = |v: &Value| -> (String, String) {
+                match v {
+                    Value::Record(_) => (v.key("type").text().into_owned(), v.key("value").text().into_owned()),
+                    Value::Num(_) => ("number".into(), v.text().into_owned()),
+                    Value::Bool(_) => ("boolean".into(), v.text().into_owned()),
+                    Value::Null => ("null".into(), "null".into()),
+                    _ => ("string".into(), v.text().into_owned()),
+                }
+            };
+            let ((ta, va), (tb, vb)) = (typed(&a[0]), typed(&a[1]));
+            if ta == "string" && tb == "string" {
+                return Ok(Value::Num(va.encode_utf16().cmp(vb.encode_utf16()) as i8 as f64));
+            }
+            let number = |t: &str, v: &str| -> f64 {
+                match t {
+                    "boolean" => if v == "true" { 1.0 } else { 0.0 },
+                    "null" => 0.0,
+                    "string" if v.trim().is_empty() => 0.0,
+                    _ => crate::native::ts::statics::number(v.trim().trim_end_matches('n')).unwrap_or(f64::NAN),
+                }
+            };
+            let (x, y) = (number(&ta, &va), number(&tb, &vb));
+            Ok(x.partial_cmp(&y).map_or(Value::Null, |o| Value::Num(o as i8 as f64)))
+        },
+    },
+    Function {
         name: "byte_len",
         signature: "byte_len(text)",
         doc: "bytes in a text's UTF-8: how far it moves an `offset`",

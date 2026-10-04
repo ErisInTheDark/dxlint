@@ -1229,6 +1229,14 @@ fn links_lead_to_nodes_read_like_the_node_itself() {
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "let x = 1;\nx;\nx;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["1:2:true:2, 3", "1:0:true:", "1:0:true:"]);
+    let l = native_linter(r#"
+        in ts_identifier rule d info "{count(declarations)}:{scope is ts_function}:{writer is ts_assignment}" { when text == "a" }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "function f() { var a; var a = 1; a = 2; }").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["2:true:false", "2:true:false", "2:true:true"]);
+    let l = native_linter(r#"in ts_identifier rule n info "{identifier_name}""#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), r"foo;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["foo"]);
 }
 
 #[test]
@@ -1294,6 +1302,10 @@ fn reduce_folds_in_order_and_records_read_computed_keys() {
         }
     "#);
     assert_eq!(rule_messages(&l, "ab"), vec!["fold: 3,2,6|1|1|-1"]);
+    let l = linter(r#"in .t match word /[a-z0-9]+/ { rule c info "{compare_text('a10', text)}/{compare_text('a10', text, true)}/{compare_text('B', 'a')}/{compare_text('B', 'a', false, true)}" }"#);
+    assert_eq!(rule_messages(&l, "a2"), vec!["c: -1/1/-1/1"]);
+    let l = linter(r#"in .t match word /[a-z0-9]+/ { rule c info "{js_compare('10', '9')}/{js_compare(10, '9')}/{js_compare('', 0)}/{js_compare('x', 1)}/{js_compare({ type: 'bigint', value: '-1' }, -2)}" }"#);
+    assert_eq!(rule_messages(&l, "a"), vec!["c: -1/1/0//1"]);
 }
 
 #[test]

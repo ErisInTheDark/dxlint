@@ -436,6 +436,19 @@ const CORE: &[Fact] = &[
         get: |f, n| opt(f.precision_lost(n), Value::Bool),
     },
     Fact {
+        name: "identifier_name",
+        doc: "native layers: on an identifier or private name, the name as JavaScript reads it (`\\u0066oo` is `foo`)",
+        get: |f, n| f.with_file(|file, n| {
+            let s = &file.syntax;
+            match s.kind(n) {
+                Some(crate::native::ts::kinds::Kind::Ident | crate::native::ts::kinds::Kind::PrivateName) => {
+                    Value::from(crate::native::ts::statics::identifier_name(s.text(n)))
+                }
+                _ => Value::Null,
+            }
+        }, n),
+    },
+    Fact {
         name: "compiler_options",
         doc: "native layers: the file's boolean tsconfig compiler options (`compiler_options.strictNullChecks`), `strict` filling in the options it implies; unset ones are null",
         get: |f, n| f.with_file(|file, _| {
