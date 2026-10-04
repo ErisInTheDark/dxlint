@@ -8,21 +8,20 @@ rule arrow-parens {
   set style "as-needed"
 }
 
-in js_code {
-  # `==` -> `===`. The operator is a field, so the fix only touches it.
-  match js_loose_eq /[^=!<>]/ op:/[!=]=/ /[^=]/
-
-  # console.log anywhere except in scripts/: our own take on the built-in
-  # no-console, so it replaces it.
-  match js_console_log /\bconsole\.(?:log|debug)\b/ {
-    override rule no-console warn "remove `{text}`" {
-      ignore "scripts/**"
-    }
-  }
+# `==` -> `===`. The operator is a field, so the fix only touches it.
+in ts_binary.operator rule strict-equality warn "use `{text}=` instead of `{text}`" {
+  when text == "==" || text == "!="
+  fix as text "="
 }
-in js_loose_eq.op rule strict-equality warn "use `{text}=` instead of `{text}`" fix as text "="
+
+# console.log anywhere except in scripts/: our own take on the built-in
+# no-console, so it replaces it.
+override in ts_member rule no-console warn "remove `{text}`" {
+  when text ~ /console\.(?:log|debug)/
+  ignore "scripts/**"
+}
 
 # Searched only inside comments.
-in js_line_comment, js_block_comment match js_todo /\bTODO\b/ {
+in ts_comment match todo /\bTODO\b/ {
   rule todo info "TODO left in a comment"
 }

@@ -137,7 +137,7 @@ pub enum CExpr {
     Descendants(Vec<u32>),
     /// `overlapping(layer)`: nodes of these matchers anywhere in the file
     /// whose span overlaps this node's, in source order.
-    Overlapping(Vec<u32>),
+    Overlapping(Vec<u32>, Option<Box<(CExpr, CExpr)>>),
     /// `base.a.b`: on node values the compiled read of `a.b`; on records
     /// those keys.
     Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
@@ -158,7 +158,7 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
-    ("overlapping(layer)", "the nodes of a layer or group anywhere in the file whose span overlaps the node's, in source order (`ts_line` and the comments or strings on it)"),
+    ("overlapping(layer, from?, to?)", "the nodes of a layer or group anywhere in the file whose span overlaps the node's (or the byte range `from..to`), in source order (`ts_line` and the comments or strings on it)"),
     ("walk(roots, n => next)", "the nodes reachable from `roots` (nodes) by `next` (nodes, or a list of them), each once, in visiting order, roots included"),
     ("map(list, x => value)", "the list of `value` for each item `x`"),
     ("filter(list, x => test)", "the items for which `test` is truthy"),
@@ -472,8 +472,14 @@ impl Scope<'_> {
             // `overlapping(layer)`: nodes of a layer or group sharing some of
             // this node's span (anywhere in the file).
             ExprKind::Call(name, args) if matches!(name.text.as_str(), "descendants" | "overlapping") && self.grammar.function(&name.text).is_none() => {
-                let layer = match args.as_slice() {
-                    [Expr { kind: ExprKind::Var(path), .. }] if path.len() == 1 => Some(&path[0]),
+                // `overlapping(layer, from, to)`: overlapping a byte range instead.
+                let (layer_arg, range) = match args.as_slice() {
+                    [l] => (Some(l), None),
+                    [l, from, to] if name.text == "overlapping" => (Some(l), Some((from, to))),
+                    _ => (None, None),
+                };
+                let layer = match layer_arg {
+                    Some(Expr { kind: ExprKind::Var(path), .. }) if path.len() == 1 => Some(&path[0]),
                     _ => None,
                 };
                 let ids = layer.and_then(|l| match self.grammar.matcher(&l.text) {
@@ -497,7 +503,11 @@ impl Scope<'_> {
                 if let Some(l) = layer {
                     self.note(l.span, if ids.len() == 1 && self.grammar.matcher(&l.text).is_some() { Resolved::Layer(l.text.clone()) } else { Resolved::Group(l.text.clone()) });
                 }
-                if overlapping { CExpr::Overlapping(ids) } else { CExpr::Descendants(ids) }
+                let range = match range {
+                    Some((from, to)) => Some(Box::new((self.compile(from, errors)?, self.compile(to, errors)?))),
+                    None => None,
+                };
+                if overlapping { CExpr::Overlapping(ids, range) } else { CExpr::Descendants(ids) }
             }
             // `walk(roots, n => next)`: every node reachable from the roots.
             ExprKind::Call(name, args) if name.text == "walk" && self.grammar.function("walk").is_none() => {
@@ -1534,10 +1544,19 @@ impl<'a> Ctx<'a> {
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
             }
-            CExpr::Overlapping(ids) => {
+            CExpr::Overlapping(ids, range) => {
                 let spans = self.layer_spans(ids);
-                let me = self.tree.node(self.node);
-                let (start, end) = (me.start, me.end.max(me.start + 1));
+                let (start, end) = match range {
+                    Some(r) => {
+                        let at = |e: &CExpr| self.eval(e).and_then(|v| v.num()).map(|n| n.max(0.0) as u32);
+                        (at(&r.0)?, at(&r.1)?)
+                    }
+                    None => {
+                        let me = self.tree.node(self.node);
+                        (me.start, me.end)
+                    }
+                };
+                let end = end.max(start + 1);
                 // Candidates start before our end; scan back while some
                 // earlier node can still reach our start.
                 let mut i = spans.nodes.partition_point(|&(s, _, _)| s < end);

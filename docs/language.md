@@ -403,7 +403,7 @@ so nested rules compose.
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
 | `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.layer`) |
 | `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
-| `overlapping(layer)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's, in source order: on a `ts_line`, `overlapping(ts_comment)` |
+| `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
 | `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
 | `f(a, b)` | function call |
@@ -495,7 +495,7 @@ let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.n
 | `previous_sibling`, `previous_gap` | the previous node of the same layer in the same parent, and the text between |
 | `gap_before` | the text between the previous child of the parent (of any layer) and the node: blank lines, comments, separators; `null` for the first child |
 | `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.argument` is `1`) |
-| `enclosing` | the innermost layer around the node's start, seeing through overlays (`"js_string"` inside a string) |
+| `enclosing` | the innermost layer around the node's start, seeing through overlays (`"rs_string"` inside a string) |
 | `indented` | the node's line starts inside a layer declared with `indent` |
 | `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
 | `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
@@ -869,10 +869,15 @@ and `final-newline`.
 
 | language | contents |
 |---|---|
-| `.rs`, `.ts`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code`, `js_code` etc. name all code layers) |
-| `.ts` | also `native ts` for every JS and TS file (parsed only when a rule needs a `ts_*` layer), the groups `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
+| `.rs`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
+| `.ts` | `native ts` for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
+
+A language's rules live in topic files it imports itself (`.ts/format`,
+`.ts/layout`, `.ts/style` with its parts `.ts/style/ordering`,
+`.ts/style/signatures`, ...; `.rs/format`): internal building blocks, not
+separate bundles.
 
 | ruleset | turns on |
 |---|---|

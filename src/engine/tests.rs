@@ -1362,9 +1362,9 @@ fn node_values_step_to_their_parent() {
 #[test]
 fn descendants_of_trivia_bring_their_nodes() {
     // No rule targets `ts_line`: reading it through `descendants` is enough.
-    let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}""#);
+    let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}/{count(overlapping(ts_line, 0, 4))}/{count(overlapping(ts_line, 6, 6))}""#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;\nb;\nc;").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["3"]);
+    assert_eq!(messages, ["3/2/1"]);
     // `overlapping`: the comments and strings on each line, nothing else.
     let l = native_linter(r#"in ts_line rule o info "{line}:{join(map(overlapping(ts_comment), c => c.text), '|')}:{count(overlapping(ts_string))}""#);
     let messages: Vec<String> =
