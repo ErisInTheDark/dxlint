@@ -129,6 +129,46 @@ in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " restriction_import_list(entry.allowImportNames) " from '{info.source}' " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else restriction_import_list(entry.importNames) " from '{info.source}' " restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " restriction_import_list(entry.allowImportNames) " " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) restriction_import_custom(entry)
 }
 
+in ts_identifier let restriction_numeric_identifier true
+in ts_parenthesized {
+  let restriction_numeric_identifier expression.restriction_numeric_identifier == true
+  let restriction_numeric_parse_int expression.restriction_numeric_parse_int == true
+}
+in ts_identifier let restriction_numeric_parse_int text == "parseInt"
+in ts_member, ts_index let restriction_numeric_parse_int object == "Number" && static_name == "parseInt"
+in ts_call let restriction_numeric_radix callee.restriction_numeric_parse_int == true
+in ts_declarator let restriction_numeric_const parent.kind == "const"
+in ts_assignment {
+  let restriction_numeric_default parent is ts_array && parent.write_site != null
+  let restriction_numeric_object left.restriction_numeric_identifier != true
+}
+in ts_node {
+  let restriction_numeric_type_owner if parent is (ts_union, ts_intersection, ts_parenthesized_type) then parent.restriction_numeric_type_owner else {alias: parent is ts_type_alias, indexed: parent is ts_indexed_access}
+  let restriction_numeric_parent if parent is ts_parenthesized then parent.restriction_numeric_parent else {
+    default: parent is ts_assignment_pattern && field == "right" || parent is ts_parameter && field == "init" || parent is ts_assignment && field == "right" && parent.restriction_numeric_default,
+    class_field: parent is ts_class_property && field == "init",
+    readonly: parent is ts_class_property && field == "init" && contains(parent.modifier, "readonly"),
+    enum: parent is ts_enum_member,
+    literal_type: parent is ts_literal_type && parent.restriction_numeric_type_owner.alias,
+    type_index: parent.restriction_numeric_type_owner.indexed == true,
+    declaration: parent is ts_declarator,
+    constant: parent.restriction_numeric_const == true,
+    object: parent is (ts_object, ts_property, ts_method) || parent is ts_assignment && parent.restriction_numeric_object,
+    radix: parent is ts_call && field == "argument" && index == 1 && parent.restriction_numeric_radix,
+    jsx: parent is ts_jsx_expression,
+    array_index: parent is ts_index && field == "index"
+  }
+  let restriction_numeric_full if parent is ts_parenthesized then parent.restriction_numeric_full else if parent is ts_unary && contains(["-", "+"], parent.operator) then {sign: parent.operator, start: parent.offset, context: parent.restriction_numeric_parent} else {sign: "", start: offset, context: restriction_numeric_parent}
+}
+in ts_number, ts_bigint {
+  let restriction_numeric_signed_type parent is ts_literal_type && starts_with(parent.text, "-")
+  let restriction_numeric_sign if restriction_numeric_full.sign != "" then restriction_numeric_full.sign else if restriction_numeric_signed_type then "-" else ""
+  let restriction_numeric_value if layer is ts_bigint then (if restriction_numeric_sign == "-" && literal_value.value != "0" then "-" else "") literal_value.value "n" else num(literal_value.value) * (if restriction_numeric_sign == "-" then -1 else 1)
+  let restriction_numeric_offset if restriction_numeric_signed_type then parent.offset else restriction_numeric_full.start
+  let restriction_numeric_ts_offset if restriction_numeric_sign == "+" then offset else restriction_numeric_offset
+  let restriction_numeric_raw restriction_numeric_sign text
+  let restriction_numeric_ts_raw if restriction_numeric_sign == "+" then text else restriction_numeric_raw
+}
 in ts_number, ts_bigint rule no-magic-numbers {
   option detectObjects boolean = false "check object property numbers"
   option enforceConst boolean = false "require const for named number declarations"
@@ -140,13 +180,14 @@ in ts_number, ts_bigint rule no-magic-numbers {
   option ignoreNumericLiteralTypes boolean = false "allow numeric type aliases"
   option ignoreReadonlyClassProperties boolean = false "allow readonly class properties"
   option ignoreTypeIndexes boolean = false "allow numeric type indices"
-  let info restriction_number
+  let info restriction_numeric_full.context
   let typescript_specific re_test(file, /\.[cm]?tsx?$/) && (info.enum || info.literal_type || info.type_index || info.readonly)
-  when !any(ignore, v => type_of(v) == type_of(info.value) && v == info.value)
-  when !(ignoreArrayIndexes && info.array_index || ignoreDefaultValues && info.default || ignoreClassFieldInitialValues && info.class_field || ignoreEnums && info.enum || ignoreNumericLiteralTypes && info.literal_type || ignoreReadonlyClassProperties && info.readonly || ignoreTypeIndexes && info.type_index || info.radix || info.jsx)
+  let array_index info.array_index && js_compare(literal_value, 0) >= 0 && js_compare(literal_value, 4294967295) < 0 && (layer is ts_bigint || restriction_numeric_value == round(restriction_numeric_value)) && (restriction_numeric_sign != "-" || num(literal_value.value) == 0)
+  when !any(ignore, v => type_of(v) == type_of(restriction_numeric_value) && v == restriction_numeric_value)
+  when !(ignoreArrayIndexes && array_index || ignoreDefaultValues && info.default || ignoreClassFieldInitialValues && info.class_field || ignoreEnums && info.enum || ignoreNumericLiteralTypes && info.literal_type || ignoreReadonlyClassProperties && info.readonly || ignoreTypeIndexes && info.type_index || info.radix || info.jsx)
   when if info.declaration then enforceConst && !info.constant else detectObjects || !info.object
-  report at if typescript_specific then info.ts_offset else info.offset
-  warn if info.declaration then "Number constants declarations must use 'const'." else "No magic number: {if typescript_specific then info.ts_raw else info.raw}."
+  report at {start: if typescript_specific then restriction_numeric_ts_offset else restriction_numeric_offset, end: end_offset}
+  warn if info.declaration then "Number constants declarations must use 'const'." else "No magic number: {if typescript_specific then restriction_numeric_ts_raw else restriction_numeric_raw}."
 }
 
 in ts_import_specifier let restriction_declaration_local default(local, imported)

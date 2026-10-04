@@ -1,8 +1,8 @@
-//! Measurements for tag-token spacing and closing-bracket placement.
+//! Closing-tag measurements and closing-bracket placement.
 
 use super::metadata::{bounds, line, line_starts, space};
 use super::super::super::facts::NativeFile;
-use super::super::super::kinds::{Field as F, Kind as K};
+use super::super::super::kinds::Field as F;
 use super::super::super::lexer::Lexer;
 use crate::expr::Value;
 
@@ -36,19 +36,13 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
         let end = s.tree.node(n).end as usize;
         last_end = s.src[end..open_end].find('>').map_or(end, |at| end + at + 1);
     }
-    let (left_start, left_end) = last_prop.map_or((last_end - 1, last_end), |p| {
-        let prop = s.tree.node(p);
-        let value = s.get(p, F::Value);
-        let token_start = value.filter(|&v| s.is(v, K::String)).map_or(prop.end as usize - 1, |v| s.tree.node(v).start as usize);
-        (token_start, prop.end as usize)
-    });
-    let mut tags = vec![(own.start as usize, open_end, name, true, left_start, left_end)];
+    let left_end = last_prop.map_or(last_end, |p| s.tree.node(p).end as usize);
+    let mut tags = vec![(own.start as usize, open_end, name, true, left_end)];
     if let (Some(start), Some(name)) = (close, s.get(node, F::Closing)) {
         let end = s.tree.node(name).end as usize;
-        tags.push((start, own.end as usize, name, false, end - 1, end));
+        tags.push((start, own.end as usize, name, false, end));
     }
-    let mut all_parts = Vec::new();
-    let records = tags.into_iter().map(|(start, end, name, opening, left_start, left_end)| {
+    let records = tags.into_iter().map(|(start, end, name, opening, left_end)| {
         let name_start = s.tree.node(name).start as usize;
         let gt = end - 1;
         let self_close = opening && self_closing;
@@ -60,29 +54,6 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
             Some(start + lx.next_token().start as usize)
         } else { None };
         let bracket = if self_close { slash.unwrap_or(gt) } else { gt };
-        let after_open = if opening { start } else { slash.unwrap_or(start) };
-        let mut parts = Vec::new();
-        let mut gap = |kind: &'static str, left_start: usize, left_end: usize, right: usize, offset: usize| {
-            parts.push(Value::record(vec![
-                ("kind".into(), Value::from(kind)),
-                ("offset".into(), Value::from(offset)),
-                ("left_end".into(), Value::from(left_end)),
-                ("space".into(), Value::Bool(s.src[left_end..right].chars().any(space))),
-                ("newline".into(), Value::Bool(line(&lines, left_end) != line(&lines, right))),
-                ("start_newline".into(), Value::Bool(line(&lines, left_start) != line(&lines, right))),
-                ("opening".into(), Value::Bool(opening)),
-                ("self_closing".into(), Value::Bool(self_close)),
-                ("single".into(), Value::Bool(line(&lines, start) == line(&lines, end))),
-            ]));
-        };
-        if let Some(slash) = slash {
-            if self_close { gap("closingSlash", slash, slash + 1, gt, slash); }
-            else { gap("closingSlash", start, start + 1, slash, start); }
-        }
-        gap("afterOpening", after_open, after_open + 1, name_start, after_open);
-        if self_close { gap("beforeSelfClosing", left_start, left_end, bracket, bracket); }
-        else { gap("beforeClosing", left_start, left_end, gt, left_end); }
-        all_parts.extend(parts);
         let last = last_prop.map(|p| s.tree.node(p));
         let trailing_gap = &s.src[left_end..bracket];
         let trailing_comment = trailing_gap.contains("/*") || trailing_gap.contains("//");
@@ -124,7 +95,6 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
     }).collect();
     Value::record(vec![
         ("tags".into(), Value::list(records)),
-        ("parts".into(), Value::list(all_parts)),
     ])
 }
 
@@ -138,5 +108,15 @@ mod tests {
         let l = native_linter("rule jsx-tag-spacing {\nset closingSlash 'allow'\nset beforeSelfClosing 'allow'\nset afterOpening 'allow'\nset beforeClosing 'always'\n}");
         assert!(l.lint(Path::new("/root/file.tsx"), "const x = <Box a=\"a\nb\"></Box >;").is_empty());
         assert_eq!(l.lint(Path::new("/root/file.tsx"), "const x = <Box a={foo\n}></Box >;").len(), 1);
+    }
+
+    #[test]
+    fn slash_spacing_checks_keep_independent_decisions_and_element_ranges() {
+        let l = native_linter("rule jsx-tag-spacing {\nset closingSlash 'never'\nset beforeSelfClosing 'never'\nset afterOpening 'allow'\nset beforeClosing 'allow'\n}");
+        let text = "const x = <Outer><Box / ></Outer>;";
+        let slash = text.find("/ >").unwrap();
+        let diags = l.lint(Path::new("/root/file.tsx"), text);
+        assert_eq!(diags.len(), 2);
+        assert!(diags.iter().all(|diag| diag.start == slash && diag.end == slash + "/ >".len()));
     }
 }
