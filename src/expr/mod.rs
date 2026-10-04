@@ -123,6 +123,12 @@ pub enum CExpr {
     /// `opener.x` / `closer.x`: evaluated on the node's first (`true`: last)
     /// child whose layer is one of these.
     OwnChild(bool, Vec<u32>, Box<CExpr>),
+    /// `parent.x`: evaluated on the parent layer.
+    OnParent(Box<CExpr>),
+    /// `position(offset)`: `{line, column}`, 1-based, of a byte offset.
+    Position(Box<CExpr>),
+    /// `matcher.x`: evaluated on the closest ancestor of that matcher.
+    OnAncestor(u32, Box<CExpr>),
     /// A config `fn`, by index in [`Grammar::functions`], with its arguments.
     UserCall(u32, Vec<CExpr>),
     /// `reduce(list, initial, (state, item) => next)`; the body reads the
@@ -133,6 +139,7 @@ pub enum CExpr {
 /// Expression forms that are not plain functions, for `zlint functions`.
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
+    ("position(offset)", "`{line, column}` (1-based, like the builtins) of a byte offset in the file"),
     ("map(list, x => value)", "the list of `value` for each item `x`"),
     ("filter(list, x => test)", "the items for which `test` is truthy"),
     ("find(list, x => test)", "the first item for which `test` is truthy, or null"),
@@ -168,7 +175,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -383,7 +390,8 @@ impl Scope<'_> {
             ExprKind::Record(entries) => CExpr::Record(
                 entries.iter().map(|(k, v)| Some((k.text.clone().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
             ),
-            ExprKind::Key(base, key) => CExpr::Key(Box::new(self.compile(base, errors)?), key.text.as_str().into()),
+            // `first(declarations).offset`: a record's key, or a read on nodes.
+            ExprKind::Key(base, key) => self.member(self.compile(base, errors)?, key),
             ExprKind::Lambda(..) => {
                 errors.push(ConfigError::new(
                     e.span,
@@ -453,6 +461,15 @@ impl Scope<'_> {
                 };
                 self.note(name.span, Resolved::Function("dbg"));
                 CExpr::Dbg(Box::new(self.compile(&args[0], errors)?), label.unwrap_or_else(|| "dbg".into()))
+            }
+            // `position(offset)`: `{line, column}` of a byte offset in the file.
+            ExprKind::Call(name, args) if name.text == "position" && self.grammar.function("position").is_none() => {
+                let [offset] = args.as_slice() else {
+                    errors.push(ConfigError::new(e.span, "`position` takes one byte offset").note("usage: position(end_offset).line"));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function("position"));
+                CExpr::Position(Box::new(self.compile(offset, errors)?))
             }
             // A config `fn`.
             ExprKind::Call(name, args) if self.grammar.function(&name.text).is_some() => {
@@ -786,6 +803,13 @@ impl Scope<'_> {
                     self.note(field.span, Resolved::Builtin(BUILTIN_VARS[b].0));
                     return Some(CExpr::OnField(*label, Box::new(CExpr::Builtin(b))));
                 }
+                // `field.link`, `field.its_field`: anything else read there.
+                if let (Some((_, label)), false) = (own_field, ancestor_field) {
+                    if let Some(part) = self.node_part(field) {
+                        self.note(layer.span, Resolved::Field(layer.text.clone()));
+                        return Some(CExpr::OnField(*label, Box::new(part)));
+                    }
+                }
                 // `parent.x`: a field, attribute or fact of the node's
                 // parent layer.
                 if layer.text == "parent" && self.grammar.matcher("parent").is_none() {
@@ -801,6 +825,10 @@ impl Scope<'_> {
                     if let Some(label) = self.grammar.labels.get(&field.text) {
                         return Some(CExpr::ParentField(label));
                     }
+                    // Builtins and links (`parent.offset`, `parent.scope`).
+                    if let Some(part) = self.node_part(field) {
+                        return Some(CExpr::OnParent(Box::new(part)));
+                    }
                     errors.push(ConfigError::new(field.span, format!("no field or attribute `{}`", field.text)));
                     return None;
                 }
@@ -814,7 +842,13 @@ impl Scope<'_> {
                     return None;
                 };
                 let fields = self.grammar.matchers[m as usize].labels();
+                // `ts_function.my_attr`, `ts_class.offset`: anything else a
+                // node has, read on the closest ancestor.
                 if !fields.contains(&field.text) {
+                    if let Some(part) = self.node_part(field).filter(|p| !matches!(p, CExpr::Field(_))) {
+                        self.note(layer.span, Resolved::Layer(layer.text.clone()));
+                        return Some(CExpr::OnAncestor(m, Box::new(part)));
+                    }
                     errors.push(
                         ConfigError::new(field.span, format!("matcher `{}` has no field `{}`", layer.text, field.text))
                             .suggest(&field.text, fields.iter().map(String::as_str)),
@@ -825,10 +859,50 @@ impl Scope<'_> {
                 self.note(layer.span, Resolved::Layer(layer.text.clone()));
                 Some(CExpr::Ancestor(m, Some(label)))
             }
-            _ => {
-                errors.push(ConfigError::new(e.span, "paths have at most two parts: `matcher.field`"));
+            [first, rest @ ..] => {
+                // Longer paths walk: `callee.object.x` (own field, then the
+                // rest on its node), `parent.callee.x`, `previous.left.x`,
+                // `ts_class.body.x`.
+                let inner = self.relative_path(rest, errors)?;
+                if let Some((_, label)) = self.fields.iter().find(|(f, _)| *f == first.text) {
+                    self.note(first.span, Resolved::Field(first.text.clone()));
+                    return Some(CExpr::OnField(*label, Box::new(inner)));
+                }
+                if first.text == "parent" && self.grammar.matcher("parent").is_none() {
+                    self.note(first.span, Resolved::Builtin("parent"));
+                    return Some(CExpr::OnParent(Box::new(inner)));
+                }
+                if let Some(m) = self.grammar.matcher(&first.text) {
+                    self.note(first.span, Resolved::Layer(first.text.clone()));
+                    return Some(CExpr::OnAncestor(m, Box::new(inner)));
+                }
+                if let Some(rel) = Relative::named(&first.text) {
+                    self.note(first.span, Resolved::Relative(Relative::NAMES.iter().find(|(_, r)| *r == rel).expect("named").0));
+                    return Some(CExpr::Relative(rel, Box::new(inner)));
+                }
+                errors.push(ConfigError::new(first.span, format!("unknown name `{}`", first.text)));
                 None
             }
+            [] => None,
+        }
+    }
+
+    /// The rest of a path, read on some node: field labels walk into their
+    /// nodes; anything else is read there, then `.key`s.
+    fn relative_path(&self, parts: &[crate::config::ast::Name], errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        let [first, rest @ ..] = parts else { return None };
+        if rest.is_empty() {
+            return self.relative_part(first, errors);
+        }
+        match self.node_part(first) {
+            Some(CExpr::Field(label)) => Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?))),
+            Some(mut value) => {
+                for key in rest {
+                    value = self.member(value, key);
+                }
+                Some(value)
+            }
+            None => self.relative_part(first, errors),
         }
     }
 }
@@ -1279,6 +1353,22 @@ impl<'a> Ctx<'a> {
                 Some(p) => self.attr(p, *a)?,
                 None => Value::Null,
             },
+            CExpr::Position(offset) => {
+                let mut at = (self.eval(offset)?.num()?.max(0.0) as usize).min(self.source.len());
+                while !self.source.is_char_boundary(at) {
+                    at -= 1;
+                }
+                let (line, column) = self.lines.line_col(self.source, at);
+                Value::record(vec![("line".into(), Value::from(line + 1)), ("column".into(), Value::from(column + 1))])
+            }
+            CExpr::OnParent(inner) => match self.parent_layer() {
+                Some(p) => Ctx { node: p, ..*self }.eval(inner)?,
+                None => Value::Null,
+            },
+            CExpr::OnAncestor(m, inner) => match self.tree.ancestor(self.grammar, self.node, *m) {
+                Some(a) => Ctx { node: a, ..*self }.eval(inner)?,
+                None => Value::Null,
+            },
             CExpr::FieldAttr(label, a) => {
                 let mut values = Vec::new();
                 for id in self.tree.fields(self.node, *label) {
@@ -1430,6 +1520,7 @@ impl<'a> Ctx<'a> {
             CExpr::List(items) => Value::List(items.iter().map(eval).collect::<Result<_, _>>()?),
             CExpr::Record(entries) => Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), eval(v)?))).collect::<Result<_, String>>()?),
             CExpr::Key(base, key) => eval(base)?.key(key),
+            CExpr::Member(base, key, _) => eval(base)?.key(key),
             CExpr::Call(f, args) => {
                 let args = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
                 (f.call)(&args)?

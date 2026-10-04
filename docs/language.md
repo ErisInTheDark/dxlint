@@ -316,6 +316,7 @@ values filled in and other holes left as written.
 
 **Names.** A rule name may be `family:variant` (`semi:never`,
 `no-multiple-empty-lines:eof`): several rules that make up one. `rule
+semi` turns on and configures `semi` and every `semi:*` variant, `rule
 semi:* off` reaches every variant, and suppressing `semi` suppresses the
 whole family. A second definition with a name already in use is an error;
 use [`override`](#changing-imported-definitions-override-drop) to replace one.
@@ -338,7 +339,7 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | `files "glob" ...` | only these files |
 | `ignore "glob" ...` | not these files |
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
-| `report at expr` | diagnostics start at that byte offset (`offset` and `end_offset` are a node's own; native facts give others, such as `write_site`) |
+| `report at expr` | where diagnostics point: a byte offset starts them there (`offset` and `end_offset` are a node's own; native facts give others, such as `write_site`); a `{start, end}` record or a node (`declaration`) gives the whole span |
 | `@each name in list` | one diagnostic per item of a list from the rule's options (`@each entry in paths`): `when`, the message, `fix` and `report at` see the item as `name` (`let`s stay per node). The list is known when the config loads; rules never loop over code |
 
 A macro at the start of a body line is pasted as clauses.
@@ -396,8 +397,11 @@ so nested rules compose.
 | `option.key`, `x.key`, `f(...).key` | a record's value for `key` (`null` when missing) |
 | `map(xs, x => ...)` | a lambda, for `map`, `filter`, `find`, `find_last`, `all` and `any` |
 | `reduce(xs, init, (state, x) => ...)` | folds a list in order: each step sees the state the previous one gave |
-| `matcher` / `matcher.field` | the closest enclosing node of `matcher`, or its field |
-| `field.layer`, `field.offset`, `field.attr`, `field.fact` | a builtin, attribute or fact read on the node in one of this node's fields (a list for several) |
+| `matcher` / `matcher.x` | the closest enclosing node of `matcher`, or anything read on it (`ts_function.name`, `ts_class.offset`, `ts_function.my_attr`) |
+| `parent.x` | anything read on the layer the node sits in (`parent.offset`, `parent.depth`) |
+| `field.layer`, `field.offset`, `field.attr`, `field.fact`, `field.link` | a builtin, attribute, fact or link read on the node in one of this node's fields (a list for several) |
+| `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
+| `first(references).line` | `.x` on a node value (from a link) reads on that node |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
@@ -509,7 +513,13 @@ let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.n
 `repeat`, `pad_start`, `pad_end`, `starts_with`, `ends_with`, `contains`,
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `compact`, `sum`, `any`,
-`count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`.
+`count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`,
+`compare_text`, `js_compare`.
+
+`slice` counts characters; offsets (`offset`, `end_offset`, native spans)
+count bytes, so cut source text at them with `byte_slice(text, from, to?)`.
+`position(offset)` gives `{line, column}` of an offset, like the `line` and
+`column` builtins: `position(end_offset).line`.
 
 Regex functions take the full syntax of Rust's `regex` crate (no lookaround
 or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first
@@ -628,9 +638,12 @@ in ts_block rule padded-blocks:top warn "Block must not be padded by blank lines
 }
 ```
 
-Files get token nodes only when an active rule needs them. A rule made of
-variants only (`comma-spacing:before`, `comma-spacing:after`) is turned on
-and configured by its family name: `rule comma-spacing`.
+Files get token nodes only when an active rule needs them. A family name
+turns on and configures every variant (`comma-spacing:before`,
+`comma-spacing:after`): `rule comma-spacing`.
+
+Group `ts_node` holds every syntax layer (not tokens): `in ts_node let
+...` gives an attribute to all of them, for walks that may cross any kind.
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what
@@ -656,6 +669,8 @@ is wrong, messages) is written in the rule.
 | `regex_problems` | on a regex literal or the pattern string of `RegExp(...)`: one problem per line: `empty_class`, `spaces:N`, `backref:<kind>:<backref>:<group>`, `misleading:<kind>` |
 | `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
 | `precision_lost` | on a number literal: not exactly representable as a double |
+| `identifier_name` | on an identifier or private name: the name as JavaScript reads it (`foo` is `foo`) |
+| `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
 
 Values and types are separate namespaces (`const X` does not hide an
 imported type `X`), and merged declarations (`interface X` + `const X`,

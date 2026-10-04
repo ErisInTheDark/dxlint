@@ -390,17 +390,39 @@ impl Linter {
             (Report::End, _) => (end, end),
             _ => (start, end),
         };
+        // `report at`: an offset (the start), a `{start, end}` record or a node.
         let (start, end) = match &f.report_at {
-            Some(at) => match ctx.eval(at).and_then(|v| v.num()) {
-                Ok(n) => {
+            Some(at) => {
+                let boundary = |n: f64| {
                     let mut at = (n.max(0.0) as usize).min(ctx.source.len());
                     while !ctx.source.is_char_boundary(at) {
                         at -= 1;
                     }
-                    (at, end.max(at))
+                    at
+                };
+                let span = ctx.eval(at).and_then(|v| match v {
+                    Value::Node(id, _) => {
+                        let n = ctx.tree.node(id);
+                        Ok((n.start as usize, n.end as usize))
+                    }
+                    Value::Record(_) => {
+                        let s = boundary(v.key("start").num()?);
+                        let e = match v.key("end") {
+                            Value::Null => end.max(s),
+                            e => boundary(e.num()?).max(s),
+                        };
+                        Ok((s, e))
+                    }
+                    v => v.num().map(|n| {
+                        let s = boundary(n);
+                        (s, end.max(s))
+                    }),
+                });
+                match span {
+                    Ok(span) => span,
+                    Err(e) => return Some(failed(e)),
                 }
-                Err(e) => return Some(failed(e)),
-            },
+            }
             None => (start, end),
         };
         let fix = fix.map(|edit| vec![edit]);

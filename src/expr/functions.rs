@@ -95,6 +95,20 @@ fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
     }
 }
 
+/// `byte_slice(text, from, to?)`: by byte offsets (what `offset` and native
+/// spans count), not characters; negative counts from the end.
+fn byte_slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
+    let s = text(&a[0]);
+    let len = s.len();
+    let resolve = |i: f64| if i < 0.0 { len.saturating_sub((-i) as usize) } else { (i as usize).min(len) };
+    let from = resolve(a[1].num()?);
+    let to = a.get(2).map(|v| v.num()).transpose()?.map_or(len, resolve).max(from);
+    match s.get(from..to) {
+        Some(part) => Ok(Value::from(part.to_string())),
+        None => Err(format!("byte_slice: {from}..{to} is not on character boundaries")),
+    }
+}
+
 /// Extended grapheme clusters, approximately: what joins onto the character
 /// before it (joiners and what they join, marks, variation selectors,
 /// emoji modifiers and tags, the second half of a flag) starts none.
@@ -481,10 +495,18 @@ pub static FUNCTIONS: &[Function] = &[
     Function {
         name: "slice",
         signature: "slice(text_or_list, from, to?)",
-        doc: "part of a text or list; negative indexes count from the end",
+        doc: "part of a text (by characters) or list; negative indexes count from the end",
         min: 2,
         max: 3,
         call: slice,
+    },
+    Function {
+        name: "byte_slice",
+        signature: "byte_slice(text, from, to?)",
+        doc: "part of a text by byte offsets (what `offset`, `end_offset` and native spans count); negative counts from the end; an error off a character boundary",
+        min: 2,
+        max: 3,
+        call: byte_slice,
     },
     Function {
         name: "str",

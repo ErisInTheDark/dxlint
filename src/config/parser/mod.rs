@@ -482,6 +482,17 @@ impl<'a> Parser<'a> {
         self.bump();
         let Some(name) = self.ident("a native front end name (`ts`)") else { return };
         self.end_of_item();
+        // `ts_node`: every syntax layer of the front end (tokens aside).
+        if name.text == "ts" && !self.config.natives.iter().any(|n| n.text == "ts") {
+            use crate::native::ts::kinds::{Kind, KINDS};
+            let parents = KINDS
+                .iter()
+                .enumerate()
+                .filter(|&(i, _)| !Kind::is_token_index(i))
+                .map(|(_, (layer, _))| Parent::Matcher(Name { text: layer.to_string(), span: name.span }))
+                .collect();
+            self.config.groups.push(GroupDef { name: Name { text: "ts_node".into(), span: name.span }, parents, library: true });
+        }
         self.config.natives.push(name);
     }
 

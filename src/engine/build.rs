@@ -39,18 +39,19 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
     let uses: Uses = RefCell::default();
-    for def in &config.functions {
-        let Some(i) = grammar.function(&def.name.text) else { continue };
-        let params = def.params.iter().map(|p| p.text.clone()).collect();
-        let scope = Scope { uses: Some(&uses), ..Scope::function_body(&grammar, &def.name.text, params) };
-        if let Some(body) = scope.compile(&def.body, &mut errors) {
-            let _ = grammar.functions[i].body.set(body);
-        }
-    }
     let mut attr_names: Vec<String> = Vec::new();
     for def in &config.attrs {
         if !attr_names.contains(&def.name.text) {
             attr_names.push(def.name.text.clone());
+        }
+    }
+    for def in &config.functions {
+        let Some(i) = grammar.function(&def.name.text) else { continue };
+        let params = def.params.iter().map(|p| p.text.clone()).collect();
+        // Parameters holding nodes read attributes too (`d.initialised`).
+        let scope = Scope { uses: Some(&uses), attrs: &attr_names, ..Scope::function_body(&grammar, &def.name.text, params) };
+        if let Some(body) = scope.compile(&def.body, &mut errors) {
+            let _ = grammar.functions[i].body.set(body);
         }
     }
     let attrs = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
@@ -193,11 +194,11 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
     for (ci, c) in configs.iter().enumerate() {
         let pattern = &c.patch.name;
         let mut matching: Vec<usize> = (0..config.rules.len()).filter(|&i| wildcard(&pattern.text, &config.rules[i].name.text)).collect();
-        // A rule made of variants only (`comma-spacing:before`, `:after`)
-        // answers to its family name.
-        if matching.is_empty() && !pattern.text.contains(['*', ':']) {
+        // A family name also configures its variants (`comma-spacing:before`,
+        // `:after`), with or without a rule of the plain name.
+        if !pattern.text.contains(['*', ':']) {
             let family = format!("{}:", pattern.text);
-            matching = (0..config.rules.len()).filter(|&i| config.rules[i].name.text.starts_with(&family)).collect();
+            matching.extend((0..config.rules.len()).filter(|&i| config.rules[i].name.text.starts_with(&family)));
         }
         if matching.is_empty() {
             if c.soft {

@@ -449,6 +449,11 @@ const CORE: &[Fact] = &[
         }, n),
     },
     Fact {
+        name: "token_texts",
+        doc: "native layers: the node's code tokens' texts, in order (comments and spacing dropped); equal lists mean the same tokens",
+        get: |f, n| f.with_file(|file, n| Value::list(file.tokens(n).into_iter().map(|t| Value::from(t.to_string())).collect()), n),
+    },
+    Fact {
         name: "compiler_options",
         doc: "native layers: the file's boolean tsconfig compiler options (`compiler_options.strictNullChecks`), `strict` filling in the options it implies; unset ones are null",
         get: |f, n| f.with_file(|file, _| {

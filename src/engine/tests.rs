@@ -1240,6 +1240,37 @@ fn links_lead_to_nodes_read_like_the_node_itself() {
 }
 
 #[test]
+fn paths_reach_ancestors_parents_fields_and_nodes() {
+    let l = native_linter(r#"
+        in ts_identifier let marked text == "a"
+        in ts_function let fname name
+        fn is_marked(n) = n.marked
+        in ts_call rule c info "{ts_function.offset}|{parent.layer}|{callee.object.layer}|{callee.property}|{callee.object.declaration.offset}|{ts_function.fname}|{position(end_offset).line}|{byte_slice(source, offset + 4, end_offset - 1)}|{join(token_texts, ' ')}"
+        in ts_identifier rule r info "{first(references).offset}:{is_marked(first(references))}" { when count(references) > 0 }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "function f(a) {\n  a.b('é');\n}").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["18:true", "0|ts_expression_statement|ts_identifier|b|11|f|2|'é'|a . b ( 'é' )"]);
+    // `report at` a `{start, end}` span; `ts_node` is every syntax layer.
+    let l = native_linter(r#"
+        in ts_node let seen true
+        in ts_for_of rule f info "{modifier}:{seen}" { report at { start: right.offset, end: right.end_offset } }
+        in ts_for_of rule g info "g" { report at { start: offset, end: offset + 3 } }
+    "#);
+    let spans: Vec<(usize, usize, String)> =
+        l.lint(Path::new("/root/a.ts"), "async function h() { for await (const x of y) {} }").into_iter().map(|d| (d.start, d.end, d.message)).collect();
+    assert_eq!(spans, [(21, 24, "g".to_string()), (43, 44, "await:true".to_string())]);
+}
+
+#[test]
+fn byte_slice_counts_bytes_and_refuses_split_characters() {
+    let l = linter(r#"in .t match word /\S+/ { rule b info "{byte_slice(text, 2)}|{byte_slice(text, 0, -2)}" }"#);
+    assert_eq!(rule_messages(&l, "éab"), vec!["b: ab|é"]);
+    let l = linter(r#"in .t match word /\S+/ { rule b info "{byte_slice(text, 1)}" }"#);
+    let messages = rule_messages(&l, "éab");
+    assert!(messages.len() == 1 && messages[0].contains("not on character boundaries"), "{messages:?}");
+}
+
+#[test]
 fn own_brackets_and_variant_families() {
     // `opener.x` / `closer.x` read the node's own brackets; a family name
     // turns on every variant.
@@ -1253,6 +1284,17 @@ fn own_brackets_and_variant_families() {
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "if (a) {\n\n  b;\n}\nif (c) { d; }").into_iter().map(|d| d.message).collect();
     // pad:bottom, then pad:top (same span, by rule name).
     assert_eq!(messages, ["0", "1"]);
+    // With a rule of the plain name too, its name still turns on (and
+    // configures) the variants.
+    let l = native_linter(r#"
+        define {
+          in ts_block rule pad info "main {n}" { option n int(0..) = 0 "n" }
+          in ts_block rule pad:inner info "inner {n}" { option n int(0..) = 0 "n" }
+        }
+        rule pad { set n 2 }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "{ }").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["main 2", "inner 2"]);
     // A class's first opener is its `<`: name the bracket wanted.
     let l = native_linter(r#"in ts_class rule c info "{opener.text}/{opener.ts_open_brace.text}/{closer.ts_close_brace.line}""#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "class A<T> {\n}").into_iter().map(|d| d.message).collect();

@@ -49,7 +49,8 @@ kinds! {
     If = "ts_if" [Test, Consequent, Alternate],
     For = "ts_for" [Init, Test, Update, Body],
     ForIn = "ts_for_in" [Left, Right, Body],
-    ForOf = "ts_for_of" [Left, Right, Body],
+    // `modifier`: the `await` of `for await`.
+    ForOf = "ts_for_of" [Modifier, Left, Right, Body],
     While = "ts_while" [Test, Body],
     DoWhile = "ts_do_while" [Body, Test],
     Return = "ts_return" [Arg],
@@ -78,7 +79,8 @@ kinds! {
     // ---- modules
     Import = "ts_import" [Kind, DefaultImport, Namespace, Specifier, From],
     ImportSpec = "ts_import_specifier" [Kind, Imported, Local],
-    ImportEquals = "ts_import_equals" [Modifier, Name, Value],
+    // `kind`: `type` for `import type x = require(...)`.
+    ImportEquals = "ts_import_equals" [Kind, Modifier, Name, Value],
     Export = "ts_export" [Kind, Decl, Specifier, Namespace, From, Expr],
     ExportSpec = "ts_export_specifier" [Kind, Local, Exported],
     ExportAssign = "ts_export_assignment" [Expr],
@@ -204,6 +206,11 @@ impl Kind {
 
     /// A token node (`ts_comma`, `ts_keyword`, ...), not syntax.
     pub fn is_token(self) -> bool {
-        (Kind::Comma as u16..=Kind::Punctuator as u16).contains(&(self as u16))
+        Self::is_token_index(self as usize)
+    }
+
+    /// Whether `KINDS[i]` is a token kind.
+    pub fn is_token_index(i: usize) -> bool {
+        (Kind::Comma as usize..=Kind::Punctuator as usize).contains(&i)
     }
 }
