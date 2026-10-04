@@ -199,26 +199,3 @@ pub fn thrown_error(file: &NativeFile, node: u32) -> Value<'static> {
         } else { None };
     message.map_or(Value::Null, Value::from)
 }
-
-pub fn useless_concat(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if !s.is(node, K::Binary) || s.word(node, F::Op) != Some("+") { return Value::Null }
-    let (Some(mut left), Some(mut right)) = (s.get(node, F::Left), s.get(node, F::Right)) else { return Value::Null };
-    left = s.unparen(left);
-    right = s.unparen(right);
-    while s.is(left, K::Binary) && s.word(left, F::Op) == Some("+") {
-        let Some(next) = s.get(left, F::Right) else { return Value::Null };
-        left = s.unparen(next);
-    }
-    while s.is(right, K::Binary) && s.word(right, F::Op) == Some("+") {
-        let Some(next) = s.get(right, F::Left) else { return Value::Null };
-        right = s.unparen(next);
-    }
-    let strings = matches!(s.kind(left), Some(K::String | K::Template)) && matches!(s.kind(right), Some(K::String | K::Template));
-    let between = &s.src[s.tree.node(left).end as usize..s.tree.node(right).start as usize];
-    if strings && !between.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
-        s.get(node, F::Op).map_or(Value::Null, |op| Value::Num(f64::from(s.tree.node(op).start)))
-    } else {
-        Value::Null
-    }
-}

@@ -315,9 +315,16 @@ in ts_pattern_property, ts_property rule no-useless-rename:destructuring {
   warn "Destructuring assignment {original_name.name} unnecessarily renamed."
 }
 
+fn concat_endpoint_next(n, right_side) = if n.layer is ts_parenthesized then n.expression.node else if n.layer is ts_binary && n.operator == "+" then (if right_side then n.right.node else n.left.node) else null
+fn concat_endpoint(n, right_side) = last(walk(n, current => concat_endpoint_next(current, right_side)))
+
 in ts_binary rule no-useless-concat {
-  when useless_concat != null
-  report at useless_concat
+  when operator == "+"
+  let left_endpoint concat_endpoint(left.node, true)
+  let right_endpoint concat_endpoint(right.node, false)
+  when left_endpoint.layer is (ts_string, ts_template) && right_endpoint.layer is (ts_string, ts_template)
+  when !re_test(byte_slice(source, left_endpoint.end_offset, right_endpoint.offset), /[\r\n\u{2028}\u{2029}]/)
+  report at operator.offset
   warn "Unexpected string concatenation of literals."
 }
 

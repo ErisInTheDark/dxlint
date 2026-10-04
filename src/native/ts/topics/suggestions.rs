@@ -45,7 +45,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "parse_int_callee", doc: "native layers: the source spelling of an unshadowed parseInt or Number.parseInt callee, through parentheses", get: |f, n| f.with_file(expressions::parse_int_callee, n) },
     Fact { name: "radix_error", doc: "native layers: missing or invalid parseInt argument diagnostic, excluding spread argument uncertainty", get: |f, n| f.with_file(expressions::radix_error, n) },
     Fact { name: "thrown_error", doc: "native layers: diagnostic when a thrown expression cannot produce an error object or is global undefined", get: |f, n| f.with_file(expressions::thrown_error, n) },
-    Fact { name: "useless_concat", doc: "native layers: operator offset when adjacent string or template operands are concatenated on one line, null otherwise", get: |f, n| f.with_file(expressions::useless_concat, n) },
     Fact { name: "accessor_pair", doc: "native layers: accessor kind, scope, display name, pairing and unique pair grouping", get: |f, n| f.with_file(accessors::pair, n) },
     Fact { name: "property_descriptor", doc: "native layers: getter/setter presence in a global Object or Reflect property descriptor", get: |f, n| f.with_file(accessors::descriptor, n) },
     Fact { name: "object_shorthand_member", doc: "native layers: object member shorthand eligibility, constructor and annotation exceptions, and arrow lexical safety", get: |f, n| f.with_file(objects::shorthand, n) },
