@@ -16,8 +16,13 @@ mod signatures;
 mod return_types;
 mod boundary_types;
 mod void_types;
+mod restricted_types;
+mod member_ordering;
 
 pub const FACTS: &[Fact] = &[
+    Fact { name: "member_order", doc: "native layers: configured member-order violations; arguments are member types, name order and optionality order", get: |f, n| f.with_file(member_ordering::member_order, n) },
+    Fact { name: "member_order_info", doc: "native layers: class expression status and standard member-group order", get: |f, n| f.with_file(member_ordering::member_order_info, n) },
+    Fact { name: "restricted_type_candidates", doc: "native layers: type names, generic instantiations, keywords and empty tuples or objects eligible for restrictions", get: |f, n| f.with_file(restricted_types::restricted_type_candidates, n) },
     Fact { name: "function_boundary_style", doc: "native layers: function or parameter reachable through module exports, with type exemptions and parameter diagnostics", get: |f, n| f.with_file(boundary_types::function_boundary_style, n) },
     Fact { name: "function_type_candidate", doc: "native layers: sole call or construct signature replaceable by a function type, or invalid interface this type", get: |f, n| f.with_file(signatures::function_type_candidate, n) },
     Fact { name: "nonadjacent_signatures", doc: "native layers: function or member overloads separated by another declaration", get: |f, n| f.with_file(signatures::nonadjacent_signatures, n) },

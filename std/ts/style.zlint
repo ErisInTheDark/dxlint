@@ -58,6 +58,15 @@ in jsdoc_typed_tag rule no-types {
 }
 
 # ---- type syntax -------------------------------------------------------------------
+in ts_type_reference, ts_type_keyword, ts_tuple_type, ts_type_literal rule no-restricted-types {
+  option types { [key: string]: boolean | string | { fixWith?: string; message?: string; suggest?: string[] } | null } = {} "Restricted types and custom messages."
+  let restricted_names filter(map(restricted_type_candidates, c => { name: c.name, offset: c.offset, key: find_last(keys(types), n => re_replace(n, /\s+/, "") == c.name) }), c => c.key != null)
+  let restricted_entries map(restricted_names, c => { name: c.name, offset: c.offset, policy: first(slice(values(types), index_of(keys(types), c.key), index_of(keys(types), c.key) + 1)) })
+  each entry in filter(restricted_entries, e => type_of(e.policy) != "null" && !(type_of(e.policy) == "bool" && e.policy == false))
+  report at entry.offset
+  warn "Don't use `{entry.name}` as a type." (if type_of(entry.policy) == "str" && entry.policy != "" then " " entry.policy else if entry.policy.message != null && entry.policy.message != "" then " " entry.policy.message else "")
+}
+
 # array-type selects array or generic notation separately for readonly arrays.
 in ts_type_keyword, ts_array_type, ts_qualified_name let is_simple_type true
 in ts_type_reference let is_simple_type count(type_argument) == 0 || name == "Array" && count(type_argument) == 1 && first([] type_argument.is_simple_type) == true
@@ -347,6 +356,28 @@ in ts_declarator, ts_class_property, ts_parameter rule consistent-generic-constr
 }
 
 # ---- classes -------------------------------------------------------------------------
+schema member_order_config null | "never" | (string | string[])[] | {
+  memberTypes?: "never" | (string | string[])[]
+  order?: "alphabetically" | "alphabetically-case-insensitive" | "as-written" | "natural" | "natural-case-insensitive"
+  optionalityOrder?: "optional-first" | "required-first"
+}
+in ts_class, ts_interface, ts_type_literal rule member-ordering {
+  option default member_order_config = null "Default ordering; null uses the standard member groups."
+  option classes member_order_config = null "Class declaration ordering."
+  option classExpressions member_order_config = null "Class expression ordering."
+  option interfaces member_order_config = null "Interface ordering."
+  option typeLiterals member_order_config = null "Type literal ordering."
+  let ordering_info member_order_info
+  let specific_order if layer == "ts_interface" then interfaces else if layer == "ts_type_literal" then typeLiterals else if ordering_info.class_expression then classExpressions else classes
+  let selected_order if specific_order != null then specific_order else default
+  when selected_order != "never"
+  let ordering_config if selected_order == null then { memberTypes: ordering_info.standard_order } else selected_order
+  let ordering_types if type_of(ordering_config) == "list" then ordering_config else if ordering_config.memberTypes != null then ordering_config.memberTypes else if specific_order == null then ordering_info.standard_order else null
+  each violation in member_order(ordering_types, ordering_config.order, ordering_config.optionalityOrder)
+  report at violation.offset
+  warn violation.message
+}
+
 in ts_class_property rule explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
