@@ -1,6 +1,6 @@
-//! The file as tokens, where rules care about tokens rather than nodes:
-//! the tokens of a node's text, and the punctuation between nodes that has
-//! no node of its own (the `(` of a call).
+//! Parser-aware tokens, gaps and nodes for uncovered punctuation.
+//! Native literal spans retain their syntax's boundaries: JSX strings,
+//! for example, treat backslashes as text rather than escapes.
 
 use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K, ALL_KINDS};
@@ -12,6 +12,10 @@ use std::collections::HashMap;
 
 pub(crate) struct Lexed(pub(crate) Vec<Token>);
 pub(crate) struct LexedComments(pub(crate) Vec<Token>);
+
+/// Requested token kinds, indexed by the native kind registry.
+pub type TokenMask = [bool; ALL_KINDS.len()];
+pub const ALL_TOKENS: TokenMask = [true; ALL_KINDS.len()];
 
 pub(crate) fn lex_comments(file: &NativeFile<'_>) -> LexedComments {
     let lexed = file.cached(lex);
@@ -33,7 +37,10 @@ pub(crate) fn lex(file: &NativeFile<'_>) -> Lexed {
     let syntax = &file.syntax;
     let mut opaque = HashMap::new();
     for id in 0..syntax.tree.nodes.len() as u32 {
-        if matches!(syntax.kind(id), Some(K::Regex | K::JsxText)) {
+        if syntax.is(id, K::String) {
+            let node = syntax.tree.node(id);
+            opaque.insert(node.start, (node.end, Tok::Str));
+        } else if matches!(syntax.kind(id), Some(K::Regex | K::JsxText)) {
             let node = syntax.tree.node(id);
             opaque.insert(node.start, (node.end, Tok::Regex));
         } else if matches!(syntax.kind(id), Some(K::Template | K::TemplateType)) {
@@ -54,11 +61,19 @@ fn raw_kind(node: &Node) -> Option<K> {
 /// Gives each punctuation and keyword token that no child node covers a
 /// token node (`ts_comma`, `ts_keyword`, ...) under the innermost node
 /// holding it, in field `token`, so rules can target tokens as layers.
-pub fn attach(src: &str, parsed: &mut Parsed) {
+/// Only the kinds in `wanted`: which syntax node owns each token does not
+/// depend on the selection.
+pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
+    if !wanted.iter().any(|&wanted| wanted) {
+        return;
+    }
     let nodes = &parsed.nodes;
     let mut opaque = HashMap::new();
     for node in nodes {
         match raw_kind(node) {
+            Some(K::String) => {
+                opaque.insert(node.start, (node.end, Tok::Str));
+            }
             Some(K::Regex | K::JsxText) => {
                 opaque.insert(node.start, (node.end, Tok::Regex));
             }
@@ -72,13 +87,21 @@ pub fn attach(src: &str, parsed: &mut Parsed) {
         }
     }
     let tokens = lex_around(src, &opaque);
-    let mut owned: Vec<(u32, Token)> = Vec::new();
+    let mut owned = Vec::new();
     let mut stack = vec![parsed.root];
+    let mut children = Vec::new();
     while let Some(id) = stack.pop() {
         let node = &nodes[id as usize];
-        let mut children: Vec<&Node> = node.children.iter().map(|e| &nodes[e.node as usize]).collect();
-        children.sort_by_key(|c| c.start);
+        stack.extend(node.children.iter().filter(|e| nodes[e.node as usize].matcher != TEXT).map(|e| e.node));
         let mut at = tokens.partition_point(|t| t.start < node.start);
+        // A node written as one token already owns it, even when another
+        // syntax node shares its span. Its children still need visiting.
+        if tokens.get(at).is_some_and(|token| (token.start, token.end) == (node.start, node.end)) {
+            continue;
+        }
+        children.clear();
+        children.extend(node.children.iter().map(|e| &nodes[e.node as usize]));
+        children.sort_by_key(|c| c.start);
         let mut next_child = children.iter().peekable();
         while let Some(token) = tokens.get(at).filter(|t| t.end <= node.end) {
             while next_child.next_if(|c| c.end <= token.start).is_some() {}
@@ -89,20 +112,17 @@ pub fn attach(src: &str, parsed: &mut Parsed) {
                     next_child.next();
                 }
                 _ => {
-                    // A node written as one token (a name, a literal) is that token.
-                    if (token.start, token.end) != (node.start, node.end) {
-                        owned.push((id, *token));
+                    if let Some(kind) = token_kind(src, token).filter(|&kind| wanted[kind as usize]) {
+                        owned.push((id, kind, token.start, token.end));
                     }
                     at += 1;
                 }
             }
         }
-        stack.extend(node.children.iter().filter(|e| nodes[e.node as usize].matcher != TEXT).map(|e| e.node));
     }
-    for (owner, token) in owned {
-        let Some(kind) = token_kind(src, &token) else { continue };
+    for (owner, kind, start, end) in owned {
         let id = parsed.nodes.len() as u32;
-        parsed.nodes.push(Node { matcher: kind as u32, start: token.start, end: token.end, children: Vec::new() });
+        parsed.nodes.push(Node { matcher: kind as u32, start, end, children: Vec::new() });
         parsed.nodes[owner as usize].children.push(Edge { label: F::Token as u16, node: id });
     }
 }
@@ -317,6 +337,70 @@ impl NativeFile<'_> {
 mod lexical_tests {
     use super::*;
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn selected_tokens_preserve_their_spans_and_owners() {
+        let src = "function run<T>(left, right) { const values = [left, ...right]; if (left) return values; }";
+        let parsed = super::super::parse(src, false).expect("valid syntax");
+        let original_len = parsed.nodes.len();
+        let projection = |parsed: &Parsed| {
+            let mut tokens = Vec::new();
+            for (owner, node) in parsed.nodes[..original_len].iter().enumerate() {
+                for edge in node.children.iter().filter(|edge| edge.label == F::Token as u16) {
+                    let token = &parsed.nodes[edge.node as usize];
+                    tokens.push((owner, token.start, token.end, raw_kind(token).expect("token kind")));
+                }
+            }
+            tokens.sort_by_key(|token| (token.0, token.1));
+            tokens
+        };
+        let mut all = Parsed { nodes: parsed.nodes.clone(), root: parsed.root };
+        attach_selected(src, &mut all, &ALL_TOKENS);
+        let all_tokens = projection(&all);
+        let mut wanted = [false; ALL_KINDS.len()];
+        for kind in [K::Comma, K::OpenBrace, K::Ellipsis] {
+            wanted[kind as usize] = true;
+        }
+        let expected: Vec<_> = all_tokens.into_iter().filter(|token| wanted[token.3 as usize]).collect();
+        assert!(!expected.is_empty());
+        let mut selected = Parsed { nodes: parsed.nodes.clone(), root: parsed.root };
+        attach_selected(src, &mut selected, &wanted);
+        assert_eq!(projection(&selected), expected);
+        let mut none = parsed;
+        attach_selected(src, &mut none, &[false; ALL_KINDS.len()]);
+        assert_eq!(none.nodes.len(), original_len);
+        assert!(projection(&none).is_empty());
+    }
+
+    #[test]
+    fn raw_jsx_strings_preserve_following_delimiters() {
+        use crate::engine::tests::native_linter;
+        use crate::grammar::Tree;
+        use crate::native::ts::{modules::Project, syntax::Syntax};
+        use std::path::Path;
+
+        let src = r#"const view = <Box a="\" b={ value } />; function after() { return 1; }"#;
+        let linter = native_linter("");
+        let front = linter.grammar.natives.first().expect("native ts");
+        let mut parsed = super::super::parse(src, true).expect("valid jsx");
+        let boundaries: Vec<_> = parsed.nodes.iter()
+            .filter(|node| matches!(raw_kind(node), Some(K::JsxExpression | K::Block)))
+            .flat_map(|node| [(node.start, K::OpenBrace, Tok::P("{")), (node.end - 1, K::CloseBrace, Tok::P("}"))])
+            .collect();
+        assert!(!boundaries.is_empty());
+        attach_selected(src, &mut parsed, &ALL_TOKENS);
+        let attached: Vec<_> = boundaries.iter().map(|&(at, kind, _)| {
+            parsed.nodes.iter().any(|node| node.start == at && raw_kind(node) == Some(kind))
+        }).collect();
+        let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
+        let project = Project::default();
+        let file = NativeFile::new(Syntax::new(&tree, src, front), Path::new("/root/a.tsx"), &project);
+        let code = file.cached(lex);
+        for &(at, _, tok) in &boundaries {
+            assert!(code.0.iter().any(|token| token.start == at && token.tok == tok), "missing code token at {at}");
+        }
+        assert!(attached.into_iter().all(|present| present), "missing attached delimiter");
+    }
 
     #[test]
     fn opaque_spans_do_not_leak_punctuation_or_comments() {

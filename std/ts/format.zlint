@@ -1,5 +1,5 @@
-# .ts/format: text-layer rules and shared matcher contexts.
-# Complete native replacements live in .ts/layout.
+# .ts/format: token and text rules, shared matcher contexts.
+# Native layout policy also lives in .ts/layout.
 # Rule names are eslint rule names without the plugin prefix;
 # `family:variant` rules are parts of one eslint rule. All are off until
 # turned on: `rule semi:always`, `rule quotes:double { set style "double" }`.
@@ -143,71 +143,27 @@ group js_code js_type_member
 
 # ---- spacing ---------------------------------------------------------------
 
-in js_code match js_parenthesis_inner_space /(?<=\()[ \t]+(?=[^ \t\r\n)])|(?<=[^ \t\r\n(])[ \t]+(?=\))/
-in js_parenthesis_inner_space rule space-in-parens:open-space warn "There should be no space after this paren." {
+in ts_open_paren rule space-in-parens:after {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when ends_with(before, "(")
-  when !starts_with(after, "//")
-  let next if starts_with(after, "{{") then "{{}}" else if starts_with(after, "[") then "[]" else if starts_with(after, "(") then "()" else if starts_with(after, ")") then "empty" else ""
-  when (mode == "never") != contains(exceptions, next)
-  fix as ""
+  let paren_space default(re_find(space_after.text, /^\s*/), "")
+  let paren_next if space_after.comments then "" else if next_token is ts_open_brace then "{{}}" else if next_token is ts_open_bracket then "[]" else if next_token is ts_open_paren then "()" else if next_token is ts_close_paren then "empty" else ""
+  let paren_wants (mode == "always") != contains(exceptions, paren_next)
+  when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !starts_with(trim_start(space_after.text), "//") && !paren_wants else paren_wants && (paren_next != "empty" || contains(exceptions, "empty"))
+  report at if paren_space != "" then end_offset else offset
+  fix space_after as if paren_wants then " " else ""
+  warn if paren_space != "" then "There should be no space after this paren." else "There must be a space after this paren."
 }
-in js_parenthesis_inner_space rule space-in-parens:close-space warn "There should be no space before this paren." {
+in ts_close_paren rule space-in-parens:before {
   option mode "always" | "never" = "never" "spacing inside parentheses"
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when starts_with(after, ")")
-  let prev if ends_with(before, "}}") then "{{}}" else if ends_with(before, "]") then "[]" else if ends_with(before, ")") then "()" else if ends_with(before, "(") then "empty" else ""
-  when (mode == "never") != contains(exceptions, prev)
-  fix as ""
-}
-over parentheses match js_paren_open_tight /(?<=\()[^ \t\r\n)]/
-over parentheses match js_paren_close_tight /[^ \t\r\n(](?=\))/
-in js_paren_open_tight rule space-in-parens:missing-open warn "There must be a space after this paren." {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
-  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  let next if text == "{{" then "{{}}" else if text == "[" then "[]" else if text == "(" then "()" else ""
-  when (mode == "always") != contains(exceptions, next)
-  report at offset - 1
-  fix as " " text
-}
-in js_paren_close_tight rule space-in-parens:missing-close warn "There must be a space before this paren." {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
-  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  let prev if text == "}}" then "{{}}" else if text == "]" then "[]" else if text == ")" then "()" else ""
-  when (mode == "always") != contains(exceptions, prev)
-  report at end_offset
-  fix as text " "
-}
-over parentheses match js_paren_empty_spaced /(?<=\()[ \t]+\)/
-over parentheses match js_paren_empty_tight /(?<=\()\)/
-in js_paren_empty_spaced rule space-in-parens:empty-open-space warn "There should be no space after this paren." {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
-  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when (mode == "never") != contains(exceptions, "empty")
-  report at offset
-  fix as ")"
-}
-in js_paren_empty_spaced rule space-in-parens:empty-close-space warn "There should be no space before this paren." {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
-  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when (mode == "never") != contains(exceptions, "empty")
-  report at offset
-  fix as ")"
-}
-in js_paren_empty_tight rule space-in-parens:empty-missing-open warn "There must be a space after this paren." {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
-  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when mode == "never" && contains(exceptions, "empty")
-  report at offset - 1
-  fix as " )"
-}
-in js_paren_empty_tight rule space-in-parens:empty-missing-close warn "There must be a space before this paren." {
-  option mode "always" | "never" = "never" "spacing inside parentheses"
-  option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
-  when mode == "never" && contains(exceptions, "empty")
-  report at offset
-  fix as " )"
+  let paren_space default(re_find(space_before.text, /\s*$/), "")
+  let paren_previous if space_before.comments then "" else if previous_token is ts_close_brace then "{{}}" else if previous_token is ts_close_bracket then "[]" else if previous_token is ts_close_paren then "()" else if previous_token is ts_open_paren then "empty" else ""
+  let paren_wants (mode == "always") != contains(exceptions, paren_previous)
+  when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !paren_wants else paren_wants && (paren_previous != "empty" || contains(exceptions, "empty"))
+  report at if paren_space != "" then offset - byte_len(paren_space) else offset
+  fix space_before as if paren_wants then " " else ""
+  warn if paren_space != "" then "There should be no space before this paren." else "There must be a space before this paren."
 }
 
 in brackets match js_bracket_inner_space /(?<=\[)[ \t]+(?=[^ \t\r\n\]])|(?<=[^ \t\r\n\[])[ \t]+(?=\])/
@@ -215,30 +171,12 @@ in js_bracket_inner_space rule array-bracket-spacing warn "There should be no sp
   when parent == "brackets"
   fix as ""
 }
-in js_code match js_dot_line_end /(?<![?.\d])\.(?=[ \t]*\r?\n)/
-in js_dot_line_end rule dot-location warn "Expected dot to be on same line as property." {
+in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
   option style "object" | "property" = "property" "line for a member-access dot"
-  when style == "property"
-}
-in js_code match js_dot_line_start /(?<=\n[ \t]*)\.(?=[\w$#])/
-in js_dot_line_start rule dot-location:object warn "Expected dot to be on same line as object." {
-  option style "object" | "property" = "property" "line for a member-access dot"
-  when style == "object"
-}
-in js_code match js_optional_dot_line_start /(?<=\n[ \t]*)\?\.(?=[\w$#])/
-in js_optional_dot_line_start rule dot-location:optional-object warn "Expected dot to be on same line as object." {
-  option style "object" | "property" = "property" "line for a member-access dot"
-  when style == "object"
-}
-in js_code match js_dot_after_comment /(?<=\n[ \t]*\/\*[^*]*\*\/[ \t]*)\.(?=[\w$#])/
-in js_dot_after_comment rule dot-location:comment-object warn "Expected dot to be on same line as object." {
-  option style "object" | "property" = "property" "line for a member-access dot"
-  when style == "object"
-}
-in js_code match js_dot_before_comment /(?<![?.\d])\.(?=[ \t]*\/\*[^*]*\*\/[ \t]*\r?\n)/
-in js_dot_before_comment rule dot-location:comment-property warn "Expected dot to be on same line as property." {
-  option style "object" | "property" = "property" "line for a member-access dot"
-  when style == "property"
+  when text == "." || text == "?."
+  when parent is (ts_member, ts_qualified_name, ts_import_type, ts_meta_property, ts_jsx_name)
+  when if style == "object" then space_before.line_break else space_after.line_break
+  warn if style == "object" then "Expected dot to be on same line as object." else "Expected dot to be on same line as property."
 }
 
 in js_interpolation match js_interpolation_space /(?<=\$\{)[ \t]+|[ \t]+(?=\})/

@@ -4,6 +4,47 @@
 define {
 
 fn layout_comma_space(gap, before_side) = default(re_find(gap, if before_side then /\s*$/ else /^\s*/), "")
+fn layout_same_line(gap) = !re_test(gap, /[\n\r\u{2028}\u{2029}]/)
+@macro layout_block_space_options {
+  option style "always" | "never" = "always" "spaces inside non-empty blocks"
+}
+@macro layout_computed_space_options {
+  option style "always" | "never" = "never" "spaces inside computed property brackets"
+  option enforceForClassMembers boolean = true "check computed class members"
+}
+@macro layout_switch_colon_options {
+  option before boolean = false "space before case colon"
+  option after boolean = true "space after case colon"
+}
+in ts_block, ts_static_block, ts_switch, ts_enum let layout_block_line_comment starts_with(trim_start(opener.ts_open_brace.space_after.text), "//")
+in ts_method let layout_class_method parent is ts_class
+in ts_computed_key let layout_computed_class parent is ts_class_property || default(parent.layout_class_method, false)
+in ts_rest, ts_spread let layout_spread_property parent is (ts_object, ts_object_pattern)
+in ts_block let layout_block_function parent is (ts_function, ts_arrow, ts_method)
+in ts_block let layout_block_case parent is ts_case
+in ts_block let layout_block_module parent is ts_namespace
+in ts_block let layout_brace_excluded parent is (ts_program, ts_block, ts_case)
+in ts_block let layout_brace_keyword parent is (ts_if, ts_try)
+in ts_block, ts_static_block, ts_switch, ts_class let layout_brace_single opener.ts_open_brace.line == closer.ts_close_brace.line
+in ts_function let layout_generator_kind if name != null then "named" else "anonymous"
+in ts_method let layout_generator_kind if parent is ts_object then "shorthand" else "method"
+@macro layout_yield_star_options {
+  option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
+  option before boolean | null = null "override space before star"
+  option after boolean | null = null "override space after star"
+}
+@macro layout_generator_star_options {
+  option mode "before" | "after" | "both" | "neither" = "before" "spacing around generator star"
+  option before boolean | null = null "override space before star"
+  option after boolean | null = null "override space after star"
+  option named star_mode | null = null "named function override"
+  option anonymous star_mode | null = null "anonymous function override"
+  option method star_mode | null = null "method override"
+  option shorthand star_mode | null = null "object method override"
+  let star_override if parent.layout_generator_kind == "named" then named else if parent.layout_generator_kind == "anonymous" then anonymous else if parent.layout_generator_kind == "shorthand" then default(shorthand, method) else method
+  let resolved_mode if type_of(star_override) == "str" then star_override else mode
+}
+fn layout_star_space(overridden, mode, configured, before_side) = if type_of(overridden) == "str" then mode == "both" || mode == (if before_side then "before" else "after") else default(get(overridden, if before_side then "before" else "after"), default(configured, mode == "both" || mode == (if before_side then "before" else "after")))
 macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
 macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
 fn layout_padding_attached_start(gap) = default(re_find(gap, "^(?:" layout_horizontal_space "*" layout_comment_pattern ")*"), "")
@@ -239,33 +280,41 @@ in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, t
   warn "Operator '{text}' must be spaced."
 }
 
-in ts_block, ts_switch, ts_class, ts_interface, ts_enum rule space-before-blocks {
+in ts_open_brace rule space-before-blocks {
   option style "always" | "never" = "always" "spaces before blocks"
   option functions "always" | "never" | "off" | null = null "function body policy"
   option keywords "always" | "never" | "off" | null = null "statement body policy"
   option classes "always" | "never" | "off" | null = null "class body policy"
   option modules "always" | "never" | "off" | null = null "module body policy"
-  let block_gap block_prefix_spacing
-  when block_gap != null
-  let block_mode if block_gap.kind == "classes" then default(classes, style) else if block_gap.kind == "functions" then default(functions, style) else if block_gap.kind == "modules" then default(modules, style) else default(keywords, style)
-  when block_mode != "off" && block_gap.spaced != (block_mode == "always")
-  report at block_gap.offset
-  warn if block_gap.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
+  when parent is (ts_block, ts_switch, ts_class, ts_interface, ts_enum) && previous_token != null
+  let block_class parent is (ts_class, ts_interface, ts_enum)
+  let block_function default(parent.layout_block_function, false)
+  let block_previous token_neighbours.before.text
+  when block_previous != "=>"
+  when !(contains(["try", "do", "else", "finally", "catch", "static"], block_previous) && !block_class && !block_function)
+  when !(block_previous == ":" && default(parent.layout_block_case, false))
+  when !space_before.line_break
+  let block_mode if block_class then default(classes, style) else if block_function then default(functions, style) else if default(parent.layout_block_module, false) then default(modules, style) else default(keywords, style)
+  when block_mode != "off" && space_before.spaced != (block_mode == "always")
+  warn if space_before.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
 }
 
-in ts_function, ts_method, ts_arrow, ts_try rule space-before-function-paren {
+in ts_open_paren rule space-before-function-paren {
   option style "always" | "never" = "always" "spaces before function parameter lists"
   option named "always" | "never" | "ignore" | null = null "named function policy"
   option anonymous "always" | "never" | "ignore" | null = null "anonymous function policy"
   option asyncArrow "always" | "never" | "ignore" | null = null "async arrow policy"
   option catch "always" | "never" | "ignore" | null = null "catch policy"
-  let function_gap function_paren_spacing
-  when function_gap != null
-  let paren_mode if function_gap.kind == "named" then default(named, style) else if function_gap.kind == "anonymous" then default(anonymous, style) else if function_gap.kind == "asyncArrow" then default(asyncArrow, style) else default(catch, style)
-  when paren_mode != "ignore" && !(paren_mode == "always" && function_gap.generic_anonymous)
-  when function_gap.spaced != (paren_mode == "always")
-  report at if function_gap.spaced then function_gap.start else function_gap.end
-  warn if function_gap.spaced then "Unexpected space before function parentheses." else "Missing space before function parentheses."
+  when parent is (ts_function, ts_method, ts_arrow, ts_try) && previous_token != null
+  let function_named parent is ts_method || parent.name != null
+  when !(parent is ts_function && !function_named && contains(parent.modifier, "*"))
+  when parent not ts_arrow || token_neighbours.before.text == "async"
+  when parent not ts_try || parent.parameter != null
+  let paren_mode if parent is ts_try then default(catch, style) else if parent is ts_arrow then default(asyncArrow, style) else if function_named then default(named, style) else default(anonymous, style)
+  when paren_mode != "ignore" && !(paren_mode == "always" && !function_named && parent.type_parameter != null)
+  when space_before.spaced != (paren_mode == "always")
+  report at if space_before.spaced then space_before.start else offset
+  warn if space_before.spaced then "Unexpected space before function parentheses." else "Missing space before function parentheses."
 }
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
@@ -299,50 +348,83 @@ in ts_member, ts_index, ts_indexed_access, ts_qualified_name, ts_import_type rul
   warn "Unexpected whitespace before property {property_spacing.name}."
 }
 
-in ts_block, ts_static_block, ts_switch, ts_enum rule block-spacing {
-  option style "always" | "never" = "always" "spaces inside non-empty blocks"
-  each delimiter_site in filter(delimiter_spacing_sites, s => s.spaced != (style == "always") && !(style == "never" && s.line_comment))
-  report at delimiter_site.offset
-  fix as slice(text, 0, delimiter_site.start - offset) (if style == "always" then " " else "") slice(text, delimiter_site.end - offset)
-  warn if style == "always" then "Requires a space {delimiter_site.side} '{delimiter_site.token}'." else "Unexpected space(s) {delimiter_site.side} '{delimiter_site.token}'."
+in ts_open_brace rule block-spacing:after {
+  @layout_block_space_options
+  when parent is (ts_block, ts_static_block, ts_switch, ts_enum)
+  when space_after.comments || next_token not ts_close_brace
+  when !(style == "never" && parent.layout_block_line_comment)
+  let block_space layout_comma_space(space_after.text, false)
+  when layout_same_line(block_space) && (block_space != "") != (style == "always")
+  report at if block_space != "" then end_offset else offset
+  fix space_after as if style == "always" then " " else ""
+  warn if style == "always" then "Requires a space after '{{'." else "Unexpected space(s) after '{{'."
 }
 
-in ts_computed_key, ts_index, ts_indexed_access rule computed-property-spacing {
-  option style "always" | "never" = "never" "spaces inside computed property brackets"
-  option enforceForClassMembers boolean = true "check computed class members"
-  each delimiter_site in filter(delimiter_spacing_sites, s => s.spaced != (style == "always") && (!s.class_member || enforceForClassMembers))
-  report at delimiter_site.offset
-  fix as slice(text, 0, delimiter_site.start - offset) (if style == "always" then " " else "") slice(text, delimiter_site.end - offset)
-  warn if style == "always" then "A space is required {delimiter_site.side} '{delimiter_site.token}'." else "There should be no space {delimiter_site.side} '{delimiter_site.token}'."
+in ts_close_brace rule block-spacing:before {
+  @layout_block_space_options
+  when parent is (ts_block, ts_static_block, ts_switch, ts_enum)
+  when space_before.comments || previous_token not ts_open_brace
+  when !(style == "never" && parent.layout_block_line_comment)
+  let block_space layout_comma_space(space_before.text, true)
+  when layout_same_line(block_space) && (block_space != "") != (style == "always")
+  report at if block_space != "" then offset - byte_len(block_space) else offset
+  fix space_before as if style == "always" then " " else ""
+  warn if style == "always" then "Requires a space before '}}'." else "Unexpected space(s) before '}}'."
+}
+
+in ts_open_bracket rule computed-property-spacing:after {
+  @layout_computed_space_options
+  when parent is (ts_computed_key, ts_index, ts_indexed_access)
+  when !default(parent.layout_computed_class, false) || enforceForClassMembers
+  let computed_space layout_comma_space(space_after.text, false)
+  when layout_same_line(computed_space) && (computed_space != "") != (style == "always")
+  report at if computed_space != "" then end_offset else offset
+  fix space_after as if style == "always" then " " else ""
+  warn if style == "always" then "A space is required after '['." else "There should be no space after '['."
+}
+
+in ts_close_bracket rule computed-property-spacing:before {
+  @layout_computed_space_options
+  when parent is (ts_computed_key, ts_index, ts_indexed_access)
+  when !default(parent.layout_computed_class, false) || enforceForClassMembers
+  let computed_space layout_comma_space(space_before.text, true)
+  when layout_same_line(computed_space) && (computed_space != "") != (style == "always")
+  report at if computed_space != "" then offset - byte_len(computed_space) else offset
+  fix space_before as if style == "always" then " " else ""
+  warn if style == "always" then "A space is required before ']'." else "There should be no space before ']'."
 }
 
 schema star_mode "before" | "after" | "both" | "neither" | { before?: boolean; after?: boolean }
 
-in ts_yield rule yield-star-spacing {
-  option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
-  option before boolean | null = null "override space before star"
-  option after boolean | null = null "override space after star"
-  each star_site in filter(star_spacing_sites, s => s.spaced != (if s.side == "before" then default(before, mode == "before" || mode == "both") else default(after, mode == "after" || mode == "both")))
-  report at star_site.offset
-  warn if star_site.spaced then "Unexpected space {star_site.side} *." else "Missing space {star_site.side} *."
+in ts_yield.operator rule yield-star-spacing:before {
+  @layout_yield_star_options
+  when text == "*" && previous_token != null
+  when space_before.spaced != default(before, mode == "before" || mode == "both")
+  warn if space_before.spaced then "Unexpected space before *." else "Missing space before *."
 }
 
-in ts_function, ts_method rule generator-star-spacing {
-  option mode "before" | "after" | "both" | "neither" = "before" "spacing around generator star"
-  option before boolean | null = null "override space before star"
-  option after boolean | null = null "override space after star"
-  option named star_mode | null = null "named function override"
-  option anonymous star_mode | null = null "anonymous function override"
-  option method star_mode | null = null "method override"
-  option shorthand star_mode | null = null "object method override"
-  let star_kind first(star_spacing_sites).kind
-  let star_override if star_kind == "named" then named else if star_kind == "anonymous" then anonymous else if star_kind == "shorthand" then default(shorthand, method) else method
-  let resolved_mode if type_of(star_override) == "str" then star_override else mode
-  let wants_before if type_of(star_override) == "str" then resolved_mode == "before" || resolved_mode == "both" else default(star_override.before, default(before, resolved_mode == "before" || resolved_mode == "both"))
-  let wants_after if type_of(star_override) == "str" then resolved_mode == "after" || resolved_mode == "both" else default(star_override.after, default(after, resolved_mode == "after" || resolved_mode == "both"))
-  each star_site in filter(star_spacing_sites, s => s.separated != (if s.side == "before" then wants_before else wants_after))
-  report at star_site.offset
-  warn if star_site.separated then "Unexpected space {star_site.side} *." else "Missing space {star_site.side} *."
+in ts_yield.operator rule yield-star-spacing:after {
+  @layout_yield_star_options
+  when text == "*" && next_token != null
+  when space_after.spaced != default(after, mode == "after" || mode == "both")
+  warn if space_after.spaced then "Unexpected space after *." else "Missing space after *."
+}
+
+in ts_function.modifier, ts_method.modifier rule generator-star-spacing:before {
+  @layout_generator_star_options
+  when text == "*" && previous_token != null
+  when parent not ts_method || offset != token_neighbours.parent_start
+  let star_space layout_comma_space(space_before.text, true)
+  when (star_space != "") != layout_star_space(star_override, resolved_mode, before, true)
+  warn if star_space != "" then "Unexpected space before *." else "Missing space before *."
+}
+
+in ts_function.modifier, ts_method.modifier rule generator-star-spacing:after {
+  @layout_generator_star_options
+  when text == "*" && next_token != null
+  let star_space layout_comma_space(space_after.text, false)
+  when (star_space != "") != layout_star_space(star_override, resolved_mode, after, false)
+  warn if star_space != "" then "Unexpected space after *." else "Missing space after *."
 }
 
 in ts_function, ts_arrow, ts_class, ts_interface, ts_type_alias, ts_method, ts_call, ts_new, ts_tagged_template, ts_type_reference, ts_function_type, ts_method_signature, ts_call_signature rule type-generic-spacing {
@@ -369,26 +451,34 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
     else if unary_gap.prefix then "Unexpected space after unary operator '{unary_gap.operator}'." else "Unexpected space before unary operator '{unary_gap.operator}'."
 }
 
-in ts_rest, ts_spread rule rest-spread-spacing {
+in ts_ellipsis rule rest-spread-spacing {
   option style "always" | "never" = "never" "spacing after rest and spread"
-  let spread_gap spread_spacing
-  when spread_gap != null && spread_gap.spaced != (style == "always")
-  report at if style == "always" then offset else spread_gap.start
-  fix as slice(text, 0, spread_gap.start - offset) (if style == "always" then " " else "") slice(text, spread_gap.end - offset)
-  warn if style == "always" then "Expected whitespace after {spread_gap.kind} operator." else "Unexpected whitespace after {spread_gap.kind} operator."
+  when parent is (ts_rest, ts_spread) && next_token != null
+  let spread_space layout_comma_space(space_after.text, false)
+  when (spread_space != "") != (style == "always")
+  let spread_kind (if parent is ts_rest then "rest" else "spread") (if parent.layout_spread_property then " property" else "")
+  report at if style == "always" then offset else end_offset
+  fix space_after as if style == "always" then " " else ""
+  warn if style == "always" then "Expected whitespace after {spread_kind} operator." else "Unexpected whitespace after {spread_kind} operator."
 }
 
-in ts_case rule switch-colon-spacing {
-  option before boolean = false "space before case colon"
-  option after boolean = true "space after case colon"
-  each colon_site in filter(switch_colon_sites, s => (if s.side == "before" then before else after) != s.spaced)
-  report at colon_site.offset
-  warn if colon_site.side == "before" && before || colon_site.side == "after" && after then "Expected space(s) {colon_site.side} this colon." else "Unexpected space(s) {colon_site.side} this colon."
+in ts_colon rule switch-colon-spacing:before {
+  @layout_switch_colon_options
+  when parent is ts_case && previous_token != null
+  when !space_before.line_break && before != space_before.spaced
+  warn if before then "Expected space(s) before this colon." else "Unexpected space(s) before this colon."
 }
 
-in ts_program rule no-extra-semi {
-  each extra_semi in extra_semicolons
-  report at extra_semi
+in ts_colon rule switch-colon-spacing:after {
+  @layout_switch_colon_options
+  when parent is ts_case && next_token != null && next_token not ts_close_brace
+  when !space_after.line_break && after != space_after.spaced
+  warn if after then "Expected space(s) after this colon." else "Unexpected space(s) after this colon."
+}
+
+in ts_empty, ts_semicolon rule no-extra-semi {
+  when layer is ts_empty && parent not (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_if, ts_labeled, ts_with)
+    || layer is ts_semicolon && parent is ts_class
   warn "Unnecessary semicolon."
 }
 
@@ -488,13 +578,36 @@ in ts_tagged_template rule template-tag-spacing:missing {
   warn "Missing space between template tag and template literal."
 }
 
-in ts_block, ts_static_block, ts_switch, ts_class rule brace-style {
+@macro layout_brace_options {
   option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
   option allowSingleLine boolean = false "allow single-line block bodies"
-  each brace_site in brace_style_sites
-  when if brace_site.kind == "keyword" then brace_site.same_line != (style == "1tbs") else if brace_site.kind == "open" then (if style == "allman" then brace_site.same_line && !(allowSingleLine && brace_site.single_line) else !brace_site.same_line) else brace_site.same_line && !(allowSingleLine && brace_site.single_line)
-  report at brace_site.offset
-  warn if brace_site.kind == "keyword" then (if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block.") else if brace_site.kind == "open" then (if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement.") else if brace_site.kind == "body" then "Statement inside of curly braces should be on next line." else "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
+  when parent is (ts_block, ts_static_block, ts_switch, ts_class)
+  when !default(parent.layout_brace_excluded, false)
+}
+in ts_open_brace rule brace-style:open {
+  @layout_brace_options
+  when previous_token != null
+  when if style == "allman" then !space_before.line_break && !(allowSingleLine && parent.layout_brace_single) else space_before.line_break
+  warn if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement."
+}
+in ts_open_brace rule brace-style:body {
+  @layout_brace_options
+  when next_token not ts_close_brace
+  when !space_after.line_break && !(allowSingleLine && parent.layout_brace_single)
+  warn "Statement inside of curly braces should be on next line."
+}
+in ts_close_brace rule brace-style:close {
+  @layout_brace_options
+  when previous_token not ts_open_brace
+  when !space_before.line_break && !(allowSingleLine && parent.layout_brace_single)
+  warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
+}
+in ts_close_brace rule brace-style:keyword {
+  @layout_brace_options
+  when default(parent.layout_brace_keyword, false)
+  when contains(["else", "catch", "finally"], token_neighbours.after.text)
+  when space_after.line_break == (style == "1tbs")
+  warn if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block."
 }
 
 group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function

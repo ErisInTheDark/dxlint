@@ -70,6 +70,9 @@ pub struct Rule {
     fix_target: FixTarget,
     /// Reads token nodes (`opener.x`): native trees need them.
     reads_tokens: bool,
+    /// Reads `children.x`; reads `previous.x` / `next.x`.
+    reads_children: bool,
+    reads_siblings: bool,
     /// The layers it targets when all its targets are layers (else empty):
     /// where its `let`s can be read from another node (`previous.rank`).
     target_layers: Vec<u32>,
@@ -134,6 +137,9 @@ pub struct Linter {
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
     attrs: Vec<Attr>,
+    /// An attribute reads `children.x`, or `previous.x` on a token: files
+    /// then get every token kind, so those reads see the same nodes.
+    token_attr_neighbours: bool,
     /// `in a forward x from field`: (matcher, attribute, label).
     forwards: Vec<(u32, u16, u16)>,
     /// Other files' exports, read on demand by native rules.
@@ -201,17 +207,29 @@ impl Linter {
         // Overlays only matter when an active rule can see inside them, and
         // each tree only when an active rule targets its layers.
         let mut targets = vec![false; self.grammar.matchers.len()];
-        let (mut wants_layers, mut wants_native, mut wants_tokens) = (false, false, false);
-        let is_token = |m: u32| {
-            self.grammar.native_kind(m).and_then(|k| crate::native::ts::kinds::ALL_KINDS.get(k.kind as usize)).is_some_and(|k| k.is_token())
-        };
+        let (mut wants_layers, mut wants_native) = (false, false);
+        // Token kinds the active rules use (a node per token costs): the
+        // ones they target, and brackets for `opener.x`. All of them when a
+        // read would see the difference (`children.x`, `previous.x` on a token).
+        use crate::native::ts::kinds::{Kind, ALL_KINDS};
+        let mut token_kinds = [false; ALL_KINDS.len()];
+        let mut all_tokens = false;
+        let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
         for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
-            wants_tokens |= f.reads_tokens;
+            if f.reads_tokens {
+                for k in [Kind::OpenParen, Kind::CloseParen, Kind::OpenBracket, Kind::CloseBracket, Kind::OpenBrace, Kind::CloseBrace, Kind::OpenAngle, Kind::CloseAngle] {
+                    token_kinds[k as usize] = true;
+                }
+            }
+            let mut on_tokens = f.reads_tokens;
             for t in &f.targets {
                 match *t {
                     Target::Matcher(m) | Target::Field(m, _) if self.grammar.native_kind(m).is_some() => {
                         wants_native = true;
-                        wants_tokens |= is_token(m);
+                        if let Some(k) = token_kind(m) {
+                            token_kinds[k] = true;
+                            on_tokens = true;
+                        }
                     }
                     Target::Matcher(m) | Target::Field(m, _) => {
                         targets[m as usize] = true;
@@ -220,6 +238,11 @@ impl Linter {
                     Target::Lang(_) => wants_layers = true,
                 }
             }
+            all_tokens |= f.reads_children || on_tokens && f.reads_siblings;
+        }
+        let wants_tokens = token_kinds.iter().any(|&k| k);
+        if wants_tokens && (all_tokens || self.token_attr_neighbours) {
+            token_kinds = crate::native::ts::tokens::ALL_TOKENS;
         }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
@@ -248,9 +271,9 @@ impl Linter {
             if let (Some(front), Some(jsx)) = (self.grammar.natives.first(), crate::native::ts::reads(path)) {
                 let parse_started = std::time::Instant::now();
                 let mut parsed = crate::native::ts::parse(text, jsx);
-                // Token layers cost a node per token: only when a rule targets one.
+                // Token layers cost a node per token: only the kinds rules use.
                 if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
-                    crate::native::ts::tokens::attach(text, parsed);
+                    crate::native::ts::tokens::attach_selected(text, parsed, &token_kinds);
                 }
                 let rules_started = std::time::Instant::now();
                 if let Some(p) = &self.profile {

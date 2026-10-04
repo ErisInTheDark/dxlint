@@ -48,11 +48,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(delimiters::member_delimiter_sites, n),
     },
     Fact {
-        name: "brace_style_sites",
-        doc: "native controlled block/static/switch/class bodies: {kind,offset,same_line,single_line} open/body/close/keyword boundaries, bare statement-list blocks exempt",
-        get: |f, n| f.with_file(delimiters::brace_style_sites, n),
-    },
-    Fact {
         name: "comment_contents",
         doc: "native program: {kind,body,offset,side} begin/end lexical comment sites, excluding hashbang and opaque string/template/JSX text spans",
         get: |f, n| f.with_file(comment_contents, n),
@@ -78,16 +73,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(call_spacing, n),
     },
     Fact {
-        name: "switch_colon_sites",
-        doc: "native switch case: colon sides {offset,side,start,end,spaced}; only adjacent tokens on the same line, gap retains comments",
-        get: |f, n| f.with_file(punctuation::switch_colon_sites, n),
-    },
-    Fact {
-        name: "extra_semicolons",
-        doc: "native program: redundant statement and class-member semicolon byte offsets; excludes control-statement empty bodies",
-        get: |f, n| f.with_file(punctuation::extra_semicolons, n),
-    },
-    Fact {
         name: "semicolon_style_sites",
         doc: "native program: statement and for-header semicolons {offset,previous_line,next_line,last_child,for_header}; line flags indicate a break to the adjacent token",
         get: |f, n| f.with_file(punctuation::semicolon_style_sites, n),
@@ -103,24 +88,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(operators::unary_spacing, n),
     },
     Fact {
-        name: "spread_spacing",
-        doc: "native rest/spread: {kind,start,end,spaced}; gap ends at the first token or comment after ...",
-        get: |f, n| f.with_file(operators::spread_spacing, n),
-    },
-    Fact {
         name: "generic_spacing_sites",
         doc: "native generic owners: {side,start,end,spaced}; before/after boundaries plus inner bracket gaps, excludes context-owned outer boundaries",
         get: |f, n| f.with_file(punctuation::generic_spacing_sites, n),
-    },
-    Fact {
-        name: "star_spacing_sites",
-        doc: "native generator/yield: {kind,side,offset,start,end,separated,spaced}; generator separation includes comments, yield spaced counts whitespace outside comments",
-        get: |f, n| f.with_file(operators::star_spacing_sites, n),
-    },
-    Fact {
-        name: "delimiter_spacing_sites",
-        doc: "native blocks and computed properties: {side,token,offset,start,end,spaced,class_member,line_comment}; whitespace gaps beside delimiters and comments on the same line",
-        get: |f, n| f.with_file(delimiters::delimiter_spacing_sites, n),
     },
     Fact {
         name: "property_spacing",
@@ -131,16 +101,6 @@ pub const FACTS: &[Fact] = &[
         name: "trailing_comma_sites",
         doc: "native list owners: {kind,offset,trailing,multiline,allowed,tsx_single}; offset is comma or insertion point, multiline compares last item/comma with closing token",
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
-    },
-    Fact {
-        name: "function_paren_spacing",
-        doc: "native functions/methods/async arrows/try-catch: {kind,start,end,spaced,generic_anonymous}; gap immediately before the parameter-list opener",
-        get: |f, n| f.with_file(delimiters::function_paren_spacing, n),
-    },
-    Fact {
-        name: "block_prefix_spacing",
-        doc: "native block/switch/class/interface/enum: {kind,offset,spaced}; same-line gap before the opening brace, excludes arrow/keyword/case-colon boundaries owned by other rules",
-        get: |f, n| f.with_file(delimiters::block_prefix_spacing, n),
     },
     Fact {
         name: "class_member_gaps",

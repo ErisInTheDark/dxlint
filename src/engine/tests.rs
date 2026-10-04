@@ -1262,6 +1262,18 @@ fn paths_reach_ancestors_parents_fields_and_nodes() {
 }
 
 #[test]
+fn selecting_token_kinds_keeps_what_neighbour_reads_see() {
+    // Only commas are targeted, but a comma's previous token is still there.
+    let l = native_linter(r#"in ts_comma rule c info "{previous.layer}""#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f(a, b);").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["ts_open_paren"]);
+    let l = native_linter(r#"in ts_call rule c info "{count(children)}"
+        in ts_comma rule d info "d""#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f(a, b);").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["6", "d"]);
+}
+
+#[test]
 fn byte_slice_counts_bytes_and_refuses_split_characters() {
     let l = linter(r#"in .t match word /\S+/ { rule b info "{byte_slice(text, 2)}|{byte_slice(text, 0, -2)}" }"#);
     assert_eq!(rule_messages(&l, "éab"), vec!["b: ab|é"]);

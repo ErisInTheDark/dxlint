@@ -54,7 +54,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             let _ = grammar.functions[i].body.set(body);
         }
     }
-    let attrs = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
+    let (attrs, token_attr_neighbours) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -177,6 +177,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         by_field,
         by_lang,
         attrs,
+        token_attr_neighbours,
         forwards,
         project: Default::default(),
         fingerprint,
@@ -295,7 +296,10 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
 }
 
 /// Compiles every `let` attribute on each layer that defines it.
-fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> Vec<Attr> {
+/// The attributes, and whether one reads nodes that selecting token kinds
+/// would change: `children.x` anywhere, `previous.x` / `next.x` on a token.
+fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> (Vec<Attr>, bool) {
+    let mut token_neighbours = false;
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
@@ -321,13 +325,26 @@ fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String]
                     continue;
                 }
                 let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), ..Scope::new(g) };
+                let uses_before = uses.borrow().len();
                 if let Some(e) = scope.compile(&def.expr, errors) {
                     attrs[id].defs.push((m, e));
                 }
+                let (children, siblings) = reads_neighbours(&uses.borrow()[uses_before..]);
+                token_neighbours |= children || is_token_layer(g, m) && siblings;
             }
         }
     }
-    attrs
+    (attrs, token_neighbours)
+}
+
+fn is_token_layer(g: &Grammar, m: u32) -> bool {
+    g.native_kind(m).and_then(|k| crate::native::ts::kinds::ALL_KINDS.get(k.kind as usize)).is_some_and(|k| k.is_token())
+}
+
+/// Whether these reads include `children.x`, and `previous.x` / `next.x`.
+fn reads_neighbours(uses: &[(crate::config::source::Span, crate::expr::Resolved)]) -> (bool, bool) {
+    let read = |names: &[&str]| uses.iter().any(|(_, r)| matches!(r, crate::expr::Resolved::Relative(n) if names.contains(n)));
+    (read(&["children"]), read(&["previous", "next"]))
 }
 
 /// Named option schemas, after checking every schema name used refers to
@@ -440,9 +457,12 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     }
     // Reading a node's own brackets needs the file's token nodes.
     let reads_tokens = uses.borrow()[uses_before..].iter().any(|(_, r)| matches!(r, crate::expr::Resolved::Group(g) if g == "opener" || g == "closer"));
+    let (reads_children, reads_siblings) = reads_neighbours(&uses.borrow()[uses_before..]);
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
     Some(Rule {
         reads_tokens,
+        reads_children,
+        reads_siblings,
         target_layers,
         name: def.name.text.clone(),
         span: def.name.span,
