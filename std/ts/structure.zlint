@@ -3,25 +3,59 @@
 
 define {
 
+in ts_conditional let structure_ternary_jsx if parent is ts_conditional then parent.structure_ternary_jsx else parent is ts_jsx_expression
+in ts_binary, ts_logical let structure_operator operator
+in ts_conditional let structure_operator "?:"
+in ts_binary, ts_logical let structure_operator_offset operator.offset
+in ts_conditional let structure_operator_offset (test.space_after).end
+in ts_conditional let structure_test_offset test.offset
+in ts_conditional let structure_consequent_offset consequent.offset
+in ts_variable_declaration let structure_loop_declaration parent is (ts_for, ts_for_in, ts_for_of)
+in ts_union, ts_intersection let structure_first_type_offset first(type.offset)
+in ts_type_alias let structure_start offset
+in ts_unary let structure_typeof operator == "typeof"
+in ts_parenthesized let structure_typeof default(expression.structure_typeof, false)
+in ts_parenthesized let structure_single_conditional expression.layer is ts_conditional
+
+@macro structure_mixed_operator_rule(name, position) {
+  in ts_binary, ts_logical rule name {
+    option groups string[][] = [["+", "-", "*", "/", "%", "**"], ["&", "|", "^", "~", "<<", ">>", ">>>"], ["==", "!=", "===", "!==", ">", ">=", "<", "<="], ["&&", "||"], ["in", "instanceof"]] "operator groups requiring parentheses"
+    option allowSamePrecedence boolean = true "allow mixtures with equal precedence"
+    when parent is (ts_binary, ts_logical, ts_conditional)
+    let child_operator structure_operator
+    let outer_operator parent.structure_operator
+    when child_operator != outer_operator
+    when !allowSamePrecedence || precedence != parent.precedence
+    when any(groups, operators => contains(operators, child_operator) && contains(operators, outer_operator))
+    let child_first field == "left" || field == "test"
+    let left_operator if child_first then child_operator else outer_operator
+    let right_operator if child_first then outer_operator else child_operator
+    report at position
+    warn "Unexpected mix of '{left_operator}' and '{right_operator}'. Use parentheses to clarify the intended order of operations."
+  }
+}
+
+in ts_call, ts_new, ts_import_call let structure_argument_count count(argument)
+in ts_function, ts_call let structure_iife_wrapped parent is ts_parenthesized
+  || parent is (ts_if, ts_while, ts_do_while) && field == "test"
+  || parent is ts_switch && field == "discriminant"
+  || parent is ts_with && field == "object"
+  || parent is (ts_call, ts_new, ts_import_call) && field == "argument" && parent.structure_argument_count == 1 && next_token is ts_close_paren
+in ts_function let structure_iife_callee { direct: true, prototype: false, wrapped: structure_iife_wrapped }
+in ts_parenthesized let structure_iife_callee expression.structure_iife_callee
+in ts_member, ts_index let structure_iife_callee if (object.structure_iife_callee).direct && contains(["call", "apply"], static_name) then { direct: false, prototype: true, wrapped: (object.structure_iife_callee).wrapped } else null
+
 in ts_call rule wrap-iife {
   option mode "outside" | "inside" | "any" = "outside"
   option functionPrototypeMethods boolean = false "include function call/apply invocations"
-  let info iife_layout
+  let info callee.structure_iife_callee
   when info != null && (functionPrototypeMethods || !info.prototype)
-  when !info.call_wrapped && !info.function_wrapped || mode == "inside" && !info.function_wrapped || mode == "outside" && !info.call_wrapped
-  warn if !info.call_wrapped && !info.function_wrapped then "Wrap an immediate function invocation in parentheses." else if mode == "inside" then "Wrap only the function expression in parens." else "Move the invocation into the parens that contain the function."
+  when !structure_iife_wrapped && !info.wrapped || mode == "inside" && !info.wrapped || mode == "outside" && !structure_iife_wrapped
+  warn if !structure_iife_wrapped && !info.wrapped then "Wrap an immediate function invocation in parentheses." else if mode == "inside" then "Wrap only the function expression in parens." else "Move the invocation into the parens that contain the function."
 }
 
-in ts_binary, ts_logical rule no-mixed-operators {
-  option groups string[][] = [["+", "-", "*", "/", "%", "**"], ["&", "|", "^", "~", "<<", ">>", ">>>"], ["==", "!=", "===", "!==", ">", ">=", "<", "<="], ["&&", "||"], ["in", "instanceof"]] "operator groups requiring parentheses"
-  option allowSamePrecedence boolean = true "allow mixtures with equal precedence"
-  let info mixed_operators
-  when info != null && (!allowSamePrecedence || !info.same_precedence)
-  when any(groups, operators => contains(operators, info.left) && contains(operators, info.right))
-  each offset in info.offsets
-  report at offset
-  warn "Unexpected mix of '{info.left}' and '{info.right}'. Use parentheses to clarify the intended order of operations."
-}
+@structure_mixed_operator_rule(no-mixed-operators:child, structure_operator_offset)
+@structure_mixed_operator_rule(no-mixed-operators:parent, parent.structure_operator_offset)
 
 in ts_variable_declaration rule one-var {
   option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
@@ -144,15 +178,17 @@ in ts_parenthesized, ts_parenthesized_type rule no-extra-parens {
   warn "Unnecessary parentheses around expression."
 }
 
-in ts_conditional rule multiline-ternary {
+in ts_question, ts_colon rule multiline-ternary {
   option mode "always" | "always-multiline" | "never" = "always"
   option ignoreJSX boolean = false "ignore conditionals in JSX expressions"
-  each finding in ternary_linebreaks
-  when !ignoreJSX || !finding.jsx
-  when mode != "always-multiline" || finding.multiline
-  when mode == "never" && finding.broken || mode != "never" && !finding.broken
-  report at finding.offset
-  warn if mode == "never" then "Unexpected newline between {finding.operands} of ternary expression." else "Expected newline between {finding.operands} of ternary expression."
+  when parent is ts_conditional
+  when !ignoreJSX || !parent.structure_ternary_jsx
+  when mode != "always-multiline" || re_test(parent_text, /[\n\r\u{2028}\u{2029}]/)
+  let broken space_before.line_break || space_after.line_break
+  when mode == "never" && broken || mode != "never" && !broken
+  let operands if text == "?" then "test and consequent" else "consequent and alternate"
+  report at if text == "?" then parent.structure_test_offset else parent.structure_consequent_offset
+  warn if mode == "never" then "Unexpected newline between {operands} of ternary expression." else "Expected newline between {operands} of ternary expression."
 }
 
 in ts_program rule no-tabs {
@@ -194,7 +230,7 @@ in ts_regex rule wrap-regex {
 in ts_declarator rule one-var-declaration-per-line {
   option mode "initializations" | "always" = "initializations"
   when previous_sibling != null && !contains(previous_gap, "\n")
-  when !parent.for_declaration
+  when !parent.structure_loop_declaration
   when mode == "always" || init != null || previous.init != null
   warn "Expected variable declaration to be on a new line."
 }
@@ -209,9 +245,9 @@ in ts_binary rule eqeqeq {
   let same_literal_type left_literal != null && right_literal != null && left_literal.type == right_literal.type
   let loose operator == "==" || operator == "!="
   let strict_null (operator == "===" || operator == "!==") && null_check && mode == "always" && null_mode == "never"
-  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || equality_typeof))
+  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || default(left.structure_typeof, false) || default(right.structure_typeof, false)))
   let expected if strict_null then slice(operator, 0, len(operator) - 1) else operator "="
-  report at operator_offset
+  report at operator.offset
   warn "Expected '{expected}' and instead saw '{operator}'."
 }
 
@@ -248,22 +284,19 @@ in ts_program rule indent-binary-ops {
   warn "Expected indentation of " len(info.expected) " " (if mode == "tab" then "tab" else "space") (if len(info.expected) == 1 then "" else "s")
 }
 
-in ts_binary, ts_logical, ts_assignment, ts_declarator, ts_class_property, ts_conditional, ts_import_equals, ts_type_alias, ts_conditional_type, ts_union, ts_intersection, ts_type_parameter, ts_enum_member rule operator-linebreak {
+in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule operator-linebreak {
   option mode "before" | "after" | "none" | null = null "operator side of a line break"
   option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
-  let policies map(operator_linebreaks, info => {
-    info: info,
-    policy: default(get(overrides, info.operator), if mode == null && contains(["?", ":"], info.operator) then "before" else default(mode, "after")),
-  })
-  let findings map(policies, entry => {
-    info: entry.info,
-    policy: if entry.policy != "ignore" && entry.info.leading_union then "after" else entry.policy,
-  })
-  each entry in findings
-  when entry.policy != "ignore" && (entry.info.before || entry.info.after)
-  when entry.info.before && entry.info.after || entry.policy == "before" && !entry.info.before || entry.policy == "after" && !entry.info.after || entry.policy == "none"
-  report at entry.info.offset
-  warn if entry.info.before && entry.info.after then "Bad line breaking before and after '{entry.info.operator}'." else if entry.policy == "before" then "'{entry.info.operator}' should be placed at the beginning of the line." else if entry.policy == "after" then "'{entry.info.operator}' should be placed at the end of the line." else "There should be no line break before or after '{entry.info.operator}'."
+  when parent is (ts_binary, ts_logical, ts_assignment)
+    || parent is (ts_conditional, ts_conditional_type) && contains(["?", ":"], text)
+    || parent is (ts_declarator, ts_class_property, ts_import_equals, ts_type_alias, ts_type_parameter, ts_enum_member) && text == "="
+    || parent is (ts_union, ts_intersection) && contains(["|", "&"], text) && offset > parent.structure_first_type_offset
+  let placement default(get(overrides, text), if mode == null && contains(["?", ":"], text) then "before" else default(mode, "after"))
+  let next_text if parent is ts_type_alias then byte_slice(parent_text, space_after.end - parent.structure_start) else null
+  let policy if placement != "ignore" && parent is ts_type_alias && re_test(next_text, /^[|&]/) then "after" else placement
+  when policy != "ignore" && (space_before.line_break || space_after.line_break)
+  when space_before.line_break && space_after.line_break || policy == "before" && !space_before.line_break || policy == "after" && !space_after.line_break || policy == "none"
+  warn if space_before.line_break && space_after.line_break then "Bad line breaking before and after '{text}'." else if policy == "before" then "'{text}' should be placed at the beginning of the line." else if policy == "after" then "'{text}' should be placed at the end of the line." else "There should be no line break before or after '{text}'."
 }
 
 in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_call, ts_new, ts_if, ts_import, ts_export, ts_enum, ts_function_type, ts_interface, ts_type_literal, ts_tuple_type, ts_type_reference, ts_method, ts_class rule list-style {
@@ -356,12 +389,35 @@ in ts_program rule lines-around-comment {
   warn if info.boundary == "before" then "Expected line before comment." else "Expected line after comment."
 }
 
+in ts_parenthesized let structure_unwrapped_end default(expression.structure_unwrapped_end, expression.end_offset)
+in ts_parenthesized let structure_unwrapped_text default(expression.structure_unwrapped_text, expression.text)
+in ts_parenthesized let structure_chain_info expression.structure_chain_info
+in ts_parenthesized let structure_call_depth expression.structure_call_depth
+in ts_call, ts_new let structure_call_depth default((callee.structure_chain_info).depth, 1)
+
+@macro structure_chain_owner(kind, property_start, property_text, is_computed) {
+  in kind let structure_chain_info {
+    depth: 1 + default(object.structure_call_depth, 0),
+    offset: (object.space_after).end,
+    gap: byte_slice(source, default(object.structure_unwrapped_end, object.end_offset), property_start),
+    property: property_text,
+    computed: is_computed,
+    optional: optional != null,
+  }
+}
+@structure_chain_owner(ts_member, property.offset, default(property.structure_unwrapped_text, property.text), false)
+@structure_chain_owner(ts_index, index.offset, default(index.structure_unwrapped_text, index.text), true)
+
 in ts_call rule newline-per-chained-call {
   option ignoreChainWithDepth number = 2 "allow chains up to this depth"
-  let info call_chain_layout
-  when info != null && info.depth > ignoreChainWithDepth && info.same_line
+  let info callee.structure_chain_info
+  when info != null && info.depth > ignoreChainWithDepth && !re_test(info.gap, /[\n\r\u{2028}\u{2029}]/)
   report at info.offset
-  warn "Expected line break before `{info.callee}`."
+  let first_line default(re_find(info.property, /^[^\n\r\u{2028}\u{2029}]*/), "")
+  let prefix if info.optional then (if info.computed then "?.[" else "?.") else (if info.computed then "[" else ".")
+  let suffix if info.computed && len(first_line) == len(info.property) then "]" else ""
+  let callee_name prefix first_line suffix
+  warn "Expected line break before `{callee_name}`."
 }
 
 in ts_arrow.body rule implicit-arrow-linebreak {
@@ -375,7 +431,7 @@ in ts_arrow.body rule implicit-arrow-linebreak {
 in ts_arrow rule no-confusing-arrow {
   option allowParens boolean = true "parentheses disambiguate a conditional body"
   option onlyOneSimpleParam boolean = false "check only single identifier parameters"
-  when conditional_arrow_body == "bare" || !allowParens && conditional_arrow_body == "parenthesized"
+  when body.layer is ts_conditional || !allowParens && body.layer is ts_parenthesized && body.structure_single_conditional
   when !onlyOneSimpleParam || count(parameter) == 1 && re_test(first(parameter), /^[A-Za-z_$][\w$]*$/)
   warn "Arrow function used ambiguously with a conditional expression."
 }

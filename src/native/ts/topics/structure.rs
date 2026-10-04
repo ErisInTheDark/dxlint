@@ -17,90 +17,20 @@ mod indentation;
 mod padding;
 
 pub const FACTS: &[Fact] = &[
+    Fact { name: "precedence", doc: "native expressions and types: binding strength, increasing from sequence to primary", get: |f, n| f.with_file(|f, n| Value::from(f64::from(operators::precedence(&f.syntax, n))), n) },
     Fact { name: "line_layout_findings", doc: "native ts_program: tab runs, mixed indentation and line endings", get: |f, n| f.with_file(line_layout_findings, n) },
     Fact { name: "bom", doc: "native ts_program: source starts with a Unicode BOM", get: |f, n| f.with_file(bom, n) },
-    Fact { name: "operator_offset", doc: "native ts_binary: operator position", get: |f, n| f.with_file(operator_offset, n) },
-    Fact { name: "for_declaration", doc: "native ts_variable_declaration: declaration is a loop header", get: |f, n| f.with_file(for_declaration, n) },
-    Fact { name: "conditional_arrow_body", doc: "native ts_arrow: conditional body, direct or parenthesized", get: |f, n| f.with_file(conditional_arrow_body, n) },
-    Fact { name: "equality_typeof", doc: "native ts_binary: an operand is a typeof expression", get: |f, n| f.with_file(equality_typeof, n) },
-    Fact { name: "ternary_linebreaks", doc: "native ts_conditional: operand linebreaks and report positions", get: |f, n| f.with_file(ternary_linebreaks, n) },
     Fact { name: "excess_parens", doc: "native parenthesized expressions and types: redundant parentheses with option contexts", get: |f, n| f.with_file(parens::excess, n) },
     Fact { name: "comment_layout", doc: "native program: line comment bodies, positions and directive status", get: |f, n| f.with_file(comments::layout, n) },
     Fact { name: "comment_style_findings", doc: "native program: multiline comment style findings", get: |f, n| f.with_file(comments::styles, n) },
     Fact { name: "comment_gaps", doc: "native program: missing blank lines and immediate container boundaries around comments", get: |f, n| f.with_file(comments::gaps, n) },
     Fact { name: "line_lengths", doc: "native program: source lines, tab segments, literal and comment status", get: |f, n| f.with_file(lines::lengths, n) },
     Fact { name: "declaration_groups", doc: "native variable declarations: counts, previous statement and preceding groups in the owning scope", get: |f, n| f.with_file(declarations::groups, n) },
-    Fact { name: "mixed_operators", doc: "native binary and logical expressions: adjacent unparenthesized operator pair and positions", get: |f, n| f.with_file(operators::mixed, n) },
-    Fact { name: "operator_linebreaks", doc: "native infix and initializer owners: operator positions and neighbouring token linebreaks", get: |f, n| f.with_file(operators::linebreaks, n) },
-    Fact { name: "iife_layout", doc: "native calls: immediate function and prototype invocations with wrapping status", get: |f, n| f.with_file(calls::layout, n) },
-    Fact { name: "call_chain_layout", doc: "native calls: chain depth, member prefix and line layout", get: |f, n| f.with_file(calls::chain, n) },
     Fact { name: "statement_line_events", doc: "native program: counted statement enter and exit lines in traversal order", get: |f, n| f.with_file(statements::events, n) },
     Fact { name: "list_layout", doc: "native list owners: boundaries, item counts and spacing or wrapping pairs", get: |f, n| f.with_file(lists::sites, n) },
     Fact { name: "binary_operand_indents", doc: "native program: operand-line indentation constraints in traversal order", get: |f, n| f.with_file(indentation::operands, n) },
     Fact { name: "statement_padding", doc: "native program: adjacent body statements, matcher categories and intervening blank lines", get: |f, n| f.with_file(padding::sites, n) },
 ];
-
-fn ternary_linebreaks(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let (Some(test), Some(consequent), Some(alternate)) = (
-        s.get(node, Field::Test), s.get(node, Field::Consequent), s.get(node, Field::Alternate),
-    ) else { return Value::Null };
-    let test = s.tree.node(test);
-    let consequent = s.tree.node(consequent);
-    let alternate = s.tree.node(alternate);
-    let broken = |start: u32, end: u32| s.src[start as usize..end as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']);
-    let multiline = broken(test.start, alternate.end);
-    let mut outer = node;
-    while let Some(parent) = s.parent(outer).filter(|&parent| s.is(parent, Kind::Conditional)) {
-        outer = parent;
-    }
-    let jsx = s.parent(outer).is_some_and(|parent| s.is(parent, Kind::JsxExpression));
-    Value::list(vec![
-        Value::record(vec![
-            ("offset".into(), Value::from(test.start as usize)),
-            ("broken".into(), Value::Bool(broken(test.end, consequent.start))),
-            ("multiline".into(), Value::Bool(multiline)),
-            ("jsx".into(), Value::Bool(jsx)),
-            ("operands".into(), Value::from("test and consequent")),
-        ]),
-        Value::record(vec![
-            ("offset".into(), Value::from(consequent.start as usize)),
-            ("broken".into(), Value::Bool(broken(consequent.end, alternate.start))),
-            ("multiline".into(), Value::Bool(multiline)),
-            ("jsx".into(), Value::Bool(jsx)),
-            ("operands".into(), Value::from("consequent and alternate")),
-        ]),
-    ])
-}
-
-fn equality_typeof(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    Value::Bool([Field::Left, Field::Right].into_iter().filter_map(|f| s.get(node, f)).any(|operand| {
-        let operand = s.unparen(operand);
-        s.is(operand, Kind::Unary) && s.word(operand, Field::Op) == Some("typeof")
-    }))
-}
-
-fn conditional_arrow_body(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(body) = s.get(node, Field::Body) else { return Value::Null };
-    match s.kind(body) {
-        Some(Kind::Conditional) => Value::from("bare"),
-        Some(Kind::Paren) if s.get(body, Field::Expr).is_some_and(|inner| s.is(inner, Kind::Conditional)) => Value::from("parenthesized"),
-        _ => Value::Null,
-    }
-}
-
-fn for_declaration(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    Value::Bool(s.parent(node).and_then(|p| s.kind(p)).is_some_and(|k| matches!(k, Kind::For | Kind::ForIn | Kind::ForOf)))
-}
-
-fn operator_offset(file: &NativeFile, node: u32) -> Value<'static> {
-    file.syntax.get(node, Field::Op)
-        .map(|op| Value::from(file.syntax.tree.node(op).start as usize))
-        .unwrap_or(Value::Null)
-}
 
 fn bom(file: &NativeFile, node: u32) -> Value<'static> {
     if file.syntax.is(node, Kind::Program) {
