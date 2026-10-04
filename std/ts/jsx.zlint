@@ -3,17 +3,32 @@
 
 define {
 
-in ts_jsx_element rule jsx-indent-props {
+in ts_node, ts_open_angle, ts_close_angle, ts_punctuator let jsx_line_prefix byte_slice(source, position(offset).js_line_start, offset)
+fn jsx_indent(prefix) = len(default(re_find(prefix, "^" jsx_space_regex() "*"), ""))
+fn jsx_indent_operator(text) = re_test(text, /^[ \t]*[?:]/)
+fn jsx_indent_spaces(text) = len(default(re_find(text, /^ */), ""))
+fn jsx_indent_tabs(text) = len(default(re_find(text, /^\t*/), ""))
+in ts_jsx_element {
+  let jsx_prop_indent_operator jsx_indent_operator(jsx_line_prefix)
+  let jsx_prop_indent_first_column position(first([] property.node).offset).js_column - 1
+}
+in ts_jsx_attribute, ts_jsx_spread_attribute {
+  let jsx_prop_indent_line default(re_find(byte_slice(source, position(offset).js_line_start, end_offset), /^[^\n\r\u{2028}\u{2029}]*/), "")
+  let jsx_prop_indent_operator jsx_indent_operator(jsx_prop_indent_line)
+  let jsx_prop_indent_extra previous.jsx_prop_indent_extra == true || !jsx_prop_indent_operator && !contains(jsx_prop_indent_line, "<") && (if previous == null then parent.jsx_prop_indent_operator else previous.jsx_prop_indent_operator)
+}
+in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-indent-props {
   option mode int | "tab" | "first" = 4 "prop indent size or alignment"
   option indentMode int | "tab" | "first" | null = null "prop indent size or alignment"
   option ignoreTernaryOperator boolean = false "ignore ternary continuation indentation"
-  let info jsx_prop_indent
   let selected default(indentMode, mode)
   let size if selected == "tab" then 1 else selected
-  let base_indent if selected == "tab" then info.tabs else info.spaces
-  each row in filter(info.props, p => p.first_in_line && (if selected == "first" then p.spaces != info.first_column else (if selected == "tab" then p.tabs else p.spaces) != base_indent + size * (if p.extra && !ignoreTernaryOperator then 2 else 1)))
-  report at row.offset
-  warn "Expected indentation of {if selected == 'first' then info.first_column else base_indent + size * (if row.extra && !ignoreTernaryOperator then 2 else 1)} {if selected == 'tab' then 'tab' else 'space'} {if (if selected == 'first' then info.first_column else base_indent + size * (if row.extra && !ignoreTernaryOperator then 2 else 1)) == 1 then 'character' else 'characters'} but found {if selected == 'tab' then row.tabs else row.spaces}."
+  let base_indent if selected == "tab" then jsx_indent_tabs(parent.jsx_line_prefix) else jsx_indent_spaces(parent.jsx_line_prefix)
+  let actual if selected == "tab" then jsx_indent_tabs(jsx_line_prefix) else jsx_indent_spaces(jsx_line_prefix)
+  let expected if selected == "first" then parent.jsx_prop_indent_first_column else base_indent + size * (if jsx_prop_indent_extra && !ignoreTernaryOperator then 2 else 1)
+  when parent is ts_jsx_element && jsx_trim_space(jsx_line_prefix) == "" && actual != expected
+  report at {start: offset, end: parent.end_offset}
+  warn "Expected indentation of {expected} {if selected == 'tab' then 'tab' else 'space'} {if expected == 1 then 'character' else 'characters'} but found {actual}."
 }
 in ts_node {
   let jsx_child_leading layer is ts_jsx_text && re_test(text, "^" jsx_space_regex() "*\n")
@@ -193,7 +208,10 @@ in ts_close_brace rule jsx-curly-newline:before {
 }
 in ts_jsx_attribute let jsx_tag_last_token_start if value.layer is ts_string then value.offset else end_offset
 in ts_jsx_spread_attribute let jsx_tag_last_token_start end_offset
-in ts_jsx_element let jsx_tag_last_prop last([] property.node)
+in ts_jsx_element {
+  let jsx_tag_last_prop last([] property.node)
+  let jsx_tag_name_line position(name.offset).js_line
+}
 in ts_open_angle, ts_close_angle, ts_punctuator {
   let jsx_tag_opening offset >= parent.jsx_syntax.opening.start && offset < parent.jsx_syntax.opening.end
   let jsx_tag_self_slash parent is ts_jsx_element && parent.jsx_syntax.self_closing && text == "/" && space_after.end == parent.jsx_syntax.opening.end - 1
@@ -230,23 +248,34 @@ in ts_punctuator rule jsx-tag-spacing:before-self-closing {
   @jsx_tag_spacing_body
 }
 schema jsx_bracket_location "after-props" | "props-aligned" | "tag-aligned" | "line-aligned"
-macro jsx_bracket_answer(c) (find(c.tag.locations, p => p.mode == c.placement))
-in ts_jsx_element rule jsx-closing-bracket-location {
+in ts_close_angle, ts_punctuator rule jsx-closing-bracket-location {
   option mode jsx_bracket_location = "tag-aligned" "closing bracket alignment"
   option location jsx_bracket_location | null = null "alignment for both tag kinds"
   option nonEmpty jsx_bracket_location | boolean | null = null "alignment for paired opening tags"
   option selfClosing jsx_bracket_location | boolean | null = null "alignment for self-closing tags"
-  let checks map(filter(jsx_tag_layout.tags, t => t.opening), t => {tag: t, placement: if !t.has_props then "after-tag" else if t.last_on_open_line then "after-props" else default(if t.self_closing then selfClosing else nonEmpty, default(location, mode))})
-  each check in filter(checks, c => jsx_bracket_answer(c) != null && !(jsx_bracket_answer(c)).correct)
-  report at check.tag.bracket
-  warn "The closing bracket must be {if (jsx_bracket_answer(check)).placement == 'after-tag' then 'placed after the opening tag' else if (jsx_bracket_answer(check)).placement == 'after-props' then 'placed after the last prop' else if (jsx_bracket_answer(check)).placement == 'props-aligned' then 'aligned with the last prop' else if (jsx_bracket_answer(check)).placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if (jsx_bracket_answer(check)).column != null then ' (expected column ' ((jsx_bracket_answer(check)).column + 1) (if check.tag.last_on_close_line then ' on the next line)' else ')') else ''}"
+  let last_prop parent.jsx_tag_last_prop
+  let last_line position(last_prop.end_offset).js_line
+  let here position(offset)
+  let opening position(parent.offset)
+  let selected if last_prop == null then "after-tag" else if last_line == opening.js_line then "after-props" else default(if parent.jsx_syntax.self_closing then selfClosing else nonEmpty, default(location, mode))
+  let aligned_column if selected == "props-aligned" then position(last_prop.offset).js_column else if selected == "tag-aligned" then opening.js_column else if selected == "line-aligned" then jsx_indent(parent.jsx_line_prefix) + 1 else null
+  let aligned if selected == "after-tag" then parent.jsx_tag_name_line == here.js_line else if selected == "after-props" then last_line == here.js_line else aligned_column == here.js_column && (selected != "tag-aligned" || starts_with(parent.jsx_line_prefix, "\t") == starts_with(jsx_line_prefix, "\t"))
+  let fallback !aligned && (contains(space_before.text, "/*") || contains(space_before.text, "//")) && contains(["after-tag", "after-props"], selected)
+  let placement if fallback then "line-aligned" else selected
+  let expected_column if fallback then jsx_indent(parent.jsx_line_prefix) + 1 else aligned_column
+  when parent is ts_jsx_element && (jsx_tag_self_slash || layer is ts_close_angle && !parent.jsx_syntax.self_closing && end_offset == parent.jsx_syntax.opening.end)
+  when type_of(selected) == "str" && !(if fallback then expected_column == here.js_column else aligned)
+  report at {start: offset, end: parent.end_offset}
+  warn "The closing bracket must be {if placement == 'after-tag' then 'placed after the opening tag' else if placement == 'after-props' then 'placed after the last prop' else if placement == 'props-aligned' then 'aligned with the last prop' else if placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if expected_column != null then ' (expected column ' expected_column (if last_prop != null && last_line == here.js_line then ' on the next line)' else ')') else ''}"
 }
-in ts_jsx_element, ts_jsx_fragment rule jsx-closing-tag-location {
+in ts_open_angle rule jsx-closing-tag-location {
   option mode "tag-aligned" | "line-aligned" = "tag-aligned" "closing-tag alignment"
-  let info jsx_closing_tag
-  when info != null && !info.single && info.column != (if mode == "tag-aligned" then info.open_column else info.indent)
-  report at info.offset
-  warn if !info.own_line then "Closing tag of a multiline JSX expression must be on its own line." else if mode == "tag-aligned" then "Expected closing tag to match indentation of opening." else "Expected closing tag to be aligned with the line containing the opening tag"
+  let here position(offset)
+  let expected if mode == "tag-aligned" then position(parent.offset).js_column else jsx_indent(parent.jsx_line_prefix) + 1
+  let own_line jsx_trim_space(jsx_line_prefix) == ""
+  when parent is (ts_jsx_element, ts_jsx_fragment) && offset == parent.jsx_syntax.closing.start && position(parent.offset).js_line != here.js_line && here.js_column != expected
+  report at {start: offset, end: parent.end_offset}
+  warn if !own_line then "Closing tag of a multiline JSX expression must be on its own line." else if mode == "tag-aligned" then "Expected closing tag to match indentation of opening." else "Expected closing tag to be aligned with the line containing the opening tag"
 }
 
 fn jsx_items(value) = if type_of(value) == "list" then value else if value == null then [] else [value]

@@ -5,46 +5,10 @@ use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::lexer::{Lexer, Tok};
 use crate::expr::Value;
 
-pub(super) struct LineStarts(Vec<usize>);
-
 // JavaScript whitespace includes BOM, not Unicode NEL.
 pub(super) fn space(ch: char) -> bool {
     matches!(ch, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}'
         | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
-}
-
-impl LineStarts {
-    pub(super) fn start(&self, at: usize) -> usize {
-        self.0[line(self, at) - 1]
-    }
-
-    pub(super) fn column(&self, src: &str, at: usize) -> usize {
-        src[self.start(at)..at].encode_utf16().count()
-    }
-
-    pub(super) fn indentation(&self, src: &str, at: usize) -> usize {
-        src[self.start(at)..].chars().take_while(|&ch| space(ch) && !matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
-            .map(char::len_utf16).sum()
-    }
-
-    pub(super) fn starts_tab(&self, src: &str, at: usize) -> bool {
-        src[self.start(at)..].starts_with('\t')
-    }
-}
-
-pub(super) fn line_starts(file: &NativeFile) -> LineStarts {
-    let src = file.syntax.src;
-    let mut starts = vec![0];
-    for (at, ch) in src.char_indices() {
-        if ch == '\n' || matches!(ch, '\u{2028}' | '\u{2029}') || ch == '\r' && !src[at + 1..].starts_with('\n') {
-            starts.push(at + ch.len_utf8());
-        }
-    }
-    LineStarts(starts)
-}
-
-pub(super) fn line(starts: &LineStarts, offset: usize) -> usize {
-    starts.0.partition_point(|&start| start <= offset)
 }
 
 pub(super) fn bounds(file: &NativeFile, node: u32) -> (usize, Option<usize>) {

@@ -1,53 +1,4 @@
-//! Prop indentation follows the tag's line, with one ternary continuation step.
-
-use super::metadata::{line_starts, space};
-use super::super::super::facts::NativeFile;
-use super::super::super::kinds::Field as F;
-use crate::expr::Value;
-
-fn counts(text: &str) -> (usize, usize) {
-    (text.chars().take_while(|&ch| ch == ' ').count(), text.chars().take_while(|&ch| ch == '\t').count())
-}
-
-fn operator(text: &str) -> bool {
-    text.trim_start_matches([' ', '\t']).starts_with(['?', ':'])
-}
-
-pub fn props(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let attrs: Vec<_> = s.all(node, F::Property).collect();
-    let Some(&first) = attrs.first() else { return Value::Null };
-    let lines = file.cached(line_starts);
-    let own = s.tree.node(node);
-    let head = s.src[lines.start(own.start as usize)..].split('\n').next().unwrap_or("");
-    let (spaces, tabs) = counts(head);
-    let mut using_operator = operator(head);
-    let mut extra = false;
-    let props = attrs.into_iter().map(|id| {
-        let attr = s.tree.node(id);
-        let start = attr.start as usize;
-        let prefix = &s.src[lines.start(start)..start];
-        let text = s.src[lines.start(start)..attr.end as usize].split('\n').next().unwrap_or("");
-        let current_operator = operator(text);
-        if current_operator { using_operator = true; }
-        else if text.contains('<') { using_operator = false; }
-        if using_operator && !current_operator { extra = true; using_operator = false; }
-        let (spaces, tabs) = counts(prefix);
-        Value::record(vec![
-            ("offset".into(), Value::from(start)),
-            ("first_in_line".into(), Value::Bool(prefix.chars().all(space))),
-            ("spaces".into(), Value::from(spaces)),
-            ("tabs".into(), Value::from(tabs)),
-            ("extra".into(), Value::Bool(extra)),
-        ])
-    }).collect();
-    Value::record(vec![
-        ("spaces".into(), Value::from(spaces)),
-        ("tabs".into(), Value::from(tabs)),
-        ("first_column".into(), Value::from(lines.column(s.src, s.tree.node(first).start as usize))),
-        ("props".into(), Value::list(props)),
-    ])
-}
+//! Prop-indentation policy regressions for the std rules.
 
 #[cfg(test)]
 mod tests {
@@ -61,5 +12,14 @@ mod tests {
         assert!(l.lint(Path::new("/root/file.tsx"), text).is_empty());
         let ignored = native_linter("rule jsx-indent-props {\nset mode 2\nset ignoreTernaryOperator true\n}");
         assert_eq!(ignored.lint(Path::new("/root/file.tsx"), text).len(), 4);
+    }
+
+    #[test]
+    fn attribute_line_breaks_do_not_reset_ternary_indentation() {
+        let l = native_linter("rule jsx-indent-props { set mode 2 }");
+        for separator in ["\r", "\u{2028}", "\u{2029}"] {
+            let text = format!("const x = flag\n  ? <Box\n      a=\"before{separator}<after\"\n      b\n    />\n  : null;");
+            assert!(l.lint(Path::new("/root/file.tsx"), &text).is_empty(), "{separator:?}");
+        }
     }
 }
