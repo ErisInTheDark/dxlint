@@ -183,10 +183,21 @@ in ts_try.kind rule no-useless-catch:clause {
   warn "Unnecessary catch clause."
 }
 
+fn enabled_global_identifier(n, name) = n.layer is ts_identifier && n.text == name && n.resolved == "global" && n.global != "off"
+fn parse_int_target(n) = if enabled_global_identifier(n, "parseInt") || n.layer is (ts_member, ts_index) && n.static_name == "parseInt" && enabled_global_identifier(unparenthesised_node(n.object.node), "Number") then n.text else null
+in ts_call let parse_int_name parse_int_target(unparenthesised_node(callee.node))
+fn valid_radix(value) = value.type == "number" && value.value >= 2 && value.value <= 36 && value.value % 1 == 0
+fn invalid_radix(n) = n.layer is ts_identifier && n.text == "undefined" && n.resolved == "global" || (n.layer is (ts_number, ts_string, ts_boolean, ts_null, ts_regex, ts_bigint) || n.layer is ts_unary && contains(["+", "-"], n.operator) && n.argument.layer is ts_number) && !valid_radix(n.literal_value)
+
 in ts_call rule radix {
   option mode ("always" | "as-needed") = "always" "legacy radix policy"
-  when parse_int_callee != null && radix_error != null
-  warn radix_error
+  when parse_int_name != null
+  let argument_count count(argument)
+  let first_argument unparenthesised_node(first([] argument.node))
+  let second_argument unparenthesised_node(first(slice([] argument.node, 1)))
+  when first_argument.layer not ts_spread && second_argument.layer not ts_spread
+  when argument_count < 2 || invalid_radix(second_argument)
+  warn if argument_count == 0 then "Missing parameters." else if argument_count == 1 then "Missing radix parameter." else "Invalid radix parameter, must be an integer between 2 and 36."
 }
 
 in ts_identifier rule no-shadow-restricted-names {
@@ -281,10 +292,10 @@ in ts_call rule symbol-description {
 }
 
 in ts_call rule prefer-numeric-literals {
-  when count(argument) == 2 && parse_int_callee != null
+  when count(argument) == 2 && parse_int_name != null
   when first([] argument.literal_value).type == "string"
   when contains(["2", "8", "16"], last(argument))
-  warn "Use {if last(argument) == '2' then 'binary' else if last(argument) == '8' then 'octal' else 'hexadecimal'} literals instead of {parse_int_callee}()."
+  warn "Use {if last(argument) == '2' then 'binary' else if last(argument) == '8' then 'octal' else 'hexadecimal'} literals instead of {parse_int_name}()."
 }
 
 in ts_string let octal_escape re_find(re_find(text, /(?:^|[^\\])(?:\\\\)*\\(?:[0-3][0-7]{1,2}|[4-7][0-7]|0[89]|[1-7])/), /\\(?:[0-3][0-7]{1,2}|[4-7][0-7]|0[89]|[1-7])$/)

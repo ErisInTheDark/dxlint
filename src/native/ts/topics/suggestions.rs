@@ -40,8 +40,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "redundant_boolean_cast", doc: "native layers: cast kind and minimum context policy (0 direct, 1 logical, 2 inner)", get: |f, n| f.with_file(coercion::boolean_cast, n) },
     Fact { name: "global_callee", doc: "native layers: an unshadowed, enabled global identifier called by this call or constructor, through parentheses", get: |f, n| f.with_file(expressions::global_callee, n) },
     Fact { name: "global_method_callee", doc: "native layers: global object and static method called, through parentheses and unwritten aliases", get: |f, n| f.with_file(expressions::global_method_callee, n) },
-    Fact { name: "parse_int_callee", doc: "native layers: the source spelling of an unshadowed parseInt or Number.parseInt callee, through parentheses", get: |f, n| f.with_file(expressions::parse_int_callee, n) },
-    Fact { name: "radix_error", doc: "native layers: missing or invalid parseInt argument diagnostic, excluding spread argument uncertainty", get: |f, n| f.with_file(expressions::radix_error, n) },
     Fact { name: "thrown_error", doc: "native layers: diagnostic when a thrown expression cannot produce an error object or is global undefined", get: |f, n| f.with_file(expressions::thrown_error, n) },
     Fact { name: "accessor_pair", doc: "native layers: accessor kind, scope, display name, pairing and unique pair grouping", get: |f, n| f.with_file(accessors::pair, n) },
     Fact { name: "property_descriptor", doc: "native layers: getter/setter presence in a global Object or Reflect property descriptor", get: |f, n| f.with_file(accessors::descriptor, n) },

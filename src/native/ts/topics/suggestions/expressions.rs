@@ -142,37 +142,6 @@ pub fn global_method_callee(file: &NativeFile, node: u32) -> Value<'static> {
         .map_or(Value::Null, Value::from)
 }
 
-pub fn parse_int_callee(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(callee) = s.get(node, F::Callee).map(|n| s.unparen(n)) else { return Value::Null };
-    let direct = s.is(callee, K::Ident) && s.text(callee) == "parseInt" && file.resolved(callee) == Some("global") && file.global_setting(callee) != Some("off");
-    let member = matches!(s.kind(callee), Some(K::Member | K::Index))
-        && statics::property_name(s, callee).as_deref() == Some("parseInt")
-        && s.get(callee, F::Object).map(|n| s.unparen(n))
-            .is_some_and(|n| s.is(n, K::Ident) && s.text(n) == "Number" && file.resolved(n) == Some("global") && file.global_setting(n) != Some("off"));
-    if direct || member { Value::from(s.text(callee).to_string()) } else { Value::Null }
-}
-
-pub fn radix_error(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let args: Vec<_> = s.all(node, F::Arg).map(|n| s.unparen(n)).collect();
-    if args.iter().take(2).any(|&n| s.is(n, K::Spread)) { return Value::Null }
-    let error = match args.as_slice() {
-        [] => Some("Missing parameters."),
-        [_] => Some("Missing radix parameter."),
-        [_, radix, ..] => {
-            let undefined = s.is(*radix, K::Ident) && s.text(*radix) == "undefined" && file.resolved(*radix) == Some("global");
-            let literal = matches!(s.kind(*radix), Some(K::Number | K::String | K::Bool | K::Null | K::Regex | K::BigInt))
-                || s.is(*radix, K::Unary) && matches!(s.word(*radix, F::Op), Some("+" | "-"))
-                    && s.get(*radix, F::Arg).is_some_and(|n| s.is(n, K::Number));
-            let valid = statics::literal_value(s, *radix).is_some_and(|(kind, value)| kind == "number"
-                && value.parse::<f64>().is_ok_and(|n| (2.0..=36.0).contains(&n) && n.fract() == 0.0));
-            (undefined || literal && !valid).then_some("Invalid radix parameter, must be an integer between 2 and 36.")
-        }
-    };
-    error.map_or(Value::Null, Value::from)
-}
-
 /// Whether an expression can produce an error object, following possible value branches.
 pub(crate) fn could_be_error(file: &NativeFile, node: u32) -> bool {
     let s = &file.syntax;
