@@ -9,7 +9,6 @@ mod parens;
 mod declarations;
 mod operators;
 mod calls;
-mod statements;
 mod lists;
 mod indentation;
 mod padding;
@@ -19,7 +18,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "bom", doc: "native ts_program: source starts with a Unicode BOM", get: |f, n| f.with_file(bom, n) },
     Fact { name: "excess_parens", doc: "native parenthesized expressions and types: redundant parentheses with option contexts", get: |f, n| f.with_file(parens::excess, n) },
     Fact { name: "declaration_groups", doc: "native variable declarations: counts, previous statement and preceding groups in the owning scope", get: |f, n| f.with_file(declarations::groups, n) },
-    Fact { name: "statement_line_events", doc: "native program: counted statement enter and exit lines in traversal order", get: |f, n| f.with_file(statements::events, n) },
     Fact { name: "list_layout", doc: "native list owners: boundaries, item counts and spacing or wrapping pairs", get: |f, n| f.with_file(lists::sites, n) },
     Fact { name: "binary_operand_indents", doc: "native program: operand-line indentation constraints in traversal order", get: |f, n| f.with_file(indentation::operands, n) },
     Fact { name: "statement_padding", doc: "native program: adjacent body statements, matcher categories and intervening blank lines", get: |f, n| f.with_file(padding::sites, n) },

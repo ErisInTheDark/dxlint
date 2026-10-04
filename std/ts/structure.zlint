@@ -135,7 +135,7 @@ fn structure_is_directive(body) = re_test(body, /^(?:eslint|jscs|\/ <reference|\
   || re_test(body, /^node:coverage\s+(?:(?:disable|enable)(?:[^\p{Alphabetic}\p{Number}_-]|$)|ignore\s+next(?:[^\p{Alphabetic}\p{Number}_-]|$))/)
   || re_test(body, /^webpack(?:ChunkName|FetchPriority|Mode|Exports|Include|Exclude|Prefetch|Preload|Ignore)\s*:/)
 
-over ts_program match structure_hashbang /\A#![^\n\r\u{2028}\u{2029}]*/
+in ts_program layer text match structure_hashbang /\A#![^\n\r\u{2028}\u{2029}]*/
 group structure_comment ts_comment, structure_hashbang
 in structure_comment let structure_comment_body if layer is ts_block_comment then slice(text, 2, len(text) - 2) else slice(text, 2)
 in structure_comment let structure_directive structure_is_directive(trim_start(structure_comment_body))
@@ -424,23 +424,51 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   warn (if entry.spacing then (if entry.shouldSpace then "Should have space between '" else "Should not have space(s) between '") else (if entry.shouldWrap then "Should have line break between '" else "Should not have line break(s) between '")) entry.info.prev "' and '" entry.info.next "'"
 }
 
-in ts_program rule max-statements-per-line {
+group structure_statement ts_break, ts_class, ts_continue, ts_debugger, ts_do_while, ts_expression_statement,
+  ts_for_in, ts_for_of, ts_for, ts_function, ts_if, ts_import, ts_labeled, ts_return, ts_switch,
+  ts_throw, ts_try, ts_variable_declaration, ts_while, ts_with, ts_export
+group structure_declaration_parent ts_program, ts_block, ts_if, ts_for, ts_for_in, ts_for_of,
+  ts_while, ts_do_while, ts_labeled, ts_with, ts_export
+group structure_suppress_statement_entry ts_do_while, ts_for, ts_for_in, ts_for_of, ts_if, ts_labeled, ts_while
+@macro structure_statement_type(layer, name) {
+  in layer let structure_statement_type name
+}
+@structure_statement_type(ts_break, "BreakStatement")
+@structure_statement_type(ts_continue, "ContinueStatement")
+@structure_statement_type(ts_debugger, "DebuggerStatement")
+@structure_statement_type(ts_do_while, "DoWhileStatement")
+@structure_statement_type(ts_expression_statement, "ExpressionStatement")
+@structure_statement_type(ts_for_in, "ForInStatement")
+@structure_statement_type(ts_for_of, "ForOfStatement")
+@structure_statement_type(ts_for, "ForStatement")
+@structure_statement_type(ts_if, "IfStatement")
+@structure_statement_type(ts_import, "ImportDeclaration")
+@structure_statement_type(ts_labeled, "LabeledStatement")
+@structure_statement_type(ts_return, "ReturnStatement")
+@structure_statement_type(ts_switch, "SwitchStatement")
+@structure_statement_type(ts_throw, "ThrowStatement")
+@structure_statement_type(ts_try, "TryStatement")
+@structure_statement_type(ts_variable_declaration, "VariableDeclaration")
+@structure_statement_type(ts_while, "WhileStatement")
+@structure_statement_type(ts_with, "WithStatement")
+in ts_class let structure_statement_type if parent is structure_declaration_parent then "ClassDeclaration" else null
+in ts_function let structure_statement_type if parent is structure_declaration_parent then "FunctionDeclaration" else null
+in ts_export let structure_statement_type if kind == "default" then "ExportDefaultDeclaration" else if kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration"
+in structure_statement let structure_statement_enter !(parent is structure_suppress_statement_entry && field != "alternate" || parent is ts_export && parent.kind != "*")
+in structure_statement let structure_statement_exit offset + byte_len(trim_end(trim_end(trim_end(text), ";")))
+
+in ts_line rule max-statements-per-line {
   option max number = 1 "maximum statements on one line"
   option ignoredNodes string[] = [] "statement types excluded from counting"
-  let events filter(statement_line_events, event => !contains(ignoredNodes, event.kind))
-  let groups map(filter(events, current => default(last(filter(events, previous => previous.index < current.index)).line, 0) != current.line), current => {
-    startIndex: current.index,
-    endIndex: default(first(filter(events, next => next.index > current.index && next.line != current.line)).index, len(statement_line_events)),
-    carried: if current.enter then 0 else 1,
-  })
-  let measurements map(groups, group => {
-    carried: group.carried,
-    entries: filter(events, event => event.enter && event.index >= group.startIndex && event.index < group.endIndex),
-  })
-  each info in measurements
-  when count(info.entries) + info.carried > max
-  report at first(slice(info.entries, max - info.carried)).offset
-  warn "This line has {count(info.entries) + info.carried} statements. Maximum allowed is {max}."
+  let row position(offset).js_line
+  let statements filter(overlapping(structure_statement), statement => statement.structure_statement_type != null && !contains(ignoredNodes, statement.structure_statement_type))
+  let entries filter(statements, statement => statement.structure_statement_enter && position(statement.offset).js_line == row)
+  let exits filter(statements, statement => position(statement.structure_statement_exit).js_line == row)
+  when count(entries) > 0 || count(exits) > 0
+  let carried if any(exits, statement => count(entries) == 0 || statement.structure_statement_exit <= first(entries).offset) then 1 else 0
+  when count(entries) + carried > max
+  report at default(first(slice(entries, max - carried)).offset, first(overlapping(ts_program)).node)
+  warn "This line has {count(entries) + carried} statements. Maximum allowed is {max}."
 }
 
 fn structure_gap_parts(source, from, to, comments) = reduce(filter(comments, comment => comment.offset < to && comment.end_offset > from), { cursor: from, code: false }, (state, comment) => {
