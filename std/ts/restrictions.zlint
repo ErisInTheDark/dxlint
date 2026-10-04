@@ -149,37 +149,73 @@ in ts_number, ts_bigint rule no-magic-numbers {
   warn if info.declaration then "Number constants declarations must use 'const'." else "No magic number: {if typescript_specific then info.ts_raw else info.raw}."
 }
 
+in ts_import_specifier let restriction_declaration_local default(local, imported)
+in ts_export_specifier let restriction_declaration_local local
+in ts_import {
+  let restriction_declaration_export false
+  let restriction_declaration_category if count(specifier) > 0 then "named" else if namespace != null then "namespace" else if default_import != null then "default" else "side"
+  let restriction_declaration_count count(specifier) + (if namespace != null then 1 else 0) + (if default_import != null then 1 else 0)
+  let restriction_declaration_syntax if restriction_declaration_count == 0 then "none" else if namespace != null && default_import == null then "all" else if restriction_declaration_count == 1 then "single" else "multiple"
+  let restriction_declaration_local default(default_import, default(namespace, default(first([] specifier.restriction_declaration_local), "")))
+}
+in ts_export {
+  let restriction_declaration_export true
+  let restriction_declaration_category if count(specifier) > 0 then "named" else if namespace != null then "namespace" else "all"
+  let restriction_declaration_count count(specifier) + (if namespace != null then 1 else 0)
+  let restriction_declaration_syntax if restriction_declaration_count == 0 then "none" else if namespace != null then "all" else if restriction_declaration_count == 1 then "single" else "multiple"
+  let restriction_declaration_local default(namespace, default(first([] specifier.restriction_declaration_local), ""))
+}
+in ts_import, ts_export let restriction_declaration_entry if from == null then null else {
+  offset: offset, end: end_offset, module: default(from.static_name, ""),
+  export: restriction_declaration_export, type_only: kind == "type",
+  category: restriction_declaration_category, syntax: restriction_declaration_syntax,
+  local: restriction_declaration_local
+}
+# Declaration spans contain their literal keyword; skip only impossible subtrees.
+in ts_node let restriction_declarations if !contains(text, "import") && !contains(text, "export") then [] else [] restriction_declaration_entry reduce([] children.restriction_declarations, [], (entries, child) => entries child)
 schema restriction_import_syntax "none" | "all" | "multiple" | "single"
+@macro restriction_sort_import_options {
+  option ignoreCase boolean = false "ignore letter case"
+  option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
+  option ignoreDeclarationSort boolean = false "ignore declaration order"
+  option ignoreMemberSort boolean = false "ignore named-member order"
+  option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
+}
 in ts_import rule sort-imports {
-  option ignoreCase boolean = false "ignore letter case"
-  option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
-  option ignoreDeclarationSort boolean = false "ignore declaration order"
-  option ignoreMemberSort boolean = false "ignore named-member order"
-  option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
-  let info restriction_import_order
-  let current_index len(first(split(join(memberSyntaxSortOrder, ","), info.syntax)))
-  let previous_index len(first(split(join(memberSyntaxSortOrder, ","), info.previous_syntax)))
-  when !ignoreDeclarationSort && info.previous_syntax != null && !(allowSeparatedGroups && info.separated)
-  when info.syntax != info.previous_syntax && current_index < previous_index || info.syntax == info.previous_syntax && (if ignoreCase then info.insensitive else info.sensitive)
-  warn if info.syntax != info.previous_syntax then "Expected '{info.syntax}' syntax before '{info.previous_syntax}' syntax." else "Imports should be sorted alphabetically."
+  @restriction_sort_import_options
+  let preceding reduce(filter(ts_program.restriction_declarations, entry => !entry.export && entry.offset < offset), null, (nearest, entry) => if nearest == null || entry.offset > nearest.offset then entry else nearest)
+  let current_index len(first(split(join(memberSyntaxSortOrder, ","), restriction_declaration_syntax)))
+  let previous_index len(first(split(join(memberSyntaxSortOrder, ","), preceding.syntax)))
+  let separated preceding != null && re_count(byte_slice(source, preceding.end, offset), /\n/) > 1
+  when !ignoreDeclarationSort && restriction_declaration_entry != null && preceding != null && !(allowSeparatedGroups && separated)
+  when restriction_declaration_syntax != preceding.syntax && current_index < previous_index || restriction_declaration_syntax == preceding.syntax && compare_text(restriction_declaration_local, preceding.local, false, ignoreCase) < 0
+  warn if restriction_declaration_syntax != preceding.syntax then "Expected '{restriction_declaration_syntax}' syntax before '{preceding.syntax}' syntax." else "Imports should be sorted alphabetically."
 }
-in ts_import rule sort-imports:members {
-  option ignoreCase boolean = false "ignore letter case"
-  option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
-  option ignoreDeclarationSort boolean = false "ignore declaration order"
-  option ignoreMemberSort boolean = false "ignore named-member order"
-  option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
-  let info restriction_import_order
-  when !ignoreMemberSort
-  each hit in filter(info.members, m => m.ignoreCase == ignoreCase)
-  report at hit.offset
-  warn "Member '{hit.name}' of the import declaration should be sorted alphabetically."
+in ts_import_specifier rule sort-imports:members {
+  @restriction_sort_import_options
+  let unsorted previous != null && compare_text(previous.restriction_declaration_local, restriction_declaration_local, false, ignoreCase) > 0
+  let encountered previous.encountered == true || unsorted
+  when !ignoreMemberSort && parent is ts_import && parent.restriction_declaration_entry != null && unsorted && previous.encountered != true
+  report at {start: offset, end: parent.end_offset}
+  warn "Member '{restriction_declaration_local}' of the import declaration should be sorted alphabetically."
 }
-in ts_import, ts_export rule no-duplicate-imports {
+fn restriction_import_mergeable(a, b) = !(a.type_only && b.type_only && (a.category == "default" && b.category == "named" || a.category == "named" && b.category == "default")) && !(a.category == "all" && contains(["named", "namespace", "default"], b.category) || b.category == "all" && contains(["named", "namespace", "default"], a.category) || a.category == "namespace" && b.category == "named" || a.category == "named" && b.category == "namespace")
+@macro restriction_duplicate_import_body {
   option includeExports boolean = false "also check re-exports"
   option allowSeparateTypeImports boolean = false "allow separate type and value imports"
-  each hit in filter(restriction_duplicate_imports, h => h.allowSeparateTypeImports == allowSeparateTypeImports && (includeExports || !h.export && !h.previous_export))
-  warn "'{hit.module}' {if hit.export then 'export' else 'import'} is duplicated{if hit.export == hit.previous_export then '' else if hit.export then ' as import' else ' as export'}."
+  let own restriction_declaration_entry
+  let module trim(own.module)
+  when own != null && module != "" && (includeExports || !own.export && !previous_export)
+  when any(ts_program.restriction_declarations, entry => entry.offset < offset && entry.export == previous_export && trim(entry.module) == module && (!allowSeparateTypeImports || entry.type_only == own.type_only) && restriction_import_mergeable(own, entry))
+  warn "'{module}' {if own.export then 'export' else 'import'} is duplicated{if own.export == previous_export then '' else if own.export then ' as import' else ' as export'}."
+}
+in ts_import, ts_export rule no-duplicate-imports {
+  let previous_export false
+  @restriction_duplicate_import_body
+}
+in ts_import, ts_export rule no-duplicate-imports:exports {
+  let previous_export true
+  @restriction_duplicate_import_body
 }
 
 in ts_declarator rule sort-vars {
@@ -468,10 +504,40 @@ in ts_program rule capitalized-comments {
   warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
 }
 
+in ts_object {
+  let restriction_import_options parent is ts_import_call
+  let restriction_import_attributes parent.restriction_import_attribute_group == true
+}
+in ts_property, ts_pattern_property {
+  let restriction_import_options_key parent.restriction_import_options == true || parent.restriction_import_attributes == true
+  let restriction_import_attribute_group parent.restriction_import_options == true && contains(["with", "assert"], static_name)
+  let restriction_name_pattern layer is ts_pattern_property || parent.write_site != null
+  let restriction_name_alias restriction_name_pattern && value != null && (value.layer not ts_assignment_pattern || value.left != null)
+  let restriction_name_same value != null && key == default(value.left, value)
+}
+in ts_export_specifier {
+  let restriction_name_reexport parent.from != null
+  let restriction_name_export_alias exported != null
+}
+in ts_class let restriction_name_declaration parent is (ts_program, ts_block, ts_export)
+in ts_member let restriction_name_mutation parent not ts_update && !(parent is ts_unary && parent.operator == "delete")
+in ts_identifier, ts_private_name {
+  let restriction_identifier_name re_replace(text, /^#*/, "")
+  let restriction_name_external contains(["readonly", "writable"], global)
+  let restriction_name_attributes field == "key" && parent is ts_property && parent.restriction_import_options_key == true
+  let restriction_name_pattern parent.restriction_name_pattern == true
+  let restriction_name_alias field == "key" && parent.restriction_name_alias == true
+  let restriction_name_same parent.restriction_name_same == true
+  let restriction_name_assignment parent is ts_member && field == "property" && parent.write_site != null && parent.restriction_name_mutation
+  let restriction_name_renamed parent is ts_import_specifier && field == "imported" && parent.local != null || parent is ts_export_specifier && field == "local" && parent.restriction_name_export_alias && parent.restriction_name_reexport
+  let restriction_name_property field == "key" && (if restriction_name_pattern then !restriction_name_alias || restriction_name_same else parent is ts_property) || restriction_name_assignment
+  let restriction_name_length if parent is (ts_declarator, ts_parameter) then field == "name" else if parent is ts_assignment_pattern then field == "left" else if restriction_name_pattern then (if field == "key" then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then field == "key" else if parent is ts_import_specifier then field == "local" && default(parent.imported.static_name, parent.imported) != restriction_identifier_name else if parent is ts_import then contains(["default_import", "namespace"], field) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then field == "parameter" else if parent is ts_member then restriction_name_assignment else false
+}
 in ts_identifier, ts_private_name rule id-denylist {
   option options string[] = [] "restricted identifiers"
-  let info restriction_name
-  when info.deny && contains(options, info.name)
+  when !restriction_name_external && !restriction_name_attributes && !restriction_name_renamed && !restriction_name_alias
+  when parent not (ts_call, ts_new, ts_meta_property) && !(parent is ts_member && field == "property" && !restriction_name_assignment)
+  when contains(options, restriction_identifier_name)
   warn "Identifier '{text}' is restricted."
 }
 in ts_identifier, ts_private_name rule id-length {
@@ -480,10 +546,9 @@ in ts_identifier, ts_private_name rule id-length {
   option properties "always" | "never" = "always" "check author-defined properties"
   option exceptions string[] = [] "names exempt from length limits"
   option exceptionPatterns regex[] = [] "name patterns exempt from length limits"
-  let info restriction_name
-  let amount graphemes(info.name)
-  when info.length && !(properties == "never" && info.length_property)
-  when !contains(exceptions, info.name) && !any(exceptionPatterns, p => re_test(info.name, p))
+  let amount graphemes(restriction_identifier_name)
+  when restriction_name_length && !restriction_name_attributes && !(properties == "never" && restriction_name_property)
+  when !contains(exceptions, restriction_identifier_name) && !any(exceptionPatterns, p => re_test(restriction_identifier_name, p))
   when amount < min || max != null && amount > max
   warn if amount < min then "Identifier name '{text}' is too short (< {min})." else "Identifier name '{text}' is too long (> {max})."
 }
@@ -493,9 +558,9 @@ in ts_identifier, ts_private_name rule id-match {
   option classFields boolean = false "check class fields"
   option onlyDeclarations boolean = false "check only declarations"
   option ignoreDestructuring boolean = false "ignore existing destructured names"
-  let info restriction_name
-  when any(info.checks, c => c.properties == properties && c.classFields == classFields && c.onlyDeclarations == onlyDeclarations && c.ignoreDestructuring == ignoreDestructuring)
-  when !re_test(info.name, mode)
+  let check if layer is ts_private_name then parent not ts_class_property || classFields else if parent is ts_member then properties && (field == "object" || restriction_name_assignment) else if restriction_name_pattern then !restriction_name_alias && !(ignoreDestructuring && (field == "key" || restriction_name_same)) else if parent is ts_property && field == "key" then properties else if parent is ts_assignment_pattern then field == "left" && properties && !ignoreDestructuring else if parent is ts_import_specifier then field == "local" || field == "imported" && parent.local == null else if parent is ts_import then contains(["default_import", "namespace"], field) else if parent is ts_class_property then classFields else if parent is (ts_call, ts_new, ts_meta_property) then false else !onlyDeclarations || parent is (ts_function, ts_declarator)
+  when !restriction_name_external && !restriction_name_attributes && check
+  when !re_test(restriction_identifier_name, mode)
   warn "Identifier '{text}' does not match the pattern '{mode}'."
 }
 schema restriction_global string | {name: string; message?: string}
