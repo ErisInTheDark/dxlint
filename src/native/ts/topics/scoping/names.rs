@@ -14,7 +14,9 @@ pub(super) fn function_context(file: &NativeFile, node: u32) -> Value<'static> {
     let inferred = match s.kind(parent) {
         Some(K::Declarator | K::Param) => s.get(parent, F::Name).is_some_and(|n| s.is(n, K::Ident)),
         Some(K::Prop | K::ClassProp) => true,
-        Some(K::Assign | K::AssignPattern) => s.get(parent, F::Left).is_some_and(|n| s.is(n, K::Ident)),
+        Some(K::Assign | K::AssignPattern) => s.get(parent, F::Left)
+            .or_else(|| s.parent(parent).filter(|&p| matches!(s.kind(p), Some(K::Prop | K::PatternProp))).and_then(|p| s.get(p, F::Key)))
+            .is_some_and(|n| s.is(n, K::Ident)),
         Some(K::PatternProp) => s.get(parent, F::Key).is_some_and(|n| s.is(n, K::Ident)),
         _ => false,
     };
@@ -106,6 +108,7 @@ fn descriptor_method(s: &crate::native::ts::syntax::Syntax, call: u32, method: &
 }
 
 pub(super) fn camelcase(file: &NativeFile, node: u32) -> Value<'static> {
+    if file.import_options_key(node).is_some() { return Value::Null; }
     let s = &file.syntax;
     let name = s.text(node).strip_prefix('#').unwrap_or(s.text(node));
     let body = name.trim_matches('_');
@@ -121,6 +124,7 @@ pub(super) fn camelcase(file: &NativeFile, node: u32) -> Value<'static> {
     }
     let property = parent.is_some_and(|p| {
         matches!(s.kind(p), Some(K::Prop | K::Method | K::ClassProp)) && s.field(node) == Some(F::Key)
+            && !s.parent(p).is_some_and(|object| s.is(object, K::Object) && b.write_sites.contains_key(&object))
             || s.is(p, K::Member) && s.is(node, K::Ident) && s.field(node) == Some(F::Property)
                 && b.write_sites.get(&p).is_some_and(|&site| s.is(site, K::Assign))
     });
@@ -163,4 +167,38 @@ pub(super) fn camelcase(file: &NativeFile, node: u32) -> Value<'static> {
         ("global".into(), Value::Bool(configured_global)),
         ("binding".into(), Value::Bool(value_name || globals)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn assignment_patterns_check_values_not_property_keys() {
+        let path = Path::new("/root/a.mjs");
+        let l = native_linter("rule camelcase { set ignoreGlobals true }");
+        assert!(l.lint(path, "/* globals a_global */ ({ snake_key: a_global } = input);").is_empty());
+        assert_eq!(l.lint(path, "({ snake_key: unknown_name } = input);").len(), 1);
+        let l = native_linter("rule camelcase { set ignoreDestructuring true }");
+        assert!(l.lint(path, "var { [{category_id} = query]: categoryId } = query;").is_empty());
+        assert_eq!(l.lint(path, "const object = { snake_key: 1 };").len(), 1);
+    }
+
+    #[test]
+    fn shorthand_defaults_infer_function_names_without_blessing_other_defaults() {
+        let l = native_linter("rule func-names { set mode \"as-needed\" }");
+        let path = Path::new("/root/a.mjs");
+        assert!(l.lint(path, "({ value = function() {} } = input);").is_empty());
+        assert_eq!(l.lint(path, "consume(function() {});").len(), 1);
+    }
+
+    #[test]
+    fn import_option_keys_are_metadata_but_values_and_computed_keys_are_code() {
+        let l = native_linter("rule camelcase");
+        let path = Path::new("/root/a.mjs");
+        assert!(l.lint(path, "import('data', { outer_key: { inner_key: 'json' } });").is_empty());
+        assert_eq!(l.lint(path, "import('data', { outer_key: { [computed_key]: 'json' } });").len(), 1);
+        assert_eq!(l.lint(path, "import('data', { outer_key: { inner_key: local_value } });").len(), 1);
+    }
 }
