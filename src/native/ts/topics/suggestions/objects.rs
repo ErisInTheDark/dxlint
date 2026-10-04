@@ -1,9 +1,29 @@
-//! Object-literal shorthand eligibility and consistency.
+//! Object literal and property-operation preferences.
 
 use super::super::super::facts::{Facts, NativeFile};
 use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::statics::property_name;
 use crate::expr::Value;
+
+pub fn own_property_call(file: &NativeFile, node: u32) -> Value<'static> {
+    let s = &file.syntax;
+    let found = (|| {
+        let callee = s.unparen(s.get(node, F::Callee)?);
+        if !matches!(s.kind(callee), Some(K::Member | K::Index)) || property_name(s, callee).as_deref() != Some("call") { return None }
+        let method = s.unparen(s.get(callee, F::Object)?);
+        if !matches!(s.kind(method), Some(K::Member | K::Index)) || property_name(s, method).as_deref() != Some("hasOwnProperty") { return None }
+        let mut object = s.unparen(s.get(method, F::Object)?);
+        let empty = s.is(object, K::Object) && s.all(object, F::Property).next().is_none();
+        if matches!(s.kind(object), Some(K::Member | K::Index)) && property_name(s, object).as_deref() == Some("prototype") {
+            object = s.unparen(s.get(object, F::Object)?);
+        }
+        let builtin = s.is(object, K::Ident) && s.text(object) == "Object";
+        if !(empty || builtin) || file.bindings().visible(s, node, "Object", true).is_some()
+            || !matches!(file.globals().setting("Object"), Some("readonly" | "writable")) { return None }
+        Some(())
+    })();
+    Value::Bool(found.is_some())
+}
 
 struct Member {
     name: Option<String>,

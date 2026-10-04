@@ -243,7 +243,8 @@ pub fn radix_error(file: &NativeFile, node: u32) -> Value<'static> {
     error.map_or(Value::Null, Value::from)
 }
 
-fn could_be_error(file: &NativeFile, node: u32) -> bool {
+/// Whether an expression can produce an error object, following possible value branches.
+pub(crate) fn could_be_error(file: &NativeFile, node: u32) -> bool {
     let s = &file.syntax;
     let node = s.unparen(node);
     let recurse = |field| s.get(node, field).is_some_and(|n| could_be_error(file, n));

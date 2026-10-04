@@ -5,7 +5,7 @@ use crate::expr::Value;
 use super::super::facts::NativeFile;
 use super::super::kinds::{Field as F, Kind as K};
 
-mod expressions;
+pub(crate) mod expressions;
 mod accessors;
 mod objects;
 mod coercion;
@@ -14,8 +14,17 @@ mod statements;
 mod regex;
 mod errors;
 mod strict;
+mod operators;
 
 pub const FACTS: &[Fact] = &[
+    Fact { name: "own_property_call", doc: "native layers: builtin Object/prototype/empty-object hasOwnProperty.call can use the visible global Object.hasOwn", get: |f, n| f.with_file(objects::own_property_call, n) },
+    Fact { name: "label_binding", doc: "native layers: labelled statement name collides with a visible value binding or configured global", get: |f, n| f.with_file(statements::label_binding, n) },
+    Fact { name: "single_iteration_loop", doc: "native layers: reachable loop body has no normal or correctly targeted continue path for another iteration", get: |f, n| f.with_file(statements::single_iteration, n) },
+    Fact { name: "useless_escapes", doc: "native layers: unnecessary string, untagged template and regex identity escapes with source offsets and option-filterable characters", get: |f, n| f.with_file(regex::useless_escapes, n) },
+    Fact { name: "unnamed_regex_captures", doc: "native layers: unnamed capturing group source spellings in valid literal or statically known RegExp patterns", get: |f, n| f.with_file(regex::unnamed_captures, n) },
+    Fact { name: "logical_assignment", doc: "native layers: repeated-reference logical assignment, logical expression or if statement and equivalent assignment operator", get: |f, n| f.with_file(operators::logical_assignment, n) },
+    Fact { name: "arithmetic_assignment", doc: "native layers: compound arithmetic assignment operator equivalent to this repeated-reference assignment", get: |f, n| f.with_file(operators::arithmetic_assignment, n) },
+    Fact { name: "comparison_orientation", doc: "native layers: literal operand sides, equality policy and parenthesised ordered-range exemption", get: |f, n| f.with_file(operators::comparison_orientation, n) },
     Fact { name: "redundant_conditional", doc: "native layers: boolean-literal or identical-identifier default conditional category through parentheses", get: |f, n| f.with_file(expressions::redundant_conditional, n) },
     Fact { name: "regex_literal_preference", doc: "native layers: static-string or redundant literal RegExp construction diagnostic and wrapping policy", get: |f, n| f.with_file(regex::literal_preference, n) },
     Fact { name: "strict_directive_policy", doc: "native layers: explicit strict directive findings for global, function, never and module policies", get: |f, n| f.with_file(strict::policy, n) },

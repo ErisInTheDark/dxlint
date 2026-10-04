@@ -1,9 +1,51 @@
 //! Statement structure preferences.
 
+use std::collections::HashSet;
+
 use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::lexer::{Lexer, Tok};
+use super::super::super::paths::{self, Domain};
+use super::super::super::syntax::Syntax;
 use crate::expr::Value;
+
+struct SingleIteration(HashSet<u32>);
+
+#[derive(Default)]
+struct LoopPaths {
+    entered: HashSet<u32>,
+    repeated: HashSet<u32>,
+}
+
+impl Domain for LoopPaths {
+    type S = ();
+    fn join(&self, _: &(), _: &()) {}
+    fn loop_back(&mut self, _: &Syntax, node: u32, entered: bool, state: Option<&()>) {
+        if entered { self.entered.insert(node); }
+        if state.is_some() { self.repeated.insert(node); }
+    }
+}
+
+fn single_iterations(file: &NativeFile) -> SingleIteration {
+    let s = &file.syntax;
+    let mut domain = LoopPaths::default();
+    for (_, body) in paths::bodies(s) { paths::walk(s, &mut domain, body, ()); }
+    SingleIteration(domain.entered.difference(&domain.repeated).copied().collect())
+}
+
+pub fn single_iteration(file: &NativeFile, node: u32) -> Value<'static> {
+    Value::Bool(file.cached(single_iterations).0.contains(&node))
+}
+
+pub fn label_binding(file: &NativeFile, node: u32) -> Value<'static> {
+    let s = &file.syntax;
+    let collision = s.get(node, F::Label).is_some_and(|label| {
+        let name = s.text(label);
+        file.bindings().visible(s, node, name, true).is_some()
+            || matches!(file.globals().setting(name), Some("readonly" | "writable"))
+    });
+    Value::Bool(collision)
+}
 
 pub fn rethrow(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
@@ -335,6 +377,21 @@ pub fn curly_body(file: &NativeFile, body: u32) -> Value<'static> {
 mod tests {
     use std::path::Path;
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn looping_paths_respect_reachability_jump_targets_and_finally() {
+        let lint = native_linter("rule no-unreachable-loop");
+        for (source, expected) in [
+            ("function f() { while (a) { if (b) continue; break; } }", 0),
+            ("function f() { while (a) { if (b) return; throw e; } }", 1),
+            ("function f() { return; while (a) { break; } }", 0),
+            ("outer: while (a) { while (b) { continue outer; } break; }", 1),
+            ("function f() { while (a) { try { return; } finally { continue; } } }", 0),
+            ("function f() { while (a) { try { continue; } finally { break; } } }", 1),
+        ] {
+            assert_eq!(lint.lint(Path::new("/root/a.js"), source).len(), expected, "{source}");
+        }
+    }
 
     #[test]
     fn lone_blocks_preserve_only_real_strict_scope_bindings() {

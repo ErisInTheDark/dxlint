@@ -626,18 +626,6 @@ in js_string, js_single_string rule no-template-curly-in-string warn "Unexpected
   when text ~ /.*\$\{[^}\r\n]+\}.*/
 }
 
-# Escapes that mean the same as the bare character.
-in js_escape rule no-useless-escape warn "Unnecessary escape character: {text}." {
-  when !(text ~ /\\(?:[\\nrvtbfux0-9\r\n  ]|\r\n)/)
-  when !(parent == "js_string" && text == "\\\"" || parent == "js_single_string" && text == "\\'")
-  when !(parent == "js_template" && (text == "\\`" || text == "\\$" && starts_with(after, "{{") || text == "\\{{" && ends_with(before, "$")))
-}
-in js_regex_escape rule no-useless-escape:regex warn "Unnecessary escape character: {text}." {
-  when !(text ~ /\\[\\bcdDfnpPrsStvwWxu0-9\]]/)
-  when parent == "js_regex_class" || !(text ~ /\\[\^\/.$*+?\[{}|()Bk]/)
-  # In a class: `^` first and `-` between two characters still mean something.
-  when !(parent == "js_regex_class" && (text == "\\^" && parent_before == "[" || text == "\\-" && parent_before != "[" && !starts_with(after, "]")))
-}
 
 in js_interface_body rule no-empty-interface warn "{if re_test(before, /\bextends\b/) then 'An interface declaring no members is equivalent to its supertype.' else 'An empty interface is equivalent to `{{}}`.'}" {
   when text ~ /\{\s*\}/

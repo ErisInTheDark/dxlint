@@ -439,6 +439,19 @@ in ts_string rule no-multi-str {
   warn "Multiline support is limited to browsers supporting ES5 only."
 }
 
+in ts_string, ts_template, ts_regex rule no-useless-escape {
+  option allowRegexCharacters string[] = [] "allow otherwise unnecessary regex escapes"
+  each escape_info in useless_escapes
+  when !escape_info.regex || !contains(allowRegexCharacters, escape_info.character)
+  report at escape_info.offset
+  warn "Unnecessary escape character: \\{escape_info.character}."
+}
+
+in ts_regex, ts_call, ts_new rule prefer-named-capture-group {
+  each capture in unnamed_regex_captures
+  warn "Capture group '{capture}' should be converted to a named or non-capturing group."
+}
+
 in ts_regex rule no-div-regex {
   when re_test(text, "^/=")
   warn "A regular expression literal can be confused with '/='."
@@ -466,6 +479,48 @@ in ts_program, ts_function, ts_arrow, ts_method rule strict {
   each strict_finding in if strict_mode == "module" then strict_policy.module else if strict_mode == "global" then strict_policy.global else if strict_mode == "function" then strict_policy.function else strict_policy.never
   report at strict_finding.offset
   warn strict_finding.message
+}
+
+in ts_call rule prefer-object-has-own {
+  when own_property_call
+  warn "Use 'Object.hasOwn()' instead of 'Object.prototype.hasOwnProperty.call()'."
+}
+
+in ts_labeled rule no-label-var {
+  when label_binding
+  warn "Found identifier with same name as label."
+}
+
+in ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of rule no-unreachable-loop {
+  option ignore ("WhileStatement" | "DoWhileStatement" | "ForStatement" | "ForInStatement" | "ForOfStatement")[] = [] "ignore selected loop kinds"
+  let loop_type if layer == "ts_while" then "WhileStatement" else if layer == "ts_do_while" then "DoWhileStatement" else if layer == "ts_for" then "ForStatement" else if layer == "ts_for_in" then "ForInStatement" else "ForOfStatement"
+  when !contains(ignore, loop_type) && single_iteration_loop
+  warn "Invalid loop. Its body allows only one iteration."
+}
+
+in ts_assignment, ts_logical, ts_if rule logical-assignment-operators {
+  option mode ("always" | "never") = "always" "logical assignment policy"
+  option enforceForIfStatements boolean = false "include conditional assignments"
+  let logical_info logical_assignment
+  when logical_info != null
+  when if mode == "never" then logical_info.kind == "shorthand" else logical_info.kind != "shorthand" && (logical_info.kind != "if" || enforceForIfStatements)
+  warn if mode == "never" then "Unexpected logical operator assignment ({logical_info.operator}) shorthand." else if logical_info.kind == "assignment" then "Assignment (=) can be replaced with operator assignment ({logical_info.operator})." else if logical_info.kind == "logical" then "Logical expression can be replaced with an assignment ({logical_info.operator})." else "'if' statement can be replaced with a logical operator assignment with operator {logical_info.operator}."
+}
+
+in ts_assignment rule operator-assignment {
+  option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
+  when if mode == "never" then operator != "=" && !contains(["&&=", "||=", "??="], operator) else arithmetic_assignment != null
+  warn if mode == "never" then "Unexpected operator assignment ({operator}) shorthand." else "Assignment (=) can be replaced with operator assignment ({arithmetic_assignment})."
+}
+
+in ts_binary rule yoda {
+  option mode ("never" | "always") = "never" "literal comparison side"
+  option exceptRange boolean = false "allow parenthesised ordered range checks"
+  option onlyEquality boolean = false "apply only to equality operators"
+  let comparison_info comparison_orientation
+  when comparison_info != null && (!onlyEquality || comparison_info.equality) && !(exceptRange && comparison_info.range)
+  when if mode == "always" then comparison_info.right && !comparison_info.left else comparison_info.left && !comparison_info.right
+  warn "Expected literal to be on the {if mode == 'always' then 'left' else 'right'} side of {operator}."
 }
 
 in ts_throw rule preserve-caught-error {
