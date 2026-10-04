@@ -127,24 +127,29 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
 
 schema member_separator_options { delimiter?: "semi" | "comma" | "none"; requireLast?: boolean }
 schema member_separator_config { multiline?: member_separator_options; singleline?: member_separator_options }
-in ts_interface, ts_type_literal rule member-delimiter-style {
+in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature let layout_member_token if contains([";", ","], token_neighbours.after.text) then token_neighbours.after else last_token
+in ts_interface, ts_type_literal let layout_last_member last(member.node)
+in ts_interface, ts_type_literal let layout_members_single position(opener.ts_open_brace.offset).js_line == position(end_offset).js_line
+in ts_interface, ts_type_literal let layout_last_member_inline position(layout_last_member.layout_member_token.end).js_line == position(end_offset).js_line
+in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature rule member-delimiter-style {
   option delimiter "semi" | "comma" | "none" | null = null "default separator for legacy configurations"
   option multiline member_separator_options = {} "multiline member separators"
   option singleline member_separator_options = {} "single-line member separators"
   option overrides { interface?: member_separator_config; typeLiteral?: member_separator_config } = {} "separators by declaration kind"
   option multilineDetection "brackets" | "last-member" = "brackets" "multiline classification"
-  let member_delimiter_owner first(member_delimiter_sites)
-  when member_delimiter_owner != null
-  let member_single member_delimiter_owner.single_line || multilineDetection == "last-member" && member_delimiter_owner.last_same_line
-  let member_override if member_delimiter_owner.kind == "interface" then overrides.interface else overrides.typeLiteral
+  when parent is (ts_interface, ts_type_literal)
+  let member_single parent.layout_members_single || multilineDetection == "last-member" && parent.layout_last_member_inline
+  let member_override if parent is ts_interface then overrides.interface else overrides.typeLiteral
   let member_base if member_single then singleline else multiline
   let member_policy if member_single then member_override.singleline else member_override.multiline
   let member_delimiter default(member_policy.delimiter, default(member_base.delimiter, default(delimiter, "semi")))
   let member_require_last default(member_policy.requireLast, default(member_base.requireLast, !member_single))
-  each member_site in member_delimiter_sites
-  when member_site.delimiter != (if member_site.last && !member_require_last then "none" else member_delimiter)
-  report at member_site.offset
-  warn if member_site.last && !member_require_last || member_delimiter == "none" then (if member_site.delimiter == "semi" then "Unexpected separator (;)." else "Unexpected separator (,).") else if member_delimiter == "semi" then "Expected a semicolon." else "Expected a comma."
+  let member_last offset == parent.layout_last_member.offset
+  let member_token layout_member_token
+  let member_actual if member_token.text == ";" then "semi" else if member_token.text == "," then "comma" else "none"
+  when member_actual != (if member_last && !member_require_last then "none" else member_delimiter)
+  report at member_token.end
+  warn if member_last && !member_require_last || member_delimiter == "none" then (if member_actual == "semi" then "Unexpected separator (;)." else "Unexpected separator (,).") else if member_delimiter == "semi" then "Expected a semicolon." else "Expected a comma."
 }
 
 @macro layout_comment_policy {

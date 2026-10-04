@@ -36,11 +36,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(quotes::property_quote_sites, n),
     },
     Fact {
-        name: "member_delimiter_sites",
-        doc: "native interface/type literal: {kind,single_line,last_same_line,last,delimiter,offset}; offset last token end including optional separator, node multiline ignores declaration header",
-        get: |f, n| f.with_file(delimiters::member_delimiter_sites, n),
-    },
-    Fact {
         name: "empty_line_runs",
         doc: "native program: {kind,count,offsets} runs of empty lines; kind bof/eof/middle, offsets line starts, final editor newline ignored and template quasi lines protected",
         get: |f, n| f.with_file(lines::empty_line_runs, n),
