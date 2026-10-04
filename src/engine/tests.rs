@@ -1262,6 +1262,27 @@ fn paths_reach_ancestors_parents_fields_and_nodes() {
 }
 
 #[test]
+fn node_values_walk_and_read_paths() {
+    // `walk` follows writes back through assigned identifiers, each once
+    // (the cycle a = b; b = a ends); `n.a.b` reads on node values; JS
+    // positions break lines at U+2028 and count UTF-16 units (😀 is two).
+    let l = native_linter(r#"
+        in ts_identifier let sources [] references.writer.right.node
+        in ts_variable_declaration rule w info "{join(map(walk([] declaration.name.node, n => n.sources), n => n.text), ',')}"
+        in ts_call rule p info "{node.callee.object.layer}|{node.callee.property}"
+        in ts_bigint rule b info "{literal_value.value}"
+        in ts_string rule j info "{position(offset).line}:{position(offset).js_line}:{position(end_offset).js_column}"
+    "#);
+    let messages: Vec<String> =
+        l.lint(Path::new("/root/a.ts"), "let a, b;\na = b;\nb = a;\nx.y(0x10n, 1_000n);\n'\u{2028}'; '😀';").into_iter().map(|d| d.message).collect();
+    // `parent.exported`: the specifier's field, not the same-named fact.
+    let l = native_linter(r#"in ts_identifier rule e info "{parent.exported}" { when text == "foo" }"#);
+    let exported: Vec<String> = l.lint(Path::new("/root/a.ts"), "export { foo as bar } from 'm';").into_iter().map(|d| d.message).collect();
+    assert_eq!(exported, ["bar"]);
+    assert_eq!(messages, ["a,b,b,a", "ts_identifier|y", "16", "1000", "5:5:2", "5:6:8"]);
+}
+
+#[test]
 fn selecting_token_kinds_keeps_what_neighbour_reads_see() {
     // Only commas are targeted, but a comma's previous token is still there.
     let l = native_linter(r#"in ts_comma rule c info "{previous.layer}""#);

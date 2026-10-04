@@ -401,7 +401,9 @@ so nested rules compose.
 | `parent.x` | anything read on the layer the node sits in (`parent.offset`, `parent.depth`) |
 | `field.layer`, `field.offset`, `field.attr`, `field.fact`, `field.link` | a builtin, attribute, fact or link read on the node in one of this node's fields (a list for several) |
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
-| `first(references).line` | `.x` on a node value (from a link) reads on that node |
+| `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.layer`) |
+| `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
+| `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
@@ -519,7 +521,9 @@ let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.n
 `slice` counts characters; offsets (`offset`, `end_offset`, native spans)
 count bytes, so cut source text at them with `byte_slice(text, from, to?)`.
 `position(offset)` gives `{line, column}` of an offset, like the `line` and
-`column` builtins: `position(end_offset).line`.
+`column` builtins (`position(end_offset).line`), and `{js_line, js_column}`
+as JavaScript tools count them: U+2028 and U+2029 break lines, columns
+count UTF-16 units.
 
 Regex functions take the full syntax of Rust's `regex` crate (no lookaround
 or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first

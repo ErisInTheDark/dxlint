@@ -53,6 +53,7 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("index", "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root"),
     ("field", "the field the node fills in its parent (`callee`, `argument`, `left`); null when it has none"),
     ("gap_before", "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child"),
+    ("node", "the node itself as a node value (reads as its text): for `walk`, `report at`, and `.x` reads later (`right.node`, `parent.node`)"),
 ];
 
 /// A built-in variable or native fact of that name.
@@ -125,8 +126,18 @@ pub enum CExpr {
     OwnChild(bool, Vec<u32>, Box<CExpr>),
     /// `parent.x`: evaluated on the parent layer.
     OnParent(Box<CExpr>),
-    /// `position(offset)`: `{line, column}`, 1-based, of a byte offset.
+    /// `position(offset)`: `{line, column, js_line, js_column}`, 1-based, of
+    /// a byte offset.
     Position(Box<CExpr>),
+    /// `walk(roots, n => next)`; the body reads the node as the innermost
+    /// `Param`.
+    Walk(Box<CExpr>, Box<CExpr>),
+    /// `base.a.b`: on node values the compiled read of `a.b`; on records
+    /// those keys.
+    Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
+    /// A field when the node has one by that label, else this (`parent.x`
+    /// where `x` names both a field and a fact).
+    FieldElse(u16, Box<CExpr>),
     /// `matcher.x`: evaluated on the closest ancestor of that matcher.
     OnAncestor(u32, Box<CExpr>),
     /// A config `fn`, by index in [`Grammar::functions`], with its arguments.
@@ -139,7 +150,8 @@ pub enum CExpr {
 /// Expression forms that are not plain functions, for `zlint functions`.
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
-    ("position(offset)", "`{line, column}` (1-based, like the builtins) of a byte offset in the file"),
+    ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do"),
+    ("walk(roots, n => next)", "the nodes reachable from `roots` (nodes) by `next` (nodes, or a list of them), each once, in visiting order, roots included"),
     ("map(list, x => value)", "the list of `value` for each item `x`"),
     ("filter(list, x => test)", "the items for which `test` is truthy"),
     ("find(list, x => test)", "the first item for which `test` is truthy, or null"),
@@ -175,7 +187,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -210,6 +222,9 @@ pub struct AttrMemo<'a> {
     params: RefCell<Vec<Value<'a>>>,
     /// Config `fn` calls in progress (recursion is bounded).
     calls: std::cell::Cell<u32>,
+    /// Where JavaScript lines start (also after U+2028 and U+2029), for
+    /// `position(offset).js_line`.
+    js_lines: std::cell::OnceCell<Vec<usize>>,
 }
 
 /// What names mean inside one rule.
@@ -365,6 +380,20 @@ impl<'a> Scope<'a> {
     fn member(&self, base: CExpr, key: &crate::config::ast::Name) -> CExpr {
         CExpr::Member(Box::new(base), key.text.clone().into(), self.node_part(key).map(Box::new))
     }
+
+    /// `base.a.b...`: on records the keys; on node values the whole rest
+    /// read there (`n.callee.object.layer`).
+    fn member_path(&self, base: CExpr, keys: &[crate::config::ast::Name]) -> CExpr {
+        match keys {
+            [] => base,
+            [key] => self.member(base, key),
+            _ => {
+                let mut quiet = Vec::new();
+                let part = self.relative_path(keys, &mut quiet).filter(|_| quiet.is_empty());
+                CExpr::Path(Box::new(base), keys.iter().map(|k| k.text.clone().into()).collect(), part.map(Box::new))
+            }
+        }
+    }
 }
 
 impl Scope<'_> {
@@ -416,6 +445,23 @@ impl Scope<'_> {
                 inner.params.extend(params.iter().map(|p| p.text.clone()));
                 let body = inner.compile(body, errors)?;
                 CExpr::Reduce(Box::new(list), Box::new(initial), Box::new(body))
+            }
+            // `walk(roots, n => next)`: every node reachable from the roots.
+            ExprKind::Call(name, args) if name.text == "walk" && self.grammar.function("walk").is_none() => {
+                let lambda = match args.as_slice() {
+                    [_, Expr { kind: ExprKind::Lambda(params, body), .. }] if params.len() == 1 => Some((&params[0], body)),
+                    _ => None,
+                };
+                let Some((param, body)) = lambda else {
+                    errors.push(ConfigError::new(e.span, "`walk` takes the start nodes and a lambda giving each node's next nodes").note("usage: walk([] references, n => n.writer)"));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function("walk"));
+                let roots = self.compile(&args[0], errors)?;
+                let mut inner = self.clone();
+                inner.params.push(param.text.clone());
+                let body = inner.compile(body, errors)?;
+                CExpr::Walk(Box::new(roots), Box::new(body))
             }
             ExprKind::Call(name, args) if args.len() == 2 && matches!(args[1].kind, ExprKind::Lambda(..)) => {
                 let Some((fname, each)) = Each::named(&name.text) else {
@@ -618,11 +664,8 @@ impl Scope<'_> {
         } else {
             None
         };
-        if let Some(mut value) = value {
-            for key in &path[1..] {
-                value = self.member(value, key);
-            }
-            return Some(value);
+        if let Some(value) = value {
+            return Some(self.member_path(value, &path[1..]));
         }
         if self.defining.as_deref() == Some(first.text.as_str()) {
             errors.push(
@@ -674,11 +717,8 @@ impl Scope<'_> {
         } else {
             None
         };
-        if let Some(mut value) = own {
-            for key in &path[1..] {
-                value = self.member(value, key);
-            }
-            return Some(value);
+        if let Some(value) = own {
+            return Some(self.member_path(value, &path[1..]));
         }
         match path {
             [name] => {
@@ -820,6 +860,10 @@ impl Scope<'_> {
                     }
                     if let Some(fact) = fact {
                         self.note(field.span, Resolved::Fact(facts::FACTS[fact].name));
+                        // A field of that name wins where the parent has one.
+                        if let Some(label) = self.grammar.labels.get(&field.text) {
+                            return Some(CExpr::OnParent(Box::new(CExpr::FieldElse(label, Box::new(CExpr::Fact(fact, FactOf::Node))))));
+                        }
                         return Some(CExpr::Fact(fact, FactOf::Parent));
                     }
                     if let Some(label) = self.grammar.labels.get(&field.text) {
@@ -880,6 +924,10 @@ impl Scope<'_> {
                     self.note(first.span, Resolved::Relative(Relative::NAMES.iter().find(|(_, r)| *r == rel).expect("named").0));
                     return Some(CExpr::Relative(rel, Box::new(inner)));
                 }
+                // `node.callee.x`, `declaration.parent.x`: read on that value.
+                if let Some(value) = self.node_part(first) {
+                    return Some(self.member_path(value, rest));
+                }
                 errors.push(ConfigError::new(first.span, format!("unknown name `{}`", first.text)));
                 None
             }
@@ -896,15 +944,26 @@ impl Scope<'_> {
         }
         match self.node_part(first) {
             Some(CExpr::Field(label)) => Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?))),
-            Some(mut value) => {
-                for key in rest {
-                    value = self.member(value, key);
-                }
-                Some(value)
-            }
+            Some(value) => Some(self.member_path(value, rest)),
             None => self.relative_part(first, errors),
         }
     }
+}
+
+/// Byte offsets where JavaScript lines start: after `\n`, `\r` (not before
+/// `\n`), U+2028 and U+2029.
+fn js_line_starts(src: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    let b = src.as_bytes();
+    for (i, c) in src.char_indices() {
+        let end = i + c.len_utf8();
+        match c {
+            '\n' | '\u{2028}' | '\u{2029}' => starts.push(end),
+            '\r' if b.get(end) != Some(&b'\n') => starts.push(end),
+            _ => {}
+        }
+    }
+    starts
 }
 
 fn arity(f: &Function) -> String {
@@ -1217,6 +1276,7 @@ impl<'a> Ctx<'a> {
                 }
             }
             "source" => Value::from(self.source),
+            "node" => Value::Node(self.node, std::borrow::Cow::Borrowed(self.node_text(self.node))),
             "enclosing" => match self.tree.innermost_at(self.grammar, start as u32, self.node) {
                 Some(id) if !self.tree.is_root(id) => Value::from(self.grammar.matchers[self.tree.node(id).matcher as usize].name.as_str()),
                 _ => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),
@@ -1359,8 +1419,53 @@ impl<'a> Ctx<'a> {
                     at -= 1;
                 }
                 let (line, column) = self.lines.line_col(self.source, at);
-                Value::record(vec![("line".into(), Value::from(line + 1)), ("column".into(), Value::from(column + 1))])
+                let starts = self.memo.js_lines.get_or_init(|| js_line_starts(self.source));
+                let js_line = starts.partition_point(|&s| s <= at);
+                let js_column = self.source[starts[js_line - 1]..at].encode_utf16().count();
+                Value::record(vec![
+                    ("line".into(), Value::from(line + 1)),
+                    ("column".into(), Value::from(column + 1)),
+                    ("js_line".into(), Value::from(js_line)),
+                    ("js_column".into(), Value::from(js_column + 1)),
+                ])
             }
+            CExpr::Walk(roots, next) => {
+                let mut seen = std::collections::HashSet::new();
+                let mut queue: std::collections::VecDeque<Value<'a>> = self.eval(roots)?.items().into();
+                let mut out = Vec::new();
+                while let Some(v) = queue.pop_front() {
+                    let Value::Node(id, _) = &v else { continue };
+                    if !seen.insert(*id) {
+                        continue;
+                    }
+                    self.memo.params.borrow_mut().push(v.clone());
+                    let more = self.eval(next);
+                    self.memo.params.borrow_mut().pop();
+                    queue.extend(more?.items());
+                    out.push(v);
+                }
+                Value::list(out)
+            }
+            CExpr::Path(base, keys, part) => {
+                let base = self.eval(base)?;
+                let on = |v: &Value<'a>| -> Result<Value<'a>, String> {
+                    match (v, part) {
+                        (Value::Node(id, _), Some(part)) => Ctx { node: *id, ..*self }.eval(part),
+                        (Value::Record(_), _) => Ok(keys.iter().fold(v.clone(), |v, k| v.key(k))),
+                        _ => Ok(Value::Null),
+                    }
+                };
+                match &base {
+                    Value::List(items) if items.iter().any(|i| matches!(i, Value::Node(..))) => {
+                        Value::list(items.iter().map(on).collect::<Result<_, _>>()?)
+                    }
+                    v => on(v)?,
+                }
+            }
+            CExpr::FieldElse(label, other) => match self.tree.fields(self.node, *label).is_empty() {
+                false => self.field(self.node, *label),
+                true => self.eval(other)?,
+            },
             CExpr::OnParent(inner) => match self.parent_layer() {
                 Some(p) => Ctx { node: p, ..*self }.eval(inner)?,
                 None => Value::Null,
@@ -1521,6 +1626,7 @@ impl<'a> Ctx<'a> {
             CExpr::Record(entries) => Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), eval(v)?))).collect::<Result<_, String>>()?),
             CExpr::Key(base, key) => eval(base)?.key(key),
             CExpr::Member(base, key, _) => eval(base)?.key(key),
+            CExpr::Path(base, keys, _) => keys.iter().fold(eval(base)?, |v, k| v.key(k)),
             CExpr::Call(f, args) => {
                 let args = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
                 (f.call)(&args)?

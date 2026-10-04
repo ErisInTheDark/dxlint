@@ -54,11 +54,40 @@ pub fn literal_text(s: &Syntax, node: u32) -> Option<String> {
         K::String => super::regex::cook(text),
         K::Template if s.all(node, F::Expr).next().is_none() => super::regex::cook(text),
         K::Number => Some(number_string(number(text)?)),
-        K::BigInt => Some(text.trim_end_matches('n').replace('_', "")),
+        K::BigInt => bigint_decimal(text),
         K::Bool | K::Null | K::Regex => Some(text.to_string()),
         K::Paren => literal_text(s, s.get(node, F::Expr)?),
         _ => None,
     }
+}
+
+/// A bigint literal's value in decimal (`0x10n` is `16`), exactly.
+fn bigint_decimal(text: &str) -> Option<String> {
+    let digits = text.trim_end_matches('n').replace('_', "");
+    let (radix, body) = match digits.get(..2).map(str::to_ascii_lowercase).as_deref() {
+        Some("0x") => (16, &digits[2..]),
+        Some("0o") => (8, &digits[2..]),
+        Some("0b") => (2, &digits[2..]),
+        _ => (10, digits.as_str()),
+    };
+    // Little-endian base 10^9 limbs.
+    let mut limbs: Vec<u64> = vec![0];
+    for c in body.chars() {
+        let mut carry = u64::from(c.to_digit(radix)?);
+        for limb in &mut limbs {
+            let v = *limb * u64::from(radix) + carry;
+            *limb = v % 1_000_000_000;
+            carry = v / 1_000_000_000;
+        }
+        if carry > 0 {
+            limbs.push(carry);
+        }
+    }
+    let mut out = limbs.last().copied().unwrap_or(0).to_string();
+    for limb in limbs.iter().rev().skip(1) {
+        out.push_str(&format!("{limb:09}"));
+    }
+    Some(out)
 }
 
 /// A literal-like expression's JavaScript type and value as text: strings,
@@ -70,7 +99,7 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
         K::String => ("string", super::regex::cook(text)?),
         K::Template if s.all(node, F::Expr).next().is_none() => ("string", super::regex::cook(text)?),
         K::Number => ("number", number_string(number(text)?)),
-        K::BigInt => ("bigint", text.trim_end_matches('n').replace('_', "")),
+        K::BigInt => ("bigint", bigint_decimal(text)?),
         K::Bool => ("boolean", text.to_string()),
         K::Null => ("null", "null".into()),
         K::Regex => ("regex", text.to_string()),

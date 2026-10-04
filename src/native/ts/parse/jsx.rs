@@ -74,17 +74,27 @@ impl<'s> Parser<'s> {
         }
         // The whole closing name (`a.b`, `a:b`) is one plain name: only the
         // opening tag references a component.
+        // Spacing (line breaks too) may surround the `.` / `:`.
         let b = self.src.as_bytes();
+        let skip = |mut at: usize| {
+            while b.get(at).is_some_and(u8::is_ascii_whitespace) {
+                at += 1;
+            }
+            at
+        };
         let mut end = closing_start as usize;
         loop {
             end = self.lx.jsx_name_end(end);
-            if matches!(b.get(end), Some(b'.' | b':')) && b.get(end + 1).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
-                end += 1;
+            let dot = skip(end);
+            let next = skip(dot + 1);
+            if matches!(b.get(dot), Some(b'.' | b':')) && b.get(next).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
+                end = next;
             } else {
                 break;
             }
         }
-        if &src[closing_start as usize..end] != name_text {
+        let bare = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        if bare(&src[closing_start as usize..end]) != bare(name_text) {
             return self.fail_at(closing_start, &format!("expected corresponding JSX closing tag for `{name_text}`"));
         }
         let closing = self.jsx_name_node(closing_start, end);
@@ -256,5 +266,17 @@ impl<'s> Parser<'s> {
         let mut kids = Kids::default();
         kids.add(Field::Expr, e);
         Ok(self.finish(Kind::JsxExpression, start, kids))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn member_names_may_break_lines_around_their_dots() {
+        for src in ["<Form\n.Input />", "<Form.\nInput />", "<Form . Input>x</Form\n.Input>", "<a:b></a : b>"] {
+            let r = super::super::super::parse(&format!("const x = {src};"), true);
+            assert!(r.is_ok(), "{src}: {:?}", r.err());
+        }
+        assert!(super::super::super::parse("const x = <A.B></A.C>;", true).is_err());
     }
 }
