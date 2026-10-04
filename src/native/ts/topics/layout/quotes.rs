@@ -9,48 +9,6 @@ use std::sync::LazyLock;
 
 use super::lex;
 
-pub(super) fn string_quote_context(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    if !matches!(syntax.kind(node), Some(K::String | K::Template)) {
-        return Value::Null;
-    }
-    let parent = syntax.parent(node);
-    let jsx = parent.is_some_and(|id| syntax.is(id, K::JsxAttribute));
-    let mut non_backtick = parent.is_some_and(|id| match syntax.kind(id) {
-        Some(K::Prop | K::PatternProp | K::Method | K::ClassProp) => syntax.get(id, F::Key) == Some(node),
-        Some(K::Import | K::Export) => syntax.get(id, F::From) == Some(node) || syntax.get(id, F::Namespace) == Some(node),
-        Some(K::ImportSpec) => syntax.get(id, F::Imported) == Some(node),
-        Some(K::ExportSpec | K::ImportType | K::MethodSig | K::PropSig | K::Namespace) => true,
-        Some(K::EnumMember) => syntax.get(id, F::Name) == Some(node),
-        Some(K::LiteralType) => syntax.parent(id).is_some_and(|outer| syntax.is(outer, K::ImportType)),
-        Some(K::Call) => syntax.parent(id).is_some_and(|outer| syntax.is(outer, K::ImportEquals)),
-        _ => false,
-    });
-    if let Some(statement) = parent.filter(|&id| syntax.is(id, K::ExprStmt)) {
-        if let Some(owner) = syntax.parent(statement).filter(|&id| syntax.is(id, K::Program) || syntax.is(id, K::Block) && syntax.parent(id).is_some_and(|function| matches!(syntax.kind(function), Some(K::Function | K::Arrow | K::Method)))) {
-            for sibling in syntax.all(owner, F::Body) {
-                if sibling == statement {
-                    non_backtick = true;
-                    break;
-                }
-                if !syntax.is(sibling, K::ExprStmt) || syntax.get(sibling, F::Expr).is_none_or(|expr| !syntax.is(expr, K::String)) {
-                    break;
-                }
-            }
-        }
-    }
-    static LINEBREAK: LazyLock<regex_automata::meta::Regex> = LazyLock::new(|| regex_automata::meta::Regex::new(r"(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]").expect("unescaped line break pattern"));
-    let template_feature = syntax.is(node, K::Template) && (syntax.all(node, F::Expr).next().is_some()
-        || parent.is_some_and(|id| syntax.is(id, K::TaggedTemplate) && syntax.get(id, F::Quasi) == Some(node))
-        || LINEBREAK.is_match(syntax.text(node)));
-    Value::record(vec![
-        ("jsx".into(), Value::Bool(jsx)),
-        ("non_backtick".into(), Value::Bool(non_backtick)),
-        ("template".into(), Value::Bool(syntax.is(node, K::Template))),
-        ("template_feature".into(), Value::Bool(template_feature)),
-    ])
-}
-
 pub(super) fn property_quote_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
     if matches!(syntax.kind(node), Some(K::Import | K::Export)) {

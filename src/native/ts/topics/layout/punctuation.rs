@@ -1,7 +1,5 @@
 //! Structural punctuation sites, sharing the parser-aware lexical stream.
 
-use std::collections::BTreeMap;
-
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
@@ -55,63 +53,6 @@ pub(super) fn generic_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'
                 ("start".into(), Value::from(start as usize)),
                 ("end".into(), Value::from(end as usize)),
                 ("spaced".into(), Value::Bool(if side == "inner" { gap.chars().any(char::is_whitespace) } else { gap_has_space(gap) })),
-            ]));
-        }
-    }
-    Value::list(sites)
-}
-
-pub(super) fn semicolon_style_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    if !syntax.is(node, K::Program) {
-        return Value::Null;
-    }
-    let lexed = file.cached(lex);
-    let sites = semicolons(file, false);
-    Value::list(sites.into_iter().map(|(at, (last_child, for_header))| {
-        let token = lexed.0[at];
-        let previous_line = at.checked_sub(1).is_some_and(|i| syntax.src[lexed.0[i].end as usize..token.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']));
-        let next_line = lexed.0.get(at + 1).is_some_and(|next| syntax.src[token.end as usize..next.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']));
-        Value::record(vec![
-            ("offset".into(), Value::from(token.start as usize)),
-            ("previous_line".into(), Value::Bool(previous_line)),
-            ("next_line".into(), Value::Bool(next_line)),
-            ("last_child".into(), Value::Bool(last_child)),
-            ("for_header".into(), Value::Bool(for_header)),
-        ])
-    }).collect())
-}
-
-pub(super) fn semicolon_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    if !syntax.is(node, K::Program) {
-        return Value::Null;
-    }
-    let lexed = file.cached(lex);
-    let mut sites = Vec::new();
-    for (at, _) in semicolons(file, true) {
-        let token = lexed.0[at];
-        let previous = at.checked_sub(1).and_then(|i| lexed.0.get(i));
-        let next = lexed.0.get(at + 1);
-        let before_start = previous.map_or(token.start, |previous| previous.end) as usize;
-        let after_end = next.map_or(token.end, |next| next.start) as usize;
-        let before_gap = &syntax.src[before_start..token.start as usize];
-        let after_gap = &syntax.src[token.end as usize..after_end];
-        let first_in_line = previous.is_none() || before_gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']);
-        let last_in_line = next.is_none() || after_gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']);
-        for (side, start, end, spaced) in [
-            ("before", before_start, token.start as usize, !first_in_line && gap_has_space(before_gap)),
-            ("after", token.end as usize, after_end, !last_in_line && gap_has_space(after_gap)),
-        ] {
-            if side == "after" && (first_in_line || last_in_line || next.is_some_and(|next| matches!(next.tok, Tok::P(")" | "}")))) {
-                continue;
-            }
-            sites.push(Value::record(vec![
-                ("side".into(), Value::from(side)),
-                ("offset".into(), Value::from(if spaced { start } else { token.start as usize })),
-                ("start".into(), Value::from(start)),
-                ("end".into(), Value::from(end)),
-                ("spaced".into(), Value::Bool(spaced)),
             ]));
         }
     }
@@ -193,48 +134,6 @@ fn terminal_arrow_block(file: &NativeFile<'_>, mut node: u32, end: u32) -> bool 
         let Some(child) = syntax.tree.node(node).children.iter().map(|child| child.node).find(|&child| syntax.tree.node(child).end == end) else { return false };
         node = child;
     }
-}
-
-fn semicolons(file: &NativeFile<'_>, include_signatures: bool) -> BTreeMap<usize, (bool, bool)> {
-    let syntax = &file.syntax;
-    let lexed = file.cached(lex);
-    let mut sites = BTreeMap::new();
-    for id in 0..syntax.tree.nodes.len() as u32 {
-        if syntax.is(id, K::For) {
-            for field in [F::Init, F::Test] {
-                if let Some(child) = syntax.get(id, field) {
-                    let end = syntax.tree.node(child).end;
-                    let at = lexed.0.partition_point(|token| token.end < end);
-                    if let Some(at) = (at..lexed.0.len()).find(|&i| lexed.0[i].tok == Tok::P(";")) {
-                        sites.insert(at, (false, true));
-                    }
-                }
-            }
-            continue;
-        }
-        if !matches!(syntax.kind(id), Some(K::Break | K::Continue | K::Debugger | K::DoWhile | K::Export | K::ExportAssign | K::ExprStmt | K::Import | K::Return | K::Throw | K::Var | K::ClassProp))
-            && (!include_signatures || !matches!(syntax.kind(id), Some(K::Function | K::Method | K::TypeAlias | K::PropSig | K::MethodSig | K::CallSig))) {
-            continue;
-        }
-        let end = syntax.tree.node(id).end;
-        let Some(mut at) = lexed.0.partition_point(|token| token.end <= end).checked_sub(1) else { continue };
-        if include_signatures && matches!(syntax.kind(id), Some(K::PropSig | K::MethodSig | K::CallSig))
-            && lexed.0.get(at + 1).is_some_and(|token| token.tok == Tok::P(";")) {
-            at += 1;
-        }
-        if lexed.0[at].tok != Tok::P(";") {
-            continue;
-        }
-        let last = syntax.parent(id).is_none_or(|parent| match syntax.kind(parent) {
-            Some(K::DoWhile) => true,
-            Some(K::If) if syntax.get(parent, F::Consequent) == Some(id) && syntax.get(parent, F::Alternate).is_some() => true,
-            Some(K::Program | K::Block | K::StaticBlock | K::Case) => syntax.all(parent, F::Body).last() == Some(id),
-            Some(K::Class) => syntax.all(parent, F::Member).last() == Some(id),
-            _ => false,
-        });
-        sites.entry(at).or_insert((last, false));
-    }
-    sites
 }
 
 #[cfg(test)]

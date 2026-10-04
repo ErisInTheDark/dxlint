@@ -5,7 +5,7 @@ use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::lexer::Tok;
 
-use super::{gap_has_space, lex};
+use super::lex;
 
 pub(super) fn member_delimiter_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
@@ -62,43 +62,6 @@ pub(super) fn brace_start(file: &NativeFile<'_>, node: u32) -> Option<u32> {
     let at = lexed.0.partition_point(|token| token.start < from);
     lexed.0[at..].iter().take_while(|token| token.start < span.end).find(|token| token.tok == Tok::P("{")).map(|token| token.start)
 }
-
-pub(super) fn property_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    let (left, right, indexed, same_line) = match syntax.kind(node) {
-        Some(K::Member) => (syntax.get(node, F::Object), syntax.get(node, F::Property), false, true),
-        Some(K::Index) => (syntax.get(node, F::Object), syntax.get(node, F::Index), true, true),
-        Some(K::IndexedAccess) => (syntax.get(node, F::Object), syntax.get(node, F::Index), true, false),
-        Some(K::QualifiedName) => (syntax.get(node, F::Left), syntax.get(node, F::Right), false, false),
-        Some(K::ImportType) => (None, syntax.get(node, F::Qualifier), false, false),
-        _ => return Value::Null,
-    };
-    let Some(right) = right else { return Value::Null };
-    let right_span = syntax.tree.node(right);
-    let lexed = file.cached(lex);
-    let right_at = lexed.0.partition_point(|token| token.start < right_span.start);
-    let start = if let Some(left) = left {
-        syntax.tree.node(left).end
-    } else {
-        let Some(at) = right_at.checked_sub(2) else { return Value::Null };
-        lexed.0[at].end
-    };
-    let end = if indexed {
-        let from = lexed.0.partition_point(|token| token.start < start);
-        let Some(open) = (from..right_at).rev().find(|&i| lexed.0[i].tok == Tok::P("[")) else { return Value::Null };
-        lexed.0[open].start
-    } else {
-        right_span.start
-    };
-    if same_line && syntax.src[start as usize..right_span.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
-        return Value::Null;
-    }
-    Value::record(vec![
-        ("name".into(), Value::from(syntax.text(right).to_owned())),
-        ("spaced".into(), Value::Bool(gap_has_space(&syntax.src[start as usize..end as usize]))),
-    ])
-}
-
 
 #[cfg(test)]
 mod tests {

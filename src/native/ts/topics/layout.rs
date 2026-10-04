@@ -3,7 +3,7 @@
 use crate::expr::facts::Fact;
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
-use crate::native::ts::kinds::{Field as F, Kind as K};
+use crate::native::ts::kinds::Kind as K;
 use crate::native::ts::lexer::{Tok, Token};
 
 use crate::native::ts::tokens::{gap_has_space, lex, lex_comments};
@@ -13,7 +13,6 @@ mod operators;
 mod delimiters;
 mod lists;
 mod lines;
-mod annotations;
 mod quotes;
 
 pub const FACTS: &[Fact] = &[
@@ -31,11 +30,6 @@ pub const FACTS: &[Fact] = &[
         name: "multiple_space_sites",
         doc: "native program: same-line token/comment gaps {start,end,gap,display,owner,eol_comment}; opaque spans excluded, owner is the smallest node containing the last gap byte",
         get: |f, n| f.with_file(multiple_space_sites, n),
-    },
-    Fact {
-        name: "string_quote_context",
-        doc: "native string/template: {jsx,non_backtick,template,template_feature}; grammar-safe non-backtick contexts and semantic template features (tag/interpolation/unescaped newline)",
-        get: |f, n| f.with_file(quotes::string_quote_context, n),
     },
     Fact {
         name: "property_quote_sites",
@@ -58,29 +52,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(lines::empty_line_runs, n),
     },
     Fact {
-        name: "annotation_spacing",
-        doc: "native typed declarations/parameters/members/functions/tuples/mapped types: {category,optional,label,before,after,inner,outer}; gap records {spaced,offset}, optional label includes mapped +/- modifiers",
-        get: |f, n| f.with_file(annotations::annotation_spacing, n),
-    },
-    Fact {
         name: "token_neighbours",
         doc: "native layers: adjacent tokens as before/after records {text,start,end,gap,spaced,same_line,line_break}; gap retains comments, spaced counts whitespace outside comments, line_break includes comment line breaks; parent_start is the parent's byte offset",
         get: |f, n| f.with_file(token_neighbours, n),
-    },
-    Fact {
-        name: "call_spacing",
-        doc: "native calls/new/import(): the gap before invocation parentheses {start,end,gap,spaced,line_break,optional,prefix_spaced,suffix_spaced}; null when no argument list",
-        get: |f, n| f.with_file(call_spacing, n),
-    },
-    Fact {
-        name: "semicolon_style_sites",
-        doc: "native program: statement and for-header semicolons {offset,previous_line,next_line,last_child,for_header}; line flags indicate a break to the adjacent token",
-        get: |f, n| f.with_file(punctuation::semicolon_style_sites, n),
-    },
-    Fact {
-        name: "semicolon_spacing_sites",
-        doc: "native program: semicolon sides {side,offset,start,end,spaced}; report offset follows ESLint whitespace-vs-token positions, excludes after line-end/closing paren/brace",
-        get: |f, n| f.with_file(punctuation::semicolon_spacing_sites, n),
     },
     Fact {
         name: "unary_spacing",
@@ -91,11 +65,6 @@ pub const FACTS: &[Fact] = &[
         name: "generic_spacing_sites",
         doc: "native generic owners: {side,start,end,spaced}; before/after boundaries plus inner bracket gaps, excludes context-owned outer boundaries",
         get: |f, n| f.with_file(punctuation::generic_spacing_sites, n),
-    },
-    Fact {
-        name: "property_spacing",
-        doc: "native member/index/qualified/import-type: {name,spaced}; gap before property includes access punctuation, comments do not count as spaces, expression members on different lines are excluded",
-        get: |f, n| f.with_file(delimiters::property_spacing, n),
     },
     Fact {
         name: "trailing_comma_sites",
@@ -231,42 +200,6 @@ fn edge(src: &str, token: Option<&Token>, start: usize, end: usize) -> Value<'st
         ("spaced".into(), Value::Bool(gap_has_space(gap))),
         ("same_line".into(), Value::Bool(!line_break)),
         ("line_break".into(), Value::Bool(line_break)),
-    ])
-}
-
-fn call_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    let from = match syntax.kind(node) {
-        Some(K::Call | K::New) => syntax.all(node, F::TypeArg).last().or_else(|| syntax.get(node, F::Callee)).map(|id| syntax.tree.node(id).end),
-        Some(K::ImportCall) => Some(syntax.tree.node(node).start + 6),
-        _ => None,
-    };
-    let Some(from) = from else { return Value::Null };
-    let lexed = file.cached(lex);
-    let limit = syntax.tree.node(node).end;
-    let at = lexed.0.partition_point(|token| token.start < from);
-    let Some(open) = (at..lexed.0.len()).take_while(|&i| lexed.0[i].start < limit).find(|&i| lexed.0[i].tok == Tok::P("(")) else { return Value::Null };
-    let Some(mut previous) = open.checked_sub(1) else { return Value::Null };
-    let optional = lexed.0[previous].tok == Tok::P("?.");
-    let optional_token = lexed.0[previous];
-    if optional {
-        let Some(index) = previous.checked_sub(1) else { return Value::Null };
-        previous = index;
-    }
-    let start = lexed.0[previous].end as usize;
-    let end = lexed.0[open].start as usize;
-    let gap = &syntax.src[start..end];
-    let prefix = if optional { &syntax.src[start..optional_token.start as usize] } else { gap };
-    let suffix = if optional { &syntax.src[optional_token.end as usize..end] } else { gap };
-    Value::record(vec![
-        ("start".into(), Value::from(start)),
-        ("end".into(), Value::from(end)),
-        ("gap".into(), Value::from(gap.to_owned())),
-        ("spaced".into(), Value::Bool(gap_has_space(gap))),
-        ("line_break".into(), Value::Bool(gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']))),
-        ("optional".into(), Value::Bool(optional)),
-        ("prefix_spaced".into(), Value::Bool(gap_has_space(prefix))),
-        ("suffix_spaced".into(), Value::Bool(gap_has_space(suffix))),
     ])
 }
 

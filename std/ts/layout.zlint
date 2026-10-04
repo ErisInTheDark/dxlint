@@ -91,15 +91,23 @@ in ts_program rule no-multi-spaces {
   warn "Multiple spaces found before '{multiple_gap.display}'."
 }
 
+in ts_string let layout_quote_fixed_string (parent is ts_property || parent is ts_pattern_property || parent is ts_method || parent is ts_class_property || parent is ts_method_signature || parent is ts_property_signature) && field == "key" || (parent is ts_import || parent is ts_export) && (field == "from" || field == "namespace") || parent is ts_import_specifier && field == "imported" || parent is ts_export_specifier || (parent is ts_namespace || parent is ts_enum_member) && field == "name" || parent is ts_import_type && field == "argument"
+in ts_literal_type let layout_quote_import_argument parent is ts_import_type && offset == parent.argument.offset
+in ts_call let layout_quote_external_module parent is ts_import_equals && offset == parent.value.offset
+in ts_program let layout_quote_prologue true
+in ts_block let layout_quote_prologue (parent is ts_function || parent is ts_arrow || parent is ts_method) && offset == parent.body.offset
+in ts_expression_statement let layout_quote_directive default(parent.layout_quote_prologue, false) && expression.layer is ts_string && (previous == null || default(previous.layout_quote_directive, false))
+in ts_template let layout_quote_template_feature count(expression) > 0 || parent is ts_tagged_template && field == "quasi" || re_test(text, /(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]/)
 in ts_string, ts_template rule quotes {
   option style "double" | "single" | "backtick" = "double" "string delimiters"
   option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
   option allowTemplateLiterals "never" | "avoidEscape" | "always" | boolean = "never" "allow unused template delimiters"
   option ignoreStringLiterals boolean = false "check templates only"
-  let quote_context string_quote_context
+  let quote_template layer is ts_template
+  let quote_fixed default(layout_quote_fixed_string, false) || parent is ts_expression_statement && parent.layout_quote_directive || parent is ts_literal_type && default(parent.layout_quote_import_argument, false) || parent is ts_call && default(parent.layout_quote_external_module, false)
   let quote_delimiter if style == "single" then "'" else if style == "double" then "\"" else "`"
   let quote_alternate if style == "double" then "'" else "\""
-  when if quote_context.template then style != "backtick" && allowTemplateLiterals != "always" && allowTemplateLiterals != true && !quote_context.template_feature && !((allowTemplateLiterals == "avoidEscape") && avoidEscape && contains(text, quote_delimiter)) else !ignoreStringLiterals && !quote_context.jsx && !(style == "backtick" && quote_context.non_backtick) && !starts_with(text, quote_delimiter) && !(avoidEscape && starts_with(text, quote_alternate) && contains(text, quote_delimiter))
+  when if quote_template then style != "backtick" && allowTemplateLiterals != "always" && allowTemplateLiterals != true && !layout_quote_template_feature && !((allowTemplateLiterals == "avoidEscape") && avoidEscape && contains(text, quote_delimiter)) else !ignoreStringLiterals && parent not ts_jsx_attribute && !(style == "backtick" && quote_fixed) && !starts_with(text, quote_delimiter) && !(avoidEscape && starts_with(text, quote_alternate) && contains(text, quote_delimiter))
   warn "Strings must use {if style == 'single' then 'singlequote' else if style == 'double' then 'doublequote' else 'backtick'}."
 }
 
@@ -196,29 +204,48 @@ in ts_program rule no-multiple-empty-lines {
 }
 
 schema annotation_gap_options { before?: boolean; after?: boolean }
-in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_index_signature, ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type, ts_tuple_member, ts_mapped_type rule type-annotation-spacing {
+in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_index_signature, ts_tuple_member, ts_mapped_type let layout_annotation_start type.offset
+in ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type let layout_annotation_start return_type.offset
+in ts_declarator let layout_annotation_category "variable"
+in ts_parameter let layout_annotation_category "parameter"
+in ts_class_property, ts_property_signature, ts_index_signature, ts_method_signature, ts_call_signature let layout_annotation_category "property"
+in ts_function, ts_arrow, ts_method let layout_annotation_category "returnType"
+in ts_function_type, ts_tuple_member, ts_mapped_type let layout_annotation_category "colon"
+in ts_colon let layout_annotation_optional token_neighbours.before.text == "?"
+@macro layout_annotation_options {
   option before boolean = false "space before annotation punctuation"
   option after boolean = true "space after annotation punctuation"
   option overrides { colon?: annotation_gap_options; variable?: annotation_gap_options | "ignore"; property?: annotation_gap_options | "ignore"; parameter?: annotation_gap_options | "ignore"; returnType?: annotation_gap_options | "ignore"; questionMark?: annotation_gap_options | "ignore" } = {} "annotation context policies"
-  let annotation_site annotation_spacing
-  when annotation_site != null
-  let annotation_policy if annotation_site.category == "variable" then overrides.variable else if annotation_site.category == "property" then overrides.property else if annotation_site.category == "parameter" then overrides.parameter else if annotation_site.category == "returnType" then overrides.returnType else overrides.colon
+  when parent.layout_annotation_start != null && offset < parent.layout_annotation_start
+  let annotation_category parent.layout_annotation_category
+  let annotation_policy if annotation_category == "variable" then overrides.variable else if annotation_category == "property" then overrides.property else if annotation_category == "parameter" then overrides.parameter else if annotation_category == "returnType" then overrides.returnType else overrides.colon
   when annotation_policy != "ignore"
   let annotation_colon_before default(overrides.colon.before, before)
   let annotation_colon_after default(overrides.colon.after, after)
-  let annotation_optional annotation_site.optional && overrides.questionMark != "ignore"
-  let annotation_label if annotation_optional then annotation_site.label else ":"
+  let annotation_optional layout_annotation_optional && overrides.questionMark != "ignore"
+  let annotation_label if !annotation_optional then ":" else if starts_with(parent.optional, "+") then "+?:" else if starts_with(parent.optional, "-") then "-?:" else "?:"
   let annotation_before if annotation_optional then default(overrides.questionMark.before, annotation_colon_before) else default(annotation_policy.before, annotation_colon_before)
   let annotation_after default(annotation_policy.after, annotation_colon_after)
-  each annotation_gap in [
-    { gap: if annotation_optional then annotation_site.outer else annotation_site.before, desired: annotation_before, side: "before" },
-    { gap: annotation_site.after, desired: annotation_after, side: "after" },
-    { gap: annotation_site.inner, desired: default(overrides.questionMark.after, false), side: "between" }
-  ]
-  when annotation_gap.side != "between" || annotation_optional
-  when annotation_gap.gap != null && annotation_gap.gap.spaced != annotation_gap.desired
-  report at annotation_gap.gap.offset
-  warn if annotation_gap.side == "between" then (if annotation_gap.desired then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'.") else (if annotation_gap.desired then "Expected a space {annotation_gap.side} the '{annotation_label}'." else "Unexpected space {annotation_gap.side} the '{annotation_label}'.")
+}
+in ts_colon rule type-annotation-spacing:before {
+  @layout_annotation_options
+  let annotation_gap if annotation_optional then parent.optional.space_before else space_before
+  when annotation_gap != null && annotation_gap.spaced != annotation_before
+  report at if annotation_optional then parent.optional.offset else offset
+  warn if annotation_before then "Expected a space before the '{annotation_label}'." else "Unexpected space before the '{annotation_label}'."
+}
+in ts_colon rule type-annotation-spacing:after {
+  @layout_annotation_options
+  when space_after.spaced != annotation_after
+  warn if annotation_after then "Expected a space after the '{annotation_label}'." else "Unexpected space after the '{annotation_label}'."
+}
+in ts_colon rule type-annotation-spacing:between {
+  when layout_annotation_optional
+  @layout_annotation_options
+  when annotation_optional
+  let annotation_inner default(overrides.questionMark.after, false)
+  when space_before.spaced != annotation_inner
+  warn if annotation_inner then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'."
 }
 
 in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
@@ -343,9 +370,29 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   warn if dangle_check.site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
 }
 
-in ts_member, ts_index, ts_indexed_access, ts_qualified_name, ts_import_type rule no-whitespace-before-property {
-  when property_spacing != null && property_spacing.spaced
-  warn "Unexpected whitespace before property {property_spacing.name}."
+in ts_parenthesized let layout_property_name default(expression.layout_property_name, expression)
+in ts_parenthesized_type let layout_property_name default(type.layout_property_name, type)
+in ts_member let layout_property_name property
+in ts_index, ts_indexed_access let layout_property_name default(index.layout_property_name, index)
+in ts_qualified_name let layout_property_name right
+in ts_member let layout_property_spaced object.space_after.spaced || property.space_before.spaced
+in ts_qualified_name let layout_property_spaced left.space_after.spaced || right.space_before.spaced
+in ts_member let layout_property_same_line position(object.end_offset).line == position(property.offset).line
+in ts_index let layout_property_same_line position(object.end_offset).line == position(index.offset).line
+in ts_member, ts_qualified_name rule no-whitespace-before-property {
+  when default(layout_property_same_line, true) && layout_property_spaced
+  warn "Unexpected whitespace before property {layout_property_name}."
+}
+in ts_index, ts_indexed_access rule no-whitespace-before-property:computed {
+  when default(layout_property_same_line, true)
+  when object.space_after.spaced || opener.ts_open_bracket.space_before.spaced
+  warn "Unexpected whitespace before property {layout_property_name}."
+}
+in ts_dot rule no-whitespace-before-property:import {
+  when parent is ts_import_type && parent.qualifier != null
+  when space_before.spaced || space_after.spaced
+  report at parent.offset
+  warn "Unexpected whitespace before property {parent.qualifier}."
 }
 
 in ts_open_brace rule block-spacing:after {
@@ -482,19 +529,38 @@ in ts_empty, ts_semicolon rule no-extra-semi {
   warn "Unnecessary semicolon."
 }
 
-in ts_program rule semi-style {
+group layout_semi_owner ts_break, ts_continue, ts_debugger, ts_do_while, ts_export, ts_export_assignment, ts_expression_statement, ts_import, ts_return, ts_throw, ts_variable_declaration, ts_class_property
+in layout_semi_owner let layout_semi_last parent is ts_do_while || parent is ts_if && parent.alternate != null && end_offset == parent.consequent.end_offset || parent is (ts_program, ts_block, ts_static_block, ts_case, ts_class) && next == null
+in ts_variable_declaration let layout_semi_initializer parent is ts_for && offset == parent.init.offset
+in ts_semicolon let layout_semi_header if parent is ts_for then parent.init != null && (parent.test == null && previous_token not ts_semicolon || offset < parent.test.offset) || parent.test != null && offset >= parent.test.end_offset else default(parent.layout_semi_initializer, false)
+in ts_semicolon let layout_semi_statement parent is layout_semi_owner && end_offset == parent.end_offset
+in ts_semicolon rule semi-style {
   option style "last" | "first" = "last" "semicolon line position"
-  each semi_site in filter(semicolon_style_sites, s => if style == "last" || s.for_header then s.previous_line else !s.last_child && s.next_line)
-  report at semi_site.offset
-  warn if style == "last" || semi_site.for_header then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
+  when layout_semi_header || layout_semi_statement
+  let semi_at_end style == "last" || layout_semi_header
+  when if semi_at_end then space_before.line_break else !default(parent.layout_semi_last, false) && space_after.line_break
+  warn if semi_at_end then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
 }
 
-in ts_program rule semi-spacing {
+@macro layout_semi_spacing_options {
   option before boolean = false "space before semicolon"
   option after boolean = true "space after semicolon"
-  each semi_site in filter(semicolon_spacing_sites, s => s.spaced != (if s.side == "before" then before else after))
-  report at semi_site.offset
-  warn if semi_site.spaced then "Unexpected whitespace {semi_site.side} semicolon." else "Missing whitespace {semi_site.side} semicolon."
+  when layout_semi_header || layout_semi_statement || parent is (ts_type_alias, ts_function, ts_method) && end_offset == parent.end_offset || parent is (ts_interface, ts_type_literal)
+}
+in ts_semicolon rule semi-spacing:before {
+  @layout_semi_spacing_options
+  let semi_space space_before != null && !space_before.line_break && space_before.spaced
+  when semi_space != before
+  report at if semi_space then space_before.start else offset
+  warn if semi_space then "Unexpected whitespace before semicolon." else "Missing whitespace before semicolon."
+}
+in ts_semicolon rule semi-spacing:after {
+  @layout_semi_spacing_options
+  when previous_token != null && next_token != null
+  when !space_before.line_break && !space_after.line_break && next_token not (ts_close_paren, ts_close_brace)
+  when space_after.spaced != after
+  report at if space_after.spaced then end_offset else offset
+  warn if space_after.spaced then "Unexpected whitespace after semicolon." else "Missing whitespace after semicolon."
 }
 
 in ts_comma rule comma-spacing:before {
@@ -525,38 +591,53 @@ in ts_comma rule comma-spacing:after {
   warn if after then "A space is required after ','." else "There should be no space after ','."
 }
 
-in ts_call, ts_new, ts_import_call rule function-call-spacing {
+in ts_call, ts_new let layout_invocation_end default(last(type_argument.end_offset), callee.end_offset)
+in ts_import_call let layout_invocation_end offset + 6
+in ts_call let layout_invocation_optional optional != null
+in ts_new, ts_import_call let layout_invocation_optional false
+in ts_open_paren rule function-call-spacing {
   option mode "always" | "never" = "never" "spacing before invocation parentheses"
   option allowNewlines boolean = false "allow line breaks before invocation parentheses"
   option optionalChain { before: boolean = true; after: boolean = true } = { before: true, after: true } "spacing around optional invocation punctuation"
-  let call_gap call_spacing
-  when call_gap != null
-  let bad_newline mode == "always" && !allowNewlines && call_gap.line_break
-  let bad_space if mode == "never" then call_gap.spaced
-    else if call_gap.optional then call_gap.prefix_spaced != optionalChain.before || call_gap.suffix_spaced != optionalChain.after
-    else !call_gap.spaced
+  when parent is (ts_call, ts_new, ts_import_call)
+  when offset >= parent.layout_invocation_end
+  let invocation_optional parent.layout_invocation_optional
+  let invocation_prefix if invocation_optional then parent.optional.space_before else space_before
+  let invocation_spaced invocation_prefix.spaced || space_before.spaced
+  let bad_newline mode == "always" && !allowNewlines && (invocation_prefix.line_break || space_before.line_break)
+  let bad_space if mode == "never" then invocation_spaced
+    else if invocation_optional then invocation_prefix.spaced != optionalChain.before || space_before.spaced != optionalChain.after
+    else !invocation_spaced
   when bad_newline || bad_space
-  report at call_gap.start
+  report at invocation_prefix.start
   warn if bad_newline then "Unexpected newline between function name and paren."
-    else if mode == "never" || call_gap.optional && (!optionalChain.before && call_gap.prefix_spaced || !optionalChain.after && call_gap.suffix_spaced) then "Unexpected whitespace between function name and paren."
+    else if mode == "never" || invocation_optional && (!optionalChain.before && invocation_prefix.spaced || !optionalChain.after && space_before.spaced) then "Unexpected whitespace between function name and paren."
     else "Missing space between function name and paren."
 }
 
 # Named tuple members use `name?: Type`.
-in ts_tuple_member rule type-named-tuple-spacing:optional {
-  when re_test(text, /^[\w$]+\s+\?/) || re_test(text, /^[\w$]+\?\s+:/)
-  fix as re_replace(text, /^([\w$]+)\s*\?\s*:/, "$1?:")
+in ts_tuple_member let layout_tuple_prefix !name.space_after.comments && (optional == null || !optional.space_after.comments)
+in ts_colon rule type-named-tuple-spacing:optional {
+  when parent is ts_tuple_member && parent.optional != null
+  when parent.layout_tuple_prefix
+  when space_before.spaced
+  report at parent.offset
+  fix space_before as ""
   warn "Unexpected space between '?' and the ':'."
 }
-in ts_tuple_member rule type-named-tuple-spacing:before {
-  when re_test(text, /^[\w$]+\s+\??\s*:/)
-  fix as re_replace(text, /^([\w$]+)\s+(\??)\s*:/, "$1$2:")
+in ts_tuple_member.name rule type-named-tuple-spacing:before {
+  when parent.layout_tuple_prefix
+  when space_after.spaced
+  report at parent.offset
+  fix space_after as ""
   warn "Unexpected space before the ':'."
 }
-in ts_tuple_member rule type-named-tuple-spacing:after {
-  let prefix re_find(text, /^[\w$]+\s*\??\s*:\s*/)
-  when prefix != null && !ends_with(prefix, ": ")
-  fix as re_replace(text, /^([\w$]+\s*\??\s*):\s*/, "$1: ")
+in ts_colon rule type-named-tuple-spacing:after {
+  when parent is ts_tuple_member
+  when parent.layout_tuple_prefix
+  when len(re_find(space_after.text, /^\s*/)) != 1
+  report at parent.offset
+  fix space_after as " "
   warn "Expected a space after the ':'."
 }
 
@@ -628,11 +709,12 @@ in semicolon_statement rule semi {
 # Empty constructor argument lists belong to this new expression, not its callee.
 in ts_new rule new-parens {
   option style "always" | "never" = "always" "empty constructor parentheses"
-  let call_gap call_spacing
+  let constructor_open opener.ts_open_paren.offset
+  let constructor_close closer.ts_close_paren.offset
   when count(argument) == 0
-  when (call_gap != null) != (style == "always")
+  when (constructor_open != null && constructor_close != null && callee.end_offset < end_offset) != (style == "always")
   report at offset
-  fix as if style == "always" then text "()" else "(" slice(text, 0, call_gap.end - offset) slice(text, call_gap.end - offset + 1, len(text) - 1) ")"
+  fix as if style == "always" then text "()" else "(" byte_slice(text, 0, constructor_open - offset) byte_slice(text, constructor_open - offset + 1, constructor_close - offset) byte_slice(text, constructor_close - offset + 1) ")"
   warn if style == "always" then "Missing '()' invoking a constructor." else "Unnecessary '()' invoking a constructor with no arguments."
 }
 
