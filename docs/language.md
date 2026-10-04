@@ -622,8 +622,9 @@ A file the parser cannot read gets one warning instead of rules on `ts_*`
 layers.
 
 **One tree.** A file the parser reads gets one tree: the parser's nodes, and
-the pattern layers inside them. A pattern layer inside a native layer is
-matched across that node's text and sits under it; the language's own
+the pattern layers inside them, by the rules pattern trees follow: a pattern
+layer inside a native layer fills the gaps between that node's other
+children and sits under it, an overlay searches its whole text; the language's own
 pattern layers (`in .js match ...`) are matched across the file and sit
 under the program. Rules see no difference:
 
@@ -659,14 +660,16 @@ Files get token nodes only when an active rule needs them. A family name
 turns on and configures every variant (`comma-spacing:before`,
 `comma-spacing:after`): `rule comma-spacing`.
 
-Trivia are layers too, also only when a rule targets them: comments
-(`ts_line_comment`, `ts_block_comment`, group `ts_comment`) under the
-innermost node holding them, in field `comment`; and `ts_line`, every line
-of the file (JavaScript line breaks, the break left out; the last may be
-empty) under the program, in field `lines`.
+Comments and lines are pattern layers in `std/ts.zlint` (see One tree):
+`ts_line_comment` and `ts_block_comment` (group `ts_comment`) are children of
+the code node whose text, between its other children, holds them, so never
+inside a string, regex or template text; `ts_line` is an overlay over the
+file, each JavaScript line with its line break (the last may have none).
 
-Group `ts_node` holds every syntax layer (not tokens or trivia): `in ts_node let
-...` gives an attribute to all of them, for walks that may cross any kind.
+Group `ts_node` holds every syntax layer (not tokens): `in ts_node let ...`
+gives an attribute to all of them, for walks that may cross any kind.
+`ts_code` is the same without literal text (`ts_string`, `ts_regex`,
+`ts_jsx_text`).
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what

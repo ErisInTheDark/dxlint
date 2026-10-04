@@ -7,6 +7,9 @@ use super::{build, Diagnostic, Linter};
 use crate::config::source::Disk;
 use crate::config::{self, ast::Severity};
 
+/// Behaviour of std's TypeScript rules that spans several owners.
+mod ts_std_rules;
+
 const LANG: &str = r#"
 lang t "*.t"
 match paren /\(/ until /\)/
@@ -1313,18 +1316,26 @@ fn node_values_walk_and_read_paths() {
 
 #[test]
 fn trivia_layers_and_descendants() {
-    // Comments sit under the innermost node holding them; lines (JS line
-    // breaks, without them) under the program, the last one possibly empty.
+    // Comments are children of the code node whose text (between its other
+    // children) holds them: never inside strings, regex or template text.
+    // Lines lie over the file, their JS line break included.
     let l = native_linter(r#"
         in ts_comment rule c info "{parent}:{text}"
-        in ts_line rule l info "{index}:{text}"
+        in ts_line rule l info "{position(offset).js_line}:{trim(text)}:{byte_len(text)}"
     "#);
     let messages: Vec<String> = l
         .lint(Path::new("/root/a.ts"), "f(/* a */ 1); // b\r\nlet s = '//x';\u{2028}x\n")
         .into_iter()
         .map(|d| d.message)
         .collect();
-    assert_eq!(messages, ["0:f(/* a */ 1); // b", "ts_call:/* a */", "ts_program:// b", "1:let s = '//x';", "2:x", "3:"]);
+    assert_eq!(messages, ["1:f(/* a */ 1); // b:20", "ts_call:/* a */", "ts_program:// b", "2:let s = '//x';:17", "3:x:2"]);
+    let l = native_linter(r#"in ts_comment rule c info "{parent}:{text}""#);
+    let messages: Vec<String> = l
+        .lint(Path::new("/root/a.tsx"), "x = `// no ${ /* yes */ y }`;\nr = /\\/\\/x/;\nv = <a>// no</a>;")
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(messages, ["ts_template:/* yes */"]);
     let l = native_linter(r#"
         in ts_program rule d info "{join(map(descendants(ts_function_like), n => n.layer), ',')}"
         in ts_new rule t info "{first_token.layer}:{last_token.text}"
@@ -1355,10 +1366,10 @@ fn descendants_of_trivia_bring_their_nodes() {
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;\nb;\nc;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["3"]);
     // `overlapping`: the comments and strings on each line, nothing else.
-    let l = native_linter(r#"in ts_line rule o info "{index}:{join(map(overlapping(ts_comment), c => c.text), '|')}:{count(overlapping(ts_string))}""#);
+    let l = native_linter(r#"in ts_line rule o info "{line}:{join(map(overlapping(ts_comment), c => c.text), '|')}:{count(overlapping(ts_string))}""#);
     let messages: Vec<String> =
         l.lint(Path::new("/root/a.ts"), "a; /* x\ny */ 'q';\nb; // z\nc;").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["0:/* x\ny */:0", "1:/* x\ny */:1", "2:// z:0", "3::0"]);
+    assert_eq!(messages, ["1:/* x\ny */:0", "2:/* x\ny */:1", "3:// z:0", "4::0"]);
 }
 
 #[test]

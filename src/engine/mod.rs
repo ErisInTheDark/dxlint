@@ -68,9 +68,9 @@ pub struct Rule {
     /// What the node (or the space next to it) should look like (`fix as expr`).
     fix: Option<CExpr>,
     fix_target: FixTarget,
-    /// Token kinds of the brackets it reads (`opener.x`): native trees
-    /// need those nodes.
-    bracket_kinds: Vec<u16>,
+    /// Layers it reads by name (`opener.x`, `descendants(x)`): their nodes
+    /// must be built.
+    layer_reads: Vec<u32>,
     /// Reads `children.x`; reads `previous.x` / `next.x`.
     reads_children: bool,
     reads_siblings: bool,
@@ -141,8 +141,8 @@ pub struct Linter {
     /// An attribute reads `children.x`, or `previous.x` on a token: files
     /// then get every token kind, so those reads see the same nodes.
     token_attr_neighbours: bool,
-    /// Bracket token kinds attributes and `fn`s read.
-    shared_token_kinds: Vec<u16>,
+    /// Layers attributes and `fn`s read by name.
+    shared_layer_reads: Vec<u32>,
     /// `in a forward x from field`: (matcher, attribute, label).
     forwards: Vec<(u32, u16, u16)>,
     /// Other files' exports, read on demand by native rules.
@@ -216,40 +216,46 @@ impl Linter {
         // read would see the difference (`children.x`, `previous.x` on a token).
         use crate::native::ts::kinds::ALL_KINDS;
         let mut token_kinds = [false; ALL_KINDS.len()];
-        let mut all_tokens = false;
+        let (mut all_tokens, mut lang_layers) = (false, false);
         let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
-        for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
-            for &k in f.bracket_kinds.iter().chain(&self.shared_token_kinds) {
-                token_kinds[k as usize] = true;
+        // A layer some active rule targets or reads by name (`opener.x`,
+        // `descendants(x)`): its nodes must be built. Returns whether it is
+        // a token layer.
+        let mut need = |m: u32, target: bool, targets: &mut [bool]| -> bool {
+            if self.grammar.native_kind(m).is_some() {
+                wants_native |= target;
+                return token_kind(m).inspect(|&k| token_kinds[k] = true).is_some();
             }
-            let mut on_tokens = !f.bracket_kinds.is_empty();
+            targets[m as usize] = true;
+            wants_layers = true;
+            // Pattern layers inside token layers need those nodes too.
+            for &h in &self.grammar.native_hosts[m as usize] {
+                if let Some(k) = token_kind(h) {
+                    token_kinds[k] = true;
+                }
+            }
+            false
+        };
+        for &m in &self.shared_layer_reads {
+            need(m, false, &mut targets);
+        }
+        for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
+            let mut on_tokens = false;
+            for &m in &f.layer_reads {
+                on_tokens |= need(m, false, &mut targets);
+            }
             for t in &f.targets {
                 match *t {
-                    Target::Matcher(m) | Target::Field(m, _) if self.grammar.native_kind(m).is_some() => {
-                        wants_native = true;
-                        if let Some(k) = token_kind(m) {
-                            token_kinds[k] = true;
-                            on_tokens = true;
-                        }
-                    }
-                    Target::Matcher(m) | Target::Field(m, _) => {
-                        targets[m as usize] = true;
-                        wants_layers = true;
-                        // Inside comments or lines: those nodes must exist.
-                        for &h in &self.grammar.native_hosts[m as usize] {
-                            if let Some(k) = token_kind(h) {
-                                token_kinds[k] = true;
-                            }
-                        }
-                    }
-                    Target::Lang(_) => wants_layers = true,
+                    Target::Matcher(m) | Target::Field(m, _) => on_tokens |= need(m, true, &mut targets),
+                    Target::Lang(_) => lang_layers = true,
                 }
             }
             all_tokens |= f.reads_children || on_tokens && f.reads_siblings;
         }
+        wants_layers |= lang_layers;
         let wants_tokens = token_kinds.iter().any(|&k| k);
         if wants_tokens && (all_tokens || self.token_attr_neighbours) {
-            crate::native::ts::tokens::add_code_tokens(&mut token_kinds);
+            crate::native::ts::tokens::add_all_tokens(&mut token_kinds);
         }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");

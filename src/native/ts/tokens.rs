@@ -18,10 +18,9 @@ pub type TokenMask = [bool; ALL_KINDS.len()];
 #[cfg(test)]
 pub const ALL_TOKENS: TokenMask = [true; ALL_KINDS.len()];
 
-/// Adds every punctuation and keyword kind (comments and lines stay as
-/// they are: they have fields of their own, so no sibling read sees them).
-pub fn add_code_tokens(mask: &mut TokenMask) {
-    for k in ALL_KINDS.iter().filter(|k| k.is_code_token()) {
+/// Adds every token kind.
+pub fn add_all_tokens(mask: &mut TokenMask) {
+    for k in ALL_KINDS.iter().filter(|k| k.is_token()) {
         mask[*k as usize] = true;
     }
 }
@@ -95,10 +94,9 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
             _ => {}
         }
     }
-    let code = ALL_KINDS.iter().any(|k| k.is_code_token() && wanted[*k as usize]);
-    let tokens = if code { lex_around(src, &opaque) } else { Vec::new() };
+    let tokens = lex_around(src, &opaque);
     let mut owned = Vec::new();
-    let mut stack = if code { vec![parsed.root] } else { Vec::new() };
+    let mut stack = vec![parsed.root];
     let mut children = Vec::new();
     while let Some(id) = stack.pop() {
         let node = &nodes[id as usize];
@@ -123,69 +121,18 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
                 }
                 _ => {
                     if let Some(kind) = token_kind(src, token).filter(|&kind| wanted[kind as usize]) {
-                        owned.push((id, F::Token, kind, token.start, token.end));
+                        owned.push((id, kind, token.start, token.end));
                     }
                     at += 1;
                 }
             }
         }
     }
-    if wanted[K::LineComment as usize] || wanted[K::BlockComment as usize] {
-        let literals = nodes.iter().filter(|n| raw_kind(n).is_some_and(super::comments::is_literal)).map(|n| (n.start as usize, n.end as usize)).collect();
-        for c in super::comments::scan(src, literals) {
-            let kind = if c.block { K::BlockComment } else { K::LineComment };
-            if wanted[kind as usize] {
-                owned.push((innermost(nodes, parsed.root, c.start, c.end), F::Comment, kind, c.start, c.end));
-            }
-        }
-    }
-    if wanted[K::Line as usize] {
-        for (start, end) in js_lines(src) {
-            owned.push((parsed.root, F::Lines, K::Line, start as u32, end as u32));
-        }
-    }
-    for (owner, field, kind, start, end) in owned {
+    for (owner, kind, start, end) in owned {
         let id = parsed.nodes.len() as u32;
         parsed.nodes.push(Node { matcher: kind as u32, start, end, children: Vec::new() });
-        parsed.nodes[owner as usize].children.push(Edge { label: field as u16, node: id });
+        parsed.nodes[owner as usize].children.push(Edge { label: F::Token as u16, node: id });
     }
-}
-
-/// The innermost syntax node holding `start..end`.
-fn innermost(nodes: &[Node], root: u32, start: u32, end: u32) -> u32 {
-    let mut at = root;
-    'down: loop {
-        for e in &nodes[at as usize].children {
-            let c = &nodes[e.node as usize];
-            if c.matcher != TEXT && c.start <= start && end <= c.end && raw_kind(c).is_some_and(|k| !k.is_token()) {
-                at = e.node;
-                continue 'down;
-            }
-        }
-        return at;
-    }
-}
-
-/// Each JavaScript line's span, without its line break (`\r\n`, `\n`,
-/// `\r`, U+2028, U+2029); the last line may be empty.
-fn js_lines(src: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let mut start = 0;
-    let mut chars = src.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        let len = match c {
-            '\r' if chars.peek().is_some_and(|&(_, n)| n == '\n') => {
-                chars.next();
-                2
-            }
-            '\n' | '\r' | '\u{2028}' | '\u{2029}' => c.len_utf8(),
-            _ => continue,
-        };
-        out.push((start, i));
-        start = i + len;
-    }
-    out.push((start, src.len()));
-    out
 }
 
 /// The layer a token reads as from outside: the node written exactly as

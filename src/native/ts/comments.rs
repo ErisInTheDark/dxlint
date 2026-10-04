@@ -26,7 +26,7 @@ impl Comment {
 }
 
 /// Kinds whose text holds no comments: literals and JSX text.
-pub fn is_literal(kind: Kind) -> bool {
+fn is_literal(kind: Kind) -> bool {
     matches!(kind, Kind::String | Kind::Template | Kind::Regex | Kind::JsxText)
 }
 
@@ -40,7 +40,7 @@ pub fn comments(s: &Syntax) -> Vec<Comment> {
 }
 
 /// The comments of `src` outside the `literals` spans.
-pub fn scan(src: &str, mut literals: Vec<(usize, usize)>) -> Vec<Comment> {
+fn scan(src: &str, mut literals: Vec<(usize, usize)>) -> Vec<Comment> {
     literals.sort_unstable();
     let b = src.as_bytes();
     let mut out = Vec::new();

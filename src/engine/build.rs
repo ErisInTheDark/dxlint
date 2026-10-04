@@ -57,7 +57,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         }
     }
     let (attrs, token_attr_neighbours) = attributes(&config, &grammar, &attr_names, &uses, &shared_reads, &mut errors);
-    let shared_token_kinds = token_kinds(&grammar, &shared_reads.borrow());
+    let shared_layer_reads = unique(shared_reads.into_inner());
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -181,7 +181,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         by_lang,
         attrs,
         token_attr_neighbours,
-        shared_token_kinds,
+        shared_layer_reads,
         forwards,
         project: Default::default(),
         fingerprint,
@@ -348,12 +348,10 @@ fn attributes(
     (attrs, token_neighbours)
 }
 
-/// The native token and trivia kinds among these matchers.
-fn token_kinds(g: &Grammar, matchers: &[u32]) -> Vec<u16> {
-    let mut kinds: Vec<u16> = matchers.iter().filter(|&&m| is_token_layer(g, m)).filter_map(|&m| g.native_kind(m)).map(|k| k.kind).collect();
-    kinds.sort_unstable();
-    kinds.dedup();
-    kinds
+fn unique(mut ids: Vec<u32>) -> Vec<u32> {
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 fn is_token_layer(g: &Grammar, m: u32) -> bool {
@@ -477,11 +475,11 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     }
     // Reading brackets or descendants of token and trivia layers needs
     // those nodes.
-    let bracket_kinds = token_kinds(g, &layer_reads.borrow());
+    let layer_reads = unique(layer_reads.into_inner());
     let (reads_children, reads_siblings) = reads_neighbours(&uses.borrow()[uses_before..]);
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
     Some(Rule {
-        bracket_kinds,
+        layer_reads,
         reads_children,
         reads_siblings,
         target_layers,

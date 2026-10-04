@@ -19,6 +19,7 @@ use super::text::{decode, look, utf8_len};
 use super::{DfaCaches, Grammar, View};
 use crate::pattern::compile::{Inst, Program, NO_LABEL};
 use crate::pattern::dfa::Dfa;
+use crate::pattern::prefilter::ByteSet;
 
 /// `Node::matcher` of the file's root node.
 pub const ROOT: u32 = u32::MAX;
@@ -182,14 +183,21 @@ impl<'g, 't> Parser<'g, 't> {
     }
 
     /// Pattern layers in a front end's tree (`nodes`, already in this
-    /// grammar's ids): the language's root layers across the file go under
-    /// `root`; a native node's child (and overlay) layers are matched across
-    /// its text and go under it. The pattern nodes are appended to `nodes`;
-    /// returns their holes (see [`Parser::holes`]) with the new ids.
+    /// grammar's ids), by the rules pattern trees follow: a node's child
+    /// layers fill the gaps between its other children, and its overlays
+    /// search its whole text. The
+    /// pattern nodes are appended to `nodes`; returns their holes (see
+    /// [`Parser::holes`]) with the new ids.
     pub fn graft(&mut self, nodes: &mut Vec<Node>, root: u32) -> Vec<(u32, u32, u32)> {
         let view = self.view;
+        let spans = |id: u32| -> Vec<(usize, usize)> {
+            nodes[id as usize].children.iter().map(|e| &nodes[e.node as usize]).map(|c| (c.start as usize, c.end as usize)).collect()
+        };
         // Placeholders stand in for the native hosts while matching.
         let mut hosts: Vec<(u32, u32)> = Vec::new();
+        // The language's own layers: across the whole file, under the
+        // program (until no std layer lives there, the regex JS grammar
+        // still does).
         let edges = self.root_edges();
         let root_host = self.push(Node { matcher: ROOT, start: 0, end: self.text.len() as u32, children: edges });
         hosts.push((root, root_host));
@@ -199,7 +207,9 @@ impl<'g, 't> Parser<'g, 't> {
                 continue;
             }
             let host = self.push(Node { matcher: m, start: n.start, end: n.end, children: Vec::new() });
-            self.fill_children(host);
+            if !view.children[m as usize].is_empty() {
+                self.fill_gaps(host, &view.children[m as usize], &view.child_first[m as usize], spans(id as u32));
+            }
             hosts.push((id as u32, host));
         }
         // One overlay pass over every host (an empty span hosts nothing
@@ -249,11 +259,7 @@ impl<'g, 't> Parser<'g, 't> {
     fn fill_children(&mut self, id: u32) {
         let g = self.g;
         let view = self.view;
-        let text = self.text;
-        let (m, start, end) = {
-            let n = &self.nodes[id as usize];
-            (n.matcher, n.start as usize, n.end as usize)
-        };
+        let m = self.nodes[id as usize].matcher;
         let list = &view.children[m as usize];
         if list.is_empty() || g.matchers[m as usize].has_skip {
             return;
@@ -264,10 +270,19 @@ impl<'g, 't> Parser<'g, 't> {
         }
         let mut covered = Vec::new();
         self.structural_children(id, &mut covered);
+        self.fill_gaps(id, list, &view.child_first[m as usize], covered);
+    }
+
+    /// Children from `list` in the gaps of `id`'s text that `covered`
+    /// leaves: children never start inside another child.
+    fn fill_gaps(&mut self, id: u32, list: &[u32], cf: &ByteSet, mut covered: Vec<(usize, usize)>) {
+        let text = self.text;
+        let (m, start, end) = {
+            let n = &self.nodes[id as usize];
+            (n.matcher, n.start as usize, n.end as usize)
+        };
         covered.sort_unstable();
         covered.push((end, end));
-
-        let cf = &view.child_first[m as usize];
         self.depth += 1;
         let mut found = Vec::new();
         let mut pos = start;

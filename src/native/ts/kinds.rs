@@ -26,8 +26,6 @@ fields! {
     Closing = "closing",
     // The node's own punctuation and keyword tokens (see `tokens::attach_selected`).
     Token = "token",
-    // Comments inside the node and no child of it; the program's lines.
-    Comment = "comment", Lines = "lines",
 }
 
 macro_rules! kinds {
@@ -174,12 +172,6 @@ kinds! {
     CloseAngle = "ts_close_angle" [],
     Keyword = "ts_keyword" [],
     Punctuator = "ts_punctuator" [],
-    // Trivia: comments under the innermost node holding them (field
-    // `comment`), and every line of the file under the program (field
-    // `lines`; its text without the line break).
-    LineComment = "ts_line_comment" [],
-    BlockComment = "ts_block_comment" [],
-    Line = "ts_line" [],
     // ---- types (every kind from here on is a type)
     TypeRef = "ts_type_reference" [Name, TypeArg],
     QualifiedName = "ts_qualified_name" [Left, Right],
@@ -218,13 +210,13 @@ impl Kind {
         Self::is_token_index(self as usize)
     }
 
-    /// Whether `KINDS[i]` is a token kind (code tokens and trivia).
+    /// Whether `KINDS[i]` is a token kind.
     pub fn is_token_index(i: usize) -> bool {
-        (Kind::Comma as usize..=Kind::Line as usize).contains(&i)
+        (Kind::Comma as usize..=Kind::Punctuator as usize).contains(&i)
     }
 
-    /// A punctuation or keyword token (not a comment or line).
-    pub fn is_code_token(self) -> bool {
-        (Kind::Comma as u16..=Kind::Punctuator as u16).contains(&(self as u16))
+    /// Literal text: no code (and so no comment) inside.
+    pub fn is_literal_text(self) -> bool {
+        matches!(self, Kind::String | Kind::Regex | Kind::JsxText)
     }
 }
