@@ -88,9 +88,23 @@ in ts_variable_declaration rule one-var {
   warn "{issue}"
 }
 
-macro expanded_line_length(parts, extra, width) (if width == 0 then sum(parts) else sum(map(slice(parts, 0, len(parts) - 1), part => part - part % width + width)) + last(parts)) - extra
+group structure_template ts_template, ts_template_type
+group structure_literal ts_string, ts_regex
+in ts_comment let structure_comment_span if parent is ts_jsx_expression && parent.expression == null && !re_test(parent.text, /[\n\r\u{2028}\u{2029}]/) then { start: parent.offset, end: parent.end_offset } else { start: offset, end: end_offset }
+in ts_line let structure_line_content re_replace(text, /(?:\r\n|[\n\r\u{2028}\u{2029}])$/, "")
+in ts_line let structure_line_end offset + byte_len(structure_line_content)
+in ts_line let structure_line_comments map(overlapping(ts_comment), comment => comment.structure_comment_span)
+in ts_line let structure_last_comment last(structure_line_comments)
+in ts_line let structure_full_comment structure_last_comment != null && structure_last_comment.end >= structure_line_end
+  && (structure_last_comment.start <= offset || trim(byte_slice(structure_line_content, 0, structure_last_comment.start - offset)) == "")
+in ts_line let structure_line_template any(overlapping(structure_template), template => any(template.quasi.node, quasi => quasi.offset <= structure_line_end && quasi.end_offset >= offset))
 
-in ts_program rule max-len {
+fn expanded_line_length(parts, extra, width) = (if width == 0 then sum(parts) else sum(map(slice(parts, 0, len(parts) - 1), part => part - part % width + width)) + last(parts)) - extra
+fn structure_strip_comments(content, start, comments) = byte_slice(content, 0, reduce(reverse(comments), byte_len(content), (end, comment) =>
+  if comment.start >= start && comment.start <= start + end && comment.end >= start + end
+  then byte_len(trim_end(byte_slice(content, 0, comment.start - start))) else end))
+
+in ts_line rule max-len {
   option options (number | { code?: number; comments?: number; tabWidth?: number; ignorePattern?: string; ignoreComments?: boolean; ignoreStrings?: boolean; ignoreUrls?: boolean; ignoreTemplateLiterals?: boolean; ignoreRegExpLiterals?: boolean; ignoreTrailingComments?: boolean })[] = [] "line limits, tab stops and exemptions"
   let settings last(options)
   let code_limit if type_of(first(options)) == "num" then first(options) else default(settings.code, 80)
@@ -98,21 +112,20 @@ in ts_program rule max-len {
   let tab_width if type_of(second) == "num" then second else default(settings.tabWidth, 4)
   let comment_limit default(settings.comments, 0)
   let strip_comments settings.ignoreTrailingComments || settings.ignoreComments
-  let measurements map(line_lengths, source_line => {
-    offset: source_line.offset,
-    text: if strip_comments then source_line.stripped else source_line.text,
-    length: expanded_line_length(if strip_comments then source_line.stripped_segments else source_line.segments, if strip_comments then source_line.stripped_unicode_extra else source_line.unicode_extra, tab_width),
-    comment_applies: source_line.comment && comment_limit > 0,
-    limit: if source_line.comment && comment_limit > 0 then comment_limit else code_limit,
-    ignored: settings.ignoreComments && source_line.comment || settings.ignoreStrings && source_line.string || settings.ignoreTemplateLiterals && source_line.template || settings.ignoreRegExpLiterals && source_line.regex
-  })
-  each finding in measurements
-  when !finding.ignored
-  when !settings.ignoreUrls || !re_test(finding.text, /[^:/?#]:\/\/[^?#]/)
-  when !settings.ignorePattern || !re_test(finding.text, settings.ignorePattern)
-  when finding.length > finding.limit
-  report at finding.offset
-  warn if finding.comment_applies then "This line has a comment length of {finding.length}. Maximum allowed is {finding.limit}." else "This line has a length of {finding.length}. Maximum allowed is {finding.limit}."
+  when !settings.ignoreComments || !structure_full_comment
+  when !settings.ignoreStrings || count(overlapping(ts_string)) == 0
+  when !settings.ignoreTemplateLiterals || !structure_line_template
+  when !settings.ignoreRegExpLiterals || count(overlapping(ts_regex)) == 0
+  let measured if strip_comments && !structure_full_comment then structure_strip_comments(structure_line_content, offset, structure_line_comments) else structure_line_content
+  when !settings.ignoreUrls || !re_test(measured, /[^:/?#]:\/\/[^?#]/)
+  when !settings.ignorePattern || !re_test(measured, settings.ignorePattern)
+  let parts map(split(measured, "\t"), part => utf16_len(part))
+  let length expanded_line_length(parts, utf16_len(measured) - len(measured), tab_width)
+  let comment_applies structure_full_comment && comment_limit > 0
+  let limit if comment_applies then comment_limit else code_limit
+  when length > limit
+  report at offset
+  warn if comment_applies then "This line has a comment length of {length}. Maximum allowed is {limit}." else "This line has a length of {length}. Maximum allowed is {limit}."
 }
 
 in ts_program rule line-comment-position {
@@ -191,27 +204,32 @@ in ts_question, ts_colon rule multiline-ternary {
   warn if mode == "never" then "Unexpected newline between {operands} of ternary expression." else "Expected newline between {operands} of ternary expression."
 }
 
-in ts_program rule no-tabs {
+in ts_line match structure_tab_run /\t+/
+in structure_tab_run rule no-tabs {
   option allowIndentationTabs boolean = false "allow tabs at the start of a line"
-  each finding in line_layout_findings
-  when finding.kind == "tab" && (!allowIndentationTabs || !finding.indentation)
-  report at finding.offset
+  when !allowIndentationTabs || !re_test(byte_slice(parent.text, 0, offset - parent.offset), /^[ \t]*$/)
+  report at offset
   warn "Unexpected tab character."
 }
 
-in ts_program rule no-mixed-spaces-and-tabs {
+in ts_line rule no-mixed-spaces-and-tabs {
   option mode "default" | "smart-tabs" = "default"
-  each finding in line_layout_findings
-  when mode == "smart-tabs" && finding.kind == "mixed-smart" || mode != "smart-tabs" && finding.kind == "mixed"
-  report at finding.offset
+  let indentation re_find(structure_line_content, /^[ \t]+/)
+  when indentation != null && contains(indentation, " ") && contains(indentation, "\t")
+  let smart_prefix re_find(indentation, /^[ \t]*? \t/)
+  when mode != "smart-tabs" || smart_prefix != null
+  let boundary offset + (if mode == "smart-tabs" then len(smart_prefix) - 2 else len(re_find(indentation, /^(?: +|\t+)/)) - 1)
+  when !any(overlapping(ts_comment), comment => comment.offset < offset && offset < comment.end_offset)
+  when !any(overlapping(structure_literal), literal => literal.offset < offset && boundary < literal.end_offset)
+  when !any(overlapping(structure_template), template => any(template.quasi.node, quasi => quasi.offset < offset && boundary < quasi.end_offset))
+  report at boundary
   warn "Mixed spaces and tabs."
 }
 
-in ts_program rule linebreak-style {
+in ts_line match structure_line_break /\r\n|[\n\u{2028}\u{2029}]/
+in structure_line_break rule linebreak-style {
   option mode "unix" | "windows" = "unix"
-  each finding in line_layout_findings
-  when mode == "unix" && contains(["crlf", "other-linebreak"], finding.kind) || mode == "windows" && contains(["lf", "other-linebreak"], finding.kind)
-  report at finding.offset
+  when mode == "unix" && text != "\n" || mode == "windows" && text != "\r\n"
   warn if mode == "unix" then "Expected linebreaks to be 'LF' but found 'CRLF'." else "Expected linebreaks to be 'CRLF' but found 'LF'."
 }
 

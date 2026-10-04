@@ -273,10 +273,10 @@ in ts_class.name, ts_interface.name rule no-unsafe-declaration-merging {
 schema ts_directive_setting boolean | "allow-with-description" | { descriptionFormat: string }
 # The directive and its description, as TypeScript reads them: `// @ts-x`
 # (`///` too for check/nocheck) or the last line of a block comment.
-macro ts_comment_body (if layer == "js_line_comment" then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, ""))
-macro ts_pragma (layer == "js_line_comment" && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/))
-macro ts_suppress (if layer == "js_line_comment" then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/))
-in js_line_comment, js_block_comment rule ban-ts-comment {
+in ts_comment let ts_comment_body if layer is ts_line_comment then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, "")
+in ts_comment let ts_pragma layer is ts_line_comment && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/)
+in ts_comment let ts_suppress if layer is ts_line_comment then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/)
+in ts_comment rule ban-ts-comment {
   option ts_expect_error ts_directive_setting = "allow-with-description"
   option ts_ignore ts_directive_setting = true
   option ts_nocheck ts_directive_setting = true
@@ -289,7 +289,8 @@ in js_line_comment, js_block_comment rule ban-ts-comment {
   let short graphemes(trim(description)) < minimumDescriptionLength
   when directive != null
   # `@ts-nocheck` only counts before the first statement.
-  when !(directive == "nocheck" && (re_test(re_replace(text_before, /\/\*[\s\S]*?\*\/|\/\/[^\n]*/, ""), /\S/) || re_test(after, /\S/)))
+  let first_code (first(overlapping(ts_program))).first_token.start
+  when directive != "nocheck" || first_code == null || offset < first_code
   when setting == true || (setting == "allow-with-description" || format != null) && (short || format != null && !re_test(description, format))
   warn if setting == true && directive == "ignore" then "Use \"@ts-expect-error\" instead of \"@ts-ignore\", as \"@ts-ignore\" will do nothing if the following line is error-free."
     else if setting == true then "Do not use \"@ts-{directive}\" because it alters compilation errors."
@@ -594,18 +595,20 @@ in ts_call, ts_new rule no-invalid-regexp {
 # ---- whitespace and line breaks -------------------------------------------------
 # Runs of irregular spaces, and each irregular line terminator. A BOM
 # starting the file is not one.
-in js_code, js_line_comment, js_block_comment, js_template, js_regex, js_string, js_single_string match js_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
-in js_irregular_ws rule no-irregular-whitespace {
+group problem_template ts_template, ts_template_type
+over ts_program match problem_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
+in problem_irregular_ws rule no-irregular-whitespace {
   option skipStrings boolean = true "allow it in strings"
   option skipComments boolean = false "allow it in comments"
   option skipRegExps boolean = false "allow it in regexes"
   option skipTemplates boolean = false "allow it in templates"
   option skipJSXText boolean = false "allow it in JSX text"
   when !(offset == 0 && text == "\u{FEFF}")
-  when !(skipStrings && (parent == "js_string" || parent == "js_single_string"))
-  when !(skipComments && (parent == "js_line_comment" || parent == "js_block_comment"))
-  when !(skipRegExps && parent == "js_regex")
-  when !(skipTemplates && parent == "js_template")
+  when !skipStrings || count(overlapping(ts_string)) == 0
+  when !skipComments || count(overlapping(ts_comment)) == 0
+  when !skipRegExps || count(overlapping(ts_regex)) == 0
+  when !skipTemplates || !any(overlapping(problem_template), template => any(template.quasi.node, quasi => quasi.offset <= offset && end_offset <= quasi.end_offset))
+  when !skipJSXText || count(overlapping(ts_jsx_text)) == 0
   warn "Irregular whitespace not allowed."
 }
 
@@ -620,17 +623,18 @@ in ts_call, ts_index, ts_tagged_template, ts_binary rule no-unexpected-multiline
     else "Unexpected newline between numerator and division operator."
 }
 
-# ---- on the `js_*` text layers ---------------------------------------------
+# ---- strings and interfaces -----------------------------------------------
 
-in js_string, js_single_string rule no-template-curly-in-string warn "Unexpected template string expression." {
+in ts_string rule no-template-curly-in-string warn "Unexpected template string expression." {
   when text ~ /.*\$\{[^}\r\n]+\}.*/
 }
 
 
-in js_interface_body rule no-empty-interface warn "{if re_test(before, /\bextends\b/) then 'An interface declaring no members is equivalent to its supertype.' else 'An empty interface is equivalent to `{{}}`.'}" {
-  when text ~ /\{\s*\}/
+in ts_interface rule no-empty-interface warn "{if count(extends) > 0 then 'An interface declaring no members is equivalent to its supertype.' else 'An empty interface is equivalent to `{{}}`.'}" {
+  when count(member) == 0
   # Several supertypes make a useful intersection.
-  when !re_test(re_replace(before, /<[^<>]*(?:<[^<>]*>[^<>]*)*>/, ""), /\bextends\b[^{]*,/)
+  when count(extends) <= 1
+  report at { start: opener.ts_open_brace.offset, end: closer.ts_close_brace.end_offset }
 }
 
 }

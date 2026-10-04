@@ -8,41 +8,47 @@
 define {
 
 macro license_text replace(license, "\n", newline)
-macro license_like re_test(text, /(?i)(?:Copyright|@license|SPDX-License-Identifier)\b/)
 macro license_wanted license != "" && (skip_files == "" || !re_test(file, skip_files))
+fn license_like(comment) = re_test(comment, /(?i)(?:Copyright|@license|SPDX-License-Identifier)\b/)
 
-# The file's first comment, the space before it and the space after it.
-over .js match js_lead_comment pre:/\A\s*/ head:(/\/\*[\s\S]*?\*\// or /\/\/[^\r\n]*/) post:/\s*/
-# A file whose code starts before any comment.
-over .js match js_lead_code /\A\s*/ code:/[^\s\/]|\/[^\/*]/
+in ts_program let license_prefix re_find(text, /\A\s*/)
+in ts_program let license_first_comment first(overlapping(ts_comment))
+in ts_program let license_header if license_first_comment != null && license_first_comment.offset == byte_len(license_prefix) then license_first_comment else null
+in ts_program let license_suffix_space if license_header == null then "" else re_find(byte_slice(text, license_header.end_offset), /\A\s*/)
 
-in js_lead_comment.head, js_lead_code.code rule header:missing warn "Missing license header" {
+in ts_program rule header:missing warn "Missing license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
   report change
-  when license_wanted && (parent == "js_lead_code" || !license_like)
-  fix as license_text newline newline text
+  when license_wanted && byte_len(license_prefix) < byte_len(text)
+  when license_header == null || !license_like(license_header.text)
+  fix as license_prefix license_text newline newline byte_slice(text, byte_len(license_prefix))
 }
-in js_lead_comment.head rule header:invalid warn "Invalid license header" {
+in ts_program rule header:invalid warn "Invalid license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
-  when license_wanted && license_like && text != license_text
-  fix as license_text
+  when license_wanted && license_header != null
+  when license_like(license_header.text) && license_header.text != license_text
+  report at { start: license_header.offset, end: license_header.end_offset }
+  fix as byte_slice(text, 0, license_header.offset) license_text byte_slice(text, license_header.end_offset)
 }
-in js_lead_comment.pre rule header:before warn "Superfluous new lines before license header" {
+in ts_program rule header:before warn "Superfluous new lines before license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
-  report end
-  when license_wanted && contains(text, "\n")
-  when js_lead_comment.head == license_text
-  fix as ""
+  when license_wanted && license_header != null && contains(license_prefix, "\n")
+  when license_header.text == license_text
+  report at license_header.offset
+  fix as byte_slice(text, license_header.offset)
 }
-in js_lead_comment.post rule header:after warn "{if re_count(text, /\n/) > 2 then 'Superfluous new lines' else 'Missing new line'} after license header" {
+in ts_program rule header:after warn "{if re_count(license_suffix_space, /\n/) > 2 then 'Superfluous new lines' else 'Missing new line'} after license header" {
   option license string = "" "the license header"
   option skip_files regex = "" "file paths without a header"
-  when license_wanted && re_count(text, /\n/) != 2 && text_after != ""
-  when js_lead_comment.head == license_text
-  fix as newline newline
+  when license_wanted && license_header != null
+  when license_header.text == license_text
+  let suffix_end license_header.end_offset + byte_len(license_suffix_space)
+  when re_count(license_suffix_space, /\n/) != 2 && suffix_end < end_offset
+  report at { start: license_header.end_offset, end: suffix_end }
+  fix as byte_slice(text, 0, license_header.end_offset) newline newline byte_slice(text, suffix_end)
 }
 
 }
