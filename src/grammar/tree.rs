@@ -18,6 +18,8 @@ pub struct Tree {
     holes: Vec<(u32, u32, u32)>,
     /// Nesting went past the parser's depth limit somewhere.
     pub too_deep: bool,
+    /// `(root node, layer)` of each named layer's tree in this file.
+    pub layer_roots: Vec<(u32, u16)>,
 }
 
 impl Tree {
@@ -32,7 +34,9 @@ impl Tree {
         p.profile = profile;
         let root = p.parse();
         let too_deep = p.too_deep;
-        Tree::from_nodes(std::mem::take(&mut p.nodes), std::mem::take(&mut p.holes), root, too_deep)
+        let mut tree = Tree::from_nodes(std::mem::take(&mut p.nodes), std::mem::take(&mut p.holes), root, too_deep);
+        tree.layer_roots = std::mem::take(&mut p.layer_roots);
+        tree
     }
 
     /// A tree from a native front end's nodes (already using this grammar's
@@ -49,8 +53,30 @@ impl Tree {
         p.profile = profile;
         let holes = p.graft(&mut nodes, root);
         let too_deep = p.too_deep;
+        let layer_roots = std::mem::take(&mut p.layer_roots);
         drop(p);
-        Tree::from_nodes(nodes, holes, root, too_deep)
+        let mut tree = Tree::from_nodes(nodes, holes, root, too_deep);
+        tree.layer_roots = layer_roots;
+        tree
+    }
+
+    /// The named layer (index into [`Grammar::layers`]) a node is in, or
+    /// `None` for the default layer.
+    pub fn layer_of(&self, mut id: u32) -> Option<u16> {
+        if self.layer_roots.is_empty() {
+            return None;
+        }
+        loop {
+            if let Some(&(_, l)) = self.layer_roots.iter().find(|&&(r, _)| r == id) {
+                return Some(l);
+            }
+            id = self.parent(id)?;
+        }
+    }
+
+    /// The root node of a named layer's tree, when the file has one.
+    pub fn layer_root(&self, l: u16) -> Option<u32> {
+        self.layer_roots.iter().find(|&&(_, x)| x == l).map(|&(r, _)| r)
     }
 
     fn from_nodes(mut nodes: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
@@ -79,7 +105,7 @@ impl Tree {
                 }
             }
         }
-        Tree { nodes, parent, label, order, root, holes, too_deep }
+        Tree { nodes, parent, label, order, root, holes, too_deep, layer_roots: Vec::new() }
     }
 
     /// Where a node's inside (its `*`) starts and ends, if its pattern has one.
@@ -139,8 +165,8 @@ impl Tree {
     }
 
     /// The deepest layer node (not labelled text) whose span contains `pos`,
-    /// ignoring `skip` (the node asking) and its descendants. Overlay nodes
-    /// are skipped: they sit on top of the text rather than containing it.
+    /// ignoring `skip` (the node asking) and its descendants, in the default
+    /// layer.
     pub fn innermost_at(&self, g: &Grammar, pos: u32, skip: u32) -> Option<u32> {
         let mut id = self.root;
         'descend: loop {
@@ -150,8 +176,9 @@ impl Tree {
             let upto = children.partition_point(|e| self.nodes[e.node as usize].start <= pos);
             for e in children[..upto].iter().rev() {
                 let n = &self.nodes[e.node as usize];
-                let overlay = n.matcher != TEXT && n.matcher != ROOT && g.matchers[n.matcher as usize].is_overlay;
-                if e.node == skip || overlay {
+                // Named layers (their roots, their nodes) are other trees.
+                let other = n.matcher == ROOT || n.matcher != TEXT && g.matchers[n.matcher as usize].layer.is_some();
+                if e.node == skip || other {
                     continue;
                 }
                 if pos < n.end {

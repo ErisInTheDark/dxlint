@@ -164,9 +164,9 @@ fn rules_on_a_group_check_every_member() {
 }
 
 #[test]
-fn overlays_see_text_that_layers_consumed() {
+fn named_layers_see_text_that_other_layers_consumed() {
     let l = linter(r#"
-        over .t match trailing /[ \t]+$/ {
+        in .t layer text match trailing /[ \t]+$/ {
           rule trailing-ws warn "trailing whitespace" fix as ""
         }
     "#);
@@ -176,9 +176,9 @@ fn overlays_see_text_that_layers_consumed() {
 }
 
 #[test]
-fn overlays_stay_searched_when_only_their_children_are_checked() {
+fn named_layers_stay_searched_when_only_their_children_are_checked() {
     let l = linter(r#"
-        over .t match line /^[^\n]+/ {
+        in .t layer lines match line /^[^\n]+/ {
           match shout /[A-Z]{3,}/ {
             rule no-shout warn "quiet please"
           }
@@ -238,7 +238,7 @@ fn lookbehind_tells_regex_literals_from_division() {
 #[test]
 fn lookahead_checks_without_consuming() {
     let l = linter(r#"
-        over .t match semi_line /;(?=[ \t]*\r?\n[ \t]*\S)/ {
+        in .t layer text match semi_line /;(?=[ \t]*\r?\n[ \t]*\S)/ {
           rule no-semi warn "semicolon before code" fix as ""
         }
     "#);
@@ -268,14 +268,16 @@ fn specialisations_inherit_children_and_win_ties() {
 }
 
 #[test]
-fn enclosing_sees_through_overlays_into_comments_and_strings() {
+fn layers_are_separate_trees_related_by_position() {
+    // `enclosing` and `containing` read the other trees by position; a
+    // layer node's parent is its layer's root, never the node searched.
     let l = linter(r#"
-        over .t, paren match bad /BAD/ {
-          rule where warn "{enclosing}"
+        in .t, paren layer marks match bad /BAD/ {
+          rule where warn "{enclosing}|{containing(paren)}|{parent}"
         }
     "#);
     let messages: Vec<String> = lint(&l, "BAD // BAD\n(BAD \"BAD\")").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, vec![".t", "comment", "paren", "str"]);
+    assert_eq!(messages, vec![".t||.t", "comment||.t", "paren|(BAD \"BAD\")|.t", "str|(BAD \"BAD\")|.t"]);
 }
 
 #[test]
@@ -314,7 +316,7 @@ fn parent_before_spans_lines_within_the_parent_only() {
 fn indent_follows_the_inside_of_declared_layers() {
     let l = linter(r#"
         in paren indent
-        over .t, paren match line /^[ \t]*\S/ {
+        in .t, paren layer lines match line /^[ \t]*\S/ {
           rule ind warn "[{if indented then indent_anchor else 'none'}|{indent_closes}|{indent_hangs}]"
         }
     "#);
@@ -336,7 +338,7 @@ fn indent_can_target_a_field_only() {
     let l = linter(r#"
         in .t match pair /\[/ body:paren /\]/
         in pair.body indent
-        over .t, paren match line /^[ \t]*\S/ {
+        in .t, paren layer lines match line /^[ \t]*\S/ {
           rule ind warn "[{if indented then indent_anchor else 'none'}]"
         }
     "#);
@@ -352,7 +354,7 @@ fn indent_inside_a_matcher_block_indents_that_matcher() {
         in .t match blk /\[/ until /\]/ {
           indent
         }
-        over .t, blk match line /^[ \t]*\S/ {
+        in .t, blk layer lines match line /^[ \t]*\S/ {
           rule ind warn "{indented}"
         }
     "#);
@@ -364,7 +366,7 @@ fn indent_inside_a_matcher_block_indents_that_matcher() {
 fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
     let l = linter(r#"
         in paren indent
-        over .t, paren match line /^[ \t]*\S/ {
+        in .t, paren layer lines match line /^[ \t]*\S/ {
           macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
           rule ind warn "indent" {
             when slice(text, 0, -1) != level
@@ -831,7 +833,7 @@ fn longest_child_wins_and_ties_go_to_the_first() {
 #[test]
 fn options_defaults_sets_and_messages() {
     let l = linter(r#"
-        over .t match line /^[^\n]+/ {
+        in .t layer lines match line /^[^\n]+/ {
           rule long-line warn "max {max}" {
             option max int(0..) = 10 "max chars"
             when len(text) > max
@@ -1361,10 +1363,11 @@ fn node_values_step_to_their_parent() {
 
 #[test]
 fn descendants_of_trivia_bring_their_nodes() {
-    // No rule targets `ts_line`: reading it through `descendants` is enough.
-    let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}/{count(overlapping(ts_line, 0, 4))}/{count(overlapping(ts_line, 6, 6))}""#);
+    // No rule targets `ts_line`: reading it is enough. Lines are their own
+    // layer: not descendants of the program, found by position.
+    let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}/{count(overlapping(ts_line))}/{count(overlapping(ts_line, 0, 4))}/{count(overlapping(ts_line, 6, 6))}""#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;\nb;\nc;").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, ["3/2/1"]);
+    assert_eq!(messages, ["0/3/2/1"]);
     // `overlapping`: the comments and strings on each line, nothing else.
     let l = native_linter(r#"in ts_line rule o info "{line}:{join(map(overlapping(ts_comment), c => c.text), '|')}:{count(overlapping(ts_string))}""#);
     let messages: Vec<String> =

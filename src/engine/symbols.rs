@@ -84,7 +84,7 @@ pub struct Symbols {
 
 const KEYWORDS: &[(&str, &str)] = &[
     ("in", "`in a, b <item>`: the layers (or `layer.field`s, groups, `.lang`s) the item is about; `in a, b { ... }` for a block"),
-    ("over", "`over a match x pattern`: an overlay, searched over `a`'s text without consuming it"),
+    ("layer", "`in a layer name match x pattern`: `x` goes in the named layer, a tree of its own over the same text, searched across `a`'s text without consuming it"),
     ("match", "`match name pattern`: a layer; `in parent match name` attaches an existing one"),
     ("rule", "`in a rule name [severity [message]] [fix as expr] [{ clauses }]` defines a rule; `rule name [severity [message]] [{ set option value; clauses }]` (no `in`) turns an existing one on and configures it; names may glob (`semi:*`)"),
     ("let", "`in a let name expr`: an attribute of `a`'s nodes; inside a rule body, a value of the rule"),

@@ -41,7 +41,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `in A, B match name pattern` | a matcher searched inside layers `A` and `B` |
 | `in A match name` | attach an existing matcher to more parents |
 | `match name like base pattern` | a specialisation of `base`, see [Layers](#layers) |
-| `over A match name pattern` | an overlay: searched over `A`'s text without consuming it |
+| `in A layer L match name pattern` | `name` goes in the named layer `L`: a tree of its own over the same text, searched across `A`'s text without consuming it, see [Layers](#layers) |
 | `group name A, B` | add layers to a named group, usable wherever a layer list is |
 | `in A, B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
 | `in A rule name ...` | define a rule checking `A`'s nodes (and turn it on), see [Rules](#rules) |
@@ -71,14 +71,14 @@ native layers keep (`init`, `quasi`, `consequent`).
 
 ## Context blocks
 
-`in A`, `over A`, `match x ...` and `lang l ...` set a **context**: the layers
+`in A`, `in A layer L`, `match x ...` and `lang l ...` set a **context**: the layers
 the rest of the line is about. A `{` at the end of such a line opens a block,
 and every line inside it is in that context:
 
 | head | lines inside mean |
 |---|---|
 | `in A, B {` | `in A, B <line>` |
-| `over A {` | `over A <line>`: matchers are overlays |
+| `in A layer L {` | `in A layer L <line>`: matchers go in layer `L` |
 | `match x ... {` | `in x <line>` |
 | `lang l ... {` | `in .l <line>` |
 | `rule r ... {` | rule clauses, see [Rules](#rules) |
@@ -149,7 +149,7 @@ wins, and among equal lengths a specialisation beats its base, then the one
 attached first wins.
 
 **Specialisation (`like`).** `match js_object like braces ...` is a kind of
-`braces`: it keeps every child and overlay of `braces`, wins ties against it,
+`braces`: it keeps every child and named-layer child of `braces`, wins ties against it,
 and counts as `braces` for rules (`in braces rule` sees it, with `layer`
 naming the specialisation), for `is` tests and for ancestor lookups (`braces`
 in an expression finds the closest one). Use it to tell kinds of one shape
@@ -184,13 +184,23 @@ of the languages it is attached to (or attached through `.*`). That lets
 shared layers like `parentheses` carry Rust strings in Rust files and
 JavaScript strings in JavaScript files.
 
-**Overlays.** `over A match x ...` searches `A`'s text for `x` without
-taking that text away from `A`'s other children. Use overlays for
-line-oriented checks:
+**Named layers.** A file's nodes form trees over its text: the default
+layer, where every plain `match` goes (and a native front end's nodes), and
+any named layers. Inside one layer nodes tile the text; different layers
+overlap freely. `in A layer L match x ...` puts `x` in layer `L`: it is
+searched across `A`'s text without taking it from `A`'s children, and sits
+in `L`'s tree, whose root is the file. Use named layers for what cuts across
+syntax, like lines:
 
 ```zlint
-over .* match trailing_whitespace /[ \t]+$/
+in .* layer text match trailing_whitespace /[ \t]+$/
+in .rust layer lines match line /^.*$/
 ```
+
+`parent`, `previous`, `children` and `descendants` stay within a node's own
+layer; other layers are read by position: `containing(kind)` is the
+innermost node of that kind (any layer) holding the node, and
+`overlapping(kind)` the nodes sharing its span.
 
 **Indentation.** `in braces, parentheses, brackets indent` declares that a
 layer's inside, the text its `until` skips, is indented: a line starting
@@ -205,7 +215,7 @@ decide the unit and any language-specific continuation lines:
 
 ```zlint
 in parentheses, brackets, braces indent
-over rs_code match line /^[ \t]*\S/          # each code line, first char included
+in rs_code layer lines match line /^[ \t]*\S/   # each code line, first char included
 
 in line rule indent {
   let level if !indented then "" else if indent_closes then indent_anchor else indent_anchor "    "
@@ -495,7 +505,7 @@ let wanted find_last(config, c => matches(c.prev, previous.layer) && matches(c.n
 | `previous_sibling`, `previous_gap` | the previous node of the same layer in the same parent, and the text between |
 | `gap_before` | the text between the previous child of the parent (of any layer) and the node: blank lines, comments, separators; `null` for the first child |
 | `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.argument` is `1`) |
-| `enclosing` | the innermost layer around the node's start, seeing through overlays (`"rs_string"` inside a string) |
+| `enclosing` | the innermost default-layer node around the node's start, read from any layer (`"rs_string"` inside a string) |
 | `indented` | the node's line starts inside a layer declared with `indent` |
 | `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
 | `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
@@ -624,7 +634,7 @@ layers.
 **One tree.** A file the parser reads gets one tree: the parser's nodes, and
 the pattern layers inside them, by the rules pattern trees follow: a pattern
 layer inside a native layer fills the gaps between that node's other
-children and sits under it, an overlay searches its whole text; the language's own
+children and sits under it, a named layer's matcher searches its whole text; the language's own
 pattern layers (`in .js match ...`) are matched across the file and sit
 under the program. Rules see no difference:
 
@@ -663,7 +673,7 @@ turns on and configures every variant (`comma-spacing:before`,
 Comments and lines are pattern layers in `std/ts.zlint` (see One tree):
 `ts_line_comment` and `ts_block_comment` (group `ts_comment`) are children of
 the code node whose text, between its other children, holds them, so never
-inside a string, regex or template text; `ts_line` is an overlay over the
+inside a string, regex or template text; `ts_line` is in the named layer `lines`, over the
 file, each JavaScript line with its line break (the last may have none).
 
 Group `ts_node` holds every syntax layer (not tokens): `in ts_node let ...`

@@ -49,8 +49,10 @@ pub struct Matcher {
     pub has_skip: bool,
     /// The matcher this one specialises (`match x like base`).
     pub like: Option<u32>,
-    /// Attached with `over` somewhere: its nodes lie on top of the text.
-    pub is_overlay: bool,
+    /// `in A layer L match ...`: the named layer (index into
+    /// [`Grammar::layers`]) whose tree its nodes go in. Searched anywhere in
+    /// its parents' text without consuming it.
+    pub layer: Option<u16>,
     /// A node kind of a native front end (`native ts`), not a pattern.
     pub native: Option<NativeKind>,
     /// Languages this matcher is restricted to; `None` means every language.
@@ -148,6 +150,8 @@ pub struct Grammar {
     /// Per matcher: the native layers its nodes can sit in (directly, or
     /// through pattern layers), so their nodes get built when it is needed.
     pub native_hosts: Vec<Vec<u32>>,
+    /// Names of the named layers (`in A layer L`), by index.
+    pub layers: Vec<String>,
     views: Vec<View>,
     by_name: HashMap<String, u32>,
     /// Warm DFA caches, reused across files (building one is not cheap).
@@ -353,7 +357,7 @@ impl Grammar {
                 has_captures: false,
                 has_skip: false,
                 like: None,
-                is_overlay: false,
+                layer: None,
                 native: None,
                 gate: Some(Vec::new()),
                 children: Vec::new(),
@@ -366,6 +370,7 @@ impl Grammar {
         // groups resolved to their final members.
         let groups = resolve_groups(config, &by_name, errors);
         let mut ungated = vec![false; matchers.len()];
+        let mut layers: Vec<String> = Vec::new();
         for def in &config.matchers {
             let Some(&id) = by_name.get(&def.name.text) else {
                 if def.pattern.is_none() {
@@ -392,15 +397,23 @@ impl Grammar {
                     other => vec![other],
                 })
                 .collect();
-            if def.overlay && !def.parents.is_empty() {
-                matchers[id as usize].is_overlay = true;
+            let overlay = def.layer.is_some();
+            if let Some(l) = &def.layer {
+                let at = match layers.iter().position(|n| *n == l.text) {
+                    Some(at) => at,
+                    None => {
+                        layers.push(l.text.clone());
+                        layers.len() - 1
+                    }
+                };
+                matchers[id as usize].layer = Some(at as u16);
             }
             for parent in parents {
                 match parent {
                     Parent::Lang(name) => match langs.iter().position(|l| l.name == name.text) {
                         Some(li) => {
                             let lang = &mut langs[li];
-                            push_unique(if def.overlay { &mut lang.overlays } else { &mut lang.children }, id);
+                            push_unique(if overlay { &mut lang.overlays } else { &mut lang.children }, id);
                             if let Some(gate) = &mut matchers[id as usize].gate {
                                 if !gate.contains(&li) {
                                     gate.push(li);
@@ -415,7 +428,7 @@ impl Grammar {
                     },
                     Parent::AnyLang(_) => {
                         for lang in &mut langs {
-                            push_unique(if def.overlay { &mut lang.overlays } else { &mut lang.children }, id);
+                            push_unique(if overlay { &mut lang.overlays } else { &mut lang.children }, id);
                         }
                         ungated[id as usize] = true;
                     }
@@ -424,7 +437,7 @@ impl Grammar {
                     Parent::Matcher(name) => match by_name.get(&name.text) {
                         Some(&pid) => {
                             let p = &mut matchers[pid as usize];
-                            push_unique(if def.overlay { &mut p.overlays } else { &mut p.children }, id);
+                            push_unique(if overlay { &mut p.overlays } else { &mut p.children }, id);
                         }
                         None => errors.push(match Dropped::find(&config.dropped, &name.text) {
                             Some(d) => d.still_used(name.span),
@@ -474,6 +487,7 @@ impl Grammar {
         let native_hosts = native_hosts(&matchers);
         Grammar {
             native_hosts,
+            layers,
             matchers,
             langs,
             labels,
@@ -547,7 +561,7 @@ fn add_natives(
                 has_captures: false,
                 has_skip: false,
                 like: None,
-                is_overlay: false,
+                layer: None,
                 native: Some(NativeKind { front: fronts.len() as u8, kind: kind as u16 }),
                 gate: None,
                 children: Vec::new(),

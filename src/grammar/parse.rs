@@ -114,6 +114,10 @@ pub struct Parser<'g, 't> {
     depth: u32,
     /// Set when nesting exceeded [`MAX_DEPTH`] and some structure was skipped.
     pub too_deep: bool,
+    /// Per named layer: its top nodes found so far.
+    layered: Vec<Vec<u32>>,
+    /// `(root node, layer)` of each named layer's tree.
+    pub layer_roots: Vec<(u32, u16)>,
 }
 
 /// Cheap checks before running a matcher at `pos`: its first byte, first two
@@ -152,6 +156,23 @@ impl<'g, 't> Parser<'g, 't> {
             look_caches: HashMap::new(),
             depth: 0,
             too_deep: false,
+            layered: vec![Vec::new(); g.layers.len()],
+            layer_roots: Vec::new(),
+        }
+    }
+
+    /// Each named layer with nodes: a root node over the whole file holding
+    /// its top nodes, under `under` (the file).
+    fn root_layers(&mut self, under: u32) {
+        for l in 0..self.layered.len() {
+            let tops = std::mem::take(&mut self.layered[l]);
+            if tops.is_empty() {
+                continue;
+            }
+            let children = tops.into_iter().map(|n| Edge { label: NO_LABEL, node: n }).collect();
+            let root = self.push(Node { matcher: ROOT, start: 0, end: self.text.len() as u32, children });
+            self.nodes[under as usize].children.push(Edge { label: NO_LABEL, node: root });
+            self.layer_roots.push((root, l as u16));
         }
     }
 
@@ -161,6 +182,7 @@ impl<'g, 't> Parser<'g, 't> {
         let edges = self.root_edges();
         let root = self.push(Node { matcher: ROOT, start: 0, end: self.text.len() as u32, children: edges });
         self.overlays(root);
+        self.root_layers(root);
         root
     }
 
@@ -216,8 +238,12 @@ impl<'g, 't> Parser<'g, 't> {
         // itself), so nodes several hosts share are searched once.
         let all = self.push(Node { matcher: ROOT, start: 0, end: 0, children: hosts.iter().map(|&(_, h)| Edge { label: NO_LABEL, node: h }).collect() });
         self.overlays(all);
+        self.root_layers(root_host);
 
         let offset = nodes.len() as u32;
+        for r in &mut self.layer_roots {
+            r.0 += offset;
+        }
         let mut placeholder = vec![None; self.nodes.len()];
         for &(native, host) in &hosts {
             placeholder[host as usize] = Some(native);
@@ -394,7 +420,14 @@ impl<'g, 't> Parser<'g, 't> {
                     };
                     match node {
                         Some(n) => {
-                            self.nodes[id as usize].children.push(Edge { label: NO_LABEL, node: n });
+                            // A named layer's nodes go in that layer's tree.
+                            match om.layer {
+                                Some(l) => {
+                                    self.layered[l as usize].push(n);
+                                    stack.push(n);
+                                }
+                                None => self.nodes[id as usize].children.push(Edge { label: NO_LABEL, node: n }),
+                            }
                             pos = (self.nodes[n as usize].end as usize).max(s + 1);
                         }
                         None => pos = s + utf8_len(text[s]),

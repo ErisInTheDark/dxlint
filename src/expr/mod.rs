@@ -138,6 +138,9 @@ pub enum CExpr {
     /// `overlapping(layer)`: nodes of these matchers anywhere in the file
     /// whose span overlaps this node's, in source order.
     Overlapping(Vec<u32>, Option<Box<(CExpr, CExpr)>>),
+    /// `containing(layer)`: the innermost node of these matchers, in any
+    /// named layer, whose span holds this node's (not the node itself).
+    Containing(Vec<u32>),
     /// `base.a.b`: on node values the compiled read of `a.b`; on records
     /// those keys.
     Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
@@ -157,6 +160,7 @@ pub enum CExpr {
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
+    ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none)"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
     ("overlapping(layer, from?, to?)", "the nodes of a layer or group anywhere in the file whose span overlaps the node's (or the byte range `from..to`), in source order (`ts_line` and the comments or strings on it)"),
     ("walk(roots, n => next)", "the nodes reachable from `roots` (nodes) by `next` (nodes, or a list of them), each once, in visiting order, roots included"),
@@ -195,7 +199,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -471,7 +475,9 @@ impl Scope<'_> {
             // `descendants(layer)`: nodes of a layer or group under this one.
             // `overlapping(layer)`: nodes of a layer or group sharing some of
             // this node's span (anywhere in the file).
-            ExprKind::Call(name, args) if matches!(name.text.as_str(), "descendants" | "overlapping") && self.grammar.function(&name.text).is_none() => {
+            // `containing(layer)`: the innermost node of a layer or group, in
+            // any named layer, whose span holds this node's.
+            ExprKind::Call(name, args) if matches!(name.text.as_str(), "descendants" | "overlapping" | "containing") && self.grammar.function(&name.text).is_none() => {
                 // `overlapping(layer, from, to)`: overlapping a byte range instead.
                 let (layer_arg, range) = match args.as_slice() {
                     [l] => (Some(l), None),
@@ -496,7 +502,8 @@ impl Scope<'_> {
                     errors.push(ConfigError::new(e.span, format!("`{}` takes a layer or group name", name.text)).note(format!("usage: {}(ts_comment)", name.text)));
                     return None;
                 };
-                self.note(name.span, Resolved::Function(if overlapping { "overlapping" } else { "descendants" }));
+                let containing = name.text == "containing";
+                self.note(name.span, Resolved::Function(if overlapping { "overlapping" } else if containing { "containing" } else { "descendants" }));
                 if let Some(reads) = self.layer_reads {
                     reads.borrow_mut().extend(&ids);
                 }
@@ -507,7 +514,13 @@ impl Scope<'_> {
                     Some((from, to)) => Some(Box::new((self.compile(from, errors)?, self.compile(to, errors)?))),
                     None => None,
                 };
-                if overlapping { CExpr::Overlapping(ids, range) } else { CExpr::Descendants(ids) }
+                if containing {
+                    CExpr::Containing(ids)
+                } else if overlapping {
+                    CExpr::Overlapping(ids, range)
+                } else {
+                    CExpr::Descendants(ids)
+                }
             }
             // `walk(roots, n => next)`: every node reachable from the roots.
             ExprKind::Call(name, args) if name.text == "walk" && self.grammar.function("walk").is_none() => {
@@ -1219,6 +1232,12 @@ impl<'a> Ctx<'a> {
         let line_start = self.lines.line_start(line);
         let mut p = self.tree.parent(self.node);
         while let Some(id) = p {
+            // From a named layer, indentation is the default layer's: carry
+            // on from the node holding this one there.
+            if self.tree.layer_roots.iter().any(|&(r, _)| r == id) {
+                p = self.tree.innermost_at(self.grammar, start as u32, self.node);
+                continue;
+            }
             let n = self.tree.node(id);
             let label = self.tree.label(id);
             let owner = label.and_then(|_| self.tree.owner(id)).map(|o| self.tree.node(o).matcher);
@@ -1543,6 +1562,23 @@ impl<'a> Ctx<'a> {
                 }
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
+            }
+            CExpr::Containing(ids) => {
+                let spans = self.layer_spans(ids);
+                let me = self.tree.node(self.node);
+                let mut i = spans.nodes.partition_point(|&(s, _, _)| s <= me.start);
+                let mut best: Option<(u32, u32, u32)> = None;
+                while i > 0 && spans.max_end[i - 1] >= me.end {
+                    i -= 1;
+                    let (s, e, id) = spans.nodes[i];
+                    if e >= me.end && id != self.node && best.is_none_or(|(bs, be, _)| e - s < be - bs) {
+                        best = Some((s, e, id));
+                    }
+                }
+                match best {
+                    Some((_, _, id)) => Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id))),
+                    None => Value::Null,
+                }
             }
             CExpr::Overlapping(ids, range) => {
                 let spans = self.layer_spans(ids);

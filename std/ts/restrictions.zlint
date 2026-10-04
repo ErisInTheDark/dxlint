@@ -514,7 +514,7 @@ in ts_function_like rule max-lines-per-function {
 macro restriction_directive(x) re_test(x, /^\s*(?:eslint(?:[- ]|$)|globals?\s|exported\s)/)
 in ts_program {
   let restriction_comment_catalog descendants(ts_comment)
-  let restriction_comment_line_catalog descendants(ts_line)
+  let restriction_comment_line_catalog overlapping(ts_line)
 }
 in ts_comment {
   let restriction_comment_body slice(text, 2, if layer is ts_block_comment then len(text) - 2 else len(text))

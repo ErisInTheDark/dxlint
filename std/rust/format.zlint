@@ -51,7 +51,7 @@ in rs_blank_before_close rule rs-no-blank-before-close warn "Blank line before a
   when !in_leaf
   fix as ""
 }
-over .rust match rs_end /[^\n]\z|(?<=\n)(?:[ \t]*\r?\n)+\z/
+in .rust layer text match rs_end /[^\n]\z|(?<=\n)(?:[ \t]*\r?\n)+\z/
 in rs_end rule rs-eol-last warn "The file must end in exactly one line break." {
   fix as if ends_with(text, "\n") then "" else text newline
 }
@@ -137,9 +137,9 @@ in rs_use_list match rs_use_list
 # Reported at each comma followed by another item on its line (commas of
 # nested lists belong to those lists). An overlay, so comma-spacing still
 # sees the comma.
-over rs_use_list match rs_use_comma /,(?=[ \t]*[^\s}\/])/
+in rs_use_list layer text match rs_use_comma /,(?=[ \t]*[^\s}\/])/
 in rs_use_comma rule rs-use-list-breaks warn "Use lists with paths have one item per line." {
-  when re_test(re_replace(re_replace(slice(parent_text, 1, -1), /\{[^{}]*\}/, "{{}}"), /\{[^{}]*\}/, "{{}}"), /::|\*|\{/)
+  when re_test(re_replace(re_replace(slice(containing(rs_use_list).text, 1, -1), /\{[^{}]*\}/, "{{}}"), /\{[^{}]*\}/, "{{}}"), /::|\*|\{/)
 }
 
 # ---- punctuation ------------------------------------------------------------
@@ -241,7 +241,7 @@ in parentheses, brackets, braces indent
 
 # Each code line: its indentation and first character. An overlay, so the
 # character still belongs to whatever layer starts there.
-over rs_code match rs_line /^[ \t]*\S/
+in rs_code layer lines match rs_line /^[ \t]*\S/
 
 macro line_indent slice(text, 0, -1)
 macro line_code text default(re_find(text_after, /^[^\r\n]*/), "")

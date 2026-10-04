@@ -64,7 +64,7 @@
         { "include": "#sstring" },
         { "include": "#regex" },
         {
-          "match": "\\b(import|macro|lang|group|match|in|over|rule|indent|like|set|ignore|option|schema|when|fix|files|report|let|native|forward|from)\\b",
+          "match": "\\b(import|macro|lang|group|match|in|layer|rule|indent|like|set|ignore|option|schema|when|fix|files|report|let|native|forward|from)\\b",
           "name": "keyword.other.zlint"
         },
         { "match": "\\b(string|number|int|boolean|any|regex)\\b(?=\\s*(?:[|=\\[(;,}\"]|$))", "name": "support.type.primitive.zlint" },

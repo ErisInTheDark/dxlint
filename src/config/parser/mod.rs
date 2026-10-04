@@ -22,19 +22,19 @@ use crate::pattern::Pat;
 /// Words with a meaning in items, clauses or patterns; they cannot name
 /// macros or matchers.
 const RESERVED: &[&str] = &[
-    "import", "macro", "lang", "group", "match", "in", "over", "rule", "indent", "like", "set", "ignore", "option", "when",
+    "import", "macro", "lang", "group", "match", "in", "layer", "rule", "indent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
     "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each",
 ];
 
-/// What the lines of a `{ ... }` block (or one `in ...` / `over ...` line)
-/// are about: their parent layers, or what their rules check.
+/// What the lines of a `{ ... }` block (or one `in ...` line) are about:
+/// their parent layers, or what their rules check.
 #[derive(Clone)]
 struct Context {
     /// Layers, languages or groups, each maybe narrowed to a field.
     parents: Vec<(Parent, Option<Name>)>,
-    /// `over`: matchers defined here are overlays.
-    overlay: bool,
+    /// `in A layer L`: matchers defined here form the named layer `L`.
+    layer: Option<Name>,
 }
 
 /// A rule target for one context parent.
@@ -273,7 +273,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "fn") => self.fn_def(),
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "group") => self.group(),
-            (Tk::Ident, "in" | "over") => self.context_item(),
+            (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
             (Tk::Ident, "rule") => self.rule(ctx),
             (Tk::Ident, "indent") => self.indent(ctx),
@@ -301,7 +301,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, group, match, in/over ..., rule, indent, let, fn, macro, schema, import, ignore, native, define, drop, override",
+                        "items are: lang, group, match, in ..., rule, indent, let, fn, macro, schema, import, ignore, native, define, drop, override",
                     ),
                 );
                 self.bump();
@@ -313,15 +313,25 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `in A or B ...` / `over A ...`: a context for the rest of the line,
-    /// or for every line of the `{ ... }` block that follows.
+    /// `in A or B [layer L] ...`: a context for the rest of the line, or for
+    /// every line of the `{ ... }` block that follows.
     fn context_item(&mut self) {
         let kw = self.bump().expect("peeked");
         let parents = self.parent_items();
         if parents.is_empty() {
             return;
         }
-        let ctx = Context { parents, overlay: &*kw.text == "over" };
+        self.skip(false, true);
+        let layer = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("layer")) {
+            self.ts.next_raw();
+            match self.ident("a layer name") {
+                Some(l) => Some(l),
+                None => return,
+            }
+        } else {
+            None
+        };
+        let ctx = Context { parents, layer };
         self.skip(false, true);
         match self.ts.peek_raw(0).cloned() {
             Some(t) if t.kind == Tk::LBrace => {
@@ -364,8 +374,8 @@ impl<'a> Parser<'a> {
     fn indent(&mut self, ctx: Option<&Context>) {
         let kw = self.bump().expect("peeked");
         match ctx {
-            Some(c) if !c.overlay => self.config.indents.push(IndentDef { targets: c.parents.clone(), library: self.defining > 0 }),
-            Some(_) => self.errors.push(ConfigError::new(kw.span, "`indent` needs `in`, not `over`")),
+            Some(c) if c.layer.is_none() => self.config.indents.push(IndentDef { targets: c.parents.clone(), library: self.defining > 0 }),
+            Some(_) => self.errors.push(ConfigError::new(kw.span, "`layer` names where matchers go, not `indent`")),
             None => self.errors.push(ConfigError::new(kw.span, "`indent` needs a context: `in <layer> indent`")),
         }
         self.end_of_item();
@@ -381,7 +391,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let targets = match ctx {
-            Some(c) if !c.overlay => {
+            Some(c) if c.layer.is_none() => {
                 let mut out = Vec::new();
                 for (parent, field) in &c.parents {
                     match (parent, field) {
@@ -456,7 +466,7 @@ impl<'a> Parser<'a> {
         let Some(field) = self.ident("the field to forward from") else { return };
         self.end_of_item();
         let targets: Vec<Name> = match ctx {
-            Some(c) if !c.overlay => c
+            Some(c) if c.layer.is_none() => c
                 .parents
                 .iter()
                 .filter_map(|(p, f)| match (p, f) {
@@ -771,7 +781,7 @@ impl<'a> Parser<'a> {
         }
         let root = Parent::Lang(name.clone());
         self.config.langs.push(LangDef { name, globs });
-        self.block_or_end(Context { parents: vec![(root, None)], overlay: false });
+        self.block_or_end(Context { parents: vec![(root, None)], layer: None });
     }
 
     /// One or more globs, side by side on the line: `"*.rs" "*.rs.in"`.
@@ -887,9 +897,9 @@ impl<'a> Parser<'a> {
     fn matcher(&mut self, ctx: Option<&Context>) {
         let overriding = self.overriding.take();
         self.bump();
-        let (parents, overlay) = match ctx {
-            Some(c) => (self.no_fields(c.parents.clone()), c.overlay),
-            None => (Vec::new(), false),
+        let (parents, layer) = match ctx {
+            Some(c) => (self.no_fields(c.parents.clone()), c.layer.clone()),
+            None => (Vec::new(), None),
         };
         let Some(name) = self.ident("a matcher name") else { return };
         if RESERVED.contains(&name.text.as_str()) {
@@ -929,7 +939,7 @@ impl<'a> Parser<'a> {
             return;
         }
         let own = Parent::Matcher(name.clone());
-        let def = MatcherDef { name, parents, overlay, pattern, like, library: self.defining > 0 };
+        let def = MatcherDef { name, parents, layer, pattern, like, library: self.defining > 0 };
         match overriding {
             Some(kw) if def.pattern.is_none() => {
                 self.errors.push(ConfigError::new(kw, "`override match` needs the new pattern: `override match name pattern`"));
@@ -944,7 +954,7 @@ impl<'a> Parser<'a> {
             },
             None => self.config.matchers.push(def),
         }
-        self.block_or_end(Context { parents: vec![(own, None)], overlay: false });
+        self.block_or_end(Context { parents: vec![(own, None)], layer: None });
     }
 
     /// `rule name [severity [message]] [fix as expr] [{ clauses }]`, checking the
@@ -1491,14 +1501,14 @@ mod tests {
             match params /\(/ until /\)/
             in params match params
             in .rust match fn /fn/ ws name:/\w+/ ws? :params
-            over .rust match line /^.*$/
+            in .rust layer lines match line /^.*$/
             in .rust match either (/a/ or "b") until /c/
         "#);
         assert_eq!(c.langs.len(), 1);
         assert_eq!(c.matchers.len(), 9);
         let fun = c.matchers.iter().find(|m| m.name.text == "fn").unwrap();
         assert_eq!(fun.pattern.as_ref().unwrap().0.labels(), vec!["name", "params"]);
-        assert!(c.matchers.iter().find(|m| m.name.text == "line").unwrap().overlay);
+        assert_eq!(c.matchers.iter().find(|m| m.name.text == "line").unwrap().layer.as_ref().map(|l| l.text.as_str()), Some("lines"));
         assert!(c.matchers.iter().any(|m| m.name.text == "params" && m.pattern.is_none()));
         let either = &c.matchers.iter().find(|m| m.name.text == "either").unwrap().pattern.as_ref().unwrap().0;
         assert!(matches!(either, Pat::Seq(items) if matches!(items[0], Pat::Alt(_)) && matches!(items[1], Pat::Skip)), "{either:?}");
@@ -1542,7 +1552,7 @@ mod tests {
                 rule braces warn "brace" { when true }
               }
             }
-            over .t, brace {
+            in .t, brace layer lines {
               match line /^.+/
             }
             in brace { in .t match back /y/ }
@@ -1552,7 +1562,7 @@ mod tests {
         assert_eq!(parents(by_name("brace")), vec![".t"]);
         assert_eq!(parents(by_name("inner")), vec!["brace"]);
         assert_eq!(parents(by_name("line")), vec![".t", "brace"]);
-        assert!(by_name("line").overlay && !by_name("inner").overlay);
+        assert!(by_name("line").layer.is_some() && by_name("inner").layer.is_none());
         // A nested `in` replaces the block's context.
         assert_eq!(parents(by_name("back")), vec![".t"]);
         assert!(matches!(&c.rules[0].targets[..], [Target::Matcher(n)] if n.text == "brace"));

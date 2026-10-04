@@ -109,7 +109,7 @@ in parentheses {
 in rs_string match rs_escape /\\./                  # escapes live in strings
 
 in .rust match call name:/\w+/ arguments:parentheses   # fields: call.name, call.arguments
-over .* match trailing_whitespace /[ \t]+$/ {       # overlays see all text
+in .* layer text match trailing_whitespace /[ \t]+$/ {   # named layers see all text
   rule no-trailing-whitespace warn "no trailing whitespace" fix as ""
 }
 in call.name rule loud-calls warn "shout it" fix as upper(text) "!"   # values side by side join
@@ -204,7 +204,7 @@ Where the speed comes from:
 3. **Cheap rejection.** First-byte sets, a 64K-bit table of possible first
    two bytes, and `*` fast-forwarding to the next byte where anything could
    start.
-4. **Only what is needed.** Overlays no rule looks at are never searched,
+4. **Only what is needed.** Named layers no rule looks at are never searched,
    built-in layers only rules that are off would need are not built at all,
    expression values borrow from the source instead of copying, and warm DFA
    caches are pooled across files.

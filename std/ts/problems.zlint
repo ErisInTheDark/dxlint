@@ -596,7 +596,7 @@ in ts_call, ts_new rule no-invalid-regexp {
 # Runs of irregular spaces, and each irregular line terminator. A BOM
 # starting the file is not one.
 group problem_template ts_template, ts_template_type
-over ts_program match problem_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
+in ts_program layer text match problem_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
 in problem_irregular_ws rule no-irregular-whitespace {
   option skipStrings boolean = true "allow it in strings"
   option skipComments boolean = false "allow it in comments"

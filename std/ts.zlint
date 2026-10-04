@@ -37,7 +37,7 @@ define {
   }
   # Each line, its line break included (the last may have none): over the
   # file, across whatever nodes it runs through.
-  over .js match ts_line /[^\n\r\u{2028}\u{2029}]*(?:\r\n|[\n\r\u{2028}\u{2029}])|[^\n\r\u{2028}\u{2029}]+/
+  in .js layer lines match ts_line /[^\n\r\u{2028}\u{2029}]*(?:\r\n|[\n\r\u{2028}\u{2029}])|[^\n\r\u{2028}\u{2029}]+/
 }
 group ts_comment ts_line_comment, ts_block_comment
 

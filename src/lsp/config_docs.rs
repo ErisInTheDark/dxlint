@@ -152,13 +152,13 @@ impl ConfigFile<'_> {
     }
 }
 
-/// `in a, b`, `over a`, `group g a`, `drop group g`, `is (` before the
-/// cursor, with no `match`/`rule`/`let` yet: a list of layers.
+/// `in a, b`, `group g a`, `drop group g`, `is (` before the cursor, with no
+/// `layer`/`match`/`rule`/`let` yet: a list of layers.
 fn is_layer_list(before: &str) -> bool {
     let words: Vec<&str> = before.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).collect();
     let head = words.first().copied().unwrap_or("");
-    let past_head = words.iter().any(|w| matches!(*w, "match" | "rule" | "let" | "indent" | "forward"));
-    (matches!(head, "in" | "over" | "group") || before.ends_with("is ") || before.ends_with("is (") || before.ends_with("not ") || before.ends_with("not (") || before.ends_with(", ")) && !past_head
+    let past_head = words.iter().any(|w| matches!(*w, "layer" | "match" | "rule" | "let" | "indent" | "forward"));
+    (matches!(head, "in" | "group") || before.ends_with("is ") || before.ends_with("is (") || before.ends_with("not ") || before.ends_with("not (") || before.ends_with(", ")) && !past_head
 }
 
 /// The name before a `.` the cursor follows: `ts_call.` -> `ts_call`.

@@ -4,25 +4,25 @@
 
 define {
 
-over .* match trailing_whitespace /[ \t]+$/ {
+in .* layer text match trailing_whitespace /[ \t]+$/ {
   rule trailing-whitespace warn "no trailing whitespace" fix as ""
 }
 
-over .* match line_text /^[^\r\n]+/ {
+in .* layer text match line_text /^[^\r\n]+/ {
   rule max-line-length warn "line is {len(text)} characters long (max {max})" {
     option max int(1..) = 120 "maximum line length, in characters"
     when len(text) > max
   }
 }
 
-over .* match tab_indent /^ *\t[ \t]*/ {
+in .* layer text match tab_indent /^ *\t[ \t]*/ {
   rule tab-indent warn "indent with spaces, not tabs" {
     option width int(1..) = 4 "spaces per tab"
     fix as replace(text, "\t", repeat(" ", width))
   }
 }
 
-over .* match blank_run /\n(?:[ \t]*\r?\n){2,}/ {
+in .* layer text match blank_run /\n(?:[ \t]*\r?\n){2,}/ {
   rule blank-lines warn "at most {max} blank lines in a row" {
     option max int(0..) = 2 "blank lines allowed in a row"
     when len(split(text, "\n")) - 2 > max
@@ -30,7 +30,7 @@ over .* match blank_run /\n(?:[ \t]*\r?\n){2,}/ {
   }
 }
 
-over .* match file_end /[^\n]\z|\n(?:\r?\n)+\z/ {
+in .* layer text match file_end /[^\n]\z|\n(?:\r?\n)+\z/ {
   rule final-newline warn "files end with exactly one newline" fix as if ends_with(text, "\n") then "\n" else text "\n"
 }
 

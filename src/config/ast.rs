@@ -155,14 +155,15 @@ impl Parent {
     }
 }
 
-/// `[in|over A or B] match name [pattern]`. Without a pattern it attaches
-/// an existing matcher to more parents.
+/// `[in A or B [layer L]] match name [pattern]`. Without a pattern it
+/// attaches an existing matcher to more parents.
 #[derive(Debug)]
 pub struct MatcherDef {
     pub name: Name,
     pub parents: Vec<Parent>,
-    /// `over`: searched across the parent's text without consuming it.
-    pub overlay: bool,
+    /// `layer L`: its nodes form (part of) the named layer `L`, a tree of
+    /// its own over the same text, found anywhere in the parents' text.
+    pub layer: Option<Name>,
     pub pattern: Option<(Pat, Span)>,
     /// `match name like base ...`: a specialisation of `base`. It gets all
     /// of `base`'s children and overlays, wins ties against it, and counts as
