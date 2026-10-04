@@ -622,12 +622,28 @@ in ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of rule no-unreachable-loop 
   warn "Invalid loop. Its body allows only one iteration."
 }
 
+fn unparenthesised_node(n) = last(walk(n, current => if current.layer is ts_parenthesized then current.expression.node else null))
+fn logical_chain_top(n) = n.layer is (ts_member, ts_index, ts_call) && n.in_optional_chain == true && !(n.parent.layer is (ts_member, ts_index, ts_call, ts_non_null) && contains(["object", "callee", "expression"], n.field))
+fn logical_reference(n) = n != null && !logical_chain_top(n) && (n.layer is (ts_member, ts_index) || n.layer is ts_identifier && n.text != "undefined")
+fn logical_same_reference(a, b) = a.reference_key != null && a.reference_key == b.reference_key
+fn logical_nullish(n) = if n.layer is ts_null then false else if n.layer is ts_identifier && n.text == "undefined" && n.resolved == "global" || n.layer is ts_unary && n.operator == "void" && unparenthesised_node(n.argument.node).layer is ts_number && unparenthesised_node(n.argument.node).literal_value.value == 0 then true else null
+fn logical_nullish_reference(reference, value) = if logical_reference(reference) && logical_nullish(value) != null then { reference: reference, undefined: logical_nullish(value), operator: "??" } else null
+fn logical_nullish_comparison(n, op) = if n.layer is ts_binary && n.operator == op then default(logical_nullish_reference(unparenthesised_node(n.left.node), unparenthesised_node(n.right.node)), logical_nullish_reference(unparenthesised_node(n.right.node), unparenthesised_node(n.left.node))) else null
+fn logical_nullish_pair(a, b) = if a != null && b != null && a.undefined != b.undefined && logical_same_reference(a.reference, b.reference) then a else null
+fn logical_boolean_existence(n, negated) = if logical_reference(n) then { reference: n, operator: if negated then "||" else "&&" } else if n.layer is ts_unary && n.operator == "!" && logical_reference(unparenthesised_node(n.argument.node)) then { reference: unparenthesised_node(n.argument.node), operator: "&&" } else if n.layer is ts_call && n.global_callee == "Boolean" && count(n.argument.node) == 1 && logical_reference(unparenthesised_node(first(n.argument.node))) then { reference: unparenthesised_node(first(n.argument.node)), operator: if negated then "||" else "&&" } else null
+fn logical_existence(n) = default(logical_boolean_existence(unparenthesised_node(if n.layer is ts_unary && n.operator == "!" then n.argument.node else n), n.layer is ts_unary && n.operator == "!"), default(logical_nullish_comparison(n, "=="), if n.layer is ts_logical && n.operator == "||" then logical_nullish_pair(logical_nullish_comparison(unparenthesised_node(n.left.node), "==="), logical_nullish_comparison(unparenthesised_node(n.right.node), "===")) else null))
+fn logical_assignment_value(assigned, value) = if value.layer is ts_logical && logical_same_reference(assigned, last(walk(value.left.node, current => if current.layer is ts_logical && current.operator == value.operator then current.left.node else null))) then { kind: "assignment", operator: value.operator "=" } else null
+fn logical_expression_value(reference, assignment, op, kind) = if logical_reference(reference) && assignment.layer is ts_assignment && assignment.operator == "=" && logical_same_reference(reference, assignment.left.node) then { kind: kind, operator: op "=" } else null
+fn logical_if_value(existence, body) = if existence != null && body.layer is ts_expression_statement then logical_expression_value(existence.reference, unparenthesised_node(body.expression.node), existence.operator, "if") else null
+fn logical_assignment_info(n) = if n.layer is ts_assignment && contains(["&&=", "||=", "??="], n.operator) then { kind: "shorthand", operator: n.operator } else if n.layer is ts_assignment && n.operator == "=" then logical_assignment_value(n.left.node, unparenthesised_node(n.right.node)) else if n.layer is ts_logical then logical_expression_value(unparenthesised_node(n.left.node), unparenthesised_node(n.right.node), n.operator, "logical") else if n.layer is ts_if && n.alternate == null then logical_if_value(logical_existence(unparenthesised_node(n.test.node)), if n.consequent.layer is ts_block then (if count(n.consequent.body.node) == 1 then first(n.consequent.body.node) else null) else n.consequent.node) else null
+
 in ts_assignment, ts_logical, ts_if rule logical-assignment-operators {
   option mode ("always" | "never") = "always" "logical assignment policy"
   option enforceForIfStatements boolean = false "include conditional assignments"
-  let logical_info logical_assignment
+  when layer not ts_if || enforceForIfStatements
+  let logical_info logical_assignment_info(node)
   when logical_info != null
-  when if mode == "never" then logical_info.kind == "shorthand" else logical_info.kind != "shorthand" && (logical_info.kind != "if" || enforceForIfStatements)
+  when if mode == "never" then logical_info.kind == "shorthand" else logical_info.kind != "shorthand"
   warn if mode == "never" then "Unexpected logical operator assignment ({logical_info.operator}) shorthand." else if logical_info.kind == "assignment" then "Assignment (=) can be replaced with operator assignment ({logical_info.operator})." else if logical_info.kind == "logical" then "Logical expression can be replaced with an assignment ({logical_info.operator})." else "'if' statement can be replaced with a logical operator assignment with operator {logical_info.operator}."
 }
 
