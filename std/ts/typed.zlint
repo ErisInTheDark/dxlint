@@ -61,25 +61,68 @@ in ts_throw.argument rule only-throw-error {
   warn if throw_policy.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
 }
 
-in ts_call, ts_new {
-  rule no-implied-eval {
-    when implied_eval != null && implied_eval.mode == "typed"
-    report at implied_eval.offset
-    warn "Implied eval. Consider passing a function."
-  }
+in ts_identifier {
+  let eval_name text
+  let eval_identifier true
+  let eval_core_root if contains(["global", "globalThis", "window", "self"], text) && global != null && global != "off" then text else null
+  let eval_timer_global resolved == "global" && (re_test(file, /\.[cm]?tsx?$/) || global != null && global != "off")
+  let eval_constructor builtin_type("FunctionConstructor") || contains(default(type_flags, []), "any") || type_opaque && reference_kind == null
+}
+in ts_member, ts_index {
+  let eval_name static_name
+  let eval_core_root if object.eval_core_root != null && static_name == object.eval_core_root then object.eval_core_root else null
+  let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object.layer == "ts_identifier" && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
+  let eval_constructor builtin_type("FunctionConstructor") || contains(default(type_flags, []), "any") || type_opaque
+}
+in ts_member let eval_bind_member property == "bind"
+in ts_parenthesized {
+  let eval_name expression.eval_name
+  let eval_identifier expression.eval_identifier
+  let eval_core_root expression.eval_core_root
+  let eval_timer_global expression.eval_timer_global
+  let eval_constructor expression.eval_constructor
+}
+group typed_simple_expression ts_identifier, ts_private_name, ts_this, ts_super, ts_null, ts_boolean,
+  ts_number, ts_bigint, ts_string, ts_regex, ts_template, ts_tagged_template, ts_array, ts_object,
+  ts_member, ts_index, ts_new, ts_unary, ts_update, ts_await, ts_yield,
+  ts_logical, ts_assignment, ts_conditional, ts_sequence, ts_as, ts_satisfies,
+  ts_non_null, ts_type_assertion, ts_function, ts_arrow, ts_class, ts_instantiation, ts_meta_property,
+  ts_import_call
+in typed_simple_expression, ts_binary {
+  let eval_callback callable || builtin_type("Function")
+}
+in typed_simple_expression {
+  let eval_string layer is (ts_string, ts_template)
+    || static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"])
+}
+in ts_call {
+  let eval_callback callable || builtin_type("Function") || callee.eval_bind_member == true || callee.layer == "ts_identifier" && callee == "bind"
+  let eval_string static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"]) || callee.global_value == "String" && first([] argument.static_string) != null
+}
+in ts_binary let eval_string static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"]) || operator == "+" && (left.eval_string == true || right.eval_string == true)
+in ts_parenthesized {
+  let eval_callback expression.eval_callback
+  let eval_string expression.eval_string
+}
+in ts_call, ts_new let eval_timer (contains(["setTimeout", "setInterval", "execScript"], callee.eval_name) || callee.eval_name == "setImmediate" && re_test(file, /\.[cm]?tsx?$/)) && callee.eval_timer_global == true
+in ts_call.argument, ts_new.argument rule no-implied-eval {
+  when index == 0 && parent.eval_timer == true && re_test(file, /\.[cm]?tsx?$/) && eval_callback != true
+  warn "Implied eval. Consider passing a function."
+}
+in ts_call {
   rule no-implied-eval:core {
-    when implied_eval != null && implied_eval.mode == "core"
-    report at implied_eval.offset
+    when eval_timer && callee.eval_name != "execScript" && !re_test(file, /\.[cm]?tsx?$/) && first([] argument.eval_string) == true
     warn "Implied eval. Consider passing a function instead of a string."
   }
   rule no-implied-eval:exec {
-    when implied_eval != null && implied_eval.mode == "exec"
-    report at implied_eval.offset
+    when eval_timer && callee.eval_name == "execScript" && !re_test(file, /\.[cm]?tsx?$/) && first([] argument.eval_string) == true
     warn "Implied eval. Do not use execScript()."
   }
+}
+in ts_call, ts_new {
   rule no-implied-eval:function {
-    when implied_eval != null && implied_eval.mode == "function"
-    report at implied_eval.offset
+    when callee.eval_name == "Function" && re_test(file, /\.[cm]?tsx?$/) && callee.eval_constructor
+    when callee.eval_identifier == true || callee.eval_timer_global == true
     warn "Implied eval. Do not use the Function constructor to create functions."
   }
 }
@@ -262,13 +305,15 @@ in ts_await rule await-thenable {
   when argument.nonawaitable_type == true
   warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
 }
-in ts_array let is_promise_aggregator_argument parent.promise_aggregator == true
+in ts_member, ts_index let promise_aggregate_member object.global_value == "Promise" && contains(["all", "allSettled", "race", "any"], static_name)
+in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
+in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
   when layer != "ts_hole" && parent.is_promise_aggregator_argument && nonawaitable_type == true
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_call.argument rule await-thenable:iterable {
-  when parent.promise_aggregator == true && layer != "ts_array" && nonawaitable_iterable == true
+  when parent.is_promise_aggregator == true && layer != "ts_array" && nonawaitable_iterable == true
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_for_of rule await-thenable:for-of {
@@ -456,8 +501,11 @@ in ts_unary rule no-unsafe-unary-minus {
 }
 
 in ts_member, ts_index let object_array_type object.array_type
+in ts_parenthesized let object_array_type expression.object_array_type
+in ts_member, ts_index let array_literal_object object.layer == "ts_array"
+in ts_parenthesized let array_literal_object expression.array_literal_object
 in ts_unary rule no-array-delete {
-  when array_delete == true
+  when operator == "delete" && (argument.array_literal_object == true || argument.object_array_type == true)
   warn "Using the `delete` operator with an array expression is unsafe."
 }
 

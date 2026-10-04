@@ -21,7 +21,6 @@ mod transfers;
 mod assignments;
 mod arguments;
 mod enums;
-mod implied_eval;
 mod specifiers;
 mod errors;
 mod promises;
@@ -34,6 +33,29 @@ fn is_typescript(file: &NativeFile<'_>) -> bool {
 }
 
 pub const FACTS: &[Fact] = &[
+    Fact {
+        name: "callable",
+        doc: "native expressions: the type supplies call signatures (every union arm, or an intersection arm)",
+        get: |f, n| f.with_file(|file, node| Value::Bool(file.typing().checker.callable_type(&file.type_of(node))), n),
+    },
+    Fact {
+        name: "type_opaque",
+        doc: "native expressions: type computation is unsupported or unresolved, distinct from explicit unknown and open type parameters",
+        get: |f, n| f.with_file(|file, node| Value::Bool(file.type_of(node).is_opaque()), n),
+    },
+    Fact {
+        name: "builtin_type",
+        doc: "native expressions: builtin_type(name) asks whether the type is the named standard-library type or derives from it",
+        get: |f, n| f.with_file(|file, node| {
+            let args = crate::expr::facts::args();
+            args.first().map_or(Value::Null, |name| Value::Bool(file.typing().checker.is_builtin_type_or_base(&file.type_of(node), &name.to_string())))
+        }, n),
+    },
+    Fact {
+        name: "static_string",
+        doc: "native expressions: constant evaluated text, including templates, concatenation and unmodified variables; null when unknown",
+        get: |f, n| f.with_file(|file, node| file.static_string(node).map_or(Value::Null, Value::from), n),
+    },
     Fact {
         name: "returned_awaitables",
         doc: "native async functions: returned branch certainty and error/resource handling context",
@@ -78,11 +100,6 @@ pub const FACTS: &[Fact] = &[
         name: "type_specifier_groups",
         doc: "native values: allowed-type candidates per union arm, with named file/lib/package provenance",
         get: |f, n| f.with_file(specifiers::groups, n),
-    },
-    Fact {
-        name: "implied_eval",
-        doc: "native calls and constructions: global eval-like handler or Function constructor",
-        get: |f, n| f.with_file(implied_eval::finding, n),
     },
     Fact {
         name: "mixed_enum_offset",
@@ -165,11 +182,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(awaitability::iterable, n),
     },
     Fact {
-        name: "promise_aggregator",
-        doc: "native calls: a built-in Promise aggregation method",
-        get: |f, n| f.with_file(awaitability::aggregator, n),
-    },
-    Fact {
         name: "unsafe_type",
         doc: "native expressions: any or unresolved annotation provenance, distinct from unknown",
         get: |f, n| f.with_file(unsafe_types::kind, n),
@@ -213,11 +225,6 @@ pub const FACTS: &[Fact] = &[
         name: "void_argument_kind",
         doc: "on a void unary expression: the effective argument is a call, assignment or other expression",
         get: |f, n| f.with_file(void_argument_kind, n),
-    },
-    Fact {
-        name: "array_delete",
-        doc: "on a delete unary expression: the target is a member of an array or tuple",
-        get: |f, n| f.with_file(array_delete, n),
     },
     Fact {
         name: "nullish_coalescing",
@@ -291,23 +298,6 @@ fn void_argument_kind(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         Some(Kind::Assign) => "assignment",
         _ => "other",
     })
-}
-
-fn array_delete(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if !s.is(node, Kind::Unary) || s.word(node, Field::Op) != Some("delete") {
-        return Value::Bool(false);
-    }
-    let Some(target) = s.get(node, Field::Arg).map(|id| s.unparen(id)) else {
-        return Value::Bool(false);
-    };
-    if !matches!(s.kind(target), Some(Kind::Member | Kind::Index)) {
-        return Value::Bool(false);
-    }
-    let Some(object) = s.get(target, Field::Object) else {
-        return Value::Bool(false);
-    };
-    Value::Bool(s.is(object, Kind::Array) || is_array(&file.constrained_type_of(object), &file.typing().checker))
 }
 
 #[cfg(test)]
@@ -483,7 +473,7 @@ mod tests {
     fn constrained_arrays_cover_parameters_and_uninferred_call_results() {
         let linter = native_linter(r#"
             in ts_unary rule deletion {
-                when array_delete == true
+                when operator == "delete" && argument.object_array_type == true
                 error "deletion"
             }
         "#);

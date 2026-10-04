@@ -39,16 +39,6 @@ fn invalid_iterable(ty: &Ty, ck: &Checker<'_>) -> bool {
     }
 }
 
-pub(super) fn aggregator(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let result = s.get(node, Field::Callee).is_some_and(|callee| {
-        matches!(s.kind(callee), Some(Kind::Member | Kind::Index))
-            && s.get(callee, Field::Object).is_some_and(|object| file.global_value(object).as_deref() == Some("Promise"))
-            && crate::native::ts::statics::property_name(s, callee).is_some_and(|name| matches!(name.as_str(), "all" | "allSettled" | "race" | "any"))
-    });
-    Value::Bool(result)
-}
-
 pub(super) fn for_of(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let s = &file.syntax;
     if !s.is(node, Kind::ForOf) || !s.has_word(node, Field::Modifier, "await") {
