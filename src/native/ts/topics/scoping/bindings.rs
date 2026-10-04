@@ -180,62 +180,6 @@ pub(super) fn strict_code(file: &NativeFile, node: u32) -> bool {
     false
 }
 
-pub(super) fn declaration_position(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let parent = s.parent(node);
-    let nested = !parent.is_some_and(|p| matches!(s.kind(p), Some(K::Program | K::StaticBlock | K::Export))
-        || s.is(p, K::Block) && s.parent(p).is_some_and(|n| matches!(s.kind(n), Some(K::Function | K::Arrow | K::Method | K::StaticBlock))));
-    let mut body = "program";
-    let mut cursor = parent;
-    while let Some(n) = cursor {
-        match s.kind(n) {
-            Some(K::StaticBlock) => { body = "class static block body"; break; }
-            Some(K::Function | K::Arrow | K::Method) => { body = "function body"; break; }
-            _ => {}
-        }
-        cursor = s.parent(n);
-    }
-    Value::record(vec![
-        ("nested".into(), Value::Bool(nested)),
-        ("top".into(), Value::Bool(variable_on_top(s, node))),
-        ("declaration".into(), Value::Bool(s.is(node, K::Function) && parent.is_some_and(|p| matches!(s.kind(p), Some(K::Program | K::Block | K::Export | K::If | K::Labeled | K::While | K::DoWhile | K::For | K::ForIn | K::ForOf | K::Case))))),
-        ("body".into(), Value::from(body)),
-        ("strict".into(), Value::Bool(strict_code(file, parent.unwrap_or(node)))),
-    ])
-}
-
-fn variable_on_top(s: &Syntax, node: u32) -> bool {
-    let mut statement = node;
-    let Some(mut parent) = s.parent(statement) else { return false };
-    if s.is(parent, K::Export) {
-        statement = parent;
-        let Some(p) = s.parent(parent) else { return false };
-        parent = p;
-    }
-    let top_level = matches!(s.kind(parent), Some(K::Program | K::StaticBlock))
-        || s.is(parent, K::Block) && s.parent(parent).is_some_and(|n| matches!(s.kind(n), Some(K::Function | K::Arrow | K::Method | K::StaticBlock)));
-    if !top_level {
-        return false;
-    }
-    let mut declarations = false;
-    for sibling in s.all(parent, F::Body) {
-        if sibling == statement {
-            return true;
-        }
-        if !declarations && !s.is(parent, K::StaticBlock) && !s.parent(parent).is_some_and(|n| s.is(n, K::StaticBlock))
-            && (s.is(sibling, K::Import) || s.is(sibling, K::ExprStmt) && s.get(sibling, F::Expr).is_some_and(|n| s.is(n, K::String)))
-        {
-            continue;
-        }
-        if s.is(sibling, K::Var) || s.is(sibling, K::Export) && s.get(sibling, F::Decl).is_some_and(|n| s.is(n, K::Var)) {
-            declarations = true;
-        } else {
-            return false;
-        }
-    }
-    false
-}
-
 #[derive(Default)]
 struct Redeclarations(HashMap<u32, (bool, bool, bool, bool)>);
 
@@ -314,38 +258,6 @@ pub(super) fn redeclaration(file: &NativeFile, id: u32) -> Value<'static> {
         ("safe_merge".into(), Value::Bool(safe_merge)),
         ("builtin".into(), Value::Bool(builtin)),
         ("comment".into(), Value::Bool(comment)),
-    ])
-}
-
-pub(super) fn this_alias(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let declarator = s.is(node, K::Declarator);
-    let Some(name) = s.get(node, if declarator { F::Name } else { F::Left }).filter(|&n| s.is(n, K::Ident)) else {
-        return Value::Null;
-    };
-    let value = s.get(node, if declarator { F::Init } else { F::Right });
-    let is_this = value.is_some_and(|n| s.is(s.unparen(n), K::This));
-    let mut assigned = value.is_some();
-    if declarator && !assigned {
-        let b = file.bindings();
-        let first = b.merged.get(&name).copied().unwrap_or(name);
-        assigned = b.decl_scope.iter().any(|(&id, &scope)| {
-            b.merged.get(&id).copied().unwrap_or(id) == first && b.decl_scope.get(&name) == Some(&scope)
-                && s.parent(id).is_some_and(|n| s.is(n, K::Declarator) && s.get(n, F::Init).is_some())
-        }) || b.refs.iter().any(|(&reference, &declaration)| {
-            declaration == first && b.ref_scope.get(&reference) == b.decl_scope.get(&name)
-                && b.write_sites.get(&reference).is_some_and(|&site| {
-                    s.is(site, K::Assign) && s.word(site, F::Op) == Some("=")
-                        && s.get(site, F::Right).is_some_and(|n| s.is(s.unparen(n), K::This))
-                })
-        });
-    }
-    Value::record(vec![
-        ("name".into(), Value::from(s.text(name).to_string())),
-        ("this".into(), Value::Bool(is_this)),
-        ("valid".into(), Value::Bool(is_this && (declarator || s.word(node, F::Op) == Some("=")))),
-        ("value".into(), Value::Bool(value.is_some())),
-        ("assigned".into(), Value::Bool(assigned)),
     ])
 }
 
@@ -705,52 +617,6 @@ fn receiver_in(s: &Syntax, node: u32) -> bool {
                 })
         }
         _ => s.kids(node).any(|(_, child)| receiver_in(s, child)),
-    }
-}
-
-pub(super) fn scoping_head_offset(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let node = s.unparen(node);
-    let head = match s.kind(node) {
-        Some(K::Member) => s.get(node, F::Property),
-        Some(K::Index) => s.get(node, F::Index),
-        Some(K::Arrow) => s.get(node, F::Op),
-        _ => None,
-    }
-    .unwrap_or(node);
-    Value::from(s.tree.node(s.unparen(head)).start as usize)
-}
-
-pub(super) fn scoping_date_utc(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let node = s.unparen(node);
-    let is_utc = matches!(s.kind(node), Some(K::Member | K::Index))
-        && crate::native::ts::statics::property_name(s, node).as_deref() == Some("UTC");
-    Value::Bool(is_utc && s.get(node, F::Object).is_some_and(|object| is_global_date(file, object)))
-}
-
-fn is_global_date(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    let node = s.unparen(node);
-    match s.kind(node) {
-        Some(K::Ident) => {
-            s.text(node) == "Date"
-                && file.bindings().unresolved.contains(&node)
-                && file.globals().setting("Date") != Some("off")
-        }
-        Some(K::Member | K::Index) => {
-            if crate::native::ts::statics::property_name(s, node).as_deref() != Some("Date") {
-                return false;
-            }
-            s.get(node, F::Object).is_some_and(|object| {
-                let object = s.unparen(object);
-                s.is(object, K::Ident)
-                    && matches!(s.text(object), "global" | "globalThis" | "self" | "window")
-                    && file.bindings().unresolved.contains(&object)
-                    && matches!(file.globals().setting(s.text(object)), Some("readonly" | "writable"))
-            })
-        }
-        _ => false,
     }
 }
 

@@ -63,47 +63,6 @@ pub(super) fn consistent_returns(file: &NativeFile, node: u32) -> Value<'static>
     ])
 }
 
-pub(super) fn useless_return(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if s.get(node, F::Arg).is_some() || file.reach().0.unreachable.contains(&node) {
-        return Value::Bool(false);
-    }
-    let mut child = node;
-    while let Some(parent) = s.parent(child) {
-        match s.kind(parent) {
-            Some(K::Function | K::Arrow | K::Method) => return Value::Bool(true),
-            Some(K::For | K::ForIn | K::ForOf | K::While | K::DoWhile) => return Value::Bool(false),
-            Some(K::Try) if s.field(child) == Some(F::Finalizer) => return Value::Bool(false),
-            Some(K::Block | K::Case) => {
-                let mut past = false;
-                for sibling in s.all(parent, F::Body) {
-                    if sibling == child { past = true; continue; }
-                    if past && meaningful_statement(s, sibling) {
-                        return Value::Bool(false);
-                    }
-                }
-                if s.is(parent, K::Case) {
-                    let breaks = s.all(parent, F::Body).any(|n| s.is(n, K::Break));
-                    let last_case = s.parent(parent).and_then(|n| s.all(n, F::Case).last()) == Some(parent);
-                    if !breaks && !last_case { return Value::Bool(false); }
-                }
-            }
-            _ => {}
-        }
-        child = parent;
-    }
-    Value::Bool(false)
-}
-
-fn meaningful_statement(s: &crate::native::ts::syntax::Syntax, node: u32) -> bool {
-    match s.kind(node) {
-        Some(K::Function | K::Break) => false,
-        Some(K::Return) if s.get(node, F::Arg).is_none() => false,
-        Some(K::Block) => s.all(node, F::Body).any(|n| meaningful_statement(s, n)),
-        _ => true,
-    }
-}
-
 fn return_void(file: &NativeFile, node: u32) -> bool {
     let typing = file.typing();
     let is_async = file.syntax.has_word(node, F::Modifier, "async");
@@ -126,39 +85,4 @@ fn contains_void(file: &NativeFile, ty: &Ty, promise: bool) -> bool {
         }
         _ => false,
     }
-}
-
-pub(super) fn executor_return(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let arrow = s.is(node, K::Arrow);
-    let expression = if arrow {
-        s.get(node, F::Body).filter(|&n| !s.is(n, K::Block))
-    } else {
-        s.get(node, F::Arg)
-    };
-    let Some(expression) = expression else { return Value::Null };
-    let mut function = node;
-    if !arrow {
-        while !matches!(s.kind(function), Some(K::Function | K::Arrow | K::Method)) {
-            let Some(parent) = s.parent(function) else { return Value::Null };
-            function = parent;
-        }
-    }
-    if !matches!(s.kind(function), Some(K::Function | K::Arrow)) {
-        return Value::Null;
-    }
-    let mut argument = function;
-    while let Some(parent) = s.parent(argument).filter(|&n| s.is(n, K::Paren)) {
-        argument = parent;
-    }
-    let Some(new) = s.parent(argument).filter(|&n| s.is(n, K::New) && s.get(n, F::Arg) == Some(argument)) else { return Value::Null };
-    let Some(callee) = s.get(new, F::Callee).map(|n| s.unparen(n)).filter(|&n| s.is(n, K::Ident) && s.text(n) == "Promise") else { return Value::Null };
-    if !file.bindings().unresolved.contains(&callee) || file.globals().setting("Promise") == Some("off") {
-        return Value::Null;
-    }
-    let expression = s.unparen(expression);
-    Value::record(vec![
-        ("void".into(), Value::Bool(s.is(expression, K::Unary) && s.word(expression, F::Op) == Some("void"))),
-        ("offset".into(), Value::from(s.tree.node(if arrow { expression } else { node }).start as usize)),
-    ])
 }
