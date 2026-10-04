@@ -386,6 +386,25 @@ pub(crate) fn native_linter(rules: &str) -> Linter {
     built.linter.expect("no errors")
 }
 
+/// Runs `f` on `text` parsed as `/root/a.ts`, with the node of each `/*@*/`
+/// marker (the node starting right after it, outermost first): native
+/// owners test their queries directly with this.
+pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts::facts::NativeFile, &[u32]) -> T) -> T {
+    use crate::grammar::Tree;
+    use crate::native::ts::{facts::NativeFile, syntax::Syntax};
+    let l = native_linter("");
+    let front = l.grammar.natives.first().expect("native ts");
+    let parsed = crate::native::ts::parse(text, false).expect("parses");
+    let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
+    let path = Path::new("/root/a.ts");
+    let file = NativeFile::new(Syntax::new(&tree, text, front), path, &l.project);
+    let marks: Vec<u32> = text.match_indices("/*@*/").map(|(at, m)| {
+        let start = at + m.len() + text[at + m.len()..].len() - text[at + m.len()..].trim_start().len();
+        tree.order.iter().copied().find(|&n| tree.node(n).start as usize == start && n != tree.root).expect("a node at the marker")
+    }).collect();
+    f(&file, &marks)
+}
+
 #[test]
 fn native_layers_carry_fields_and_attributes() {
     let l = native_linter(r#"
@@ -1132,6 +1151,21 @@ fn lambdas_map_filter_and_test_lists() {
         }
     "#);
     assert_eq!(rule_messages(&l, "ab"), vec!["each: AB|2,4|true||a, b"]);
+}
+
+#[test]
+fn facts_called_with_arguments_see_them_only_during_the_call() {
+    use crate::expr::{facts, Value};
+    let inner = facts::with_args(vec![Value::Num(1.0)], || {
+        let nested = facts::with_args(vec![Value::Num(2.0)], || Value::List(facts::args()));
+        Value::List(vec![nested, Value::List(facts::args())])
+    });
+    assert_eq!(inner, Value::List(vec![Value::List(vec![Value::Num(2.0)]), Value::List(vec![Value::Num(1.0)])]));
+    assert!(facts::args().is_empty());
+    // A fact reads the same whether named or called.
+    let l = native_linter("in ts_identifier rule u warn \"{uses}/{uses()}\" { when uses != null }");
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "let a = 1; a;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["1/1"]);
 }
 
 #[test]

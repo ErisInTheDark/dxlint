@@ -732,6 +732,8 @@ mod tests {
         // A type-only export uses a value only as a type.
         assert_eq!(ts("const B = 0; export type { B };"), ["'B' is assigned a value but only used as a type.@6"]);
         assert_eq!(ts("const C = 0; export { type C };"), ["'C' is assigned a value but only used as a type.@6"]);
+        // A type's qualifier is a namespace: the parameter does not hide it.
+        assert!(ts("import * as foo from 'foo'; export function f(foo: foo.Foo) { return foo; }").is_empty());
         assert!(ts("import type { X } from 'x'; export let v: X;").is_empty());
         assert!(ts("type F<T> = T extends (x: infer I) => void ? I : never; export const f: F<1> = 1;").is_empty());
         assert_eq!(ts("interface I { next: I }"), ["'I' is defined but never used.@10"]);

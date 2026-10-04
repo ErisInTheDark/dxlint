@@ -143,6 +143,12 @@ impl NativeFile<'_> {
 
     /// eslint's `isSameReference`.
     pub(crate) fn same_reference(&self, a: u32, b: u32) -> bool {
+        self.same_reference_keyed(a, b, false)
+    }
+
+    /// eslint's `isSameReference(a, b, disableStaticComputedKey)`: with
+    /// `literal_keys_differ`, `x.y` and `x["y"]` are different references.
+    pub(crate) fn same_reference_keyed(&self, a: u32, b: u32, literal_keys_differ: bool) -> bool {
         let s = &self.syntax;
         let (a, b) = (self.unparen(a), self.unparen(b));
         match (s.kind(a), s.kind(b)) {
@@ -152,13 +158,16 @@ impl NativeFile<'_> {
                 super::statics::literal_value(s, a) == super::statics::literal_value(s, b)
             }
             (Some(ka @ (K::Member | K::Index)), Some(kb @ (K::Member | K::Index))) => {
-                let same_object = s.get(a, F::Object).zip(s.get(b, F::Object)).is_some_and(|(x, y)| self.same_reference(x, y));
-                if let Some(name) = super::statics::property_name(s, a) {
-                    return same_object && super::statics::property_name(s, b).as_deref() == Some(&name);
+                let same = |x: u32, y: u32| self.same_reference_keyed(x, y, literal_keys_differ);
+                let same_object = s.get(a, F::Object).zip(s.get(b, F::Object)).is_some_and(|(x, y)| same(x, y));
+                if !literal_keys_differ {
+                    if let Some(name) = super::statics::property_name(s, a) {
+                        return same_object && super::statics::property_name(s, b).as_deref() == Some(&name);
+                    }
                 }
                 ka == kb && same_object && {
                     let key = |n: u32| s.get(n, F::Property).or_else(|| s.get(n, F::Index));
-                    key(a).zip(key(b)).is_some_and(|(x, y)| self.same_reference(x, y))
+                    key(a).zip(key(b)).is_some_and(|(x, y)| same(x, y))
                 }
             }
             _ => false,

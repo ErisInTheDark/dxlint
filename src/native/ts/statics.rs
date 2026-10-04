@@ -78,6 +78,9 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
         K::Unary => {
             let op = s.word(node, F::Op)?;
             let (kind, value) = literal_value(s, s.get(node, F::Arg)?)?;
+            if kind == "bigint" && op == "-" {
+                return Some(("bigint", if value == "0" { value } else { format!("-{value}") }));
+            }
             let n = match kind {
                 "number" => value.parse::<f64>().ok()?,
                 "string" if op == "+" || op == "-" => value.trim().parse::<f64>().unwrap_or(if value.trim().is_empty() { 0.0 } else { f64::NAN }),
@@ -91,6 +94,45 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
         }
         _ => return None,
     })
+}
+
+/// How eslint's sorting rules order names: by UTF-16 unit, optionally
+/// ignoring case, and optionally natural (`a2` before `a10`).
+pub fn compare_names(a: &str, b: &str, insensitive: bool, natural: bool) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let a = if insensitive { a.to_lowercase() } else { a.to_string() };
+    let b = if insensitive { b.to_lowercase() } else { b.to_string() };
+    let a: Vec<_> = a.encode_utf16().collect();
+    let b: Vec<_> = b.encode_utf16().collect();
+    let digit = |u: u16| (48..=57).contains(&u);
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if natural && digit(a[i]) && digit(b[j]) {
+            let (start_i, start_j) = (i, j);
+            while i < a.len() && digit(a[i]) {
+                i += 1;
+            }
+            while j < b.len() && digit(b[j]) {
+                j += 1;
+            }
+            let left = &a[start_i..i];
+            let right = &b[start_j..j];
+            let left = &left[left.iter().take_while(|&&n| n == 48).count()..];
+            let right = &right[right.iter().take_while(|&&n| n == 48).count()..];
+            let order = left.len().cmp(&right.len()).then_with(|| left.cmp(right));
+            if order != Ordering::Equal {
+                return order;
+            }
+        } else {
+            let order = a[i].cmp(&b[j]);
+            if order != Ordering::Equal {
+                return order;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    (a.len() - i).cmp(&(b.len() - j))
 }
 
 /// An identifier as JavaScript reads it: `foo` is `foo`.

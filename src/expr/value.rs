@@ -38,6 +38,18 @@ impl<'s> Value<'s> {
         }
     }
 
+    /// The value owning all its text.
+    pub fn into_static(self) -> Value<'static> {
+        match self {
+            Value::Null => Value::Null,
+            Value::Bool(b) => Value::Bool(b),
+            Value::Num(n) => Value::Num(n),
+            Value::Str(s) => Value::Str(Cow::Owned(s.into_owned())),
+            Value::List(items) => Value::List(items.into_iter().map(Value::into_static).collect()),
+            Value::Record(entries) => Value::Record(entries.into_iter().map(|(k, v)| (k, v.into_static())).collect()),
+        }
+    }
+
     /// A record's value for `key` (null when missing, or not a record).
     pub fn key(&self, key: &str) -> Value<'s> {
         match self {

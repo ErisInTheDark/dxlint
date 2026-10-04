@@ -88,6 +88,25 @@ impl NativeFile<'_> {
         Some(tokens.join(" "))
     }
 
+    /// A key of the options object of a dynamic `import(x, { ... })`:
+    /// `Some(None)` for its own keys (`with`), `Some(Some(name))` for keys
+    /// of an object one level in, under property `name` (`type` in
+    /// `{ with: { type: "json" } }`).
+    pub fn import_options_key(&self, node: u32) -> Option<Option<String>> {
+        let s = &self.syntax;
+        if s.field(node) != Some(F::Key) {
+            return None;
+        }
+        let object = s.parent(node).filter(|&n| s.is(n, K::Prop)).and_then(|p| s.parent(p)).filter(|&n| s.is(n, K::Object))?;
+        let holder = s.parent(object)?;
+        if s.is(holder, K::ImportCall) {
+            return Some(None);
+        }
+        let outer = s.parent(holder).filter(|&n| s.is(holder, K::Prop) && s.is(n, K::Object))?;
+        s.parent(outer).filter(|&n| s.is(n, K::ImportCall))?;
+        Some(super::statics::property_name(s, holder))
+    }
+
     /// Where eslint reports a function: from its start (its property's, for
     /// methods and property values) or, for arrows, at the `=>`.
     pub fn function_head(&self, func: u32) -> Option<usize> {

@@ -2,7 +2,7 @@
 
 use super::super::super::facts::{Facts, NativeFile};
 use super::super::super::kinds::{Field as F, Kind as K};
-use super::sorting::compare;
+use super::super::super::statics::compare_names as compare;
 use crate::expr::Value;
 use std::cmp::Ordering;
 

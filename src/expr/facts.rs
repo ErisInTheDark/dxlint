@@ -21,6 +21,26 @@ pub struct Fact {
     pub get: fn(&dyn Facts, u32) -> Value<'static>,
 }
 
+thread_local! {
+    static ARGS: std::cell::RefCell<Vec<Value<'static>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `get` with `args` as its arguments: a fact written as a call
+/// (`member_order(groups, order)`) reads them with [`args`]. For analyses
+/// whose whole-file state depends on a rule's options.
+pub fn with_args(args: Vec<Value<'static>>, get: impl FnOnce() -> Value<'static>) -> Value<'static> {
+    let saved = ARGS.with(|a| std::mem::replace(&mut *a.borrow_mut(), args));
+    let out = get();
+    ARGS.with(|a| *a.borrow_mut() = saved);
+    out
+}
+
+/// The arguments of the fact call being evaluated (empty when the fact is
+/// read as a name).
+pub fn args() -> Vec<Value<'static>> {
+    ARGS.with(|a| a.borrow().clone())
+}
+
 /// `v`'s value, or null.
 pub fn opt<T>(v: Option<T>, f: impl FnOnce(T) -> Value<'static>) -> Value<'static> {
     v.map_or(Value::Null, f)
@@ -396,6 +416,15 @@ const CORE: &[Fact] = &[
         name: "precision_lost",
         doc: "native layers: on a number literal: its value is not exactly representable as a double",
         get: |f, n| opt(f.precision_lost(n), Value::Bool),
+    },
+    Fact {
+        name: "compiler_option",
+        doc: "native layers: `compiler_option(\"name\")`: a boolean tsconfig compiler option for this file (`strict` counts for the options it implies); false when unset",
+        get: |f, n| f.with_file(|file, _| {
+            let name = args().first().map(|v| v.text().into_owned()).unwrap_or_default();
+            let id = file.project.file_id(file.path);
+            Value::Bool(file.project.strict_option(id, &name))
+        }, n),
     },
 ];
 

@@ -2,36 +2,9 @@
 
 use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
-use super::super::super::statics::property_name;
+use super::super::super::statics::{compare_names as compare, property_name};
 use crate::expr::Value;
 use std::cmp::Ordering;
-
-pub(super) fn compare(a: &str, b: &str, insensitive: bool, natural: bool) -> Ordering {
-    let a = if insensitive { a.to_lowercase() } else { a.to_string() };
-    let b = if insensitive { b.to_lowercase() } else { b.to_string() };
-    let a: Vec<_> = a.encode_utf16().collect();
-    let b: Vec<_> = b.encode_utf16().collect();
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() && j < b.len() {
-        if natural && (48..=57).contains(&a[i]) && (48..=57).contains(&b[j]) {
-            let (start_i, start_j) = (i, j);
-            while i < a.len() && (48..=57).contains(&a[i]) { i += 1; }
-            while j < b.len() && (48..=57).contains(&b[j]) { j += 1; }
-            let left = &a[start_i..i];
-            let right = &b[start_j..j];
-            let left = &left[left.iter().take_while(|&&n| n == 48).count()..];
-            let right = &right[right.iter().take_while(|&&n| n == 48).count()..];
-            let order = left.len().cmp(&right.len()).then_with(|| left.cmp(right));
-            if order != Ordering::Equal { return order; }
-        } else {
-            let order = a[i].cmp(&b[j]);
-            if order != Ordering::Equal { return order; }
-            i += 1;
-            j += 1;
-        }
-    }
-    (a.len() - i).cmp(&(b.len() - j))
-}
 
 pub fn variables(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;

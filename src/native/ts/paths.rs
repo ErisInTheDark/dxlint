@@ -31,6 +31,12 @@ pub trait Domain {
     /// Before an expression's children run (`x += await y` reads `x`
     /// before the `await`, though `step` sees the target after the value).
     fn before_expr(&mut self, _s: &Syntax, _node: u32, _state: &mut Self::S) {}
+    /// After a loop's body: whether any path entered it (`while (false)`
+    /// never does), and the state going around again (the body's end and
+    /// its `continue`s, before any update or later test), `None` when
+    /// nothing comes back. Called each settling round: the last call is
+    /// final.
+    fn loop_back(&mut self, _s: &Syntax, _node: u32, _entered: bool, _state: Option<&Self::S>) {}
     /// Before a statement (or `case`) runs; `None` when no path reaches it.
     fn enter(&mut self, _s: &Syntax, _node: u32, _state: Option<&Self::S>) {}
 }
@@ -344,6 +350,7 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
                 // for-in/of: may run zero times.
                 exits = self.join(exits, head.clone());
             }
+            let entered = entry.is_some();
             let out = match body {
                 Some(b) => self.stmt(b, entry.take()),
                 None => Out::normal(entry.take()),
@@ -358,6 +365,7 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
                     jumps_out.push((j, x));
                 }
             }
+            self.d.loop_back(s, node, entered, next.as_ref());
             next = self.opt_expr(update, next);
             if body_first {
                 next = self.opt_expr(test, next);
@@ -903,4 +911,33 @@ fn case_end_reachable(s: &Syntax, case: u32, _reach: &Reach) -> bool {
     // A `break` out of the switch is not falling through; other jumps
     // leave too.
     out.normal.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    /// Whether each loop's body is entered, and comes back around.
+    struct Back(HashMap<u32, (bool, bool)>);
+
+    impl Domain for Back {
+        type S = ();
+        fn join(&self, _: &(), _: &()) {}
+        fn loop_back(&mut self, _: &Syntax, node: u32, entered: bool, state: Option<&()>) {
+            self.0.insert(node, (entered, state.is_some()));
+        }
+    }
+
+    #[test]
+    fn loop_back_sees_entry_the_body_end_and_continues() {
+        let text = "/*@*/for (;;) { break; } /*@*/while (x) { if (y) continue; break; } /*@*/for (const a of b) { throw a; } /*@*/do { f(); } while (x); /*@*/while (false) { f(); }";
+        crate::engine::tests::with_native_file(text, |file, marks| {
+            let mut back = Back(HashMap::new());
+            walk(&file.syntax, &mut back, file.syntax.root(), ());
+            let got: Vec<(bool, bool)> = marks.iter().map(|m| back.0[m]).collect();
+            assert_eq!(got, [(true, false), (true, true), (true, false), (true, true), (false, false)]);
+        })
+    }
 }

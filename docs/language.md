@@ -585,7 +585,9 @@ Files are only parsed this way when an active rule targets a `ts_*` layer,
 and a file the parser cannot read gets one warning instead of rules. Native
 layers have no pattern children (`in ts_call match x ...` is an error).
 
-**Facts.** Native layers add builtins (null elsewhere):
+**Facts.** Native layers add builtins (null elsewhere). A fact that depends
+on a rule's settings takes them as arguments, like a function:
+`member_order(memberTypes, order)`.
 
 | name | value |
 |---|---|

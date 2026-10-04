@@ -83,16 +83,13 @@ pub fn name(file: &NativeFile, node: u32) -> Value<'static> {
     ])
 }
 
+/// Import attribute keys: the options' own, and those under `with`/`assert`.
 fn import_attribute_key(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    if s.field(node) != Some(F::Key) { return false; }
-    let Some(prop) = s.parent(node).filter(|&n| s.is(n, K::Prop)) else { return false };
-    let Some(object) = s.parent(prop).filter(|&n| s.is(n, K::Object)) else { return false };
-    if s.parent(object).is_some_and(|n| s.is(n, K::ImportCall)) {
-        return true;
+    match file.import_options_key(node) {
+        Some(None) => true,
+        Some(Some(outer)) => outer == "with" || outer == "assert",
+        None => false,
     }
-    s.parent(object).filter(|&n| s.is(n, K::Prop) && matches!(property_name(s, n), Some(n) if n == "with" || n == "assert"))
-        .and_then(|n| s.parent(n)).and_then(|n| s.parent(n)).is_some_and(|n| s.is(n, K::ImportCall))
 }
 
 pub fn properties(file: &NativeFile, node: u32) -> Value<'static> {

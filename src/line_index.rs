@@ -9,10 +9,16 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
+    /// Lines end at `\n`, `\r\n` or a lone `\r` (as LSP and eslint count).
     pub fn new(text: &str) -> Self {
+        let bytes = text.as_bytes();
         let mut starts = Vec::with_capacity(text.len() / 32 + 1);
         starts.push(0);
-        starts.extend(memchr::memchr_iter(b'\n', text.as_bytes()).map(|i| i as u32 + 1));
+        starts.extend(
+            memchr::memchr2_iter(b'\n', b'\r', bytes)
+                .filter(|&i| !(bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n')))
+                .map(|i| i as u32 + 1),
+        );
         LineIndex { starts, len: text.len() as u32 }
     }
 
@@ -32,16 +38,16 @@ impl LineIndex {
         self.starts.get(line).copied().unwrap_or(self.len) as usize
     }
 
-    /// End of the line's content, excluding `\n` / `\r\n`.
+    /// End of the line's content, excluding `\n` / `\r\n` / `\r`.
     pub fn line_end(&self, text: &str, line: usize) -> usize {
         let next = self.starts.get(line + 1).map(|&s| s as usize).unwrap_or(text.len());
         let bytes = text.as_bytes();
         let mut end = next;
         if end > self.line_start(line) && bytes.get(end - 1) == Some(&b'\n') {
             end -= 1;
-            if end > self.line_start(line) && bytes.get(end - 1) == Some(&b'\r') {
-                end -= 1;
-            }
+        }
+        if end > self.line_start(line) && bytes.get(end - 1) == Some(&b'\r') {
+            end -= 1;
         }
         end
     }
@@ -98,5 +104,14 @@ mod tests {
         assert_eq!(idx.line_text(text, 0), "a");
         assert_eq!(idx.line_col(text, y), (1, 2));
         assert_eq!(idx.from_utf16(text, 9, 0), text.len());
+    }
+
+    #[test]
+    fn a_lone_carriage_return_ends_a_line() {
+        let text = "a\rb\r\nc\nd";
+        let idx = LineIndex::new(text);
+        assert_eq!(idx.line_count(), 4);
+        assert_eq!(idx.line_col(text, text.find('c').unwrap()), (2, 0));
+        assert_eq!((idx.line_text(text, 0), idx.line_text(text, 1)), ("a", "b"));
     }
 }

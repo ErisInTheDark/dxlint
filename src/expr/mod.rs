@@ -109,6 +109,9 @@ pub enum CExpr {
     /// `map(list, x => body)` and friends; the body reads the item as the
     /// innermost `Param`.
     Each(Each, Box<CExpr>, Box<CExpr>),
+    /// `fact(args)` on the node: the fact reads its arguments through
+    /// [`facts::args`].
+    FactCall(usize, Vec<CExpr>),
     /// `reduce(list, initial, (state, item) => next)`; the body reads the
     /// state and the item as the two innermost `Param`s.
     Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
@@ -385,6 +388,13 @@ impl Scope<'_> {
                 };
                 self.note(name.span, Resolved::Function("dbg"));
                 CExpr::Dbg(Box::new(self.compile(&args[0], errors)?), label.unwrap_or_else(|| "dbg".into()))
+            }
+            // `fact(args)`: a native analysis that takes the rule's values.
+            ExprKind::Call(name, args) if functions::lookup(&name.text).is_none() && facts::fact(&name.text).is_some() => {
+                let i = facts::fact(&name.text).expect("checked");
+                self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
+                let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
+                CExpr::FactCall(i, args)
             }
             ExprKind::Call(name, args) => {
                 let Some(f) = functions::lookup(&name.text) else {
@@ -1036,6 +1046,11 @@ impl<'a> Ctx<'a> {
                         }
                     }
                 }
+            }
+            CExpr::FactCall(i, args) => {
+                let Some(native) = self.native else { return Ok(Value::Null) };
+                let args = args.iter().map(|a| self.eval(a).map(Value::into_static)).collect::<Result<Vec<_>, _>>()?;
+                facts::with_args(args, || (facts::FACTS[*i].get)(native, self.node))
             }
             CExpr::Attr(a) => self.attr(self.node, *a)?,
             CExpr::ParentField(label) => match self.parent_layer() {

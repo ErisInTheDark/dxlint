@@ -68,6 +68,38 @@ pub struct Bindings {
     pub merged: HashMap<u32, u32>,
 }
 
+impl Bindings {
+    /// The declaration `name` means at `at` (a value, or a type when
+    /// `value` is false), searching the scopes around it outward; `None`
+    /// for a global or an unknown name. For names no reference spells out:
+    /// `{}.hasOwnProperty` asks whether `Object` is the global one.
+    pub fn visible(&self, s: &Syntax, at: u32, name: &str, value: bool) -> Option<u32> {
+        let mut scope = None;
+        let mut node = Some(at);
+        while let (None, Some(n)) = (scope, node) {
+            scope = self.scopes.iter().rposition(|sc| sc.node == n);
+            node = s.parent(n);
+        }
+        let mut scope = scope.or((!self.scopes.is_empty()).then_some(0));
+        let type_only = |d: u32| {
+            let kinds = self.declaration_kinds.get(&d).map(Vec::as_slice).unwrap_or_default();
+            let kind = self.decls.get(&d).map_or("", |b| b.kind);
+            std::iter::once(kind).chain(kinds.iter().copied()).all(|k| matches!(k, "type" | "interface" | "type_param"))
+        };
+        while let Some(sc) = scope {
+            let found = self.decl_scope.iter()
+                .filter(|&(&d, &ds)| ds == sc && s.text(d) == name && (!value || !type_only(self.merged.get(&d).copied().unwrap_or(d))))
+                .map(|(&d, _)| self.merged.get(&d).copied().unwrap_or(d))
+                .min_by_key(|&d| s.tree.node(d).start);
+            if found.is_some() {
+                return found;
+            }
+            scope = self.scopes[sc].parent;
+        }
+        None
+    }
+}
+
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct MemberUses {
     pub reads: u32,
@@ -931,12 +963,10 @@ impl<'t> Binder<'_, 't> {
             }
             K::TypeRef => {
                 if let Some(n) = s.get(id, F::Name) {
-                    if s.is(n, K::Ident) {
-                        self.reference(n, scope, Use::Type);
-                    } else {
-                        let l = self.leftmost(n);
-                        self.reference(l, scope, Use::Namespace);
-                    }
+                    // `foo.Foo` looks `foo` up as a namespace, which a
+                    // plain value (a parameter `foo`) does not hide.
+                    let named = if s.is(n, K::Ident) { n } else { self.leftmost(n) };
+                    self.reference(named, scope, Use::Type);
                 }
                 self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
             }
@@ -1104,6 +1134,22 @@ mod tests {
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn names_resolve_at_any_node_through_enclosing_scopes() {
+        let text = "let Object = 1; type T = 1; function f() { const T = 2; /*@*/a; { /*@*/b; } } /*@*/c;";
+        crate::engine::tests::with_native_file(text, |file, marks| {
+            let b = file.bindings();
+            let s = &file.syntax;
+            let name = |d: Option<u32>| d.map(|d| s.tree.node(d).start);
+            let outer_object = Some(4);
+            assert_eq!(name(b.visible(s, marks[0], "Object", true)), outer_object);
+            assert_eq!(name(b.visible(s, marks[1], "T", true)), Some(49), "the inner const, not the outer type");
+            assert_eq!(name(b.visible(s, marks[2], "T", true)), None, "only a type outside");
+            assert_eq!(name(b.visible(s, marks[2], "T", false)), Some(21));
+            assert_eq!(b.visible(s, marks[2], "Math", true), None);
+        })
+    }
 
     #[test]
     fn computed_class_keys_use_the_outer_this() {

@@ -432,10 +432,15 @@ impl Project {
     /// A boolean compiler option of the tsconfig governing `file`: its own
     /// setting, else `strict`'s for the options `strict` implies, else off.
     pub fn strict_option(&self, file: FileId, name: &str) -> bool {
-        let path = self.path(file);
-        let Some(config) = path.parent().and_then(|d| self.config_for(d)) else { return false };
-        let flag = |n: &str| config.flags.get(n).copied();
+        let flag = |n: &str| self.compiler_flag(file, n);
         flag(name).or_else(|| STRICT_FAMILY.contains(&name).then(|| flag("strict")).flatten()).unwrap_or(false)
+    }
+
+    /// A boolean compiler option as the tsconfig governing `file` sets it
+    /// (`None` when unset or there is no tsconfig).
+    pub fn compiler_flag(&self, file: FileId, name: &str) -> Option<bool> {
+        let path = self.path(file);
+        path.parent().and_then(|d| self.config_for(d))?.flags.get(name).copied()
     }
 
     /// The global scope of the tsconfig governing `file`.

@@ -12,7 +12,7 @@ const GLOBAL_OBJECTS: &[&str] = &["globalThis", "global", "self", "window"];
 impl NativeFile<'_> {
     /// An optional chain's outermost node (eslint's `ChainExpression`): in a
     /// chain with a `?.`, and not continued by its parent.
-    fn chain_top(&self, node: u32) -> bool {
+    pub(crate) fn chain_top(&self, node: u32) -> bool {
         let s = &self.syntax;
         let in_chain = |mut n: u32| loop {
             match s.kind(n) {
@@ -162,6 +162,16 @@ impl NativeFile<'_> {
                 let r = self.static_string_at(s.get(node, F::Right)?, depth + 1)?;
                 Some(l + &r)
             }
+            // `(a, "x")`, `y = "x"`: the last value, the assigned value.
+            K::Sequence => self.static_string_at(s.all(node, F::Expr).last()?, depth + 1),
+            K::Assign if s.word(node, F::Op) == Some("=") => self.static_string_at(s.get(node, F::Right)?, depth + 1),
+            // `"gimu"[0]`: one UTF-16 unit, as JavaScript indexes.
+            K::Index if s.get(node, F::Optional).is_none() => {
+                let text = self.static_string_at(s.get(node, F::Object)?, depth + 1)?;
+                let at = self.static_number_at(s.get(node, F::Index)?, depth + 1)?;
+                let unit = (at >= 0.0 && at.fract() == 0.0).then(|| text.encode_utf16().nth(at as usize)).flatten()?;
+                Some(String::from_utf16_lossy(&[unit]))
+            }
             K::Ident => {
                 let decl = *self.bindings().refs.get(&node)?;
                 let b = self.binding(decl)?;
@@ -264,5 +274,19 @@ impl NativeFile<'_> {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn static_strings_follow_sequences_assignments_and_indexes() {
+        let text = "const flags = 'gimu'; let y; /*@*/(0, 'a'); /*@*/y = 'b'; /*@*/flags[1]; /*@*/'😀'[0]; /*@*/flags[9];";
+        crate::engine::tests::with_native_file(text, |file, marks| {
+            // The marks are expression statements.
+            let expr = |m| file.syntax.get(m, crate::native::ts::kinds::Field::Expr).expect("an expression");
+            let got: Vec<_> = marks.iter().map(|&m| file.static_string(expr(m))).collect();
+            assert_eq!(got, [Some("a".into()), Some("b".into()), Some("i".into()), Some("\u{fffd}".into()), None]);
+        })
     }
 }
