@@ -16,6 +16,9 @@ pub enum Value<'s> {
     List(Arc<[Value<'s>]>),
     /// `{ key: value }`, keys in written order.
     Record(Arc<[(Key, Value<'s>)]>),
+    /// A node of the file's tree (from a link such as `declaration`): reads
+    /// as its text, and `.x` reads `x` on it.
+    Node(u32, Cow<'s, str>),
 }
 
 /// A record key: usually a literal name, which costs no allocation.
@@ -38,6 +41,7 @@ impl<'s> Value<'s> {
             Value::Str(_) => "str",
             Value::List(_) => "list",
             Value::Record(_) => "record",
+            Value::Node(..) => "node",
         }
     }
 
@@ -49,6 +53,15 @@ impl<'s> Value<'s> {
             Value::Str(s) => !s.is_empty(),
             Value::List(l) => !l.is_empty(),
             Value::Record(r) => !r.is_empty(),
+            Value::Node(..) => true,
+        }
+    }
+
+    /// A node as the text it stands for (outside `.x` reads and `is`).
+    fn as_text(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) | Value::Node(_, s) => Some(s),
+            _ => None,
         }
     }
 
@@ -61,6 +74,7 @@ impl<'s> Value<'s> {
             Value::Str(s) => Value::Str(Cow::Owned(s.into_owned())),
             Value::List(items) => Value::List(items.iter().cloned().map(Value::into_static).collect()),
             Value::Record(entries) => Value::Record(entries.iter().map(|(k, v)| (k.clone(), v.clone().into_static())).collect()),
+            Value::Node(id, s) => Value::Node(id, Cow::Owned(s.into_owned())),
         }
     }
 
@@ -76,7 +90,7 @@ impl<'s> Value<'s> {
     pub fn literal(&self) -> String {
         match self {
             Value::Null => "null".into(),
-            Value::Str(s) => format!("{:?}", s.as_ref()),
+            Value::Str(s) | Value::Node(_, s) => format!("{:?}", s.as_ref()),
             Value::List(items) => format!("[{}]", items.iter().map(Value::literal).collect::<Vec<_>>().join(", ")),
             Value::Record(entries) => {
                 if entries.is_empty() {
@@ -92,9 +106,9 @@ impl<'s> Value<'s> {
     /// Text form used in templates and string functions; borrows when it
     /// already is text.
     pub fn text(&self) -> Cow<'_, str> {
-        match self {
-            Value::Str(s) => Cow::Borrowed(s),
-            other => Cow::Owned(other.to_string()),
+        match self.as_text() {
+            Some(s) => Cow::Borrowed(s),
+            None => Cow::Owned(self.to_string()),
         }
     }
 
@@ -106,7 +120,7 @@ impl<'s> Value<'s> {
         match self {
             Value::Num(n) => Ok(*n),
             Value::Bool(b) => Ok(f64::from(u8::from(*b))),
-            Value::Str(s) => s.trim().parse().map_err(|_| format!("expected a number, got \"{s}\"")),
+            Value::Str(s) | Value::Node(_, s) => s.trim().parse().map_err(|_| format!("expected a number, got \"{s}\"")),
             Value::Null => Ok(0.0),
             Value::List(_) => Err("expected a number, got a list".into()),
             Value::Record(_) => Err("expected a number, got a record".into()),
@@ -134,6 +148,9 @@ impl<'s> Value<'s> {
     /// Loose equality: numbers compare numerically even against numeric text.
     pub fn loose_eq(&self, other: &Value) -> bool {
         match (self, other) {
+            // The same node; otherwise nodes compare as their text.
+            (Value::Node(a, _), Value::Node(b, _)) => a == b,
+            (Value::Node(_, s), v) | (v, Value::Node(_, s)) => Value::Str(Cow::Borrowed(s)).loose_eq(v),
             (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.trim().parse::<f64>().is_ok_and(|b| b == *a),
             (Value::Null, Value::Str(s)) | (Value::Str(s), Value::Null) => s.is_empty(),
             (Value::Str(a), Value::Str(b)) => a == b,
@@ -165,7 +182,7 @@ impl fmt::Display for Value<'_> {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => write!(f, "{}", *n as i64),
             Value::Num(n) => write!(f, "{n}"),
-            Value::Str(s) => f.write_str(s),
+            Value::Str(s) | Value::Node(_, s) => f.write_str(s),
             Value::List(items) => {
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {

@@ -138,6 +138,16 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                     }
                 }
             }
+            // `@macro`, `@name(...)`, `@each`: what happens when the config
+            // loads. One identifier token, `@` included.
+            b'@' if bytes.get(i + 1).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_') => {
+                i += 1;
+                let name_char = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+                while i < bytes.len() && (name_char(bytes[i]) || bytes[i] == b'-' && bytes.get(i + 1).is_some_and(|&b| name_char(b))) {
+                    i += 1;
+                }
+                push(&mut out, Tk::Ident, start, i, &text[start..i]);
+            }
             b'0'..=b'9' => {
                 while i < bytes.len() && bytes[i].is_ascii_digit() {
                     i += 1;

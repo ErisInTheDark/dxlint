@@ -396,13 +396,23 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     // Each `let` sees the ones before it.
     let mut locals = Vec::new();
     for (name, e) in &def.locals {
+        // A `let` reads itself only on other nodes: `previous.depth + 1`.
+        scope.defining = Some(name.text.clone());
         locals.push(scope.compile(e, errors).unwrap_or(CExpr::Const(Value::Null)));
+        scope.defining = None;
         scope.locals.push(name.text.clone());
     }
 
     // `each x in list`: the list is per node; `x` is in scope for the rest
     // (not for `let`s, which are kept per node).
-    let each = def.each.as_ref().and_then(|(_, list)| scope.compile(list, errors));
+    // `@each`: the list may read the rule's options and nothing of a node.
+    let each = def.each.as_ref().and_then(|(_, list)| {
+        if def.each_options {
+            Scope { options: scope.options.clone(), uses: Some(uses), ..Scope::constants(g) }.compile(list, errors)
+        } else {
+            scope.compile(list, errors)
+        }
+    });
     if let Some((name, _)) = &def.each {
         scope.params.push(name.text.clone());
     }
@@ -429,8 +439,10 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     }
     // Reading a node's own brackets needs the file's token nodes.
     let reads_tokens = uses.borrow()[uses_before..].iter().any(|(_, r)| matches!(r, crate::expr::Resolved::Group(g) if g == "opener" || g == "closer"));
+    let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
     Some(Rule {
         reads_tokens,
+        target_layers,
         name: def.name.text.clone(),
         span: def.name.span,
         targets,

@@ -259,6 +259,8 @@ pub struct RuleDef {
     /// `each name in list`: the rule runs once per item, with `name` bound
     /// to it in `when`, the message, `fix` and `report at`.
     pub each: Option<(Name, Expr)>,
+    /// `@each`: the list reads only the rule's options.
+    pub each_options: bool,
     /// Part of the rule failed to parse: running the rest would check
     /// something else than what was written.
     pub broken: bool,
@@ -301,6 +303,7 @@ impl RuleDef {
             report: None,
             report_at: None,
             each: None,
+            each_options: false,
             broken: false,
         }
     }

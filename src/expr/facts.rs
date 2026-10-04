@@ -41,6 +41,24 @@ pub fn args() -> Vec<Value<'static>> {
     ARGS.with(|a| a.borrow().clone())
 }
 
+/// A link: a relation from a node to other nodes of the same tree
+/// (`declaration`, `references`). Rules read it as a node (or a list of
+/// them, with `many`), then read anything on it: `declaration.line`.
+pub struct Link {
+    pub name: &'static str,
+    pub doc: &'static str,
+    pub many: bool,
+    pub get: fn(&dyn Facts, u32) -> Vec<u32>,
+}
+
+/// Every link: the core list, then each topic's.
+pub static LINKS: LazyLock<Vec<&'static Link>> = LazyLock::new(|| crate::native::ts::LINK_GROUPS.iter().flat_map(|g| g.iter()).collect());
+
+/// A link's index in [`LINKS`].
+pub fn link(name: &str) -> Option<usize> {
+    LINKS.iter().position(|l| l.name == name)
+}
+
 /// `v`'s value, or null.
 pub fn opt<T>(v: Option<T>, f: impl FnOnce(T) -> Value<'static>) -> Value<'static> {
     v.map_or(Value::Null, f)

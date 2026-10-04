@@ -339,7 +339,7 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | `ignore "glob" ...` | not these files |
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
 | `report at expr` | diagnostics start at that byte offset (`offset` and `end_offset` are a node's own; native facts give others, such as `write_site`) |
-| `each name in list` | one diagnostic per item: `when`, the message, `fix` and `report at` see the item as `name` (`let`s stay per node) |
+| `@each name in list` | one diagnostic per item of a list from the rule's options (`@each entry in paths`): `when`, the message, `fix` and `report at` see the item as `name` (`let`s stay per node). The list is known when the config loads; rules never loop over code |
 
 A macro at the start of a body line is pasted as clauses.
 
@@ -355,6 +355,25 @@ in ts_statement rule padding-line-between-statements {
   warn "Expected blank line before this statement."
 }
 ```
+
+A rule's `let` can also be read on another node the rule targets:
+`previous.rank`, `parent.depth`. That carries state along siblings or down
+the tree without loops, and the state sees the rule's options. A `let` may
+read itself on other nodes only:
+
+```zlint
+in ts_class_member rule member-order warn "out of order" {
+  option order string[] = ["field", "method"]
+  let rank index_of(order, kind)
+  let highest if previous.highest == null then rank else max(previous.highest, rank)
+  when previous.highest != null && rank < previous.highest
+}
+```
+
+**Links** lead to other nodes: `declaration` (of a referencing identifier)
+and `references` (of a declaring one). A node reads as its text, `is` and
+`not` test its layer, and `.x` reads anything on it: `declaration.line`,
+`references.line`.
 
 Fixes are minimal: the common start and end of the node and its fix are left
 alone, so a rule on a whole statement that only adds `;` edits one character.
@@ -836,24 +855,27 @@ in ts_class_body rule late-member warn "out of order" {
 }
 ```
 
-Macros paste tokens: they generate zlint code, not text.
+Macros paste tokens: they generate zlint code, not text. Everything that
+happens while the config loads starts with `@`: defining a macro, calling
+one, `@each`.
 
 ```zlint
-macro rs_code_layers .rust, parentheses, brackets, braces   # one line
+@macro rs_code_layers .rust, parentheses, brackets, braces  # one line
 
-macro forbid(name, pattern, why) {                          # lines, with arguments
+@macro forbid(name, pattern, why) {                         # lines, with arguments
   in rs_code match name pattern {
     rule name error why
   }
 }
-forbid(no_dbg, /\bdbg!/, "remove dbg! before committing")
+@forbid(no_dbg, /\bdbg!/, "remove dbg! before committing")
 ```
 
-Arguments are glued to the name (`forbid(`); `macro nl (...)`, with a space,
-is a one-line macro whose body starts with `(`. An expansion behaves like a
-parenthesised group wherever it lands, so `macro digits /\d/+` then
-`digits?` means `(/\d/+)?`. Macros cannot recurse, and redefining one needs
-`override macro`.
+Arguments are glued to the name (`@forbid(`); `@macro nl (...)`, with a
+space, is a one-line macro whose body starts with `(`. An expansion behaves
+like a parenthesised group wherever it lands, so `@macro digits /\d/+` then
+`@digits?` means `(/\d/+)?`. Macros cannot recurse, and redefining one needs
+`override @macro`. (Plain `macro` and calls without `@` still work while
+configs move over.)
 
 ## Suppressing diagnostics
 

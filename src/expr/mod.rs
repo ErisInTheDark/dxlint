@@ -112,6 +112,11 @@ pub enum CExpr {
     /// `fact(args)` on the node: the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>),
+    /// A link (`declaration`, `references`): the node(s) it leads to.
+    Link(usize),
+    /// `base.key`: on a record its key; on a node (or nodes) the compiled
+    /// read, when `key` names one.
+    Member(Box<CExpr>, value::Key, Option<Box<CExpr>>),
     /// `field.builtin`: evaluated on the node(s) in a field of this one
     /// (null without any, a list for several).
     OnField(u16, Box<CExpr>),
@@ -220,6 +225,8 @@ pub struct Scope<'a> {
     /// The `fn` whose body this is: it sees its parameters and nothing of
     /// any node (with `options_only`).
     pub function: Option<&'a str>,
+    /// The rule `let` being compiled: readable on other nodes only.
+    pub defining: Option<String>,
     /// Where tooling collects how each name was read.
     pub uses: Option<&'a RefCell<Vec<(crate::config::source::Span, Resolved)>>>,
 }
@@ -279,6 +286,7 @@ impl<'a> Scope<'a> {
             params: Vec::new(),
             rule: None,
             function: None,
+            defining: None,
             uses: None,
         }
     }
@@ -299,9 +307,35 @@ impl<'a> Scope<'a> {
         Scope { options_only: true, ..Scope::new(grammar) }
     }
 
-    /// What `x` means on a relative node: an attribute, a fact, a builtin or
-    /// a field label (any layer's).
+    /// What `x` means on a relative node: the rule's own `let` (also the one
+    /// being defined: `let depth previous.depth + 1`), an attribute, a fact,
+    /// a link, a builtin or a field label (any layer's).
     fn relative_part(&self, part: &crate::config::ast::Name, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        let found = self.node_part(part);
+        if found.is_none() {
+            errors.push(
+                ConfigError::new(part.span, format!("no let, attribute, fact, builtin or field `{}`", part.text))
+                    .suggest(&part.text, self.attrs.iter().map(String::as_str).chain(facts::FACTS.iter().map(|f| f.name))),
+            );
+        }
+        found
+    }
+
+    /// `x` read on some node, when it names something nodes have.
+    fn node_part(&self, part: &crate::config::ast::Name) -> Option<CExpr> {
+        let rule = || self.rule.unwrap_or_default().to_string();
+        if let Some(i) = self.locals.iter().position(|l| *l == part.text) {
+            self.note(part.span, Resolved::Local(rule(), part.text.clone()));
+            return Some(CExpr::Local(i as u16));
+        }
+        if self.defining.as_deref() == Some(part.text.as_str()) {
+            self.note(part.span, Resolved::Local(rule(), part.text.clone()));
+            return Some(CExpr::Local(self.locals.len() as u16));
+        }
+        if let Some(i) = facts::link(&part.text) {
+            self.note(part.span, Resolved::Fact(facts::LINKS[i].name));
+            return Some(CExpr::Link(i));
+        }
         if let Some(i) = self.attrs.iter().position(|a| *a == part.text) {
             self.note(part.span, Resolved::Attr(part.text.clone()));
             return Some(CExpr::Attr(i as u16));
@@ -317,11 +351,12 @@ impl<'a> Scope<'a> {
         if let Some(label) = self.grammar.labels.get(&part.text) {
             return Some(CExpr::Field(label));
         }
-        errors.push(
-            ConfigError::new(part.span, format!("no attribute, fact, builtin or field `{}`", part.text))
-                .suggest(&part.text, self.attrs.iter().map(String::as_str).chain(facts::FACTS.iter().map(|f| f.name))),
-        );
         None
+    }
+
+    /// `base.key`: a record's key, or `key` read on a node.
+    fn member(&self, base: CExpr, key: &crate::config::ast::Name) -> CExpr {
+        CExpr::Member(Box::new(base), key.text.clone().into(), self.node_part(key).map(Box::new))
     }
 }
 
@@ -568,9 +603,16 @@ impl Scope<'_> {
         };
         if let Some(mut value) = value {
             for key in &path[1..] {
-                value = CExpr::Key(Box::new(value), key.text.as_str().into());
+                value = self.member(value, key);
             }
             return Some(value);
+        }
+        if self.defining.as_deref() == Some(first.text.as_str()) {
+            errors.push(
+                ConfigError::new(first.span, format!("`{}` refers to itself", first.text))
+                    .note(format!("read it on another node: `previous.{0}`, `parent.{0}`", first.text)),
+            );
+            return None;
         }
         if let Some(function) = self.function {
             errors.push(
@@ -578,6 +620,14 @@ impl Scope<'_> {
                     .note("a function computes from its arguments alone: pass in what it needs"),
             );
             return None;
+        }
+        // Load-time expressions (`@each`) read the rule's options.
+        if let (true, Some(i)) = (self.options_only, self.options.iter().position(|o| *o == first.text)) {
+            let mut value = CExpr::Opt(i);
+            for key in &path[1..] {
+                value = CExpr::Key(Box::new(value), key.text.as_str().into());
+            }
+            return Some(value);
         }
         if self.options_only {
             errors.push(
@@ -601,12 +651,15 @@ impl Scope<'_> {
         } else if let Some(i) = facts::fact(&first.text) {
             self.note(first.span, Resolved::Fact(facts::FACTS[i].name));
             Some(CExpr::Fact(i, FactOf::Node))
+        } else if let Some(i) = facts::link(&first.text) {
+            self.note(first.span, Resolved::Fact(facts::LINKS[i].name));
+            Some(CExpr::Link(i))
         } else {
             None
         };
         if let Some(mut value) = own {
             for key in &path[1..] {
-                value = CExpr::Key(Box::new(value), key.text.as_str().into());
+                value = self.member(value, key);
             }
             return Some(value);
         }
@@ -636,6 +689,10 @@ impl Scope<'_> {
                 if let Some(i) = facts::fact(&name.text) {
                     self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
                     return Some(CExpr::Fact(i, FactOf::Node));
+                }
+                if let Some(i) = facts::link(&name.text) {
+                    self.note(name.span, Resolved::Fact(facts::LINKS[i].name));
+                    return Some(CExpr::Link(i));
                 }
                 if let Some(m) = self.grammar.matcher(&name.text) {
                     self.note(name.span, Resolved::Layer(name.text.clone()));
@@ -806,8 +863,9 @@ pub struct Ctx<'a> {
     /// `in a forward x from field`: (matcher, attribute, label).
     pub forwards: &'a [(u32, u16, u16)],
     pub memo: &'a AttrMemo<'a>,
-    /// The rule being applied (its index) and its `let` expressions.
-    pub locals: Option<(u32, &'a [CExpr])>,
+    /// The rule being applied (its index), its `let` expressions and the
+    /// layers it targets (empty: not only whole layers).
+    pub locals: Option<(u32, &'a [CExpr], &'a [u32])>,
     /// Facts of the native front end, when `tree` is a native tree.
     pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
 }
@@ -1141,6 +1199,37 @@ impl<'a> Ctx<'a> {
                     }
                 }
             }
+            CExpr::Link(i) => {
+                let Some(native) = self.native else { return Ok(Value::Null) };
+                let link = facts::LINKS[*i];
+                let nodes = (link.get)(native, self.node);
+                let node = |id: u32| {
+                    let n = self.tree.node(id);
+                    Value::Node(id, std::borrow::Cow::Borrowed(&self.source[n.start as usize..n.end as usize]))
+                };
+                if link.many {
+                    Value::list(nodes.into_iter().map(node).collect())
+                } else {
+                    nodes.first().map_or(Value::Null, |&id| node(id))
+                }
+            }
+            CExpr::Member(base, key, part) => {
+                let base = self.eval(base)?;
+                let on = |v: &Value<'a>| -> Result<Value<'a>, String> {
+                    match (v, part) {
+                        (Value::Node(id, _), Some(part)) => Ctx { node: *id, ..*self }.eval(part),
+                        (Value::Record(_), _) => Ok(v.key(key)),
+                        _ => Ok(Value::Null),
+                    }
+                };
+                match &base {
+                    // Nodes in a list (`references.line`): each one's.
+                    Value::List(items) if items.iter().any(|i| matches!(i, Value::Node(..))) => {
+                        Value::list(items.iter().map(on).collect::<Result<_, _>>()?)
+                    }
+                    v => on(v)?,
+                }
+            }
             CExpr::OwnChild(last, ids, inner) => {
                 let fits = |e: &&crate::grammar::Edge| ids.iter().any(|&t| self.grammar.is_a(self.tree.node(e.node).matcher, t));
                 let children = &self.tree.node(self.node).children;
@@ -1242,12 +1331,19 @@ impl<'a> Ctx<'a> {
                 let name = self.eval(value)?;
                 let m = match &name {
                     Value::Null => None,
+                    Value::Node(id, _) => Some(self.tree.node(*id).matcher),
                     v => self.grammar.matcher(&v.text()),
                 };
                 Value::Bool(m.is_some_and(|m| ids.iter().any(|&t| self.grammar.is_a(m, t))))
             }
             CExpr::Local(i) => {
-                let Some((rule, exprs)) = self.locals else { return Err("a rule's `let` outside the rule".into()) };
+                let Some((rule, exprs, targets)) = self.locals else { return Err("a rule's `let` outside the rule".into()) };
+                // Read on another node (`previous.rank`): only where the rule
+                // could run, so the `let`'s fields exist there.
+                let matcher = self.tree.node(self.node).matcher;
+                if !targets.is_empty() && !targets.iter().any(|&t| self.grammar.is_a(matcher, t)) {
+                    return Ok(Value::Null);
+                }
                 let key = (self.node, rule, *i);
                 if let Some(v) = self.memo.locals.borrow().get(&key) {
                     return Ok(v.clone());

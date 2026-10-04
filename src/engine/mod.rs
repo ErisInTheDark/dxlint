@@ -70,6 +70,9 @@ pub struct Rule {
     fix_target: FixTarget,
     /// Reads token nodes (`opener.x`): native trees need them.
     reads_tokens: bool,
+    /// The layers it targets when all its targets are layers (else empty):
+    /// where its `let`s can be read from another node (`previous.rank`).
+    target_layers: Vec<u32>,
     report: Report,
     /// `report at <offset>`
     report_at: Option<CExpr>,
@@ -300,7 +303,7 @@ impl Linter {
                         attrs: &self.attrs,
                         forwards: &self.forwards,
                         memo: &memo,
-                        locals: Some((fi as u32, &self.rules[fi].locals)),
+                        locals: Some((fi as u32, &self.rules[fi].locals, &self.rules[fi].target_layers)),
                         native,
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());

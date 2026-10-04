@@ -24,6 +24,8 @@ use super::syntax::Syntax;
 pub trait Facts {
     /// `f` on the file itself (topic modules' facts).
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static>;
+    /// `f` on the file itself, for links (nodes a node leads to).
+    fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
     fn binding(&self, node: u32) -> Option<Binding>;
     fn import_of(&self, node: u32) -> Option<(String, String)>;
     fn decl_doc(&self, node: u32) -> Option<String>;
@@ -130,6 +132,10 @@ pub type TypeParamFacts = (Vec<Option<String>>, Vec<Option<String>>);
 
 impl Facts for NativeFile<'_> {
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static> {
+        f(self, node)
+    }
+
+    fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32> {
         f(self, node)
     }
 

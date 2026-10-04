@@ -269,7 +269,7 @@ impl<'a> Parser<'a> {
         let before = self.errors.len();
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
-            (Tk::Ident, "macro") => self.macro_def(),
+            (Tk::Ident, "macro" | "@macro") => self.macro_def(),
             (Tk::Ident, "fn") => self.fn_def(),
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "group") => self.group(),
@@ -1374,8 +1374,10 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                // `each name in list`: once per item.
-                (Tk::Ident, "each") => {
+                // `each name in list`: once per item. `@each`: the list is
+                // the rule's options, known when the config loads.
+                (Tk::Ident, at @ ("each" | "@each")) => {
+                    def.each_options = at == "@each";
                     self.bump();
                     if let Some(name) = self.ident("a name for each item") {
                         self.skip(false, true);

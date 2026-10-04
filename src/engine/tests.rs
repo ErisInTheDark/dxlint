@@ -1186,6 +1186,52 @@ fn tokens_are_layers_under_the_node_that_owns_them() {
 }
 
 #[test]
+fn rule_lets_read_on_other_nodes_carry_state_without_loops() {
+    // A prefix maximum along siblings, from the rule's own option.
+    let l = native_linter(r#"
+        in ts_expression_statement rule order info "{rank}<{frontier}" {
+          option order string[] = ["a", "b", "c"]
+          let rank index_of(order, text)
+          let frontier if previous.frontier == null then rank else max(previous.frontier, rank)
+          when previous.frontier != null && rank < previous.frontier
+        }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a\nc\nb\nc\na").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["1<2", "0<2"]);
+    // A `let` naming itself directly is an error: it reads on other nodes.
+    let built = build(config::load_text("t.zlint", "import .ts\nin ts_identifier rule r { let x x + 1 }\n", &Disk), PathBuf::from("/root"));
+    assert_eq!(built.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["`x` refers to itself"]);
+}
+
+#[test]
+fn load_time_constructs_start_with_an_at() {
+    let l = native_linter(r#"
+        @macro named(n) (text == n)
+        in ts_identifier rule r info "{entry}" {
+          option names string[] = ["a", "b"]
+          @each entry in names
+          when @named(entry)
+        }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a; b; c;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["a", "b"]);
+    // `@each` reads options only.
+    let built = build(config::load_text("t.zlint", "import .ts\nin ts_identifier rule r { @each x in [text] }\n", &Disk), PathBuf::from("/root"));
+    assert_eq!(built.errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["`text` is not a constant"]);
+}
+
+#[test]
+fn links_lead_to_nodes_read_like_the_node_itself() {
+    let l = native_linter(r#"
+        in ts_identifier rule d info "{declaration.line}:{count(references)}:{declaration is ts_identifier}:{references.line}" {
+          when declaration != null
+        }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "let x = 1;\nx;\nx;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["1:2:true:2, 3", "1:0:true:", "1:0:true:"]);
+}
+
+#[test]
 fn own_brackets_and_variant_families() {
     // `opener.x` / `closer.x` read the node's own brackets; a family name
     // turns on every variant.

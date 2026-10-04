@@ -109,7 +109,7 @@ impl Stream {
     }
 
     pub fn is_macro(&self, name: &str) -> bool {
-        self.macros.contains_key(name)
+        self.macros.contains_key(name.strip_prefix('@').unwrap_or(name))
     }
 
     fn macro_depth(&self) -> usize {
@@ -119,8 +119,9 @@ impl Stream {
     /// If the next token invokes a macro, replaces it (and its arguments)
     /// with the expansion and returns true.
     pub fn expand(&mut self, errors: &mut Vec<ConfigError>) -> bool {
-        let name = match self.peek_raw(0) {
-            Some(tok) if tok.kind == Tk::Ident => tok.text.clone(),
+        // `@name` calls a macro; a bare `name` still does for now.
+        let name: Rc<str> = match self.peek_raw(0) {
+            Some(tok) if tok.kind == Tk::Ident => Rc::from(tok.text.strip_prefix('@').unwrap_or(&tok.text)),
             _ => return false,
         };
         let Some(def) = self.macros.get(&name).cloned() else { return false };
