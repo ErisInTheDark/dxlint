@@ -3,6 +3,73 @@
 
 define {
 
+in ts_jsx_element rule jsx-indent-props {
+  option mode int | "tab" | "first" = 4 "prop indent size or alignment"
+  option indentMode int | "tab" | "first" | null = null "prop indent size or alignment"
+  option ignoreTernaryOperator boolean = false "ignore ternary continuation indentation"
+  let info jsx_prop_indent
+  let selected default(indentMode, mode)
+  let size if selected == "tab" then 1 else selected
+  let base_indent if selected == "tab" then info.tabs else info.spaces
+  each row in filter(info.props, p => p.first_in_line && (if selected == "first" then p.spaces != info.first_column else (if selected == "tab" then p.tabs else p.spaces) != base_indent + size * (if p.extra && !ignoreTernaryOperator then 2 else 1)))
+  report at row.offset
+  warn "Expected indentation of {if selected == 'first' then info.first_column else base_indent + size * (if row.extra && !ignoreTernaryOperator then 2 else 1)} {if selected == 'tab' then 'tab' else 'space'} {if (if selected == 'first' then info.first_column else base_indent + size * (if row.extra && !ignoreTernaryOperator then 2 else 1)) == 1 then 'character' else 'characters'} but found {if selected == 'tab' then row.tabs else row.spaces}."
+}
+in ts_jsx_element, ts_jsx_fragment rule jsx-one-expression-per-line {
+  option allow "none" | "literal" | "single-child" | "single-line" | "non-jsx" = "none" "allowed same-line children"
+  let info jsx_children
+  when !(allow == "non-jsx" && !info.has_jsx || allow == "single-child" && info.single_child || allow == "literal" && info.single_child && info.literal_child || allow == "single-line" && info.single_line_allowed)
+  each row in (if allow == "single-line" then info.single_line_reports else info.reports)
+  report at row.offset
+  warn "`{row.descriptor}` must be placed on a new line"
+}
+in ts_jsx_element, ts_jsx_fragment rule jsx-newline {
+  option prevent boolean = false "prevent blank lines between children"
+  option allowMultilines boolean = false "keep blank lines around multiline children"
+  let info jsx_children
+  each row in filter(info.newlines, p => if allowMultilines && p.multiline then !p.blank else p.blank == prevent)
+  report at row.offset
+  warn if allowMultilines && row.multiline then "Multiline JSX elements should start in a new line" else if prevent then "JSX element should not start in a new line" else "JSX element should start in a new line"
+}
+in ts_jsx_element, ts_jsx_fragment rule jsx-child-element-spacing {
+  each row in jsx_children.spacing
+  report at row.offset
+  warn "Ambiguous spacing {if row.after then 'after previous' else 'before next'} element {row.name}"
+}
+schema jsx_wrap_mode boolean | "ignore" | "parens" | "parens-new-line"
+macro jsx_wrap_option(c) (if c.kind == "declaration" then declaration else if c.kind == "assignment" then assignment else if c.kind == "return" then return else if c.kind == "arrow" then arrow else if c.kind == "condition" then condition else if c.kind == "logical" then logical else if c.kind == "prop" then prop else propertyValue)
+macro jsx_wrap_enabled(v) (v != false && v != "ignore")
+in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
+  option declaration jsx_wrap_mode = "parens" "variable initializer wrapping"
+  option assignment jsx_wrap_mode = "parens" "assignment wrapping"
+  option return jsx_wrap_mode = "parens" "return expression wrapping"
+  option arrow jsx_wrap_mode = "parens" "arrow body wrapping"
+  option condition jsx_wrap_mode = "ignore" "conditional branch wrapping"
+  option logical jsx_wrap_mode = "ignore" "logical right-hand side wrapping"
+  option prop jsx_wrap_mode = "ignore" "JSX prop expression wrapping"
+  option propertyValue jsx_wrap_mode = "ignore" "object property value wrapping"
+  let info jsx_context
+  when !info.single
+  each context in filter(info.contexts, c => jsx_wrap_enabled(jsx_wrap_option(c)) && (!c.fallback || !jsx_wrap_enabled(condition)) && (!info.parenthesized || jsx_wrap_option(c) == "parens-new-line" && info.parens_same_line))
+  warn if !info.parenthesized then "Missing parentheses around multilines JSX" else "Parentheses around JSX should be on separate lines"
+}
+in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
+  option mode "always" | "multiline" = "multiline" "call argument linebreak policy"
+  let info jsx_context
+  when info.call_break && (mode == "always" || !info.single)
+  warn "Missing line break around JSX"
+}
+in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment rule jsx-curly-brace-presence {
+  option mode "always" | "never" | "ignore" = "never" "default brace policy"
+  option props "always" | "never" | "ignore" | null = null "attribute literal brace policy"
+  option children "always" | "never" | "ignore" | null = null "child literal brace policy"
+  option propElementValues "always" | "never" | "ignore" = "ignore" "JSX element attribute brace policy"
+  let info jsx_brace_presence
+  let selected default(if info.scope == "props" then props else children, mode)
+  when info != null && (if info.scope == "element" then (if info.expression then propElementValues == "never" else propElementValues != "ignore") else if info.expression then selected == "never" && info.unnecessary else selected == "always" && info.missing)
+  warn if info.expression then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
+}
+
 schema jsx_curly_config {when?: "always" | "never"; allowMultiline?: boolean; spacing?: {objectLiterals?: "always" | "never"}}
 in ts_jsx_expression, ts_jsx_spread_attribute rule jsx-curly-spacing {
   option options ("always" | "never" | {when?: "always" | "never"; allowMultiline?: boolean; spacing?: {objectLiterals?: "always" | "never"}; attributes?: boolean | jsx_curly_config; children?: boolean | jsx_curly_config})[] = [] "brace spacing and context overrides"

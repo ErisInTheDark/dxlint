@@ -5,7 +5,32 @@ use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::lexer::{Lexer, Tok};
 use crate::expr::Value;
 
-pub(super) struct LineStarts(pub(super) Vec<usize>);
+pub(super) struct LineStarts(Vec<usize>);
+
+// JavaScript whitespace includes BOM, not Unicode NEL.
+pub(super) fn space(ch: char) -> bool {
+    matches!(ch, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}'
+        | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+}
+
+impl LineStarts {
+    pub(super) fn start(&self, at: usize) -> usize {
+        self.0[line(self, at) - 1]
+    }
+
+    pub(super) fn column(&self, src: &str, at: usize) -> usize {
+        src[self.start(at)..at].encode_utf16().count()
+    }
+
+    pub(super) fn indentation(&self, src: &str, at: usize) -> usize {
+        src[self.start(at)..].chars().take_while(|&ch| space(ch) && !matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+            .map(char::len_utf16).sum()
+    }
+
+    pub(super) fn starts_tab(&self, src: &str, at: usize) -> bool {
+        src[self.start(at)..].starts_with('\t')
+    }
+}
 
 pub(super) fn line_starts(file: &NativeFile) -> LineStarts {
     let src = file.syntax.src;
@@ -23,7 +48,7 @@ pub(super) fn line(starts: &LineStarts, offset: usize) -> usize {
 }
 
 fn canonical_name(text: &str) -> String {
-    text.chars().filter(|ch| !ch.is_whitespace()).collect()
+    text.chars().filter(|&ch| !space(ch)).collect()
 }
 
 fn pascal(name: &str) -> bool {
@@ -71,7 +96,7 @@ pub fn tag(file: &NativeFile, node: u32) -> Value<'static> {
     let (open_end, close) = bounds(file, node);
     let children: Vec<_> = s.all(node, F::Body).collect();
     let empty = children.is_empty() || children.len() == 1 && s.is(children[0], K::JsxText)
-        && s.text(children[0]).contains('\n') && s.text(children[0]).chars().all(|ch| ch != '\u{a0}' && ch.is_whitespace());
+        && s.text(children[0]).contains('\n') && s.text(children[0]).chars().all(|ch| ch != '\u{a0}' && space(ch));
     let lines = file.cached(line_starts);
     let start_line = line(&lines, own.start as usize);
     let single = start_line == line(&lines, open_end);
@@ -154,8 +179,8 @@ pub fn attribute(file: &NativeFile, node: u32) -> Value<'static> {
     let body = if string { &text[1..text.len() - 1] } else { "" };
     Value::Record(vec![
         ("offset".into(), Value::from(equal)),
-        ("before".into(), Value::Bool(s.src[start..equal].chars().any(char::is_whitespace))),
-        ("after".into(), Value::Bool(s.src[equal + 1..end].chars().any(char::is_whitespace))),
+        ("before".into(), Value::Bool(s.src[start..equal].chars().any(space))),
+        ("after".into(), Value::Bool(s.src[equal + 1..end].chars().any(space))),
         ("string".into(), Value::Bool(string)),
         ("boolean".into(), Value::Bool(s.is(value, K::JsxExpression) && s.get(value, F::Expr).is_some_and(|n| {
             let n = s.unparen(n);

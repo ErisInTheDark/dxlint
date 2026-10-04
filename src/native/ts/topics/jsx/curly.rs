@@ -2,6 +2,7 @@
 
 use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
+use super::metadata::space;
 use crate::expr::Value;
 
 fn newline(text: &str) -> bool {
@@ -10,12 +11,15 @@ fn newline(text: &str) -> bool {
 
 pub fn gaps(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
+    if s.is(node, K::JsxExpression) && s.get(node, F::Expr).is_some_and(|expr| s.is(expr, K::Spread)) {
+        return Value::Null;
+    }
     let n = s.tree.node(node);
     let start = n.start as usize;
     let end = n.end as usize;
     let body = &s.src[start + 1..end - 1];
-    let leading = body.len() - body.trim_start().len();
-    let trailing = body.trim_end().len();
+    let leading = body.len() - body.trim_start_matches(space).len();
+    let trailing = body.trim_end_matches(space).len();
     let expression = s.get(node, F::Expr).or_else(|| s.get(node, F::Arg));
     let (first, last, single) = expression.map_or((end - 1, start + 1, !newline(body)), |id| {
         let expr = s.tree.node(id);
@@ -36,7 +40,7 @@ pub fn gaps(file: &NativeFile, node: u32) -> Value<'static> {
     ])).collect();
     Value::Record(vec![
         ("attribute".into(), Value::Bool(attribute)),
-        ("object".into(), Value::Bool(body.trim_start().starts_with('{'))),
+        ("object".into(), Value::Bool(body.trim_start_matches(space).starts_with('{'))),
         ("single".into(), Value::Bool(single)),
         ("left_newline".into(), Value::Bool(newline(&s.src[start + 1..first]))),
         ("sides".into(), Value::List(sides)),
@@ -52,5 +56,11 @@ mod tests {
     fn context_spacing_object_replaces_global_spacing() {
         let l = native_linter("rule jsx-curly-spacing { set options [{when: 'always', spacing: {objectLiterals: 'never'}, attributes: {spacing: {}}}] }");
         assert_eq!(l.lint(Path::new("/root/file.tsx"), "const x = <Box a={{x: 1}} />;").len(), 2);
+    }
+
+    #[test]
+    fn spread_children_are_not_expression_containers() {
+        let l = native_linter("rule jsx-curly-spacing { set options [{children: true}] }");
+        assert!(l.lint(Path::new("/root/file.tsx"), "const x = <Box>{ ...items }</Box>;").is_empty());
     }
 }

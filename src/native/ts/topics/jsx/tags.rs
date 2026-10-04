@@ -1,23 +1,10 @@
 //! Measurements for tag-token spacing and closing-bracket placement.
 
-use super::metadata::{bounds, line, line_starts, LineStarts};
+use super::metadata::{bounds, line, line_starts, space};
 use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::lexer::Lexer;
 use crate::expr::Value;
-
-fn column(src: &str, lines: &LineStarts, at: usize) -> usize {
-    src[lines.0[line(lines, at) - 1]..at].encode_utf16().count()
-}
-
-fn indentation(src: &str, lines: &LineStarts, at: usize) -> usize {
-    src[lines.0[line(lines, at) - 1]..].chars().take_while(|ch| ch.is_whitespace() && !matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
-        .map(char::len_utf16).sum()
-}
-
-fn starts_tab(src: &str, lines: &LineStarts, at: usize) -> bool {
-    src[lines.0[line(lines, at) - 1]..].starts_with('\t')
-}
 
 pub fn closing(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
@@ -25,14 +12,14 @@ pub fn closing(file: &NativeFile, node: u32) -> Value<'static> {
     let (_, close) = bounds(file, node);
     let Some(close) = close else { return Value::Null };
     let lines = file.cached(line_starts);
-    let prefix = &s.src[lines.0[line(&lines, close) - 1]..close];
+    let prefix = &s.src[lines.start(close)..close];
     Value::Record(vec![
         ("offset".into(), Value::from(close)),
         ("single".into(), Value::Bool(line(&lines, start) == line(&lines, close))),
-        ("own_line".into(), Value::Bool(prefix.chars().all(char::is_whitespace))),
-        ("column".into(), Value::from(column(s.src, &lines, close))),
-        ("open_column".into(), Value::from(column(s.src, &lines, start))),
-        ("indent".into(), Value::from(indentation(s.src, &lines, start))),
+        ("own_line".into(), Value::Bool(prefix.chars().all(space))),
+        ("column".into(), Value::from(lines.column(s.src, close))),
+        ("open_column".into(), Value::from(lines.column(s.src, start))),
+        ("indent".into(), Value::from(lines.indentation(s.src, start))),
     ])
 }
 
@@ -80,7 +67,7 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
                 ("kind".into(), Value::from(kind)),
                 ("offset".into(), Value::from(offset)),
                 ("left_end".into(), Value::from(left_end)),
-                ("space".into(), Value::Bool(s.src[left_end..right].chars().any(char::is_whitespace))),
+                ("space".into(), Value::Bool(s.src[left_end..right].chars().any(space))),
                 ("newline".into(), Value::Bool(line(&lines, left_end) != line(&lines, right))),
                 ("start_newline".into(), Value::Bool(line(&lines, left_start) != line(&lines, right))),
                 ("opening".into(), Value::Bool(opening)),
@@ -99,11 +86,11 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
         let last = last_prop.map(|p| s.tree.node(p));
         let trailing_gap = &s.src[left_end..bracket];
         let trailing_comment = trailing_gap.contains("/*") || trailing_gap.contains("//");
-        let bracket_column = column(s.src, &lines, bracket);
-        let open_column = column(s.src, &lines, start);
-        let indent = indentation(s.src, &lines, start);
-        let tabs_match = starts_tab(s.src, &lines, start) == starts_tab(s.src, &lines, bracket);
-        let last_column = last.map_or(0, |p| column(s.src, &lines, p.start as usize));
+        let bracket_column = lines.column(s.src, bracket);
+        let open_column = lines.column(s.src, start);
+        let indent = lines.indentation(s.src, start);
+        let tabs_match = lines.starts_tab(s.src, start) == lines.starts_tab(s.src, bracket);
+        let last_column = last.map_or(0, |p| lines.column(s.src, p.start as usize));
         let last_on_close_line = last.is_some_and(|p| line(&lines, p.end as usize) == line(&lines, bracket));
         let locations = ["after-tag", "after-props", "props-aligned", "tag-aligned", "line-aligned"].into_iter().map(|mode| {
             let correct_column = match mode {
