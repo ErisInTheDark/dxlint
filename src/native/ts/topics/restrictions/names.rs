@@ -2,7 +2,6 @@
 
 use super::super::super::facts::{Facts, NativeFile};
 use super::super::super::kinds::{Field as F, Kind as K};
-use super::super::super::statics::property_name;
 use crate::expr::Value;
 
 pub fn name(file: &NativeFile, node: u32) -> Value<'static> {
@@ -90,88 +89,6 @@ fn import_attribute_key(file: &NativeFile, node: u32) -> bool {
         Some(Some(outer)) => outer == "with" || outer == "assert",
         None => false,
     }
-}
-
-pub fn properties(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let pattern = s.is(node, K::ObjectPattern) || s.is(node, K::Object);
-    let object = if pattern {
-        s.parent(node).and_then(|p| match s.kind(p) {
-            Some(K::Declarator | K::Param) => s.get(p, F::Init),
-            Some(K::Assign | K::AssignPattern) => s.get(p, F::Right),
-            _ => None,
-        })
-    } else {
-        s.get(node, F::Object)
-    };
-    let object = object.filter(|&n| s.is(s.unparen(n), K::Ident)).map(|n| s.text(s.unparen(n)).to_string());
-    let candidates = if pattern { s.all(node, F::Property).collect() } else { vec![node] };
-    Value::list(candidates.into_iter().filter_map(|n| {
-        let name = property_name(s, n)?;
-        Some(Value::record(vec![
-            ("object".into(), object.clone().map_or(Value::Null, Value::from)),
-            ("property".into(), Value::from(name)),
-            ("offset".into(), Value::from(s.tree.node(node).start as usize)),
-        ]))
-    }).collect())
-}
-
-pub fn exports(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let mut names = Vec::new();
-    if s.word(node, F::Kind) == Some("default") {
-        names.push(("default".to_string(), node, "direct"));
-    } else if let Some(namespace) = s.get(node, F::Namespace) {
-        names.push((file.static_name(namespace).unwrap_or_else(|| s.text(namespace).to_string()), namespace, "namespaceFrom"));
-    } else if let Some(decl) = s.get(node, F::Decl) {
-        let mut stack = vec![decl];
-        while let Some(n) = stack.pop() {
-            if file.declaration_kinds(n).is_some() && s.is(n, K::Ident) {
-                names.push((s.text(n).to_string(), n, "named"));
-            } else {
-                stack.extend(s.kids(n).filter(|(f, _)| !matches!(f, Some(F::Init | F::Body | F::Param))).map(|(_, n)| n));
-            }
-        }
-        names.sort_by_key(|(_, n, _)| s.tree.node(*n).start);
-    } else {
-        for spec in s.all(node, F::Specifier) {
-            if let Some(exported) = s.get(spec, F::Exported).or_else(|| s.get(spec, F::Local)) {
-                let name = file.static_name(exported).unwrap_or_else(|| s.text(exported).to_string());
-                let local = s.get(spec, F::Local).map(|n| file.static_name(n).unwrap_or_else(|| s.text(n).to_string()));
-                let kind = if s.get(node, F::From).is_none() { "named" } else if local.as_deref() == Some("default") { "defaultFrom" } else { "namedFrom" };
-                names.push((name, exported, kind));
-            }
-        }
-    }
-    Value::list(names.into_iter().map(|(name, n, kind)| Value::record(vec![
-        ("name".into(), Value::from(name)), ("offset".into(), Value::from(s.tree.node(n).start as usize)), ("kind".into(), Value::from(kind)),
-    ])).collect())
-}
-
-pub fn global_member(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(property) = property_name(s, node) else { return Value::Null };
-    let mut at = s.get(node, F::Object).map(|n| s.unparen(n));
-    let mut intermediates = Vec::new();
-    while let Some(n) = at {
-        if s.is(n, K::Ident) {
-            if file.resolved(n) != Some("global") || !matches!(file.global_setting(n), Some("readonly" | "writable")) {
-                return Value::Null;
-            }
-            let object = s.text(n);
-            if intermediates.iter().any(|name| name != object) { return Value::Null; }
-            let offset = s.get(node, F::Property).or_else(|| s.get(node, F::Index)).map_or(s.tree.node(node).start, |n| s.tree.node(n).start);
-            return Value::record(vec![("object".into(), Value::from(object.to_string())), ("property".into(), Value::from(property)), ("offset".into(), Value::from(offset as usize))]);
-        }
-        if matches!(s.kind(n), Some(K::Member | K::Index)) {
-            let Some(name) = property_name(s, n) else { break };
-            intermediates.push(name);
-            at = s.get(n, F::Object).map(|n| s.unparen(n));
-        } else {
-            break;
-        }
-    }
-    Value::Null
 }
 
 #[cfg(test)]

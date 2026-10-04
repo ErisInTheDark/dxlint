@@ -98,45 +98,6 @@ pub fn order(file: &NativeFile, node: u32) -> Value<'static> {
     ])
 }
 
-pub fn restriction(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let mut declaration = node;
-    while !matches!(s.kind(declaration), Some(K::Import | K::Export | K::ImportEquals)) {
-        let Some(parent) = s.parent(declaration) else { return Value::Null };
-        declaration = parent;
-    }
-    let from = s.get(declaration, F::From).or_else(|| s.get(declaration, F::Value).and_then(|n| s.all(n, F::Arg).next()));
-    let Some(source) = from.and_then(|n| file.static_name(n)) else { return Value::Null };
-    let source = source.trim().to_string();
-    let whole = node == declaration;
-    let star = s.is(declaration, K::Export) && s.all(declaration, F::Specifier).next().is_none() && s.get(declaration, F::Decl).is_none();
-    let name = if star || s.field(node) == Some(F::Namespace) {
-        "*".to_string()
-    } else if s.field(node) == Some(F::DefaultImport) {
-        "default".to_string()
-    } else if matches!(s.kind(node), Some(K::ImportSpec | K::ExportSpec)) {
-        let name = s.get(node, F::Imported).or_else(|| s.get(node, F::Local)).unwrap_or(node);
-        file.static_name(name).unwrap_or_else(|| s.text(name).to_string())
-    } else { String::new() };
-    let mut offset = s.tree.node(node).start as usize;
-    if name == "*" {
-        offset = s.text(declaration).find('*').map_or(offset, |i| s.tree.node(declaration).start as usize + i);
-    }
-    let type_only = s.word(node, F::Kind) == Some("type") || s.word(declaration, F::Kind) == Some("type");
-    let all_type = s.word(declaration, F::Kind) == Some("type") || s.get(declaration, F::DefaultImport).is_none() && s.get(declaration, F::Namespace).is_none()
-        && s.all(declaration, F::Specifier).next().is_some() && s.all(declaration, F::Specifier).all(|n| s.word(n, F::Kind) == Some("type"));
-    let parents = source.match_indices('/').filter(|(i, _)| *i > 0).map(|(i, _)| Value::from(source[..i].to_string())).collect();
-    Value::record(vec![
-        ("source".into(), Value::from(source)),
-        ("name".into(), Value::from(name)),
-        ("item".into(), Value::Bool(!whole || star)),
-        ("type".into(), Value::Bool(type_only)),
-        ("all_type".into(), Value::Bool(all_type)),
-        ("offset".into(), Value::from(offset)),
-        ("parents".into(), Value::list(parents)),
-    ])
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;

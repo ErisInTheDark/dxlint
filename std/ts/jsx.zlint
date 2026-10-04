@@ -37,8 +37,15 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-child-element-spacing {
   warn "Ambiguous spacing {if row.after then 'after previous' else 'before next'} element {row.name}"
 }
 schema jsx_wrap_mode boolean | "ignore" | "parens" | "parens-new-line"
-macro jsx_wrap_option(c) (if c.kind == "declaration" then declaration else if c.kind == "assignment" then assignment else if c.kind == "return" then return else if c.kind == "arrow" then arrow else if c.kind == "condition" then condition else if c.kind == "logical" then logical else if c.kind == "prop" then prop else propertyValue)
-macro jsx_wrap_enabled(v) (v != false && v != "ignore")
+fn jsx_wrap_active(value) = value != false && value != "ignore"
+in ts_jsx_element let jsx_wrap_element true
+in ts_parenthesized let jsx_wrap_element expression.jsx_wrap_element == true
+in ts_jsx_expression let jsx_prop_expression parent is ts_jsx_attribute
+in ts_parenthesized, ts_jsx_element, ts_jsx_fragment, ts_conditional {
+  let jsx_wrap_context if parent is ts_parenthesized then parent.jsx_wrap_context else if parent is ts_declarator && field == "init" then "declaration" else if parent is ts_assignment && field == "right" then "assignment" else if parent is ts_return && field == "argument" then "return" else if parent is ts_arrow && field == "body" then "arrow" else if parent is ts_logical && field == "right" then "logical" else if parent is ts_conditional && contains(["consequent", "alternate"], field) then "condition" else if parent is ts_jsx_expression && field == "expression" && parent.jsx_prop_expression then "prop" else if jsx_wrap_element && parent is ts_property && field == "value" then "propertyValue" else null
+  let jsx_wrap_fallback if parent is ts_parenthesized then parent.jsx_wrap_fallback else if parent is ts_conditional then parent.jsx_wrap_context else null
+  let jsx_call_argument if parent is ts_parenthesized then parent.jsx_call_argument else parent is (ts_call, ts_new) && field == "argument"
+}
 in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
   option declaration jsx_wrap_mode = "parens" "variable initializer wrapping"
   option assignment jsx_wrap_mode = "parens" "assignment wrapping"
@@ -48,15 +55,17 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
   option logical jsx_wrap_mode = "ignore" "logical right-hand side wrapping"
   option prop jsx_wrap_mode = "ignore" "JSX prop expression wrapping"
   option propertyValue jsx_wrap_mode = "ignore" "object property value wrapping"
-  let info jsx_context
-  when !info.single
-  each context in filter(info.contexts, c => jsx_wrap_enabled(jsx_wrap_option(c)) && (!c.fallback || !jsx_wrap_enabled(condition)) && (!info.parenthesized || jsx_wrap_option(c) == "parens-new-line" && info.parens_same_line))
-  warn if !info.parenthesized then "Missing parentheses around multilines JSX" else "Parentheses around JSX should be on separate lines"
+  let context if jsx_wrap_context == "condition" && !jsx_wrap_active(condition) && contains(["declaration", "assignment"], jsx_wrap_fallback) then jsx_wrap_fallback else jsx_wrap_context
+  let selected default(get({declaration: declaration, assignment: assignment, return: return, arrow: arrow, condition: condition, logical: logical, prop: prop, propertyValue: propertyValue}, context), "ignore")
+  let parenthesized parent is ts_parenthesized
+  when jsx_break(text) && jsx_wrap_active(selected)
+  when !parenthesized || selected == "parens-new-line" && (!space_before.line_break || !space_after.line_break)
+  warn if !parenthesized then "Missing parentheses around multilines JSX" else "Parentheses around JSX should be on separate lines"
 }
 in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
   option mode "always" | "multiline" = "multiline" "call argument linebreak policy"
-  let info jsx_context
-  when info.call_break && (mode == "always" || !info.single)
+  when jsx_call_argument && (mode == "always" || jsx_break(text))
+  when !space_before.line_break || next_token not ts_comma && !space_after.line_break
   warn "Missing line break around JSX"
 }
 in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment rule jsx-curly-brace-presence {
@@ -70,33 +79,70 @@ in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment ru
   warn if info.expression then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
 }
 
+fn jsx_space_regex() = /[\t\n\u{b}\u{c}\r \u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]/
+fn jsx_js_space(text) = re_test(text, jsx_space_regex())
+fn jsx_strip_space(text) = re_replace(text, jsx_space_regex(), "")
+fn jsx_utf16_length(text) = len(text) + re_count(text, /[\u{10000}-\u{10ffff}]/)
+fn jsx_break(text) = re_test(text, /[\n\r\u{2028}\u{2029}]/)
+fn jsx_edge_space(text, opening) = default(re_find(text, if opening then "^" jsx_space_regex() "*" else jsx_space_regex() "*$"), "")
+in ts_jsx_expression {
+  let jsx_brace_container expression.layer not ts_spread
+  let jsx_brace_attribute parent is ts_jsx_attribute
+  let jsx_brace_single !jsx_break(default(expression, slice(text, 1, len(text) - 1)))
+}
+in ts_jsx_spread_attribute {
+  let jsx_brace_container true
+  let jsx_brace_attribute true
+  let jsx_brace_single !jsx_break(argument)
+}
+in ts_jsx_expression, ts_jsx_spread_attribute {
+  let jsx_brace_object starts_with(slice(text, 1 + len(jsx_edge_space(slice(text, 1), true))), "{{")
+  let jsx_brace_left_break opener.ts_open_brace.space_after.line_break
+}
+in ts_open_brace, ts_close_brace {
+  let jsx_brace_open layer is ts_open_brace
+  let jsx_brace_gap if jsx_brace_open then space_after.text else space_before.text
+  let jsx_brace_edge jsx_edge_space(jsx_brace_gap, jsx_brace_open)
+  let jsx_brace_direction if jsx_brace_open then "after" else "before"
+}
 schema jsx_curly_config {when?: "always" | "never"; allowMultiline?: boolean; spacing?: {objectLiterals?: "always" | "never"}}
-in ts_jsx_expression, ts_jsx_spread_attribute rule jsx-curly-spacing {
+@macro jsx_curly_spacing_body {
   option options ("always" | "never" | {when?: "always" | "never"; allowMultiline?: boolean; spacing?: {objectLiterals?: "always" | "never"}; attributes?: boolean | jsx_curly_config; children?: boolean | jsx_curly_config})[] = [] "brace spacing and context overrides"
-  let info jsx_curly
   let head first(options)
   let cfg if type_of(head) == "str" then default(first(slice(options, 1, 2)), {}) else default(head, {})
-  let context_cfg if info.attribute then default(cfg.attributes, true) else default(cfg.children, false)
+  let context_cfg if parent.jsx_brace_attribute then default(cfg.attributes, true) else default(cfg.children, false)
   let base_when if type_of(head) == "str" then head else default(cfg.when, "never")
   let scope_cfg if type_of(context_cfg) == "bool" then {} else context_cfg
   let object_spacing default(scope_cfg.spacing, default(cfg.spacing, {}))
-  let spacing if info.object then default(object_spacing.objectLiterals, default(scope_cfg.when, base_when)) else default(scope_cfg.when, base_when)
+  let spacing if parent.jsx_brace_object then default(object_spacing.objectLiterals, default(scope_cfg.when, base_when)) else default(scope_cfg.when, base_when)
   let multiline default(scope_cfg.allowMultiline, default(cfg.allowMultiline, true))
-  when context_cfg != false
-  each side in filter(info.sides, s => if spacing == "always" then !s.space || s.newline && !multiline else (if s.newline then !multiline else s.space))
-  report at side.offset
-  warn if side.newline then "There should be no newline {side.direction} '{side.token}'" else if spacing == "always" then "A space is required {side.direction} '{side.token}'" else "There should be no space {side.direction} '{side.token}'"
+  when parent.jsx_brace_container && context_cfg != false
+  when if spacing == "always" then jsx_brace_edge == "" || jsx_break(jsx_brace_edge) && !multiline else (if jsx_break(jsx_brace_edge) then !multiline else jsx_brace_edge != "")
+  report at {start: offset, end: parent.end_offset}
+  warn if jsx_break(jsx_brace_edge) then "There should be no newline {jsx_brace_direction} '{text}'" else if spacing == "always" then "A space is required {jsx_brace_direction} '{text}'" else "There should be no space {jsx_brace_direction} '{text}'"
 }
-in ts_jsx_expression rule jsx-curly-newline {
+in ts_open_brace rule jsx-curly-spacing:after {
+  @jsx_curly_spacing_body
+}
+in ts_close_brace rule jsx-curly-spacing:before {
+  @jsx_curly_spacing_body
+}
+@macro jsx_curly_newline_body {
   option mode "consistent" | "never" = "consistent" "default brace newline policy"
   option singleline "consistent" | "require" | "forbid" | null = null "single-line expression policy"
   option multiline "consistent" | "require" | "forbid" | null = null "multiline expression policy"
-  let info jsx_curly
-  let policy default(if info.single then singleline else multiline, if mode == "never" then "forbid" else "consistent")
-  let needs if policy == "require" then true else if policy == "forbid" then false else info.left_newline
-  each side in filter(info.sides, s => s.token_newline != needs)
-  report at side.offset
-  warn "{if needs then 'Expected' else 'Unexpected'} newline {side.direction} '{side.token}'."
+  let policy default(if parent.jsx_brace_single then singleline else multiline, if mode == "never" then "forbid" else "consistent")
+  let needs if policy == "require" then true else if policy == "forbid" then false else parent.jsx_brace_left_break
+  when parent is ts_jsx_expression && parent.jsx_brace_container
+  when jsx_break(jsx_brace_gap) != needs
+  report at {start: offset, end: parent.end_offset}
+  warn "{if needs then 'Expected' else 'Unexpected'} newline {jsx_brace_direction} '{text}'."
+}
+in ts_open_brace rule jsx-curly-newline:after {
+  @jsx_curly_newline_body
+}
+in ts_close_brace rule jsx-curly-newline:before {
+  @jsx_curly_newline_body
 }
 macro jsx_tag_policy(p) (if p.kind == "closingSlash" then closingSlash else if p.kind == "beforeSelfClosing" then beforeSelfClosing else if p.kind == "afterOpening" then afterOpening else beforeClosing)
 macro jsx_tag_newline(p) (jsx_tag_policy(p) == "proportional-always" && !p.single && !p.newline)
@@ -130,11 +176,19 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-closing-tag-location {
   warn if !info.own_line then "Closing tag of a multiline JSX expression must be on its own line." else if mode == "tag-aligned" then "Expected closing tag to match indentation of opening." else "Expected closing tag to be aligned with the line containing the opening tag"
 }
 
+fn jsx_items(value) = if type_of(value) == "list" then value else if value == null then [] else [value]
+fn jsx_pascal(name) = re_test(name, /^\p{Uppercase}[\p{Uppercase}\p{Lowercase}0-9]*$/) && re_test(name, /[\p{Lowercase}0-9]/)
+fn jsx_caps(name) = re_test(name, /^[\p{Uppercase}0-9](?:[\p{Uppercase}0-9_]*[\p{Uppercase}0-9])?$/)
+in ts_jsx_element {
+  let jsx_name_spelling jsx_strip_space(name)
+  let jsx_intrinsic_name re_test(jsx_name_spelling, /^[a-z]/)
+}
 in ts_jsx_element rule jsx-self-closing-comp {
   option component boolean = true "check components"
   option html boolean = true "check intrinsic elements"
-  let info jsx_tag
-  when !info.self_closing && info.empty && (component && info.component || html && info.dom)
+  let content jsx_items(body)
+  let empty len(content) == 0 || len(content) == 1 && first(jsx_items(body.layer)) is ts_jsx_text && contains(first(content), "\n") && jsx_strip_space(first(content)) == "" && !re_test(first(content), /\u{a0}/)
+  when closing != null && empty && (component && !jsx_intrinsic_name && !contains(jsx_name_spelling, ":") || html && jsx_intrinsic_name)
   warn "Empty components are self-closing"
 }
 in ts_jsx_element rule jsx-pascal-case {
@@ -142,65 +196,86 @@ in ts_jsx_element rule jsx-pascal-case {
   option allowLeadingUnderscore boolean = false "allow one leading underscore"
   option allowNamespace boolean = false "check only the first namespace segment"
   option ignore string[] = [] "component-name globs to ignore"
-  let info jsx_tag
-  let names if allowNamespace then slice(info.names, 0, 1) else info.names
-  let bad find(names, n => n.length == 1 || !((if allowLeadingUnderscore then n.underscore_pascal else n.pascal) || allowAllCaps && (if allowLeadingUnderscore then n.underscore_caps else n.caps) || any(ignore, p => re_test(n.name, "^" replace(replace(re_escape(p), "\\*", ".*"), "\\?", ".") "$"))))
-  when !info.dom && bad != null && bad.length != 1
-  warn "Imported JSX component {bad.name} must be in PascalCase{if allowAllCaps then ' or SCREAMING_SNAKE_CASE' else ''}"
+  let parts split(replace(jsx_name_spelling, ":", "."), ".")
+  let names if allowNamespace then slice(parts, 0, 1) else parts
+  let bad find(names, n => jsx_utf16_length(n) == 1 || !(jsx_pascal(if allowLeadingUnderscore && starts_with(n, "_") then slice(n, 1) else n) || allowAllCaps && jsx_caps(if allowLeadingUnderscore && starts_with(n, "_") then slice(n, 1) else n) || any(ignore, p => re_test(n, "^" replace(replace(re_escape(p), "\\*", ".*"), "\\?", ".") "$"))))
+  when !jsx_intrinsic_name && bad != null && jsx_utf16_length(bad) != 1
+  warn "Imported JSX component {bad} must be in PascalCase{if allowAllCaps then ' or SCREAMING_SNAKE_CASE' else ''}"
 }
 in ts_jsx_element rule jsx-shorthand-fragment {
-  let info jsx_tag
-  when contains(["Fragment", "React.Fragment"], info.name) && len(info.attributes) == 0
-  warn "Use shorthand fragment syntax `<>...</>` instead of `<{info.name}>...</{info.name}>`."
+  when contains(["Fragment", "React.Fragment"], jsx_name_spelling) && property == null
+  warn "Use shorthand fragment syntax `<>...</>` instead of `<{jsx_name_spelling}>...</{jsx_name_spelling}>`."
 }
 in ts_jsx_attribute rule jsx-shorthand-boolean {
-  let info jsx_attribute
-  when info.boolean
+  when value.layer is ts_jsx_expression && value.jsx_boolean_true == true
   warn "Omit the value for boolean attributes."
 }
-in ts_jsx_attribute rule jsx-quotes {
+in ts_boolean let jsx_boolean_true text == "true"
+in ts_parenthesized let jsx_boolean_true expression.jsx_boolean_true == true
+in ts_jsx_expression let jsx_boolean_true expression.jsx_boolean_true == true
+fn jsx_contains_quote(text, double) = contains(text, if double then '"' else "'") || re_test(text, if double then /&(?:quot|#\+?0*34|#[xX]\+?0*22);/ else /&(?:apos|#\+?0*39|#[xX]\+?0*27);/)
+in ts_jsx_attribute.value rule jsx-quotes {
   option mode "prefer-double" | "prefer-single" = "prefer-double" "preferred attribute quote"
-  let info jsx_attribute
-  when info.string && (if mode == "prefer-double" then info.quote != '"' && !info.double else info.quote != "'" && !info.single)
-  report at info.value_offset
+  let double mode == "prefer-double"
+  when layer is ts_string
+  when slice(text, 0, 1) != (if double then '"' else "'") && !jsx_contains_quote(slice(text, 1, len(text) - 1), double)
   warn "Unexpected usage of {if mode == 'prefer-double' then 'singlequote' else 'doublequote'}."
 }
-in ts_jsx_attribute rule jsx-equals-spacing {
+@macro jsx_equals_spacing_body {
   option mode "always" | "never" = "never" "spacing around equals"
-  let info jsx_attribute
-  when info != null
-  each side in filter([{name: "before", spaced: info.before}, {name: "after", spaced: info.after}], s => s.spaced != (mode == "always"))
-  report at info.offset
-  warn if mode == "always" then "A space is required {side.name} '='" else "There should be no space {side.name} '='"
+  when parent is ts_jsx_attribute
+  when jsx_js_space(if jsx_equals_before then space_before.text else space_after.text) != (mode == "always")
+  report at {start: offset, end: parent.end_offset}
+  warn if mode == "always" then "A space is required {if jsx_equals_before then 'before' else 'after'} '='" else "There should be no space {if jsx_equals_before then 'before' else 'after'} '='"
 }
-in ts_jsx_element rule jsx-first-prop-new-line {
+in ts_equals rule jsx-equals-spacing:before {
+  let jsx_equals_before true
+  @jsx_equals_spacing_body
+}
+in ts_equals rule jsx-equals-spacing:after {
+  let jsx_equals_before false
+  @jsx_equals_spacing_body
+}
+in ts_jsx_element {
+  let jsx_opening_span jsx_syntax.opening
+  let jsx_opening_single !jsx_break(byte_slice(text, 0, jsx_opening_span.end - offset))
+  let jsx_property_count count(property)
+  let jsx_first_prop_headline first([] property.jsx_prop_headline) == true
+}
+in ts_jsx_attribute, ts_jsx_spread_attribute {
+  let jsx_prop_same !space_before.line_break
+  let jsx_prop_headline !jsx_break(byte_slice(parent.text, 0, offset - parent.offset))
+  let jsx_prop_first previous == null
+  let jsx_prop_run if jsx_prop_same then 1 + default(previous.jsx_prop_run, 0) else 1
+  let jsx_prop_group_index if jsx_prop_same && !jsx_prop_first then 1 + previous.jsx_prop_group_index else 0
+}
+in ts_jsx_attribute let jsx_prop_name jsx_strip_space(name)
+in ts_parenthesized let jsx_unparenthesized_text default(expression.jsx_unparenthesized_text, expression)
+in ts_jsx_spread_attribute let jsx_prop_name default(argument.jsx_unparenthesized_text, argument)
+in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-first-prop-new-line {
   option mode "always" | "never" | "multiline" | "multiline-multiprop" | "multiprop" = "multiline-multiprop" "first prop placement"
-  let info jsx_tag
-  let prop first(info.attributes)
-  let should_wrap mode == "always" || mode == "multiline" && !info.single || mode == "multiline-multiprop" && !info.single && len(info.attributes) > 1 || mode == "multiprop" && len(info.attributes) > 1
-  let should_inline mode == "never" || mode == "multiprop" && !info.single && len(info.attributes) <= 1
-  when prop != null && (should_wrap && prop.head_line || should_inline && !prop.head_line)
-  report at prop.offset
+  let should_wrap mode == "always" || mode == "multiline" && !parent.jsx_opening_single || mode == "multiline-multiprop" && !parent.jsx_opening_single && parent.jsx_property_count > 1 || mode == "multiprop" && parent.jsx_property_count > 1
+  let should_inline mode == "never" || mode == "multiprop" && !parent.jsx_opening_single && parent.jsx_property_count <= 1
+  when jsx_prop_first && (should_wrap && jsx_prop_headline || should_inline && !jsx_prop_headline)
+  report at {start: offset, end: parent.end_offset}
   warn if should_wrap then "Property should be placed on a new line" else "Property should be placed on the same line as the component declaration"
 }
-in ts_jsx_element rule jsx-max-props-per-line {
+in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-max-props-per-line {
   option maximum number(1..) | {single?: int(1..); multi?: int(1..)} = 1 "maximum props per line"
   option when "always" | "multiline" = "always" "which tags to check"
-  let info jsx_tag
   let single_limit if type_of(maximum) == "num" then (if when == "multiline" then null else maximum) else maximum.single
   let multi_limit if type_of(maximum) == "num" then maximum else maximum.multi
-  each prop in filter(info.attributes, p => p.group_index == (if info.single && p.head_line then single_limit else multi_limit))
-  report at prop.offset
-  warn "Prop `{prop.name}` must be placed on a new line"
+  when jsx_prop_group_index == (if parent.jsx_opening_single && jsx_prop_headline then single_limit else multi_limit)
+  report at {start: offset, end: parent.end_offset}
+  warn "Prop `{jsx_prop_name}` must be placed on a new line"
 }
-in ts_jsx_element rule jsx-props-style {
+in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-props-style {
   option singleLine {maxItems: int(0..) | null = null} = {} "single-line prop limit"
   option multiLine {minItems: int(0..) = 0; maxItemsPerLine: int(1..) = 1} = {} "multiline prop limits"
-  let info jsx_tag
-  let need_wrap if info.single then singleLine.maxItems != null && len(info.attributes) > singleLine.maxItems else len(info.attributes) >= multiLine.minItems && !(first(info.attributes)).head_line
-  each prop in filter(info.attributes, p => if need_wrap then p.same && (p.first || p.run > multiLine.maxItemsPerLine && (p.run - 1) % multiLine.maxItemsPerLine == 0) else !p.same)
-  report at prop.offset
-  warn if need_wrap then "Prop `{prop.name}` must be placed on a new line" else "Prop `{prop.name}` should not be placed on a new line"
+  let need_wrap if parent.jsx_opening_single then singleLine.maxItems != null && parent.jsx_property_count > singleLine.maxItems else parent.jsx_property_count >= multiLine.minItems && !parent.jsx_first_prop_headline
+  when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > multiLine.maxItemsPerLine && (jsx_prop_run - 1) % multiLine.maxItemsPerLine == 0) else !jsx_prop_same
+  report at {start: offset, end: parent.end_offset}
+  warn if need_wrap then "Prop `{jsx_prop_name}` must be placed on a new line" else "Prop `{jsx_prop_name}` should not be placed on a new line"
 }
 
 }
