@@ -449,6 +449,16 @@ const CORE: &[Fact] = &[
         }, n),
     },
     Fact {
+        name: "first_token",
+        doc: "native layers: the node's first code token: `{text, layer, start, end}` (`layer` as `previous_token` names it: `ts_identifier`, `ts_number`, `ts_open_paren`...)",
+        get: |f, n| f.with_file(|file, n| edge_token(file, n, false), n),
+    },
+    Fact {
+        name: "last_token",
+        doc: "native layers: the node's last code token, as `first_token`",
+        get: |f, n| f.with_file(|file, n| edge_token(file, n, true), n),
+    },
+    Fact {
         name: "token_texts",
         doc: "native layers: the node's code tokens' texts, in order (comments and spacing dropped); equal lists mean the same tokens",
         get: |f, n| f.with_file(|file, n| Value::list(file.tokens(n).into_iter().map(|t| Value::from(t.to_string())).collect()), n),
@@ -464,6 +474,24 @@ const CORE: &[Fact] = &[
 ];
 
 use crate::native::ts::facts as facts_bits;
+
+/// The first (`last`: last) code token inside a node.
+fn edge_token(file: &crate::native::ts::facts::NativeFile<'_>, node: u32, last: bool) -> Value<'static> {
+    use crate::native::ts::tokens;
+    let n = file.syntax.tree.node(node);
+    let lexed = file.cached(tokens::lex);
+    let from = lexed.0.partition_point(|t| t.start < n.start);
+    let to = lexed.0.partition_point(|t| t.end <= n.end);
+    let inside = lexed.0.get(from..to.max(from)).unwrap_or_default();
+    let Some(t) = (if last { inside.last() } else { inside.first() }) else { return Value::Null };
+    let layer = tokens::token_layer(file, t).map_or(Value::Null, |k| Value::from(k.name()));
+    Value::record(vec![
+        ("text".into(), Value::from(file.syntax.src[t.start as usize..t.end as usize].to_string())),
+        ("layer".into(), layer),
+        ("start".into(), Value::from(t.start as usize)),
+        ("end".into(), Value::from(t.end as usize)),
+    ])
+}
 
 /// A fact's index in [`FACTS`].
 pub fn fact(name: &str) -> Option<usize> {

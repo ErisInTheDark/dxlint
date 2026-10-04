@@ -225,7 +225,7 @@ impl<'s> Parser<'s> {
             }
             Tok::P("-") if matches!(self.peek().tok, Tok::Num | Tok::BigInt) => {
                 self.bump();
-                let v = self.leaf(Kind::Number);
+                let v = self.leaf(if self.tok.tok == Tok::BigInt { Kind::BigInt } else { Kind::Number });
                 let mut kids = Kids::default();
                 kids.add(Field::Value, v);
                 Ok(self.finish(Kind::LiteralType, start, kids))

@@ -24,8 +24,10 @@ fields! {
     Exported = "exported", Quasi = "quasi", Tag = "tag", Constraint = "constraint", Default = "default",
     Check = "check", Optional = "optional", Modifier = "modifier", Decorator = "decorator", Qualifier = "qualifier",
     Closing = "closing",
-    // The node's own punctuation and keyword tokens (see `tokens::attach`).
+    // The node's own punctuation and keyword tokens (see `tokens::attach_selected`).
     Token = "token",
+    // Comments inside the node and no child of it; the program's lines.
+    Comment = "comment", Lines = "lines",
 }
 
 macro_rules! kinds {
@@ -60,7 +62,8 @@ kinds! {
     Switch = "ts_switch" [Discriminant, Case],
     Case = "ts_case" [Test, Body],
     // `kind`: the `catch` keyword.
-    Try = "ts_try" [Block, Kind, Param, Handler, Finalizer],
+    // `type`: the catch parameter's annotation (`catch (e: unknown)`).
+    Try = "ts_try" [Block, Kind, Param, Type, Handler, Finalizer],
     Labeled = "ts_labeled" [Label, Body],
     Empty = "ts_empty" [],
     Debugger = "ts_debugger" [],
@@ -171,6 +174,12 @@ kinds! {
     CloseAngle = "ts_close_angle" [],
     Keyword = "ts_keyword" [],
     Punctuator = "ts_punctuator" [],
+    // Trivia: comments under the innermost node holding them (field
+    // `comment`), and every line of the file under the program (field
+    // `lines`; its text without the line break).
+    LineComment = "ts_line_comment" [],
+    BlockComment = "ts_block_comment" [],
+    Line = "ts_line" [],
     // ---- types (every kind from here on is a type)
     TypeRef = "ts_type_reference" [Name, TypeArg],
     QualifiedName = "ts_qualified_name" [Left, Right],
@@ -209,8 +218,13 @@ impl Kind {
         Self::is_token_index(self as usize)
     }
 
-    /// Whether `KINDS[i]` is a token kind.
+    /// Whether `KINDS[i]` is a token kind (code tokens and trivia).
     pub fn is_token_index(i: usize) -> bool {
-        (Kind::Comma as usize..=Kind::Punctuator as usize).contains(&i)
+        (Kind::Comma as usize..=Kind::Line as usize).contains(&i)
+    }
+
+    /// A punctuation or keyword token (not a comment or line).
+    pub fn is_code_token(self) -> bool {
+        (Kind::Comma as u16..=Kind::Punctuator as u16).contains(&(self as u16))
     }
 }

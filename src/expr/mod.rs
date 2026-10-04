@@ -132,6 +132,9 @@ pub enum CExpr {
     /// `walk(roots, n => next)`; the body reads the node as the innermost
     /// `Param`.
     Walk(Box<CExpr>, Box<CExpr>),
+    /// `descendants(layer)`: nodes under this one of these matchers (or
+    /// their specialisations), in source order.
+    Descendants(Vec<u32>),
     /// `base.a.b`: on node values the compiled read of `a.b`; on records
     /// those keys.
     Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
@@ -150,7 +153,8 @@ pub enum CExpr {
 /// Expression forms that are not plain functions, for `zlint functions`.
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
-    ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do"),
+    ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
+    ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
     ("walk(roots, n => next)", "the nodes reachable from `roots` (nodes) by `next` (nodes, or a list of them), each once, in visiting order, roots included"),
     ("map(list, x => value)", "the list of `value` for each item `x`"),
     ("filter(list, x => test)", "the items for which `test` is truthy"),
@@ -187,7 +191,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -251,6 +255,9 @@ pub struct Scope<'a> {
     pub defining: Option<String>,
     /// Where tooling collects how each name was read.
     pub uses: Option<&'a RefCell<Vec<(crate::config::source::Span, Resolved)>>>,
+    /// Where the bracket layers `opener.x` / `closer.x` read are collected
+    /// (files then need those token nodes).
+    pub brackets: Option<&'a RefCell<Vec<u32>>>,
 }
 
 /// How the compiler read a name: what hover, go to definition and
@@ -310,6 +317,7 @@ impl<'a> Scope<'a> {
             function: None,
             defining: None,
             uses: None,
+            brackets: None,
         }
     }
 
@@ -445,6 +453,31 @@ impl Scope<'_> {
                 inner.params.extend(params.iter().map(|p| p.text.clone()));
                 let body = inner.compile(body, errors)?;
                 CExpr::Reduce(Box::new(list), Box::new(initial), Box::new(body))
+            }
+            // `descendants(layer)`: nodes of a layer or group under this one.
+            ExprKind::Call(name, args) if name.text == "descendants" && self.grammar.function("descendants").is_none() => {
+                let layer = match args.as_slice() {
+                    [Expr { kind: ExprKind::Var(path), .. }] if path.len() == 1 => Some(&path[0]),
+                    _ => None,
+                };
+                let ids = layer.and_then(|l| match self.grammar.matcher(&l.text) {
+                    Some(m) => Some(vec![m]),
+                    None => Some(
+                        self.grammar.group(&l.text)?.iter().filter_map(|p| match p {
+                            crate::config::ast::Parent::Matcher(n) => self.grammar.matcher(&n.text),
+                            _ => None,
+                        }).collect(),
+                    ),
+                });
+                let Some(ids) = ids else {
+                    errors.push(ConfigError::new(e.span, "`descendants` takes a layer or group name").note("usage: descendants(ts_export)"));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function("descendants"));
+                if let Some(l) = layer {
+                    self.note(l.span, if ids.len() == 1 && self.grammar.matcher(&l.text).is_some() { Resolved::Layer(l.text.clone()) } else { Resolved::Group(l.text.clone()) });
+                }
+                CExpr::Descendants(ids)
             }
             // `walk(roots, n => next)`: every node reachable from the roots.
             ExprKind::Call(name, args) if name.text == "walk" && self.grammar.function("walk").is_none() => {
@@ -807,6 +840,9 @@ impl Scope<'_> {
                     _ => (members(&layer.text).expect("checked"), second, &path[2..]),
                 };
                 let inner = self.relative_part(field, errors)?;
+                if let Some(brackets) = self.brackets {
+                    brackets.borrow_mut().extend(&ids);
+                }
                 let mut value = CExpr::OwnChild(layer.text == "closer", ids, Box::new(inner));
                 for key in keys {
                     value = CExpr::Key(Box::new(value), key.text.as_str().into());
@@ -1427,7 +1463,23 @@ impl<'a> Ctx<'a> {
                     ("column".into(), Value::from(column + 1)),
                     ("js_line".into(), Value::from(js_line)),
                     ("js_column".into(), Value::from(js_column + 1)),
+                    ("js_line_start".into(), Value::from(starts[js_line - 1])),
                 ])
+            }
+            CExpr::Descendants(ids) => {
+                let mut found = Vec::new();
+                let mut stack: Vec<u32> = self.tree.node(self.node).children.iter().map(|e| e.node).collect();
+                while let Some(id) = stack.pop() {
+                    let n = self.tree.node(id);
+                    if n.matcher != ROOT && n.matcher != TEXT {
+                        if ids.iter().any(|&m| self.grammar.is_a(n.matcher, m)) {
+                            found.push((n.start, std::cmp::Reverse(n.end), id));
+                        }
+                        stack.extend(n.children.iter().map(|e| e.node));
+                    }
+                }
+                found.sort_unstable();
+                Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
             }
             CExpr::Walk(roots, next) => {
                 let mut seen = std::collections::HashSet::new();

@@ -68,8 +68,9 @@ pub struct Rule {
     /// What the node (or the space next to it) should look like (`fix as expr`).
     fix: Option<CExpr>,
     fix_target: FixTarget,
-    /// Reads token nodes (`opener.x`): native trees need them.
-    reads_tokens: bool,
+    /// Token kinds of the brackets it reads (`opener.x`): native trees
+    /// need those nodes.
+    bracket_kinds: Vec<u16>,
     /// Reads `children.x`; reads `previous.x` / `next.x`.
     reads_children: bool,
     reads_siblings: bool,
@@ -140,6 +141,8 @@ pub struct Linter {
     /// An attribute reads `children.x`, or `previous.x` on a token: files
     /// then get every token kind, so those reads see the same nodes.
     token_attr_neighbours: bool,
+    /// Bracket token kinds attributes and `fn`s read.
+    shared_token_kinds: Vec<u16>,
     /// `in a forward x from field`: (matcher, attribute, label).
     forwards: Vec<(u32, u16, u16)>,
     /// Other files' exports, read on demand by native rules.
@@ -211,17 +214,15 @@ impl Linter {
         // Token kinds the active rules use (a node per token costs): the
         // ones they target, and brackets for `opener.x`. All of them when a
         // read would see the difference (`children.x`, `previous.x` on a token).
-        use crate::native::ts::kinds::{Kind, ALL_KINDS};
+        use crate::native::ts::kinds::ALL_KINDS;
         let mut token_kinds = [false; ALL_KINDS.len()];
         let mut all_tokens = false;
         let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
         for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
-            if f.reads_tokens {
-                for k in [Kind::OpenParen, Kind::CloseParen, Kind::OpenBracket, Kind::CloseBracket, Kind::OpenBrace, Kind::CloseBrace, Kind::OpenAngle, Kind::CloseAngle] {
-                    token_kinds[k as usize] = true;
-                }
+            for &k in f.bracket_kinds.iter().chain(&self.shared_token_kinds) {
+                token_kinds[k as usize] = true;
             }
-            let mut on_tokens = f.reads_tokens;
+            let mut on_tokens = !f.bracket_kinds.is_empty();
             for t in &f.targets {
                 match *t {
                     Target::Matcher(m) | Target::Field(m, _) if self.grammar.native_kind(m).is_some() => {
@@ -242,7 +243,7 @@ impl Linter {
         }
         let wants_tokens = token_kinds.iter().any(|&k| k);
         if wants_tokens && (all_tokens || self.token_attr_neighbours) {
-            token_kinds = crate::native::ts::tokens::ALL_TOKENS;
+            crate::native::ts::tokens::add_code_tokens(&mut token_kinds);
         }
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");

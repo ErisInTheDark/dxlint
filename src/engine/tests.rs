@@ -1283,6 +1283,57 @@ fn node_values_walk_and_read_paths() {
 }
 
 #[test]
+fn trivia_layers_and_descendants() {
+    // Comments sit under the innermost node holding them; lines (JS line
+    // breaks, without them) under the program, the last one possibly empty.
+    let l = native_linter(r#"
+        in ts_comment rule c info "{parent}:{text}"
+        in ts_line rule l info "{index}:{text}"
+    "#);
+    let messages: Vec<String> = l
+        .lint(Path::new("/root/a.ts"), "f(/* a */ 1); // b\r\nlet s = '//x';\u{2028}x\n")
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(messages, ["0:f(/* a */ 1); // b", "ts_call:/* a */", "ts_program:// b", "1:let s = '//x';", "2:x", "3:"]);
+    let l = native_linter(r#"
+        in ts_program rule d info "{join(map(descendants(ts_function_like), n => n.layer), ',')}"
+        in ts_new rule t info "{first_token.layer}:{last_token.text}"
+        in ts_try rule y info "{type}"
+    "#);
+    let messages: Vec<String> = l
+        .lint(Path::new("/root/a.ts"), "function f() { const g = () => 1; }\nnew A(1);\ntry {} catch (e: any) {}")
+        .into_iter()
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(messages, ["ts_function,ts_arrow", "ts_keyword:)", "any"]);
+}
+
+#[test]
+fn library_attributes_read_only_inside_functions_are_kept() {
+    // A `define`d attribute reached only through a `fn` body's `n.x`.
+    let l = native_linter(r#"
+        define {
+          in ts_member let lib_object_layer object.layer
+        }
+        fn object_layer(n) = n.lib_object_layer
+        in ts_member rule m info "{object_layer(node)}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a.b;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["ts_identifier"]);
+}
+
+#[test]
+fn bracket_reads_in_attributes_attach_their_tokens() {
+    let l = native_linter(r#"
+        in ts_call let paren_line opener.ts_open_paren.line
+        in ts_call rule p info "{paren_line}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f\n(1);").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["2"]);
+}
+
+#[test]
 fn selecting_token_kinds_keeps_what_neighbour_reads_see() {
     // Only commas are targeted, but a comma's previous token is still there.
     let l = native_linter(r#"in ts_comma rule c info "{previous.layer}""#);

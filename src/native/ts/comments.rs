@@ -25,21 +25,28 @@ impl Comment {
     }
 }
 
+/// Kinds whose text holds no comments: literals and JSX text.
+pub fn is_literal(kind: Kind) -> bool {
+    matches!(kind, Kind::String | Kind::Template | Kind::Regex | Kind::JsxText)
+}
+
 /// Every comment, in order.
 pub fn comments(s: &Syntax) -> Vec<Comment> {
-    let mut literals: Vec<(usize, usize)> = (0..s.tree.nodes.len() as u32)
-        .filter(|&id| matches!(s.kind(id), Some(Kind::String | Kind::Template | Kind::Regex)))
-        .map(|id| {
-            let n = s.tree.node(id);
-            (n.start as usize, n.end as usize)
-        })
-        .collect();
+    let literals = (0..s.tree.nodes.len() as u32).filter(|&id| s.kind(id).is_some_and(is_literal)).map(|id| {
+        let n = s.tree.node(id);
+        (n.start as usize, n.end as usize)
+    });
+    scan(s.src, literals.collect())
+}
+
+/// The comments of `src` outside the `literals` spans.
+pub fn scan(src: &str, mut literals: Vec<(usize, usize)>) -> Vec<Comment> {
     literals.sort_unstable();
-    let b = s.src.as_bytes();
+    let b = src.as_bytes();
     let mut out = Vec::new();
     let mut lit = literals.into_iter().peekable();
     // A `#!` line is not code.
-    let mut i = if s.src.starts_with("#!") { s.src.find('\n').unwrap_or(b.len()) } else { 0 };
+    let mut i = if src.starts_with("#!") { src.find('\n').unwrap_or(b.len()) } else { 0 };
     while i + 1 < b.len() {
         while lit.peek().is_some_and(|&(_, end)| end <= i) {
             lit.next();

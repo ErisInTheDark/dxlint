@@ -45,16 +45,19 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             attr_names.push(def.name.text.clone());
         }
     }
+    // Brackets read by `fn`s and attributes: any rule may reach them.
+    let shared_brackets: RefCell<Vec<u32>> = RefCell::default();
     for def in &config.functions {
         let Some(i) = grammar.function(&def.name.text) else { continue };
         let params = def.params.iter().map(|p| p.text.clone()).collect();
         // Parameters holding nodes read attributes too (`d.initialised`).
-        let scope = Scope { uses: Some(&uses), attrs: &attr_names, ..Scope::function_body(&grammar, &def.name.text, params) };
+        let scope = Scope { uses: Some(&uses), attrs: &attr_names, brackets: Some(&shared_brackets), ..Scope::function_body(&grammar, &def.name.text, params) };
         if let Some(body) = scope.compile(&def.body, &mut errors) {
             let _ = grammar.functions[i].body.set(body);
         }
     }
-    let (attrs, token_attr_neighbours) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
+    let (attrs, token_attr_neighbours) = attributes(&config, &grammar, &attr_names, &uses, &shared_brackets, &mut errors);
+    let shared_token_kinds = native_kinds(&grammar, &shared_brackets.borrow());
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -178,6 +181,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         by_lang,
         attrs,
         token_attr_neighbours,
+        shared_token_kinds,
         forwards,
         project: Default::default(),
         fingerprint,
@@ -298,7 +302,14 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
 /// Compiles every `let` attribute on each layer that defines it.
 /// The attributes, and whether one reads nodes that selecting token kinds
 /// would change: `children.x` anywhere, `previous.x` / `next.x` on a token.
-fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> (Vec<Attr>, bool) {
+fn attributes(
+    config: &crate::config::ast::Config,
+    g: &Grammar,
+    names: &[String],
+    uses: &Uses,
+    brackets: &RefCell<Vec<u32>>,
+    errors: &mut Vec<ConfigError>,
+) -> (Vec<Attr>, bool) {
     let mut token_neighbours = false;
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
     for def in &config.attrs {
@@ -324,7 +335,7 @@ fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String]
                     );
                     continue;
                 }
-                let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), ..Scope::new(g) };
+                let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), brackets: Some(brackets), ..Scope::new(g) };
                 let uses_before = uses.borrow().len();
                 if let Some(e) = scope.compile(&def.expr, errors) {
                     attrs[id].defs.push((m, e));
@@ -335,6 +346,14 @@ fn attributes(config: &crate::config::ast::Config, g: &Grammar, names: &[String]
         }
     }
     (attrs, token_neighbours)
+}
+
+/// The native kinds of these matchers (their specialisations aside).
+fn native_kinds(g: &Grammar, matchers: &[u32]) -> Vec<u16> {
+    let mut kinds: Vec<u16> = matchers.iter().filter_map(|&m| g.native_kind(m)).map(|k| k.kind).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
 }
 
 fn is_token_layer(g: &Grammar, m: u32) -> bool {
@@ -409,7 +428,8 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
             errors.push(ConfigError::new(opt.name.span, format!("option `{field}` has the same name as a field of `{target_text}`")));
         }
     }
-    let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), ..Scope::new(g) };
+    let brackets: RefCell<Vec<u32>> = RefCell::default();
+    let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), brackets: Some(&brackets), ..Scope::new(g) };
     let uses_before = uses.borrow().len();
     // Each `let` sees the ones before it.
     let mut locals = Vec::new();
@@ -455,12 +475,12 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     if errors.len() > before {
         return None;
     }
-    // Reading a node's own brackets needs the file's token nodes.
-    let reads_tokens = uses.borrow()[uses_before..].iter().any(|(_, r)| matches!(r, crate::expr::Resolved::Group(g) if g == "opener" || g == "closer"));
+    // Reading a node's own brackets needs those token nodes.
+    let bracket_kinds = native_kinds(g, &brackets.borrow());
     let (reads_children, reads_siblings) = reads_neighbours(&uses.borrow()[uses_before..]);
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
     Some(Rule {
-        reads_tokens,
+        bracket_kinds,
         reads_children,
         reads_siblings,
         target_layers,

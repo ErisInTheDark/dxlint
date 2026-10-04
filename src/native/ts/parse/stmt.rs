@@ -389,7 +389,8 @@ impl<'s> Parser<'s> {
                 let p = self.binding()?;
                 kids.add(Field::Param, p);
                 if self.eat(":") {
-                    self.type_()?;
+                    let t = self.type_()?;
+                    kids.add(Field::Type, t);
                 }
                 self.expect(")")?;
             }

@@ -403,6 +403,7 @@ so nested rules compose.
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
 | `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.layer`) |
 | `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
+| `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
 | `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
@@ -523,7 +524,7 @@ count bytes, so cut source text at them with `byte_slice(text, from, to?)`.
 `position(offset)` gives `{line, column}` of an offset, like the `line` and
 `column` builtins (`position(end_offset).line`), and `{js_line, js_column}`
 as JavaScript tools count them: U+2028 and U+2029 break lines, columns
-count UTF-16 units.
+count UTF-16 units; `js_line_start` is the byte offset that line starts at.
 
 Regex functions take the full syntax of Rust's `regex` crate (no lookaround
 or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first
@@ -646,7 +647,13 @@ Files get token nodes only when an active rule needs them. A family name
 turns on and configures every variant (`comma-spacing:before`,
 `comma-spacing:after`): `rule comma-spacing`.
 
-Group `ts_node` holds every syntax layer (not tokens): `in ts_node let
+Trivia are layers too, also only when a rule targets them: comments
+(`ts_line_comment`, `ts_block_comment`, group `ts_comment`) under the
+innermost node holding them, in field `comment`; and `ts_line`, every line
+of the file (JavaScript line breaks, the break left out; the last may be
+empty) under the program, in field `lines`.
+
+Group `ts_node` holds every syntax layer (not tokens or trivia): `in ts_node let
 ...` gives an attribute to all of them, for walks that may cross any kind.
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
@@ -674,6 +681,7 @@ is wrong, messages) is written in the rule.
 | `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
 | `precision_lost` | on a number literal: not exactly representable as a double |
 | `identifier_name` | on an identifier or private name: the name as JavaScript reads it (`foo` is `foo`) |
+| `first_token`, `last_token` | the node's first / last code token: `{text, layer, start, end}` |
 | `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
 
 Values and types are separate namespaces (`const X` does not hide an

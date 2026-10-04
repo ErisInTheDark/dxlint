@@ -40,9 +40,17 @@ fn expr_names(e: &Expr, out: &mut HashSet<String>) {
         ExprKind::List(items) => items.iter().for_each(|i| expr_names(i, out)),
         ExprKind::Record(entries) => entries.iter().for_each(|(_, v)| expr_names(v, out)),
         ExprKind::Lambda(_, body) => expr_names(body, out),
-        ExprKind::Key(base, _) => expr_names(base, out),
+        // `f(x).attr` reads `attr` on node values too.
+        ExprKind::Key(base, key) => {
+            expr_names(base, out);
+            out.insert(key.text.clone());
+        }
         ExprKind::Var(path) => out.extend(path.iter().map(|n| n.text.clone())),
-        ExprKind::Call(_, args) => args.iter().for_each(|a| expr_names(a, out)),
+        // A config `fn` needs what its body reads.
+        ExprKind::Call(name, args) => {
+            out.insert(name.text.clone());
+            args.iter().for_each(|a| expr_names(a, out));
+        }
         ExprKind::Unary(_, a) => expr_names(a, out),
         ExprKind::Binary(_, a, b) => {
             expr_names(a, out);
@@ -146,6 +154,14 @@ pub fn prune(config: &mut Config) {
         }
         for a in config.attrs.iter().filter(|a| a.name.text == name) {
             expr_names(&a.expr, &mut found);
+        }
+        for f in config.functions.iter().filter(|f| f.name.text == name) {
+            expr_names(&f.body, &mut found);
+        }
+        // A group read by name (`descendants(group)`, `x is group`) needs
+        // its members.
+        for g in config.groups.iter().filter(|g| g.name.text == name) {
+            found.extend(g.parents.iter().filter_map(parent_name).map(str::to_string));
         }
         for n in found {
             if needed.insert(n.clone()) {
