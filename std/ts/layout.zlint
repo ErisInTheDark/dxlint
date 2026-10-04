@@ -3,7 +3,24 @@
 
 define {
 
-drop rule quotes*
+in ts_variable_declaration, ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_method, ts_arrow, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_sequence, ts_enum, ts_tuple_type, ts_type_literal, ts_method_signature, ts_call_signature, ts_index_signature, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_tagged_template rule comma-style {
+  option style "last" | "first" = "last" "comma line position"
+  option exceptions { [key: string]: boolean } = {} "exempt list node kinds"
+  each comma_line in filter(comma_line_sites, s => get(exceptions, s.owner) != true && (s.before_break && s.after_break || (if style == "last" then s.before_break else s.after_break)))
+  report at comma_line.offset
+  warn if comma_line.before_break && comma_line.after_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
+}
+
+in ts_program rule no-multi-spaces {
+  option ignoreEOLComments boolean = false "ignore final comments on a line"
+  option includeTabs boolean = true "include tabs in repeated whitespace"
+  option exceptions { [key: string]: boolean } = {} "exempt node kinds"
+  each multiple_gap in filter(multiple_space_sites, s => (includeTabs || contains(s.gap, "  ")) && !(ignoreEOLComments && s.eol_comment) && get(exceptions, s.owner) != true)
+  report at multiple_gap.start
+  fix as slice(text, 0, multiple_gap.start) " " slice(text, multiple_gap.end)
+  warn "Multiple spaces found before '{multiple_gap.display}'."
+}
+
 in ts_string, ts_template rule quotes {
   option style "double" | "single" | "backtick" = "double" "string delimiters"
   option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
@@ -16,7 +33,6 @@ in ts_string, ts_template rule quotes {
   warn "Strings must use {if style == 'single' then 'singlequote' else if style == 'double' then 'doublequote' else 'backtick'}."
 }
 
-drop rule quote-props*
 in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_object, ts_interface, ts_type_literal, ts_enum, ts_import, ts_export rule quote-props {
   option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
   option keywords boolean = false "require quotes on reserved words"
@@ -33,7 +49,6 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
 
 schema member_separator_options { delimiter?: "semi" | "comma" | "none"; requireLast?: boolean }
 schema member_separator_config { multiline?: member_separator_options; singleline?: member_separator_options }
-drop rule member-delimiter-style*
 in ts_interface, ts_type_literal rule member-delimiter-style {
   option delimiter "semi" | "comma" | "none" | null = null "default separator for legacy configurations"
   option multiline member_separator_options = {} "multiline member separators"
@@ -54,7 +69,6 @@ in ts_interface, ts_type_literal rule member-delimiter-style {
   warn if member_site.last && !member_require_last || member_delimiter == "none" then (if member_site.delimiter == "semi" then "Unexpected separator (;)." else "Unexpected separator (,).") else if member_delimiter == "semi" then "Expected a semicolon." else "Expected a comma."
 }
 
-drop rule spaced-comment*
 in ts_program rule spaced-comment {
   option style "always" | "never" = "always" "spacing inside comment delimiters"
   option exceptions string[] = [] "repeated sequences exempt from spacing"
@@ -87,7 +101,6 @@ in ts_program rule spaced-comment {
   warn if comment_site.site.side == "end" then (if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment.") else if style == "always" then (if comment_site.policy.has_exceptions then "Expected exception block, space or tab after '{comment_site.identifier}{comment_site.marker}' in comment." else "Expected space or tab after '{comment_site.identifier}{comment_site.marker}' in comment.") else if comment_site.marker != "" then "Unexpected space or tab after marker ({comment_site.marker}) in comment." else "Unexpected space or tab after '{comment_site.identifier}' in comment."
 }
 
-drop rule no-floating-decimal*
 in ts_number rule no-floating-decimal:leading {
   when starts_with(text, ".")
   warn "A leading decimal point can be confused with a dot."
@@ -99,7 +112,6 @@ in ts_number rule no-floating-decimal:trailing {
   fix as text "0"
 }
 
-drop rule no-multiple-empty-lines*
 in ts_program rule no-multiple-empty-lines {
   option max int(0..) = 2 "maximum consecutive blank lines"
   option maxEOF int(0..) | null = null "maximum final blank lines"
@@ -114,7 +126,6 @@ in ts_program rule no-multiple-empty-lines {
 }
 
 schema annotation_gap_options { before?: boolean; after?: boolean }
-drop rule type-annotation-spacing*
 in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_index_signature, ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type, ts_tuple_member, ts_mapped_type rule type-annotation-spacing {
   option before boolean = false "space before annotation punctuation"
   option after boolean = true "space after annotation punctuation"
@@ -140,7 +151,6 @@ in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_ind
   warn if annotation_gap.side == "between" then (if annotation_gap.desired then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'.") else (if annotation_gap.desired then "Expected a space {annotation_gap.side} the '{annotation_label}'." else "Unexpected space {annotation_gap.side} the '{annotation_label}'.")
 }
 
-drop rule padded-blocks*
 in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks {
   option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
   option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
@@ -154,7 +164,6 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks {
   warn if padding_site.padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
 }
 
-drop rule lines-between-class-members
 in ts_class rule lines-between-class-members {
   option style "always" | "never" = "always" "blank lines between class members"
   option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
@@ -170,7 +179,6 @@ in ts_class rule lines-between-class-members {
   warn if class_gap.site.padded then "Unexpected blank line between class members." else "Expected blank line between class members."
 }
 
-drop rule space-infix-ops
 in ts_binary, ts_logical, ts_assignment, ts_assignment_pattern, ts_conditional, ts_conditional_type, ts_declarator, ts_parameter, ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter, ts_union, ts_intersection rule space-infix-ops {
   option int32Hint boolean = false "allow terminal |0 conversion"
   option ignoreOperators string[] = [] "operators exempt from spacing"
@@ -180,7 +188,6 @@ in ts_binary, ts_logical, ts_assignment, ts_assignment_pattern, ts_conditional, 
   warn "Operator '{infix_site.operator}' must be spaced."
 }
 
-drop rule space-before-blocks*
 in ts_block, ts_switch, ts_class, ts_interface, ts_enum rule space-before-blocks {
   option style "always" | "never" = "always" "spaces before blocks"
   option functions "always" | "never" | "off" | null = null "function body policy"
@@ -195,7 +202,6 @@ in ts_block, ts_switch, ts_class, ts_interface, ts_enum rule space-before-blocks
   warn if block_gap.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
 }
 
-drop rule space-before-function-paren*
 in ts_function, ts_method, ts_arrow, ts_try rule space-before-function-paren {
   option style "always" | "never" = "always" "spaces before function parameter lists"
   option named "always" | "never" | "ignore" | null = null "named function policy"
@@ -212,7 +218,6 @@ in ts_function, ts_method, ts_arrow, ts_try rule space-before-function-paren {
 }
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
-drop rule comma-dangle*
 in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature rule comma-dangle {
   option style trailing_comma_mode = "never" "trailing comma policy"
   option arrays trailing_comma_mode | null = null "array policy"
@@ -238,13 +243,11 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   warn if dangle_check.site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
 }
 
-drop rule no-whitespace-before-property
 in ts_member, ts_index, ts_indexed_access, ts_qualified_name, ts_import_type rule no-whitespace-before-property {
   when property_spacing != null && property_spacing.spaced
   warn "Unexpected whitespace before property {property_spacing.name}."
 }
 
-drop rule block-spacing*
 in ts_block, ts_static_block, ts_switch, ts_enum rule block-spacing {
   option style "always" | "never" = "always" "spaces inside non-empty blocks"
   each delimiter_site in filter(delimiter_spacing_sites, s => s.spaced != (style == "always") && !(style == "never" && s.line_comment))
@@ -253,7 +256,6 @@ in ts_block, ts_static_block, ts_switch, ts_enum rule block-spacing {
   warn if style == "always" then "Requires a space {delimiter_site.side} '{delimiter_site.token}'." else "Unexpected space(s) {delimiter_site.side} '{delimiter_site.token}'."
 }
 
-drop rule computed-property-spacing*
 in ts_computed_key, ts_index, ts_indexed_access rule computed-property-spacing {
   option style "always" | "never" = "never" "spaces inside computed property brackets"
   option enforceForClassMembers boolean = true "check computed class members"
@@ -265,7 +267,6 @@ in ts_computed_key, ts_index, ts_indexed_access rule computed-property-spacing {
 
 schema star_mode "before" | "after" | "both" | "neither" | { before?: boolean; after?: boolean }
 
-drop rule yield-star-spacing
 in ts_yield rule yield-star-spacing {
   option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
   option before boolean | null = null "override space before star"
@@ -275,7 +276,6 @@ in ts_yield rule yield-star-spacing {
   warn if star_site.spaced then "Unexpected space {star_site.side} *." else "Missing space {star_site.side} *."
 }
 
-drop rule generator-star-spacing*
 in ts_function, ts_method rule generator-star-spacing {
   option mode "before" | "after" | "both" | "neither" = "before" "spacing around generator star"
   option before boolean | null = null "override space before star"
@@ -308,7 +308,7 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
   option overrides { [key: string]: boolean } = {} "spacing by operator"
   let unary_gap unary_spacing
   when unary_gap != null
-  let wants_space if unary_gap.word then words else nonwords
+  let wants_space default(get(overrides, unary_gap.override_key), default(get(overrides, unary_gap.operator), if unary_gap.word then words else nonwords))
   when wants_space != unary_gap.separated
   when !(wants_space && unary_gap.first_bang) && !(unary_gap.word && !wants_space && !unary_gap.removable)
   warn if unary_gap.word then
@@ -318,7 +318,6 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
     else if unary_gap.prefix then "Unexpected space after unary operator '{unary_gap.operator}'." else "Unexpected space before unary operator '{unary_gap.operator}'."
 }
 
-drop rule rest-spread-spacing
 in ts_rest, ts_spread rule rest-spread-spacing {
   option style "always" | "never" = "never" "spacing after rest and spread"
   let spread_gap spread_spacing
@@ -349,7 +348,6 @@ in ts_program rule semi-style {
   warn if style == "last" || semi_site.for_header then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
 }
 
-drop rule semi-spacing:*
 in ts_program rule semi-spacing {
   option before boolean = false "space before semicolon"
   option after boolean = true "space after semicolon"
@@ -358,7 +356,6 @@ in ts_program rule semi-spacing {
   warn if semi_site.spaced then "Unexpected whitespace {semi_site.side} semicolon." else "Missing whitespace {semi_site.side} semicolon."
 }
 
-drop rule comma-spacing:*
 in ts_program rule comma-spacing {
   option before boolean = false "space before comma"
   option after boolean = true "space after comma"
@@ -421,7 +418,6 @@ in ts_tagged_template rule template-tag-spacing:missing {
   warn "Missing space between template tag and template literal."
 }
 
-drop rule brace-style*
 in ts_block, ts_static_block, ts_switch, ts_class rule brace-style {
   option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
   option allowSingleLine boolean = false "allow single-line block bodies"
@@ -431,18 +427,19 @@ in ts_block, ts_static_block, ts_switch, ts_class rule brace-style {
   warn if brace_site.kind == "keyword" then (if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block.") else if brace_site.kind == "open" then (if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement.") else if brace_site.kind == "body" then "Statement inside of curly braces should be on next line." else "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
 }
 
-# semi "always" on statements: each native statement owns its `;`
-# (.js/format's semi:never is the other choice).
 group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function
-in ts_export let semicolon_not_needed declaration != null
-in ts_variable_declaration let semicolon_not_needed re_test(parent, /^ts_for/)
-# Only bodiless ones: overload and abstract signatures.
-in ts_method, ts_function let semicolon_not_needed body != null
-in semicolon_statement rule semi:always {
-  when !ends_with(text, ";") && semicolon_not_needed != true
-  report change
-  fix as text ";"
-  warn "Missing semicolon."
+in semicolon_statement rule semi {
+  option mode "always" | "never" = "always" "statement semicolon policy"
+  option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
+  option omitLastInOneLineClassBody boolean = false "omit final semicolons in single-line class bodies"
+  option beforeStatementContinuationChars "always" | "any" | "never" = "any" "semicolons before continuation characters"
+  let statement_semi statement_semicolon
+  when statement_semi != null
+  let omit_statement_semi omitLastInOneLineBlock && statement_semi.one_line_block || omitLastInOneLineClassBody && statement_semi.one_line_class
+  when if mode == "always" then statement_semi.present == omit_statement_semi else if statement_semi.present then statement_semi.redundant || !statement_semi.class_hazard && !statement_semi.same_line && (!statement_semi.hazard_before || !statement_semi.class_field && beforeStatementContinuationChars == "never" && !statement_semi.hazard_after) else !statement_semi.class_field && beforeStatementContinuationChars == "always" && statement_semi.hazard_before
+  report at statement_semi.offset
+  fix as slice(text, 0, statement_semi.offset - offset) (if statement_semi.present then "" else ";") slice(text, statement_semi.end - offset)
+  warn if statement_semi.present then "Extra semicolon." else "Missing semicolon."
 }
 
 # Empty constructor argument lists belong to this new expression, not its callee.

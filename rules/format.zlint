@@ -34,7 +34,7 @@ rule quotes* {
   set style "double"
 }
 rule rest-spread-spacing
-rule semi:always
+rule semi
 rule semi-spacing*
 rule space-before-blocks
 rule space-before-function-paren*

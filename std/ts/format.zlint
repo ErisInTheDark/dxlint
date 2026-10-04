@@ -1,5 +1,5 @@
-# .ts/format: stylistic rules on the `js_*` text layers, modelled on
-# eslint's and @stylistic's. Native ports in .ts/layout replace them.
+# .ts/format: text-layer rules and shared matcher contexts.
+# Complete native replacements live in .ts/layout.
 # Rule names are eslint rule names without the plugin prefix;
 # `family:variant` rules are parts of one eslint rule. All are off until
 # turned on: `rule semi:always`, `rule quotes:double { set style "double" }`.
@@ -115,98 +115,14 @@ in js_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allowed.
 
 # ---- blank lines ---------------------------------------------------------
 
-in js_code match js_blank_start /\A(?:[ \t]*\r?\n)+/
-in js_code match js_blank_end /^(?:[ \t]*\r?\n)+\z/
 # Blank lines count everywhere but in template literals, comments included.
 in js_code, js_block_comment match js_blank_run /^(?:[ \t]*\r?\n)+/
-
-# Optional-body blank lines start mid-line, after the code their first line
-# break ends.
-macro blank_lines (re_count(text, /\n/) - (if re_test(before, /\S/) then 1 else 0))
-in js_blank_run, js_optional_body.blank, js_padding_bottom rule no-multiple-empty-lines warn "More than {max} blank line(s) not allowed." {
-  option max int(0..) = 2 "blank lines allowed in a row"
-  report change
-  when blank_lines > max
-  fix as (if re_test(before, /\S/) then default(re_find(text, /^[ \t]*\r?\n/), "") else "") repeat(newline, max)
-}
-in js_blank_end rule no-multiple-empty-lines:eof warn "Too many blank lines at the end of file. Max of {max} allowed." {
-  option max int(0..) = 0 "blank lines allowed at the end of the file"
-  report change
-  when count(lines(text)) > max
-  fix as repeat(newline, max)
-}
-in js_blank_start rule no-multiple-empty-lines:bof warn "Too many blank lines at the beginning of file. Max of {max} allowed." {
-  option max int(0..) = 0 "blank lines allowed at the start of the file"
-  report change
-  when count(lines(text)) > max
-  fix as repeat(newline, max)
-}
-
-# Padding inside blocks (never) and class bodies (always). Checked on the
-# brace's own text, anchored at its ends: lookbehinds would also see
-# braces inside comments.
-in braces rule padded-blocks:never-top warn "Block must not be padded by blank lines." {
-  option blocks "never" | "ignore" = "never"
-  when (layer == "braces" || layer == "js_block") && blocks == "never"
-  fix as re_replace(text, /^\{([ \t]*\r?\n)(?:[ \t]*\r?\n)+/, "{{$1")
-}
-# Lookahead is safe here: from the brace's own text, the next `}` after
-# only whitespace is always its own.
-in braces match js_padding_bottom /(?<=\S)[ \t]*\r?\n(?:[ \t]*\r?\n)+(?=[ \t]*\})/
-in js_padding_bottom rule padded-blocks:never-bottom warn "Block must not be padded by blank lines." {
-  option blocks "never" | "ignore" = "never"
-  when (parent == "braces" || parent == "js_block") && blocks == "never"
-  fix as default(re_find(text, /^[ \t]*\r?\n/), newline)
-}
-in js_class_body rule padded-blocks:always-top warn "Block must be padded by blank lines." {
-  option classes "always" | "ignore" = "always"
-  when classes == "always"
-  fix as re_replace(text, /^\{([ \t]*\r?\n)([ \t]*[^\s}])/, "{{$1$1$2")
-}
-in js_class_body rule padded-blocks:always-bottom warn "Block must be padded by blank lines." {
-  option classes "always" | "ignore" = "always"
-  report change
-  when classes == "always"
-  fix as re_replace(text, /([^\s{][ \t]*)(\r?\n)([ \t]*\})$/, "$1$2$2$3")
-}
-
-# A blank line between a multi-line class member and the next one. Members
-# are statements; the gap between two of them holds blank lines and comments.
-in js_statement rule lines-between-class-members warn "Expected blank line between class members." {
-  when parent == "js_class_body" && previous_sibling != null
-  when re_test(previous_sibling, /\n/) && !re_test(previous_gap, /\n[ \t]*\r?\n/)
-  fix as newline text
-}
 
 # No blank lines between `if (x)` and its single-statement body.
 in js_statement_context match js_optional_body /(?<![.\w$])\b(?:if|while|for)\b[ \t]*/ parentheses /[ \t]*/ blank:/\r?\n(?:[ \t]*\r?\n)+/ /(?=[ \t]*[^\s{\/])/
 in js_optional_body.blank rule no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
   report change
   fix as newline
-}
-
-# ---- semicolons ----------------------------------------------------------
-
-# Empty loop bodies and `else;` need their semicolon; eat them first.
-# `} while (x);` ends a do-while instead.
-in js_statement_context match js_empty_body /(?<!\}[ \t]*)\b(?:while|for|if)\b[ \t]*/ parentheses /[ \t]*;/ or /\belse[ \t]*;/
-
-# Code before any trailing comment and line break.
-# A trailing `// comment` starts after whitespace (`.//` in a template is not one).
-macro statement_code re_replace(text, /[ \t]+\/\/[^\r\n]*$|[ \t]+$/, "")
-
-in js_statement rule semi:never warn "Extra semicolon." {
-  report change
-  when layer != "js_empty_statement" && ends_with(statement_code, ";") && !re_test(after, /\S/) && !re_test(statement_code, /\belse[ \t]*;$/)
-  when !re_test(text_after, /^\s*[\[(`+\-\/]/)
-  fix as slice(statement_code, 0, -1) slice(text, len(statement_code))
-}
-# semi:always lives in .ts/problems (on the native layers).
-# `;` before `}` on one line (`{ return x; }`) also counts.
-in braces match js_semicolon_before_brace /;(?=[ \t]*\})/
-in js_semicolon_before_brace rule semi:never-brace warn "Extra semicolon." {
-  when parent != "js_interface_body" && parent != "js_type_literal"
-  fix as ""
 }
 
 in js_code match js_var /(?<![.\w$])\bvar\b(?![ \t]*:)/
@@ -218,142 +134,12 @@ in js_var rule no-var warn "Unexpected var, use let or const instead." {
 
 # ---- interfaces and type literals ------------------------------------------
 
-in js_type_body match js_member_delimiter /[;,](?=[ \t]*(?:\/\/[^\r\n]*)?\r?\n)/
-in js_member_delimiter rule member-delimiter-style:multiline warn "Unexpected separator ({text})." {
-  option delimiter "none" | "semi" | "comma" = "none"
-  when delimiter == "none"
-  fix as ""
-}
-
 # Members of multi-line interfaces and type literals, like statements. The
-# delimiter itself stays outside, for `js_member_delimiter`.
+# delimiter itself stays outside.
 in js_type_body match js_type_member /^[ \t]*(?=[^\s}\/@,;])/ until (/(?=[ \t]*[;,])/ or statement_end)
 group js_code js_type_member
-in js_type_member rule member-delimiter-style:missing warn "Expected a {delimiter} after this member." {
-  option delimiter "none" | "semi" | "comma" = "none"
-  report change
-  when delimiter != "none" && !re_test(after, /^[ \t]*[;,]/)
-  fix as re_replace(text, /([ \t]*(?:\/\/[^\r\n]*)?)$/, (if delimiter == "semi" then ";" else ",") "$1")
-}
-in js_member_delimiter rule member-delimiter-style:wrong warn "Expected a {delimiter} instead of '{text}'." {
-  option delimiter "none" | "semi" | "comma" = "none"
-  when delimiter == "semi" && text == "," || delimiter == "comma" && text == ";"
-  fix as if delimiter == "semi" then ";" else ","
-}
-
-# ---- strings -------------------------------------------------------------
-
-in js_string rule quotes:double warn "Strings must use singlequote." {
-  option style "single" | "double" = "single"
-  when style == "single" && len(text) >= 2 && ends_with(text, "\"")
-  fix as "'" replace(replace(replace(slice(text, 1, -1), "\\\"", "\""), "\\'", "'"), "'", "\\'") "'"
-}
-in js_single_string rule quotes:single warn "Strings must use doublequote." {
-  option style "single" | "double" = "single"
-  option avoidEscape boolean = false "keep the other quote when it saves escapes"
-  when style == "double" && len(text) >= 2 && ends_with(text, "'")
-  when !(avoidEscape && contains(text, "\""))
-  fix as "\"" replace(replace(replace(slice(text, 1, -1), "\\'", "'"), "\\\"", "\""), "\"", "\\\"") "\""
-}
-
-# Template literals with nothing to interpolate, on one line, untagged.
-in js_template rule quotes:template warn "Strings must use {style}quote." {
-  option style "single" | "double" = "single"
-  option allowTemplateLiterals boolean = true "allow `templates` that could be plain strings"
-  option avoidEscape boolean = false "keep the template when the quote would need escaping"
-  when !allowTemplateLiterals && !contains(text, "$\{") && !contains(text, "\n")
-  when !(avoidEscape && contains(text, if style == "double" then "\"" else "'"))
-  # Tagged templates stay; `return` / `typeof` / ... are not tags.
-  when !re_test(before, /[\w$)\]][ \t]*$/) || re_test(before, /(?:^|[^\w$.])(?:return|typeof|case|yield|await|in|of|new|throw|void|else|do|instanceof)[ \t]*$/)
-  fix as (if style == "double" then "\"" replace(replace(slice(text, 1, -1), "\\`", "`"), "\"", "\\\"") "\""
-  else "'" replace(replace(slice(text, 1, -1), "\\`", "`"), "'", "\\'") "'")
-}
-
-# Object and interface keys that need no quotes.
-# Specialised strings, so they win against plain ones and keep their rules.
-match js_quoted_key like js_single_string /(?<=(?:^|[{,])[ \t]*(?:readonly[ \t]+)?)'(?:[^'\\\r\n]|\\.)*'(?=[ \t]*\??:)/
-match js_quoted_double_key like js_string /(?<=(?:^|[{,])[ \t]*(?:readonly[ \t]+)?)"(?:[^"\\\r\n]|\\.)*"(?=[ \t]*\??:)/
-in js_members match js_quoted_key
-in js_members match js_quoted_double_key
-in js_quoted_key, js_quoted_double_key rule quote-props warn "Properties shouldn't be quoted as all quotes are redundant." {
-  option types boolean = true "also interface and type literal keys (eslint core checks objects only)"
-  when types || parent != "js_type_member" && parent != "js_interface_body" && parent != "js_type_literal"
-  when text ~ /['"][A-Za-z_$][\w$]*['"]/
-  when !re_test(braces, /(?m)(?:^|[{,])[ \t]*(?:readonly[ \t]+)?['"](?:[^'"\r\n]*[^\w$'"\r\n][^'"\r\n]*|\d[^'"\r\n]*|)['"][ \t]*\??:/)
-  fix as slice(text, 1, -1)
-}
 
 # ---- commas --------------------------------------------------------------
-
-in js_code match js_comma_space_before /[ \t]+(?=,)/
-in js_comma_space_before rule comma-spacing:before warn "There should be no space before ','." {
-  option before boolean = false "space before comma"
-  option after boolean = true "space after comma"
-  when !before
-  when !re_test(before, /[\[,][ \t]*$/)
-  fix as ""
-}
-in js_code match js_comma_no_space_after /,(?=[^ \t\r\n)\]},])/
-in js_comma_no_space_after rule comma-spacing:after warn "A space is required after ','." {
-  option before boolean = false "space before comma"
-  option after boolean = true "space after comma"
-  when after
-  fix as ", "
-}
-in js_code match js_comma_no_space_before /[^ \t\r\n](?=,)/
-in js_comma_no_space_before rule comma-spacing:missing-before warn "A space is required before ','." {
-  option before boolean = false "space before comma"
-  option after boolean = true "space after comma"
-  when before
-  fix as text " "
-}
-in js_code match js_comma_space_after /(?<=,)[ \t]+(?=\S)/
-in js_comma_space_after rule comma-spacing:unexpected-after warn "There should be no space after ','." {
-  option before boolean = false "space before comma"
-  option after boolean = true "space after comma"
-  when !after
-  fix as ""
-}
-
-in js_code match js_comma_first /(?<=\n[ \t]*),/
-in js_comma_first rule comma-style warn "',' should be placed last." {
-}
-
-# Multiline lists end with a comma: the last element's line (ignoring
-# trailing comments and comment-only lines) must end with `,`.
-macro last_item_tail(close) /(?m)^([ \t]*(?:[^ \t\r\n\/](?:[^\/\r\n]|\/[^\/\r\n])*?)?[^,\s{(\[\/])((?:[ \t]+\/\/[^\r\n]*)?(?:\r?\n[ \t]*(?:\/\/[^\r\n]*)?)*\r?\n[ \t]*/ close /)\z/
-in braces rule comma-dangle warn "Missing trailing comma." {
-  option objects "always-multiline" | "ignore" = "always-multiline" "objects and destructuring"
-  option imports "always-multiline" | "ignore" = "always-multiline" "import and export lists"
-  option enums "always-multiline" | "ignore" = "always-multiline" "enum bodies"
-  report change
-  when contains(text, "\n")
-  when if layer == "js_import_list" then imports == "always-multiline"
-    else if layer == "js_enum_body" then enums == "always-multiline"
-    else (layer == "js_object" || layer == "js_object_property" || layer == "js_object_else") && objects == "always-multiline"
-  # Type literals in object positions: optional members, or several members
-  # and no commas at all.
-  when !re_test(text, /(?m)^[ \t]*(?:readonly[ \t]+)?(?:[\w$]+\?|\[[^\]\r\n]*\bin\b[^\]\r\n]*\]\??)[ \t]*:/)
-  when !re_test(text, /;[ \t]*(?:\/\/[^\r\n]*)?\r?\n/)
-  when re_test(text, /,[ \t]*(?:\/\/[^\r\n]*)?\r?\n/) || re_count(text, /(?m)^[ \t]*\S/) <= 3
-  fix as re_replace(text, last_item_tail(/\}/), "$1,$2")
-}
-in brackets rule comma-dangle:array warn "Missing trailing comma." {
-  option arrays "always-multiline" | "ignore" = "always-multiline" "arrays and tuples"
-  report change
-  when layer == "brackets" && arrays == "always-multiline" && contains(text, "\n")
-  fix as re_replace(text, last_item_tail(/\]/), "$1,$2")
-}
-# Call arguments and parameter lists: a paren after a callee or a function
-# name, or an arrow function's parameters. A rest parameter takes no comma.
-in parentheses rule comma-dangle:function warn "Missing trailing comma." {
-  option functions "always-multiline" | "ignore" = "ignore"
-  report change
-  when functions == "always-multiline" && contains(text, "\n") && parent != "js_type_member"
-  when re_test(before, /[\w$)\]>][ \t]*$/) && !re_test(before, /=>[ \t]*$|\b(?:if|for|while|switch|catch|with|return|typeof|void|await|yield|in|of|case|throw|delete|instanceof)[ \t]*$/) || re_test(after, /^[ \t]*(?::[^=;]*)?=>/)
-  when !re_test(text, /\.\.\.[^,\r\n]*\s*\)$/)
-  fix as re_replace(text, last_item_tail(/\)/), "$1,$2")
-}
 
 # ---- spacing ---------------------------------------------------------------
 
@@ -429,17 +215,6 @@ in js_bracket_inner_space rule array-bracket-spacing warn "There should be no sp
   when parent == "brackets"
   fix as ""
 }
-in js_bracket_inner_space rule computed-property-spacing warn "There should be no space inside this bracket." {
-  when parent == "js_index"
-  fix as ""
-}
-
-in js_code match js_multi_space /(?<=\S)[ \t]{2,}(?=[^ \t\r\n\/])/
-in js_multi_space rule no-multi-spaces warn "Multiple spaces found." fix as " "
-
-in js_code match js_space_before_property /(?<=[\w$)\]])[ \t]+(?=\??\.[\w$#])/
-in js_space_before_property rule no-whitespace-before-property warn "Unexpected whitespace before property." fix as ""
-
 in js_code match js_dot_line_end /(?<![?.\d])\.(?=[ \t]*\r?\n)/
 in js_dot_line_end rule dot-location warn "Expected dot to be on same line as property." {
   option style "object" | "property" = "property" "line for a member-access dot"
@@ -464,43 +239,6 @@ in js_code match js_dot_before_comment /(?<![?.\d])\.(?=[ \t]*\/\*[^*]*\*\/[ \t]
 in js_dot_before_comment rule dot-location:comment-property warn "Expected dot to be on same line as property." {
   option style "object" | "property" = "property" "line for a member-access dot"
   when style == "property"
-}
-
-in js_code match js_float_leading_dot /(?<![\w$.)\]])\.\d/
-in js_float_leading_dot rule no-floating-decimal:leading warn "A leading decimal point can be confused with a dot." fix as "0" text
-in js_code match js_float_trailing_dot /\b\d+\.(?![\d\w.])/
-in js_float_trailing_dot rule no-floating-decimal:trailing warn "A trailing decimal point can be confused with a dot." fix as text "0"
-
-in js_code match js_spread_space /\.\.\.[ \t]+/
-in js_spread_space rule rest-spread-spacing warn "Unexpected whitespace after spread operator." fix as "..."
-
-in js_code match js_semicolon_space_before /(?<=\S)[ \t]+;/
-in js_semicolon_space_before rule semi-spacing:before warn "Unexpected whitespace before semicolon." {
-  option before boolean = false "space before semicolon"
-  option after boolean = true "space after semicolon"
-  when !before
-  fix as ";"
-}
-over parentheses match js_semicolon_no_space_after /;(?=[^\s;)])/
-in js_semicolon_no_space_after rule semi-spacing:after warn "Missing whitespace after semicolon." {
-  option before boolean = false "space before semicolon"
-  option after boolean = true "space after semicolon"
-  when after
-  fix as "; "
-}
-over js_code match js_semicolon_no_space_before /(?<=\S);/
-in js_semicolon_no_space_before rule semi-spacing:missing-before warn "Missing whitespace before semicolon." {
-  option before boolean = false "space before semicolon"
-  option after boolean = true "space after semicolon"
-  when before
-  fix as " ;"
-}
-in js_code match js_semicolon_space_after /(?<=;)[ \t]+(?=[^\s;)])/
-in js_semicolon_space_after rule semi-spacing:unexpected-after warn "Unexpected whitespace after semicolon." {
-  option before boolean = false "space before semicolon"
-  option after boolean = true "space after semicolon"
-  when !after
-  fix as ""
 }
 
 in js_interpolation match js_interpolation_space /(?<=\$\{)[ \t]+|[ \t]+(?=\})/
@@ -595,54 +333,11 @@ in js_curly_close_tight rule object-curly-spacing:close warn "A space is require
   fix as text " "
 }
 
-# Single-line blocks: `{ return x }`
-in braces match js_block_open_tight /(?<=\{)[^ \t\r\n}]/
-in braces match js_block_close_tight /[^ \t\r\n{](?=\})/
-in js_block_open_tight rule block-spacing:open warn "Requires a space after '\{'." {
-  when parent == "braces"
-  report change
-  fix as " " text
-}
-in js_block_close_tight rule block-spacing:close warn "Requires a space before '\}'." {
-  when parent == "braces"
-  report change
-  fix as text " "
-}
-
-# `){`, `else{`, `class X{` -> one space before the block.
-in braces rule space-before-blocks warn "Missing space before opening brace." {
-  report change
-  when re_test(before, /[\w$)\]]$/) && !re_test(before, /\$$/)
-  fix as " " text
-}
-
 # Keys: `key: value`, also in interfaces and type literals.
 in js_keyed match js_key_colon /(?<=(?:^|[{,;])[ \t]*(?:readonly[ \t]+)?(?:[\w$]+\??|'[^'\r\n]*'|"[^"\r\n]*"|\[[^\]\r\n]*\]))[ \t]*:[ \t]*(?=\S)/
 in js_key_colon rule key-spacing warn "Bad spacing around ':' after a key." {
   when text != ": "
   fix as ": "
-}
-
-# Type annotations: `a: T`, `a?: T`, `(): T`.
-# Only where a declaration can be: after a parameter or member name (at the
-# start of a line or after `(`, `,`, `{`, `;` or a modifier), or after a
-# parameter list. Ternary and conditional-type colons stay out.
-in js_code match js_annotation_colon /(?<=(?:(?:^|[(,{;]|\b(?:let|const|var|readonly|public|private|protected|static|declare|abstract|override))[ \t]*(?:\.\.\.)?[\w$]+\??|\)))(?<!\?[^.:;\r\n][^;\r\n]*)[ \t]*:[ \t]*(?=[^\s:])/
-in js_annotation_colon, js_key_colon rule type-annotation-spacing warn "Bad spacing around ':' in a type annotation." {
-  when layer == "js_annotation_colon" || parent == "js_interface_body" || parent == "js_type_literal" || parent == "js_type_member"
-  when parent != "js_object" && parent != "js_object_property" && parent != "js_object_else" && !re_test(before, /^\s*(?:case\b.*|default\s*)$/)
-  # `) : x` closing a multi-line ternary's middle branch: a spaced `?` came first.
-  when !(re_test(before, /\)[ \t]*$/) && re_test(parent_before, /\s\?\s/))
-  when text != ": "
-  fix as ": "
-}
-
-# `a = b`: spaces around assignments and binary operators.
-in js_code match js_infix_tight /(?<=[\w$)\]'"`])(?:===?|!==?|[+\-*%\/&|^]=|&&|\|\||\?\?|<=|>=|(?<![=!<>+\-*\/%&|^?])=(?![=>]))[ \t]*(?=[\w$(\[!'"`])|(?<=[ \t])(?:===?|!==?|&&|\|\||\?\?|(?<![=!<>+\-*\/%&|^?])=(?![=>]))(?=[\w$(\[!'"`])/
-in js_infix_tight rule space-infix-ops warn "Operator '{trim(text)}' must be spaced." {
-  report change
-  when text != trim(text) " " || !re_test(before, /[ \t]$/)
-  fix as (if re_test(before, /[ \t]$/) then "" else " ") trim(text) " "
 }
 
 # ---- keywords ---------------------------------------------------------------
@@ -651,55 +346,6 @@ in js_code match js_keyword_tight_after /(?<![.\w$])\b(?:if|for|while|switch|cat
 in js_keyword_tight_after rule keyword-spacing:after warn "Expected space(s) after \"{text}\"." fix as text " "
 in js_code match js_keyword_tight_before /(?<=\})(?:else|catch|finally|while)\b/
 in js_keyword_tight_before rule keyword-spacing:before warn "Expected space(s) before \"{text}\"." fix as " " text
-
-# `function foo (`, `function (`, method `foo (`
-in js_code match js_function_parenthesis /\bfunction\b[ \t]*\*?[ \t]*(?:[\w$]+[ \t]*)?(?:<[^>()]*>)?(?=\()/
-in js_function_parenthesis rule space-before-function-paren:function warn "Missing space before function parentheses." {
-  option style "always" | "never" = "always"
-  report change
-  fix as if style == "always" then trim_end(text) " " else trim_end(text)
-}
-in js_member, js_object, js_object_property, js_object_else match js_method_name /(?<=(?:^|[{,])[ \t]*(?:(?:public|private|protected|static|async|override|abstract|readonly|get|set)[ \t]+)*\*?[ \t]*)[#\w$]+[ \t]*(?:<[^>()]*>)?[ \t]*(?=\([^)]*\)[ \t]*(?::[^={;]*)?\{)/
-in js_method_name rule space-before-function-paren:method warn "Missing space before function parentheses." {
-  option style "always" | "never" = "always"
-  report change
-  when !(text ~ /(?:if|for|while|switch|catch)[ \t]*/)
-  fix as if style == "always" then trim_end(text) " " else trim_end(text)
-}
-in js_code match js_async_arrow /(?<![.\w$])\basync(?=\()/
-in js_async_arrow rule space-before-function-paren:async warn "Missing space before function parentheses." fix as "async "
-
-# Generators: `function* foo`, `*foo ()` -> `* foo ()`, `yield* x`.
-in js_code match js_function_star /\bfunction[ \t]*\*[ \t]*/
-in js_function_star rule generator-star-spacing:function warn "Missing space after *." fix as "function* "
-in js_member, js_object, js_object_property match js_method_star /(?<=(?:^|[{,])[ \t]*(?:(?:static|async)[ \t]+)*)\*[ \t]*(?=[\w$#\[])/
-in js_method_star rule generator-star-spacing warn "Missing space after *." fix as "* "
-in js_code match js_yield_star /\byield[ \t]*\*[ \t]*/
-in js_yield_star rule yield-star-spacing warn "Missing space after *." fix as "yield* "
-
-# `} else` vs `}\nelse`
-in js_statement_context match js_closing_keyword /(?<=\})[ \t]*(?:else|catch|finally)\b/
-in js_closing_keyword rule brace-style:stroustrup warn "Closing curly brace appears on the same line as the subsequent block." {
-  option style "1tbs" | "stroustrup" = "stroustrup"
-  when style == "stroustrup"
-  report change
-  fix as newline indent trim(text)
-}
-in js_statement_context match js_closing_keyword_newline /(?<=\}[ \t]*)\r?\n[ \t]*(?:else|catch|finally)\b/
-in js_closing_keyword_newline rule brace-style:1tbs warn "Closing curly brace does not appear on the same line as the subsequent block." {
-  option style "1tbs" | "stroustrup" = "stroustrup"
-  when style == "1tbs"
-  report change
-  fix as " " trim(text)
-}
-
-# ---- comments ----------------------------------------------------------------
-
-in js_line_comment rule spaced-comment:line warn "Expected space or tab after '//' in comment." {
-  report change
-  when !re_test(text, /^\/\/(?:[ \t]|$|\/*$|#(?:region|endregion)\b)/)
-  fix as "// " slice(text, 2)
-}
 
 import .ts/flow
 
