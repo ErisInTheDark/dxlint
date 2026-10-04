@@ -29,7 +29,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "curly_body", doc: "native layers: control body name, brace status and all multi/line/nest brace expectations with chain consistency", get: |f, n| f.with_file(statements::curly_body, n) },
     Fact { name: "unicode_regex_flags", doc: "native layers: known literal or global RegExp flags, including missing flags as empty, excluding spread patterns", get: |f, n| f.with_file(regex::unicode_flags, n) },
     Fact { name: "eval_usage", doc: "native layers: direct or indirect eval reference, optional-call status and identifier/property report offset", get: |f, n| f.with_file(expressions::eval_usage, n) },
-    Fact { name: "sequence_context", doc: "native layers: comma position and explicit-parenthesis intent outside exempt for init/update sequences", get: |f, n| f.with_file(statements::sequence_context, n) },
     Fact { name: "extended_native", doc: "native layers: global builtin prototype being extended by assignment or Object property definition, or null", get: |f, n| f.with_file(expressions::extended_native, n) },
     Fact { name: "empty_function", doc: "native layers: uncommented empty function category, display name, TypeScript exceptions and body offset", get: |f, n| f.with_file(functions::empty_function, n) },
     Fact { name: "missing_switch_default", doc: "native layers: final trailing comment text and presence for a nonempty switch missing default, or null", get: |f, n| f.with_file(statements::switch_default, n) },

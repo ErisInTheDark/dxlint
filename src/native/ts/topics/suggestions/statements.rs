@@ -140,25 +140,6 @@ pub fn switch_default(file: &NativeFile, node: u32) -> Value<'static> {
     ])
 }
 
-pub fn sequence_context(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let mut outer = node;
-    let mut parens = 0;
-    while let Some(parent) = s.parent(outer).filter(|&n| s.is(n, K::Paren)) { outer = parent; parens += 1; }
-    let parent = s.parent(outer);
-    if parent.is_some_and(|n| s.is(n, K::For)) && matches!(s.field(outer), Some(F::Init | F::Update)) { return Value::Null }
-    let intentional = parens > 0 && !(parens == 1 && parent.is_some_and(|n| s.is(n, K::Arrow)) && s.field(outer) == Some(F::Body));
-    let Some(first) = s.all(node, F::Expr).next() else { return Value::Null };
-    let from = s.tree.node(first).end;
-    let mut lexer = Lexer::new(&s.src[from as usize..s.tree.node(node).end as usize]);
-    let offset = loop {
-        let token = lexer.next_token();
-        if token.tok == Tok::Eof { return Value::Null }
-        if token.tok == Tok::P(",") { break from + token.start }
-    };
-    Value::record(vec![("intentional".into(), Value::Bool(intentional)), ("offset".into(), Value::Num(f64::from(offset)))])
-}
-
 fn brace_expectations(file: &NativeFile, owner: u32, body: u32) -> [i32; 3] {
     let s = &file.syntax;
     let block = s.is(body, K::Block);

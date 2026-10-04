@@ -158,9 +158,14 @@ in ts_string rule no-nonoctal-decimal-escape {
 # Comma operators, except loop init/update and explicitly grouped expressions.
 in ts_sequence rule no-sequences {
   option allowInParentheses boolean = true "allow explicitly parenthesised sequences"
-  let sequence_info sequence_context
-  when sequence_info != null && !(allowInParentheses && sequence_info.intentional)
-  report at sequence_info.offset
+  let enclosed walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null)
+  let outside last(enclosed)
+  when !(outside.parent is ts_for && contains(["init", "update"], outside.field))
+  let paren_count count(enclosed) - 1
+  when !allowInParentheses || paren_count == 0 || paren_count == 1 && outside.parent is ts_arrow && outside.field == "body"
+  let comma_offset opener.ts_comma.offset
+  when comma_offset != null
+  report at comma_offset
   warn "Unexpected use of comma operator."
 }
 
