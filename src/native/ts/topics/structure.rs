@@ -6,7 +6,6 @@ use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::Kind;
 
 mod parens;
-mod comments;
 mod declarations;
 mod operators;
 mod calls;
@@ -19,9 +18,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "precedence", doc: "native expressions and types: binding strength, increasing from sequence to primary", get: |f, n| f.with_file(|f, n| Value::from(f64::from(operators::precedence(&f.syntax, n))), n) },
     Fact { name: "bom", doc: "native ts_program: source starts with a Unicode BOM", get: |f, n| f.with_file(bom, n) },
     Fact { name: "excess_parens", doc: "native parenthesized expressions and types: redundant parentheses with option contexts", get: |f, n| f.with_file(parens::excess, n) },
-    Fact { name: "comment_layout", doc: "native program: line comment bodies, positions and directive status", get: |f, n| f.with_file(comments::layout, n) },
-    Fact { name: "comment_style_findings", doc: "native program: multiline comment style findings", get: |f, n| f.with_file(comments::styles, n) },
-    Fact { name: "comment_gaps", doc: "native program: missing blank lines and immediate container boundaries around comments", get: |f, n| f.with_file(comments::gaps, n) },
     Fact { name: "declaration_groups", doc: "native variable declarations: counts, previous statement and preceding groups in the owning scope", get: |f, n| f.with_file(declarations::groups, n) },
     Fact { name: "statement_line_events", doc: "native program: counted statement enter and exit lines in traversal order", get: |f, n| f.with_file(statements::events, n) },
     Fact { name: "list_layout", doc: "native list owners: boundaries, item counts and spacing or wrapping pairs", get: |f, n| f.with_file(lists::sites, n) },

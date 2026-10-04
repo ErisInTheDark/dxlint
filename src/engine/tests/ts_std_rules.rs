@@ -3,6 +3,27 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn adjacent_comments_share_outer_blank_line_requirements() {
+    let lint = native_linter("rule lines-around-comment {\n set beforeBlockComment true\n set afterBlockComment true\n}");
+    let source = "before();\n/* first */ /* second\n continued */\nafter();";
+    let reports = lint.lint(Path::new("/root/a.ts"), source);
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0].start, source.find("/* first").expect("first comment"));
+    assert_eq!(reports[1].start, source.find("/* second").expect("second comment"));
+}
+
+#[test]
+fn multiline_comment_style_uses_javascript_line_boundaries() {
+    let linter = native_linter("rule multiline-comment-style");
+    for separator in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+        let source = format!("/*bad{separator} more{separator} */");
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), &source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, [0, 5 + separator.len()], "{source:?}: {diagnostics:#?}");
+    }
+}
+
+#[test]
 fn empty_interfaces_use_members_and_supertypes_not_body_text() {
     let linter = native_linter("rule no-empty-interface");
     for (source, expected) in [

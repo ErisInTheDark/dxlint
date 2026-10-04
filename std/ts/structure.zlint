@@ -128,30 +128,102 @@ in ts_line rule max-len {
   warn if comment_applies then "This line has a comment length of {length}. Maximum allowed is {limit}." else "This line has a length of {length}. Maximum allowed is {limit}."
 }
 
-in ts_program rule line-comment-position {
+fn structure_is_directive(body) = re_test(body, /^(?:eslint|jscs|\/ <reference|\/ <amd-)/)
+  || re_test(body, /^(?:@ts-expect-error|@ts-ignore|@ts-nocheck|@ts-check|prettier-ignore)(?:[^\p{Alphabetic}\p{Number}_-]|$)/)
+  || re_test(body, /^(?:jshint|jslint|istanbul|global|globals|exported)\s/)
+  || re_test(body, /^(?:v8|c8)\s+ignore(?:[^\p{Alphabetic}\p{Number}_-]|$)/)
+  || re_test(body, /^node:coverage\s+(?:(?:disable|enable)(?:[^\p{Alphabetic}\p{Number}_-]|$)|ignore\s+next(?:[^\p{Alphabetic}\p{Number}_-]|$))/)
+  || re_test(body, /^webpack(?:ChunkName|FetchPriority|Mode|Exports|Include|Exclude|Prefetch|Preload|Ignore)\s*:/)
+
+over ts_program match structure_hashbang /\A#![^\n\r\u{2028}\u{2029}]*/
+group structure_comment ts_comment, structure_hashbang
+in structure_comment let structure_comment_body if layer is ts_block_comment then slice(text, 2, len(text) - 2) else slice(text, 2)
+in structure_comment let structure_directive structure_is_directive(trim_start(structure_comment_body))
+in ts_comment let structure_comment_beside trim(byte_slice(source, position(offset).js_line_start, offset)) != ""
+
+in ts_line_comment rule line-comment-position {
   option options ("above" | "beside" | { position?: "above" | "beside"; ignorePattern?: string; applyDefaultIgnorePatterns?: boolean })[] = [] "line comment position and exemptions"
   let settings first(options)
   let position if type_of(settings) == "str" then settings else default(settings.position, "above")
   let ignore_pattern default(settings.ignorePattern, "")
   let ignore_default default(settings.applyDefaultIgnorePatterns, true)
-  each finding in comment_layout
-  when !ignore_default || !finding.directive && !re_test(finding.body, /^\s*falls?\s?through/)
-  when ignore_pattern == "" || !re_test(finding.body, ignore_pattern)
-  when position == "above" && finding.beside || position == "beside" && !finding.beside
-  report at finding.offset
+  when !ignore_default || !structure_directive && !re_test(structure_comment_body, /^\s*falls?\s?through/)
+  when ignore_pattern == "" || !re_test(structure_comment_body, ignore_pattern)
+  when position == "above" && structure_comment_beside || position == "beside" && !structure_comment_beside
+  report at offset
   warn if position == "above" then "Expected comment to be above code." else "Expected comment to be beside code."
 }
 
-in ts_program rule multiline-comment-style {
+@macro structure_comment_style_options {
   option mode "starred-block" | "bare-block" | "separate-lines" = "starred-block"
   option checkJSDoc boolean = false "check JSDoc when requiring line comments"
   option checkExclamation boolean = false "check exclamation comments when requiring line comments"
-  each finding in comment_style_findings
-  when finding.mode == mode
-  when checkJSDoc || !finding.jsdoc
-  when checkExclamation || !finding.exclamation
-  report at finding.offset
-  warn "{finding.message}"
+}
+in ts_comment let structure_style_eligible !structure_directive && !structure_comment_beside
+in ts_block_comment let structure_multiline structure_first_row.offset != structure_last_row.offset
+in ts_block_comment let structure_block_first byte_slice(source, offset + 2, structure_first_row.structure_line_end)
+in ts_block_comment let structure_block_last byte_slice(source, structure_last_row.offset, end_offset - 2)
+in ts_block_comment let structure_block_middle filter(overlapping(ts_line), row => row.offset > structure_first_row.offset && row.offset < structure_last_row.offset)
+in ts_block_comment let structure_block_padded all(structure_block_middle, row => re_test(row.structure_line_content, /^\s/) && contains(row.structure_line_content, " "))
+in ts_block_comment let structure_block_jsdoc starts_with(structure_block_first, "*") && trim(slice(structure_block_first, 1)) == "" && structure_block_padded && trim(structure_block_last) == ""
+in ts_block_comment let structure_block_exclamation starts_with(structure_block_first, "!") && trim(slice(structure_block_first, 1)) == "" && structure_block_padded && trim(structure_block_last) == ""
+
+in ts_block_comment rule multiline-comment-style:shape {
+  @structure_comment_style_options
+  when structure_style_eligible && structure_multiline
+  when if mode == "bare-block" then trim(structure_block_first) == "" && trim(structure_block_last) == ""
+    && all(structure_block_middle, row => starts_with(trim_start(row.structure_line_content), "*"))
+    && !structure_block_jsdoc && !structure_block_exclamation
+    else mode == "separate-lines"
+      && trim(byte_slice(source, end_offset, structure_last_row.structure_line_end)) == ""
+      && (checkJSDoc || !structure_block_jsdoc) && (checkExclamation || !structure_block_exclamation)
+  report at offset
+  warn if mode == "bare-block" then "Expected a block comment without padding stars." else "Expected multiple line comments instead of a block comment."
+}
+
+in ts_block_comment rule multiline-comment-style:open {
+  @structure_comment_style_options
+  when mode == "starred-block" && structure_style_eligible && structure_multiline
+  when trim(if starts_with(structure_block_first, "*") || starts_with(structure_block_first, "!") then slice(structure_block_first, 1) else structure_block_first) != ""
+  report at offset
+  warn "Expected a linebreak after '/*'."
+}
+
+in ts_block_comment rule multiline-comment-style:close {
+  @structure_comment_style_options
+  when mode == "starred-block" && structure_style_eligible && structure_multiline && trim(structure_block_last) != ""
+  report at end_offset - 2
+  warn "Expected a linebreak before '*/'."
+}
+
+in ts_line rule multiline-comment-style:alignment {
+  @structure_comment_style_options
+  when mode == "starred-block"
+  let comment first(filter(overlapping(ts_block_comment), comment => comment.structure_style_eligible && comment.offset < offset))
+  when comment != null
+  let prefix byte_slice(source, comment.structure_first_row.offset, comment.offset) " *"
+  when !starts_with(text, prefix)
+  report at offset
+  warn if starts_with(trim_start(text), "*") then "Expected this line to be aligned with the start of the comment." else "Expected a '*' at the start of this line."
+}
+
+fn structure_line_comments_join(source, previous, next) = previous != null && next != null
+  && previous.layer is ts_line_comment && next.layer is ts_line_comment
+  && previous.structure_style_eligible && next.structure_style_eligible && previous.end_offset <= next.offset
+  && position(next.offset).js_line == position(previous.end_offset).js_line + 1
+  && trim(byte_slice(source, previous.end_offset, next.offset)) == ""
+in ts_line_comment let structure_previous_comment last(structure_previous_row.structure_row_comments)
+in ts_line_comment let structure_next_comment first(structure_next_row.structure_row_comments)
+in ts_line_comment let structure_joins_previous structure_line_comments_join(source, structure_previous_comment, node)
+in ts_line_comment let structure_joins_next structure_line_comments_join(source, node, structure_next_comment)
+in ts_line_comment let structure_group_unsafe contains(structure_comment_body, "*/")
+  || any(walk(if structure_joins_next then structure_next_comment.node else null, comment => if comment.structure_joins_next then comment.structure_next_comment.node else null),
+    comment => contains(comment.structure_comment_body, "*/"))
+in ts_line_comment rule multiline-comment-style:consecutive {
+  @structure_comment_style_options
+  when mode != "separate-lines" && structure_style_eligible && !structure_joins_previous && structure_joins_next && !structure_group_unsafe
+  report at offset
+  warn "Expected a block comment instead of consecutive line comments."
 }
 
 in ts_parenthesized, ts_parenthesized_type rule no-extra-parens {
@@ -371,7 +443,37 @@ in ts_program rule max-statements-per-line {
   warn "This line has {count(info.entries) + info.carried} statements. Maximum allowed is {max}."
 }
 
-in ts_program rule lines-around-comment {
+fn structure_gap_parts(source, from, to, comments) = reduce(filter(comments, comment => comment.offset < to && comment.end_offset > from), { cursor: from, code: false }, (state, comment) => {
+  cursor: min(comment.end_offset, to),
+  code: state.code || trim(byte_slice(source, state.cursor, max(comment.offset, from))) != "",
+})
+fn structure_gap_has_code(source, to, parts) = parts.code || trim(byte_slice(source, parts.cursor, to)) != ""
+
+in ts_line let structure_row_comments overlapping(structure_comment)
+in ts_line let structure_row_blocked trim(text) == "" || any(structure_row_comments, comment =>
+  position(comment.offset).js_line == position(offset).js_line || position(comment.end_offset).js_line == position(offset).js_line)
+in structure_comment let structure_first_row first(overlapping(ts_line, offset, offset + 1))
+in structure_comment let structure_last_row first(overlapping(ts_line, end_offset - 1, end_offset))
+in structure_comment let structure_previous_row if structure_first_row.offset > 0 then first(overlapping(ts_line, structure_first_row.offset - 1, structure_first_row.offset)) else null
+in structure_comment let structure_next_row first(overlapping(ts_line, structure_last_row.end_offset, structure_last_row.end_offset + 1))
+in structure_comment let structure_inline structure_gap_has_code(source, offset,
+  structure_gap_parts(source, structure_first_row.offset, offset, structure_first_row.structure_row_comments))
+  || structure_gap_has_code(source, structure_last_row.end_offset,
+    structure_gap_parts(source, end_offset, structure_last_row.end_offset, structure_last_row.structure_row_comments))
+
+in ts_class let structure_boundary_targets ["Block", "Class"]
+in ts_block let structure_boundary_targets if parent is ts_namespace then ["Module"] else ["Block"]
+in ts_static_block, ts_switch, ts_case let structure_boundary_targets ["Block"]
+in ts_object, ts_object_pattern let structure_boundary_targets ["Object"]
+in ts_array, ts_array_pattern let structure_boundary_targets ["Array"]
+in ts_interface let structure_boundary_targets ["Interface"]
+in ts_type_literal let structure_boundary_targets ["Type"]
+in ts_enum let structure_boundary_targets ["Enum"]
+in ts_class, ts_interface, ts_enum, ts_static_block, ts_switch let structure_boundary_start opener.ts_open_brace.offset
+in ts_block, ts_case, ts_object, ts_object_pattern, ts_array, ts_array_pattern, ts_type_literal let structure_boundary_start offset
+
+@macro structure_comment_gap(name, before) {
+in structure_comment rule name {
   option beforeBlockComment boolean = true "blank line before block comments"
   option afterBlockComment boolean = false "blank line after block comments"
   option beforeLineComment boolean = false "blank line before line comments"
@@ -397,15 +499,28 @@ in ts_program rule lines-around-comment {
   option allowModuleEnd boolean = false "allow comments at module ends"
   let allowedStart compact([if allowClassStart == true then "Class" else null, if allowObjectStart then "Object" else null, if allowArrayStart then "Array" else null, if allowInterfaceStart then "Interface" else null, if allowTypeStart then "Type" else null, if allowEnumStart then "Enum" else null, if allowModuleStart then "Module" else null])
   let allowedEnd compact([if allowClassEnd == true then "Class" else null, if allowObjectEnd then "Object" else null, if allowArrayEnd then "Array" else null, if allowInterfaceEnd then "Interface" else null, if allowTypeEnd then "Type" else null, if allowEnumEnd then "Enum" else null, if allowModuleEnd then "Module" else null])
-  each info in comment_gaps
-  when !(applyDefaultIgnorePatterns && info.directive) && (ignorePattern == "" || !re_test(info.body, ignorePattern))
-  when !any(map(info.targets, target => contains(if info.boundary == "before" then allowedStart else allowedEnd, target)))
-  when !(contains(info.targets, "Block") && (if info.boundary == "before" then allowBlockStart else allowBlockEnd) && !(contains(info.targets, "Class") && (if info.boundary == "before" then allowClassStart else allowClassEnd) == false))
-  when if info.boundary == "before" then (if info.block then beforeBlockComment else beforeLineComment)
-    else (if info.hashbang then afterHashbangComment else if info.block then afterBlockComment else afterLineComment)
-  report at info.offset
-  warn if info.boundary == "before" then "Expected line before comment." else "Expected line after comment."
+  when if before then (if layer is ts_block_comment then beforeBlockComment else beforeLineComment)
+    else (if layer is structure_hashbang then afterHashbangComment else if layer is ts_block_comment then afterBlockComment else afterLineComment)
+  when !(applyDefaultIgnorePatterns && structure_directive) && (ignorePattern == "" || !re_test(structure_comment_body, ignorePattern))
+  when !structure_inline
+  let row if before then structure_first_row else structure_last_row
+  let adjacent if before then structure_previous_row else structure_next_row
+  when adjacent != null && !adjacent.structure_row_blocked
+  when !any(row.structure_row_comments, comment => if before
+    then comment.offset < offset && position(comment.end_offset).js_line == position(offset).js_line
+    else comment.offset >= end_offset && position(comment.offset).js_line == position(end_offset).js_line)
+  let boundary parent.structure_boundary_start != null && parent.structure_boundary_start <= offset
+    && (if before then position(parent.structure_boundary_start).js_line + 1 == position(offset).js_line
+      else position(parent.end_offset).js_line == position(end_offset).js_line + 1)
+  let targets if boundary then default(parent.structure_boundary_targets, []) else []
+  when !any(targets, target => contains(if before then allowedStart else allowedEnd, target))
+  when !(contains(targets, "Block") && (if before then allowBlockStart else allowBlockEnd) && !(contains(targets, "Class") && (if before then allowClassStart else allowClassEnd) == false))
+  report at offset
+  warn if before then "Expected line before comment." else "Expected line after comment."
 }
+}
+@structure_comment_gap(lines-around-comment:before, true)
+@structure_comment_gap(lines-around-comment:after, false)
 
 in ts_parenthesized let structure_unwrapped_end default(expression.structure_unwrapped_end, expression.end_offset)
 in ts_parenthesized let structure_unwrapped_text default(expression.structure_unwrapped_text, expression.text)
