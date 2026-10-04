@@ -145,6 +145,9 @@ pub struct Grammar {
     /// Every group's final members.
     groups: HashMap<String, Vec<Parent>>,
     pub natives: Vec<NativeFront>,
+    /// Per matcher: the native layers its nodes can sit in (directly, or
+    /// through pattern layers), so their nodes get built when it is needed.
+    pub native_hosts: Vec<Vec<u32>>,
     views: Vec<View>,
     by_name: HashMap<String, u32>,
     /// Warm DFA caches, reused across files (building one is not cheap).
@@ -416,11 +419,9 @@ impl Grammar {
                         }
                         ungated[id as usize] = true;
                     }
+                    // Inside a native layer too: matched across its node's
+                    // text once the front end has built the tree.
                     Parent::Matcher(name) => match by_name.get(&name.text) {
-                        Some(&pid) if matchers[pid as usize].native.is_some() => errors.push(ConfigError::new(
-                            name.span,
-                            format!("`{}` is a native layer; pattern layers cannot live inside it", name.text),
-                        )),
                         Some(&pid) => {
                             let p = &mut matchers[pid as usize];
                             push_unique(if def.overlay { &mut p.overlays } else { &mut p.children }, id);
@@ -470,7 +471,9 @@ impl Grammar {
         check_left_recursion(&matchers, &by_name, errors);
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
+        let native_hosts = native_hosts(&matchers);
         Grammar {
+            native_hosts,
             matchers,
             langs,
             labels,
@@ -789,6 +792,31 @@ fn build_view(li: usize, lang: &Lang, matchers: &[Matcher]) -> View {
         root_prefilter: Prefilter::from_set(&union(&root_children)),
         root_children,
         root_overlays: gated(&lang.overlays),
+    }
+}
+
+/// For each pattern matcher, the native matchers it can be nested in.
+fn native_hosts(matchers: &[Matcher]) -> Vec<Vec<u32>> {
+    let mut hosts: Vec<Vec<u32>> = vec![Vec::new(); matchers.len()];
+    loop {
+        let mut changed = false;
+        for (p, m) in matchers.iter().enumerate() {
+            let from: Vec<u32> = if m.native.is_some() { vec![p as u32] } else { hosts[p].clone() };
+            for &c in m.children.iter().chain(&m.overlays) {
+                if matchers[c as usize].native.is_some() {
+                    continue;
+                }
+                for &h in &from {
+                    if !hosts[c as usize].contains(&h) {
+                        hosts[c as usize].push(h);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            return hosts;
+        }
     }
 }
 

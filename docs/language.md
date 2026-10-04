@@ -618,9 +618,20 @@ in ts_if.test, ts_while.test rule assign-in-condition warn "assignment in a cond
 }
 ```
 
-Files are only parsed this way when an active rule targets a `ts_*` layer,
-and a file the parser cannot read gets one warning instead of rules. Native
-layers have no pattern children (`in ts_call match x ...` is an error).
+A file the parser cannot read gets one warning instead of rules on `ts_*`
+layers.
+
+**One tree.** A file the parser reads gets one tree: the parser's nodes, and
+the pattern layers inside them. A pattern layer inside a native layer is
+matched across that node's text and sits under it; the language's own
+pattern layers (`in .js match ...`) are matched across the file and sit
+under the program. Rules see no difference:
+
+```zlint
+in ts_comment match todo /\bTODO\b/
+in ts_string, ts_template match escape /\\./
+in todo rule no-todo warn "Unexpected TODO."
+```
 
 **Tokens.** Punctuation and keywords that no child node covers are layers
 too, under the node that owns them (field `token`): `ts_comma`,

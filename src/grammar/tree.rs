@@ -41,6 +41,18 @@ impl Tree {
         Tree::from_nodes(nodes, Vec::new(), root, false)
     }
 
+    /// A front end's tree (in this grammar's ids) with the pattern layers
+    /// that live inside it: one tree per file.
+    pub fn graft(g: &Grammar, lang: usize, text: &str, mut nodes: Vec<Node>, root: u32, overlays: Option<&[bool]>, profile: Option<&crate::engine::Profile>) -> Tree {
+        let mut p = Parser::new(g, lang, text);
+        p.enabled_overlays = overlays;
+        p.profile = profile;
+        let holes = p.graft(&mut nodes, root);
+        let too_deep = p.too_deep;
+        drop(p);
+        Tree::from_nodes(nodes, holes, root, too_deep)
+    }
+
     fn from_nodes(mut nodes: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
         let starts: Vec<u32> = nodes.iter().map(|n| n.start).collect();
         for node in &mut nodes {

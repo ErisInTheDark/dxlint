@@ -235,6 +235,12 @@ impl Linter {
                     Target::Matcher(m) | Target::Field(m, _) => {
                         targets[m as usize] = true;
                         wants_layers = true;
+                        // Inside comments or lines: those nodes must exist.
+                        for &h in &self.grammar.native_hosts[m as usize] {
+                            if let Some(k) = token_kind(h) {
+                                token_kinds[k] = true;
+                            }
+                        }
                     }
                     Target::Lang(_) => wants_layers = true,
                 }
@@ -251,8 +257,50 @@ impl Linter {
         let run = Run { lang, text, lines: &lines, file: &file, active: &active, options: &options };
         let mut out = Vec::new();
 
-        if wants_layers {
-            let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
+        let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
+        // One tree per file: where a front end reads the file, its tree with
+        // the pattern layers grafted in; elsewhere the pattern layers' own.
+        let front = match wants_layers || wants_native {
+            true => self.grammar.natives.first().zip(crate::native::ts::reads(path)),
+            false => None,
+        };
+        let mut pattern_tree = wants_layers;
+        if let Some((front, jsx)) = front {
+            let parse_started = std::time::Instant::now();
+            let mut parsed = crate::native::ts::parse(text, jsx);
+            // Token layers cost a node per token: only the kinds rules use.
+            if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
+                crate::native::ts::tokens::attach_selected(text, parsed, &token_kinds);
+            }
+            match parsed {
+                Ok(parsed) => {
+                    let nodes = front.remap(parsed.nodes);
+                    let tree = match wants_layers {
+                        true => Tree::graft(&self.grammar, lang, text, nodes, parsed.root, Some(&overlays), self.profile.as_ref()),
+                        false => Tree::from_native(nodes, parsed.root),
+                    };
+                    let rules_started = std::time::Instant::now();
+                    if let Some(p) = &self.profile {
+                        Profile::add_time(&p.parse_nanos, rules_started - parse_started);
+                    }
+                    let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project);
+                    self.check_tree(&tree, &run, Some(&facts), &mut out);
+                    if tree.too_deep {
+                        out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));
+                    }
+                    if let Some(p) = &self.profile {
+                        Profile::add_time(&p.rules_nanos, rules_started.elapsed());
+                    }
+                    pattern_tree = false;
+                }
+                // Text layers still apply to a file the front end cannot
+                // read: from the file's root alone.
+                Err((at, msg)) if wants_native => out.push(engine_warning(at as usize, format!("could not parse this file as TypeScript: {msg}"))),
+                Err(_) => {}
+            }
+        }
+
+        if pattern_tree {
             let parse_started = std::time::Instant::now();
             let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
             let rules_started = std::time::Instant::now();
@@ -265,32 +313,6 @@ impl Linter {
             }
             if let Some(p) = &self.profile {
                 Profile::add_time(&p.rules_nanos, rules_started.elapsed());
-            }
-        }
-
-        if wants_native {
-            if let (Some(front), Some(jsx)) = (self.grammar.natives.first(), crate::native::ts::reads(path)) {
-                let parse_started = std::time::Instant::now();
-                let mut parsed = crate::native::ts::parse(text, jsx);
-                // Token layers cost a node per token: only the kinds rules use.
-                if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
-                    crate::native::ts::tokens::attach_selected(text, parsed, &token_kinds);
-                }
-                let rules_started = std::time::Instant::now();
-                if let Some(p) = &self.profile {
-                    Profile::add_time(&p.parse_nanos, rules_started - parse_started);
-                }
-                match parsed {
-                    Ok(parsed) => {
-                        let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
-                        let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project);
-                        self.check_tree(&tree, &run, Some(&facts), &mut out);
-                    }
-                    Err((at, msg)) => out.push(engine_warning(at as usize, format!("could not parse this file as TypeScript: {msg}"))),
-                }
-                if let Some(p) = &self.profile {
-                    Profile::add_time(&p.rules_nanos, rules_started.elapsed());
-                }
             }
         }
         let suppressions = Suppressions::parse(text, &lines);

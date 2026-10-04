@@ -157,6 +157,14 @@ impl<'g, 't> Parser<'g, 't> {
     /// Scans the whole file as the language's root layer, then searches
     /// overlays. Returns the root node.
     pub fn parse(&mut self) -> u32 {
+        let edges = self.root_edges();
+        let root = self.push(Node { matcher: ROOT, start: 0, end: self.text.len() as u32, children: edges });
+        self.overlays(root);
+        root
+    }
+
+    /// The language's root layers across the whole file.
+    fn root_edges(&mut self) -> Vec<Edge> {
         let view = self.view;
         let text = self.text;
         let mut edges = Vec::new();
@@ -170,9 +178,58 @@ impl<'g, 't> Parser<'g, 't> {
                 None => pos = p + utf8_len(text[p]),
             }
         }
-        let root = self.push(Node { matcher: ROOT, start: 0, end: text.len() as u32, children: edges });
-        self.overlays(root);
-        root
+        edges
+    }
+
+    /// Pattern layers in a front end's tree (`nodes`, already in this
+    /// grammar's ids): the language's root layers across the file go under
+    /// `root`; a native node's child (and overlay) layers are matched across
+    /// its text and go under it. The pattern nodes are appended to `nodes`;
+    /// returns their holes (see [`Parser::holes`]) with the new ids.
+    pub fn graft(&mut self, nodes: &mut Vec<Node>, root: u32) -> Vec<(u32, u32, u32)> {
+        let view = self.view;
+        // Placeholders stand in for the native hosts while matching.
+        let mut hosts: Vec<(u32, u32)> = Vec::new();
+        let edges = self.root_edges();
+        let root_host = self.push(Node { matcher: ROOT, start: 0, end: self.text.len() as u32, children: edges });
+        hosts.push((root, root_host));
+        for (id, n) in nodes.iter().enumerate() {
+            let m = n.matcher;
+            if m == TEXT || m == ROOT || (view.children[m as usize].is_empty() && view.overlays[m as usize].is_empty()) {
+                continue;
+            }
+            let host = self.push(Node { matcher: m, start: n.start, end: n.end, children: Vec::new() });
+            self.fill_children(host);
+            hosts.push((id as u32, host));
+        }
+        // One overlay pass over every host (an empty span hosts nothing
+        // itself), so nodes several hosts share are searched once.
+        let all = self.push(Node { matcher: ROOT, start: 0, end: 0, children: hosts.iter().map(|&(_, h)| Edge { label: NO_LABEL, node: h }).collect() });
+        self.overlays(all);
+
+        let offset = nodes.len() as u32;
+        let mut placeholder = vec![None; self.nodes.len()];
+        for &(native, host) in &hosts {
+            placeholder[host as usize] = Some(native);
+        }
+        let mut moved = Vec::new();
+        for (i, mut n) in std::mem::take(&mut self.nodes).into_iter().enumerate() {
+            for e in &mut n.children {
+                e.node += offset;
+            }
+            if let Some(native) = placeholder[i] {
+                moved.push((native, std::mem::take(&mut n.children)));
+            }
+            // Placeholders stay as inert text so ids keep their places.
+            if placeholder[i].is_some() || i as u32 == all {
+                n = Node { matcher: TEXT, start: n.start, end: n.start, children: Vec::new() };
+            }
+            nodes.push(n);
+        }
+        for (native, edges) in moved {
+            nodes[native as usize].children.extend(edges);
+        }
+        std::mem::take(&mut self.holes).into_iter().map(|(n, s, e)| (n + offset, s, e)).collect()
     }
 
     fn push(&mut self, node: Node) -> u32 {

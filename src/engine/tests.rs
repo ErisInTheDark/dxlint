@@ -673,15 +673,44 @@ fn parent_reads_the_parent_layers_fields_and_attributes() {
 }
 
 #[test]
-fn native_layers_have_no_pattern_children() {
-    let src = "import .ts\nin ts_call match x /x/\nmatch ts_if /y/\nin x let text 1\n";
+fn native_layers_cannot_be_redefined_as_patterns() {
+    let src = "import .ts\nmatch ts_if /y/\nin ts_call let text 1\n";
     let errors: Vec<String> = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"))
         .errors
         .into_iter()
         .map(|e| e.message)
         .collect();
-    assert_eq!(errors.len(), 3, "{errors:#?}");
-    assert!(errors[0].contains("already a matcher") && errors[1].contains("native layer") && errors[2].contains("built-in"), "{errors:#?}");
+    assert_eq!(errors.len(), 2, "{errors:#?}");
+    assert!(errors[0].contains("already a matcher") && errors[1].contains("built-in"), "{errors:#?}");
+}
+
+#[test]
+fn pattern_layers_live_inside_native_layers() {
+    // One tree: a pattern layer under a native one is matched in that
+    // node's text, sits under it, and reads like any layer.
+    let l = native_linter(r#"
+        in ts_comment match todo /TODO/
+        in ts_string match esc /\\./
+        in todo rule t info "{parent}@{offset}"
+        in esc rule e info "{text} in {parent.text}"
+    "#);
+    let messages: Vec<String> =
+        l.lint(Path::new("/root/a.ts"), "// TODO a\nlet s = 'x\\ny'; // not TODO? TODO\nlet TODO = 1;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["ts_line_comment@3", "\\n in 'x\\ny'", "ts_line_comment@33", "ts_line_comment@39"]);
+    // Root-level pattern layers sit under the program, alongside native
+    // rules, in the same tree (one parse).
+    let l = native_linter(r#"
+        in .js match semi_run /;;+/
+        in semi_run rule s info "{parent}"
+        in ts_empty rule e info "empty"
+    "#);
+    let mut messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;;;").into_iter().map(|d| d.message).collect();
+    messages.sort();
+    assert_eq!(messages, ["empty", "empty", "ts_program"]);
+    // Suppressions apply to grafted nodes like any other.
+    let l = native_linter(r#"in ts_comment match todo /TODO/
+        in todo rule t warn "todo""#);
+    assert!(l.lint(Path::new("/root/a.ts"), "// zlint-ignore t\n// TODO").is_empty());
 }
 
 #[test]
