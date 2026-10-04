@@ -1,4 +1,4 @@
-# .ts/format: token and text rules, shared matcher contexts.
+# .ts/format: syntax-owned rules and textual edges.
 # Native layout policy also lives in .ts/layout.
 # Rule names are eslint rule names without the plugin prefix;
 # `family:variant` rules are parts of one eslint rule. All are off until
@@ -6,140 +6,52 @@
 
 define {
 
-# ---- what kind of bracket is this? ------------------------------------------
-# All are `like braces` / `like brackets`, so they keep every child layer and win
-# ties against the plain ones. A plain `braces` is a block.
-
-# Object literals and destructuring patterns: expression positions.
-# Line comments may sit between the opener and the brace (`[⏎ // why⏎ {`).
-match js_object like braces /(?<=(?:[=(,\[?]|&&|\|\||\?\?|\.\.\.|\breturn|\byield|\bexport[ \t]+default|\b(?:const|let|var))(?:[ \t\r\n]|\/\/[^\r\n]*\r?\n)*)(?<![=!<>]=[ \t\r\n]*)\{/ until /\}/
-in js_code match js_object
-# `key: {` inside an object, and `cond ? a : {`, are objects too.
-match js_object_property like braces /(?<=:[ \t\r\n]*)\{/ until /\}/
-in js_object, js_object_property, js_object_else match js_object_property
-# The else branch of a ternary: `? a : {`, `} : {` (an annotation is `}: T`),
-# or `: {` opening a line.
-match js_object_else like braces /(?<=\?[^.:;{}\r\n][^;{}\r\n]*:[ \t]*|\}[ \t]+:[ \t]*|^[ \t]*:[ \t]*)\{/ until /\}/
-in js_code match js_object_else
-
-match js_import_list like braces /(?<=\b(?:import|export)(?:[ \t]+type)?[ \t]*)\{/ until /\}/
-in js_code match js_import_list
-
-match js_class_body like braces /(?<=\bclass\b[^{;()]*)\{/ until /\}/
-in js_code match js_class_body
-
-match js_interface_body like braces /(?<=\binterface\b[^{;()]*)\{/ until /\}/
-in js_code match js_interface_body
-
-match js_namespace_body like braces /(?<=\b(?:namespace|module)[ \t]+(?:[\w$.]+|'[^'\r\n]*'|"[^"\r\n]*")[ \t]*|\bdeclare[ \t]+global[ \t]*)\{/ until /\}/
-in js_code match js_namespace_body
-match js_global_body like js_namespace_body /(?<=\bdeclare[ \t]+global[ \t]*)\{/ until /\}/
-in js_code match js_global_body
-
-match js_switch_body like braces /(?<=\bswitch[ \t]*\([^{}]*\)[ \t]*)\{/ until /\}/
-in js_code match js_switch_body
-
-match js_enum_body like braces /(?<=\benum[ \t]+[\w$]+[ \t]*)\{/ until /\}/
-in js_code match js_enum_body
-
-# Type literals: after a type annotation colon, `type X =`, `|`, `&` or `<`;
-# not a ternary's `:` or a `case x:` label.
-match js_type_literal like braces /(?<=(?:[:|&<]|\btype[ \t]+[\w$]+(?:<[^=]*>)?[ \t]*=)[ \t\r\n]*)(?<!\?[^.:;{}\r\n][^;{}\r\n]*:[ \t]*|\}[ \t]+:[ \t]*|^[ \t]*:[ \t]*)(?<!\b(?:case\b[^:\r\n]*|default[ \t]*):[ \t]*)\{/ until /\}/
-in js_code match js_type_literal
-
-# Code blocks: function and control-flow bodies, arrow bodies, case blocks,
-# and bare blocks opening a line (objects there win the tie: declared first).
-match js_block like braces /(?<=(?:\)|=>|\belse|\btry|\bcatch|\bfinally|\bdo|\)[ \t]*:[^;={}\r\n]*|\b(?:case\b[^:\r\n]*|default[ \t]*):|^)[ \t\r\n]*)\{/ until /\}/
-in js_code match js_block
-
-# `a[i]`: computed member access rather than an array.
-match js_index like brackets /(?<=[\w$)\]])\[/ until /\]/
-in js_code match js_index
-
-# ---- statements ------------------------------------------------------------
-# A statement runs from its first token to its `;`, or to the line break
-# after which the next line does not continue it. Brackets, strings and
-# comments inside are children, so multi-line calls and objects stay whole.
-
-group js_statement_parents .js, js_block, js_class_body, js_namespace_body, js_switch_body
-# A trailing `>` continues only as an operator (`a >`, `=>`), not as the end
-# of a type argument list (`as Foo<Bar>`). A line opening with `}` closes
-# the parent block, so it always ends the statement.
-# A comment-only line inside a continuation (`x =⏎ // why⏎ value`) does not
-# end it either.
-macro statement_end /(?<![=*\/%&|^,?:(\[{<!~.\r\n \t]|[ \t=]>|[^+]\+|[^-]-|\b(?:implements|extends|keyof|typeof|instanceof|in|of|as|is|new|await|yield|delete|void|default|else|do))(?<![=,(\[{?:&|+\-*\/%<>!][ \t]*\r?\n[ \t]*\/\/[^\r\n]*)(?=[ \t]*\r?\n)(?![ \t]*\r?\n(?:[ \t]*(?:\/\/[^\r\n]*|\/\*[\s\S]*?\*\/[ \t]*)?\r?\n)*[ \t]*(?:[.?:+\-%&|^=,;)\]>]|\*[ \t*]|\/[^\/*]|<[^\w]|(?:else|catch|finally|extends|implements)\b))|(?=[ \t]*\r?\n[ \t]*\})|(?=[ \t]*\z)/
-# A statement starts a line, or follows a `case x:` label on its line.
-macro statement_start /(?:^[ \t]*|(?<=\b(?:case\b[^\r\n]*?|default[ \t]*):[ \t]+))(?=[^\s}\/@,;])(?!(?:case\b|default[ \t]*:))/
-in js_statement_parents match js_statement statement_start until (/;/ or statement_end)
-# Class members are statements of a class body.
-match js_member like js_statement statement_start until (/;/ or statement_end)
-in js_class_body match js_member
-# `while (x);` and `else;`: the semicolon is the (empty) body.
-match js_empty_statement like js_statement /^[ \t]*/ (/(?:while|for|if)\b[ \t]*/ parentheses /[ \t]*/ or /else[ \t]*/) /;/
-in js_statement_parents match js_empty_statement
-group js_code js_statement
-
-group js_statement_context .js, braces, js_statement
-macro js_type_body js_interface_body, js_type_literal
-macro js_members js_object, js_object_property, js_object_else, js_member, js_interface_body, js_type_literal, js_type_member
-macro js_keyed js_object, js_object_property, js_object_else, js_interface_body, js_type_literal, js_type_member
-
 # ---- files ---------------------------------------------------------------
 
-over .js match js_end /[^\n]\z/
-in js_end rule eol-last warn "Newline required at end of file but not found." {
+in ts_program match format_file_tail /[^\n]\z/
+in format_file_tail rule eol-last warn "Newline required at end of file but not found." {
   option mode "always" | "never" = "always" "whether files end in a newline"
   when mode == "always"
   report at end_offset
   fix as text "\n"
 }
-over .js match js_final_newlines /(?:\r?\n)+\z/
-in js_final_newlines rule eol-last:never warn "Newline not allowed at end of file." {
+in ts_program match format_final_newlines /(?:\r?\n)+\z/
+in format_final_newlines rule eol-last:never warn "Newline not allowed at end of file." {
   option mode "always" | "never" = "always" "whether files end in a newline"
   when mode == "never"
   report at end_offset - (if ends_with(text, "\r\n") then 2 else 1)
   fix as ""
 }
 
-# Overlay the whole source so comment lines are seen; exclude template text
-# because its whitespace changes the literal value.
-over .js match js_trailing_spaces /[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]+(?=\r?\n|\z)/
-in js_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allowed." {
+in ts_line match format_trailing_spaces /[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]+(?=[\r\n\u{2028}\u{2029}]|\z)/
+in format_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allowed." {
   option skipBlankLines boolean = false "ignore whitespace-only lines"
   option ignoreComments boolean = false "ignore comment lines"
-  when !(skipBlankLines && !re_test(before, /\S/))
-  when !(ignoreComments && (enclosing is (js_line_comment, js_block_comment) || starts_with(before, "#!")))
-  when enclosing != "js_template"
+  when !(skipBlankLines && re_test(parent.text, /^[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]*(?:\r\n|[\r\n\u{2028}\u{2029}])?\z/))
+  when !(ignoreComments && (starts_with(parent.text, "#!") || any(overlapping(ts_comment), comment => comment.layer is ts_line_comment || position(comment.end_offset).js_line > position(offset).js_line)))
+  when !any(overlapping(ts_template), template => any(template.quasi.node, quasi => offset >= quasi.offset && end_offset <= quasi.end_offset))
   fix as ""
 }
 
 # ---- blank lines ---------------------------------------------------------
 
-# Blank lines count everywhere but in template literals, comments included.
-in js_code, js_block_comment match js_blank_run /^(?:[ \t]*\r?\n)+/
-
-# No blank lines between `if (x)` and its single-statement body.
-in js_statement_context match js_optional_body /(?<![.\w$])\b(?:if|while|for)\b[ \t]*/ parentheses /[ \t]*/ blank:/\r?\n(?:[ \t]*\r?\n)+/ /(?=[ \t]*[^\s{\/])/
-in js_optional_body.blank rule no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
+# No blank lines between a header and its single-statement body.
+in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body rule no-blank-lines-in-optional-blocks warn "Avoid blank lines between a conditional or loop statement and its single non-block statement." {
+  when layer not ts_block && !space_before.comments && space_before.blank_lines > 0
+  let optional_header default(re_find(space_before.text, /^[ \t]*/), "")
+  let optional_indent default(re_find(space_before.text, /[ \t]*\z/), "")
   report change
-  fix as newline
+  fix space_before as optional_header newline optional_indent
 }
 
-in js_code match js_var /(?<![.\w$])\bvar\b(?![ \t]*:)/
 # `declare global { var x }` is the only way to declare a global.
-in js_var rule no-var warn "Unexpected var, use let or const instead." {
-  when js_global_body == null
+in ts_namespace let format_global_namespace kind == "global"
+in ts_node let format_global_scope default(format_global_namespace, false) || default(parent.format_global_scope, false)
+in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or const instead." {
+  when text == "var"
+  when ts_namespace.format_global_scope != true
   fix as "let"
 }
-
-# ---- interfaces and type literals ------------------------------------------
-
-# Members of multi-line interfaces and type literals, like statements. The
-# delimiter itself stays outside.
-in js_type_body match js_type_member /^[ \t]*(?=[^\s}\/@,;])/ until (/(?=[ \t]*[;,])/ or statement_end)
-group js_code js_type_member
-
-# ---- commas --------------------------------------------------------------
 
 # ---- spacing ---------------------------------------------------------------
 
@@ -166,10 +78,37 @@ in ts_close_paren rule space-in-parens:before {
   warn if paren_space != "" then "There should be no space before this paren." else "There must be a space before this paren."
 }
 
-in brackets match js_bracket_inner_space /(?<=\[)[ \t]+(?=[^ \t\r\n\]])|(?<=[^ \t\r\n\[])[ \t]+(?=\])/
-in js_bracket_inner_space rule array-bracket-spacing warn "There should be no space inside this bracket." {
-  when parent == "brackets"
-  fix as ""
+fn format_gap_text(gap, spaced, comments) = (if spaced then " " else "") join(map(filter(comments, comment => comment.offset >= gap.start && comment.end_offset <= gap.end), comment => comment.text), "")
+fn format_gap_result(source, start, result) = result.text byte_slice(source, result.end - start)
+fn format_replace_gaps(source, start, edits) = format_gap_result(source, start, reduce(edits, { end: start, text: "" }, (result, edit) => { end: edit.end, text: result.text byte_slice(source, result.end - start, edit.start - start) edit.text }))
+
+in ts_array, ts_array_pattern rule array-bracket-spacing {
+  option style "always" | "never" = "never" "spacing inside array brackets"
+  option singleValue boolean | null = null "override spacing around a single element"
+  option objectsInArrays boolean | null = null "override spacing beside object elements"
+  option arraysInArrays boolean | null = null "override spacing beside nested arrays"
+  let array_spaced style == "always"
+  when !(array_spaced && count(element) == 0)
+  let array_open opener.ts_open_bracket.node
+  let array_close closer.ts_close_bracket.node
+  let array_single singleValue != null && singleValue != array_spaced && count(element) == 1
+  let array_objects objectsInArrays != null && objectsInArrays != array_spaced
+  let array_arrays arraysInArrays != null && arraysInArrays != array_spaced
+  let array_first first(element.node)
+  let array_last last(element.node)
+  let array_open_wants array_spaced != (array_single || array_objects && array_first.layer is (ts_object, ts_object_pattern) || array_arrays && array_first.layer is (ts_array, ts_array_pattern))
+  let array_close_wants array_spaced != (array_single || array_objects && array_last.layer is (ts_object, ts_object_pattern) || array_arrays && array_last.layer is (ts_array, ts_array_pattern))
+  let array_edges [
+    { open: true, gap: array_open.space_after, wanted: array_open_wants, position: if array_open_wants then array_open.offset else array_open.end_offset },
+    { open: false, gap: array_close.space_before, wanted: array_close_wants, position: if array_close_wants then array_close.offset else array_close.space_before.start }
+  ]
+  let array_bad filter(array_edges, edge => !edge.gap.line_break && edge.gap.spaced != edge.wanted && (edge.open || edge.gap.start != array_open.end_offset))
+  let array_comments overlapping(ts_comment)
+  let array_fixed format_replace_gaps(text, offset, map(array_bad, edge => { start: edge.gap.start, end: edge.gap.end, text: format_gap_text(edge.gap, edge.wanted, array_comments) }))
+  each array_edge in array_bad
+  report at array_edge.position
+  fix as array_fixed
+  warn if array_edge.wanted then (if array_edge.open then "A space is required after '['." else "A space is required before ']'.") else (if array_edge.open then "There should be no space after '['." else "There should be no space before ']'.")
 }
 in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
   option style "object" | "property" = "property" "line for a member-access dot"
@@ -179,111 +118,276 @@ in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
   warn if style == "object" then "Expected dot to be on same line as object." else "Expected dot to be on same line as property."
 }
 
-in js_interpolation match js_interpolation_space /(?<=\$\{)[ \t]+|[ \t]+(?=\})/
-in js_interpolation_space rule template-curly-spacing:after warn "Unexpected space(s) after '${{'." {
+@macro format_template_curly {
   option mode "always" | "never" = "never" "spacing inside template substitutions"
-  when mode == "never" && ends_with(before, "${{")
-  fix as ""
+  let template_before default(re_find(space_before.text, /\s*$/), "")
+  let template_after default(re_find(space_after.text, /^\s*/), "")
 }
-in js_interpolation_space rule template-curly-spacing:before warn "Unexpected space(s) before '}}'." {
-  option mode "always" | "never" = "never" "spacing inside template substitutions"
-  when mode == "never" && starts_with(after, "}}")
-  fix as ""
-}
-over js_interpolation match js_interpolation_open_tight /(?<=\$\{)[^ \t\r\n}]/
-over js_interpolation match js_interpolation_close_tight /[^ \t\r\n{](?=\})/
-in js_interpolation_open_tight rule template-curly-spacing:missing-after warn "Expected space(s) after '${{'." {
-  option mode "always" | "never" = "never" "spacing inside template substitutions"
-  when mode == "always"
-  report at offset - 2
-  fix as " " text
-}
-in js_interpolation_close_tight rule template-curly-spacing:missing-before warn "Expected space(s) before '}}'." {
-  option mode "always" | "never" = "never" "spacing inside template substitutions"
-  when mode == "always"
+in ts_template.quasi rule template-curly-spacing:after warn "Unexpected space(s) after '${{'." {
+  @format_template_curly
+  when mode == "never" && ends_with(text, "${{") && template_after != "" && !re_test(template_after, /[\n\r\u{2028}\u{2029}]/)
   report at end_offset
-  fix as text " "
+  fix space_after as ""
+}
+in ts_template.quasi rule template-curly-spacing:before warn "Unexpected space(s) before '}}'." {
+  @format_template_curly
+  when mode == "never" && starts_with(text, "}}") && template_before != "" && !re_test(template_before, /[\n\r\u{2028}\u{2029}]/)
+  report at offset - byte_len(template_before)
+  fix space_before as ""
+}
+in ts_template.quasi rule template-curly-spacing:missing-after warn "Expected space(s) after '${{'." {
+  @format_template_curly
+  when mode == "always" && ends_with(text, "${{") && template_after == ""
+  report at end_offset - 2
+  fix space_after as " "
+}
+in ts_template.quasi rule template-curly-spacing:missing-before warn "Expected space(s) before '}}'." {
+  @format_template_curly
+  when mode == "always" && starts_with(text, "}}") && template_before == ""
+  fix space_before as " "
 }
 
-in js_code match js_tag_space /(?<=[\w$)\]])(?<!\b(?:return|typeof|case|yield|await|in|of|new|throw|void|else|do|instanceof|extends|keyof|infer|is|as|satisfies|readonly|unique|asserts)[ \t]*)[ \t]+(?=`)/
-in js_tag_space rule template-tag-spacing warn "Unexpected space between template tag and template literal." {
+@macro format_template_tag {
   option style "always" | "never" = "never" "spacing after a template tag"
-  when style == "never"
-  fix as ""
+  let tag_gap quasi.space_before
+  let tag_comments filter(overlapping(ts_comment), comment => comment.offset >= tag_gap.start && comment.end_offset <= tag_gap.end)
+  let tag_line_comment any(tag_comments, comment => comment.layer is ts_line_comment)
+}
+in ts_tagged_template rule template-tag-spacing warn "Unexpected space between template tag and template literal." {
+  @format_template_tag
+  when style == "never" && tag_gap.spaced && !tag_line_comment
+  report at tag_gap.start
+  fix as format_replace_gaps(text, offset, [{ start: tag_gap.start, end: tag_gap.end, text: format_gap_text(tag_gap, false, tag_comments) }])
+}
+in ts_tagged_template rule template-tag-spacing:comment warn "Unexpected space between template tag and template literal." {
+  @format_template_tag
+  when style == "never" && tag_gap.spaced && tag_line_comment
+  report at tag_gap.start
+}
+in ts_tagged_template rule template-tag-spacing:missing warn "Missing space between template tag and template literal." {
+  @format_template_tag
+  when style == "always" && !tag_gap.spaced
+  fix as format_replace_gaps(text, offset, [{ start: tag_gap.start, end: tag_gap.end, text: format_gap_text(tag_gap, true, tag_comments) }])
 }
 
-# Arrows: `a => b`, never `a=>b`.
-over js_code match js_arrow_tight_before /(?<=[^\s(])=>/
-in js_arrow_tight_before rule arrow-spacing:before warn "Missing space before =>." {
+# The nearest syntax or comment token owns the report position.
+in ts_arrow, ts_function_type let format_arrow_comments overlapping(ts_comment)
+@macro format_arrow_spacing {
   option before boolean = true "require space before the arrow"
   option after boolean = true "require space after the arrow"
-  when before
-  report at offset - 1
-  fix as " =>"
+  when parent is ts_arrow || parent is ts_function_type && text == "=>"
+  let arrow_before default(re_find(space_before.text, /\s*$/), "")
+  let arrow_after default(re_find(space_after.text, /^\s*/), "")
+  let arrow_previous_comment last(filter(parent.format_arrow_comments, comment => comment.offset >= space_before.start && comment.end_offset <= offset))
+  let arrow_next_comment first(filter(parent.format_arrow_comments, comment => comment.offset >= end_offset && comment.end_offset <= space_after.end))
+  let arrow_previous default(arrow_previous_comment.offset, token_neighbours.before.start)
+  let arrow_next default(arrow_next_comment.offset, token_neighbours.after.start)
 }
-over js_code match js_arrow_tight_after /=>(?=[^\s])/
-in js_arrow_tight_after rule arrow-spacing:after warn "Missing space after =>." {
-  option before boolean = true "require space before the arrow"
-  option after boolean = true "require space after the arrow"
-  when after
-  report at end_offset
-  fix as "=> "
+in ts_arrow.operator, ts_punctuator rule arrow-spacing:before warn "Missing space before =>." {
+  @format_arrow_spacing
+  when before && arrow_before == ""
+  report at arrow_previous
+  fix space_before as " "
 }
-over js_code match js_arrow_space_before /[ \t\r\n]+(?==>)/
-over js_code match js_arrow_space_after /(?<==>)[ \t\r\n]+(?=\S)/
-in js_arrow_space_before rule arrow-spacing:unexpected-before warn "Unexpected space before =>." {
-  option before boolean = true "require space before the arrow"
-  option after boolean = true "require space after the arrow"
-  when !before
-  report at offset - 1
-  fix as ""
+in ts_arrow.operator, ts_punctuator rule arrow-spacing:after warn "Missing space after =>." {
+  @format_arrow_spacing
+  when after && arrow_after == ""
+  report at arrow_next
+  fix space_after as " "
 }
-in js_arrow_space_after rule arrow-spacing:unexpected-after warn "Unexpected space after =>." {
-  option before boolean = true "require space before the arrow"
-  option after boolean = true "require space after the arrow"
-  when !after
-  report at end_offset
-  fix as ""
+in ts_arrow.operator, ts_punctuator rule arrow-spacing:unexpected-before warn "Unexpected space before =>." {
+  @format_arrow_spacing
+  when !before && arrow_before != ""
+  report at arrow_previous
+  fix space_before as ""
+}
+in ts_arrow.operator, ts_punctuator rule arrow-spacing:unexpected-after warn "Unexpected space after =>." {
+  @format_arrow_spacing
+  when !after && arrow_after != ""
+  report at arrow_next
+  fix space_after as ""
 }
 
-# `(x) => x` -> `x => x`
-in js_code match js_arrow_single params:parentheses /[ \t]*=>/
-in js_arrow_single.params rule arrow-parens warn if requireForBlockBody then "Unexpected parentheses around single function argument having a body with no curly braces." else "Unexpected parentheses around single function argument." {
+@macro format_arrow_parens {
   option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
   option requireForBlockBody boolean = false "keep parentheses with a block body"
+}
+in ts_parameter let format_arrow_plain name.layer is ts_identifier && optional == null && type == null && init == null && count(modifier) == 0 && count(decorator) == 0
+in ts_arrow.parameter rule arrow-parens:missing {
+  @format_arrow_parens
+  let arrow_previous token_neighbours.before
+  when count(parent.parameter) == 1
+  when arrow_previous.text != "(" || arrow_previous.start < parent.offset
+  let arrow_block style == "as-needed" && requireForBlockBody && parent.body.layer is ts_block
+  when style == "always" || arrow_block
+  fix as "(" text ")"
+  warn if arrow_block then "Expected parentheses around arrow function argument having a body with curly braces." else "Expected parentheses around arrow function argument."
+}
+in ts_arrow rule arrow-parens {
+  @format_arrow_parens
   when style == "as-needed"
-  when text ~ /\(\s*[A-Za-z_$][\w$]*\s*,?\s*\)/
-  when !re_test(before, /(?:>|[\w$])[ \t]*$/) || re_test(before, /\basync[ \t]*$/)
-  when !(requireForBlockBody && re_test(parent, /=>\s*\{/))
-  report at offset + len(default(re_find(text, /^\(\s*/), "("))
-  fix as trim(re_replace(slice(text, 1, -1), /,\s*$/, ""))
+  let arrow_block requireForBlockBody && body.layer is ts_block
+  when count(parameter) == 1 && !arrow_block && return_type == null && count(type_parameter) == 0
+  let arrow_parameter first(parameter.node)
+  when arrow_parameter.format_arrow_plain
+  let arrow_open opener.ts_open_paren.node
+  when arrow_open != null && arrow_open.offset < arrow_parameter.offset
+  let arrow_close arrow_open.paired_token
+  when !any(overlapping(ts_comment), comment => comment.offset >= arrow_open.end_offset && comment.end_offset <= arrow_close.start)
+  let arrow_prefix byte_slice(text, 0, arrow_open.offset - offset)
+  let arrow_separate arrow_open.space_before.text == "" && re_test(arrow_open.token_neighbours.before.text, /[\p{L}\p{N}_$]$/)
+  report at arrow_parameter.offset
+  fix as arrow_prefix (if arrow_separate then " " else "") arrow_parameter.text byte_slice(text, arrow_close.end - offset)
+  warn if requireForBlockBody then "Unexpected parentheses around single function argument having a body with no curly braces." else "Unexpected parentheses around single function argument."
 }
 
-# `{ a }` with spaces in object literals, patterns and import lists.
-in js_object, js_object_property, js_object_else, js_import_list, js_type_literal match js_curly_open_tight /(?<=\{)[^ \t\r\n}]/
-in js_object, js_object_property, js_object_else, js_import_list, js_type_literal match js_curly_close_tight /[^ \t\r\n{](?=\})/
-in js_curly_open_tight rule object-curly-spacing:open warn "A space is required after '\{'." {
-  report change
-  fix as " " text
+# Object-like braces, including named module lists and import attributes.
+group format_object_curly ts_object, ts_object_pattern, ts_import, ts_export, ts_mapped_type, ts_type_literal, ts_interface, ts_enum
+in ts_object let format_object_kind "ObjectExpression"
+in ts_object_pattern let format_object_kind "ObjectPattern"
+in ts_import let format_object_kind "ImportDeclaration"
+in ts_export let format_object_kind if kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration"
+in ts_mapped_type let format_object_kind "TSMappedType"
+in ts_type_literal let format_object_kind "TSTypeLiteral"
+in ts_interface let format_object_kind "TSInterfaceBody"
+in ts_enum let format_object_kind "TSEnumBody"
+in ts_object let format_object_empty count(property) == 0
+in ts_object_pattern let format_object_empty count(property) == 0 && rest == null
+in ts_import, ts_export let format_object_empty count(specifier) == 0
+in ts_mapped_type let format_object_empty false
+in ts_type_literal, ts_interface, ts_enum let format_object_empty count(member) == 0
+in ts_property, ts_pattern_property let format_curly_tail default(value.format_curly_tail, value.node)
+in ts_property_signature, ts_index_signature, ts_type_operator let format_curly_tail default(type.format_curly_tail, type.node)
+in ts_function_type let format_curly_tail default(return_type.format_curly_tail, return_type.node)
+in ts_enum_member let format_curly_tail default(init.format_curly_tail, init.node)
+in ts_spread, ts_rest let format_curly_tail default(argument.format_curly_tail, argument.node)
+in ts_assignment_pattern let format_curly_tail default(right.format_curly_tail, right.node)
+in ts_as, ts_satisfies let format_curly_tail default(type.format_curly_tail, type.node)
+in ts_mapped_type let format_object_tail default(type.format_curly_tail, type.node)
+@macro format_object_curly_options {
+  option style "always" | "never" = "never" "spaces inside object-like braces"
+  option arraysInObjects boolean | null = null "override spacing beside array values and index signatures"
+  option objectsInObjects boolean | null = null "override spacing beside object values"
+  option overrides { [node: string]: "always" | "never" } = {} "spacing by syntax kind"
+  option emptyObjects "ignore" | "always" | "never" = "ignore" "spacing inside empty braces"
+  when parent is format_object_curly
+  let curly_attributes parent is (ts_import, ts_export) && parent.from != null && offset > parent.from.end_offset
+  let curly_kind if curly_attributes then "ImportAttributes" else parent.format_object_kind
+  let curly_spaced default(get(overrides, curly_kind), style) == "always"
+  let curly_arrays arraysInObjects != null && arraysInObjects != (style == "always")
+  let curly_objects objectsInObjects != null && objectsInObjects != (style == "always")
+  let curly_empty if curly_attributes then (if layer is ts_open_brace then next_token is ts_close_brace else previous_token is ts_open_brace) else parent.format_object_empty
 }
-in js_curly_close_tight rule object-curly-spacing:close warn "A space is required before '\}'." {
-  report change
-  fix as text " "
+in ts_open_brace rule object-curly-spacing:open {
+  @format_object_curly_options
+  when !curly_empty
+  let curly_gap re_find(space_after.text, /^\s*/)
+  when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
+  let curly_required if curly_arrays && (parent is ts_mapped_type || first(parent.member.layer) is ts_index_signature) then !curly_spaced else curly_spaced
+  when (curly_gap != "") != curly_required
+  when curly_required || !space_after.comments || position(offset).js_line == position(paired_token.start).js_line
+  report at if curly_required then offset else end_offset
+  fix space_after as if curly_required then " " else ""
+  warn if curly_required then "A space is required after '\{'." else "There should be no space after '\{'."
+}
+in ts_close_brace rule object-curly-spacing:close {
+  @format_object_curly_options
+  when !curly_empty
+  let curly_gap re_find(space_before.text, /\s*$/)
+  when !re_test(curly_gap, /[\n\r\u{2028}\u{2029}]/)
+  let curly_tail if parent is (ts_object, ts_object_pattern) then default(last(parent.property.format_curly_tail), last(parent.property.node)) else if parent is ts_mapped_type then parent.format_object_tail else default(last(parent.member.format_curly_tail), last(parent.member.node))
+  let curly_required if !space_before.comments && (curly_arrays && previous_token is ts_close_bracket && curly_tail.layer is (ts_array, ts_tuple_type) || curly_objects && previous_token is ts_close_brace && curly_tail.layer is (ts_object, ts_object_pattern, ts_mapped_type, ts_type_literal)) then !curly_spaced else curly_spaced
+  when (curly_gap != "") != curly_required
+  report at if curly_required then offset else offset - byte_len(curly_gap)
+  fix space_before as if curly_required then " " else ""
+  warn if curly_required then "A space is required before '\}'." else "There should be no space before '\}'."
+}
+in ts_open_brace rule object-curly-spacing:empty {
+  @format_object_curly_options
+  when curly_empty && emptyObjects != "ignore" && !space_after.comments && !space_after.line_break && next_token is ts_close_brace
+  let curly_wanted if emptyObjects == "always" then " " else ""
+  when space_after.text != curly_wanted
+  report at end_offset
+  fix space_after as curly_wanted
+  warn if emptyObjects == "always" then "A space is required in empty '{curly_kind}'." else "There should be no space in empty '{curly_kind}'."
 }
 
-# Keys: `key: value`, also in interfaces and type literals.
-in js_keyed match js_key_colon /(?<=(?:^|[{,;])[ \t]*(?:readonly[ \t]+)?(?:[\w$]+\??|'[^'\r\n]*'|"[^"\r\n]*"|\[[^\]\r\n]*\]))[ \t]*:[ \t]*(?=\S)/
-in js_key_colon rule key-spacing warn "Bad spacing around ':' after a key." {
-  when text != ": "
-  fix as ": "
+# Keys and annotation colons belong to their property or member.
+group format_key_owner ts_property, ts_pattern_property, ts_property_signature, ts_index_signature, ts_class_property
+in ts_parenthesized, ts_computed_key let format_key_text default(expression.format_key_text, expression.text)
+in ts_property, ts_pattern_property, ts_property_signature, ts_class_property let format_key_label if key.layer is ts_computed_key then key.format_key_text else default(key.literal_value.value, key.text)
+in ts_index_signature let format_key_label byte_slice(text, 0, opener.ts_open_bracket.paired_token.end - offset)
+in ts_property, ts_pattern_property let format_key_computed key.layer is ts_computed_key
+@macro format_key_spacing {
+  when parent is format_key_owner
+  when !(parent is (ts_property_signature, ts_index_signature, ts_class_property) && position(parent.offset).js_line != position(offset).js_line)
+  let key_label parent.format_key_label
+  let key_computed if parent.format_key_computed == true then "computed " else ""
 }
+in ts_colon rule key-spacing {
+  @format_key_spacing
+  let key_gap default(re_find(space_before.text, /\s*$/), "")
+  when key_gap != ""
+  report at offset - byte_len(key_gap)
+  fix space_before as ""
+  warn "Extra space after {key_computed}key '{key_label}'."
+}
+in ts_colon rule key-spacing:after {
+  @format_key_spacing
+  let key_gap default(re_find(space_after.text, /^\s*/), "")
+  when !re_test(key_gap, /[\n\r\u{2028}\u{2029}]/) && len(key_gap) != 1
+  let key_comment first(filter(parent.format_key_comments, comment => comment.offset >= end_offset && comment.end_offset <= space_after.end))
+  report at if key_gap == "" then default(key_comment.offset, token_neighbours.after.start) else offset
+  fix space_after as " "
+  warn if key_gap == "" then "Missing space before value for {key_computed}key '{key_label}'." else "Extra space before value for {key_computed}key '{key_label}'."
+}
+in format_key_owner let format_key_comments overlapping(ts_comment)
 
 # ---- keywords ---------------------------------------------------------------
 
-in js_code match js_keyword_tight_after /(?<![.\w$])\b(?:if|for|while|switch|catch|return|typeof|else|try|do|finally|throw|case|instanceof|await|yield|new|delete|void)(?=[({\['"`])|(?<![.\w$])\bfrom(?=['"])/
-in js_keyword_tight_after rule keyword-spacing:after warn "Expected space(s) after \"{text}\"." fix as text " "
-in js_code match js_keyword_tight_before /(?<=\})(?:else|catch|finally|while)\b/
-in js_keyword_tight_before rule keyword-spacing:before warn "Expected space(s) before \"{text}\"." fix as " " text
+schema format_keyword_policy { before?: boolean; after?: boolean }
+@macro format_keyword_options {
+  option before boolean = true "space before keywords"
+  option after boolean = true "space after keywords"
+  option overrides { [keyword: string]: format_keyword_policy } = {} "spacing by keyword"
+  let keyword_value if parent is ts_for_of && field == "modifier" then "for" else if parent is ts_variable_declaration && starts_with(text, "await") then "await" else text
+  let keyword_label if parent is ts_for_of && parent.modifier != null && (text == "for" || field == "modifier") then "for await" else keyword_value
+  let keyword_policy get(overrides, keyword_value)
+  let keyword_module parent is (ts_import, ts_export, ts_import_specifier, ts_export_specifier) && contains(["import", "export", "from", "as", "type"], text)
+  let keyword_statement parent is (ts_debugger, ts_with, ts_break, ts_continue, ts_return, ts_throw, ts_try, ts_if, ts_switch, ts_case, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_while, ts_static_block) && contains(["debugger", "with", "break", "continue", "return", "throw", "try", "catch", "finally", "if", "else", "switch", "case", "default", "do", "for", "in", "of", "while", "static", "await"], text)
+  let keyword_modifier parent is (ts_method, ts_class_property) && (contains(["get", "set", "async", "accessor"], text) && offset < parent.key.offset || text == "static" && offset == parent.offset)
+  let keyword_around keyword_statement || keyword_module || keyword_modifier || parent is ts_variable_declaration && field == "kind" || parent is ts_class && text == "extends" || parent is ts_export && text == "default" || parent is (ts_import, ts_export) && text == "with" || parent is (ts_as, ts_satisfies) && contains(["as", "satisfies"], text) || layer is (ts_debugger, ts_break, ts_continue, ts_return) && contains(["debugger", "break", "continue", "return"], text)
+  let keyword_leading parent is (ts_function, ts_arrow, ts_class) && contains(["function", "async", "class"], text) && offset == parent.offset || parent is ts_unary && contains(["typeof", "void", "delete"], text) || parent is (ts_new, ts_await, ts_yield) && contains(["new", "await", "yield"], text) || layer is (ts_super, ts_this) || layer is ts_yield && text == "yield"
+}
+in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule keyword-spacing:before {
+  @format_keyword_options
+  when keyword_around || keyword_leading
+  when !(contains(["in", "of"], text) && previous_token is ts_private_name)
+  when !(token_neighbours.before.text == ">" && ts_binary.operator == ">" && offset == ts_binary.right.offset)
+  let keyword_required default(keyword_policy.before, before)
+  when space_before != null && !space_before.line_break && (keyword_required || !space_before.comments)
+  when previous_token is (ts_regex, ts_string, ts_template, ts_private_name) || re_test(token_neighbours.before.text, if keyword_module then /^[)\]}>*]$/ else /^[)\]}>]$/)
+  when !re_test(token_neighbours.before.text, /\$\{$/)
+  when space_before.spaced != keyword_required
+  report at if keyword_required then offset else space_before.start
+  fix space_before as if keyword_required then " " else ""
+  warn if keyword_required then "Expected space(s) before \"{keyword_label}\"." else "Unexpected space(s) before \"{keyword_label}\"."
+}
+in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_debugger, ts_break, ts_continue, ts_return rule keyword-spacing:after {
+  @format_keyword_options
+  when keyword_around
+  when !(parent is ts_try && text == "catch" && parent.parameter != null)
+  when !(parent is ts_import_specifier && text == "as" || parent is ts_import && text == "as")
+  when !(parent is ts_variable_declaration && starts_with(text, "await"))
+  let keyword_required default(keyword_policy.after, after)
+  when space_after != null && !space_after.line_break && (keyword_required || !space_after.comments)
+  when next_token is (ts_regex, ts_string, ts_template, ts_private_name) || re_test(token_neighbours.after.text, if keyword_module then /^[{*]$/ else /^(?:[(\[{<~!]|\+\+?|--?)$/)
+  when !re_test(token_neighbours.after.text, /^\}/)
+  when space_after.spaced != keyword_required
+  report at if !keyword_required then end_offset else if parent is ts_for_of && field == "modifier" then parent.offset else offset
+  fix space_after as if keyword_required then " " else ""
+  warn if keyword_required then "Expected space(s) after \"{keyword_label}\"." else "Unexpected space(s) after \"{keyword_label}\"."
+}
 
 import .ts/flow
 

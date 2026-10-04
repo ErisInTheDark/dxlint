@@ -641,24 +641,6 @@ in ts_colon rule type-named-tuple-spacing:after {
   warn "Expected a space after the ':'."
 }
 
-in ts_arrow.parameter rule arrow-parens:missing {
-  option style "always" | "as-needed" = "always" "parentheses around one arrow parameter"
-  option requireForBlockBody boolean = false "keep parentheses with a block body"
-  let prev token_neighbours.before
-  when count(parent.parameter) == 1 && text ~ /[A-Za-z_$][\w$]*/
-  when prev.text != "(" || prev.start < token_neighbours.parent_start
-  when style == "always" || requireForBlockBody && starts_with(parent.body, "{{")
-  fix as "(" text ")"
-  warn if requireForBlockBody && starts_with(parent.body, "{{") then "Expected parentheses around arrow function argument having a body with curly braces." else "Expected parentheses around arrow function argument."
-}
-
-in ts_tagged_template rule template-tag-spacing:missing {
-  option style "always" | "never" = "never" "spacing after a template tag"
-  when style == "always" && re_test(text, /^[^`]*[^\s]`/)
-  fix as re_replace(text, /^([^`]*[^\s])`/, "$1 `")
-  warn "Missing space between template tag and template literal."
-}
-
 @macro layout_brace_options {
   option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
   option allowSingleLine boolean = false "allow single-line block bodies"
