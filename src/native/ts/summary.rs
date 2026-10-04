@@ -27,7 +27,8 @@ pub enum TypeSyn {
     Union(Vec<TypeSyn>),
     Inter(Vec<TypeSyn>),
     Array(Box<TypeSyn>),
-    Tuple(Vec<TypeSyn>),
+    Tuple(Vec<TupleElement>),
+    Readonly(Box<TypeSyn>),
     Fn(Arc<Sig>),
     /// `new (...) => T`
     Ctor(Arc<Sig>),
@@ -36,8 +37,17 @@ pub enum TypeSyn {
     Query(Box<[Box<str>]>),
     /// `keyof T`
     Keyof(Box<TypeSyn>),
-    /// Anything the evaluator does not model (conditional, mapped types).
+    Indexed(Box<TypeSyn>, Box<TypeSyn>),
+    Conditional { check: Box<TypeSyn>, extends: Box<TypeSyn>, consequent: Box<TypeSyn>, alternate: Box<TypeSyn> },
+    /// Anything the evaluator does not model.
     Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+pub struct TupleElement<T = TypeSyn> {
+    pub ty: T,
+    pub optional: bool,
+    pub rest: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -135,9 +145,9 @@ pub struct Decl {
     pub name: Box<str>,
     pub kind: DeclKind,
     pub type_params: Vec<TParam>,
-    /// Class `extends` (a value path with type arguments) first, then
-    /// `implements`; interface `extends`.
+    /// Class or interface inheritance, not class `implements`.
     pub extends: Vec<TypeSyn>,
+    pub implements: Vec<TypeSyn>,
     pub members: Vec<Member>,
     /// Function overloads, or class constructors.
     pub sigs: Vec<Arc<Sig>>,
@@ -162,6 +172,7 @@ impl Hash for Decl {
     fn hash<H: Hasher>(&self, h: &mut H) {
         (&self.name, &self.kind, &self.type_params, &self.extends, &self.members, &self.sigs, &self.ty, &self.init, &self.doc).hash(h);
         (&self.scope, self.ambient, self.parent, self.module).hash(h);
+        self.implements.hash(h);
     }
 }
 
@@ -281,7 +292,11 @@ pub fn type_syn(v: &impl View, id: u32) -> TypeSyn {
         Some(K::TupleType) => TypeSyn::Tuple(
             v.all(id, F::Element)
                 .into_iter()
-                .map(|e| v.get(e, F::Type).map_or(TypeSyn::Other, |t| type_syn(v, t)))
+                .map(|e| TupleElement {
+                    ty: v.get(e, F::Type).map_or(TypeSyn::Other, |t| type_syn(v, t)),
+                    optional: v.get(e, F::Optional).is_some(),
+                    rest: v.is(e, K::Rest),
+                })
                 .collect(),
         ),
         Some(K::FnType) => {
@@ -303,12 +318,22 @@ pub fn type_syn(v: &impl View, id: u32) -> TypeSyn {
             }
         }
         Some(K::TypeOperator) if v.get(id, F::Op).is_some_and(|o| v.text(o) == "readonly") => {
-            v.get(id, F::Type).map_or(TypeSyn::Other, |t| type_syn(v, t))
+            v.get(id, F::Type).map_or(TypeSyn::Other, |t| TypeSyn::Readonly(Box::new(type_syn(v, t))))
         }
         Some(K::TypeOperator) if v.get(id, F::Op).is_some_and(|o| v.text(o) == "keyof") => {
             v.get(id, F::Type).map_or(TypeSyn::Other, |t| TypeSyn::Keyof(Box::new(type_syn(v, t))))
         }
         Some(K::TemplateType) => TypeSyn::Kw("string".into()),
+        Some(K::IndexedAccess) => TypeSyn::Indexed(
+            Box::new(v.get(id, F::Object).map_or(TypeSyn::Other, |t| type_syn(v, t))),
+            Box::new(v.get(id, F::Index).map_or(TypeSyn::Other, |t| type_syn(v, t))),
+        ),
+        Some(K::ConditionalType) => TypeSyn::Conditional {
+            check: Box::new(v.get(id, F::Check).map_or(TypeSyn::Other, |t| type_syn(v, t))),
+            extends: Box::new(v.get(id, F::Extends).map_or(TypeSyn::Other, |t| type_syn(v, t))),
+            consequent: Box::new(v.get(id, F::Consequent).map_or(TypeSyn::Other, |t| type_syn(v, t))),
+            alternate: Box::new(v.get(id, F::Alternate).map_or(TypeSyn::Other, |t| type_syn(v, t))),
+        },
         _ => TypeSyn::Other,
     }
 }
@@ -351,6 +376,39 @@ pub fn sig(v: &impl View, id: u32) -> Sig {
 }
 
 fn key_name(v: &impl View, key: u32) -> Box<str> {
+    let mut literal = match v.kind(key) {
+        Some(K::Computed) => v.get(key, F::Expr).unwrap_or(key),
+        _ => key,
+    };
+    while v.is(literal, K::Paren) {
+        let Some(inner) = v.get(literal, F::Expr) else { break };
+        literal = inner;
+    }
+    match v.kind(literal) {
+        Some(K::String) => {
+            if let Some(name) = super::regex::cook(v.text(literal)) { return name.into() }
+        }
+        Some(K::Template) if v.all(literal, F::Expr).is_empty() => {
+            if let Some(name) = super::regex::cook(v.text(literal)) { return name.into() }
+        }
+        Some(K::Number) => {
+            if let Some(number) = super::statics::number(v.text(literal)) { return super::statics::number_string(number).into() }
+        }
+        Some(K::Unary) => {
+            if let (Some(op), Some(value)) = (v.get(literal, F::Op), v.get(literal, F::Arg).filter(|&arg| v.is(arg, K::Number))) {
+                if let Some(number) = super::statics::number(v.text(value)) {
+                    match v.text(op) {
+                        "+" => return super::statics::number_string(number).into(),
+                        "-" => return super::statics::number_string(-number).into(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Some(K::Bool | K::Null) => return v.text(literal).into(),
+        Some(K::Ident) if literal == key => return super::statics::identifier_name(v.text(key)).into(),
+        _ => {}
+    }
     match v.kind(key) {
         Some(K::String) => v.text(key).trim_matches(|c| c == '"' || c == '\'').into(),
         _ => v.text(key).into(),
@@ -483,6 +541,7 @@ impl<V: View> Builder<'_, V> {
             kind,
             type_params: type_params(self.v, id),
             extends: Vec::new(),
+            implements: Vec::new(),
             members: Vec::new(),
             sigs: Vec::new(),
             ty: None,
@@ -543,7 +602,7 @@ impl<V: View> Builder<'_, V> {
                     let args = v.all(s, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect();
                     decl.extends.push(TypeSyn::Ref(path_of(v, e).into(), args));
                 }
-                decl.extends.extend(v.all(s, F::Implements).into_iter().map(|t| type_syn(v, t)));
+                decl.implements.extend(v.all(s, F::Implements).into_iter().map(|t| type_syn(v, t)));
                 for m in v.all(s, F::Member) {
                     if v.is(m, K::Method) && v.get(m, F::Key).is_some_and(|k| v.text(k) == "constructor") {
                         decl.sigs.push(Arc::new(sig(v, m)));
@@ -846,3 +905,46 @@ pub enum LocalExport<'a> {
 
 /// Shared, immutable summaries.
 pub type Summary = Arc<FileSummary>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::view::Raw;
+
+    fn fingerprint(src: &str) -> u64 {
+        let parsed = super::super::parse(src, false).unwrap();
+        summarise(&Raw { src, nodes: &parsed.nodes }, parsed.root, false).fingerprint()
+    }
+
+    #[test]
+    fn imported_type_modifiers_invalidate_dependents() {
+        for (before, after) in [
+            ("type T = number[];", "type T = readonly number[];"),
+            ("type T = [number];", "type T = [number?];"),
+            ("type T = [number[]];", "type T = [...number[]];"),
+        ] {
+            assert_ne!(fingerprint(before), fingerprint(after), "{before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn deferred_type_changes_invalidate_dependents() {
+        for (before, after) in [
+            ("type T = O['a'];", "type T = O['b'];"),
+            ("type T<X> = X extends string ? number : boolean;", "type T<X> = X extends string ? number : string;"),
+        ] {
+            assert_ne!(fingerprint(before), fingerprint(after), "{before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn changing_class_inheritance_invalidates_dependents() {
+        assert_ne!(fingerprint("class C extends B {}"), fingerprint("class C implements B {}"));
+    }
+
+    #[test]
+    fn equivalent_literal_keys_share_member_identity() {
+        assert_eq!(fingerprint("interface T { 'a': number }"), fingerprint("interface T { ['\\u0061']: number }"));
+        assert_eq!(fingerprint("interface T { 16: number }"), fingerprint("interface T { [0x10]: number }"));
+    }
+}

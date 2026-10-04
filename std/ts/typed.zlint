@@ -7,6 +7,244 @@ define {
 macro thenable contains(default(type_members, []), "then")
 macro flags (default(type_flags, []))
 macro has_only_flags(fs, allowed) (count(fs) > 0 && count(unique(fs allowed)) == count(unique(allowed)))
+macro matches_type_specifier(spec, gate) (spec == gate.name || (spec.name == gate.name || contains(default(spec.name, []), gate.name)) && spec.from == gate.from && (spec.path == null || ends_with(gate.path, spec.path)) && (spec.package == null || spec.package == gate.package))
+macro type_is_allowed(allowed, groups) any(allowed, spec => all(groups, group => any(group, gate => matches_type_specifier(spec, gate))))
+macro matches_type_names(groups, names) all(groups, group => any(group, name => contains(names, name)))
+
+in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
+  when generated_empty_object
+  warn "This type resolves to `{{}}`, the empty object type. This was likely not intentional."
+}
+
+in ts_function, ts_arrow, ts_method rule require-await {
+  when missing_await != null
+  report at missing_await.offset
+  warn missing_await.name " has no 'await' expression."
+}
+
+in ts_call rule use-unknown-in-catch-callback-variable {
+  each finding in unsafe_catch_callbacks
+  report at finding.offset
+  warn "Prefer the safe `: unknown` for a `" finding.method "`" (if finding.method == "then" then " rejection" else "") " callback variable." (if finding.pattern == "array" then " The thrown error may not be iterable." else if finding.pattern == "object" then " The thrown error may be nullable, or may not have the expected shape." else "")
+}
+
+in ts_function, ts_arrow, ts_method rule promise-function-async {
+  option allowAny boolean = true "Allow any and unknown return types"
+  option allowedPromiseNames string[] = [] "Additional promise type names"
+  option checkArrowFunctions boolean = true "Check arrow functions"
+  option checkFunctionDeclarations boolean = true "Check function declarations"
+  option checkFunctionExpressions boolean = true "Check function expressions"
+  option checkMethodDeclarations boolean = true "Check class methods"
+  when promise_function != null
+  when promise_function.kind != "arrow" || checkArrowFunctions
+  when promise_function.kind != "declaration" || checkFunctionDeclarations
+  when promise_function.kind != "expression" || checkFunctionExpressions
+  when promise_function.kind != "method" || checkMethodDeclarations
+  let names ("Promise" allowedPromiseNames)
+  let disallowed_unknown (!allowAny && any(promise_function.returns, result => result.unknown))
+  when disallowed_unknown || all(promise_function.returns, result => if promise_function.explicit then matches_type_names(result.groups, names) else any(result.groups, group => any(group, name => contains(names, name))))
+  report at promise_function.offset
+  warn if !disallowed_unknown && any(promise_function.returns, result => result.union && !matches_type_names(result.groups, names)) then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
+}
+
+in ts_throw.argument rule only-throw-error {
+  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "Additional allowed thrown types"
+  option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
+  option allowThrowingAny boolean = true "Allow any values"
+  option allowThrowingUnknown boolean = true "Allow unknown values"
+  when throw_policy.kind != "error"
+  when !allowRethrowing || !throw_policy.rethrown
+  when !allowThrowingAny || throw_policy.kind != "any"
+  when !allowThrowingUnknown || throw_policy.kind != "unknown"
+  when !type_is_allowed(allow, type_specifier_groups)
+  report at throw_policy.offset
+  warn if throw_policy.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+}
+
+in ts_call, ts_new {
+  rule no-implied-eval {
+    when implied_eval != null && implied_eval.mode == "typed"
+    report at implied_eval.offset
+    warn "Implied eval. Consider passing a function."
+  }
+  rule no-implied-eval:core {
+    when implied_eval != null && implied_eval.mode == "core"
+    report at implied_eval.offset
+    warn "Implied eval. Consider passing a function instead of a string."
+  }
+  rule no-implied-eval:exec {
+    when implied_eval != null && implied_eval.mode == "exec"
+    report at implied_eval.offset
+    warn "Implied eval. Do not use execScript()."
+  }
+  rule no-implied-eval:function {
+    when implied_eval != null && implied_eval.mode == "function"
+    report at implied_eval.offset
+    warn "Implied eval. Do not use the Function constructor to create functions."
+  }
+}
+
+in ts_enum rule no-mixed-enums {
+  when mixed_enum_offset != null
+  report at mixed_enum_offset
+  warn "Mixing number and string enums can be confusing."
+}
+
+in ts_call, ts_new, ts_tagged_template {
+  rule no-unsafe-argument {
+    each unsafe_arg in default(unsafe_arguments, [])
+    when unsafe_arg.mode == "argument"
+    report at unsafe_arg.offset
+    warn "Unsafe argument of type {unsafe_arg.sender} assigned to a parameter of type {unsafe_arg.receiver}."
+  }
+  rule no-unsafe-argument:spread {
+    each unsafe_arg in default(unsafe_arguments, [])
+    when unsafe_arg.mode == "spread"
+    report at unsafe_arg.offset
+    warn "Unsafe spread of an {unsafe_arg.sender} type."
+  }
+  rule no-unsafe-argument:array {
+    each unsafe_arg in default(unsafe_arguments, [])
+    when unsafe_arg.mode == "array"
+    report at unsafe_arg.offset
+    warn "Unsafe spread of an {unsafe_arg.sender} array type."
+  }
+  rule no-unsafe-argument:tuple {
+    each unsafe_arg in default(unsafe_arguments, [])
+    when unsafe_arg.mode == "tuple"
+    report at unsafe_arg.offset
+    warn "Unsafe spread of a tuple type. The argument is {unsafe_arg.sender} and is assigned to a parameter of type {unsafe_arg.receiver}."
+  }
+}
+
+in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_spread, ts_jsx_attribute {
+  rule no-unsafe-assignment {
+    each unsafe_assigned in default(unsafe_assignments, [])
+    when unsafe_assigned.mode == "any"
+    report at unsafe_assigned.offset
+    warn "Unsafe assignment of an {unsafe_assigned.sender} value."
+  }
+  rule no-unsafe-assignment:generic {
+    each unsafe_assigned in default(unsafe_assignments, [])
+    when unsafe_assigned.mode == "generic"
+    report at unsafe_assigned.offset
+    warn "Unsafe assignment of type {unsafe_assigned.sender} to a variable of type {unsafe_assigned.receiver}."
+  }
+  rule no-unsafe-assignment:array {
+    each unsafe_assigned in default(unsafe_assignments, [])
+    when unsafe_assigned.mode == "array"
+    report at unsafe_assigned.offset
+    warn "Unsafe array destructuring of an {unsafe_assigned.sender} array value."
+  }
+  rule no-unsafe-assignment:tuple {
+    each unsafe_assigned in default(unsafe_assignments, [])
+    when unsafe_assigned.mode == "tuple"
+    report at unsafe_assigned.offset
+    warn "Unsafe array destructuring of a tuple element with an {unsafe_assigned.sender} value."
+  }
+  rule no-unsafe-assignment:object {
+    each unsafe_assigned in default(unsafe_assignments, [])
+    when unsafe_assigned.mode == "object"
+    report at unsafe_assigned.offset
+    warn "Unsafe object destructuring of a property with an {unsafe_assigned.sender} value."
+  }
+  rule no-unsafe-assignment:spread {
+    each unsafe_assigned in default(unsafe_assignments, [])
+    when unsafe_assigned.mode == "spread"
+    report at unsafe_assigned.offset
+    warn "Unsafe spread of an {unsafe_assigned.sender} value in an array."
+  }
+}
+
+in ts_return, ts_arrow.body rule no-unsafe-return {
+  when unsafe_return != null && unsafe_return.kind != null
+  warn "Unsafe return of a value of type {unsafe_return.kind}."
+}
+in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
+  when unsafe_return != null && unsafe_return.sender != null
+  warn "Unsafe return of type `{unsafe_return.sender}` from function with return type `{unsafe_return.receiver}`."
+}
+
+in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
+  when this_return_type_offset != null
+  report at this_return_type_offset
+  warn "Use `this` type instead."
+}
+
+in ts_call rule prefer-regexp-exec {
+  when regexp_exec_offset != null
+  report at regexp_exec_offset
+  warn "Use the `RegExp#exec()` method instead."
+}
+
+in ts_union, ts_intersection {
+  rule no-redundant-type-constituents {
+    each redundant_constituent in default(redundant_type_constituents, [])
+    when redundant_constituent.mode == "overrides"
+    report at redundant_constituent.offset
+    warn "'{redundant_constituent.name}' overrides all other types in this {redundant_constituent.container} type."
+  }
+  rule no-redundant-type-constituents:overridden {
+    each redundant_constituent in default(redundant_type_constituents, [])
+    when redundant_constituent.mode == "overridden"
+    report at redundant_constituent.offset
+    warn "'{redundant_constituent.name}' is overridden by other types in this {redundant_constituent.container} type."
+  }
+  rule no-redundant-type-constituents:error {
+    each redundant_constituent in default(redundant_type_constituents, [])
+    when redundant_constituent.mode == "error"
+    report at redundant_constituent.offset
+    warn "'{redundant_constituent.name}' is an 'error' type that acts as 'any' and overrides all other types in this {redundant_constituent.container} type."
+  }
+  rule no-redundant-type-constituents:literal {
+    each redundant_constituent in default(redundant_type_constituents, [])
+    when redundant_constituent.mode == "literal"
+    report at redundant_constituent.offset
+    warn "{redundant_constituent.name} is overridden by {redundant_constituent.primitive} in this union type."
+  }
+  rule no-redundant-type-constituents:primitive {
+    each redundant_constituent in default(redundant_type_constituents, [])
+    when redundant_constituent.mode == "primitive"
+    report at redundant_constituent.offset
+    warn "{redundant_constituent.primitive} is overridden by the {redundant_constituent.name} in this intersection type."
+  }
+}
+
+in ts_union, ts_intersection rule no-duplicate-type-constituents {
+  option ignoreIntersections boolean = false "Ignore intersection types."
+  option ignoreUnions boolean = false "Ignore union types."
+  when !(ignoreIntersections && layer == "ts_intersection") && !(ignoreUnions && layer == "ts_union")
+  each duplicate_constituent in default(duplicate_type_constituents, [])
+  when duplicate_constituent.previous != null
+  report at duplicate_constituent.offset
+  warn "{duplicate_constituent.kind} type constituent is duplicated with {duplicate_constituent.previous}."
+}
+in ts_union rule no-duplicate-type-constituents:optional {
+  option ignoreUnions boolean = false "Ignore union types."
+  when !ignoreUnions
+  each duplicate_constituent in default(duplicate_type_constituents, [])
+  when duplicate_constituent.previous == null
+  report at duplicate_constituent.offset
+  warn "Explicit undefined is unnecessary on an optional parameter."
+}
+
+in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {
+  when non_null_assertion == true
+  warn "Use a ! assertion to more succinctly remove null and undefined from the type."
+}
+in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
+  when reduce_type_assertion == true
+  warn "Unnecessary assertion: Array#reduce accepts a type parameter for the default value."
+}
+in ts_method.return_type, ts_method_signature.return_type rule related-getter-setter-pairs {
+  when accessor_type_mismatch == true
+  warn "`get()` type should be assignable to its equivalent `set()` type."
+}
+in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversion {
+  when unnecessary_type_conversion != null
+  report at unnecessary_type_conversion.offset
+  warn "{unnecessary_type_conversion.violation} does not change the type or value of the {unnecessary_type_conversion.type}."
+}
 
 # A promise-valued statement that nothing awaits or handles.
 # `.catch(handler)` and `.then(ok, handler)` handle rejections; `.finally`
@@ -20,19 +258,26 @@ in ts_expression_statement.expression rule no-floating-promises {
 
 # `await` of something that is not a promise; promise aggregators of arrays
 # of non-promises.
-in ts_await.argument rule await-thenable {
-  when type != null && type != "any" && !thenable && !re_test(type, /\?/)
+in ts_await rule await-thenable {
+  when argument.nonawaitable_type == true
   warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
 }
-in ts_array let is_promise_aggregator_argument parent.callee ~ /Promise\.(?:all|allSettled|race|any)/
+in ts_array let is_promise_aggregator_argument parent.promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
-  when parent.is_promise_aggregator_argument && type != null && type != "any" && !thenable && !re_test(type, /\?/)
+  when layer != "ts_hole" && parent.is_promise_aggregator_argument && nonawaitable_type == true
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_call.argument rule await-thenable:iterable {
-  when parent.callee ~ /Promise\.(?:all|allSettled|race|any)/ && layer != "ts_array"
-  when type ~ /[A-Za-z0-9_.<>]+\[\]/ && !re_test(type, /\?|^any/) && !re_test(type, /^(?:Promise|PromiseLike)</)
+  when parent.promise_aggregator == true && layer != "ts_array" && nonawaitable_iterable == true
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
+}
+in ts_for_of rule await-thenable:for-of {
+  when nonasync_for_of == true
+  warn "Unexpected `for await...of` of a value that is not async iterable."
+}
+in ts_declarator.init rule await-thenable:using {
+  when nonasync_using == true
+  warn "Unexpected `await using` of a value that is not async disposable."
 }
 
 # no-unnecessary-type-arguments: the last explicit type argument is the type
@@ -172,9 +417,21 @@ in ts_parameter rule prefer-readonly:parameter {
 # ---- the cheap type-checked trio ------------------------------------------------
 macro bad_in_string(fs) (contains(fs, "array") || contains(fs, "object") || contains(fs, "function") || contains(fs, "symbol") || contains(fs, "never"))
 macro stringifies_well(t) re_test(default(t, ""), /^(?:RegExp|Error|URL|URLSearchParams)$/)
+in ts_template let tagged_template parent == "ts_tagged_template"
 in ts_template.expression rule restrict-template-expressions {
-  when bad_in_string(flags) && !contains(flags, "any") && !stringifies_well(type)
-  warn "Invalid type \"{type}\" of template literal expression."
+  option allowAny boolean = true "Allow any values"
+  option allowArray boolean = false "Allow arrays whose elements can be interpolated"
+  option allowBoolean boolean = true "Allow booleans"
+  option allowNullish boolean = true "Allow null and undefined"
+  option allowNumber boolean = true "Allow numbers and bigints"
+  option allowRegExp boolean = true "Allow regular expressions"
+  option allowNever boolean = false "Allow never values"
+  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [{ from: "lib", name: ["Error", "URL", "URLSearchParams"] }] "Additional allowed types and values"
+  let enabled_template_options ["string"] (if allowAny then ["any"] else []) (if allowArray then ["array"] else []) (if allowBoolean then ["boolean"] else []) (if allowNullish then ["nullish"] else []) (if allowNumber then ["number"] else []) (if allowRegExp then ["regexp"] else []) (if allowNever then ["never"] else [])
+  when parent.tagged_template != true
+  when template_type_checks != null
+  when any(template_type_checks, clause => !any(clause, gate => contains(enabled_template_options, gate.option) || gate.name != null && any(allow, spec => matches_type_specifier(spec, gate))))
+  warn "Invalid type \"{template_type_display}\" of template literal expression."
 }
 
 in ts_binary {
@@ -196,6 +453,105 @@ in ts_binary rule restrict-plus-operands:numeric {
 in ts_unary rule no-unsafe-unary-minus {
   when operator == "-" && count(default(argument.type_flags, [])) > 0 && !contains(argument.type_flags, "any") && !contains(argument.type_flags, "unknown") && !contains(argument.type_flags, "number") && !contains(argument.type_flags, "bigint") && !contains(argument.type_flags, "enum")
   warn "Argument of unary negation should be assignable to number | bigint but is {re_replace(default(argument.type, '?'), /^\"[\s\S]*\"$/, 'string')} instead."
+}
+
+in ts_member, ts_index let object_array_type object.array_type
+in ts_unary rule no-array-delete {
+  when array_delete == true
+  warn "Using the `delete` operator with an array expression is unsafe."
+}
+
+in ts_function, ts_arrow, ts_method rule return-await {
+  option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
+  each result in returned_awaitables
+  when result.certainty == "never" && result.awaited || result.certainty == "always" && (if mode == "always" || mode != "never" && result.handling then !result.awaited else if mode == "error-handling-correctness-only" then false else result.awaited)
+  report at result.offset
+  warn if result.certainty == "never" then "Returning an awaited value that is not a promise is not allowed." else if result.awaited then "Returning an awaited promise is not allowed in this context." else "Returning an awaited promise is required in this context."
+}
+
+in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
+  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
+  when useless_default != null
+  report at useless_default.offset
+  warn if useless_default.kind == "optional" then "Using `= undefined` to make a parameter optional adds unnecessary runtime logic." else if useless_default.kind == "undefined" then "Default value is useless because it is undefined. Optional {useless_default.owner}s are already undefined by default." else "Default value is useless because the {useless_default.owner} is not optional."
+}
+
+in ts_as, ts_type_assertion rule no-unsafe-type-assertion {
+  when unsafe_assertion != null
+  warn if unsafe_assertion.kind == "from-any" then "Unsafe assertion from {unsafe_assertion.type} detected: consider using type guards or a safer assertion." else if unsafe_assertion.kind == "to-any" then "Unsafe assertion to {unsafe_assertion.type} detected: consider using a more specific type to ensure safety." else if unsafe_assertion.kind == "unconstrained" then "Unsafe type assertion: '{unsafe_assertion.type}' could be instantiated with an arbitrary type which could be unrelated to the original type." else if unsafe_assertion.kind == "constraint" then "Unsafe type assertion: the original type is assignable to the constraint of type '{unsafe_assertion.type}', but '{unsafe_assertion.type}' could be instantiated with a different subtype of its constraint." else "Unsafe type assertion: type '{unsafe_assertion.type}' is more narrow than the original type."
+}
+
+in ts_member let object_string_array_type object.string_array_type
+in ts_call rule require-array-sort-compare {
+  option ignoreStringArrays boolean = true "Ignore arrays whose elements are all strings"
+  when count(argument) == 0 && re_test(callee, /\??\.\s*(sort|toSorted)$/)
+  when callee.object_array_type == true && (!ignoreStringArrays || callee.object_string_array_type != true)
+  warn "Require 'compare' argument."
+}
+
+in ts_call.callee rule no-unsafe-call {
+  when unsafe_call_type != null
+  warn if unsafe_call_type == "error" then if unsafe_this_type == "error" then "Unsafe call of a `this` type that could not be resolved." else "Unsafe call of a type that could not be resolved." else "Unsafe call of {if unsafe_call_type == 'function' then 'a `Function`' else 'an `any`'} typed value."
+}
+in ts_new rule no-unsafe-call:new {
+  when callee.unsafe_call_type != null
+  warn if callee.unsafe_call_type == "error" then "Unsafe construction of a type that could not be resolved." else "Unsafe construction of {if callee.unsafe_call_type == 'function' then 'a `Function`' else 'an `any`'} typed value."
+}
+in ts_tagged_template.tag rule no-unsafe-call:tag {
+  when unsafe_call_type != null
+  warn if unsafe_call_type == "error" then "Unsafe use of a template tag whose type could not be resolved." else "Unsafe use of {if unsafe_call_type == 'function' then 'a `Function`' else 'an `any`'} typed template tag."
+}
+
+in ts_unary rule no-meaningless-void-operator {
+  option checkNever boolean = false "Also check calls returning never"
+  when operator == "void" && argument != "0" && void_argument_kind != "assignment"
+  when if void_argument_kind == "call" then has_only_flags(default(argument.type_flags, []), ["undefined", "nullable", "union"]) || checkNever && has_only_flags(default(argument.type_flags, []), ["undefined", "nullable", "never", "union"]) else !contains(default(argument.type_members, []), "then")
+  warn if void_argument_kind == "call" then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
+}
+
+in ts_member, ts_index {
+  let any_access_root object.any_access_root == true || object.unsafe_type != null
+  let unsafe_member_access object.unsafe_type != null && object.any_access_root != true
+  let any_access_optional_root optional == null && (object.any_access_optional_root == true || object.unsafe_type != null)
+  let unsafe_optional_member_access optional == null && object.unsafe_type != null && object.any_access_optional_root != true
+  let object_unsafe_type object.unsafe_type
+  let object_unsafe_this_type object.unsafe_this_type
+}
+in ts_member.property rule no-unsafe-member-access {
+  option allowOptionalChaining boolean = false "Allow optional chaining on any"
+  when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
+  warn if parent.object_unsafe_type == "error" then "Unsafe member access .{text} on a type that cannot be resolved." else "Unsafe member access .{text} on an `any` value."
+}
+in ts_index.index rule no-unsafe-member-access:computed {
+  option allowOptionalChaining boolean = false "Allow optional chaining on any"
+  when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
+  report at unsafe_member_key.offset
+  warn if parent.object_unsafe_type == "error" then "Unsafe member access [{unsafe_member_key.text}] on a type that cannot be resolved." else "Unsafe member access [{unsafe_member_key.text}] on an `any` value."
+}
+in ts_index.index rule no-unsafe-member-access:key {
+  option allowOptionalChaining boolean = false "Allow optional chaining on any"
+  when unsafe_member_key.kind != null && (!allowOptionalChaining || parent.optional == null)
+  report at unsafe_member_key.offset
+  warn if unsafe_member_key.kind == "error" then "The type of computed name [{unsafe_member_key.text}] cannot be resolved." else "Computed name [{unsafe_member_key.text}] resolves to an `any` value."
+}
+
+in ts_logical, ts_assignment, ts_conditional, ts_if rule prefer-nullish-coalescing {
+  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
+  option ignoreBooleanCoercion boolean = false "Ignore Boolean conversion"
+  option ignoreConditionalTests boolean = true "Ignore conditional tests"
+  option ignoreIfStatements boolean = false "Ignore if statements"
+  option ignoreMixedLogicalExpressions boolean = false "Ignore mixed logical expressions"
+  option ignorePrimitives (boolean | { bigint?: boolean; boolean?: boolean; number?: boolean; string?: boolean }) = {} "Primitive types to ignore"
+  option ignoreTernaryTests boolean = false "Ignore ternary tests"
+  let replacement nullish_coalescing
+  let nullish_flags replacement.flags
+  when replacement != null
+  when !(replacement.truthiness && (ignoreConditionalTests && replacement.conditional || ignoreBooleanCoercion && replacement.boolean))
+  when !(ignoreMixedLogicalExpressions && replacement.mixed)
+  when !replacement.truthiness || !(ignorePrimitives == true || replacement.unknown && (ignorePrimitives.bigint == true || ignorePrimitives.boolean == true || ignorePrimitives.number == true || ignorePrimitives.string == true) || contains(default(nullish_flags, []), "bigint") && ignorePrimitives.bigint == true || contains(default(nullish_flags, []), "boolean") && ignorePrimitives.boolean == true || contains(default(nullish_flags, []), "number") && ignorePrimitives.number == true || contains(default(nullish_flags, []), "string") && ignorePrimitives.string == true)
+  when !(replacement.kind == "ternary" && ignoreTernaryTests) && !(replacement.kind == "if" && ignoreIfStatements)
+  report at replacement.offset
+  warn if replacement.kind == "ternary" then "Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read." else if replacement.kind == "if" then "Prefer using nullish coalescing operator (`??=`) instead of an assignment expression, as it is simpler to read." else if replacement.kind == "assignment" then "Prefer using nullish coalescing operator (`??=`) instead of a logical assignment (`||=`), as it is a safer operator." else "Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator."
 }
 
 }

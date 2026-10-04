@@ -10,7 +10,8 @@
 
 use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
-use super::types::Ty;
+use super::summary::type_syn;
+use super::types::{Checker, Ty};
 
 /// A condition known to hold (or not, `sense == false`) at a use.
 struct Guard {
@@ -21,7 +22,7 @@ struct Guard {
 impl NativeFile<'_> {
     /// `t`, the declared type of reference `id`, narrowed at `id`.
     pub(super) fn narrow(&self, id: u32, t: Ty) -> Ty {
-        if t.is_unknown() || self.is_write_target(id) {
+        if self.is_write_target(id) {
             return t;
         }
         let Some(key) = self.ref_key(id) else { return t };
@@ -220,7 +221,7 @@ impl NativeFile<'_> {
                     _ => t,
                 }
             }
-            _ if is_key(test) => truthy(t, sense),
+            _ if is_key(test) => truthy(t, sense, &self.typing().checker),
             Some(K::Binary) => {
                 let (Some(l), Some(r)) = (s.get(test, F::Left), s.get(test, F::Right)) else { return t };
                 let op = s.word(test, F::Op).unwrap_or("");
@@ -241,6 +242,19 @@ impl NativeFile<'_> {
                 let typeof_of = |n: u32| s.is(n, K::Unary) && s.word(n, F::Op) == Some("typeof") && s.get(n, F::Arg).is_some_and(is_key);
                 let literal = |n: u32| s.is(n, K::String).then(|| s.text(n).trim_matches(|c| c == '"' || c == '\'' || c == '`'));
                 if let Some(kind) = if typeof_of(l) { literal(r) } else if typeof_of(r) { literal(l) } else { None } {
+                    if positive && matches!(t, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Any) {
+                        match kind {
+                            "string" => return Ty::Prim("string"),
+                            "number" => return Ty::Prim("number"),
+                            "boolean" => return Ty::Prim("boolean"),
+                            "bigint" => return Ty::Prim("bigint"),
+                            "symbol" => return Ty::Prim("symbol"),
+                            "undefined" => return Ty::Undefined,
+                            "function" if matches!(t, Ty::Unknown | Ty::IntrinsicUnknown) => return self.typing().checker.global_named("Function", Vec::new()),
+                            "object" if matches!(t, Ty::Unknown | Ty::IntrinsicUnknown) => return Ty::union(vec![Ty::Prim("object"), Ty::Null]),
+                            _ => {}
+                        }
+                    }
                     return self.keep(t, |m| self.typeof_kind(m) == Some(kind), positive);
                 }
                 let other = if is_key(l) { r } else if is_key(r) { l } else { return t };
@@ -260,9 +274,12 @@ impl NativeFile<'_> {
                 let arg = s.all(test, F::Arg).next();
                 if callee == Some("Array.isArray") && arg.is_some_and(is_key) {
                     if matches!(t, Ty::Any) {
-                        return if sense { Ty::Array(Box::new(Ty::Any)) } else { t };
+                        return if sense { Ty::array(Ty::Any) } else { t };
                     }
                     return self.keep(t, |m| matches!(m, Ty::Array(_) | Ty::Tuple(_)), sense);
+                }
+                if let Some(target) = self.predicate_type(test, key) {
+                    return predicate(t, &target, sense, &self.typing().checker);
                 }
                 t
             }
@@ -270,12 +287,33 @@ impl NativeFile<'_> {
         }
     }
 
+    /// Local nongeneric predicates retain their target syntax; imported and
+    /// overloaded signatures need predicate metadata in the project summary.
+    fn predicate_type(&self, call: u32, key: &str) -> Option<Ty> {
+        let s = &self.syntax;
+        let callee = s.unparen(s.get(call, F::Callee)?);
+        if !s.is(callee, K::Ident) { return None }
+        let decl = self.decl_of(callee)?;
+        if self.binding(decl)?.writes > 0 { return None }
+        let function = s.parent(decl).filter(|&parent| s.is(parent, K::Function))?;
+        if s.all(function, F::TypeParam).next().is_some()
+            || matches!(self.type_of(callee), Ty::Fn(callable) if callable.sigs.len() > 1) { return None }
+        let annotation = s.get(function, F::ReturnType).filter(|&annotation| s.is(annotation, K::TypePredicate) && !s.has_word(annotation, F::Modifier, "asserts"))?;
+        let name = s.get(annotation, F::Name)?;
+        let index = s.all(function, F::Param).position(|param| s.get(param, F::Name).is_some_and(|param| s.text(param) == s.text(name)))?;
+        let argument = s.all(call, F::Arg).nth(index)?;
+        if self.ref_key(argument).as_deref() != Some(key) || s.all(call, F::Arg).take(index + 1).any(|arg| s.is(arg, K::Spread)) { return None }
+        let target = s.get(annotation, F::Type)?;
+        let ty = self.typing().checker.eval(&type_syn(s, target), &self.env_at(target));
+        (!matches!(ty, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_))).then_some(ty)
+    }
+
     /// Members of `t` for which `pred` is `want`; `any` and unknowns stay.
     fn keep(&self, t: Ty, pred: impl Fn(&Ty) -> bool, want: bool) -> Ty {
         match t {
-            Ty::Any | Ty::Unknown | Ty::Param(_) => t,
+            Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) => t,
             Ty::Union(items) => {
-                if items.iter().any(|m| matches!(m, Ty::Unknown | Ty::Param(_) | Ty::Inter(_))) {
+                if items.iter().any(|m| matches!(m, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_))) {
                     return Ty::Union(items);
                 }
                 Ty::union(items.into_iter().filter(|m| pred(m) == want).collect())
@@ -314,21 +352,36 @@ fn same_nullish(m: &Ty, n: &Ty) -> bool {
     matches!((m, n), (Ty::Null, Ty::Null) | (Ty::Undefined | Ty::Void, Ty::Undefined))
 }
 
+fn predicate(t: Ty, target: &Ty, sense: bool, ck: &Checker<'_>) -> Ty {
+    if let Ty::Union(parts) = t {
+        return Ty::union(parts.into_iter().map(|part| predicate(part, target, sense, ck)).collect());
+    }
+    if matches!(t, Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown) { return if sense { target.clone() } else { t } }
+    let forward = ck.assignable(&t, target);
+    if forward == Some(true) { return if sense { t } else { Ty::Never } }
+    if !sense { return t }
+    match ck.assignable(target, &t) {
+        Some(true) => target.clone(),
+        _ => Ty::Inter(vec![t, target.clone()]),
+    }
+}
+
 /// `t` where it tested truthy (`sense`) or falsy.
-pub(super) fn truthy(t: Ty, sense: bool) -> Ty {
+pub(super) fn truthy(t: Ty, sense: bool, ck: &Checker<'_>) -> Ty {
     let can_be_falsy = |m: &Ty| match m {
         Ty::Null | Ty::Undefined | Ty::Void => Some(true),
         Ty::Lit(text, _) => Some(matches!(&**text, "false" | "0" | "\"\"" | "''" | "0n")),
         Ty::Prim("string" | "number" | "boolean" | "bigint") => None,
-        Ty::Named(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Obj(..) | Ty::Fn(_) | Ty::Class(_) | Ty::Prim(_) => Some(false),
+        Ty::Named(sym, _) if ck.is_enum(sym) => None,
+        Ty::Named(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Obj(..) | Ty::Struct(_) | Ty::Ns(_) | Ty::Module(_) | Ty::Fn(_) | Ty::Class(_) | Ty::Prim(_) => Some(false),
         _ => None,
     };
     let items = match t {
         Ty::Union(items) => items,
-        Ty::Any | Ty::Unknown | Ty::Param(_) | Ty::Inter(_) => return t,
+        Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_) => return t,
         t => vec![t],
     };
-    if items.iter().any(|m| matches!(m, Ty::Unknown | Ty::Param(_) | Ty::Inter(_))) {
+    if items.iter().any(|m| matches!(m, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_))) {
         return Ty::Union(items);
     }
     let kept = items
@@ -343,4 +396,24 @@ pub(super) fn truthy(t: Ty, sense: bool) -> Ty {
         })
         .collect();
     Ty::union(kept)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::native_linter;
+    use std::path::Path;
+
+    #[test]
+    fn predicate_keeps_overlapping_structural_properties() {
+        let linter = native_linter("in ts_expression_statement.expression rule overlap { when text == 'source'\nwhen contains(default(type_members, []), 'a') && contains(default(type_members, []), 'b')\nwarn 'overlap' }");
+        let code = "interface A { a: string; } interface B { b: string; } function isB(value: unknown): value is B { return true; } declare const source: A; if (isB(source)) { source; }";
+        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
+    }
+
+    #[test]
+    fn predicate_guards_narrow_only_the_named_argument_and_cancel_after_writes() {
+        let linter = native_linter("in ts_expression_statement.expression rule async-value { when text == 'source'\nwhen contains(default(type_members, []), '[Symbol.asyncIterator]')\nwarn 'async iterable' }");
+        let code = "interface Sync { [Symbol.iterator](): unknown; } interface Async { [Symbol.asyncIterator](): unknown; } function isAsync(value: unknown): value is Async { return true; } declare let source: Sync | Async; declare const other: Sync; if (isAsync(source)) { source; } if (!isAsync(source)) { source; } if (isAsync(other)) { source; } if (!isAsync(source)) { source = {} as Async; source; }";
+        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 3);
+    }
 }

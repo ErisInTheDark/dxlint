@@ -642,7 +642,7 @@ fn facts_of_fields_and_parents_and_sibling_builtins() {
     );
     let text = "import { f } from \"m\";\nf(a, b);\n\n// note\ng(c);\n";
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, vec!["f:import", "\n", "0:a:true", "1:b:true", "g:global", "\n\n// note\n", "0:c:true"]);
+    assert_eq!(messages, vec!["f:import", "\n", "0:a:true", "1:b:true", "g:global", "\n\n// note\n", "0:c:false"]);
 }
 
 #[test]

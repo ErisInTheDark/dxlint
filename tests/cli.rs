@@ -102,7 +102,8 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
 
     // A new global declaration reaches every file that asked about types
     // (the others never looked).
-    assert_eq!(moved.last().map(String::as_str), Some("G: "));
+    // Unknown names are `any`, as TypeScript reports them.
+    assert_eq!(moved.last().map(String::as_str), Some("G: any"));
     write("g.d.ts", "declare const G: number;\n");
     let (global, stats) = run();
     assert!(global.last().is_some_and(|g| g == "G: number") && stats.contains("4 files (2 from cache)"), "{global:?} {stats}");

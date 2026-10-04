@@ -18,12 +18,14 @@ impl Checker<'_> {
         self.depth.set(self.depth.get() + 1);
         let s = match t {
             Ty::Unknown => "?".into(),
+            Ty::IntrinsicUnknown => "unknown".into(),
             Ty::Any => "any".into(),
             Ty::Never => "never".into(),
             Ty::Void => "void".into(),
             Ty::Undefined => "undefined".into(),
             Ty::Null => "null".into(),
             Ty::Prim(p) => (*p).into(),
+            Ty::Lit(text, "string") => super::super::regex::cook(text).and_then(|text| serde_json::to_string(&text).ok()).unwrap_or_else(|| text.to_string()),
             Ty::Lit(text, _) => text.to_string(),
             Ty::Named(sym, args) => {
                 let name = self.qualified_name(sym);
@@ -33,19 +35,43 @@ impl Checker<'_> {
                     format!("{name}<{}>", args.iter().map(|a| self.print(a)).collect::<Vec<_>>().join(", "))
                 }
             }
-            Ty::Union(items) => items.iter().map(|i| self.print(i)).collect::<Vec<_>>().join(" | "),
+            Ty::Union(items) => {
+                let rank = |ty: &Ty| match ty {
+                    Ty::Prim("string") => 0,
+                    Ty::Prim("number") => 1,
+                    Ty::Prim("bigint") => 2,
+                    Ty::Prim("boolean") => 3,
+                    Ty::Prim("symbol") => 4,
+                    Ty::Void => 5,
+                    Ty::Undefined => 6,
+                    Ty::Null => 7,
+                    _ => 8,
+                };
+                let mut items: Vec<_> = items.iter().collect();
+                items.sort_by_key(|ty| rank(ty));
+                items.into_iter().map(|i| self.print(i)).collect::<Vec<_>>().join(" | ")
+            }
             Ty::Inter(items) => items.iter().map(|i| self.print(i)).collect::<Vec<_>>().join(" & "),
             Ty::Array(e) => {
-                let inner = self.print(e);
-                if matches!(**e, Ty::Union(_) | Ty::Inter(_) | Ty::Fn(_)) {
-                    format!("({inner})[]")
+                let inner = self.print(&e.element);
+                let prefix = if e.readonly { "readonly " } else { "" };
+                if matches!(*e.element, Ty::Union(_) | Ty::Inter(_) | Ty::Fn(_)) {
+                    format!("{prefix}({inner})[]")
                 } else {
-                    format!("{inner}[]")
+                    format!("{prefix}{inner}[]")
                 }
             }
-            Ty::Tuple(items) => format!("[{}]", items.iter().map(|i| self.print(i)).collect::<Vec<_>>().join(", ")),
+            Ty::Tuple(items) => format!("{}[{}]", if items.readonly { "readonly " } else { "" }, items.elements.iter().map(|element| {
+                format!("{}{}{}", if element.rest { "..." } else { "" }, self.print(&element.ty), if element.optional { "?" } else { "" })
+            }).collect::<Vec<_>>().join(", ")),
             Ty::Fn(_) => "Function".into(),
-            Ty::Obj(..) => "object".into(),
+            Ty::Obj(members, env) => {
+                let properties: Vec<_> = members.iter().map(|member| {
+                    let ty = member.ty.as_ref().map_or(Ty::Unknown, |syn| self.eval(syn, env));
+                    format!("{}{}: {}", member.name, if member.optional { "?" } else { "" }, self.print(&ty))
+                }).collect();
+                if properties.is_empty() { "{}".into() } else { format!("{{ {}; }}", properties.join("; ")) }
+            }
             Ty::Struct(props) if props.is_empty() => "{}".into(),
             Ty::Struct(props) => format!("{{ {}; }}", props.iter().map(|(n, t)| format!("{n}: {}", self.print(t))).collect::<Vec<_>>().join("; ")),
             Ty::Class(sym) => format!("typeof {}", self.qualified_name(sym)),

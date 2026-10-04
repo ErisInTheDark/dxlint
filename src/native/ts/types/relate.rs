@@ -4,12 +4,33 @@
 
 use super::super::modules::DeclRef;
 use super::super::summary::{DeclKind, TypeSyn};
-use super::{Checker, Ty, MAX_DEPTH};
+use super::{Checker, Tuple, Ty, MAX_DEPTH};
 
 /// Nested structural comparisons allowed (`{ a: { b: X } }` is two).
 const MAX_STRUCTURAL: u32 = 2;
 /// Larger property bags are not compared structurally.
 const MAX_PROPS: usize = 24;
+
+impl Ty {
+    /// Any flowing into a known non-any generic position of the same type.
+    pub fn unsafe_assignment_to(&self, receiver: &Ty) -> bool {
+        fn check(sender: &Ty, receiver: &Ty, depth: usize) -> bool {
+            if depth >= 32 { return false }
+            match (sender, receiver) {
+                (Ty::Any, Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown) => false,
+                (Ty::Any, _) => true,
+                (Ty::Named(a, aa), Ty::Named(b, ba)) if a == b && aa.len() == ba.len() =>
+                    aa.iter().zip(ba).any(|(a, b)| check(a, b, depth + 1)),
+                (Ty::Array(a), Ty::Array(b)) if a.readonly == b.readonly => check(&a.element, &b.element, depth + 1),
+                (Ty::Tuple(a), Ty::Tuple(b)) if a.readonly == b.readonly && a.len() == b.len()
+                    && a.elements.iter().zip(&b.elements).all(|(a, b)| a.optional == b.optional && a.rest == b.rest) =>
+                    a.iter().zip(b.iter()).any(|(a, b)| check(a, b, depth + 1)),
+                _ => false,
+            }
+        }
+        check(self, receiver, 0)
+    }
+}
 
 impl Checker<'_> {
     /// Can a value of type `a` be assigned where `b` is expected?
@@ -33,12 +54,32 @@ impl Checker<'_> {
         }
     }
 
+    /// Fresh object literals additionally reject known excess properties.
+    pub fn assignable_fresh_object(&self, a: &Ty, b: &Ty) -> Option<bool> {
+        let props = self.props(a)?;
+        let known = if let Some((keys, _)) = self.record_parts(b) {
+            all(props.iter().map(|(name, _, _)| super::utilities::accepts_key(keys, name)))?
+        } else {
+            let target = self.props(b)?;
+            props.iter().all(|(name, _, _)| target.iter().any(|(key, _, _)| name == key))
+        };
+        if !known { return Some(false) }
+        self.assignable(a, b)
+    }
+
     fn relate(&self, a: &Ty, b: &Ty) -> Option<bool> {
+        if !matches!(a, Ty::Any | Ty::Never | Ty::Unknown) {
+            if let Some((keys, value)) = self.record_parts(b) {
+                return self.relate_record(a, keys, value);
+            }
+        }
         match (a, b) {
             (Ty::Unknown, _) | (_, Ty::Unknown) => None,
             (Ty::Any | Ty::Never, _) | (_, Ty::Any) => Some(true),
+            (_, Ty::IntrinsicUnknown) => Some(true),
+            (Ty::IntrinsicUnknown, Ty::Param(_)) => None,
+            (Ty::IntrinsicUnknown, _) => Some(false),
             (Ty::Param(x), Ty::Param(y)) if x == y => Some(true),
-            (Ty::Param(_), _) | (_, Ty::Param(_)) => None,
             // A source union needs every member; a target union one.
             (Ty::Union(items), _) => all(items.iter().map(|i| self.assignable(i, b))),
             (_, Ty::Union(items)) => any(items.iter().map(|i| self.assignable(a, i))),
@@ -47,6 +88,8 @@ impl Checker<'_> {
                 Some(true) => Some(true),
                 _ => None,
             },
+            (Ty::Param(_), _) | (_, Ty::Param(_)) => None,
+            (_, Ty::Never) => Some(false),
             (Ty::Undefined, Ty::Undefined | Ty::Void) | (Ty::Null, Ty::Null) | (Ty::Void, Ty::Void) => Some(true),
             (Ty::Undefined | Ty::Null | Ty::Void, _) | (_, Ty::Undefined | Ty::Null | Ty::Void) => Some(false),
             (Ty::Named(sym, _), Ty::Prim(p) | Ty::Lit(_, p)) if self.is_enum(sym) => {
@@ -60,18 +103,65 @@ impl Checker<'_> {
             (Ty::Prim(_) | Ty::Lit(..), Ty::Prim("object")) => Some(false),
             (Ty::Named(..) | Ty::Obj(..) | Ty::Struct(_) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) | Ty::Class(_), Ty::Prim("object")) => Some(true),
             (Ty::Named(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) | Ty::Obj(..) | Ty::Struct(_), Ty::Prim(_) | Ty::Lit(..)) => Some(false),
-            (Ty::Array(x), Ty::Array(y)) => self.assignable(x, y),
-            (Ty::Tuple(items), Ty::Array(y)) => all(items.iter().map(|i| self.assignable(i, y))),
-            (Ty::Tuple(xs), Ty::Tuple(ys)) if xs.len() == ys.len() => all(xs.iter().zip(ys).map(|(x, y)| self.assignable(x, y))),
+            (Ty::Array(x), Ty::Array(y)) if x.readonly && !y.readonly => Some(false),
+            (Ty::Array(x), Ty::Array(y)) => self.assignable(&x.element, &y.element),
+            (Ty::Tuple(items), Ty::Array(y)) if items.readonly && !y.readonly => Some(false),
+            (Ty::Tuple(items), Ty::Array(y)) => all((0..items.len()).map(|index| self.assignable(&items.at(index), &y.element))),
+            (Ty::Tuple(xs), Ty::Tuple(ys)) => self.relate_tuples(xs, ys),
+            (Ty::Named(sym, args), Ty::Array(target)) if args.len() == 1 && self.is_builtin_symbol(sym, "ReadonlyArray") => {
+                if target.readonly { self.assignable(&args[0], &target.element) } else { Some(false) }
+            },
             (Ty::Array(_), Ty::Tuple(_)) => Some(false),
             (Ty::Array(e), Ty::Named(sym, args)) if self.is_named(sym, &["Array", "ReadonlyArray", "Iterable"]) && args.len() == 1 => {
-                self.assignable(e, &args[0])
+                self.assignable(&e.element, &args[0])
             }
             (Ty::Fn(_) | Ty::Class(_), Ty::Named(sym, _)) if self.is_named(sym, &["Function"]) => Some(true),
+            (Ty::Named(sym, _), Ty::Fn(_)) if self.is_builtin_symbol(sym, "Function") && !self.callable_type(a) => Some(false),
             (Ty::Fn(x), Ty::Fn(y)) => self.relate_fns(x, y),
             (Ty::Named(x, xargs), Ty::Named(y, yargs)) => self.relate_named(x, xargs, y, yargs).or_else(|| self.structural(a, b)),
             _ => self.structural(a, b),
         }
+    }
+
+    fn relate_tuples(&self, source: &Tuple, target: &Tuple) -> Option<bool> {
+        if source.readonly && !target.readonly { return Some(false) }
+        let bounds = |tuple: &Tuple| {
+            if tuple.elements.iter().enumerate().any(|(index, element)| element.rest && index + 1 != tuple.len()) { return None }
+            let min = tuple.required_length();
+            let max = (!tuple.elements.iter().any(|element| element.rest)).then_some(tuple.len());
+            Some((min, max))
+        };
+        let (source_min, source_max) = bounds(source)?;
+        let (target_min, target_max) = bounds(target)?;
+        if source_min < target_min || target_max.is_some_and(|max| source_max.is_none_or(|length| length > max)) { return Some(false) }
+        all((0..source.len().max(target.len())).filter(|&index| source_max.is_none_or(|length| index < length))
+            .map(|index| self.assignable(&source.at(index), &target.at(index))))
+    }
+
+    fn relate_record(&self, a: &Ty, keys: &Ty, value: &Ty) -> Option<bool> {
+        use super::utilities::{accepts_key, keys_overlap, required_keys};
+        let required = required_keys(keys)?;
+        if let Some((source_keys, source_value)) = self.record_parts(a) {
+            if !all(required.iter().map(|key| accepts_key(source_keys, key)))? {
+                return Some(false);
+            }
+            return match keys_overlap(source_keys, keys) {
+                Some(true) => self.assignable(source_value, value),
+                Some(false) => Some(true),
+                None => None,
+            };
+        }
+        if let Ty::Union(parts) = a {
+            return all(parts.iter().map(|part| self.relate_record(part, keys, value)));
+        }
+        let props = self.props(a)?;
+        let required_present = required.iter().all(|key| props.iter().any(|(name, _, optional)| &**name == key && !optional));
+        if !required_present { return Some(false) }
+        all(props.iter().map(|(name, ty, _)| match accepts_key(keys, name) {
+            Some(true) => self.assignable(ty, value),
+            Some(false) => Some(true),
+            None => None,
+        }))
     }
 
     /// A function fits a single-signature function type when it needs no
@@ -117,6 +207,9 @@ impl Checker<'_> {
         if level > 8 {
             return None;
         }
+        if let Some(filter) = self.property_filter(t) {
+            return Some(filter.names(self, 0)?.len());
+        }
         match t {
             Ty::Struct(props) => Some(props.len()),
             Ty::Obj(members, _) => Some(members.len()),
@@ -152,6 +245,18 @@ impl Checker<'_> {
 
     /// `(name, type, optional)` for every property of a plain object type.
     fn props(&self, t: &Ty) -> Option<Vec<(Box<str>, Ty, bool)>> {
+        if let Some(filter) = self.property_filter(t) {
+            let names = filter.names(self, 0)?;
+            if names.is_empty() { return Some(Vec::new()) }
+            if self.depth.get() >= MAX_DEPTH { return None }
+            self.depth.set(self.depth.get() + 1);
+            let properties = self.props(filter.source);
+            self.depth.set(self.depth.get() - 1);
+            return properties?.into_iter().try_fold(Vec::new(), |mut selected, property| {
+                if filter.allows(&property.0)? { selected.push(property); }
+                Some(selected)
+            });
+        }
         match t {
             Ty::Struct(props) => Some(props.iter().map(|(n, t)| (n.clone(), t.clone(), false)).collect()),
             Ty::Obj(members, env) => self.member_props(members.iter(), env),

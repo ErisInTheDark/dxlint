@@ -10,13 +10,15 @@ mod calls;
 mod members;
 mod print;
 mod relate;
+mod utilities;
+mod identity;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::modules::{DeclRef, FileId, Globals, ModRef, ModuleAt, Project};
-use super::summary::{DeclKind, Member, Sig, Summary, TParam, TypeSyn};
+use super::summary::{DeclKind, Member, Sig, Summary, TParam, TupleElement, TypeSyn};
 
 /// All declarations merged under one name (`interface Promise` is spread
 /// over several lib files; `class X` + `namespace X`).
@@ -24,7 +26,9 @@ pub type Sym = Arc<[DeclRef]>;
 
 #[derive(Clone, Debug)]
 pub enum Ty {
+    /// Unsupported or unresolved computation, not TypeScript's `unknown`.
     Unknown,
+    IntrinsicUnknown,
     Any,
     Never,
     Void,
@@ -37,8 +41,8 @@ pub enum Ty {
     Named(Sym, Vec<Ty>),
     Union(Vec<Ty>),
     Inter(Vec<Ty>),
-    Array(Box<Ty>),
-    Tuple(Vec<Ty>),
+    Array(Array),
+    Tuple(Tuple),
     Fn(Arc<Callable>),
     /// An object type written as type syntax (`{ a: string }`).
     Obj(Arc<Vec<Member>>, Arc<Env>),
@@ -51,6 +55,67 @@ pub enum Ty {
     Module(ModRefKey),
     /// An unresolved type parameter.
     Param(Box<str>),
+}
+
+#[derive(Clone, Debug)]
+pub struct Array {
+    pub element: Box<Ty>,
+    pub readonly: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct Tuple {
+    pub elements: Vec<TupleElement<Ty>>,
+    pub readonly: bool,
+}
+
+impl Tuple {
+    pub fn iter(&self) -> impl Iterator<Item = &Ty> { self.elements.iter().map(|element| &element.ty) }
+    pub fn len(&self) -> usize { self.elements.len() }
+    pub fn is_empty(&self) -> bool { self.elements.is_empty() }
+    pub fn get(&self, index: usize) -> Option<&Ty> { self.elements.get(index).map(|element| &element.ty) }
+    pub fn first(&self) -> Option<&Ty> { self.get(0) }
+
+    pub fn at(&self, index: usize) -> Ty {
+        for (offset, element) in self.elements.iter().enumerate() {
+            if element.rest {
+                let ty = match &element.ty {
+                    Ty::Array(ty) => (*ty.element).clone(),
+                    Ty::Tuple(tuple) => tuple.at(index.saturating_sub(offset)),
+                    _ => Ty::Unknown,
+                };
+                if offset + 1 == self.elements.len() { return ty }
+                if ty.is_opaque() { return ty }
+                return Ty::union(std::iter::once(ty).chain(self.elements[offset + 1..].iter().map(|element| {
+                    if element.optional { element.ty.clone().or_undefined() } else { element.ty.clone() }
+                })).collect());
+            }
+            if offset == index {
+                return if element.optional { element.ty.clone().or_undefined() } else { element.ty.clone() };
+            }
+        }
+        Ty::Unknown
+    }
+
+    pub fn map_types(self, mut map: impl FnMut(Ty) -> Ty) -> Self {
+        Self { readonly: self.readonly, elements: self.elements.into_iter().map(|element| TupleElement { ty: map(element.ty), ..element }).collect() }
+    }
+
+    pub fn length(&self) -> Ty {
+        if self.elements.iter().any(|element| element.rest) { return Ty::Prim("number") }
+        let required = self.required_length();
+        Ty::union((required..=self.len()).map(|length| Ty::Lit(length.to_string().into(), "number")).collect())
+    }
+
+    pub fn required_length(&self) -> usize {
+        self.elements.iter().filter(|element| !element.optional && !element.rest).count()
+    }
+}
+
+impl FromIterator<Ty> for Tuple {
+    fn from_iter<I: IntoIterator<Item = Ty>>(types: I) -> Self {
+        Self { elements: types.into_iter().map(|ty| TupleElement { ty, optional: false, rest: false }).collect(), readonly: false }
+    }
 }
 
 /// A module as a value (`import * as m`).
@@ -86,20 +151,31 @@ impl Env {
 }
 
 impl Ty {
+    pub fn array(element: Ty) -> Ty {
+        Ty::Array(Array { element: Box::new(element), readonly: false })
+    }
+
     pub fn is_unknown(&self) -> bool {
+        matches!(self, Ty::Unknown | Ty::IntrinsicUnknown)
+    }
+
+    pub fn is_opaque(&self) -> bool {
         matches!(self, Ty::Unknown)
     }
 
     pub fn union(items: Vec<Ty>) -> Ty {
         let mut out: Vec<Ty> = Vec::new();
+        let mut unknown = false;
         for t in items {
             match t {
                 Ty::Never => {}
                 Ty::Union(inner) => out.extend(inner),
                 Ty::Any => return Ty::Any,
+                Ty::IntrinsicUnknown => unknown = true,
                 t => out.push(t),
             }
         }
+        if unknown { return Ty::IntrinsicUnknown }
         match out.len() {
             0 => Ty::Never,
             1 => out.pop().expect("one"),
@@ -108,6 +184,15 @@ impl Ty {
     }
 
     /// Without `null` and `undefined` (`x!`).
+    pub fn may_be_nullish(&self) -> bool {
+        match self {
+            Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Null | Ty::Undefined | Ty::Void => true,
+            Ty::Union(parts) => parts.iter().any(Ty::may_be_nullish),
+            Ty::Inter(parts) => parts.iter().all(Ty::may_be_nullish),
+            _ => false,
+        }
+    }
+
     pub fn non_null(self) -> Ty {
         match self {
             Ty::Null | Ty::Undefined => Ty::Never,
@@ -120,6 +205,7 @@ impl Ty {
     pub fn or_undefined(self) -> Ty {
         match self {
             Ty::Unknown => Ty::Unknown,
+            Ty::IntrinsicUnknown => Ty::IntrinsicUnknown,
             t => Ty::union(vec![t, Ty::Undefined]),
         }
     }
@@ -308,7 +394,7 @@ impl<'p> Checker<'p> {
         match syn {
             TypeSyn::Kw(k) => match &**k {
                 "any" => Ty::Any,
-                "unknown" => Ty::Unknown,
+                "unknown" => Ty::IntrinsicUnknown,
                 "never" => Ty::Never,
                 "void" => Ty::Void,
                 "undefined" => Ty::Undefined,
@@ -340,25 +426,85 @@ impl<'p> Checker<'p> {
                         return t.clone();
                     }
                 }
-                let args: Vec<Ty> = args.iter().map(|a| self.eval(a, env)).collect();
-                self.named_type(path, args, env)
+                let evaluated: Vec<Ty> = args.iter().map(|a| self.eval(a, env)).collect();
+                self.named_type(path, evaluated, env)
             }
             TypeSyn::Union(items) => Ty::union(items.iter().map(|t| self.eval(t, env)).collect()),
             TypeSyn::Inter(items) => {
                 let items: Vec<Ty> = items.iter().map(|t| self.eval(t, env)).collect();
                 if items.iter().any(|t| matches!(t, Ty::Never)) {
                     Ty::Never
+                } else if items.iter().any(|t| matches!(t, Ty::Any)) {
+                    Ty::Any
                 } else {
-                    Ty::Inter(items)
+                    let mut items: Vec<_> = items.into_iter().filter(|t| !matches!(t, Ty::IntrinsicUnknown)).collect();
+                    match items.len() {
+                        0 => Ty::IntrinsicUnknown,
+                        1 => items.pop().expect("one"),
+                        _ => Ty::Inter(items),
+                    }
                 }
             }
-            TypeSyn::Array(t) => Ty::Array(Box::new(self.eval(t, env))),
-            TypeSyn::Tuple(items) => Ty::Tuple(items.iter().map(|t| self.eval(t, env)).collect()),
+            TypeSyn::Array(t) => Ty::array(self.eval(t, env)),
+            TypeSyn::Tuple(items) => Ty::Tuple(Tuple {
+                elements: items.iter().map(|element| TupleElement { ty: self.eval(&element.ty, env), optional: element.optional, rest: element.rest }).collect(),
+                readonly: false,
+            }),
+            TypeSyn::Readonly(inner) => match self.eval(inner, env) {
+                Ty::Array(mut array) => { array.readonly = true; Ty::Array(array) },
+                Ty::Tuple(mut tuple) => { tuple.readonly = true; Ty::Tuple(tuple) },
+                _ => Ty::Unknown,
+            },
+            TypeSyn::Indexed(object, index) => {
+                let object = self.eval(object, env);
+                self.indexed_type(&object, &self.eval(index, env))
+            },
+            TypeSyn::Conditional { check, extends, consequent, alternate } => {
+                let checked = self.eval(check, env);
+                if let TypeSyn::Ref(path, args) = &**check {
+                    if path.len() == 1 && args.is_empty() {
+                        if let Some(index) = env.tparams.iter().rposition(|(name, _)| name == &path[0]) {
+                            match &checked {
+                                Ty::Never => return Ty::Never,
+                                Ty::Union(parts) => return Ty::union(parts.iter().map(|part| {
+                                    let mut env = env.clone();
+                                    env.tparams[index].1 = part.clone();
+                                    self.eval(syn, &env)
+                                }).collect()),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                let bound = self.eval(extends, env);
+                if matches!(checked, Ty::Any) && !matches!(bound, Ty::Any | Ty::IntrinsicUnknown) {
+                    return Ty::union(vec![self.eval(consequent, env), self.eval(alternate, env)]);
+                }
+                match self.assignable(&checked, &bound) {
+                    Some(true) => self.eval(consequent, env),
+                    Some(false) => self.eval(alternate, env),
+                    None => Ty::Unknown,
+                }
+            },
             TypeSyn::Fn(sig) => Ty::Fn(Arc::new(Callable { sigs: vec![sig.clone()], env: Arc::new(env.clone()), ret: None })),
             TypeSyn::Obj(members) => Ty::Obj(members.clone(), Arc::new(env.clone())),
             TypeSyn::Query(path) => self.value_path(path, env),
             TypeSyn::Keyof(t) => self.keyof(&self.eval(t, env)),
             TypeSyn::Ctor(_) | TypeSyn::Other => Ty::Unknown,
+        }
+    }
+
+    fn indexed_type(&self, object: &Ty, index: &Ty) -> Ty {
+        match index {
+            Ty::Union(parts) => Ty::union(parts.iter().map(|index| self.indexed_type(object, index)).collect()),
+            Ty::Lit(name, "string") => super::regex::cook(name).map_or(Ty::Unknown, |name| self.member(object, &name)),
+            Ty::Lit(name, "number") => super::statics::number(name).map_or(Ty::Unknown, |number| self.member(object, &super::statics::number_string(number))),
+            Ty::Prim("number") => match object {
+                Ty::Array(element) => (*element.element).clone(),
+                Ty::Tuple(tuple) if tuple.elements.iter().all(|element| !element.rest) => Ty::union((0..tuple.len()).map(|index| tuple.at(index)).collect()),
+                _ => Ty::Unknown,
+            },
+            _ => Ty::Unknown,
         }
     }
 
@@ -378,6 +524,9 @@ impl<'p> Checker<'p> {
     fn named_type(&self, path: &[Box<str>], args: Vec<Ty>, env: &Env) -> Ty {
         let types = self.type_decls(path, env);
         let Some(&first_decl) = types.first() else { return Ty::Unknown };
+        if let Some(ty) = self.utility_type(&types, &args, env) {
+            return ty;
+        }
         if self.kind_of(first_decl) == Some(DeclKind::Alias) {
             let Some(s) = self.summary_of(first_decl.file) else { return Ty::Unknown };
             let decl = &s.decls[first_decl.decl as usize];
@@ -388,38 +537,16 @@ impl<'p> Checker<'p> {
                 None => Ty::Unknown,
             };
         }
-        if path.len() == 1 && matches!(&*path[0], "Array" | "ReadonlyArray") && args.len() == 1 {
-            return Ty::Array(Box::new(args.into_iter().next().expect("one")));
+        if path.len() == 1 && matches!(&*path[0], "Array" | "ReadonlyArray") && args.len() == 1 && self.is_builtin_symbol(&types, &path[0]) {
+            return Ty::Array(Array { element: Box::new(args.into_iter().next().expect("one")), readonly: &*path[0] == "ReadonlyArray" });
         }
         Ty::Named(types.into(), args)
     }
 
-    /// `keyof t` for plain object types: the union of their property names
-    /// (`symbol` for computed ones). Unknown for anything with an index
-    /// signature, and for primitives, arrays and the like.
+    /// `keyof t` for resolved object properties; unions keep common names.
+    /// Index signatures and unresolved generic keys stay unknown.
     fn keyof(&self, t: &Ty) -> Ty {
-        let plain = match t {
-            Ty::Struct(_) | Ty::Obj(..) => true,
-            Ty::Named(sym, _) => {
-                !self.is_enum(sym)
-                    && sym.iter().all(|&r| {
-                        self.summary_of(r.file).is_some_and(|s| {
-                            let d = &s.decls[r.decl as usize];
-                            matches!(d.kind, DeclKind::Interface | DeclKind::Class) && !d.members.iter().any(|m| m.kind == super::summary::MemberKind::Index)
-                        })
-                    })
-            }
-            _ => false,
-        };
-        if !plain {
-            return Ty::Unknown;
-        }
-        let mut names = Vec::new();
-        self.member_names(t, &mut names);
-        // No names found is more likely a gap than `keyof {}`.
-        if names.is_empty() {
-            return Ty::Unknown;
-        }
+        let Some(names) = self.known_property_names(t, 0) else { return Ty::Unknown };
         Ty::union(
             names
                 .into_iter()

@@ -27,9 +27,10 @@ fn prints_exactly(t: &Ty) -> bool {
     match t {
         Ty::Obj(..) | Ty::Fn(_) | Ty::Module(_) => false,
         Ty::Named(_, args) => args.iter().all(prints_exactly),
-        Ty::Union(items) | Ty::Inter(items) | Ty::Tuple(items) => items.iter().all(prints_exactly),
+        Ty::Union(items) | Ty::Inter(items) => items.iter().all(prints_exactly),
+        Ty::Tuple(items) => items.iter().all(prints_exactly),
         Ty::Struct(props) => props.iter().all(|(_, t)| prints_exactly(t)),
-        Ty::Array(e) => prints_exactly(e),
+        Ty::Array(e) => prints_exactly(&e.element),
         _ => true,
     }
 }
@@ -37,10 +38,11 @@ fn prints_exactly(t: &Ty) -> bool {
 /// `any` (or a part zlint cannot read) anywhere inside.
 fn mentions_any_or_unknown(t: &Ty) -> bool {
     match t {
-        Ty::Any | Ty::Unknown => true,
+        Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown => true,
         Ty::Named(_, args) => args.iter().any(mentions_any_or_unknown),
-        Ty::Union(items) | Ty::Inter(items) | Ty::Tuple(items) => items.iter().any(mentions_any_or_unknown),
-        Ty::Array(e) => mentions_any_or_unknown(e),
+        Ty::Union(items) | Ty::Inter(items) => items.iter().any(mentions_any_or_unknown),
+        Ty::Tuple(items) => items.iter().any(mentions_any_or_unknown),
+        Ty::Array(e) => mentions_any_or_unknown(&e.element),
         _ => false,
     }
 }
@@ -94,6 +96,47 @@ impl<'t> NativeFile<'t> {
         t
     }
 
+    /// The upper bound of open type parameters, without changing their
+    /// identity in the ordinary type cache.
+    pub fn constrained_type_of(&self, id: u32) -> Ty {
+        self.constrain_type(self.type_of(id), id, &mut Vec::new())
+    }
+
+    pub fn type_parameter_bound(&self, name: &str, at: u32) -> Option<Ty> {
+        let s = &self.syntax;
+        let mut node = Some(at);
+        while let Some(n) = node {
+            if let Some(param) = s.all(n, F::TypeParam).find(|&tp| s.get(tp, F::Name).is_some_and(|id| s.text(id) == name)) {
+                return s.get(param, F::Constraint).map(|constraint| self.annotation(constraint));
+            }
+            node = s.parent(n);
+        }
+        None
+    }
+
+    fn constrain_type(&self, ty: Ty, at: u32, visiting: &mut Vec<Box<str>>) -> Ty {
+        match ty {
+            Ty::Param(name) => {
+                if visiting.contains(&name) {
+                    return Ty::Param(name);
+                }
+                if let Some(bound) = self.type_parameter_bound(&name, at) {
+                    visiting.push(name);
+                    let bound = self.constrain_type(bound, at, visiting);
+                    visiting.pop();
+                    return if matches!(bound, Ty::Any) { Ty::Unknown } else { bound };
+                }
+                Ty::Param(name)
+            }
+            Ty::Array(array) => Ty::Array(super::types::Array { element: Box::new(self.constrain_type(*array.element, at, visiting)), readonly: array.readonly }),
+            Ty::Tuple(parts) => Ty::Tuple(parts.map_types(|part| self.constrain_type(part, at, visiting))),
+            Ty::Union(parts) => Ty::union(parts.into_iter().map(|part| self.constrain_type(part, at, visiting)).collect()),
+            Ty::Inter(parts) => Ty::Inter(parts.into_iter().map(|part| self.constrain_type(part, at, visiting)).collect()),
+            Ty::Named(sym, args) => Ty::Named(sym, args.into_iter().map(|arg| self.constrain_type(arg, at, visiting)).collect()),
+            other => other,
+        }
+    }
+
     fn ck(&self) -> &Checker<'t> {
         &self.typing().checker
     }
@@ -133,6 +176,18 @@ impl<'t> NativeFile<'t> {
     }
 
     fn annotation(&self, t: u32) -> Ty {
+        let s = &self.syntax;
+        if s.is(t, K::TypeRef) {
+            if let Some(alias) = s.get(t, F::Name).and_then(|name| self.decl_of(name)).and_then(|decl| s.parent(decl)).filter(|&owner| s.is(owner, K::TypeAlias)) {
+                let name = s.get(alias, F::Name).map_or("", |name| s.text(name));
+                if self.summary_decls(name, alias).is_empty() {
+                    if s.all(alias, F::TypeParam).next().is_some() || s.all(t, F::TypeArg).next().is_some() {
+                        return Ty::Unknown;
+                    }
+                    return s.get(alias, F::Type).map_or(Ty::Unknown, |body| self.type_of(body));
+                }
+            }
+        }
         let syn = type_syn(&self.syntax, t);
         self.ck().eval(&syn, &self.env_at(t))
     }
@@ -159,8 +214,13 @@ impl<'t> NativeFile<'t> {
         let mut node = s.parent(at);
         let mut is_static = false;
         while let Some(n) = node {
+            if matches!(s.kind(n), Some(K::Function | K::Method)) {
+                if let Some(annotation) = s.all(n, F::Param).find(|&param| s.word(param, F::Name) == Some("this")).and_then(|param| s.get(param, F::Type)) {
+                    return self.annotation(annotation);
+                }
+            }
             match s.kind(n) {
-                Some(K::Function) => return Ty::Unknown,
+                Some(K::Function) => return Ty::Any,
                 Some(K::Method | K::ClassProp | K::StaticBlock) => is_static = s.has_word(n, F::Modifier, "static") || s.is(n, K::StaticBlock),
                 Some(K::Class) => {
                     let Some(name) = s.get(n, F::Name) else { return Ty::Unknown };
@@ -195,7 +255,10 @@ impl<'t> NativeFile<'t> {
         let Some(decl) = self.decl_of(id) else {
             // A global.
             let env = Env::file(ck.file);
-            return ck.value_of(&ck.lookup(&env, name));
+            let globals = ck.lookup(&env, name);
+            return if globals.is_empty() && self.bindings().unresolved.contains(&id) && self.global_value(id).is_none() {
+                Ty::Any
+            } else { ck.value_of(&globals) };
         };
         let kind = self.binding(decl).map(|b| b.kind).unwrap_or("");
         let Some(owner) = s.parent(decl) else { return Ty::Unknown };
@@ -250,36 +313,61 @@ impl<'t> NativeFile<'t> {
         }
     }
 
-    /// An unannotated callback parameter, typed from the callee's
-    /// parameter type (`list.map(x => ...)`).
+    /// An unannotated parameter receives the function's declared/callback context.
     fn contextual_param(&self, param: u32) -> Ty {
         let s = &self.syntax;
         let Some(func) = s.parent(param) else { return Ty::Unknown };
-        if !matches!(s.kind(func), Some(K::Arrow | K::Function)) || s.field(func) != Some(F::Arg) {
+        if !matches!(s.kind(func), Some(K::Arrow | K::Function)) {
             return Ty::Unknown;
         }
-        let Some(call) = s.parent(func) else { return Ty::Unknown };
         let index = s.all(func, F::Param).position(|p| p == param).unwrap_or(0);
+        self.ck().contextual_parameter(&self.contextual_type_of(func), index)
+    }
+
+    /// The type expected by a declaration, assignment or callback argument.
+    /// Callback lookup excludes function arguments to avoid inference recursion.
+    pub fn contextual_type_of(&self, func: u32) -> Ty {
+        let s = &self.syntax;
+        let mut func = func;
+        while let Some(parent) = s.parent(func) {
+            let inherits = match s.kind(parent) {
+                Some(K::Paren) => true,
+                Some(K::Logical) => matches!(s.field(func), Some(F::Left | F::Right)),
+                Some(K::Conditional) => matches!(s.field(func), Some(F::Consequent | F::Alternate)),
+                Some(K::Sequence) => s.all(parent, F::Expr).last() == Some(func),
+                _ => false,
+            };
+            if !inherits { break }
+            func = parent;
+        }
+        let Some(owner) = s.parent(func) else { return Ty::Unknown };
+        if s.is(owner, K::Prop) && s.field(func) == Some(F::Value) {
+            if let (Some(object), Some(name)) = (s.parent(owner), super::statics::property_name(s, owner)) {
+                return self.ck().member(&self.contextual_type_of(object), &name);
+            }
+        }
+        if s.field(func) == Some(F::Init) && matches!(s.kind(owner), Some(K::Declarator | K::ClassProp)) {
+            return s.get(owner, F::Type).map_or(Ty::Unknown, |annotation| self.annotation(annotation));
+        }
+        if s.is(owner, K::Assign) && s.field(func) == Some(F::Right) {
+            return s.get(owner, F::Left).map_or(Ty::Unknown, |left| self.type_of(left));
+        }
+        if s.field(func) != Some(F::Arg) || !matches!(s.kind(owner), Some(K::Call | K::New)) { return Ty::Unknown }
+        let call = owner;
         let args: Vec<u32> = s.all(call, F::Arg).collect();
         let Some(arg_index) = args.iter().position(|&a| a == func) else { return Ty::Unknown };
         let construct = s.is(call, K::New);
         let Some(callee) = s.get(call, F::Callee) else { return Ty::Unknown };
         let callee_ty = self.type_of(callee);
         // Callbacks pick no overload (and typing one here would recurse).
-        let arg_types: Vec<Ty> = args.iter().map(|&a| if matches!(s.kind(a), Some(K::Arrow | K::Function)) { Ty::Unknown } else { self.type_of(a) }).collect();
+        let arg_types: Vec<Ty> = args.iter().map(|&a| if a == func || matches!(s.kind(a), Some(K::Arrow | K::Function)) { Ty::Unknown } else { self.type_of(a) }).collect();
         let Some((sig, env)) = self.ck().signature_for(&callee_ty, &arg_types, construct) else { return Ty::Unknown };
         let Some(p) = sig.params.get(arg_index).or_else(|| sig.params.last().filter(|p| p.rest)) else { return Ty::Unknown };
         let mut env = (*env).clone();
         for tp in &sig.type_params {
             env.tparams.push((tp.name.clone(), Ty::Param(tp.name.clone())));
         }
-        match &p.ty {
-            Some(TypeSyn::Fn(inner)) => match inner.params.get(index).and_then(|ip| ip.ty.as_ref()) {
-                Some(t) => self.ck().eval(t, &env),
-                None => Ty::Unknown,
-            },
-            _ => Ty::Unknown,
-        }
+        p.ty.as_ref().map_or(Ty::Unknown, |ty| self.ck().eval(ty, &env))
     }
 
     fn args(&self, call: u32) -> Vec<Ty> {
@@ -288,6 +376,24 @@ impl<'t> NativeFile<'t> {
 
     fn type_args(&self, node: u32) -> Vec<Ty> {
         self.syntax.all(node, F::TypeArg).collect::<Vec<_>>().into_iter().map(|t| self.annotation(t)).collect()
+    }
+
+    /// A literal assigned directly to a destructuring target inherits its shape.
+    fn destructuring_receiver(&self, node: u32) -> Option<u32> {
+        let s = &self.syntax;
+        let parent = s.parent(node)?;
+        match (s.kind(parent)?, s.field(node)?) {
+            (K::Declarator | K::Param, F::Init) => s.get(parent, F::Name),
+            (K::Assign | K::AssignPattern, F::Right) => s.get(parent, F::Left),
+            (K::Paren, F::Expr) => self.destructuring_receiver(parent),
+            (K::Array, F::Element) => {
+                let receiver = self.destructuring_receiver(parent)?;
+                if !matches!(s.kind(receiver), Some(K::ArrayPattern | K::Array)) { return None }
+                let index = s.all(parent, F::Element).position(|element| element == node)?;
+                s.all(receiver, F::Element).nth(index)
+            }
+            _ => None,
+        }
     }
 
     /// The generic a node with type arguments instantiates (a call, `new`,
@@ -434,7 +540,7 @@ impl<'t> NativeFile<'t> {
     /// when nothing about it is known.
     pub fn type_flags(&self, id: u32) -> Option<Vec<&'static str>> {
         let t = self.type_of(id);
-        if matches!(t, Ty::Unknown | Ty::Param(_)) {
+        if matches!(t, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_)) {
             return None;
         }
         let mut out = Vec::new();
@@ -450,7 +556,7 @@ impl<'t> NativeFile<'t> {
             }
         };
         match t {
-            Ty::Unknown | Ty::Param(_) => add("unknown"),
+            Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) => add("unknown"),
             Ty::Any => add("any"),
             Ty::Never => add("never"),
             Ty::Void | Ty::Undefined => {
@@ -515,15 +621,23 @@ impl<'t> NativeFile<'t> {
             K::Bool => Ty::Lit(s.text(id).into(), "boolean"),
             K::BigInt => Ty::Prim("bigint"),
             K::Null => Ty::Null,
+            K::Hole => Ty::Undefined,
             K::Paren | K::Satisfies => inner(F::Expr),
             K::NonNull => inner(F::Expr).non_null(),
             K::As | K::TypeAssertion => match s.get(id, F::Type) {
-                Some(t) if s.text(t) == "const" => inner(F::Expr),
+                Some(t) if s.text(t) == "const" => {
+                    match s.get(id, F::Expr).map(|expr| s.unparen(expr)) {
+                        Some(expr) if s.is(expr, K::Array) && !s.all(expr, F::Element).any(|element| s.is(element, K::Spread)) =>
+                            Ty::Tuple(s.all(expr, F::Element).map(|element| self.type_of(element)).collect()),
+                        _ => inner(F::Expr),
+                    }
+                }
                 Some(t) => self.annotation(t),
                 None => Ty::Unknown,
             },
             K::Assign => match s.word(id, F::Op) {
                 Some("=") => inner(F::Right),
+                Some("+=" | "&&=" | "||=" | "??=") if matches!(inner(F::Left), Ty::Any) || matches!(inner(F::Right), Ty::Any) => Ty::Any,
                 _ => Ty::Unknown,
             },
             K::Member => {
@@ -545,12 +659,12 @@ impl<'t> NativeFile<'t> {
             K::Index => {
                 let object = inner(F::Object);
                 match object {
-                    Ty::Array(e) => *e,
+                    Ty::Array(e) => *e.element,
                     Ty::Tuple(items) => match s.get(id, F::Index).map(|i| s.text(i).parse::<usize>()) {
-                        Some(Ok(n)) => items.get(n).cloned().unwrap_or(Ty::Unknown),
+                        Some(Ok(n)) => items.at(n),
                         _ => Ty::Unknown,
                     },
-                    _ => Ty::Unknown,
+                    _ => s.get(id, F::Index).and_then(|index| self.static_string(index)).map_or(Ty::Unknown, |name| ck.member(&object, &name)),
                 }
             }
             K::Call => {
@@ -568,7 +682,17 @@ impl<'t> NativeFile<'t> {
             }
             K::New => {
                 let c = inner(F::Callee);
-                ck.construct(&c, &self.args(id), self.type_args(id))
+                let args = self.args(id);
+                let targs = self.type_args(id);
+                let infer_context = args.is_empty() && targs.is_empty() && ck.signature_for(&c, &args, true).is_some_and(|(sig, _)| !sig.type_params.is_empty());
+                let result = ck.construct(&c, &args, targs);
+                if infer_context {
+                    let context = self.contextual_type_of(id);
+                    if matches!((&result, &context), (Ty::Named(a, _), Ty::Named(b, _)) if a == b) {
+                        return context;
+                    }
+                }
+                result
             }
             K::Await => ck.awaited(&inner(F::Arg)),
             K::Conditional => {
@@ -583,13 +707,14 @@ impl<'t> NativeFile<'t> {
             K::Logical => {
                 let (left, right) = (inner(F::Left), inner(F::Right));
                 // One known side still says something (`false | ?`).
-                if left.is_unknown() && right.is_unknown() {
+                if left.is_opaque() && right.is_opaque() {
                     return Ty::Unknown;
                 }
                 // `x ?? []`: the empty array adds nothing to an array type.
-                let empty = |t: &Ty| matches!(t, Ty::Array(e) if matches!(**e, Ty::Never));
+                let empty = |t: &Ty| matches!(t, Ty::Array(e) if matches!(*e.element, Ty::Never));
                 match s.word(id, F::Op) {
                     Some("??") => {
+                        if !left.may_be_nullish() { return left }
                         let left = left.non_null();
                         if empty(&right) && matches!(left, Ty::Array(_) | Ty::Tuple(_)) {
                             left
@@ -597,8 +722,16 @@ impl<'t> NativeFile<'t> {
                             Ty::union(vec![left, right])
                         }
                     }
-                    Some("||") => Ty::union(vec![super::flow::truthy(left, true), right]),
-                    Some("&&") => Ty::union(vec![super::flow::truthy(left, false), right]),
+                    Some("||") => {
+                        let always_truthy = matches!(super::flow::truthy(left.clone(), false, ck), Ty::Never);
+                        let left = super::flow::truthy(left, true, ck);
+                        if always_truthy { left } else { Ty::union(vec![left, right]) }
+                    }
+                    Some("&&") => {
+                        let always_falsy = matches!(super::flow::truthy(left.clone(), true, ck), Ty::Never);
+                        let left = super::flow::truthy(left, false, ck);
+                        if always_falsy { left } else { Ty::union(vec![left, right]) }
+                    }
                     _ => Ty::Unknown,
                 }
             }
@@ -606,7 +739,14 @@ impl<'t> NativeFile<'t> {
                 Some("!" | "delete") => Ty::Prim("boolean"),
                 Some("typeof") => Ty::Prim("string"),
                 Some("void") => Ty::Undefined,
-                Some("-" | "+" | "~") => Ty::Prim("number"),
+                Some("-" | "+") => {
+                    if matches!(inner(F::Arg), Ty::Prim("bigint") | Ty::Lit(_, "bigint")) {
+                        return if s.word(id, F::Op) == Some("-") { Ty::Prim("bigint") } else { Ty::Unknown };
+                    }
+                    super::statics::literal_value(s, id).filter(|(kind, _)| *kind == "number")
+                        .map_or(Ty::Prim("number"), |(_, value)| Ty::Lit(value.into(), "number"))
+                }
+                Some("~") => if matches!(inner(F::Arg), Ty::Prim("bigint") | Ty::Lit(_, "bigint")) { Ty::Prim("bigint") } else { Ty::Prim("number") },
                 _ => Ty::Unknown,
             },
             K::Update => Ty::Prim("number"),
@@ -616,19 +756,23 @@ impl<'t> NativeFile<'t> {
                     let (a, b) = (inner(F::Left).widen(), inner(F::Right).widen());
                     match (&a, &b) {
                         (Ty::Prim("number"), Ty::Prim("number")) => Ty::Prim("number"),
+                        (Ty::Prim("bigint"), Ty::Prim("bigint")) => Ty::Prim("bigint"),
                         (Ty::Prim("string"), _) | (_, Ty::Prim("string")) => Ty::Prim("string"),
                         _ => Ty::Unknown,
                     }
                 }
-                Some(_) => Ty::Prim("number"),
+                Some(op) => if op != ">>>" && matches!(inner(F::Left).widen(), Ty::Prim("bigint")) && matches!(inner(F::Right).widen(), Ty::Prim("bigint")) { Ty::Prim("bigint") } else { Ty::Prim("number") },
                 None => Ty::Unknown,
             },
             K::Array => {
                 let items: Vec<Ty> = s.all(id, F::Element).collect::<Vec<_>>().into_iter().map(|e| self.type_of(e).widen()).collect();
-                if items.is_empty() {
-                    return Ty::Array(Box::new(Ty::Never));
+                if self.bindings().write_sites.contains_key(&id) || self.destructuring_receiver(id).is_some_and(|receiver| matches!(s.kind(receiver), Some(K::ArrayPattern | K::Array))) {
+                    return Ty::Tuple(items.into_iter().collect());
                 }
-                if items.iter().any(Ty::is_unknown) {
+                if items.is_empty() {
+                    return Ty::array(Ty::Never);
+                }
+                if items.iter().any(Ty::is_opaque) {
                     Ty::Unknown
                 } else {
                     let mut unique: Vec<Ty> = Vec::new();
@@ -638,12 +782,12 @@ impl<'t> NativeFile<'t> {
                             unique.push(t);
                         }
                     }
-                    Ty::Array(Box::new(if unique.len() == 1 { unique.pop().expect("one") } else { Ty::Union(unique) }))
+                    Ty::array(if unique.len() == 1 { unique.pop().expect("one") } else { Ty::Union(unique) })
                 }
             }
             K::Regex => ck.global_named("RegExp", Vec::new()),
             K::Object => self.object_literal(id),
-            K::Arrow | K::Function => {
+            K::Arrow | K::Function | K::Method => {
                 let mut sig = sig(&self.syntax, id);
                 sig.is_async |= s.has_word(id, F::Modifier, "async");
                 // An arrow's expression body gives its return type.
@@ -674,14 +818,19 @@ impl<'t> NativeFile<'t> {
         let s = &self.syntax;
         let mut props: Vec<(Box<str>, Ty)> = Vec::new();
         for p in s.all(id, F::Property).collect::<Vec<_>>() {
+            if s.is(p, K::Spread) {
+                return if s.get(p, F::Arg).is_some_and(|arg| matches!(self.type_of(arg), Ty::Any)) { Ty::Any } else { Ty::Unknown };
+            }
             let Some(key) = s.get(p, F::Key) else { return Ty::Unknown };
-            let name: Box<str> = match s.kind(key) {
-                Some(K::Ident | K::Number) => s.text(key).into(),
-                Some(K::String) => s.text(key).trim_matches(|c| c == '"' || c == '\'').into(),
-                _ => return Ty::Unknown,
-            };
+            let Some(name) = super::statics::property_name(s, p) else { return Ty::Unknown };
+            let name = name.into_boxed_str();
             let t = match s.kind(p) {
                 Some(K::Prop) => s.get(p, F::Value).map_or_else(|| self.type_of(key), |v| self.type_of(v)),
+                Some(K::Method) => match s.word(p, F::Kind) {
+                    Some("get") => s.get(p, F::ReturnType).map_or_else(|| self.own_return(&sig(s, p), self.ck().file).unwrap_or(Ty::Unknown), |annotation| self.type_of(annotation)),
+                    Some("set") => s.all(p, F::Param).next().and_then(|param| s.get(param, F::Name)).map_or(Ty::Unknown, |name| self.type_of(name)),
+                    _ => self.type_of(p),
+                },
                 _ => Ty::Unknown,
             };
             props.push((name, t));
@@ -697,8 +846,8 @@ impl<'t> NativeFile<'t> {
         let args = if self.ck().needs_args(f) { self.args(id) } else { vec![Ty::Unknown; self.syntax.all(id, F::Arg).count()] };
         let t = self.ck().call(f, &args, self.type_args(id));
         match f {
-            Ty::Fn(c) if t.is_unknown() && c.ret.is_none() => match &c.sigs[..] {
-                [sig] => self.own_return(sig, c.env.file).unwrap_or(t),
+            Ty::Fn(c) if c.ret.is_none() => match &c.sigs[..] {
+                [sig] if sig.ret.is_none() => self.own_return(sig, c.env.file).unwrap_or(t),
                 _ => t,
             },
             _ => t,
@@ -722,5 +871,35 @@ impl<'t> NativeFile<'t> {
             }
             at = n;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::native_linter;
+    use std::path::Path;
+
+    #[test]
+    fn logical_types_exclude_unreachable_operands_but_keep_enum_fallbacks() {
+        let linter = native_linter("in ts_logical rule reachable-string { when contains(default(type_flags, []), 'string')\nwarn 'string result' }");
+        let code = "({}) || 'unreachable'; false && 'unreachable'; true && 'reachable'; ({}) ?? 'unreachable'; enum E { Zero, One } declare const value: E; value || 'reachable'; 1 || 'unreachable'; 0 ?? 'unreachable';";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].start, code.find("true").unwrap());
+        assert_eq!(diagnostics[1].start, code.find("value ||").unwrap());
+    }
+
+    #[test]
+    fn optional_callback_context_reaches_conditional_and_final_sequence_functions() {
+        let linter = native_linter("in ts_parameter.name rule contextual-any { when contains(default(type_flags, []), 'any')\nwarn 'unsafe parameter' }");
+        let code = "declare function receive(callback: ((e: any) => void) | undefined): void; declare const flag: boolean; receive(e => {}); receive(flag ? e => {} : e => {}); receive((e => {}, e => {}));";
+        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 5);
+    }
+
+    #[test]
+    fn unknown_type_facts_remain_absent_for_existing_rule_consumers() {
+        let linter = native_linter("in ts_identifier rule known { when type != null\nwarn 'known' }");
+        let code = "declare const narrow: number; declare const broad: unknown; narrow; broad;";
+        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 2);
     }
 }

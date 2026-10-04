@@ -8,6 +8,53 @@ use super::super::summary::{DeclKind, Member, MemberKind, Sig, TypeSyn};
 use super::{Callable, Checker, Env, Sym, Ty, MAX_DEPTH};
 
 impl Checker<'_> {
+    /// Primitive backing a specific enum member, without erasing enum identity in `member`.
+    pub fn enum_member_base(&self, ty: &Ty, name: &str) -> Option<Ty> {
+        let sym = match ty { Ty::Ns(sym) | Ty::Named(sym, _) => sym, _ => return None };
+        for &decl in sym.iter() {
+            let summary = self.summary_of(decl.file)?;
+            let owner = &summary.decls[decl.decl as usize];
+            if owner.kind != DeclKind::Enum { continue }
+            if let Some(member) = owner.members.iter().find(|member| &*member.name == name) {
+                return Some(member.ty.as_ref().map_or(Ty::Prim("number"), |ty| self.eval(ty, &self.decl_env(decl))));
+            }
+        }
+        None
+    }
+
+    pub fn is_lib_decl(&self, decl: DeclRef) -> bool {
+        let path = self.project.path(decl.file);
+        path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("lib.") && name.ends_with(".d.ts"))
+    }
+
+    pub fn is_builtin_symbol(&self, sym: &[DeclRef], name: &str) -> bool {
+        sym.iter().any(|&decl| self.is_lib_decl(decl) && self.summary_of(decl.file).is_some_and(|summary| &*summary.decls[decl.decl as usize].name == name))
+    }
+
+    pub fn is_builtin_type_or_base(&self, ty: &Ty, name: &str) -> bool {
+        self.builtin_type_or_base(ty, name, &mut Vec::new())
+    }
+
+    fn builtin_type_or_base(&self, ty: &Ty, name: &str, seen: &mut Vec<DeclRef>) -> bool {
+        match ty {
+            Ty::Named(sym, args) => {
+                if self.is_builtin_symbol(sym, name) { return true }
+                for &r in sym.iter() {
+                    if seen.contains(&r) || seen.len() >= MAX_DEPTH as usize { continue }
+                    seen.push(r);
+                    let Some(summary) = self.summary_of(r.file) else { continue };
+                    let decl = &summary.decls[r.decl as usize];
+                    let mut env = self.decl_env(r);
+                    env.tparams = self.bind_tparams(&decl.type_params, args.clone(), &env);
+                    if self.bases(decl).iter().any(|base| self.builtin_type_or_base(&self.eval(base, &env), name, seen)) { return true }
+                }
+                false
+            }
+            Ty::Inter(parts) => parts.iter().any(|part| self.builtin_type_or_base(part, name, seen)),
+            _ => false,
+        }
+    }
+
     /// The type of member `name` of a value of type `t`.
     pub fn member(&self, t: &Ty, name: &str) -> Ty {
         self.deeper(|| self.member_inner(t, name, t))
@@ -35,8 +82,8 @@ impl Checker<'_> {
             Ty::Prim("boolean") | Ty::Lit(_, "boolean") => self.global_named("Boolean", vec![]),
             Ty::Prim("bigint") | Ty::Lit(_, "bigint") => self.global_named("BigInt", vec![]),
             Ty::Prim("symbol") => self.global_named("Symbol", vec![]),
-            Ty::Array(e) => self.global_named("Array", vec![(**e).clone()]),
-            Ty::Tuple(items) => self.global_named("Array", vec![Ty::union(items.clone())]),
+            Ty::Array(e) => self.global_named(if e.readonly { "ReadonlyArray" } else { "Array" }, vec![(*e.element).clone()]),
+            Ty::Tuple(items) => self.global_named(if items.readonly { "ReadonlyArray" } else { "Array" }, vec![Ty::union(items.iter().cloned().collect())]),
             Ty::Fn(_) | Ty::Class(_) => self.global_named("Function", vec![]),
             other => other.clone(),
         }
@@ -49,8 +96,19 @@ impl Checker<'_> {
     }
 
     fn member_core(&self, t: &Ty, name: &str, receiver: &Ty) -> Ty {
+        if let Some(filter) = self.property_filter(t) {
+            if filter.names(self, 0).is_some_and(|names| !names.iter().any(|key| &**key == name)) { return Ty::Unknown }
+            return if filter.allows(name) == Some(true) { self.member_inner(filter.source, name, filter.source) } else { Ty::Unknown };
+        }
+        if let Some((key, value)) = self.record_parts(t) {
+            return if super::utilities::accepts_key(key, name) == Some(true) { value.clone() } else { Ty::Unknown };
+        }
         match t {
             Ty::Any => Ty::Any,
+            Ty::Array(element) if name.parse::<usize>().is_ok() => (*element.element).clone(),
+            Ty::Tuple(tuple) if name == "length" => tuple.length(),
+            Ty::Tuple(tuple) if name.parse::<usize>().is_ok() => tuple.at(name.parse().expect("checked index")),
+            Ty::Named(symbols, args) if args.len() == 1 && name.parse::<usize>().is_ok() && self.is_builtin_symbol(symbols, "ReadonlyArray") => args[0].clone(),
             Ty::Named(sym, args) => {
                 // Enum members are the enum type.
                 if self.is_enum(sym) {
@@ -64,7 +122,7 @@ impl Checker<'_> {
                     .filter(|i| !matches!(i, Ty::Undefined | Ty::Null))
                     .map(|i| self.member_inner(i, name, i))
                     .collect();
-                if found.iter().any(Ty::is_unknown) {
+                if found.iter().any(Ty::is_opaque) {
                     Ty::Unknown
                 } else {
                     Ty::union(found)
@@ -73,7 +131,7 @@ impl Checker<'_> {
             // Every constituent that has it contributes (`T & { on: any }`
             // makes `on` any).
             Ty::Inter(items) => {
-                let found: Vec<Ty> = items.iter().map(|i| self.member_inner(i, name, receiver)).filter(|t| !t.is_unknown()).collect();
+                let found: Vec<Ty> = items.iter().map(|i| self.member_inner(i, name, receiver)).filter(|t| !t.is_opaque()).collect();
                 match found.len() {
                     0 => Ty::Unknown,
                     1 => found.into_iter().next().expect("one"),
@@ -109,7 +167,7 @@ impl Checker<'_> {
             }
             Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) => {
                 let apparent = self.apparent(t);
-                if apparent.is_unknown() {
+                if apparent.is_opaque() {
                     return Ty::Unknown;
                 }
                 self.member_inner(&apparent, name, receiver)
@@ -185,11 +243,11 @@ impl Checker<'_> {
             env.tparams = self.bind_tparams(&decl.type_params, args.to_vec(), &env);
             for base in self.bases(decl) {
                 let base_ty = self.eval(base, &env);
-                if base_ty.is_unknown() {
+                if base_ty.is_opaque() {
                     continue;
                 }
                 let t = self.member_inner(&base_ty, name, receiver);
-                if !t.is_unknown() {
+                if !t.is_opaque() {
                     return t;
                 }
             }
@@ -212,11 +270,19 @@ impl Checker<'_> {
     /// Every member name of `t`, inherited ones included (for unions, the
     /// names of any constituent).
     pub fn member_names(&self, t: &Ty, out: &mut Vec<Box<str>>) {
+        if let Some((keys, _)) = self.record_parts(t) {
+            if let Some(names) = super::utilities::required_keys(keys) {
+                out.extend(names.into_iter().map(String::into_boxed_str));
+            }
+            return;
+        }
         if self.depth.get() >= MAX_DEPTH {
             return;
         }
         self.depth.set(self.depth.get() + 1);
-        match t {
+        if let Some(filter) = self.property_filter(t) {
+            if let Some(names) = filter.names(self, 0) { out.extend(names); }
+        } else { match t {
             // Named types repeat a lot (and their heritage is deep): the
             // project remembers their member names.
             // An enum value has its primitive's members, not the enum's.
@@ -248,7 +314,7 @@ impl Checker<'_> {
                 }
             }
             _ => {}
-        }
+        } }
         self.depth.set(self.depth.get() - 1);
     }
 
@@ -272,7 +338,7 @@ impl Checker<'_> {
 
     /// The types a declaration inherits members from: a class's `extends`
     /// (its `implements` list adds none), every interface `extends`.
-    pub(super) fn bases<'d>(&self, decl: &'d super::super::summary::Decl) -> Vec<&'d TypeSyn> {
+    pub(crate) fn bases<'d>(&self, decl: &'d super::super::summary::Decl) -> Vec<&'d TypeSyn> {
         match decl.kind {
             DeclKind::Class => decl.extends.first().into_iter().collect(),
             _ => decl.extends.iter().collect(),
@@ -282,4 +348,5 @@ impl Checker<'_> {
     pub fn is_enum(&self, sym: &[DeclRef]) -> bool {
         sym.first().is_some_and(|&r| self.kind_of(r) == Some(DeclKind::Enum))
     }
+
 }
