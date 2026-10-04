@@ -7,29 +7,64 @@ define {
 in ts_if let statement_has_else alternate != null
 in ts_if let unmatched_tail alternate == null || alternate.unmatched_tail == true
 in ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled let unmatched_tail body.unmatched_tail == true
-in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled, ts_block let enclosing_else_boundary parent == "ts_if" && field == "consequent" && parent.statement_has_else == true || contains(["ts_if", "ts_for", "ts_for_in", "ts_for_of", "ts_while", "ts_with", "ts_labeled"], parent) && parent.enclosing_else_boundary == true
+in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled, ts_block let enclosing_else_boundary parent is ts_if && field == "consequent" && parent.statement_has_else == true || parent is (ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled) && parent.enclosing_else_boundary == true
 in ts_block let else_block parent == "ts_if" && field == "alternate"
 in ts_block let statement_count count([] body)
 
-in ts_return let direct_return true
 in ts_return let return_end true
-in ts_block let return_end last([] body.direct_return) == true
+in ts_block let return_end last([] body.layer) is ts_return
 in ts_return let branch_exit true
 in ts_if let branch_exit consequent.return_end == true && alternate.return_end == true
 in ts_return, ts_if let returning_branch branch_exit == true
 in ts_block let returning_branch any([] body.branch_exit, r => r == true)
-in ts_if let chain_else_offset if consequent.returning_branch != true || alternate == null then null else if alternate.statement_is_if == true then alternate.chain_else_offset else alternate.unparen_offset
+in ts_if let chain_else_offset if consequent.returning_branch != true || alternate == null then null else if alternate.layer is ts_if then alternate.chain_else_offset else alternate.offset
 
 in ts_unary let negative_test operator == "!"
 in ts_binary let negative_test operator == "!=" || operator == "!=="
 in ts_parenthesized let negative_test expression.negative_test == true
-in ts_if let statement_is_if true
-in ts_empty let empty_statement true
-in ts_continue let direct_continue true
 in ts_continue let continue_guard true
-in ts_block let continue_guard count([] body) == 1 && first([] body.direct_continue) == true
+in ts_block let continue_guard count([] body) == 1 && first([] body.layer) is ts_continue
 in ts_if let conditional_continue consequent.continue_guard == true
-in ts_block let guarded_iteration count([] body) == 0 || first([] body.statement_is_if) == true && (count([] body) == 1 || first([] body.conditional_continue) == true)
+in ts_block let guarded_iteration count([] body) == 0 || first([] body.layer) is ts_if && (count([] body) == 1 || first([] body.conditional_continue) == true)
+
+in ts_parenthesized let unwrapped_layer default(expression.unwrapped_layer, expression.layer)
+in ts_parenthesized let unwrapped_text default(expression.unwrapped_text, expression)
+in ts_return let return_value_object default(argument.unwrapped_layer, argument.layer) is ts_object
+in ts_return let return_value_braced starts_with(argument, "{{")
+in ts_block let single_return count([] body) == 1 && first([] body.layer) is ts_return
+in ts_block let return_value_object first([] body.return_value_object) == true
+in ts_block let return_value_braced first([] body.return_value_braced) == true
+in ts_function let function_this uses_this
+in ts_member let bind_property_offset property.offset
+in ts_index let bind_property_offset index.offset
+in ts_member, ts_index let bind_target if static_name != "bind" then null else if default(object.unwrapped_layer, object.layer) is ts_arrow || default(object.unwrapped_layer, object.layer) is ts_function && object.function_this != true then bind_property_offset else null
+in ts_parenthesized forward function_this, bind_target from expression
+
+in ts_throw let thrown_identifier if default(argument.unwrapped_layer, argument.layer) is ts_identifier then default(argument.unwrapped_text, argument) else null
+in ts_block let first_throw first([] body.thrown_identifier)
+in ts_try let catch_rethrows parameter.layer is ts_identifier && handler.first_throw == parameter
+
+in ts_binary let additive operator == "+"
+in ts_binary let string_addition additive && (default(left.unwrapped_layer, left.layer) is (ts_string, ts_template) || left.string_addition == true || default(right.unwrapped_layer, right.layer) is (ts_string, ts_template) || right.string_addition == true)
+in ts_binary let nonstring_addition additive && ((if left.additive == true then left.nonstring_addition == true else default(left.unwrapped_layer, left.layer) not (ts_string, ts_template)) || (if right.additive == true then right.nonstring_addition == true else default(right.unwrapped_layer, right.layer) not (ts_string, ts_template)))
+in ts_binary, ts_parenthesized let inside_addition parent is ts_binary && parent.additive == true || parent is ts_parenthesized && parent.inside_addition == true
+in ts_parenthesized forward additive, string_addition, nonstring_addition from expression
+in ts_binary let arithmetic_operator if contains(["+", "-", "*", "/", "%", "**", "<<", ">>", ">>>", "&", "|", "^"], operator) then operator else null
+in ts_binary let strict_left_reference_key left.reference_key_strict
+in ts_binary let strict_right_reference_key right.reference_key_strict
+in ts_parenthesized forward arithmetic_operator, strict_left_reference_key, strict_right_reference_key from expression
+
+in ts_parameter let required_parameter init == null && optional == null && name.layer not ts_rest && !starts_with(text, "...")
+in ts_function, ts_arrow, ts_method let parameter_required [] parameter.required_parameter
+in ts_object let assign_source_accessor any([] property.accessor_kind, k => k == "get" || k == "set")
+in ts_object let assign_source_proto contains([] property.static_name, "__proto__")
+in ts_parenthesized forward assign_source_accessor, assign_source_proto from expression
+
+in ts_computed_key let computed_literal_text if default(expression.unwrapped_layer, expression.layer) is (ts_string, ts_number) then default(expression.unwrapped_text, expression) else null
+in ts_method, ts_class_property let member_static contains([] modifier, "static")
+in ts_property, ts_pattern_property let computed_exception parent is ts_object && parent.write_site == null && static_name == "__proto__"
+in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.write_site == null && static_name == "__proto__"
+in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
 
 macro suggestion_curly_policy {
   option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
@@ -60,8 +95,8 @@ in ts_member, ts_index rule no-eval:member { suggestion_eval_policy }
 
 # `.bind(x)` on a function that never uses `this` (or on an arrow).
 in ts_call rule no-extra-bind {
-  when unnecessary_bind != null
-  report at unnecessary_bind
+  when count(argument) == 1 && first([] argument.layer) not ts_spread && callee.bind_target != null
+  report at callee.bind_target
   warn "The function binding is unnecessary."
 }
 
@@ -139,13 +174,15 @@ in ts_call rule prefer-spread {
 }
 
 in ts_call rule prefer-object-spread {
-  when global_method_callee == "Object.assign" && object_assign_spread
+  when global_method_callee == "Object.assign" && default(first([] argument.unwrapped_layer), first([] argument.layer)) is ts_object
+  when !contains([] argument.layer, "ts_spread") && !contains([] argument.unwrapped_layer, "ts_spread")
+  when count(argument) == 1 || !any([] argument.assign_source_accessor, a => a == true) && !any(slice([] argument.assign_source_proto, 1), p => p == true)
   warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{ foo: bar }}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
 }
 
 # String concatenation mixing literals and other values.
 in ts_binary rule prefer-template {
-  when mixed_string_concatenation
+  when string_addition && nonstring_addition && !inside_addition
   warn "Unexpected string concatenation."
 }
 
@@ -242,13 +279,15 @@ in ts_binary rule no-useless-concat {
 }
 
 in ts_conditional rule no-unneeded-ternary {
-  when redundant_conditional == "boolean"
+  let consequent_value consequent.literal_value
+  let alternate_value alternate.literal_value
+  when consequent_value.type == "boolean" && alternate_value.type == "boolean"
   warn "Unnecessary use of boolean literals in conditional expression."
 }
 
 in ts_conditional rule no-unneeded-ternary:default-assignment {
   option defaultAssignment boolean = true "allow conditional expressions used as default assignments"
-  when !defaultAssignment && redundant_conditional == "default"
+  when !defaultAssignment && default(test.unwrapped_layer, test.layer) is ts_identifier && default(consequent.unwrapped_layer, consequent.layer) is ts_identifier && default(test.unwrapped_text, test) == default(consequent.unwrapped_text, consequent)
   warn "Unnecessary use of conditional expression for default assignment."
 }
 
@@ -329,8 +368,9 @@ in ts_call rule prefer-exponentiation-operator {
 
 in ts_property, ts_pattern_property, ts_method, ts_class_property rule no-useless-computed-key {
   option enforceForClassMembers boolean = true "check class member keys"
-  when useless_computed_key != null && (!useless_computed_key.class || enforceForClassMembers)
-  warn "Unnecessarily computed property [{useless_computed_key.text}] found."
+  let computed_text key.computed_literal_text
+  when computed_text != null && !computed_exception && (parent not ts_class || enforceForClassMembers)
+  warn "Unnecessarily computed property [{computed_text}] found."
 }
 
 in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
@@ -347,7 +387,8 @@ in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
 }
 
 in ts_parameter rule default-param-last {
-  when default_parameter_before_required
+  when parent is (ts_function, ts_arrow, ts_method) && (init != null || optional != null)
+  when any(slice(parent.parameter_required, index + 1), p => p == true)
   warn "Default parameters should be last."
 }
 
@@ -384,7 +425,7 @@ in ts_if rule no-lonely-if {
 }
 
 in ts_if, ts_conditional rule no-negated-condition {
-  when layer is ts_conditional || alternate != null && alternate.statement_is_if != true
+  when layer is ts_conditional || alternate != null && alternate.layer not ts_if
   when test.negative_test == true
   warn "Unexpected negated condition."
 }
@@ -410,7 +451,7 @@ in ts_await, ts_for_of, ts_variable_declaration rule no-await-in-loop {
 
 in ts_for_in rule guard-for-in {
   when body != null
-  when body.empty_statement != true && body.statement_is_if != true && body.guarded_iteration != true
+  when body.layer not (ts_empty, ts_if) && body.guarded_iteration != true
   warn "The body of a for-in should be wrapped in an if statement to filter unwanted properties from the prototype."
 }
 
@@ -424,8 +465,8 @@ in ts_assignment rule no-return-assign {
 
 in ts_if rule no-else-return {
   option allowElseIf boolean = true "allow returning else-if branches"
-  when contains(["ts_program", "ts_block", "ts_case"], parent) && consequent.returning_branch == true && alternate != null
-  let else_report if allowElseIf then chain_else_offset else alternate.unparen_offset
+  when parent is (ts_program, ts_block, ts_case) && consequent.returning_branch == true && alternate != null
+  let else_report if allowElseIf then chain_else_offset else alternate.offset
   when else_report != null
   report at else_report
   warn "Unnecessary 'else' after 'return'."
@@ -434,11 +475,12 @@ in ts_if rule no-else-return {
 in ts_arrow rule arrow-body-style {
   option mode ("always" | "never" | "as-needed") = "as-needed" "arrow body block policy"
   option requireReturnForObjectLiteral boolean = false "require a block for object values"
-  let arrow_body_info arrow_body_style
-  when arrow_body_info != null
-  when arrow_body_info.block && (mode == "never" || mode == "as-needed" && arrow_body_info.single_return && !(requireReturnForObjectLiteral && arrow_body_info.object)) || !arrow_body_info.block && (mode == "always" || mode == "as-needed" && requireReturnForObjectLiteral && arrow_body_info.object)
-  report at arrow_body_info.offset
-  warn if arrow_body_info.block then arrow_body_info.message else "Expected block statement surrounding arrow body."
+  when body != null
+  let body_block body.layer is ts_block
+  let body_object if body_block then body.return_value_object == true else default(body.unwrapped_layer, body.layer) is ts_object
+  when body_block && (mode == "never" || mode == "as-needed" && body.single_return == true && !(requireReturnForObjectLiteral && body_object)) || !body_block && (mode == "always" || mode == "as-needed" && requireReturnForObjectLiteral && body_object)
+  report at body.unparen_offset
+  warn if !body_block then "Expected block statement surrounding arrow body." else if body.statement_count == 0 then "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`." else if body.single_return != true then "Unexpected block statement surrounding arrow body." else if body.return_value_braced == true then "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`." else "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`."
 }
 
 in ts_function, ts_arrow, ts_method rule no-empty-function {
@@ -465,7 +507,7 @@ in ts_assignment, ts_call rule no-extend-native {
 }
 
 in ts_string rule no-multi-str {
-  when multiline_string
+  when re_test(text, /[\r\n\u{2028}\u{2029}]/) && parent not (ts_jsx_attribute, ts_jsx_expression, ts_jsx_element)
   warn "Multiline support is limited to browsers supporting ES5 only."
 }
 
@@ -539,8 +581,10 @@ in ts_assignment, ts_logical, ts_if rule logical-assignment-operators {
 
 in ts_assignment rule operator-assignment {
   option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
-  when if mode == "never" then operator != "=" && !contains(["&&=", "||=", "??="], operator) else arithmetic_assignment != null
-  warn if mode == "never" then "Unexpected operator assignment ({operator}) shorthand." else "Assignment (=) can be replaced with operator assignment ({arithmetic_assignment})."
+  let assigned_key left.reference_key_strict
+  let shorthand if operator == "=" && right.arithmetic_operator != null && assigned_key != null && (assigned_key == right.strict_left_reference_key || contains(["*", "&", "^", "|"], right.arithmetic_operator) && assigned_key == right.strict_right_reference_key) then right.arithmetic_operator "=" else null
+  when if mode == "never" then operator != "=" && !contains(["&&=", "||=", "??="], operator) else shorthand != null
+  warn if mode == "never" then "Unexpected operator assignment ({operator}) shorthand." else "Assignment (=) can be replaced with operator assignment ({shorthand})."
 }
 
 in ts_binary rule yoda {

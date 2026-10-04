@@ -111,35 +111,3 @@ pub fn consistency(file: &NativeFile, node: u32) -> Value<'static> {
         Value::Null
     }
 }
-
-pub fn computed_key(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(key) = s.get(node, F::Key).filter(|&n| s.is(n, K::Computed))
-        .and_then(|n| s.get(n, F::Expr)).map(|n| s.unparen(n)) else { return Value::Null };
-    if !matches!(s.kind(key), Some(K::String | K::Number)) { return Value::Null }
-    let class = s.parent(node).is_some_and(|p| s.is(p, K::Class));
-    let name = property_name(s, node);
-    let static_member = s.has_word(node, F::Modifier, "static");
-    let exception = if class {
-        match s.kind(node) {
-            Some(K::ClassProp) => name.as_deref() == Some("constructor") || static_member && name.as_deref() == Some("prototype"),
-            _ => name.as_deref() == Some(if static_member { "prototype" } else { "constructor" }),
-        }
-    } else {
-        name.as_deref() == Some("__proto__") && s.parent(node).is_some_and(|p| s.is(p, K::Object) && file.write_site(p).is_none())
-    };
-    if exception { return Value::Null }
-    Value::record(vec![("class".into(), Value::Bool(class)), ("text".into(), Value::from(s.text(key).to_string()))])
-}
-
-pub fn assign_spread(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let args: Vec<_> = s.all(node, F::Arg).map(|n| s.unparen(n)).collect();
-    let eligible = args.first().is_some_and(|&n| s.is(n, K::Object))
-        && !args.iter().any(|&n| s.is(n, K::Spread))
-        && (args.len() == 1 || !args.iter().enumerate().any(|(index, &arg)| {
-            s.is(arg, K::Object) && s.all(arg, F::Property).any(|p| matches!(s.word(p, F::Kind), Some("get" | "set"))
-                || index > 0 && property_name(s, p).as_deref() == Some("__proto__"))
-        }));
-    Value::Bool(eligible)
-}

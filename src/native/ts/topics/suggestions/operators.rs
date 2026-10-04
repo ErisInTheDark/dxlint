@@ -5,18 +5,6 @@ use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::statics;
 use crate::expr::Value;
 
-pub fn arithmetic_assignment(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if s.word(node, F::Op) != Some("=") { return Value::Null }
-    let Some((left, right)) = s.get(node, F::Left).zip(s.get(node, F::Right)) else { return Value::Null };
-    let right = s.unparen(right);
-    if !s.is(right, K::Binary) { return Value::Null }
-    let Some(op) = s.word(right, F::Op).filter(|op| matches!(*op, "+" | "-" | "*" | "/" | "%" | "**" | "<<" | ">>" | ">>>" | "&" | "|" | "^")) else { return Value::Null };
-    let forward = s.get(right, F::Left).is_some_and(|n| file.same_reference_keyed(left, n, true));
-    let reverse = matches!(op, "*" | "&" | "^" | "|") && s.get(right, F::Right).is_some_and(|n| file.same_reference_keyed(left, n, true));
-    if forward || reverse { Value::from(format!("{op}=")) } else { Value::Null }
-}
-
 fn reference(file: &NativeFile, node: u32) -> bool {
     let s = &file.syntax;
     let node = s.unparen(node);

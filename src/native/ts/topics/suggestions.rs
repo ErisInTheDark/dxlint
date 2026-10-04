@@ -15,23 +15,22 @@ mod regex;
 mod errors;
 mod strict;
 mod operators;
+mod references;
 
 pub const FACTS: &[Fact] = &[
+    Fact { name: "reference_key", doc: "native layers: collision-safe comparable reference key, normalising static property access; null for unsupported expressions", get: |f, n| f.with_file(|file, node| references::key(file, node, false), n) },
+    Fact { name: "reference_key_strict", doc: "native layers: comparable reference key preserving member/index syntax and literal key types; null for unsupported expressions", get: |f, n| f.with_file(|file, node| references::key(file, node, true), n) },
     Fact { name: "own_property_call", doc: "native layers: builtin Object/prototype/empty-object hasOwnProperty.call can use the visible global Object.hasOwn", get: |f, n| f.with_file(objects::own_property_call, n) },
     Fact { name: "label_binding", doc: "native layers: labelled statement name collides with a visible value binding or configured global", get: |f, n| f.with_file(statements::label_binding, n) },
     Fact { name: "single_iteration_loop", doc: "native layers: reachable loop body has no normal or correctly targeted continue path for another iteration", get: |f, n| f.with_file(statements::single_iteration, n) },
     Fact { name: "useless_escapes", doc: "native layers: unnecessary string, untagged template and regex identity escapes with source offsets and option-filterable characters", get: |f, n| f.with_file(regex::useless_escapes, n) },
     Fact { name: "unnamed_regex_captures", doc: "native layers: unnamed capturing group source spellings in valid literal or statically known RegExp patterns", get: |f, n| f.with_file(regex::unnamed_captures, n) },
     Fact { name: "logical_assignment", doc: "native layers: repeated-reference logical assignment, logical expression or if statement and equivalent assignment operator", get: |f, n| f.with_file(operators::logical_assignment, n) },
-    Fact { name: "arithmetic_assignment", doc: "native layers: compound arithmetic assignment operator equivalent to this repeated-reference assignment", get: |f, n| f.with_file(operators::arithmetic_assignment, n) },
     Fact { name: "comparison_orientation", doc: "native layers: literal operand sides, equality policy and parenthesised ordered-range exemption", get: |f, n| f.with_file(operators::comparison_orientation, n) },
-    Fact { name: "redundant_conditional", doc: "native layers: boolean-literal or identical-identifier default conditional category through parentheses", get: |f, n| f.with_file(expressions::redundant_conditional, n) },
     Fact { name: "regex_literal_preference", doc: "native layers: static-string or redundant literal RegExp construction diagnostic and wrapping policy", get: |f, n| f.with_file(regex::literal_preference, n) },
     Fact { name: "strict_directive_policy", doc: "native layers: explicit strict directive findings for global, function, never and module policies", get: |f, n| f.with_file(strict::policy, n) },
     Fact { name: "restricted_binding", doc: "native layers: declaration shadows a restricted global name, including merged declarations and unsafe undefined bindings", get: |f, n| f.with_file(functions::restricted_binding, n) },
-    Fact { name: "unnecessary_bind", doc: "native layers: property offset for bind of an arrow or function not using its own this, excluding spread arguments", get: |f, n| f.with_file(functions::unnecessary_bind, n) },
     Fact { name: "nonoctal_decimal_escapes", doc: "native layers: unescaped decimal escape spellings and source offsets in a string literal", get: |f, n| f.with_file(expressions::decimal_escapes, n) },
-    Fact { name: "mixed_string_concatenation", doc: "native layers: outermost addition chain mixes string literals and non-string expressions through parentheses", get: |f, n| f.with_file(expressions::mixed_concat, n) },
     Fact { name: "caught_error_preservation", doc: "native layers: thrown constructor, nearest catch parameter status and cause diagnostics by options argument position", get: |f, n| f.with_file(errors::caught_error, n) },
     Fact { name: "curly_body", doc: "native layers: control body name, brace status and all multi/line/nest brace expectations with chain consistency", get: |f, n| f.with_file(statements::curly_body, n) },
     Fact { name: "unicode_regex_flags", doc: "native layers: known literal or global RegExp flags, including missing flags as empty, excluding spread patterns", get: |f, n| f.with_file(regex::unicode_flags, n) },
@@ -39,18 +38,14 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "sequence_context", doc: "native layers: comma position and explicit-parenthesis intent outside exempt for init/update sequences", get: |f, n| f.with_file(statements::sequence_context, n) },
     Fact { name: "variadic_apply", doc: "native layers: apply with a variable argument array and unchanged function receiver", get: |f, n| f.with_file(expressions::variadic_apply, n) },
     Fact { name: "extended_native", doc: "native layers: global builtin prototype being extended by assignment or Object property definition, or null", get: |f, n| f.with_file(expressions::extended_native, n) },
-    Fact { name: "multiline_string", doc: "native layers: string source spans JavaScript line terminators outside JSX literal contexts", get: |f, n| f.with_file(expressions::multiline_string, n) },
-    Fact { name: "arrow_body_style", doc: "native layers: arrow block, single-return and object status, redundant-block message and body offset", get: |f, n| f.with_file(functions::arrow_body, n) },
     Fact { name: "empty_function", doc: "native layers: uncommented empty function category, display name, TypeScript exceptions and body offset", get: |f, n| f.with_file(functions::empty_function, n) },
     Fact { name: "useless_call", doc: "native layers: unnecessary call/apply with an unchanged receiver, or null", get: |f, n| f.with_file(expressions::useless_call, n) },
     Fact { name: "returning_assignment", doc: "native layers: assignment contained in a return or concise arrow, parenthesis exemption and report offset", get: |f, n| f.with_file(statements::returning_assignment, n) },
     Fact { name: "missing_switch_default", doc: "native layers: final trailing comment text and presence for a nonempty switch missing default, or null", get: |f, n| f.with_file(statements::switch_default, n) },
     Fact { name: "unnecessary_label", doc: "native layers: redundant break/continue label name and report offset, or null", get: |f, n| f.with_file(statements::extra_label, n) },
     Fact { name: "await_in_loop", doc: "native layers: await evaluated repeatedly by a loop, excluding function and async iteration boundaries", get: |f, n| f.with_file(statements::await_loop, n) },
-    Fact { name: "catch_rethrows", doc: "native layers: catch starts by rethrowing its identifier parameter", get: |f, n| f.with_file(statements::rethrow, n) },
     Fact { name: "empty_statement_block", doc: "native layers: empty non-function block or switch without comments, catch status and report offset", get: |f, n| f.with_file(statements::empty_block, n) },
     Fact { name: "lone_statement_block", doc: "native layers: redundant block diagnostic, preserving lexical bindings except an only nested child", get: |f, n| f.with_file(statements::lone_block, n) },
-    Fact { name: "default_parameter_before_required", doc: "native layers: optional or defaulted parameter preceding a required parameter in the same function", get: |f, n| f.with_file(functions::default_parameter, n) },
     Fact { name: "function_style", doc: "native layers: function declaration/variable form, export policy, overload and arrow exceptions, and report offset", get: |f, n| f.with_file(functions::style, n) },
     Fact { name: "implicit_coercion", doc: "native layers: shorthand conversion kind, operator, and explicit recommendation", get: |f, n| f.with_file(coercion::coercion, n) },
     Fact { name: "redundant_boolean_cast", doc: "native layers: cast kind and minimum context policy (0 direct, 1 logical, 2 inner)", get: |f, n| f.with_file(coercion::boolean_cast, n) },
@@ -60,14 +55,12 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "parse_int_callee", doc: "native layers: the source spelling of an unshadowed parseInt or Number.parseInt callee, through parentheses", get: |f, n| f.with_file(expressions::parse_int_callee, n) },
     Fact { name: "radix_error", doc: "native layers: missing or invalid parseInt argument diagnostic, excluding spread argument uncertainty", get: |f, n| f.with_file(expressions::radix_error, n) },
     Fact { name: "thrown_error", doc: "native layers: diagnostic when a thrown expression cannot produce an error object or is global undefined", get: |f, n| f.with_file(expressions::thrown_error, n) },
-    Fact { name: "object_assign_spread", doc: "native layers: Object.assign arguments safely expressible as an object literal or spread, excluding accessors and source prototypes", get: |f, n| f.with_file(objects::assign_spread, n) },
     Fact { name: "useless_rename", doc: "native layers: the cooked name of a redundant import, export or destructuring alias, null otherwise", get: |f, n| f.with_file(expressions::useless_rename, n) },
     Fact { name: "useless_concat", doc: "native layers: operator offset when adjacent string or template operands are concatenated on one line, null otherwise", get: |f, n| f.with_file(expressions::useless_concat, n) },
     Fact { name: "accessor_pair", doc: "native layers: accessor kind, scope, display name, pairing and unique pair grouping", get: |f, n| f.with_file(accessors::pair, n) },
     Fact { name: "property_descriptor", doc: "native layers: getter/setter presence in a global Object or Reflect property descriptor", get: |f, n| f.with_file(accessors::descriptor, n) },
     Fact { name: "object_shorthand_member", doc: "native layers: object member shorthand eligibility, constructor and annotation exceptions, and arrow lexical safety", get: |f, n| f.with_file(objects::shorthand, n) },
     Fact { name: "object_shorthand_consistency", doc: "native layers: mixed shorthand forms or all-redundant long forms in an object literal", get: |f, n| f.with_file(objects::consistency, n) },
-    Fact { name: "useless_computed_key", doc: "native layers: unnecessary literal computed key, excluding prototype and constructor semantic changes", get: |f, n| f.with_file(objects::computed_key, n) },
 ];
 
 fn self_comparison(file: &NativeFile, node: u32) -> Value<'static> {

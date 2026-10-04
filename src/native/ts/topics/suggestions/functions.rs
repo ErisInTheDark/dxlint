@@ -40,27 +40,6 @@ pub fn restricted_binding(file: &NativeFile, node: u32) -> Value<'static> {
     Value::Bool(s.text(node) != "undefined" || file.cached(unsafe_undefined).0.contains(&owner))
 }
 
-pub fn unnecessary_bind(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(callee) = s.get(node, F::Callee).map(|n| s.unparen(n)).filter(|&n| matches!(s.kind(n), Some(K::Member | K::Index))) else { return Value::Null };
-    if super::super::super::statics::property_name(s, callee).as_deref() != Some("bind") { return Value::Null }
-    let args: Vec<_> = s.all(node, F::Arg).collect();
-    if args.len() != 1 || s.is(args[0], K::Spread) { return Value::Null }
-    let Some(function) = s.get(callee, F::Object).map(|n| s.unparen(n)) else { return Value::Null };
-    if !s.is(function, K::Arrow) && (!s.is(function, K::Function)
-        || file.bindings().functions.get(&function).is_some_and(|flags| flags & super::super::super::bind::USES_THIS != 0)) { return Value::Null }
-    s.get(callee, F::Property).or_else(|| s.get(callee, F::Index))
-        .map_or(Value::Null, |property| Value::Num(f64::from(s.tree.node(property).start)))
-}
-
-pub fn default_parameter(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(parent) = s.parent(node).filter(|&p| matches!(s.kind(p), Some(K::Function | K::Arrow | K::Method))) else { return Value::Bool(false) };
-    let optional = |n| s.get(n, F::Init).is_some() || s.get(n, F::Optional).is_some();
-    let rest = |n| s.get(n, F::Name).is_some_and(|name| s.is(name, K::Rest)) || s.text(n).trim_start().starts_with("...");
-    Value::Bool(optional(node) && s.all(parent, F::Param).skip_while(|&p| p != node).skip(1).any(|p| !optional(p) && !rest(p)))
-}
-
 pub fn style(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let Some(parent) = s.parent(node) else { return Value::Null };
@@ -104,27 +83,6 @@ pub fn style(file: &NativeFile, node: u32) -> Value<'static> {
         ("captures".into(), Value::Bool(captures)),
         ("annotated".into(), Value::Bool(s.get(holder, F::Type).is_some())),
         ("offset".into(), Value::Num(f64::from(s.tree.node(holder).start))),
-    ])
-}
-
-pub fn arrow_body(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(body) = s.get(node, F::Body) else { return Value::Null };
-    let block = s.is(body, K::Block);
-    let statements: Vec<_> = s.all(body, F::Body).collect();
-    let single_return = statements.len() == 1 && s.is(statements[0], K::Return);
-    let argument = single_return.then(|| s.get(statements[0], F::Arg)).flatten();
-    let object = if block { argument.is_some_and(|n| s.is(s.unparen(n), K::Object)) } else { s.is(s.unparen(body), K::Object) };
-    let message = if statements.is_empty() { "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`." }
-        else if !single_return { "Unexpected block statement surrounding arrow body." }
-        else if argument.is_some_and(|n| file.tokens(n).first() == Some(&"{")) { "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`." }
-        else { "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`." };
-    Value::record(vec![
-        ("block".into(), Value::Bool(block)),
-        ("single_return".into(), Value::Bool(single_return)),
-        ("object".into(), Value::Bool(object)),
-        ("message".into(), Value::from(message)),
-        ("offset".into(), Value::Num(f64::from(s.tree.node(s.unparen(body)).start))),
     ])
 }
 

@@ -7,14 +7,6 @@ use crate::expr::Value;
 
 struct WrittenGlobals(std::collections::HashSet<String>);
 
-pub fn redundant_conditional(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some((yes, no)) = s.get(node, F::Consequent).zip(s.get(node, F::Alternate)).map(|(a, b)| (s.unparen(a), s.unparen(b))) else { return Value::Null };
-    if s.is(yes, K::Bool) && s.is(no, K::Bool) { return Value::from("boolean") }
-    let Some(test) = s.get(node, F::Test).map(|n| s.unparen(n)) else { return Value::Null };
-    if s.is(test, K::Ident) && s.is(yes, K::Ident) && s.text(test) == s.text(yes) { Value::from("default") } else { Value::Null }
-}
-
 pub fn decimal_escapes(file: &NativeFile, node: u32) -> Value<'static> {
     let text = file.syntax.text(node);
     let bytes = text.as_bytes();
@@ -34,32 +26,6 @@ pub fn decimal_escapes(file: &NativeFile, node: u32) -> Value<'static> {
         }
     }
     Value::list(findings)
-}
-
-pub fn mixed_concat(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let addition = |n| s.is(n, K::Binary) && s.word(n, F::Op) == Some("+");
-    if !addition(node) { return Value::Bool(false) }
-    let mut outer = node;
-    while s.parent(outer).is_some_and(|p| s.is(p, K::Paren)) {
-        outer = s.parent(outer).unwrap_or(outer);
-    }
-    if s.parent(outer).is_some_and(addition) { return Value::Bool(false) }
-    let mut string = false;
-    let mut other = false;
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        let n = s.unparen(n);
-        if addition(n) {
-            stack.extend(s.get(n, F::Left));
-            stack.extend(s.get(n, F::Right));
-        } else if matches!(s.kind(n), Some(K::String | K::Template)) {
-            string = true;
-        } else {
-            other = true;
-        }
-    }
-    Value::Bool(string && other)
 }
 
 fn written_globals(file: &NativeFile) -> WrittenGlobals {
@@ -124,12 +90,6 @@ pub fn extended_native(file: &NativeFile, node: u32) -> Value<'static> {
     if !super::super::super::globals::is_builtin(name) || !name.starts_with(char::is_uppercase)
         || file.resolved(object) != Some("global") || file.global_setting(object) == Some("off") { return Value::Null }
     Value::from(name.to_owned())
-}
-
-pub fn multiline_string(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    Value::Bool(s.text(node).contains(['\r', '\n', '\u{2028}', '\u{2029}'])
-        && !s.parent(node).is_some_and(|p| matches!(s.kind(p), Some(K::JsxAttribute | K::JsxExpression | K::JsxElement))))
 }
 
 pub fn eval_usage(file: &NativeFile, node: u32) -> Value<'static> {
