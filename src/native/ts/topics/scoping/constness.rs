@@ -13,7 +13,7 @@ pub(super) fn binding(file: &NativeFile, node: u32) -> Value<'static> {
     let result = file.cached(analyze);
     let Some(candidate) = result.0.get(&node) else { return Value::Null };
     let (all, early) = result.1.get(&candidate.group).copied().unwrap_or((true, false));
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(candidate.offset).start as usize)),
         ("before".into(), Value::Bool(candidate.before)),
         ("all".into(), Value::Bool(all)),

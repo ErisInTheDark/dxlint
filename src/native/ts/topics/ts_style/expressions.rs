@@ -16,9 +16,9 @@ pub(super) fn expression_statement(file: &NativeFile, node: u32) -> Value<'stati
         })
     });
     let modes = (0..16).filter(|&mode| !disallowed(s, expression, mode)).map(|n| Value::from(n as usize)).collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("directive".into(), Value::Bool(directive)),
-        ("valid_modes".into(), Value::List(modes)),
+        ("valid_modes".into(), Value::list(modes)),
     ])
 }
 

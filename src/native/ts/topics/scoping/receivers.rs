@@ -30,7 +30,7 @@ pub(super) fn context(file: &NativeFile, node: u32) -> Value<'static> {
         }
         child = parent;
     }
-    Value::Record(vec![("valid".into(), Value::Bool(valid)), ("constructor".into(), Value::Bool(capital))])
+    Value::record(vec![("valid".into(), Value::Bool(valid)), ("constructor".into(), Value::Bool(capital))])
 }
 
 fn documented_receiver(file: &NativeFile, function: u32) -> bool {

@@ -60,7 +60,7 @@ pub fn duplicates(file: &NativeFile, node: u32) -> Value<'static> {
         for export in [false, true] {
             if declarations.0[..index].iter().any(|previous| previous.export == export && previous.module.trim() == own.module.trim()
                 && (!separate || previous.type_only == own.type_only) && mergeable(own, previous)) {
-                hits.push(Value::Record(vec![
+                hits.push(Value::record(vec![
                     ("allowSeparateTypeImports".into(), Value::Bool(separate)),
                     ("export".into(), Value::Bool(own.export)),
                     ("previous_export".into(), Value::Bool(export)),
@@ -69,7 +69,7 @@ pub fn duplicates(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(hits)
+    Value::list(hits)
 }
 
 pub fn order(file: &NativeFile, node: u32) -> Value<'static> {
@@ -81,20 +81,20 @@ pub fn order(file: &NativeFile, node: u32) -> Value<'static> {
     let mut members = Vec::new();
     for insensitive in [false, true] {
         if let Some(pair) = own.members.windows(2).find(|pair| compare(&pair[0].1, &pair[1].1, insensitive, false) == Ordering::Greater) {
-            members.push(Value::Record(vec![
+            members.push(Value::record(vec![
                 ("ignoreCase".into(), Value::Bool(insensitive)),
                 ("name".into(), Value::from(pair[1].1.clone())),
                 ("offset".into(), Value::from(s.tree.node(pair[1].0).start as usize)),
             ]));
         }
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("syntax".into(), Value::from(own.syntax)),
         ("previous_syntax".into(), previous.map_or(Value::Null, |d| Value::from(d.syntax))),
         ("separated".into(), Value::Bool(previous.is_some_and(|d| s.src[s.tree.node(d.node).end as usize..s.tree.node(node).start as usize].bytes().filter(|&b| b == b'\n').count() > 1))),
         ("sensitive".into(), Value::Bool(previous.is_some_and(|d| compare(&own.local, &d.local, false, false) == Ordering::Less))),
         ("insensitive".into(), Value::Bool(previous.is_some_and(|d| compare(&own.local, &d.local, true, false) == Ordering::Less))),
-        ("members".into(), Value::List(members)),
+        ("members".into(), Value::list(members)),
     ])
 }
 
@@ -126,14 +126,14 @@ pub fn restriction(file: &NativeFile, node: u32) -> Value<'static> {
     let all_type = s.word(declaration, F::Kind) == Some("type") || s.get(declaration, F::DefaultImport).is_none() && s.get(declaration, F::Namespace).is_none()
         && s.all(declaration, F::Specifier).next().is_some() && s.all(declaration, F::Specifier).all(|n| s.word(n, F::Kind) == Some("type"));
     let parents = source.match_indices('/').filter(|(i, _)| *i > 0).map(|(i, _)| Value::from(source[..i].to_string())).collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("source".into(), Value::from(source)),
         ("name".into(), Value::from(name)),
         ("item".into(), Value::Bool(!whole || star)),
         ("type".into(), Value::Bool(type_only)),
         ("all_type".into(), Value::Bool(all_type)),
         ("offset".into(), Value::from(offset)),
-        ("parents".into(), Value::List(parents)),
+        ("parents".into(), Value::list(parents)),
     ])
 }
 

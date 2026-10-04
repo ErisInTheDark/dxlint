@@ -32,7 +32,7 @@ impl Parameters {
 fn finding(file: &NativeFile<'_>, node: u32, mode: &str, sender: &Ty, receiver: Option<&Ty>, error: bool) -> Value<'static> {
     let ck = &file.typing().checker;
     let sender = if error { if mode == "array" { "error" } else { "error typed" }.to_string() } else if mode == "tuple" { format!("of type `{}`", ck.print(sender)) } else { format!("`{}`", ck.print(sender)) };
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
         ("mode".into(), Value::from(mode.to_string())),
         ("sender".into(), Value::from(sender)),
@@ -82,7 +82,7 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(out)
+    Value::list(out)
 }
 
 #[cfg(test)]

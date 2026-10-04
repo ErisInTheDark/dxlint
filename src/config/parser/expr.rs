@@ -64,7 +64,8 @@ impl Parser<'_> {
                 kind => {
                     return crossed
                         && (matches!(kind, Tk::AndAnd | Tk::OrOr | Tk::EqEq | Tk::Ne | Tk::Lt | Tk::Le | Tk::Gt | Tk::Ge | Tk::Tilde)
-                            || t.is_ident("is"))
+                            || t.is_ident("is")
+                            || t.is_ident("not"))
                 }
             }
             i += 1;
@@ -107,7 +108,7 @@ impl Parser<'_> {
     fn e_cmp(&mut self) -> Option<Expr> {
         let lhs = self.e_join()?;
         let next = self.op_peek();
-        if next == Some(Tk::Ident) && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("is")) {
+        if next == Some(Tk::Ident) && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("is") || t.is_ident("not")) {
             return self.is_test(lhs);
         }
         let op = match next {
@@ -134,44 +135,53 @@ impl Parser<'_> {
         Some(Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span })
     }
 
-    /// `value is name` or `value is [a, b]`, after `value`.
+    /// `value is name`, `value is (a, b)`, or the same with `not`, after
+    /// `value`. Parentheses with commas make a group in place.
     fn is_test(&mut self, lhs: Expr) -> Option<Expr> {
         let kw = self.ts.next_raw().expect("peeked");
         self.skip(false, true);
         let mut names = Vec::new();
-        if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrack) {
-            self.ts.next_raw();
-            loop {
-                self.skip(true, true);
-                match self.ts.next_raw() {
-                    Some(t) if t.kind == Tk::RBrack => break,
-                    Some(t) if t.kind == Tk::Comma => {}
-                    Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
-                    other => {
-                        let span = other.map(|t| t.span).or(self.ts.last_span);
-                        self.errors.push(ConfigError::new(span, "expected layer or group names in `is [a, b]`"));
-                        return None;
+        match self.ts.peek_raw(0).map(|t| t.kind) {
+            Some(Tk::LParen) => {
+                self.ts.next_raw();
+                loop {
+                    self.skip(true, true);
+                    match self.ts.next_raw() {
+                        Some(t) if t.kind == Tk::RParen => break,
+                        Some(t) if t.kind == Tk::Comma => {}
+                        Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
+                        other => {
+                            let span = other.map(|t| t.span).or(self.ts.last_span);
+                            self.errors.push(ConfigError::new(span, format!("expected layer or group names in `{} (a, b)`", kw.text)));
+                            return None;
+                        }
                     }
                 }
             }
-        } else {
-            match self.ts.next_raw() {
+            Some(Tk::LBrack) => {
+                let span = self.ts.peek_raw(0).map(|t| t.span);
+                self.errors.push(ConfigError::new(span, format!("several layers go in parentheses: `{} (a, b)`", kw.text)));
+                return None;
+            }
+            _ => match self.ts.next_raw() {
                 Some(t) if t.kind == Tk::Ident => names.push(Name { text: t.text.to_string(), span: t.span }),
                 other => {
                     let span = other.map(|t| t.span).or(Some(kw.span));
                     self.errors.push(
-                        ConfigError::new(span, "expected a layer or group name after `is`").note("several go in brackets: `layer is [a, b]`"),
+                        ConfigError::new(span, format!("expected a layer or group name after `{}`", kw.text))
+                            .note(format!("several go in parentheses: `layer {} (a, b)`", kw.text)),
                     );
                     return None;
                 }
-            }
+            },
         }
         if names.is_empty() {
-            self.errors.push(ConfigError::new(kw.span, "`is []` names no layers"));
+            self.errors.push(ConfigError::new(kw.span, format!("`{} ()` names no layers", kw.text)));
             return None;
         }
-        let span = lhs.span.to(names.last().expect("non-empty").span);
-        Some(Expr { kind: ExprKind::Is(Box::new(lhs), names), span })
+        let span = lhs.span.to(self.ts.last_span.unwrap_or(kw.span));
+        let test = Expr { kind: ExprKind::Is(Box::new(lhs), names), span };
+        Some(if kw.is_ident("not") { Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(test)), span } } else { test })
     }
 
     /// Values side by side are joined: `text "="`, `[a] [b]`.
@@ -192,7 +202,7 @@ impl Parser<'_> {
         self.skip(self.expr_depth > 0, false);
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
-            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is"),
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not"),
             _ => false,
         })
     }

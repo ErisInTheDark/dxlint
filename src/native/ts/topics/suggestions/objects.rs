@@ -83,7 +83,7 @@ fn member(file: &NativeFile, node: u32) -> Option<Member> {
 
 pub fn shorthand(file: &NativeFile, node: u32) -> Value<'static> {
     let Some(m) = member(file, node) else { return Value::Null };
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), m.name.map_or(Value::Null, Value::from)),
         ("concise".into(), Value::Bool(m.concise)),
         ("method".into(), Value::Bool(m.method)),
@@ -129,7 +129,7 @@ pub fn computed_key(file: &NativeFile, node: u32) -> Value<'static> {
         name.as_deref() == Some("__proto__") && s.parent(node).is_some_and(|p| s.is(p, K::Object) && file.write_site(p).is_none())
     };
     if exception { return Value::Null }
-    Value::Record(vec![("class".into(), Value::Bool(class)), ("text".into(), Value::from(s.text(key).to_string()))])
+    Value::record(vec![("class".into(), Value::Bool(class)), ("text".into(), Value::from(s.text(key).to_string()))])
 }
 
 pub fn assign_spread(file: &NativeFile, node: u32) -> Value<'static> {

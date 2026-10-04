@@ -1159,15 +1159,57 @@ fn lambdas_map_filter_and_test_lists() {
 fn facts_called_with_arguments_see_them_only_during_the_call() {
     use crate::expr::{facts, Value};
     let inner = facts::with_args(vec![Value::Num(1.0)], || {
-        let nested = facts::with_args(vec![Value::Num(2.0)], || Value::List(facts::args()));
-        Value::List(vec![nested, Value::List(facts::args())])
+        let nested = facts::with_args(vec![Value::Num(2.0)], || Value::list(facts::args()));
+        Value::list(vec![nested, Value::list(facts::args())])
     });
-    assert_eq!(inner, Value::List(vec![Value::List(vec![Value::Num(2.0)]), Value::List(vec![Value::Num(1.0)])]));
+    assert_eq!(inner, Value::list(vec![Value::list(vec![Value::Num(2.0)]), Value::list(vec![Value::Num(1.0)])]));
     assert!(facts::args().is_empty());
     // A fact reads the same whether named or called.
     let l = native_linter("in ts_identifier rule u warn \"{uses}/{uses()}\" { when uses != null }");
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "let a = 1; a;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["1/1"]);
+}
+
+#[test]
+fn tokens_are_layers_under_the_node_that_owns_them() {
+    let l = native_linter(r#"
+        in ts_comma rule c info "{parent}:{space_before.spaced}/{space_after.spaced}:{next_token}" fix space_after as " "
+        in ts_keyword rule k info "{text}<{parent}"
+    "#);
+    let text = "f(a ,b, [1,,2]);\nreturn;";
+    let diags = l.lint(Path::new("/root/a.ts"), text);
+    let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(messages, ["ts_call:true/false:ts_identifier", "ts_array:false/false:ts_comma", "ts_array:false/false:ts_number", "return<ts_return"]);
+    // A comma followed by a space already is left alone by the fix.
+    let (fixed, _) = super::apply_fixes(text, &diags);
+    assert_eq!(fixed, "f(a , b, [1, , 2]);\nreturn;");
+}
+
+#[test]
+fn own_brackets_and_variant_families() {
+    // `opener.x` / `closer.x` read the node's own brackets; a family name
+    // turns on every variant.
+    let l = native_linter(r#"
+        define {
+          in ts_block rule pad:top info "{opener.space_after.blank_lines}" { when opener.line != closer.line }
+          in ts_block rule pad:bottom info "{closer.space_before.blank_lines}" { when opener.line != closer.line }
+        }
+        rule pad
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "if (a) {\n\n  b;\n}\nif (c) { d; }").into_iter().map(|d| d.message).collect();
+    // pad:bottom, then pad:top (same span, by rule name).
+    assert_eq!(messages, ["0", "1"]);
+    // A class's first opener is its `<`: name the bracket wanted.
+    let l = native_linter(r#"in ts_class rule c info "{opener.text}/{opener.ts_open_brace.text}/{closer.ts_close_brace.line}""#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "class A<T> {\n}").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["</{/2"]);
+}
+
+#[test]
+fn builtins_read_on_a_fields_nodes() {
+    let l = native_linter("in ts_if rule i info \"{alternate.layer}@{alternate.offset}|{[] consequent.layer}\"");
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "if (a) b; else if (c) d;").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["ts_if@15|ts_expression_statement", "@|ts_expression_statement"]);
 }
 
 #[test]
@@ -1240,9 +1282,9 @@ fn is_tests_layer_names_against_layers_groups_and_specialisations() {
         group things word, paren
         in .t, paren match word
         in .t, paren match shout
-        in word rule w info "{layer is word}/{layer is [paren, shout]}/{parent is things}"
+        in word rule w info "{layer is word}/{layer is (paren, shout)}/{layer not (paren, shout)}/{parent is things}"
     "#);
-    assert_eq!(rule_messages(&l, "ab (CD)"), vec!["w: true/false/false", "w: true/true/true"]);
+    assert_eq!(rule_messages(&l, "ab (CD)"), vec!["w: true/false/true/false", "w: true/true/false/true"]);
 }
 
 #[test]

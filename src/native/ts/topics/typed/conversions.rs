@@ -49,7 +49,7 @@ pub(super) fn finding(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         }
         _ => None,
     };
-    result.map_or(Value::Null, |(primitive, violation, offset)| Value::Record(vec![
+    result.map_or(Value::Null, |(primitive, violation, offset)| Value::record(vec![
         ("type".into(), Value::from(primitive)), ("violation".into(), Value::from(violation)), ("offset".into(), Value::from(offset)),
     ]))
 }

@@ -32,7 +32,7 @@ fn literal(e: &Expr) -> Result<Value<'static>, ConfigError> {
         ExprKind::Unary(UnOp::Neg, inner) if matches!(inner.kind, ExprKind::Num(_)) => Value::Num(-literal(inner)?.num().unwrap_or(0.0)),
         ExprKind::List(items) => Value::List(items.iter().map(literal).collect::<Result<_, _>>()?),
         ExprKind::Record(entries) => {
-            Value::Record(entries.iter().map(|(k, v)| Ok((k.text.clone().into_boxed_str(), literal(v)?))).collect::<Result<_, ConfigError>>()?)
+            Value::Record(entries.iter().map(|(k, v)| Ok((k.text.clone().into(), literal(v)?))).collect::<Result<_, ConfigError>>()?)
         }
         _ => {
             return Err(ConfigError::new(e.span, "defaults are literal values")

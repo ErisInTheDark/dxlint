@@ -23,7 +23,7 @@ pub fn decimal_escapes(file: &NativeFile, node: u32) -> Value<'static> {
     while i + 1 < bytes.len() {
         if bytes[i] == b'\\' {
             if matches!(bytes[i + 1], b'8' | b'9') {
-                findings.push(Value::Record(vec![
+                findings.push(Value::record(vec![
                     ("text".into(), Value::from(text[i..i + 2].to_owned())),
                     ("offset".into(), Value::Num(f64::from(file.syntax.tree.node(node).start) + i as f64)),
                 ]));
@@ -33,7 +33,7 @@ pub fn decimal_escapes(file: &NativeFile, node: u32) -> Value<'static> {
             i += 1;
         }
     }
-    Value::List(findings)
+    Value::list(findings)
 }
 
 pub fn mixed_concat(file: &NativeFile, node: u32) -> Value<'static> {
@@ -175,7 +175,7 @@ pub fn eval_usage(file: &NativeFile, node: u32) -> Value<'static> {
         let Some(property) = s.get(node, if s.is(node, K::Index) { F::Index } else { F::Property }) else { return Value::Null };
         (false, false, s.tree.node(property).start)
     } else { return Value::Null };
-    Value::Record(vec![
+    Value::record(vec![
         ("direct".into(), Value::Bool(direct)),
         ("optional".into(), Value::Bool(optional)),
         ("offset".into(), Value::Num(f64::from(offset))),

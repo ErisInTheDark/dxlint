@@ -20,7 +20,7 @@ pub(super) fn redeclarations(file: &NativeFile, _: u32) -> Value<'static> {
                 && matches!(file.globals().setting(&name), Some("readonly" | "writable"));
             let syntax = file.source_type() == "script" && file.bindings().decl_scope.iter().any(|(&id, &scope)| scope == 0 && s.text(id) == name);
             let duplicate = !seen.insert(name.clone());
-            out.push(Value::Record(vec![
+            out.push(Value::record(vec![
                 ("name".into(), Value::from(name)),
                 ("offset".into(), Value::from(offset as usize)),
                 ("builtin".into(), Value::Bool(builtin)),
@@ -29,7 +29,7 @@ pub(super) fn redeclarations(file: &NativeFile, _: u32) -> Value<'static> {
             ]));
         }
     }
-    Value::List(out)
+    Value::list(out)
 }
 
 pub(super) fn declarations(file: &NativeFile, node: u32) -> Value<'static> {
@@ -59,7 +59,7 @@ pub(super) fn declarations(file: &NativeFile, node: u32) -> Value<'static> {
                 "function" | "class" => kind.to_string(),
                 kind => format!("'{kind}'"),
             };
-            entries.push(Value::Record(vec![
+            entries.push(Value::record(vec![
                 ("kind".into(), Value::from(kind)),
                 ("label".into(), Value::from(label)),
                 ("setting".into(), Value::from(setting)),
@@ -67,5 +67,5 @@ pub(super) fn declarations(file: &NativeFile, node: u32) -> Value<'static> {
             ]));
         }
     }
-    Value::List(entries)
+    Value::list(entries)
 }

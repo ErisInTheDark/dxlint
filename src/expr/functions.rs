@@ -83,7 +83,7 @@ fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
             let len = items.len();
             let from = resolve(a[1].num()?, len);
             let to = a.get(2).map(|v| v.num()).transpose()?.map_or(len, |t| resolve(t, len));
-            Ok(Value::List(items.get(from..to.max(from)).unwrap_or_default().to_vec()))
+            Ok(Value::List(items.get(from..to.max(from)).unwrap_or_default().into()))
         }
         other => {
             let chars: Vec<char> = text(other).chars().collect();
@@ -184,6 +184,14 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "byte_len",
+        signature: "byte_len(text)",
+        doc: "bytes in a text's UTF-8: how far it moves an `offset`",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::from(a[0].text().len())),
+    },
+    Function {
         name: "keys",
         signature: "keys(record)",
         doc: "a record's keys, in order",
@@ -191,7 +199,7 @@ pub static FUNCTIONS: &[Function] = &[
         max: 1,
         call: |a| match &a[0] {
             Value::Record(r) => Ok(Value::List(r.iter().map(|(k, _)| Value::from(k.to_string())).collect())),
-            Value::Null => Ok(Value::List(Vec::new())),
+            Value::Null => Ok(Value::list(Vec::new())),
             v => Err(format!("expected a record, got a {}", v.type_name())),
         },
     },
@@ -211,7 +219,7 @@ pub static FUNCTIONS: &[Function] = &[
         max: 1,
         call: |a| match &a[0] {
             Value::Record(r) => Ok(Value::List(r.iter().map(|(_, v)| v.clone()).collect())),
-            Value::Null => Ok(Value::List(Vec::new())),
+            Value::Null => Ok(Value::list(Vec::new())),
             v => Err(format!("expected a record, got a {}", v.type_name())),
         },
     },
@@ -326,7 +334,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "position of the first item equal to value, from 0 (-1 when absent)",
         min: 2,
         max: 2,
-        call: |a| Ok(Value::Num(a[0].items().iter().position(|i| i.loose_eq(&a[1])).map_or(-1.0, |i| i as f64))),
+        call: |a| Ok(Value::Num(a[0].item_slice().iter().position(|i| i.loose_eq(&a[1])).map_or(-1.0, |i| i as f64))),
     },
     Function {
         name: "split",
@@ -358,7 +366,7 @@ pub static FUNCTIONS: &[Function] = &[
         max: 2,
         call: |a| {
             let sep = a.get(1).map(text).unwrap_or_default();
-            Ok(Value::from(a[0].items().iter().map(text).collect::<Vec<_>>().join(&sep)))
+            Ok(Value::from(a[0].item_slice().iter().map(text).collect::<Vec<_>>().join(&sep)))
         },
     },
     Function {
@@ -370,7 +378,7 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| {
             let mut items = a[0].items();
             items.sort_by(|x, y| x.compare(y));
-            Ok(Value::List(items))
+            Ok(Value::list(items))
         },
     },
     Function {
@@ -386,7 +394,7 @@ pub static FUNCTIONS: &[Function] = &[
                     out.push(item);
                 }
             }
-            Ok(Value::List(out))
+            Ok(Value::list(out))
         },
     },
     Function {
@@ -408,7 +416,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "first item (null when empty)",
         min: 1,
         max: 1,
-        call: |a| Ok(a[0].items().into_iter().next().unwrap_or(Value::Null)),
+        call: |a| Ok(a[0].item_slice().first().cloned().unwrap_or(Value::Null)),
     },
     Function {
         name: "last",
@@ -416,7 +424,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "last item (null when empty)",
         min: 1,
         max: 1,
-        call: |a| Ok(a[0].items().into_iter().last().unwrap_or(Value::Null)),
+        call: |a| Ok(a[0].item_slice().last().cloned().unwrap_or(Value::Null)),
     },
     Function {
         name: "count",
@@ -424,7 +432,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "how many items a field matched: 0 for null, 1 for a single value",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::from(a[0].items().len())),
+        call: |a| Ok(Value::from(a[0].item_slice().len())),
     },
     Function {
         name: "slice",
@@ -499,7 +507,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "is any item truthy?",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::Bool(a[0].items().iter().any(Value::truthy))),
+        call: |a| Ok(Value::Bool(a[0].item_slice().iter().any(Value::truthy))),
     },
     Function {
         name: "regex_flags_error",
@@ -567,9 +575,9 @@ mod tests {
     #[test]
     fn list_helpers_accept_single_values() {
         assert_eq!(call("join", &["a".into(), ", ".into()]), Value::from("a"));
-        let sorted = call("sort", &[Value::List(vec!["b".into(), "a".into()])]);
+        let sorted = call("sort", &[Value::list(vec!["b".into(), "a".into()])]);
         assert_eq!(call("join", &[sorted, ",".into()]), Value::from("a,b"));
         assert_eq!(call("count", &[Value::Null]), Value::from(0usize));
-        assert_eq!(call("max", &[Value::List(vec![1.0.into(), 5.0.into()])]), Value::from(5.0));
+        assert_eq!(call("max", &[Value::list(vec![1.0.into(), 5.0.into()])]), Value::from(5.0));
     }
 }

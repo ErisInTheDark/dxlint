@@ -19,7 +19,7 @@ pub(super) fn call(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 
 pub(super) fn key(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let bare = file.syntax.unparen(node);
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), category(file, bare).map_or(Value::Null, Value::from)),
         ("text".into(), Value::from(file.syntax.text(bare).to_string())),
         ("offset".into(), Value::from(file.syntax.tree.node(bare).start as usize)),

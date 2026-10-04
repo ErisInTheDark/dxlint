@@ -51,7 +51,7 @@ pub fn pair(file: &NativeFile, node: u32) -> Value<'static> {
         ([(gi, getter)], [(si, setter)]) => {
             let (former_index, former, latter_index, latter) = if gi < si { (*gi, *getter, *si, *setter) } else { (*si, *setter, *gi, *getter) };
             if latter == node {
-                Value::Record(vec![
+                Value::record(vec![
                     ("former".into(), Value::from(display_name(file, former))),
                     ("gap".into(), Value::Bool(latter_index - former_index > 1)),
                     ("getter_first".into(), Value::Bool(gi < si)),
@@ -62,7 +62,7 @@ pub fn pair(file: &NativeFile, node: u32) -> Value<'static> {
         }
         _ => Value::Null,
     };
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind.to_string())),
         ("scope".into(), Value::from(scope)),
         ("paired".into(), Value::Bool(paired)),
@@ -98,7 +98,7 @@ pub fn descriptor(file: &NativeFile, node: u32) -> Value<'static> {
         .filter(|&key| s.is(key, K::Ident))
         .map(|key| s.text(key))
         .collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("get".into(), Value::Bool(names.contains(&"get"))),
         ("set".into(), Value::Bool(names.contains(&"set"))),
     ])

@@ -50,7 +50,7 @@ fn selectors(s: &Syntax, parent: u32) -> Value<'static> {
             out.push(Value::from(format!("{kind}[{name}.type={child}]")));
         }
     }
-    Value::List(out)
+    Value::list(out)
 }
 
 fn unwrap(s: &Syntax, mut node: u32) -> u32 {
@@ -297,7 +297,7 @@ pub(super) fn excess(file: &NativeFile, node: u32) -> Value<'static> {
     while let Some(next) = s.parent(return_owner).filter(|_| !matches!(s.kind(return_owner), Some(K::Return | K::Arrow | K::Function | K::Program))) {
         return_owner = next;
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(s.tree.node(node).start as usize)),
         ("functions".into(), Value::Bool(matches!(s.kind(inner), Some(K::Function | K::Arrow)) || assertion(s, inner))),
         ("sequence".into(), Value::Bool(s.is(inner, K::Sequence))),

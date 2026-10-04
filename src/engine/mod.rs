@@ -21,7 +21,7 @@ pub use diagnostic::{Diagnostic, Edit, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
 pub use profile::Profile;
 
-use crate::config::ast::{Report, Severity};
+use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{SourceMap, Span};
 use crate::expr::{Attr, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
@@ -65,8 +65,11 @@ pub struct Rule {
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
-    /// What the node should look like (`fix expr`).
+    /// What the node (or the space next to it) should look like (`fix as expr`).
     fix: Option<CExpr>,
+    fix_target: FixTarget,
+    /// Reads token nodes (`opener.x`): native trees need them.
+    reads_tokens: bool,
     report: Report,
     /// `report at <offset>`
     report_at: Option<CExpr>,
@@ -195,11 +198,18 @@ impl Linter {
         // Overlays only matter when an active rule can see inside them, and
         // each tree only when an active rule targets its layers.
         let mut targets = vec![false; self.grammar.matchers.len()];
-        let (mut wants_layers, mut wants_native) = (false, false);
+        let (mut wants_layers, mut wants_native, mut wants_tokens) = (false, false, false);
+        let is_token = |m: u32| {
+            self.grammar.native_kind(m).and_then(|k| crate::native::ts::kinds::ALL_KINDS.get(k.kind as usize)).is_some_and(|k| k.is_token())
+        };
         for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
+            wants_tokens |= f.reads_tokens;
             for t in &f.targets {
                 match *t {
-                    Target::Matcher(m) | Target::Field(m, _) if self.grammar.native_kind(m).is_some() => wants_native = true,
+                    Target::Matcher(m) | Target::Field(m, _) if self.grammar.native_kind(m).is_some() => {
+                        wants_native = true;
+                        wants_tokens |= is_token(m);
+                    }
                     Target::Matcher(m) | Target::Field(m, _) => {
                         targets[m as usize] = true;
                         wants_layers = true;
@@ -234,7 +244,11 @@ impl Linter {
         if wants_native {
             if let (Some(front), Some(jsx)) = (self.grammar.natives.first(), crate::native::ts::reads(path)) {
                 let parse_started = std::time::Instant::now();
-                let parsed = crate::native::ts::parse(text, jsx);
+                let mut parsed = crate::native::ts::parse(text, jsx);
+                // Token layers cost a node per token: only when a rule targets one.
+                if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
+                    crate::native::ts::tokens::attach(text, parsed);
+                }
                 let rules_started = std::time::Instant::now();
                 if let Some(p) = &self.profile {
                     Profile::add_time(&p.parse_nanos, rules_started - parse_started);
@@ -358,10 +372,11 @@ impl Linter {
             Some(expr) => match ctx.eval(expr) {
                 Ok(v) => {
                     let want = v.text();
-                    if want == ctx.source[start..end] {
+                    let (from, to) = fix_region(ctx.source, start, end, f.fix_target);
+                    if want == ctx.source[from..to] {
                         return None;
                     }
-                    Some(fix::minimal_edit(ctx.source, start, end, &want))
+                    Some(fix::minimal_edit(ctx.source, from, to, &want))
                 }
                 Err(e) => return Some(failed(e)),
             },
@@ -409,6 +424,22 @@ struct Run<'a> {
 
 fn engine_warning(at: usize, message: String) -> Diagnostic {
     Diagnostic { rule: ENGINE_RULE.into(), severity: Severity::Warn, message, start: at, end: at, fix: None }
+}
+
+/// The text a fix rewrites: the node, or the whitespace just before or
+/// after it (stopping at a comment or code).
+fn fix_region(source: &str, start: usize, end: usize, target: FixTarget) -> (usize, usize) {
+    match target {
+        FixTarget::Node => (start, end),
+        FixTarget::SpaceBefore => {
+            let ws = source[..start].len() - source[..start].trim_end().len();
+            (start - ws, start)
+        }
+        FixTarget::SpaceAfter => {
+            let ws = source[end..].len() - source[end..].trim_start().len();
+            (end, end + ws)
+        }
+    }
 }
 
 /// Remembers a fix that only rewrites a line's leading whitespace, as that

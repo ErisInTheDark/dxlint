@@ -55,15 +55,15 @@ fn ternary_linebreaks(file: &NativeFile, node: u32) -> Value<'static> {
         outer = parent;
     }
     let jsx = s.parent(outer).is_some_and(|parent| s.is(parent, Kind::JsxExpression));
-    Value::List(vec![
-        Value::Record(vec![
+    Value::list(vec![
+        Value::record(vec![
             ("offset".into(), Value::from(test.start as usize)),
             ("broken".into(), Value::Bool(broken(test.end, consequent.start))),
             ("multiline".into(), Value::Bool(multiline)),
             ("jsx".into(), Value::Bool(jsx)),
             ("operands".into(), Value::from("test and consequent")),
         ]),
-        Value::Record(vec![
+        Value::record(vec![
             ("offset".into(), Value::from(consequent.start as usize)),
             ("broken".into(), Value::Bool(broken(consequent.end, alternate.start))),
             ("multiline".into(), Value::Bool(multiline)),
@@ -111,7 +111,7 @@ fn bom(file: &NativeFile, node: u32) -> Value<'static> {
 }
 
 fn entry(kind: &'static str, offset: usize, indentation: bool) -> Value<'static> {
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("offset".into(), Value::from(offset)),
         ("indentation".into(), Value::Bool(indentation)),
@@ -123,7 +123,7 @@ fn line_layout_findings(file: &NativeFile, node: u32) -> Value<'static> {
         return Value::Null;
     }
     let findings = file.cached(scan_lines);
-    Value::List(findings.as_ref().clone())
+    Value::list(findings.as_ref().clone())
 }
 
 fn scan_lines(file: &NativeFile) -> Vec<Value<'static>> {

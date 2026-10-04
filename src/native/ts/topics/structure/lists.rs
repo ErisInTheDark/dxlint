@@ -42,7 +42,7 @@ fn pair(file: &NativeFile, before: &Edge, after: &Edge) -> Value<'static> {
         at = comment.end as usize;
     }
     spaced |= file.syntax.src[at..after.start].chars().any(char::is_whitespace);
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(before.end)),
         ("prev".into(), Value::from(before.text.clone())),
         ("next".into(), Value::from(after.text.clone())),
@@ -150,14 +150,15 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
         ];
         for (mode, pairs) in [("spacing", spacing), ("wrapping", wrapping), ("empty_wrapping", empty_wrapping)] {
             for pair in pairs {
-                let Value::Record(mut fields) = pair else { continue };
+                let Value::Record(fields) = pair else { continue };
+                let mut fields = fields.to_vec();
                 fields.extend(common.clone());
                 fields.push(("mode".into(), Value::from(mode)));
-                out.push(Value::Record(fields));
+                out.push(Value::record(fields));
             }
         }
     }
-    Value::List(out)
+    Value::list(out)
 }
 
 #[cfg(test)]

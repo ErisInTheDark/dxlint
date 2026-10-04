@@ -49,7 +49,7 @@ pub(super) fn layout(file: &NativeFile, node: u32) -> Value<'static> {
         let src = file.syntax.src;
         CommentLayout(file.comments().iter().filter(|comment| !comment.block).map(|comment| {
             let body = comment.body(src);
-            Value::Record(vec![
+            Value::record(vec![
                 ("offset".into(), Value::from(comment.start as usize)),
                 ("body".into(), Value::from(body.to_owned())),
                 ("beside".into(), Value::Bool(beside(src, comment))),
@@ -57,7 +57,7 @@ pub(super) fn layout(file: &NativeFile, node: u32) -> Value<'static> {
             ])
         }).collect())
     });
-    Value::List(layout.0.clone())
+    Value::list(layout.0.clone())
 }
 
 struct CommentStyles(Vec<Value<'static>>);
@@ -68,7 +68,7 @@ pub(super) fn gaps(file: &NativeFile, node: u32) -> Value<'static> {
     if !file.syntax.is(node, Kind::Program) {
         return Value::Null;
     }
-    Value::List(file.cached(scan_gaps).0.clone())
+    Value::list(file.cached(scan_gaps).0.clone())
 }
 
 fn scan_gaps(file: &NativeFile) -> CommentGaps {
@@ -142,7 +142,7 @@ fn scan_gaps(file: &NativeFile) -> CommentGaps {
                 parent_end = Some(line(node.end as usize));
             } else { targets.clear() }
         }
-        let boundaries = |at_boundary: bool| Value::List(if at_boundary {
+        let boundaries = |at_boundary: bool| Value::list(if at_boundary {
             targets.iter().map(|target| Value::from(*target)).collect()
         } else { Vec::new() });
         [
@@ -150,7 +150,7 @@ fn scan_gaps(file: &NativeFile) -> CommentGaps {
                 && (index == 0 || line(comments[index - 1].end as usize) != first), parent_start.is_some_and(|row| row + 1 == first)),
             ("after", !inline && last + 1 < starts.len() && !blocked(last + 1)
                 && comments.get(index + 1).is_none_or(|next| line(next.start as usize) != last), parent_end.is_some_and(|row| row == last + 1)),
-        ].into_iter().filter(|&(_, missing, _)| missing).map(|(boundary, _, at_boundary)| Value::Record(vec![
+        ].into_iter().filter(|&(_, missing, _)| missing).map(|(boundary, _, at_boundary)| Value::record(vec![
             ("offset".into(), Value::from(comment.start as usize)),
             ("body".into(), Value::from(comment.body(src).to_owned())),
             ("block".into(), Value::Bool(comment.block)),
@@ -163,7 +163,7 @@ fn scan_gaps(file: &NativeFile) -> CommentGaps {
 }
 
 fn finding(mode: &'static str, offset: usize, message: &'static str, jsdoc: bool, exclamation: bool) -> Value<'static> {
-    Value::Record(vec![
+    Value::record(vec![
         ("mode".into(), Value::from(mode)),
         ("offset".into(), Value::from(offset)),
         ("message".into(), Value::from(message)),
@@ -176,7 +176,7 @@ pub(super) fn styles(file: &NativeFile, node: u32) -> Value<'static> {
     if !file.syntax.is(node, Kind::Program) {
         return Value::Null;
     }
-    Value::List(file.cached(scan_styles).0.clone())
+    Value::list(file.cached(scan_styles).0.clone())
 }
 
 fn scan_styles(file: &NativeFile) -> CommentStyles {

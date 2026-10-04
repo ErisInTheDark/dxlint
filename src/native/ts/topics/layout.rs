@@ -1,14 +1,12 @@
 //! @stylistic spacing, punctuation and line breaks: lexical neighbours.
 
-use std::collections::HashSet;
-
 use crate::expr::facts::Fact;
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::lexer::{Tok, Token};
 
-use tokens::{gap_has_space, lex, lex_comments};
+use crate::native::ts::tokens::{gap_has_space, lex, lex_comments};
 
 mod punctuation;
 mod operators;
@@ -17,7 +15,6 @@ mod lists;
 mod lines;
 mod annotations;
 mod quotes;
-pub(crate) mod tokens;
 
 pub const FACTS: &[Fact] = &[
     Fact {
@@ -79,11 +76,6 @@ pub const FACTS: &[Fact] = &[
         name: "call_spacing",
         doc: "native calls/new/import(): the gap before invocation parentheses {start,end,gap,spaced,line_break,optional,prefix_spaced,suffix_spaced}; null when no argument list",
         get: |f, n| f.with_file(call_spacing, n),
-    },
-    Fact {
-        name: "comma_spacing_sites",
-        doc: "native program: eligible comma sides {offset,side,start,end,spaced,line_comment}; start/end bound the whitespace-only gap; excludes array holes and trailing type-parameter commas",
-        get: |f, n| f.with_file(comma_spacing_sites, n),
     },
     Fact {
         name: "switch_colon_sites",
@@ -151,16 +143,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(delimiters::block_prefix_spacing, n),
     },
     Fact {
-        name: "infix_spacing_sites",
-        doc: "native infix/conditional/initializer/type operators: {operator,offset,spaced,types,int32_hint}; space on both sides outside comments, int32_hint preserves terminal |0",
-        get: |f, n| f.with_file(operators::infix_spacing_sites, n),
-    },
-    Fact {
-        name: "block_padding_sites",
-        doc: "native block/static/switch/class: nonempty boundary records {kind,side,offset,padded,single_line}; adjacent same-line comments belong to the brace boundary",
-        get: |f, n| f.with_file(lines::block_padding_sites, n),
-    },
-    Fact {
         name: "class_member_gaps",
         doc: "native class: member pairs {prev,next,offset,padded,single_line,overloads_skipped}; both ordinary and overload-filtered pairs, comments attach to neighbouring members across consecutive lines",
         get: |f, n| f.with_file(lines::class_member_gaps, n),
@@ -210,7 +192,7 @@ fn multiple_space_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             raw.to_owned()
         };
         let eol_comment = comment && lexed.0.get(index + 2).is_none_or(|next| syntax.src[right.end as usize..next.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']));
-        sites.push(Value::Record(vec![
+        sites.push(Value::record(vec![
             ("start".into(), Value::from(left.end as usize)),
             ("end".into(), Value::from(right.start as usize)),
             ("gap".into(), Value::from(gap.to_owned())),
@@ -219,7 +201,7 @@ fn multiple_space_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             ("eol_comment".into(), Value::Bool(eol_comment)),
         ]));
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 fn spacing_owner(kind: K) -> &'static str {
@@ -257,17 +239,17 @@ fn spacing_owner(kind: K) -> &'static str {
 
 fn comment_contents(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     if !file.syntax.is(node, K::Program) {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let lexed = file.cached(lex_comments);
-    Value::List(lexed.0.iter().filter_map(|token| {
+    Value::list(lexed.0.iter().filter_map(|token| {
         let block = match token.tok {
             Tok::P("/*") => true,
             Tok::P("//") => false,
             _ => return None,
         };
         let end = token.end as usize - if block { 2 } else { 0 };
-        Some(["begin", "end"].map(|side| Value::Record(vec![
+        Some(["begin", "end"].map(|side| Value::record(vec![
             ("kind".into(), Value::from(if block { "block" } else { "line" })),
             ("body".into(), Value::from(file.syntax.src[token.start as usize + 2..end].to_owned())),
             ("offset".into(), Value::from(token.start as usize)),
@@ -281,7 +263,7 @@ fn edge(src: &str, token: Option<&Token>, start: usize, end: usize) -> Value<'st
     let token_end = token.end as usize;
     let gap = &src[start..end];
     let line_break = gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']);
-    Value::Record(vec![
+    Value::record(vec![
         ("text".into(), Value::from(src[token_start..token_end].to_owned())),
         ("start".into(), Value::from(token_start)),
         ("end".into(), Value::from(token_end)),
@@ -316,7 +298,7 @@ fn call_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let gap = &syntax.src[start..end];
     let prefix = if optional { &syntax.src[start..optional_token.start as usize] } else { gap };
     let suffix = if optional { &syntax.src[optional_token.end as usize..end] } else { gap };
-    Value::Record(vec![
+    Value::record(vec![
         ("start".into(), Value::from(start)),
         ("end".into(), Value::from(end)),
         ("gap".into(), Value::from(gap.to_owned())),
@@ -328,84 +310,6 @@ fn call_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     ])
 }
 
-struct CommaSites(Vec<CommaSite>);
-
-struct CommaSite {
-    offset: usize,
-    side: &'static str,
-    start: usize,
-    end: usize,
-    spaced: bool,
-    line_comment: bool,
-}
-
-fn comma_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    if !file.syntax.is(node, K::Program) {
-        return Value::Null;
-    }
-    let sites = file.cached(comma_sites);
-    Value::List(sites.0.iter().map(|site| Value::Record(vec![
-        ("offset".into(), Value::from(site.offset)),
-        ("side".into(), Value::from(site.side)),
-        ("start".into(), Value::from(site.start)),
-        ("end".into(), Value::from(site.end)),
-        ("spaced".into(), Value::Bool(site.spaced)),
-        ("line_comment".into(), Value::Bool(site.line_comment)),
-    ])).collect())
-}
-
-fn comma_sites(file: &NativeFile<'_>) -> CommaSites {
-    let syntax = &file.syntax;
-    let lexed = file.cached(lex);
-    let mut ignored_before = HashSet::new();
-    let mut ignored_after = HashSet::new();
-    for node in 0..syntax.tree.nodes.len() as u32 {
-        if matches!(syntax.kind(node), Some(K::Array | K::ArrayPattern)) {
-            let elements: Vec<_> = syntax.all(node, F::Element).collect();
-            for (i, &element) in elements.iter().enumerate() {
-                if syntax.is(element, K::Hole) {
-                    let at = syntax.tree.node(element).start;
-                    ignored_before.insert(at);
-                    if elements.get(i + 1).is_none_or(|&next| syntax.is(next, K::Hole)) {
-                        ignored_after.insert(at);
-                    }
-                }
-            }
-        }
-        if let Some(last) = syntax.all(node, F::TypeParam).last() {
-            let end = syntax.tree.node(last).end;
-            if let Some(token) = lexed.0.get(lexed.0.partition_point(|token| token.start < end)) {
-                if token.tok == Tok::P(",") {
-                    ignored_before.insert(token.start);
-                    ignored_after.insert(token.start);
-                }
-            }
-        }
-    }
-    let commented = file.cached(lex_comments);
-    let tokens = &commented.0;
-    let mut sites = Vec::new();
-    for (i, comma) in tokens.iter().enumerate().filter(|(_, token)| token.tok == Tok::P(",")) {
-        if !ignored_before.contains(&comma.start) {
-            if let Some(previous) = i.checked_sub(1).and_then(|i| tokens.get(i)).filter(|token| token.tok != Tok::P(",")) {
-                let gap = &syntax.src[previous.end as usize..comma.start as usize];
-                if !gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
-                    sites.push(CommaSite { offset: comma.start as usize, side: "before", start: previous.end as usize, end: comma.start as usize, spaced: gap_has_space(gap), line_comment: false });
-                }
-            }
-        }
-        if !ignored_after.contains(&comma.start) {
-            if let Some(next) = tokens.get(i + 1).filter(|token| !matches!(token.tok, Tok::P("," | ")" | "]" | "}"))) {
-                let gap = &syntax.src[comma.end as usize..next.start as usize];
-                if !gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
-                    sites.push(CommaSite { offset: comma.start as usize, side: "after", start: comma.end as usize, end: next.start as usize, spaced: gap_has_space(gap), line_comment: next.tok == Tok::P("//") });
-                }
-            }
-        }
-    }
-    CommaSites(sites)
-}
-
 fn token_neighbours(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let src = file.syntax.src;
     let syntax_node = file.syntax.tree.node(node);
@@ -414,7 +318,7 @@ fn token_neighbours(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let lexed = file.cached(lex);
     let before = lexed.0.partition_point(|token| token.end as usize <= start).checked_sub(1).and_then(|i| lexed.0.get(i));
     let after = lexed.0.get(lexed.0.partition_point(|token| (token.start as usize) < end));
-    Value::Record(vec![
+    Value::record(vec![
         ("before".into(), edge(src, before, before.map_or(start, |token| token.end as usize), start)),
         ("after".into(), edge(src, after, end, after.map_or(end, |token| token.start as usize))),
         ("parent_start".into(), file.syntax.parent(node).map_or(Value::Null, |parent| Value::from(file.syntax.tree.node(parent).start as usize))),
@@ -426,17 +330,6 @@ mod tests {
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
-    use super::gap_has_space;
-
-    #[test]
-    fn comment_contents_are_not_spacing_between_tokens() {
-        assert!(!gap_has_space("/* \n */"));
-        assert!(!gap_has_space("// text"));
-        assert!(gap_has_space("/* text */ "));
-        assert!(gap_has_space("// text\n"));
-        assert!(gap_has_space("\u{00a0}/* text */"));
-    }
-
     #[test]
     fn neighbours_preserve_parser_template_spans_and_comment_gaps() {
         let lint = native_linter(r#"

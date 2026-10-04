@@ -34,7 +34,7 @@ pub fn owner(file: &NativeFile, node: u32) -> Value<'static> {
     let field = s.field(top);
     let paren = s.parent(node).filter(|&p| s.is(p, K::Paren)).map(|p| s.tree.node(p));
     let mut contexts = Vec::new();
-    let mut add = |kind: &'static str, fallback: bool| contexts.push(Value::Record(vec![
+    let mut add = |kind: &'static str, fallback: bool| contexts.push(Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("fallback".into(), Value::Bool(fallback)),
     ]));
@@ -82,14 +82,14 @@ pub fn owner(file: &NativeFile, node: u32) -> Value<'static> {
         previous.is_some_and(|token| line(&lines, token.end as usize) == line(&lines, start))
             || next.tok != Tok::Eof && next.tok != Tok::P(",") && line(&lines, next.end as usize) == line(&lines, end)
     });
-    Value::Record(vec![
+    Value::record(vec![
         ("single".into(), Value::Bool(line(&lines, n.start as usize) == line(&lines, n.end as usize))),
         ("parenthesized".into(), Value::Bool(paren.is_some())),
         ("parens_same_line".into(), Value::Bool(paren.is_some_and(|p| {
             line(&lines, p.start as usize) == line(&lines, n.start as usize)
                 || line(&lines, p.end as usize - 1) == line(&lines, n.end as usize)
         }))),
-        ("contexts".into(), Value::List(contexts)),
+        ("contexts".into(), Value::list(contexts)),
         ("call_break".into(), Value::Bool(call_break)),
     ])
 }

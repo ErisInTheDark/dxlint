@@ -63,11 +63,11 @@ pub(super) fn mixed(file: &NativeFile, node: u32) -> Value<'static> {
         return Value::Null;
     }
     let (left, right) = if matches!(s.field(node), Some(F::Left | F::Test)) { (child_op, parent_op) } else { (parent_op, child_op) };
-    Value::Record(vec![
+    Value::record(vec![
         ("left".into(), Value::from(left.0.to_owned())),
         ("right".into(), Value::from(right.0.to_owned())),
         ("same_precedence".into(), Value::Bool(precedence(s, node) == precedence(s, parent))),
-        ("offsets".into(), Value::List(vec![Value::from(left.1), Value::from(right.1)])),
+        ("offsets".into(), Value::list(vec![Value::from(left.1), Value::from(right.1)])),
     ])
 }
 
@@ -90,7 +90,7 @@ fn linebreak_site(file: &NativeFile, from: usize, right: u32, wanted: &str, exac
     let after = tokens.iter().find(|&&(at, _)| at >= stop).map_or(end, |&(at, _)| at);
     let broken = |from: usize, to: usize| s.src[from..to].contains(['\n', '\r', '\u{2028}', '\u{2029}']);
     let leading_union = alias && matches!(Lexer::new(&s.src[after..]).next_token().tok, Tok::P("|" | "&"));
-    Some(Value::Record(vec![
+    Some(Value::record(vec![
         ("offset".into(), Value::from(start)),
         ("operator".into(), Value::from(wanted.to_owned())),
         ("before".into(), Value::Bool(broken(before, start))),
@@ -136,5 +136,5 @@ pub(super) fn linebreaks(file: &NativeFile, node: u32) -> Value<'static> {
         }
         _ => {}
     }
-    Value::List(out)
+    Value::list(out)
 }

@@ -17,7 +17,7 @@ pub fn variables(file: &NativeFile, node: u32) -> Value<'static> {
         let mut greatest = "";
         for (i, &(n, name)) in names.iter().enumerate() {
             if i > 0 && compare(name, greatest, insensitive, false) == Ordering::Less {
-                results.push(Value::Record(vec![
+                results.push(Value::record(vec![
                     ("ignoreCase".into(), Value::Bool(insensitive)),
                     ("offset".into(), Value::from(s.tree.node(n).start as usize)),
                 ]));
@@ -26,7 +26,7 @@ pub fn variables(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(results)
+    Value::list(results)
 }
 
 pub fn keys(file: &NativeFile, node: u32) -> Value<'static> {
@@ -68,7 +68,7 @@ pub fn keys(file: &NativeFile, node: u32) -> Value<'static> {
                     for natural in [false, true] {
                         let order = compare(&prev, &name, insensitive, natural);
                         if order == Ordering::Equal { continue; }
-                        results.push(Value::Record(vec![
+                        results.push(Value::record(vec![
                             ("ignoreComputedKeys".into(), Value::Bool(ignore_computed)),
                             ("allowLineSeparatedGroups".into(), Value::Bool(line_groups)),
                             ("caseSensitive".into(), Value::Bool(!insensitive)),
@@ -84,5 +84,5 @@ pub fn keys(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(results)
+    Value::list(results)
 }

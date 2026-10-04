@@ -112,7 +112,7 @@ pub fn logical_assignment(file: &NativeFile, node: u32) -> Value<'static> {
         }
     })();
     let Some((kind, op)) = found else { return Value::Null };
-    Value::Record(vec![("kind".into(), Value::from(kind)), ("operator".into(), Value::from(format!("{op}=")))])
+    Value::record(vec![("kind".into(), Value::from(kind)), ("operator".into(), Value::from(format!("{op}=")))])
 }
 
 fn literal(file: &NativeFile, node: u32) -> bool {
@@ -162,7 +162,7 @@ pub fn comparison_orientation(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let Some((left, right)) = s.get(node, F::Left).zip(s.get(node, F::Right)) else { return Value::Null };
     let Some(op) = s.word(node, F::Op).filter(|op| matches!(*op, "==" | "===" | "!=" | "!==" | "<" | ">" | "<=" | ">=")) else { return Value::Null };
-    Value::Record(vec![
+    Value::record(vec![
         ("left".into(), Value::Bool(literal(file, left))),
         ("right".into(), Value::Bool(literal(file, right))),
         ("equality".into(), Value::Bool(matches!(op, "==" | "==="))),

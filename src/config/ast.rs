@@ -245,6 +245,8 @@ pub struct RuleDef {
     /// `fix as expr`: what the node should look like. Different text =>
     /// diagnostic + fix.
     pub fix: Option<Expr>,
+    /// What `fix` rewrites: the node, or the whitespace next to it.
+    pub fix_target: FixTarget,
     /// `let name expr` clauses: values computed once per node, usable in
     /// the rule's other clauses (and later `let`s).
     pub locals: Vec<(Name, Expr)>,
@@ -294,6 +296,7 @@ impl RuleDef {
             ignore: Vec::new(),
             when: Vec::new(),
             fix: None,
+            fix_target: FixTarget::Node,
             locals: Vec::new(),
             report: None,
             report_at: None,
@@ -311,6 +314,17 @@ pub struct ForwardDef {
     pub attrs: Vec<Name>,
     pub field: Name,
     pub library: bool,
+}
+
+/// `fix as`, `fix space_before as`, `fix space_after as`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FixTarget {
+    #[default]
+    Node,
+    /// The whitespace right before the node (up to a comment or token).
+    SpaceBefore,
+    /// The whitespace right after the node.
+    SpaceAfter,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -393,7 +407,7 @@ pub enum ExprKind {
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value ~ pattern`: does the whole value match?
     Test(Box<Expr>, Box<Pat>),
-    /// `layer is a`, `parent is [a, b]`: is the named layer one of these
+    /// `layer is a`, `parent is (a, b)`: is the named layer one of these
     /// (or a specialisation of one, or in one of these groups)?
     Is(Box<Expr>, Vec<Name>),
 }

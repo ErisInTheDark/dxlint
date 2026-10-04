@@ -38,13 +38,13 @@ pub(super) fn annotation_spacing(file: &NativeFile<'_>, node: u32) -> Value<'sta
             _ => {}
         }
     }
-    let gap = |start: u32, end: u32, offset: u32| Value::Record(vec![
+    let gap = |start: u32, end: u32, offset: u32| Value::record(vec![
         ("spaced".into(), Value::Bool(gap_has_space(&syntax.src[start as usize..end as usize]))),
         ("offset".into(), Value::from(offset as usize)),
     ]);
     let colon_token = lexed.0[colon];
     let optional_token = lexed.0[optional_start];
-    Value::Record(vec![
+    Value::record(vec![
         ("category".into(), Value::from(category)),
         ("optional".into(), Value::Bool(optional)),
         ("label".into(), Value::from(label)),

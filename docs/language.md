@@ -349,7 +349,7 @@ and can read the `let`s above it:
 
 ```zlint
 in ts_statement rule padding-line-between-statements {
-  when index > 0 && parent is [ts_block, ts_program]
+  when index > 0 && parent is (ts_block, ts_program)
   let wanted is_conditional || previous.wants_blank_after == true
   when wanted && !re_test(default(gap_before, ""), /\n[ \t]*\r?\n/)
   warn "Expected blank line before this statement."
@@ -378,13 +378,14 @@ so nested rules compose.
 | `map(xs, x => ...)` | a lambda, for `map`, `filter`, `find`, `find_last`, `all` and `any` |
 | `reduce(xs, init, (state, x) => ...)` | folds a list in order: each step sees the state the previous one gave |
 | `matcher` / `matcher.field` | the closest enclosing node of `matcher`, or its field |
+| `field.layer`, `field.offset`, `field.attr`, `field.fact` | a builtin, attribute or fact read on the node in one of this node's fields (a list for several) |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
 | `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
-| `value is layer`, `value is [a, b]` | does the layer named by `value` (`layer`, `parent`, `previous.layer`...) count as one of these: itself, a specialisation, or a group member |
+| `value is layer`, `value is (a, b)`, `value not (a, b)` | does the layer named by `value` (`layer`, `parent`, `previous.layer`...) count as one of these: itself, a specialisation, or a group member (`not`: none of them) |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
 | `if c then a else b` | conditional |
 
@@ -405,14 +406,15 @@ or inside brackets:
 
 ```zlint
 let wants_blank_after is_conditional
-  || layer is [ts_break, ts_continue, ts_throw]
+  || layer is (ts_break, ts_continue, ts_throw)
   || spans_lines && declares != null
 ```
 
 **`is`** compares layer identity, not text: `layer is ts_loop` holds for every
 member of the `ts_loop` group, and `parent is braces` for any specialisation
-of `braces`. A list after `is` needs brackets, because `,` separates function
-arguments. Unknown names are config errors.
+of `braces`. Several names go in parentheses, a group in place:
+`parent is (ts_block, ts_program)`. `not` is the inverse: `next_token not
+(ts_closer, ts_comma)`. Unknown names are config errors.
 
 **Multi-line strings** start with `"""` at the end of a line and end with
 `"""` on a line of its own. That closing line's indentation is removed from
@@ -584,6 +586,32 @@ in ts_if.test, ts_while.test rule assign-in-condition warn "assignment in a cond
 Files are only parsed this way when an active rule targets a `ts_*` layer,
 and a file the parser cannot read gets one warning instead of rules. Native
 layers have no pattern children (`in ts_call match x ...` is an error).
+
+**Tokens.** Punctuation and keywords that no child node covers are layers
+too, under the node that owns them (field `token`): `ts_comma`,
+`ts_semicolon`, `ts_colon`, `ts_dot`, `ts_question`, `ts_ellipsis`,
+`ts_equals`, the brackets `ts_open_paren` ... `ts_close_angle` (groups
+`opener` and `closer`), `ts_keyword` and `ts_punctuator`; group `ts_token`
+has them all. `opener.x` and `closer.x` read a node's own first opening and
+last closing bracket; `opener.ts_open_brace.x` only one of that layer (a
+class's first opener is the `<` of `class A<T>`). Every native node knows `space_before` and
+`space_after` (the gap to the neighbouring token) and the layers of
+`previous_token` and `next_token`; `fix space_after as " "` rewrites just
+that whitespace. Spacing rules are one decision per token:
+
+```zlint
+in ts_comma rule comma-spacing:after warn "A space is required after ','." {
+  when next_token not (closer, ts_comma) && !space_after.line_break && !space_after.spaced
+  fix space_after as " "
+}
+in ts_block rule padded-blocks:top warn "Block must not be padded by blank lines." {
+  when opener.space_after.blank_lines > 0
+}
+```
+
+Files get token nodes only when an active rule needs them. A rule made of
+variants only (`comma-spacing:before`, `comma-spacing:after`) is turned on
+and configured by its family name: `rule comma-spacing`.
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what

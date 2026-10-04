@@ -6,7 +6,7 @@ use crate::native::ts::{facts::NativeFile, kinds::{Field, Kind}};
 struct LineLengths(Vec<Value<'static>>);
 
 fn segments(text: &str) -> Value<'static> {
-    Value::List(text.split('\t').map(|part| Value::from(part.encode_utf16().count())).collect())
+    Value::list(text.split('\t').map(|part| Value::from(part.encode_utf16().count())).collect())
 }
 
 fn unicode_extra(text: &str) -> usize {
@@ -17,7 +17,7 @@ pub(super) fn lengths(file: &NativeFile, node: u32) -> Value<'static> {
     if !file.syntax.is(node, Kind::Program) {
         return Value::Null;
     }
-    Value::List(file.cached(scan).0.clone())
+    Value::list(file.cached(scan).0.clone())
 }
 
 fn scan(file: &NativeFile) -> LineLengths {
@@ -70,7 +70,7 @@ fn scan(file: &NativeFile) -> LineLengths {
         }
         let stripped = &s.src[start..stripped_end];
         let has = |kind| literals.iter().any(|&(from, to, k)| k == kind && from <= end && to >= start);
-        out.push(Value::Record(vec![
+        out.push(Value::record(vec![
             ("offset".into(), Value::from(start)),
             ("text".into(), Value::from(text.to_owned())),
             ("stripped".into(), Value::from(stripped.to_owned())),

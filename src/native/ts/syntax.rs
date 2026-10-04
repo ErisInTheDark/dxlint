@@ -40,9 +40,15 @@ impl<'t> Syntax<'t> {
         &self.src[n.start as usize..n.end as usize]
     }
 
-    /// Children with their fields, in document order.
+    /// Children with their fields, in document order; token children (see
+    /// `tokens::attach`) are not syntax and are left out.
     pub fn kids(&self, id: u32) -> impl Iterator<Item = (Option<Field>, u32)> + '_ {
-        self.tree.node(id).children.iter().map(|e| (self.fields.get(e.label as usize).copied().flatten(), e.node))
+        self.tree
+            .node(id)
+            .children
+            .iter()
+            .map(|e| (self.fields.get(e.label as usize).copied().flatten(), e.node))
+            .filter(|(f, _)| *f != Some(Field::Token))
     }
 
     pub fn get(&self, id: u32, field: Field) -> Option<u32> {

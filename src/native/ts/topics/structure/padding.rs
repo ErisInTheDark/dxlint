@@ -154,9 +154,9 @@ fn categories(file: &NativeFile, mut node: u32) -> Value<'static> {
         if let Some(name) = s.get(node, F::Name) { selectors.push(format!("{node_type}[id.name={}]", s.text(name))); }
     }
     selectors.push(node_type.to_owned());
-    Value::Record(vec![
-        ("tags".into(), Value::List(tags.into_iter().map(Value::from).collect())),
-        ("selectors".into(), Value::List(selectors.into_iter().map(Value::from).collect())),
+    Value::record(vec![
+        ("tags".into(), Value::list(tags.into_iter().map(Value::from).collect())),
+        ("selectors".into(), Value::list(selectors.into_iter().map(Value::from).collect())),
         ("multiline".into(), Value::Bool(multi)),
     ])
 }
@@ -165,7 +165,7 @@ struct PaddingSites(Vec<Value<'static>>);
 
 pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
     if !file.syntax.is(node, K::Program) { return Value::Null }
-    Value::List(file.cached(scan).0.clone())
+    Value::list(file.cached(scan).0.clone())
 }
 
 fn scan(file: &NativeFile) -> PaddingSites {
@@ -197,7 +197,7 @@ fn scan(file: &NativeFile) -> PaddingSites {
                 cursor = comment.end as usize;
             }
             padded |= blank(&s.src[cursor..start]);
-            out.push(Value::Record(vec![
+            out.push(Value::record(vec![
                 ("offset".into(), Value::from(start)),
                 ("prev".into(), categories(file, pair[0])),
                 ("next".into(), categories(file, pair[1])),

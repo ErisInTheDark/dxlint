@@ -5,8 +5,8 @@ use crate::native::ts::kinds::{Field as F, Kind as K};
 
 pub(super) fn findings(file: &NativeFile<'_>, function: u32) -> Value<'static> {
     let s = &file.syntax;
-    if !s.has_word(function, F::Modifier, "async") { return Value::List(Vec::new()) }
-    let Some(body) = s.get(function, F::Body) else { return Value::List(Vec::new()) };
+    if !s.has_word(function, F::Modifier, "async") { return Value::list(Vec::new()) }
+    let Some(body) = s.get(function, F::Body) else { return Value::list(Vec::new()) };
     let mut expressions = if s.is(body, K::Block) {
         file.return_sites(function).filter(|&node| s.is(node, K::Return)).filter_map(|node| s.get(node, F::Arg)).collect()
     } else { vec![body] };
@@ -23,14 +23,14 @@ pub(super) fn findings(file: &NativeFile<'_>, function: u32) -> Value<'static> {
         let argument = if awaited { s.get(node, F::Arg).unwrap_or(node) } else { node };
         let ty = file.constrained_type_of(argument);
         let certainty = if uncertain(&ty) { "may" } else if ck.is_thenable(&ty) { "always" } else { "never" };
-        out.push(Value::Record(vec![
+        out.push(Value::record(vec![
             ("offset".into(), Value::from(s.tree.node(node).start as usize)),
             ("awaited".into(), Value::Bool(awaited)),
             ("certainty".into(), Value::from(certainty)),
             ("handling".into(), Value::Bool(affects_handling(file, node, function))),
         ]));
     }
-    Value::List(out)
+    Value::list(out)
 }
 
 fn uncertain(ty: &Ty) -> bool {

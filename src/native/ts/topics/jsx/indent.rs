@@ -33,7 +33,7 @@ pub fn props(file: &NativeFile, node: u32) -> Value<'static> {
         else if text.contains('<') { using_operator = false; }
         if using_operator && !current_operator { extra = true; using_operator = false; }
         let (spaces, tabs) = counts(prefix);
-        Value::Record(vec![
+        Value::record(vec![
             ("offset".into(), Value::from(start)),
             ("first_in_line".into(), Value::Bool(prefix.chars().all(space))),
             ("spaces".into(), Value::from(spaces)),
@@ -41,11 +41,11 @@ pub fn props(file: &NativeFile, node: u32) -> Value<'static> {
             ("extra".into(), Value::Bool(extra)),
         ])
     }).collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("spaces".into(), Value::from(spaces)),
         ("tabs".into(), Value::from(tabs)),
         ("first_column".into(), Value::from(lines.column(s.src, s.tree.node(first).start as usize))),
-        ("props".into(), Value::List(props)),
+        ("props".into(), Value::list(props)),
     ])
 }
 

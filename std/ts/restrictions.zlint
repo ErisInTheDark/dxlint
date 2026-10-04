@@ -241,7 +241,7 @@ in ts_static_block, ts_class_property.init rule complexity:implicit {
   option maximum int(0..) | null = null "legacy maximum complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let limits restriction_limits
-  let amount if layer is [ts_function, ts_arrow] then 1 else if variant == "classic" then limits.classic else limits.modified
+  let amount if layer is (ts_function, ts_arrow) then 1 else if variant == "classic" then limits.classic else limits.modified
   let limit default(maximum, max)
   when amount > limit
   warn "{if layer == 'ts_static_block' then 'Class static block' else 'Class field initializer'} has a complexity of {amount}. Maximum allowed is {limit}."
@@ -382,7 +382,7 @@ in ts_identifier rule no-restricted-globals {
   let globals default(config.globals, options)
   let matched find_last(globals, g => (if type_of(g) == "str" then g else g.name) == text)
   when resolved == "global" && access != "type" && matched != null
-  when !(parent is [ts_type_reference, ts_qualified_name, ts_type_query])
+  when parent not (ts_type_reference, ts_qualified_name, ts_type_query)
   warn "Unexpected use of '{text}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
 }
 in ts_member, ts_index rule no-restricted-globals:member {

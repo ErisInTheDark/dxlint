@@ -24,7 +24,7 @@ pub(super) fn duplicates(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     for part in s.all(node, Field::Type) {
         check(file, part, kind, optional, &mut seen, &mut findings);
     }
-    Value::List(findings)
+    Value::list(findings)
 }
 
 fn check(file: &NativeFile<'_>, node: u32, kind: Kind, optional: bool, seen: &mut Vec<(u32, Ty)>, findings: &mut Vec<Value<'static>>) {
@@ -51,7 +51,7 @@ fn check(file: &NativeFile<'_>, node: u32, kind: Kind, optional: bool, seen: &mu
 }
 
 fn finding(file: &NativeFile<'_>, node: u32, kind: Kind, previous: Option<u32>) -> Value<'static> {
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
         ("kind".into(), Value::from(if kind == Kind::Union { "Union" } else { "Intersection" })),
         ("previous".into(), previous.map_or(Value::Null, |n| Value::from(file.syntax.text(n).to_string()))),

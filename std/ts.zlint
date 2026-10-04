@@ -53,6 +53,14 @@ group ts_statement ts_expression_statement, ts_variable_declaration, ts_return, 
   ts_continue, ts_if, ts_switch, ts_try, ts_block, ts_labeled, ts_empty, ts_debugger, ts_with, ts_loop,
   ts_function, ts_class, ts_export, ts_import, ts_import_equals, ts_export_assignment, ts_type_alias,
   ts_interface, ts_enum, ts_namespace
+# Tokens: punctuation and keywords, under the node that owns them (field
+# `token`). Files get them only when a rule targets one.
+# A node's own brackets: `opener.x` / `closer.x` read its first opener and
+# last closer.
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+group closer ts_close_paren, ts_close_bracket, ts_close_brace, ts_close_angle
+group ts_token ts_comma, ts_semicolon, ts_colon, ts_dot, ts_question, ts_ellipsis, ts_equals, opener,
+  closer, ts_keyword, ts_punctuator
 
 import .ts/format
 import .ts/license

@@ -39,9 +39,9 @@ pub(super) fn finding(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         return Value::Null;
     }
     let offset = if matches!(kind, "logical" | "assignment") { s.get(node, F::Op).unwrap_or(node) } else { node };
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
-        ("flags".into(), Value::List(flags.into_iter().map(Value::from).collect())),
+        ("flags".into(), Value::list(flags.into_iter().map(Value::from).collect())),
         ("truthiness".into(), Value::Bool(truthiness)),
         ("unknown".into(), Value::Bool(matches!(file.type_of(subject), Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown))),
         ("conditional".into(), Value::Bool(context(file, node, false))),

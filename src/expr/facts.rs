@@ -164,7 +164,7 @@ const CORE: &[Fact] = &[
     Fact {
         name: "literal_value",
         doc: "native layers: on a literal (also `-1`, `+1`, parenthesised): `{ type, value }` with the JavaScript type (`string`, `number`, `bigint`, `boolean`, `null`, `regex`) and the value as text (`-0` for negative zero); null otherwise",
-        get: |f, n| opt(f.literal_value(n), |(t, v)| Value::Record(vec![("type".into(), Value::from(t)), ("value".into(), Value::from(v))])),
+        get: |f, n| opt(f.literal_value(n), |(t, v)| Value::record(vec![("type".into(), Value::from(t)), ("value".into(), Value::from(v))])),
     },
     Fact {
         name: "constant_truthiness",
@@ -214,7 +214,7 @@ const CORE: &[Fact] = &[
     Fact {
         name: "unexpected_multiline",
         doc: "native layers: on a call, `a[b]`, tagged template or `a / b / g`: when a line break before its `(`, `[`, template or `/` lets the next line continue the expression (eslint's no-unexpected-multiline): `{ offset, kind }` with kind `function`, `property`, `taggedTemplate` or `division`",
-        get: |f, n| opt(f.unexpected_multiline(n), |(at, kind)| Value::Record(vec![("offset".into(), Value::from(at)), ("kind".into(), Value::from(kind))])),
+        get: |f, n| opt(f.unexpected_multiline(n), |(at, kind)| Value::record(vec![("offset".into(), Value::from(at)), ("kind".into(), Value::from(kind))])),
     },
     Fact {
         name: "optional_chain_risks",
@@ -223,7 +223,7 @@ const CORE: &[Fact] = &[
             Value::List(
                 f.optional_chain_risks(n)
                     .into_iter()
-                    .map(|(at, arith)| Value::Record(vec![("offset".into(), Value::from(at)), ("arithmetic".into(), Value::Bool(arith))]))
+                    .map(|(at, arith)| Value::record(vec![("offset".into(), Value::from(at)), ("arithmetic".into(), Value::Bool(arith))]))
                     .collect(),
             )
         },
@@ -236,7 +236,7 @@ const CORE: &[Fact] = &[
                 Value::List(
                     list.into_iter()
                         .map(|(at, name, member)| {
-                            Value::Record(vec![("offset".into(), Value::from(at)), ("name".into(), Value::from(name)), ("member".into(), Value::Bool(member))])
+                            Value::record(vec![("offset".into(), Value::from(at)), ("name".into(), Value::from(name)), ("member".into(), Value::Bool(member))])
                         })
                         .collect(),
                 )
@@ -268,7 +268,7 @@ const CORE: &[Fact] = &[
         doc: "native layers: on a binary or logical expression: what eslint's no-constant-binary-expression finds, `{ kind, offset, detail }`: `constantShortCircuit` (detail `truthiness` / `nullishness`), `constantBinaryOperand` (detail: the other side, `left` / `right`), `alwaysNew`, `bothAlwaysNew`, at the operand it blames; null when nothing is constant",
         get: |f, n| {
             opt(f.constant_comparison(n, false), |(kind, at, detail)| {
-                Value::Record(vec![("kind".into(), Value::from(kind)), ("offset".into(), Value::from(at)), ("detail".into(), Value::from(detail))])
+                Value::record(vec![("kind".into(), Value::from(kind)), ("offset".into(), Value::from(at)), ("detail".into(), Value::from(detail))])
             })
         },
     },
@@ -380,7 +380,7 @@ const CORE: &[Fact] = &[
                 Value::List(
                     list.into_iter()
                         .map(|r| {
-                            Value::Record(vec![
+                            Value::record(vec![
                                 ("check".into(), Value::from(r.check)),
                                 ("kind".into(), Value::from(r.kind)),
                                 ("data".into(), Value::List(r.data.into_iter().map(Value::from).collect())),
@@ -398,7 +398,7 @@ const CORE: &[Fact] = &[
         doc: "native layers: on a regex site (see `regex_findings`): `{ flags, written, offset }`: its static flags (null when unknown), how the pattern is written (`regex`, `string`, `template` or `computed`) and where",
         get: |f, n| {
             opt(f.regex_site(n), |(flags, written, at)| {
-                Value::Record(vec![("flags".into(), opt(flags, Value::from)), ("written".into(), Value::from(written)), ("offset".into(), Value::from(at))])
+                Value::record(vec![("flags".into(), opt(flags, Value::from)), ("written".into(), Value::from(written)), ("offset".into(), Value::from(at))])
             })
         },
     },
@@ -422,7 +422,7 @@ const CORE: &[Fact] = &[
         doc: "native layers: the file's boolean tsconfig compiler options (`compiler_options.strictNullChecks`), `strict` filling in the options it implies; unset ones are null",
         get: |f, n| f.with_file(|file, _| {
             let id = file.project.file_id(file.path);
-            Value::Record(file.project.compiler_flags(id).into_iter().map(|(k, v)| (k.into_boxed_str(), Value::Bool(v))).collect())
+            Value::Record(file.project.compiler_flags(id).into_iter().map(|(k, v)| (k.into(), Value::Bool(v))).collect())
         }, n),
     },
 ];

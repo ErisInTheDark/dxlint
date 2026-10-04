@@ -6,7 +6,7 @@ use super::super::super::statics;
 use crate::expr::Value;
 
 fn finding(message: Option<&str>, offset: u32) -> Value<'static> {
-    Value::Record(vec![
+    Value::record(vec![
         ("checked".into(), Value::Bool(message.is_some())),
         ("message".into(), Value::from(message.unwrap_or("").to_owned())),
         ("offset".into(), Value::Num(f64::from(offset))),
@@ -53,14 +53,14 @@ pub fn caught_error(file: &NativeFile, node: u32) -> Value<'static> {
         }
         finding(None, offset)
     }).collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name.to_owned())),
         ("builtin".into(), Value::Bool(builtin)),
         ("default_index".into(), Value::from(if name == "AggregateError" { 2.0 } else { 1.0 })),
         ("catch".into(), Value::from(state)),
         ("catch_offset".into(), Value::Num(f64::from(s.get(catch, F::Kind).map_or(offset, |n| s.tree.node(n).start)))),
         ("throw_offset".into(), Value::Num(f64::from(offset))),
-        ("causes".into(), Value::List(causes)),
+        ("causes".into(), Value::list(causes)),
         ("missing".into(), absent),
     ])
 }

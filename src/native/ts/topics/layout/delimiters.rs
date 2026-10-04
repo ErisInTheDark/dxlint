@@ -12,9 +12,9 @@ pub(super) fn member_delimiter_sites(file: &NativeFile<'_>, node: u32) -> Value<
     let kind = match syntax.kind(node) {
         Some(K::Interface) => "interface",
         Some(K::TypeLit) => "typeLiteral",
-        _ => return Value::List(Vec::new()),
+        _ => return Value::list(Vec::new()),
     };
-    let Some(start) = brace_start(file, node) else { return Value::List(Vec::new()) };
+    let Some(start) = brace_start(file, node) else { return Value::list(Vec::new()) };
     let span = syntax.tree.node(node);
     let lexed = file.cached(lex);
     let tokens = &lexed.0;
@@ -30,14 +30,14 @@ pub(super) fn member_delimiter_sites(file: &NativeFile<'_>, node: u32) -> Value<
     };
     let single_line = same(start, span.end);
     let last_same_line = members.last().and_then(|&id| last_token(id)).is_some_and(|token| same(token.end, span.end));
-    Value::List(members.iter().enumerate().filter_map(|(i, &id)| {
+    Value::list(members.iter().enumerate().filter_map(|(i, &id)| {
         let token = last_token(id)?;
         let delimiter = match token.tok {
             Tok::P(";") => "semi",
             Tok::P(",") => "comma",
             _ => "none",
         };
-        Some(Value::Record(vec![
+        Some(Value::record(vec![
             ("kind".into(), Value::from(kind)),
             ("single_line".into(), Value::Bool(single_line)),
             ("last_same_line".into(), Value::Bool(last_same_line)),
@@ -51,24 +51,24 @@ pub(super) fn member_delimiter_sites(file: &NativeFile<'_>, node: u32) -> Value<
 pub(super) fn brace_style_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
     if !matches!(syntax.kind(node), Some(K::Block | K::StaticBlock | K::Switch | K::Class)) {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let parent = syntax.parent(node);
     if syntax.is(node, K::Block) && parent.is_some_and(|id| matches!(syntax.kind(id), Some(K::Program | K::Block | K::StaticBlock | K::Case))) {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
-    let Some(start) = brace_start(file, node) else { return Value::List(Vec::new()) };
+    let Some(start) = brace_start(file, node) else { return Value::list(Vec::new()) };
     let lexed = file.cached(lex);
     let tokens = &lexed.0;
     let open = tokens.partition_point(|token| token.start < start);
     let close = tokens.partition_point(|token| token.end <= syntax.tree.node(node).end).saturating_sub(1);
     if close <= open || tokens[close].tok != Tok::P("}") {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let same = |left: usize, right: usize| !syntax.src[tokens[left].end as usize..tokens[right].start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']);
     let single_line = same(open, close);
     let mut sites = Vec::new();
-    let mut site = |kind, offset, same_line| sites.push(Value::Record(vec![
+    let mut site = |kind, offset, same_line| sites.push(Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("offset".into(), Value::from(offset)),
         ("same_line".into(), Value::Bool(same_line)),
@@ -85,7 +85,7 @@ pub(super) fn brace_style_sites(file: &NativeFile<'_>, node: u32) -> Value<'stat
         && tokens.get(close + 1).is_some_and(|token| token.tok == Tok::Ident && matches!(&syntax.src[token.start as usize..token.end as usize], "else" | "catch" | "finally")) {
         site("keyword", tokens[close].start as usize, same(close, close + 1));
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 pub(super) fn block_prefix_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -112,7 +112,7 @@ pub(super) fn block_prefix_spacing(file: &NativeFile<'_>, node: u32) -> Value<'s
         return Value::Null;
     }
     let kind = if class { "classes" } else if function { "functions" } else if parent.is_some_and(|parent| syntax.is(parent, K::Namespace)) { "modules" } else { "keywords" };
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("offset".into(), Value::from(lexed.0[open].start as usize)),
         ("spaced".into(), Value::Bool(gap_has_space(gap))),
@@ -168,7 +168,7 @@ pub(super) fn function_paren_spacing(file: &NativeFile<'_>, node: u32) -> Value<
     let Some(previous) = open.checked_sub(1) else { return Value::Null };
     let start = lexed.0[previous].end as usize;
     let end = lexed.0[open].start as usize;
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("start".into(), Value::from(start)),
         ("end".into(), Value::from(end)),
@@ -207,7 +207,7 @@ pub(super) fn property_spacing(file: &NativeFile<'_>, node: u32) -> Value<'stati
     if same_line && syntax.src[start as usize..right_span.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
         return Value::Null;
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(syntax.text(right).to_owned())),
         ("spaced".into(), Value::Bool(gap_has_space(&syntax.src[start as usize..end as usize]))),
     ])
@@ -221,19 +221,19 @@ pub(super) fn delimiter_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value
         Some(K::Switch) => syntax.get(node, F::Discriminant).map_or(span.start, |id| syntax.tree.node(id).end),
         Some(K::Index | K::IndexedAccess) => syntax.get(node, F::Object).map_or(span.start, |id| syntax.tree.node(id).end),
         Some(K::Computed | K::Block | K::StaticBlock | K::Enum) => span.start,
-        _ => return Value::List(Vec::new()),
+        _ => return Value::list(Vec::new()),
     };
     let lexed = file.cached(lex_comments);
     let at = lexed.0.partition_point(|token| token.start < from);
     let opener = if block { "{" } else { "[" };
     let Some(open) = (at..lexed.0.len()).take_while(|&i| lexed.0[i].start < span.end).find(|&i| lexed.0[i].tok == Tok::P(opener)) else {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     };
     let Some(close) = lexed.0.partition_point(|token| token.end <= span.end).checked_sub(1).filter(|&i| lexed.0[i].tok == Tok::P(if block { "}" } else { "]" })) else {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     };
     if close <= open + 1 {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let class_member = syntax.is(node, K::Computed) && syntax.parent(node).is_some_and(|parent|
         syntax.is(parent, K::ClassProp) || syntax.is(parent, K::Method) && syntax.parent(parent).is_some_and(|class| syntax.is(class, K::Class)));
@@ -248,7 +248,7 @@ pub(super) fn delimiter_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value
             continue;
         }
         let spaced = gap_has_space(gap);
-        sites.push(Value::Record(vec![
+        sites.push(Value::record(vec![
             ("side".into(), Value::from(side)),
             ("token".into(), Value::from(syntax.src[token.start as usize..token.end as usize].to_owned())),
             ("offset".into(), Value::from(if spaced { start as usize } else { token.start as usize })),
@@ -259,7 +259,7 @@ pub(super) fn delimiter_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value
             ("line_comment".into(), Value::Bool(line_comment)),
         ]));
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 #[cfg(test)]

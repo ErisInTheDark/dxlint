@@ -44,7 +44,7 @@ pub fn context(file: &NativeFile, node: u32) -> Value<'static> {
     let type_index = ancestor.and_then(|n| s.parent(n)).is_some_and(|n| s.is(n, K::IndexedAccess));
     let object = matches!(kind, Some(K::Object | K::Prop | K::Method))
         || kind == Some(K::Assign) && parent.is_some_and(|n| s.get(n, F::Left).is_none_or(|n| !s.is(s.unparen(n), K::Ident)));
-    Value::Record(vec![
+    Value::record(vec![
         ("raw".into(), Value::from(raw)),
         ("value".into(), if bigint { Value::from(format!("{}n", number_string(value))) } else { Value::Num(value) }),
         ("offset".into(), Value::from(s.tree.node(signed_type.unwrap_or(full)).start as usize)),

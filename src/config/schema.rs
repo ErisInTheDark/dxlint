@@ -122,10 +122,10 @@ impl Schema {
                     out.push(item.fit(v, named, path, doc, depth)?);
                     path.truncate(len);
                 }
-                Ok(Value::List(out))
+                Ok(Value::list(out))
             }
             (Schema::Record(fields, rest), Value::Record(entries)) => {
-                for (k, _) in entries {
+                for (k, _) in entries.iter() {
                     if rest.is_none() && !fields.iter().any(|f| f.name == **k) {
                         let known: Vec<&str> = fields.iter().map(|f| &*f.name).collect();
                         return Err(misfit(path, format!("has no key `{k}` (keys: {})", known.join(", "))));
@@ -156,7 +156,7 @@ impl Schema {
                         path.truncate(len);
                     }
                 }
-                Ok(Value::Record(out))
+                Ok(Value::record(out))
             }
             (Schema::Union(options), v) => {
                 // The first option that takes it; otherwise the misfit of the
@@ -298,7 +298,7 @@ mod tests {
     use super::*;
     use crate::config::source::{FileId, Span};
 
-    fn rec(entries: &[(&str, Value<'static>)]) -> Value<'static> {
+    fn rec(entries: &[(&'static str, Value<'static>)]) -> Value<'static> {
         Value::Record(entries.iter().map(|(k, v)| ((*k).into(), v.clone())).collect())
     }
 
@@ -325,18 +325,18 @@ mod tests {
             None,
         );
         let list = Schema::List(Box::new(pair));
-        let good = Value::List(vec![rec(&[("blankLine", Value::from("always"))])]);
+        let good = Value::list(vec![rec(&[("blankLine", Value::from("always"))])]);
         assert_eq!(
             list.check(&good, &named),
-            Ok(Value::List(vec![rec(&[("blankLine", Value::from("always")), ("prev", Value::from("*")), ("note", Value::Null)])]))
+            Ok(Value::list(vec![rec(&[("blankLine", Value::from("always")), ("prev", Value::from("*")), ("note", Value::Null)])]))
         );
-        let bad = Value::List(vec![rec(&[("blankLine", Value::from("always"))]), rec(&[("blankLine", Value::from("sometimes"))])]);
+        let bad = Value::list(vec![rec(&[("blankLine", Value::from("always"))]), rec(&[("blankLine", Value::from("sometimes"))])]);
         assert_eq!(list.check(&bad, &named).unwrap_err().to_string(), "`[1].blankLine` must be \"any\" | \"always\", got \"sometimes\" (what goes between)");
-        let missing = Value::List(vec![rec(&[("prev", Value::from("return"))])]);
+        let missing = Value::list(vec![rec(&[("prev", Value::from("return"))])]);
         assert_eq!(list.check(&missing, &named).unwrap_err().to_string(), "`[0].blankLine` is required (what goes between)");
-        let unknown = Value::List(vec![rec(&[("blankLine", Value::from("any")), ("x", Value::Null)])]);
+        let unknown = Value::list(vec![rec(&[("blankLine", Value::from("any")), ("x", Value::Null)])]);
         assert!(list.check(&unknown, &named).unwrap_err().problem.contains("no key `x`"));
-        let wrong_named = Value::List(vec![rec(&[("blankLine", Value::from("any")), ("prev", Value::from("if"))])]);
+        let wrong_named = Value::list(vec![rec(&[("blankLine", Value::from("any")), ("prev", Value::from("if"))])]);
         assert_eq!(list.check(&wrong_named, &named).unwrap_err().path, "[0].prev");
     }
 
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(count.check(&Value::Num(-1.0), &named).unwrap_err().problem, "must be int(0..), got -1");
         let names = Schema::Range(Box::new(Schema::List(Box::new(Schema::Union(vec![lit("a"), lit("b")])))), Some(1.0), None);
         assert_eq!(names.to_string(), "(\"a\" | \"b\")[1..]");
-        assert!(names.check(&Value::List(Vec::new()), &named).is_err());
+        assert!(names.check(&Value::list(Vec::new()), &named).is_err());
         assert!(count.check(&Value::Num(1.5), &named).is_err());
         assert!(Schema::Regex.check(&Value::from("^_"), &named).is_ok());
         assert!(Schema::Regex.check(&Value::from("("), &named).unwrap_err().problem.starts_with("is not a valid regex"));

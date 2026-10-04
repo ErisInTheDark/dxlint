@@ -22,7 +22,7 @@ pub(super) fn updates(file: &NativeFile, node: u32) -> Value<'static> {
     let Some(entries) = results.0.get(&node) else { return Value::Null };
     let mut entries: Vec<_> = entries.iter().copied().collect();
     entries.sort_by_key(|&(id, _)| s.tree.node(id).start);
-    Value::List(entries.into_iter().map(|(id, property)| Value::Record(vec![
+    Value::list(entries.into_iter().map(|(id, property)| Value::record(vec![
         ("name".into(), Value::from(s.text(id).to_string())),
         ("property".into(), Value::Bool(property)),
         ("value".into(), Value::from(s.get(node, F::Left).map(|n| s.text(n)).unwrap_or("").to_string())),

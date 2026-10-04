@@ -67,7 +67,7 @@ pub fn empty_block(file: &NativeFile, node: u32) -> Value<'static> {
         s.src[after as usize..span.end as usize].find('{').map_or(span.start, |offset| after + offset as u32)
     } else { span.start };
     if file.comments().iter().any(|c| c.start > start && c.end < span.end) { return Value::Null }
-    Value::Record(vec![
+    Value::record(vec![
         ("switch".into(), Value::Bool(switch)),
         ("catch".into(), Value::Bool(parent.is_some_and(|p| s.is(p, K::Try)) && s.field(node) == Some(F::Handler))),
         ("offset".into(), Value::Num(f64::from(start))),
@@ -104,14 +104,6 @@ pub fn lone_block(file: &NativeFile, node: u32) -> Value<'static> {
     Value::from(if nested { "Nested block is redundant." } else { "Block is redundant." })
 }
 
-pub fn lonely_if(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let lonely = s.parent(node).is_some_and(|block| s.is(block, K::Block) && s.all(block, F::Body).count() == 1
-        && s.field(block) == Some(F::Alternate) && s.parent(block).is_some_and(|p| s.is(p, K::If)));
-    if !lonely { return Value::Bool(false) }
-    Value::Bool(lonely && !braces_necessary(file, s.parent(node).unwrap_or(node)))
-}
-
 fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     let s = &file.syntax;
     let Some(mut tail) = s.all(block, F::Body).next() else { return false };
@@ -142,14 +134,6 @@ fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     false
 }
 
-pub fn negated_condition(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let eligible = s.is(node, K::Conditional) || s.get(node, F::Alternate).is_some_and(|n| !s.is(n, K::If));
-    let negated = s.get(node, F::Test).map(|n| s.unparen(n)).is_some_and(|n| s.is(n, K::Unary) && s.word(n, F::Op) == Some("!")
-        || s.is(n, K::Binary) && matches!(s.word(n, F::Op), Some("!=" | "!==")));
-    Value::Bool(eligible && negated)
-}
-
 pub fn switch_default(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let cases: Vec<_> = s.all(node, F::Case).collect();
@@ -158,7 +142,7 @@ pub fn switch_default(file: &NativeFile, node: u32) -> Value<'static> {
     let end = s.tree.node(node).end;
     let after = s.tree.node(last).end;
     let comment = file.comments().iter().filter(|c| c.start >= after && c.end < end).next_back();
-    Value::Record(vec![
+    Value::record(vec![
         ("has_comment".into(), Value::Bool(comment.is_some())),
         ("comment".into(), Value::from(comment.map_or("", |c| c.body(s.src).trim()).to_owned())),
     ])
@@ -173,7 +157,7 @@ pub fn extra_label(file: &NativeFile, node: u32) -> Value<'static> {
         if matches!(s.kind(n), Some(K::For | K::ForIn | K::ForOf | K::While | K::DoWhile | K::Switch)) {
             let matching = s.parent(n).filter(|&p| s.is(p, K::Labeled)).and_then(|p| s.get(p, F::Label))
                 .is_some_and(|name| s.text(name) == s.text(label));
-            return if matching { Value::Record(vec![
+            return if matching { Value::record(vec![
                 ("name".into(), Value::from(s.text(label).to_owned())),
                 ("offset".into(), Value::Num(f64::from(s.tree.node(label).start))),
             ]) } else { Value::Null };
@@ -205,21 +189,6 @@ pub fn await_loop(file: &NativeFile, node: u32) -> Value<'static> {
     Value::Bool(false)
 }
 
-pub fn guarded_for_in(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(body) = s.get(node, F::Body) else { return Value::Bool(true) };
-    if matches!(s.kind(body), Some(K::Empty | K::If)) { return Value::Bool(true) }
-    if !s.is(body, K::Block) { return Value::Bool(false) }
-    let children: Vec<_> = s.all(body, F::Body).collect();
-    let Some(&first) = children.first() else { return Value::Bool(true) };
-    if !s.is(first, K::If) { return Value::Bool(false) }
-    if children.len() == 1 { return Value::Bool(true) }
-    let guarded = s.get(first, F::Consequent).is_some_and(|branch| s.is(branch, K::Continue)
-        || s.is(branch, K::Block) && s.all(branch, F::Body).count() == 1
-            && s.all(branch, F::Body).next().is_some_and(|n| s.is(n, K::Continue)));
-    Value::Bool(guarded)
-}
-
 pub fn returning_assignment(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let parenthesized = s.parent(node).is_some_and(|p| s.is(p, K::Paren));
@@ -227,7 +196,7 @@ pub fn returning_assignment(file: &NativeFile, node: u32) -> Value<'static> {
     while let Some(parent) = s.parent(current) {
         let arrow = s.is(parent, K::Arrow);
         if s.is(parent, K::Return) || arrow && s.field(current) == Some(F::Body) {
-            return Value::Record(vec![
+            return Value::record(vec![
                 ("arrow".into(), Value::Bool(arrow)),
                 ("parenthesized".into(), Value::Bool(parenthesized)),
                 ("offset".into(), Value::Num(f64::from(s.tree.node(parent).start))),
@@ -239,34 +208,6 @@ pub fn returning_assignment(file: &NativeFile, node: u32) -> Value<'static> {
         current = parent;
     }
     Value::Null
-}
-
-fn naive_return(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    s.is(node, K::Return) || s.is(node, K::Block) && s.all(node, F::Body).last().is_some_and(|n| s.is(n, K::Return))
-}
-
-fn returning_branch(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    let returns = |n| s.is(n, K::Return) || s.is(n, K::If)
-        && s.get(n, F::Consequent).zip(s.get(n, F::Alternate)).is_some_and(|(a, b)| naive_return(file, a) && naive_return(file, b));
-    if s.is(node, K::Block) { s.all(node, F::Body).any(returns) } else { returns(node) }
-}
-
-pub fn redundant_else(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if !s.parent(node).is_some_and(|p| matches!(s.kind(p), Some(K::Program | K::Block | K::Case))) { return Value::Null }
-    let offset = |n| Value::Record(vec![("offset".into(), Value::Num(f64::from(s.tree.node(n).start)))]);
-    if !s.get(node, F::Consequent).is_some_and(|n| returning_branch(file, n)) { return Value::Null }
-    let Some(alternate) = s.get(node, F::Alternate) else { return Value::Null };
-    let mut tail = alternate;
-    let chain = loop {
-        if !s.is(tail, K::If) { break offset(tail) }
-        let Some((consequent, next)) = s.get(tail, F::Consequent).zip(s.get(tail, F::Alternate)) else { break Value::Null };
-        if !returning_branch(file, consequent) { break Value::Null }
-        tail = next;
-    };
-    Value::Record(vec![("direct".into(), offset(alternate)), ("chain".into(), chain)])
 }
 
 pub fn sequence_context(file: &NativeFile, node: u32) -> Value<'static> {
@@ -285,7 +226,7 @@ pub fn sequence_context(file: &NativeFile, node: u32) -> Value<'static> {
         if token.tok == Tok::Eof { return Value::Null }
         if token.tok == Tok::P(",") { break from + token.start }
     };
-    Value::Record(vec![("intentional".into(), Value::Bool(intentional)), ("offset".into(), Value::Num(f64::from(offset)))])
+    Value::record(vec![("intentional".into(), Value::Bool(intentional)), ("offset".into(), Value::Num(f64::from(offset)))])
 }
 
 fn brace_expectations(file: &NativeFile, owner: u32, body: u32) -> [i32; 3] {
@@ -366,7 +307,7 @@ pub fn curly_body(file: &NativeFile, body: u32) -> Value<'static> {
     } else {
         for (i, value) in expected.into_iter().enumerate() { consistent[i] = value == 1 || value == -1 && block; }
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("block".into(), Value::Bool(block)), ("name".into(), Value::from(name)), ("condition".into(), Value::Bool(condition)),
         ("multi".into(), Value::from(f64::from(expected[0]))), ("multiline".into(), Value::from(f64::from(expected[1]))), ("nested".into(), Value::from(f64::from(expected[2]))),
         ("multi_consistent".into(), Value::Bool(consistent[0])), ("multiline_consistent".into(), Value::Bool(consistent[1])), ("nested_consistent".into(), Value::Bool(consistent[2])),

@@ -101,7 +101,7 @@ pub fn policy(file: &NativeFile, node: u32) -> Value<'static> {
         let line_break = raw.contains(['\n', '\r', '\u{2028}', '\u{2029}']) && raw.trim_matches(space).is_empty();
         missing = !line_break && !without_entities(raw).trim_matches(space).is_empty();
     } else { return Value::Null; }
-    Value::Record(vec![
+    Value::record(vec![
         ("scope".into(), Value::from(scope)),
         ("expression".into(), Value::Bool(expression)),
         ("unnecessary".into(), Value::Bool(unnecessary)),

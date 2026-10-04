@@ -115,7 +115,7 @@ pub(super) fn comma_line_sites(file: &NativeFile<'_>, node: u32) -> Value<'stati
             if before.tok == Tok::P("[") || before.tok == Tok::P(",") && tokens[..at].iter().rev().find(|token| token.tok != Tok::P(",")).is_some_and(|token| token.tok == Tok::P("[")) || after.tok == Tok::P(",") && after_break {
                 continue;
             }
-            sites.push(Value::Record(vec![
+            sites.push(Value::record(vec![
                 ("owner".into(), Value::from(owner)),
                 ("offset".into(), Value::from(comma.start as usize)),
                 ("before_break".into(), Value::Bool(syntax.src[before.end as usize..comma.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']))),
@@ -123,7 +123,7 @@ pub(super) fn comma_line_sites(file: &NativeFile<'_>, node: u32) -> Value<'stati
             ]));
         }
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 fn assignment_pattern(file: &NativeFile<'_>, mut node: u32) -> bool {
@@ -184,7 +184,7 @@ pub(super) fn trailing_comma_sites(file: &NativeFile<'_>, node: u32) -> Value<'s
         let offset = if trailing { token.start } else { token.end } as usize;
         let multiline = syntax.src[token.end as usize..close.end as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']);
         let tsx_single = kind == "generics" && items.len() == 1 && file.path.extension().is_some_and(|ext| ext == "tsx");
-        sites.push(Value::Record(vec![
+        sites.push(Value::record(vec![
             ("kind".into(), Value::from(kind)),
             ("offset".into(), Value::from(offset)),
             ("trailing".into(), Value::Bool(trailing)),
@@ -193,5 +193,5 @@ pub(super) fn trailing_comma_sites(file: &NativeFile<'_>, node: u32) -> Value<'s
             ("tsx_single".into(), Value::Bool(tsx_single)),
         ]));
     }
-    Value::List(sites)
+    Value::list(sites)
 }

@@ -64,14 +64,14 @@ pub(super) fn function(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             |ret| ck.eval(ret, &file.env_at(node)),
         ));
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("explicit".into(), Value::Bool(s.get(node, F::ReturnType).is_some())),
         ("offset".into(), Value::from(head(file, node))),
-        ("returns".into(), Value::List(returns.iter().map(|ty| Value::Record(vec![
+        ("returns".into(), Value::list(returns.iter().map(|ty| Value::record(vec![
             ("unknown".into(), Value::Bool(matches!(ty, Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown))),
             ("union".into(), Value::Bool(matches!(ty, Ty::Union(_)))),
-            ("groups".into(), Value::List(name_groups(ty, ck, 0).into_iter().map(|group| Value::List(group.into_iter().map(Value::from).collect())).collect())),
+            ("groups".into(), Value::list(name_groups(ty, ck, 0).into_iter().map(|group| Value::list(group.into_iter().map(Value::from).collect())).collect())),
         ])).collect())),
     ])
 }
@@ -92,7 +92,7 @@ pub(super) fn rejection_handler(file: &NativeFile<'_>, call: u32) -> Option<(u32
 }
 
 pub(super) fn unsafe_catch(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let Some((handler, method)) = rejection_handler(file, node) else { return Value::List(Vec::new()) };
+    let Some((handler, method)) = rejection_handler(file, node) else { return Value::list(Vec::new()) };
     let s = &file.syntax;
     let mut stack = vec![handler];
     let mut findings = Vec::new();
@@ -123,7 +123,7 @@ pub(super) fn unsafe_catch(file: &NativeFile<'_>, node: u32) -> Value<'static> {
                     };
                 }
                 if matches!(ty, Ty::Unknown | Ty::IntrinsicUnknown) { continue }
-                findings.push(Value::Record(vec![
+                findings.push(Value::record(vec![
                     ("offset".into(), Value::from(s.tree.node(parameter).start as usize)),
                     ("method".into(), Value::from(method)),
                     ("pattern".into(), Value::from(match s.kind(name) { Some(K::ArrayPattern) => "array", Some(K::ObjectPattern) => "object", _ => "" })),
@@ -132,7 +132,7 @@ pub(super) fn unsafe_catch(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             _ => {}
         }
     }
-    Value::List(findings)
+    Value::list(findings)
 }
 
 pub(super) fn missing_await(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -166,7 +166,7 @@ pub(super) fn missing_await(file: &NativeFile<'_>, node: u32) -> Value<'static> 
         stack.extend(s.kids(node).map(|(_, child)| child));
     }
     let name = file.function_name_with_kind(node).unwrap_or_else(|| "async function".into());
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(format!("{}{}", name[..1].to_uppercase(), &name[1..]))),
         ("offset".into(), Value::from(head(file, node))),
     ])

@@ -41,7 +41,7 @@ struct StatementEvents(Vec<Value<'static>>);
 
 pub(super) fn events(file: &NativeFile, node: u32) -> Value<'static> {
     if !file.syntax.is(node, K::Program) { return Value::Null }
-    Value::List(file.cached(scan).0.clone())
+    Value::list(file.cached(scan).0.clone())
 }
 
 fn scan(file: &NativeFile) -> StatementEvents {
@@ -73,7 +73,7 @@ fn scan(file: &NativeFile) -> StatementEvents {
         let at = if enter { start } else {
             start + s.text(node).trim_end().trim_end_matches(';').trim_end().len()
         };
-        out.push(Value::Record(vec![
+        out.push(Value::record(vec![
             ("index".into(), Value::from(out.len())),
             ("offset".into(), Value::from(start)),
             ("line".into(), Value::from(starts.partition_point(|&start| start <= at))),

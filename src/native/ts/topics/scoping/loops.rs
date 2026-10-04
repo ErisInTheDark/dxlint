@@ -110,7 +110,7 @@ pub(super) fn unmodified_condition(file: &NativeFile, node: u32) -> Value<'stati
     let result = file.cached(|f| UnmodifiedConditions([
         condition_references(f, false), condition_references(f, true),
     ]));
-    Value::Record(vec![
+    Value::record(vec![
         ("grouped".into(), Value::Bool(result.0[0].contains(&node))),
         ("independent".into(), Value::Bool(result.0[1].contains(&node))),
     ])

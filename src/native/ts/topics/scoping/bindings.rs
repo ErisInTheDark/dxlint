@@ -66,7 +66,7 @@ pub(super) fn underscore_names(file: &NativeFile, node: u32) -> Value<'static> {
         }
         _ => {}
     }
-    Value::List(names.into_iter().filter_map(|(name, at, context)| {
+    Value::list(names.into_iter().filter_map(|(name, at, context)| {
         let display = s.text(name);
         let name = display.strip_prefix('#').unwrap_or(display);
         if name == "_" || !(name.starts_with('_') || name.ends_with('_')) {
@@ -75,7 +75,7 @@ pub(super) fn underscore_names(file: &NativeFile, node: u32) -> Value<'static> {
         let object = s.get(node, F::Object).map(|n| s.unparen(n));
         let this_constructor = object.is_some_and(|n| s.is(n, K::Member) && s.word(n, F::Property) == Some("constructor")
             && s.get(n, F::Object).is_some_and(|o| s.is(s.unparen(o), K::This)));
-        Some(Value::Record(vec![
+        Some(Value::record(vec![
             ("name".into(), Value::from(name.to_string())),
             ("display".into(), Value::from(display.to_string())),
             ("context".into(), Value::from(context)),
@@ -150,9 +150,9 @@ fn location(s: &Syntax, id: u32) -> (usize, usize) {
 }
 
 pub(super) fn outside_bindings(file: &NativeFile, id: u32) -> Value<'static> {
-    Value::List(file.cached(collect_outside_bindings).0.get(&id).into_iter().flatten().map(|&declaration| {
+    Value::list(file.cached(collect_outside_bindings).0.get(&id).into_iter().flatten().map(|&declaration| {
         let (line, column) = location(&file.syntax, declaration);
-        Value::Record(vec![("line".into(), Value::from(line)), ("column".into(), Value::from(column))])
+        Value::record(vec![("line".into(), Value::from(line)), ("column".into(), Value::from(column))])
     }).collect())
 }
 
@@ -195,7 +195,7 @@ pub(super) fn declaration_position(file: &NativeFile, node: u32) -> Value<'stati
         }
         cursor = s.parent(n);
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("nested".into(), Value::Bool(nested)),
         ("top".into(), Value::Bool(variable_on_top(s, node))),
         ("declaration".into(), Value::Bool(s.is(node, K::Function) && parent.is_some_and(|p| matches!(s.kind(p), Some(K::Program | K::Block | K::Export | K::If | K::Labeled | K::While | K::DoWhile | K::For | K::ForIn | K::ForOf | K::Case))))),
@@ -309,7 +309,7 @@ fn redeclarations(file: &NativeFile) -> Redeclarations {
 
 pub(super) fn redeclaration(file: &NativeFile, id: u32) -> Value<'static> {
     let Some(&(duplicate, safe_merge, builtin, comment)) = file.cached(redeclarations).0.get(&id) else { return Value::Null };
-    Value::Record(vec![
+    Value::record(vec![
         ("duplicate".into(), Value::Bool(duplicate)),
         ("safe_merge".into(), Value::Bool(safe_merge)),
         ("builtin".into(), Value::Bool(builtin)),
@@ -340,7 +340,7 @@ pub(super) fn this_alias(file: &NativeFile, node: u32) -> Value<'static> {
                 })
         });
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(s.text(name).to_string())),
         ("this".into(), Value::Bool(is_this)),
         ("valid".into(), Value::Bool(is_this && (declarator || s.word(node, F::Op) == Some("=")))),
@@ -513,7 +513,7 @@ pub(super) fn shadow(file: &NativeFile, id: u32) -> Value<'static> {
         return Value::Null;
     }
     let (line, column) = outer.map(|o| location(s, o)).unwrap_or((1, 1));
-    Value::Record(vec![
+    Value::record(vec![
         ("global".into(), Value::Bool(builtin)),
         ("enum_member".into(), Value::Bool(ts && enum_scope.is_some())),
         ("line".into(), Value::from(line)),
@@ -634,7 +634,7 @@ pub(super) fn definition_use(file: &NativeFile, reference: u32) -> Value<'static
         }
     }
     let named_export = s.parent(reference).is_some_and(|n| s.is(n, K::ExportSpec));
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(binding.kind)),
         ("before".into(), Value::Bool(!decorator && (s.tree.node(reference).end < s.tree.node(declaration).end || initializing))),
         ("separate".into(), Value::Bool(separate)),

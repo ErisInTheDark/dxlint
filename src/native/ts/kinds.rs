@@ -24,6 +24,8 @@ fields! {
     Exported = "exported", Quasi = "quasi", Tag = "tag", Constraint = "constraint", Default = "default",
     Check = "check", Optional = "optional", Modifier = "modifier", Decorator = "decorator", Qualifier = "qualifier",
     Closing = "closing",
+    // The node's own punctuation and keyword tokens (see `tokens::attach`).
+    Token = "token",
 }
 
 macro_rules! kinds {
@@ -147,6 +149,25 @@ kinds! {
     JsxExpression = "ts_jsx_expression" [Expr],
     JsxText = "ts_jsx_text" [],
     JsxName = "ts_jsx_name" [],
+    // ---- tokens: punctuation and keywords no child node covers, under the
+    // node that owns them (field `token`); built only when a rule needs them
+    Comma = "ts_comma" [],
+    Semicolon = "ts_semicolon" [],
+    Colon = "ts_colon" [],
+    Dot = "ts_dot" [],
+    Question = "ts_question" [],
+    Ellipsis = "ts_ellipsis" [],
+    Equals = "ts_equals" [],
+    OpenParen = "ts_open_paren" [],
+    CloseParen = "ts_close_paren" [],
+    OpenBracket = "ts_open_bracket" [],
+    CloseBracket = "ts_close_bracket" [],
+    OpenBrace = "ts_open_brace" [],
+    CloseBrace = "ts_close_brace" [],
+    OpenAngle = "ts_open_angle" [],
+    CloseAngle = "ts_close_angle" [],
+    Keyword = "ts_keyword" [],
+    Punctuator = "ts_punctuator" [],
     // ---- types (every kind from here on is a type)
     TypeRef = "ts_type_reference" [Name, TypeArg],
     QualifiedName = "ts_qualified_name" [Left, Right],
@@ -178,5 +199,10 @@ kinds! {
 impl Kind {
     pub fn name(self) -> &'static str {
         KINDS[self as usize].0
+    }
+
+    /// A token node (`ts_comma`, `ts_keyword`, ...), not syntax.
+    pub fn is_token(self) -> bool {
+        (Kind::Comma as u16..=Kind::Punctuator as u16).contains(&(self as u16))
     }
 }

@@ -116,7 +116,7 @@ pub fn tag(file: &NativeFile, node: u32) -> Value<'static> {
         previous_end = attr.end as usize;
         let prop = s.get(n, F::Name).map(|n| canonical_name(s.text(n)))
             .or_else(|| s.get(n, F::Arg).map(|n| s.text(s.unparen(n)).to_string())).unwrap_or_default();
-        Value::Record(vec![
+        Value::record(vec![
             ("name".into(), Value::from(prop)),
             ("offset".into(), Value::from(attr.start as usize)),
             ("same".into(), Value::Bool(same)),
@@ -128,7 +128,7 @@ pub fn tag(file: &NativeFile, node: u32) -> Value<'static> {
     }).collect();
     let names = name.split(['.', ':']).map(|name| {
         let unprefixed = name.strip_prefix('_').unwrap_or(name);
-        Value::Record(vec![
+        Value::record(vec![
             ("name".into(), Value::from(name.to_string())),
             ("length".into(), Value::from(name.encode_utf16().count())),
             ("pascal".into(), Value::Bool(pascal(name))),
@@ -137,9 +137,9 @@ pub fn tag(file: &NativeFile, node: u32) -> Value<'static> {
             ("underscore_caps".into(), Value::Bool(all_caps(unprefixed))),
         ])
     }).collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name.clone())),
-        ("names".into(), Value::List(names)),
+        ("names".into(), Value::list(names)),
         ("dom".into(), Value::Bool(dom)),
         ("component".into(), Value::Bool(!dom && !name.contains(':'))),
         ("self_closing".into(), Value::Bool(close.is_none())),
@@ -147,7 +147,7 @@ pub fn tag(file: &NativeFile, node: u32) -> Value<'static> {
         ("open_end".into(), Value::from(open_end)),
         ("closing".into(), close.map_or(Value::Null, Value::from)),
         ("single".into(), Value::Bool(single)),
-        ("attributes".into(), Value::List(attributes)),
+        ("attributes".into(), Value::list(attributes)),
     ])
 }
 
@@ -177,7 +177,7 @@ pub fn attribute(file: &NativeFile, node: u32) -> Value<'static> {
     let text = s.text(value);
     let string = s.is(value, K::String);
     let body = if string { &text[1..text.len() - 1] } else { "" };
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(equal)),
         ("before".into(), Value::Bool(s.src[start..equal].chars().any(space))),
         ("after".into(), Value::Bool(s.src[equal + 1..end].chars().any(space))),

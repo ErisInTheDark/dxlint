@@ -11,8 +11,9 @@ pub mod restrictions;
 pub mod scoping;
 pub mod structure;
 pub mod suggestions;
+pub mod syntax;
 pub mod ts_style;
 pub mod typed;
 
 /// Every family's facts (after the core list in `expr::facts`).
-pub const FACT_GROUPS: &[&[Fact]] = &[layout::FACTS, structure::FACTS, typed::FACTS, ts_style::FACTS, scoping::FACTS, suggestions::FACTS, restrictions::FACTS, jsx::FACTS];
+pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, ts_style::FACTS, scoping::FACTS, suggestions::FACTS, restrictions::FACTS, jsx::FACTS];

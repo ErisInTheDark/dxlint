@@ -146,20 +146,20 @@ pub(super) fn candidate(file: &NativeFile, node: u32) -> Value<'static> {
         (subgroup, if subgroup == "accessor" { 1_000_000_000_000 + 4112 } else { 2_000_000_000_000 + if subgroup == "method" { 448 } else { 3584 } }),
         (selector, 3_000_000_000_000 + (1 << SELECTORS.iter().position(|&v| v == selector).unwrap_or(0))),
     ];
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name)),
         ("label".into(), Value::from(label)),
         ("typed".into(), Value::Bool(matches!(selector, "variable" | "parameter" | "classProperty" | "objectLiteralProperty" | "typeProperty" | "parameterProperty" | "classicAccessor"))),
         ("quotes".into(), Value::Bool(modifiers.contains(&"requiresQuotes"))),
-        ("modifiers".into(), Value::List(modifiers.into_iter().map(Value::from).collect())),
-        ("selectors".into(), Value::List(selectors.into_iter().filter(|(name, _)| !name.is_empty()).map(|(name, rank)| Value::Record(vec![("name".into(), Value::from(name)), ("rank".into(), Value::from(rank))])).collect())),
-        ("weights".into(), Value::List(WEIGHTS.iter().enumerate().map(|(i, &name)| Value::Record(vec![("name".into(), Value::from(name)), ("rank".into(), Value::from(1usize << i))])).collect())),
+        ("modifiers".into(), Value::list(modifiers.into_iter().map(Value::from).collect())),
+        ("selectors".into(), Value::list(selectors.into_iter().filter(|(name, _)| !name.is_empty()).map(|(name, rank)| Value::record(vec![("name".into(), Value::from(name)), ("rank".into(), Value::from(rank))])).collect())),
+        ("weights".into(), Value::list(WEIGHTS.iter().enumerate().map(|(i, &name)| Value::record(vec![("name".into(), Value::from(name)), ("rank".into(), Value::from(1usize << i))])).collect())),
     ])
 }
 
 pub(super) fn types(file: &NativeFile, node: u32) -> Value<'static> {
     let ty = file.type_of(node);
-    Value::List(["boolean", "string", "number", "function", "array"].into_iter()
+    Value::list(["boolean", "string", "number", "function", "array"].into_iter()
         .filter(|kind| matches_type(&ty, kind)).map(Value::from).collect())
 }
 

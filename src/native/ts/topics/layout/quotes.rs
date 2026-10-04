@@ -43,7 +43,7 @@ pub(super) fn string_quote_context(file: &NativeFile<'_>, node: u32) -> Value<'s
     let template_feature = syntax.is(node, K::Template) && (syntax.all(node, F::Expr).next().is_some()
         || parent.is_some_and(|id| syntax.is(id, K::TaggedTemplate) && syntax.get(id, F::Quasi) == Some(node))
         || LINEBREAK.is_match(syntax.text(node)));
-    Value::Record(vec![
+    Value::record(vec![
         ("jsx".into(), Value::Bool(jsx)),
         ("non_backtick".into(), Value::Bool(non_backtick)),
         ("template".into(), Value::Bool(syntax.is(node, K::Template))),
@@ -54,13 +54,13 @@ pub(super) fn string_quote_context(file: &NativeFile<'_>, node: u32) -> Value<'s
 pub(super) fn property_quote_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
     if matches!(syntax.kind(node), Some(K::Import | K::Export)) {
-        let Some(from) = syntax.get(node, F::From) else { return Value::List(Vec::new()) };
+        let Some(from) = syntax.get(node, F::From) else { return Value::list(Vec::new()) };
         let lexed = file.cached(lex);
         let at = lexed.0.partition_point(|token| token.start < syntax.tree.node(from).end);
         let end = lexed.0.partition_point(|token| token.start < syntax.tree.node(node).end);
         let tokens = &lexed.0[at..end];
         if tokens.first().is_none_or(|token| token.tok != Tok::Ident || !matches!(&syntax.src[token.start as usize..token.end as usize], "with" | "assert")) {
-            return Value::List(Vec::new());
+            return Value::list(Vec::new());
         }
         let mut sites = Vec::new();
         let mut at = 2;
@@ -80,15 +80,15 @@ pub(super) fn property_quote_sites(file: &NativeFile<'_>, node: u32) -> Value<'s
             }
             at += 1;
         }
-        return Value::List(sites);
+        return Value::list(sites);
     }
     let (group, nodes) = match syntax.kind(node) {
         Some(K::Object) => (true, syntax.all(node, F::Property).collect()),
         Some(K::TypeLit | K::Interface | K::Enum) => (true, syntax.all(node, F::Member).collect()),
         Some(K::Prop | K::PatternProp | K::PropSig | K::EnumMember) => (false, vec![node]),
-        _ => return Value::List(Vec::new()),
+        _ => return Value::list(Vec::new()),
     };
-    Value::List(nodes.into_iter().filter_map(|id| {
+    Value::list(nodes.into_iter().filter_map(|id| {
         if !matches!(syntax.kind(id), Some(K::Prop | K::PatternProp | K::PropSig | K::MethodSig | K::EnumMember)) {
             return None;
         }
@@ -117,7 +117,7 @@ fn quote_site(name: String, quoted: bool, numeric: bool, offset: usize, group: b
     let keyword = matches!(name.as_str(),
         "abstract" | "boolean" | "break" | "byte" | "case" | "catch" | "char" | "class" | "const" | "continue" | "debugger" | "default" | "delete" | "do" | "double" | "else" | "enum" | "export" | "extends" | "false" | "final" | "finally" | "float" | "for" | "function" | "goto" | "if" | "implements" | "import" | "in" | "instanceof" | "int" | "interface" | "long" | "native" | "new" | "null" | "package" | "private" | "protected" | "public" | "return" | "short" | "static" | "super" | "switch" | "synchronized" | "this" | "throw" | "throws" | "transient" | "true" | "try" | "typeof" | "var" | "void" | "volatile" | "while" | "with"
     );
-    Value::Record(vec![
+    Value::record(vec![
         ("group".into(), Value::Bool(group)),
         ("quoted".into(), Value::Bool(quoted)),
         ("numeric".into(), Value::Bool(numeric)),

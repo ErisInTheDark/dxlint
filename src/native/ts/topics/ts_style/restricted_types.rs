@@ -17,7 +17,7 @@ pub(super) fn restricted_type_candidates(file: &NativeFile, node: u32) -> Value<
         Some(K::TypeLit) if s.all(node, F::Member).next().is_none() => candidates.push(node),
         _ => {}
     }
-    Value::List(candidates.into_iter().map(|node| Value::Record(vec![
+    Value::list(candidates.into_iter().map(|node| Value::record(vec![
         ("name".into(), Value::from(s.text(node).chars().filter(|c| !c.is_whitespace()).collect::<String>())),
         ("offset".into(), Value::from(s.tree.node(node).start as usize)),
     ])).collect())

@@ -63,7 +63,7 @@ fn parts(file: &NativeFile<'_>, node: u32) -> Vec<Part> {
 
 fn finding(file: &NativeFile<'_>, node: u32, mode: &str, name: &str, primitive: &str, container: &str) -> Value<'static> {
     let node = bare(file, node);
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
         ("mode".into(), Value::from(mode.to_string())),
         ("name".into(), Value::from(name.to_string())),
@@ -132,5 +132,5 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(out)
+    Value::list(out)
 }

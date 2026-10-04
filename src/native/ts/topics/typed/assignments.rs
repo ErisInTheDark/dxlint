@@ -6,7 +6,7 @@ use crate::native::ts::statics;
 
 fn finding(file: &NativeFile<'_>, node: u32, mode: &str, error: bool, sender: Option<&Ty>, receiver: Option<&Ty>) -> Value<'static> {
     let ck = &file.typing().checker;
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
         ("mode".into(), Value::from(mode.to_string())),
         ("sender".into(), sender.map_or_else(|| Value::from(if error { "error typed" } else { "`any`" }), |ty| Value::from(format!("`{}`", ck.print(ty))))),
@@ -24,7 +24,7 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         let ty = file.type_of(arg);
         let category = super::unsafe_types::category(file, arg);
         return if category.is_some() || matches!(ty, Ty::Array(element) if matches!(*element.element, Ty::Any)) {
-            Value::List(vec![finding(file, node, "spread", category == Some("error"), None, None)])
+            Value::list(vec![finding(file, node, "spread", category == Some("error"), None, None)])
         } else { Value::Null };
     }
     let (receiver_node, sender_node, annotation, compare, report) = match s.kind(node) {
@@ -61,14 +61,14 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     }
     let category = super::unsafe_types::category(file, sender_node);
     if category.is_some() && !known_unknown {
-        return Value::List(vec![finding(file, report, "any", category == Some("error"), None, None)]);
+        return Value::list(vec![finding(file, report, "any", category == Some("error"), None, None)]);
     }
     if compare && !super::transfers::empty_map(file, sender_node) && sender.unsafe_assignment_to(&receiver) {
-        return Value::List(vec![finding(file, report, "generic", false, Some(&sender), Some(&receiver))]);
+        return Value::list(vec![finding(file, report, "generic", false, Some(&sender), Some(&receiver))]);
     }
     let mut out = Vec::new();
     destructure(file, receiver_node, &sender, Some(sender_node), &mut out, 0);
-    Value::List(out)
+    Value::list(out)
 }
 
 fn literal_source(file: &NativeFile<'_>, mut source: u32) -> Option<u32> {

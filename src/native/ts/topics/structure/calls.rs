@@ -41,7 +41,7 @@ fn wrapped(s: &Syntax, node: u32) -> bool {
 pub(super) fn layout(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let Some((function, prototype)) = iife_function(s, node) else { return Value::Null };
-    Value::Record(vec![
+    Value::record(vec![
         ("prototype".into(), Value::Bool(prototype)),
         ("call_wrapped".into(), Value::Bool(wrapped(s, node))),
         ("function_wrapped".into(), Value::Bool(wrapped(s, function))),
@@ -79,7 +79,7 @@ pub(super) fn chain(file: &NativeFile, node: u32) -> Value<'static> {
     let first = text.split(['\n', '\r', '\u{2028}', '\u{2029}']).next().expect("split has a first segment");
     let prefix = match (optional, computed) { (true, true) => "?.[", (true, false) => "?.", (false, true) => "[", (false, false) => "." };
     let suffix = if computed && first.len() == text.len() { "]" } else { "" };
-    Value::Record(vec![
+    Value::record(vec![
         ("depth".into(), Value::from(depth)),
         ("same_line".into(), Value::Bool(!gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']))),
         ("offset".into(), Value::from(offset)),

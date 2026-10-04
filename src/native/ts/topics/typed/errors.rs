@@ -35,7 +35,7 @@ pub(super) fn thrown(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         _ if error_like(&ty, &file.typing().checker, 0) => "error",
         _ => "other",
     };
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("rethrown".into(), Value::Bool(rethrown(file, node))),
         ("offset".into(), Value::from(file.syntax.tree.node(file.syntax.unparen(node)).start as usize)),

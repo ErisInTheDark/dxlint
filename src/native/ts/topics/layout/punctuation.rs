@@ -14,7 +14,7 @@ pub(super) fn generic_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'
     let parameters: Vec<_> = syntax.all(node, F::TypeParam).collect();
     let arguments: Vec<_> = syntax.all(node, F::TypeArg).collect();
     if parameters.is_empty() && arguments.is_empty() {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let lexed = file.cached(lex);
     let mut sites = Vec::new();
@@ -50,7 +50,7 @@ pub(super) fn generic_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'
             if side == "inner" && gap.starts_with(['\n', '\r']) {
                 continue;
             }
-            sites.push(Value::Record(vec![
+            sites.push(Value::record(vec![
                 ("side".into(), Value::from(side)),
                 ("start".into(), Value::from(start as usize)),
                 ("end".into(), Value::from(end as usize)),
@@ -58,7 +58,7 @@ pub(super) fn generic_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'
             ]));
         }
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 pub(super) fn semicolon_style_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -68,11 +68,11 @@ pub(super) fn semicolon_style_sites(file: &NativeFile<'_>, node: u32) -> Value<'
     }
     let lexed = file.cached(lex);
     let sites = semicolons(file, false);
-    Value::List(sites.into_iter().map(|(at, (last_child, for_header))| {
+    Value::list(sites.into_iter().map(|(at, (last_child, for_header))| {
         let token = lexed.0[at];
         let previous_line = at.checked_sub(1).is_some_and(|i| syntax.src[lexed.0[i].end as usize..token.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']));
         let next_line = lexed.0.get(at + 1).is_some_and(|next| syntax.src[token.end as usize..next.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']));
-        Value::Record(vec![
+        Value::record(vec![
             ("offset".into(), Value::from(token.start as usize)),
             ("previous_line".into(), Value::Bool(previous_line)),
             ("next_line".into(), Value::Bool(next_line)),
@@ -106,7 +106,7 @@ pub(super) fn semicolon_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value
             if side == "after" && (first_in_line || last_in_line || next.is_some_and(|next| matches!(next.tok, Tok::P(")" | "}")))) {
                 continue;
             }
-            sites.push(Value::Record(vec![
+            sites.push(Value::record(vec![
                 ("side".into(), Value::from(side)),
                 ("offset".into(), Value::from(if spaced { start } else { token.start as usize })),
                 ("start".into(), Value::from(start)),
@@ -115,7 +115,7 @@ pub(super) fn semicolon_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value
             ]));
         }
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 pub(super) fn statement_semicolon(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -169,7 +169,7 @@ pub(super) fn statement_semicolon(file: &NativeFile<'_>, node: u32) -> Value<'st
         }
     });
     let one_line_class = class_field && closing && parent.is_some_and(|id| syntax.is(id, K::Class) && super::delimiters::brace_start(file, id).is_some_and(|start| !syntax.src[start as usize..syntax.tree.node(id).end as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}'])));
-    Value::Record(vec![
+    Value::record(vec![
         ("present".into(), Value::Bool(present)),
         ("offset".into(), Value::from(if present { last.start } else { last.end } as usize)),
         ("end".into(), Value::from(last.end as usize)),
@@ -247,7 +247,7 @@ pub(super) fn switch_colon_sites(file: &NativeFile<'_>, node: u32) -> Value<'sta
     let from = syntax.get(node, F::Test).map_or(case.start + 7, |test| syntax.tree.node(test).end);
     let at = lexed.0.partition_point(|token| token.start < from);
     let Some(colon) = lexed.0.get(at).filter(|token| token.tok == Tok::P(":")) else {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     };
     let mut sites = Vec::new();
     for (side, adjacent) in [
@@ -264,7 +264,7 @@ pub(super) fn switch_colon_sites(file: &NativeFile<'_>, node: u32) -> Value<'sta
         if gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
             continue;
         }
-        sites.push(Value::Record(vec![
+        sites.push(Value::record(vec![
             ("offset".into(), Value::from(colon.start as usize)),
             ("side".into(), Value::from(side)),
             ("start".into(), Value::from(start)),
@@ -272,7 +272,7 @@ pub(super) fn switch_colon_sites(file: &NativeFile<'_>, node: u32) -> Value<'sta
             ("spaced".into(), Value::Bool(gap_has_space(gap))),
         ]));
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 pub(super) fn extra_semicolons(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -306,7 +306,7 @@ pub(super) fn extra_semicolons(file: &NativeFile<'_>, node: u32) -> Value<'stati
     }
     offsets.sort_unstable();
     offsets.dedup();
-    Value::List(offsets.into_iter().map(|offset| Value::from(offset as usize)).collect())
+    Value::list(offsets.into_iter().map(|offset| Value::from(offset as usize)).collect())
 }
 
 #[cfg(test)]

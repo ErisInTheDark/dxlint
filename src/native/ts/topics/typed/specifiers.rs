@@ -14,7 +14,7 @@ pub(super) fn named_gate(ck: &Checker<'_>, decl: DeclRef) -> Value<'static> {
         if first.starts_with('@') { format!("{first}/{}", parts.next().unwrap_or("")) } else { first.to_string() }
     });
     let from = if ck.is_lib_decl(decl) { "lib" } else if package.is_some() { "package" } else { "file" };
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name)),
         ("from".into(), Value::from(from)),
         ("path".into(), Value::from(path)),
@@ -44,10 +44,10 @@ fn candidates(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Value<'static>> {
     match ty {
         Ty::Named(sym, _) => sym.iter().map(|&decl| named_gate(ck, decl)).collect(),
         Ty::Inter(parts) => parts.iter().flat_map(|part| candidates(part, ck, depth + 1)).collect(),
-        Ty::Prim(name) => vec![Value::Record(vec![("name".into(), Value::from(*name)), ("from".into(), Value::from("lib"))])],
+        Ty::Prim(name) => vec![Value::record(vec![("name".into(), Value::from(*name)), ("from".into(), Value::from("lib"))])],
         Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Never | Ty::Void | Ty::Undefined | Ty::Null => {
             let name = match ty { Ty::Any => "any", Ty::Unknown | Ty::IntrinsicUnknown => "unknown", Ty::Never => "never", Ty::Void => "void", Ty::Undefined => "undefined", _ => "null" };
-            vec![Value::Record(vec![("name".into(), Value::from(name)), ("from".into(), Value::from("lib"))])]
+            vec![Value::record(vec![("name".into(), Value::from(name)), ("from".into(), Value::from("lib"))])]
         }
         _ => Vec::new(),
     }
@@ -55,7 +55,7 @@ fn candidates(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Value<'static>> {
 
 /// A single allowed specifier must match every union arm; intersections need one candidate.
 pub(super) fn groups(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    if super::unsafe_types::category(file, node) == Some("error") { return Value::List(vec![Value::List(Vec::new())]) }
+    if super::unsafe_types::category(file, node) == Some("error") { return Value::list(vec![Value::list(Vec::new())]) }
     let ty = file.type_of(node);
     let ck = &file.typing().checker;
     let s = &file.syntax;
@@ -76,5 +76,5 @@ pub(super) fn groups(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(groups.into_iter().map(Value::List).collect())
+    Value::list(groups.into_iter().map(Value::list).collect())
 }

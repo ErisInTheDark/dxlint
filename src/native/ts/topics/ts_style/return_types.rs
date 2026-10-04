@@ -91,7 +91,7 @@ pub(super) fn function_return_style(file: &NativeFile, node: u32) -> Value<'stat
     } else if s.is(node, K::Arrow) {
         s.get(node, F::Op).map_or(s.tree.node(node).start, |n| s.tree.node(n).start)
     } else { s.tree.node(node).start };
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name.to_string())),
         ("offset".into(), Value::from(offset as usize)),
         ("valid".into(), Value::Bool(s.get(node, F::ReturnType).is_some() || s.is(node, K::Method) && (s.word(node, F::Key) == Some("constructor") || s.word(node, F::Kind) == Some("set")))),

@@ -167,7 +167,7 @@ pub fn var_fact(file: &NativeFile, node: u32) -> Value<'static> {
     let u = file.cached(analyze);
     let Some(v) = u.vars.get(&node) else { return Value::Null };
     let b = Value::Bool;
-    Value::Record(vec![
+    Value::record(vec![
         ("used".into(), b(v.used)),
         ("exported".into(), b(v.exported)),
         ("silent".into(), b(v.silent)),
@@ -193,7 +193,7 @@ pub fn globals_fact(file: &NativeFile, node: u32) -> Value<'static> {
         return Value::Null;
     }
     let u = file.cached(analyze);
-    Value::List(u.globals.iter().map(|(name, at)| Value::Record(vec![("name".into(), Value::from(name.clone())), ("offset".into(), Value::from(*at as usize))])).collect())
+    Value::list(u.globals.iter().map(|(name, at)| Value::record(vec![("name".into(), Value::from(name.clone())), ("offset".into(), Value::from(*at as usize))])).collect())
 }
 
 /// Names of `/* exported a, b */` comments.

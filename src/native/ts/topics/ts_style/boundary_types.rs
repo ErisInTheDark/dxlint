@@ -123,7 +123,8 @@ pub(super) fn function_boundary_style(file: &NativeFile, node: u32) -> Value<'st
     let parameter = s.is(node, K::Param);
     let function = if parameter { s.parent(node).unwrap_or(node) } else { node };
     if !file.cached(collect).0.contains(&function) { return Value::Null; }
-    let Value::Record(mut shape) = super::return_types::function_return_style(file, function) else { return Value::Null; };
+    let Value::Record(shape) = super::return_types::function_return_style(file, function) else { return Value::Null; };
+    let mut shape = shape.to_vec();
     if let Some((_, value)) = shape.iter_mut().find(|(key, _)| key.as_ref() == "name") { *value = Value::from(name(file, function)); }
     let empty_method = s.is(function, K::Method) && s.get(function, F::Body).is_none();
     let offset = if empty_method {
@@ -162,7 +163,7 @@ pub(super) fn function_boundary_style(file: &NativeFile, node: u32) -> Value<'st
         shape.push(("message".into(), Value::from(message)));
         shape.push(("parameter_offset".into(), Value::from(offset as usize)));
     }
-    Value::Record(shape)
+    Value::record(shape)
 }
 
 #[cfg(test)]

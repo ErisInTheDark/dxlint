@@ -10,7 +10,7 @@ pub(super) fn unsafe_assertion(file: &NativeFile<'_>, node: u32) -> Value<'stati
     let target = if missing_target { Ty::Any } else { file.type_of(annotation) };
     if source.same_identity(&target) { return Value::Null }
     let ck = &file.typing().checker;
-    let finding = |kind, ty: String| Value::Record(vec![
+    let finding = |kind, ty: String| Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("type".into(), Value::from(ty)),
     ]);

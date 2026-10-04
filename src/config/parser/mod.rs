@@ -1051,7 +1051,7 @@ impl<'a> Parser<'a> {
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
             self.ts.next_raw();
-            def.fix = self.fix_as();
+            (def.fix_target, def.fix) = self.fix_as();
         }
         if self.errors.len() == before {
             self.skip(false, true);
@@ -1240,18 +1240,29 @@ impl<'a> Parser<'a> {
         self.end_of_item();
     }
 
-    /// After `fix`: `as expr`.
-    fn fix_as(&mut self) -> Option<Expr> {
+    /// After `fix`: `as expr`, `space_before as expr` or `space_after as expr`.
+    fn fix_as(&mut self) -> (FixTarget, Option<Expr>) {
         self.skip(false, true);
+        let target = match self.ts.peek_raw(0) {
+            Some(t) if t.is_ident("space_before") => FixTarget::SpaceBefore,
+            Some(t) if t.is_ident("space_after") => FixTarget::SpaceAfter,
+            _ => FixTarget::Node,
+        };
+        if target != FixTarget::Node {
+            self.ts.next_raw();
+        }
         match self.ts.peek_raw(0).cloned() {
             Some(t) if t.is_ident("as") => {
                 self.ts.next_raw();
-                self.expr()
+                (target, self.expr())
             }
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
-                self.errors.push(ConfigError::new(span, "expected `as` after `fix`: `fix as <what the text should be>`"));
-                None
+                self.errors.push(
+                    ConfigError::new(span, "expected `as` after `fix`: `fix as <what the text should be>`")
+                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite the whitespace next to the node"),
+                );
+                (target, None)
             }
         }
     }
@@ -1327,7 +1338,7 @@ impl<'a> Parser<'a> {
                                 .note("a rule has at most one fix: the expression saying what the text should be"),
                         );
                     } else {
-                        def.fix = self.fix_as();
+                        (def.fix_target, def.fix) = self.fix_as();
                     }
                 }
                 (Tk::Ident, "when") => {
@@ -1622,6 +1633,12 @@ mod tests {
         let (_, errors, _) = parse_str("in x rule a {\n  when 1+2 > 0\n  when 1 -2 == -1\n  when 1 <=2\n  when text~ /x/\n}\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
         assert_eq!(all, vec!["put spaces around `+`", "put spaces around `-`", "put spaces around `<=`", "put spaces around `~`"]);
+    }
+
+    #[test]
+    fn several_layers_after_is_go_in_parentheses() {
+        let (_, errors, _) = parse_str("in x rule a { when layer is [a, b] }\n");
+        assert_eq!(errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["several layers go in parentheses: `is (a, b)`"]);
     }
 
     #[test]

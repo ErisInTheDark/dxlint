@@ -1,21 +1,35 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
+use std::sync::Arc;
 
 /// A runtime value in formatter expressions. Text borrows from the linted
 /// file where it can (`'s`), so reading `text` or a field never allocates.
+/// Lists and records are shared: copying one (reading a `let`, a parameter,
+/// a record's key) never copies its items.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value<'s> {
     Null,
     Bool(bool),
     Num(f64),
     Str(Cow<'s, str>),
-    List(Vec<Value<'s>>),
+    List(Arc<[Value<'s>]>),
     /// `{ key: value }`, keys in written order.
-    Record(Vec<(Box<str>, Value<'s>)>),
+    Record(Arc<[(Key, Value<'s>)]>),
 }
 
+/// A record key: usually a literal name, which costs no allocation.
+pub type Key = Cow<'static, str>;
+
 impl<'s> Value<'s> {
+    pub fn list(items: Vec<Value<'s>>) -> Self {
+        Value::List(items.into())
+    }
+
+    pub fn record(entries: Vec<(Key, Value<'s>)>) -> Self {
+        Value::Record(entries.into())
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Null => "null",
@@ -45,8 +59,8 @@ impl<'s> Value<'s> {
             Value::Bool(b) => Value::Bool(b),
             Value::Num(n) => Value::Num(n),
             Value::Str(s) => Value::Str(Cow::Owned(s.into_owned())),
-            Value::List(items) => Value::List(items.into_iter().map(Value::into_static).collect()),
-            Value::Record(entries) => Value::Record(entries.into_iter().map(|(k, v)| (k, v.into_static())).collect()),
+            Value::List(items) => Value::List(items.iter().cloned().map(Value::into_static).collect()),
+            Value::Record(entries) => Value::Record(entries.iter().map(|(k, v)| (k.clone(), v.clone().into_static())).collect()),
         }
     }
 
@@ -85,14 +99,7 @@ impl<'s> Value<'s> {
     }
 
     pub fn into_owned(self) -> Value<'static> {
-        match self {
-            Value::Null => Value::Null,
-            Value::Bool(b) => Value::Bool(b),
-            Value::Num(n) => Value::Num(n),
-            Value::Str(s) => Value::Str(Cow::Owned(s.into_owned())),
-            Value::List(items) => Value::List(items.into_iter().map(Value::into_owned).collect()),
-            Value::Record(entries) => Value::Record(entries.into_iter().map(|(k, v)| (k, v.into_owned())).collect()),
-        }
+        self.into_static()
     }
 
     pub fn num(&self) -> Result<f64, String> {
@@ -106,10 +113,19 @@ impl<'s> Value<'s> {
         }
     }
 
+    /// Like [`Value::items`], borrowing a list's items.
+    pub fn item_slice(&self) -> Cow<'_, [Value<'s>]> {
+        match self {
+            Value::List(l) => Cow::Borrowed(l),
+            Value::Null => Cow::Borrowed(&[]),
+            other => Cow::Owned(vec![other.clone()]),
+        }
+    }
+
     /// Lists stay lists; anything else becomes a one-item list (null: empty).
     pub fn items(&self) -> Vec<Value<'s>> {
         match self {
-            Value::List(l) => l.clone(),
+            Value::List(l) => l.to_vec(),
             Value::Null => Vec::new(),
             other => vec![other.clone()],
         }
@@ -121,7 +137,7 @@ impl<'s> Value<'s> {
             (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.trim().parse::<f64>().is_ok_and(|b| b == *a),
             (Value::Null, Value::Str(s)) | (Value::Str(s), Value::Null) => s.is_empty(),
             (Value::Str(a), Value::Str(b)) => a == b,
-            (Value::List(a), Value::List(b)) => a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.loose_eq(y)),
+            (Value::List(a), Value::List(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| x.loose_eq(y)),
             (Value::Record(a), Value::Record(b)) => {
                 a.len() == b.len() && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v.loose_eq(v2)))
             }

@@ -30,7 +30,7 @@ pub fn gaps(file: &NativeFile, node: u32) -> Value<'static> {
     let sides = [
         ("after", "{", start, &body[..leading], &s.src[start + 1..first]),
         ("before", "}", end - 1, &body[trailing..], &s.src[last..end - 1]),
-    ].into_iter().map(|(direction, token, offset, gap, token_gap)| Value::Record(vec![
+    ].into_iter().map(|(direction, token, offset, gap, token_gap)| Value::record(vec![
         ("direction".into(), Value::from(direction)),
         ("token".into(), Value::from(token)),
         ("offset".into(), Value::from(offset)),
@@ -38,12 +38,12 @@ pub fn gaps(file: &NativeFile, node: u32) -> Value<'static> {
         ("newline".into(), Value::Bool(newline(gap))),
         ("token_newline".into(), Value::Bool(newline(token_gap))),
     ])).collect();
-    Value::Record(vec![
+    Value::record(vec![
         ("attribute".into(), Value::Bool(attribute)),
         ("object".into(), Value::Bool(body.trim_start_matches(space).starts_with('{'))),
         ("single".into(), Value::Bool(single)),
         ("left_newline".into(), Value::Bool(newline(&s.src[start + 1..first]))),
-        ("sides".into(), Value::List(sides)),
+        ("sides".into(), Value::list(sides)),
     ])
 }
 

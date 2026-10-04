@@ -28,7 +28,7 @@ impl Counts {
     }
 
     fn value(&self) -> Value<'static> {
-        Value::Record(vec![
+        Value::record(vec![
             ("initialized".into(), Value::from(self.initialized)),
             ("uninitialized".into(), Value::from(self.uninitialized)),
             ("requires".into(), Value::from(self.requires)),
@@ -74,7 +74,7 @@ fn scan(file: &NativeFile) -> Declarations {
             }
             None
         });
-        entries.insert(node, Value::Record(vec![
+        entries.insert(node, Value::record(vec![
             ("kind".into(), Value::from(kind.to_owned())),
             ("counts".into(), counts.value()),
             ("prior".into(), prior.value()),

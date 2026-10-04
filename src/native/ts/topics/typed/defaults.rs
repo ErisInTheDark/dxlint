@@ -11,7 +11,7 @@ pub(super) fn finding(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         _ => return Value::Null,
     };
     let Some(value) = value else { return Value::Null };
-    let finding = |kind| Value::Record(vec![
+    let finding = |kind| Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("owner".into(), Value::from(if property { "property" } else { "parameter" })),
         ("offset".into(), Value::from(s.tree.node(value).start as usize)),

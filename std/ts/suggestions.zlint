@@ -3,6 +3,34 @@
 
 define {
 
+# Statement properties stay lazy: rules request only the shape they need.
+in ts_if let statement_has_else alternate != null
+in ts_if let unmatched_tail alternate == null || alternate.unmatched_tail == true
+in ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled let unmatched_tail body.unmatched_tail == true
+in ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_with, ts_labeled, ts_block let enclosing_else_boundary parent == "ts_if" && field == "consequent" && parent.statement_has_else == true || contains(["ts_if", "ts_for", "ts_for_in", "ts_for_of", "ts_while", "ts_with", "ts_labeled"], parent) && parent.enclosing_else_boundary == true
+in ts_block let else_block parent == "ts_if" && field == "alternate"
+in ts_block let statement_count count([] body)
+
+in ts_return let direct_return true
+in ts_return let return_end true
+in ts_block let return_end last([] body.direct_return) == true
+in ts_return let branch_exit true
+in ts_if let branch_exit consequent.return_end == true && alternate.return_end == true
+in ts_return, ts_if let returning_branch branch_exit == true
+in ts_block let returning_branch any([] body.branch_exit, r => r == true)
+in ts_if let chain_else_offset if consequent.returning_branch != true || alternate == null then null else if alternate.statement_is_if == true then alternate.chain_else_offset else alternate.unparen_offset
+
+in ts_unary let negative_test operator == "!"
+in ts_binary let negative_test operator == "!=" || operator == "!=="
+in ts_parenthesized let negative_test expression.negative_test == true
+in ts_if let statement_is_if true
+in ts_empty let empty_statement true
+in ts_continue let direct_continue true
+in ts_continue let continue_guard true
+in ts_block let continue_guard count([] body) == 1 && first([] body.direct_continue) == true
+in ts_if let conditional_continue consequent.continue_guard == true
+in ts_block let guarded_iteration count([] body) == 0 || first([] body.statement_is_if) == true && (count([] body) == 1 || first([] body.conditional_continue) == true)
+
 macro suggestion_curly_policy {
   option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
   option style ("consistent" | null) = null "consistent braces throughout if chains"
@@ -350,12 +378,14 @@ in ts_block rule no-lone-blocks {
 }
 
 in ts_if rule no-lonely-if {
-  when lonely_if
+  when parent.else_block == true && parent.statement_count == 1
+  when !(unmatched_tail && parent.enclosing_else_boundary == true)
   warn "Unexpected if as the only statement in an else block."
 }
 
 in ts_if, ts_conditional rule no-negated-condition {
-  when negated_condition
+  when layer is ts_conditional || alternate != null && alternate.statement_is_if != true
+  when test.negative_test == true
   warn "Unexpected negated condition."
 }
 
@@ -379,7 +409,8 @@ in ts_await, ts_for_of, ts_variable_declaration rule no-await-in-loop {
 }
 
 in ts_for_in rule guard-for-in {
-  when !guarded_for_in
+  when body != null
+  when body.empty_statement != true && body.statement_is_if != true && body.guarded_iteration != true
   warn "The body of a for-in should be wrapped in an if statement to filter unwanted properties from the prototype."
 }
 
@@ -393,11 +424,10 @@ in ts_assignment rule no-return-assign {
 
 in ts_if rule no-else-return {
   option allowElseIf boolean = true "allow returning else-if branches"
-  let else_info redundant_else
-  when else_info != null
-  let else_report if allowElseIf then else_info.chain else else_info.direct
+  when contains(["ts_program", "ts_block", "ts_case"], parent) && consequent.returning_branch == true && alternate != null
+  let else_report if allowElseIf then chain_else_offset else alternate.unparen_offset
   when else_report != null
-  report at else_report.offset
+  report at else_report
   warn "Unnecessary 'else' after 'return'."
 }
 

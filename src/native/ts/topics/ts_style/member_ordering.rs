@@ -146,9 +146,9 @@ fn standard_order() -> Vec<String> {
 pub(super) fn member_order_info(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let expression = s.is(node, K::Class) && !s.parent(node).is_some_and(|p| matches!(s.kind(p), Some(K::Program | K::Block | K::Export | K::Namespace)));
-    Value::Record(vec![
+    Value::record(vec![
         ("class_expression".into(), Value::Bool(expression)),
-        ("standard_order".into(), Value::List(standard_order().into_iter().map(Value::from).collect())),
+        ("standard_order".into(), Value::list(standard_order().into_iter().map(Value::from).collect())),
     ])
 }
 
@@ -158,7 +158,7 @@ fn rank(member: &Member, order: &[Vec<String>]) -> Option<usize> {
 }
 
 fn report(member: &Member, message: String, result: &mut Vec<Value<'static>>) {
-    result.push(Value::Record(vec![
+    result.push(Value::record(vec![
         ("offset".into(), Value::from(member.offset)),
         ("message".into(), Value::from(message)),
     ]));
@@ -261,7 +261,7 @@ pub(super) fn member_order(file: &NativeFile, node: u32) -> Value<'static> {
     } else {
         check_order(&members, &members, types.as_deref(), &order, &mut result);
     }
-    Value::List(result)
+    Value::list(result)
 }
 
 #[cfg(test)]

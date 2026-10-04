@@ -45,16 +45,16 @@ pub(super) fn consistent_returns(file: &NativeFile, node: u32) -> Value<'static>
         _ => None,
     };
     let offset = head.map(|n| s.tree.node(n).start as usize).unwrap_or(s.tree.node(node).start as usize);
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name)),
         ("capitalized".into(), Value::from(capitalized)),
         ("specified".into(), Value::Bool(specified)),
         ("undefined".into(), Value::Bool(undefined)),
         ("falls".into(), Value::Bool(!constructor && file.reach().0.falls_off.get(&node).copied().unwrap_or(false))),
         ("offset".into(), Value::from(offset)),
-        ("returns".into(), Value::List(returns.into_iter().skip(1).map(|n| {
+        ("returns".into(), Value::list(returns.into_iter().skip(1).map(|n| {
             let (specified, undefined) = flags(n);
-            Value::Record(vec![
+            Value::record(vec![
                 ("specified".into(), Value::Bool(specified)),
                 ("undefined".into(), Value::Bool(undefined)),
                 ("offset".into(), Value::from(s.tree.node(n).start as usize)),
@@ -157,7 +157,7 @@ pub(super) fn executor_return(file: &NativeFile, node: u32) -> Value<'static> {
         return Value::Null;
     }
     let expression = s.unparen(expression);
-    Value::Record(vec![
+    Value::record(vec![
         ("void".into(), Value::Bool(s.is(expression, K::Unary) && s.word(expression, F::Op) == Some("void"))),
         ("offset".into(), Value::from(s.tree.node(if arrow { expression } else { node }).start as usize)),
     ])

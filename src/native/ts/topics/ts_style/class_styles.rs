@@ -32,7 +32,7 @@ pub(super) fn member_style(file: &NativeFile, node: u32) -> Value<'static> {
     let (name, _) = member_name(s, node);
     let head = member_head(s, node);
     let public = s.all(node, F::Modifier).find(|&n| s.text(n) == "public").map(|n| s.tree.node(n).start).unwrap_or(head);
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name)),
         ("head".into(), Value::from(head as usize)),
         ("public".into(), Value::from(public as usize)),

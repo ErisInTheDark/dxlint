@@ -24,7 +24,7 @@ mod roles;
 mod statics;
 mod summary;
 pub mod syntax;
-mod tokens;
+pub(crate) mod tokens;
 pub mod topics;
 mod types;
 pub mod unused;

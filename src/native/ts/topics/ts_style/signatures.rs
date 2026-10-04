@@ -131,7 +131,7 @@ fn compare(s: &Syntax, a: u32, b: u32, count: usize, outer_names: &[&str]) -> Op
         (s.tree.node(extra).start as usize, signature_head(s, short_sig), format!(" with {} parameter.", if rest(s, extra) { "a rest" } else { "an optional" }))
     };
     let start = if count == 2 { "These overloads".to_string() } else { format!("This overload and the one on line {}", s.src[..other].bytes().filter(|&b| b == b'\n').count() + 1) };
-    Some(Value::Record(vec![
+    Some(Value::record(vec![
         ("offset".into(), Value::from(offset)),
         ("message".into(), Value::from(format!("{start} can be combined into one signature{ending}"))),
         ("same_names".into(), Value::Bool(same_names)),
@@ -165,7 +165,7 @@ pub(super) fn unifiable_signatures(file: &NativeFile, node: u32) -> Value<'stati
             }
         }
     }
-    Value::List(result)
+    Value::list(result)
 }
 
 pub(super) fn nonadjacent_signatures(file: &NativeFile, node: u32) -> Value<'static> {
@@ -188,7 +188,7 @@ pub(super) fn nonadjacent_signatures(file: &NativeFile, node: u32) -> Value<'sta
         };
         let Some(info) = info else { last = None; continue };
         if seen.contains(&info) && last.as_ref() != Some(&info) {
-            result.push(Value::Record(vec![
+            result.push(Value::record(vec![
                 ("offset".into(), Value::from(s.tree.node(member).start as usize)),
                 ("name".into(), Value::from(format!("{}{}", if info.2 == Some(true) { "static " } else { "" }, info.0))),
             ]));
@@ -197,7 +197,7 @@ pub(super) fn nonadjacent_signatures(file: &NativeFile, node: u32) -> Value<'sta
         }
         last = Some(info);
     }
-    Value::List(result)
+    Value::list(result)
 }
 
 fn this_type(s: &Syntax, node: u32) -> Option<u32> {
@@ -214,13 +214,13 @@ pub(super) fn function_type_candidate(file: &NativeFile, node: u32) -> Value<'st
         let extends: Vec<_> = s.all(parent, F::Extends).collect();
         if !extends.is_empty() && !(extends.len() == 1 && (s.text(extends[0]) == "Function" || s.word(extends[0], F::Name) == Some("Function"))) { return Value::Null; }
         if let Some(this) = this_type(s, parent) {
-            return Value::Record(vec![
+            return Value::record(vec![
                 ("offset".into(), Value::from(s.tree.node(this).start as usize)),
                 ("message".into(), Value::from(format!("`this` refers to the function type '{}', did you intend to use a generic `this` parameter like `<Self>(this: Self, ...) => Self` instead?", s.word(parent, F::Name).unwrap_or("")))),
             ]);
         }
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(s.tree.node(node).start as usize)),
         ("message".into(), Value::from(format!("{} only has a call signature, you should use a function type instead.", if s.is(parent, K::Interface) { "Interface" } else { "Type literal" }))),
     ])

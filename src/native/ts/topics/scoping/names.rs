@@ -23,7 +23,7 @@ pub(super) fn function_context(file: &NativeFile, node: u32) -> Value<'static> {
     let name = s.get(node, F::Name);
     let recursive = name.and_then(|n| file.bindings().decls.get(&n))
         .is_some_and(|b| b.uses > 0 || b.self_uses > 0 || b.writes > 0);
-    Value::Record(vec![
+    Value::record(vec![
         ("eligible".into(), Value::Bool(!declaration || default_export)),
         ("expression".into(), Value::Bool(!declaration)),
         ("named".into(), Value::Bool(name.is_some())),
@@ -85,7 +85,7 @@ pub(super) fn function_match(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("target".into(), Value::from(target)),
         ("name".into(), Value::from(s.text(function_name).to_string())),
         ("property".into(), Value::Bool(property)),
@@ -158,7 +158,7 @@ pub(super) fn camelcase(file: &NativeFile, node: u32) -> Value<'static> {
     if !(property || label || exported) && (skip_reference || !(value_name || globals)) {
         return Value::Null;
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name.to_string())),
         ("property".into(), Value::Bool(property)),
         ("private".into(), Value::Bool(s.is(node, K::PrivateName))),

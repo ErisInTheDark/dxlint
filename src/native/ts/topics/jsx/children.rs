@@ -23,7 +23,7 @@ fn descriptor(file: &NativeFile, id: u32) -> String {
 }
 
 fn report(file: &NativeFile, id: u32) -> Value<'static> {
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(id).start as usize)),
         ("descriptor".into(), Value::from(descriptor(file, id))),
     ])
@@ -81,7 +81,7 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
         }
         if is_element(child) && !block_comment(file, child) && index + 2 < children.len() && s.is(children[index + 1], K::JsxText) {
             let next = children[index + 2..].iter().copied().find(|&id| is_element(id) && !block_comment(file, id));
-            newlines.push(Value::Record(vec![
+            newlines.push(Value::record(vec![
                 ("offset".into(), Value::from(s.tree.node(children[index + 2]).start as usize)),
                 ("blank".into(), Value::Bool(blank_line(s.text(children[index + 1])))),
                 ("multiline".into(), Value::Bool(!single(child) || next.is_some_and(|id| !single(id)))),
@@ -97,7 +97,7 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
                 let before = !text.trim_end_matches(space).is_empty() && text[text.trim_end_matches(space).len()..].contains('\n');
                 let target = if after && prev.is_some() { prev.map(|id| (id, true)) } else if before { next.map(|id| (id, false)) } else { None };
                 if let Some((id, after)) = target {
-                    spacing.push(Value::Record(vec![
+                    spacing.push(Value::record(vec![
                         ("offset".into(), Value::from(if after { s.tree.node(id).end as usize } else { s.tree.node(id).start as usize })),
                         ("name".into(), Value::from(inline_name(file, id).unwrap_or("").to_string())),
                         ("after".into(), Value::Bool(after)),
@@ -132,16 +132,16 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
         let trailing = s.is(last, K::JsxText) && s.text(last).rfind('\n').is_some_and(|at| s.text(last)[at + 1..].chars().all(space));
         delta == 0 && !leading && !trailing || delta == 2 && leading && trailing
     });
-    Value::Record(vec![
-        ("reports".into(), Value::List(reports)),
-        ("single_line_reports".into(), Value::List(single_line_reports)),
+    Value::record(vec![
+        ("reports".into(), Value::list(reports)),
+        ("single_line_reports".into(), Value::list(single_line_reports)),
         ("single_line_allowed".into(), Value::Bool(single_line_allowed)),
         ("single_child".into(), Value::Bool(children.len() == 1 && single(children[0])
             && line(&lines, own.start as usize) == line(&lines, own.end as usize))),
         ("literal_child".into(), Value::Bool(children.len() == 1 && s.is(children[0], K::JsxText))),
         ("has_jsx".into(), Value::Bool(children.iter().any(|&id| matches!(s.kind(id), Some(K::JsxElement | K::JsxFragment))))),
-        ("newlines".into(), Value::List(newlines)),
-        ("spacing".into(), Value::List(spacing)),
+        ("newlines".into(), Value::list(newlines)),
+        ("spacing".into(), Value::list(spacing)),
     ])
 }
 

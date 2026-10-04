@@ -6,7 +6,7 @@ use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::lexer::Tok;
 
-use super::{delimiters::brace_start, lex_comments};
+use super::lex_comments;
 
 struct Lines(LineIndex);
 
@@ -17,7 +17,7 @@ fn lines(file: &NativeFile<'_>) -> Lines {
 pub(super) fn empty_line_runs(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
     if !syntax.is(node, K::Program) {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let lines = file.cached(lines);
     let mut protected = vec![false; lines.0.line_count()];
@@ -39,63 +39,22 @@ pub(super) fn empty_line_runs(file: &NativeFile<'_>, node: u32) -> Value<'static
         let nonempty = protected || !lines.0.line_text(syntax.src, line).trim().is_empty();
         if nonempty {
             if line > first {
-                runs.push(Value::Record(vec![
+                runs.push(Value::record(vec![
                     ("kind".into(), Value::from(if first == 0 { "bof" } else if line == count { "eof" } else { "middle" })),
                     ("count".into(), Value::from(line - first)),
-                    ("offsets".into(), Value::List((first..line).map(|i| Value::from(lines.0.line_start(i))).collect())),
+                    ("offsets".into(), Value::list((first..line).map(|i| Value::from(lines.0.line_start(i))).collect())),
                 ]));
             }
             first = line + 1;
         }
     }
-    Value::List(runs)
-}
-
-pub(super) fn block_padding_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    let (kind, field) = match syntax.kind(node) {
-        Some(K::Block | K::StaticBlock) => ("blocks", F::Body),
-        Some(K::Switch) => ("switches", F::Case),
-        Some(K::Class) => ("classes", F::Member),
-        _ => return Value::List(Vec::new()),
-    };
-    if syntax.all(node, field).next().is_none() {
-        return Value::List(Vec::new());
-    }
-    let Some(start) = brace_start(file, node) else { return Value::List(Vec::new()) };
-    let lexed = file.cached(lex_comments);
-    let lines = file.cached(lines);
-    let line = |at: u32| lines.0.line_of(at as usize);
-    let open = lexed.0.partition_point(|token| token.start < start);
-    let Some(close) = lexed.0.partition_point(|token| token.end <= syntax.tree.node(node).end).checked_sub(1) else { return Value::List(Vec::new()) };
-    if close <= open + 1 {
-        return Value::List(Vec::new());
-    }
-    let mut first = open + 1;
-    while first < close && matches!(lexed.0[first].tok, Tok::P("/*" | "//")) && line(lexed.0[first - 1].end) == line(lexed.0[first].start) {
-        first += 1;
-    }
-    let mut last = close - 1;
-    while last > open && matches!(lexed.0[last].tok, Tok::P("/*" | "//")) && line(lexed.0[last].end) == line(lexed.0[last + 1].start) {
-        last -= 1;
-    }
-    let single_line = line(lexed.0[first - 1].end) == line(lexed.0[last + 1].start);
-    Value::List([
-        ("top", lexed.0[first - 1].start, line(lexed.0[first].start).saturating_sub(line(lexed.0[first - 1].end)) >= 2),
-        ("bottom", lexed.0[last].end, line(lexed.0[last + 1].start).saturating_sub(line(lexed.0[last].end)) >= 2),
-    ].into_iter().map(|(side, offset, padded)| Value::Record(vec![
-        ("kind".into(), Value::from(kind)),
-        ("side".into(), Value::from(side)),
-        ("offset".into(), Value::from(offset as usize)),
-        ("padded".into(), Value::Bool(padded)),
-        ("single_line".into(), Value::Bool(single_line)),
-    ])).collect())
+    Value::list(runs)
 }
 
 pub(super) fn class_member_gaps(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
     if !syntax.is(node, K::Class) {
-        return Value::List(Vec::new());
+        return Value::list(Vec::new());
     }
     let lexed = file.cached(lex_comments);
     let lines = file.cached(lines);
@@ -126,7 +85,7 @@ pub(super) fn class_member_gaps(file: &NativeFile<'_>, node: u32) -> Value<'stat
             while after > cur_last + 1 && line(lexed.0[after].start).saturating_sub(line(lexed.0[after - 1].end)) <= 1 {
                 after -= 1;
             }
-            gaps.push(Value::Record(vec![
+            gaps.push(Value::record(vec![
                 ("prev".into(), Value::from(kind(pair[0]))),
                 ("next".into(), Value::from(kind(pair[1]))),
                 ("offset".into(), Value::from(next.start as usize)),
@@ -136,5 +95,5 @@ pub(super) fn class_member_gaps(file: &NativeFile<'_>, node: u32) -> Value<'stat
             ]));
         }
     }
-    Value::List(gaps)
+    Value::list(gaps)
 }

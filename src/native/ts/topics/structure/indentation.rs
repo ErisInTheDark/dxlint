@@ -7,7 +7,7 @@ struct OperandIndents(Vec<Value<'static>>);
 
 pub(super) fn operands(file: &NativeFile, node: u32) -> Value<'static> {
     if !file.syntax.is(node, K::Program) { return Value::Null }
-    Value::List(file.cached(scan).0.clone())
+    Value::list(file.cached(scan).0.clone())
 }
 
 fn scan(file: &NativeFile) -> OperandIndents {
@@ -74,7 +74,7 @@ fn scan(file: &NativeFile) -> OperandIndents {
                 || before.is_some_and(|index| line(tokens[index].0) == left_row
                     && (matches!(text(index), "[" | "(" | "{" | "=>" | ":") || assignments.contains(&text(index))));
             let subtract = closes_more && !matches!(first_text, "]" | ")" | "}") && !chain;
-            out.push(Value::Record(vec![
+            out.push(Value::record(vec![
                 ("offset".into(), Value::from(starts[right_row])),
                 ("left_line".into(), Value::from(if chain { line(bounds.start as usize) } else { left_row })),
                 ("right_line".into(), Value::from(right_row)),

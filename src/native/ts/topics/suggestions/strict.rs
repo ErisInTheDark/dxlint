@@ -33,7 +33,7 @@ pub fn policy(file: &NativeFile, node: u32) -> Value<'static> {
     let mut policies = Vec::new();
     for mode in ["global", "function", "never", "module"] {
         let mut reports = Vec::new();
-        let mut add = |at: u32, message: String| reports.push(Value::Record(vec![
+        let mut add = |at: u32, message: String| reports.push(Value::record(vec![
             ("offset".into(), Value::Num(f64::from(s.tree.node(at).start))),
             ("message".into(), Value::from(message)),
         ]));
@@ -72,7 +72,7 @@ pub fn policy(file: &NativeFile, node: u32) -> Value<'static> {
             };
             add(directive, message.into());
         }
-        policies.push((mode.into(), Value::List(reports)));
+        policies.push((mode.into(), Value::list(reports)));
     }
-    Value::Record(policies)
+    Value::record(policies)
 }

@@ -17,7 +17,7 @@ fn empty_jsx(file: &NativeFile) -> EmptyJsx {
 pub fn comments(file: &NativeFile, _: u32) -> Value<'static> {
     let src = file.syntax.src;
     let jsx = file.cached(empty_jsx);
-    Value::List(file.comments().iter().enumerate().map(|(i, comment)| {
+    Value::list(file.comments().iter().enumerate().map(|(i, comment)| {
         let body = comment.body(src);
         let before = &src[..comment.start as usize];
         let after = &src[comment.end as usize..];
@@ -31,7 +31,7 @@ pub fn comments(file: &NativeFile, _: u32) -> Value<'static> {
         let consecutive = i > 0 && src[file.comments()[i - 1].end as usize..comment.start as usize].trim().is_empty();
         let clean: String = body.chars().filter(|&c| c != '*').collect();
         let letter = clean.chars().find(|c| !c.is_whitespace());
-        Value::Record(vec![
+        Value::record(vec![
             ("offset".into(), Value::from(comment.start as usize)),
             ("text".into(), Value::from(body.to_string())),
             ("clean".into(), Value::from(clean)),
@@ -75,10 +75,10 @@ pub fn lines(file: &NativeFile, node: u32) -> Value<'static> {
     let end_line = src[..own.end as usize].bytes().filter(|&b| b == b'\n').count();
     let program = file.syntax.is(node, super::super::super::kinds::Kind::Program);
     let lines = file.cached(line_metadata);
-    Value::List(lines.0.iter().enumerate().filter(|(line, (offset, _, _))| {
+    Value::list(lines.0.iter().enumerate().filter(|(line, (offset, _, _))| {
         *line >= start_line && *line <= end_line && !(program && *offset == src.len() && *line > 0)
     }).map(|(_, &(offset, blank, comment))| {
-        Value::Record(vec![("offset".into(), Value::from(offset)), ("blank".into(), Value::Bool(blank)), ("comment".into(), Value::Bool(comment))])
+        Value::record(vec![("offset".into(), Value::from(offset)), ("blank".into(), Value::Bool(blank)), ("comment".into(), Value::Bool(comment))])
     }).collect())
 }
 

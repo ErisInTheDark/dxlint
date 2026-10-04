@@ -13,7 +13,7 @@ pub fn closing(file: &NativeFile, node: u32) -> Value<'static> {
     let Some(close) = close else { return Value::Null };
     let lines = file.cached(line_starts);
     let prefix = &s.src[lines.start(close)..close];
-    Value::Record(vec![
+    Value::record(vec![
         ("offset".into(), Value::from(close)),
         ("single".into(), Value::Bool(line(&lines, start) == line(&lines, close))),
         ("own_line".into(), Value::Bool(prefix.chars().all(space))),
@@ -63,7 +63,7 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
         let after_open = if opening { start } else { slash.unwrap_or(start) };
         let mut parts = Vec::new();
         let mut gap = |kind: &'static str, left_start: usize, left_end: usize, right: usize, offset: usize| {
-            parts.push(Value::Record(vec![
+            parts.push(Value::record(vec![
                 ("kind".into(), Value::from(kind)),
                 ("offset".into(), Value::from(offset)),
                 ("left_end".into(), Value::from(left_end)),
@@ -105,26 +105,26 @@ pub fn layout(file: &NativeFile, node: u32) -> Value<'static> {
                 _ => correct_column == Some(bracket_column) && (mode != "tag-aligned" || tabs_match),
             };
             let fallback = !correct && trailing_comment && matches!(mode, "after-tag" | "after-props");
-            Value::Record(vec![
+            Value::record(vec![
                 ("mode".into(), Value::from(mode)),
                 ("placement".into(), Value::from(if fallback { "line-aligned" } else { mode })),
                 ("correct".into(), Value::Bool(if fallback { bracket_column == indent } else { correct })),
                 ("column".into(), if fallback { Value::from(indent) } else { correct_column.map_or(Value::Null, Value::from) }),
             ])
         }).collect();
-        Value::Record(vec![
+        Value::record(vec![
             ("opening".into(), Value::Bool(opening)),
             ("self_closing".into(), Value::Bool(self_close)),
             ("bracket".into(), Value::from(bracket)),
             ("has_props".into(), Value::Bool(last.is_some())),
-            ("locations".into(), Value::List(locations)),
+            ("locations".into(), Value::list(locations)),
             ("last_on_open_line".into(), Value::Bool(last.is_some_and(|p| line(&lines, p.end as usize) == line(&lines, start)))),
             ("last_on_close_line".into(), Value::Bool(last_on_close_line)),
         ])
     }).collect();
-    Value::Record(vec![
-        ("tags".into(), Value::List(records)),
-        ("parts".into(), Value::List(all_parts)),
+    Value::record(vec![
+        ("tags".into(), Value::list(records)),
+        ("parts".into(), Value::list(all_parts)),
     ])
 }
 

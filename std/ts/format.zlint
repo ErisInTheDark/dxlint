@@ -108,7 +108,7 @@ in js_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allowed.
   option skipBlankLines boolean = false "ignore whitespace-only lines"
   option ignoreComments boolean = false "ignore comment lines"
   when !(skipBlankLines && !re_test(before, /\S/))
-  when !(ignoreComments && (enclosing is [js_line_comment, js_block_comment] || starts_with(before, "#!")))
+  when !(ignoreComments && (enclosing is (js_line_comment, js_block_comment) || starts_with(before, "#!")))
   when enclosing != "js_template"
   fix as ""
 }

@@ -3,6 +3,35 @@
 
 define {
 
+fn layout_comma_space(gap, before_side) = default(re_find(gap, if before_side then /\s*$/ else /^\s*/), "")
+macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
+macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
+fn layout_padding_attached_start(gap) = default(re_find(gap, "^(?:" layout_horizontal_space "*" layout_comment_pattern ")*"), "")
+fn layout_padding_attached_end(gap) = default(re_find(gap, "(?:" layout_comment_pattern layout_horizontal_space "*)*$"), "")
+fn layout_padding_last_attached(prefix) = re_replace(prefix, "^(?:" layout_horizontal_space "*(" layout_comment_pattern "))*$", "$1")
+fn layout_padding_last_comment(gap) = re_replace(gap, "^(?:\\s*(" layout_comment_pattern "))*\\s*$", "$1")
+fn layout_padding_top_space(gap) = layout_comma_space(slice(gap, len(layout_padding_attached_start(gap))), false)
+fn layout_padding_tail_space(gap) = default(re_find(gap, if starts_with(layout_padding_last_comment(gap), "//") then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/), "")
+fn layout_padding_bottom_space(gap) = layout_padding_tail_space(slice(gap, 0, len(gap) - len(layout_padding_attached_end(gap))))
+fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
+fn layout_padding_mode(style, blocks, switches, classes, kind) = if style != null then style else if blocks == null && switches == null && classes == null then "always" else if kind == "ts_class" then classes else if kind == "ts_switch" then switches else blocks
+macro layout_padding_options {
+  option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
+  option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
+  option switches "always" | "never" | "start" | "end" | null = null "switch padding"
+  option classes "always" | "never" | "start" | "end" | null = null "class padding"
+  option allowSingleLineBlocks boolean = false "allow single-line blocks"
+}
+in ts_function, ts_method, ts_arrow, ts_function_type, ts_method_signature, ts_call_signature, ts_class, ts_interface, ts_type_alias let layout_last_type_parameter_end last(type_parameter.end_offset)
+in ts_block, ts_static_block let layout_padding_content body != null
+in ts_switch let layout_padding_content case != null
+in ts_class let layout_padding_content member != null
+in ts_block, ts_static_block, ts_switch, ts_class {
+  let layout_padding_open_prefix layout_padding_attached_start(opener.ts_open_brace.space_after.text)
+  let layout_padding_close_suffix layout_padding_attached_end(closer.ts_close_brace.space_before.text)
+  let layout_padding_single opener.ts_open_brace.line + layout_line_breaks(layout_padding_open_prefix) == closer.ts_close_brace.line - layout_line_breaks(layout_padding_close_suffix)
+}
+
 in ts_variable_declaration, ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_method, ts_arrow, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_sequence, ts_enum, ts_tuple_type, ts_type_literal, ts_method_signature, ts_call_signature, ts_index_signature, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_tagged_template rule comma-style {
   option style "last" | "first" = "last" "comma line position"
   option exceptions { [key: string]: boolean } = {} "exempt list node kinds"
@@ -151,17 +180,32 @@ in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_ind
   warn if annotation_gap.side == "between" then (if annotation_gap.desired then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'.") else (if annotation_gap.desired then "Expected a space {annotation_gap.side} the '{annotation_label}'." else "Unexpected space {annotation_gap.side} the '{annotation_label}'.")
 }
 
-in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks {
-  option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
-  option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
-  option switches "always" | "never" | "start" | "end" | null = null "switch padding"
-  option classes "always" | "never" | "start" | "end" | null = null "class padding"
-  option allowSingleLineBlocks boolean = false "allow single-line blocks"
-  let padding_kind first(block_padding_sites).kind
-  let padding_mode if style != null then style else if blocks == null && switches == null && classes == null then "always" else if padding_kind == "blocks" then blocks else if padding_kind == "switches" then switches else classes
-  each padding_site in filter(block_padding_sites, s => !(allowSingleLineBlocks && s.single_line) && padding_mode != null && s.padded != (padding_mode == "always" || padding_mode == "start" && s.side == "top" || padding_mode == "end" && s.side == "bottom"))
-  report at padding_site.offset
-  warn if padding_site.padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
+  layout_padding_options
+  when opener.ts_open_brace.offset != null
+  when layout_padding_content
+  let padding_mode layout_padding_mode(style, blocks, switches, classes, layer)
+  when padding_mode != null
+  when !(allowSingleLineBlocks && layout_padding_single)
+  let padding_space layout_padding_top_space(opener.ts_open_brace.space_after.text)
+  let padding_padded layout_line_breaks(padding_space) >= 2
+  when padding_padded != (padding_mode == "always" || padding_mode == "start")
+  report at if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - byte_len(layout_padding_last_attached(layout_padding_open_prefix))
+  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+}
+
+in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
+  layout_padding_options
+  when closer.ts_close_brace.offset != null
+  when layout_padding_content
+  let padding_mode layout_padding_mode(style, blocks, switches, classes, layer)
+  when padding_mode != null
+  when !(allowSingleLineBlocks && layout_padding_single)
+  let padding_space layout_padding_bottom_space(closer.ts_close_brace.space_before.text)
+  let padding_padded layout_line_breaks(padding_space) >= 2
+  when padding_padded != (padding_mode == "always" || padding_mode == "end")
+  report at closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix) - byte_len(padding_space)
+  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
 }
 
 in ts_class rule lines-between-class-members {
@@ -179,13 +223,20 @@ in ts_class rule lines-between-class-members {
   warn if class_gap.site.padded then "Unexpected blank line between class members." else "Expected blank line between class members."
 }
 
-in ts_binary, ts_logical, ts_assignment, ts_assignment_pattern, ts_conditional, ts_conditional_type, ts_declarator, ts_parameter, ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter, ts_union, ts_intersection rule space-infix-ops {
+in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule space-infix-ops {
   option int32Hint boolean = false "allow terminal |0 conversion"
   option ignoreOperators string[] = [] "operators exempt from spacing"
   option ignoreTypes boolean = false "skip union and intersection operators"
-  each infix_site in filter(infix_spacing_sites, s => !s.spaced && !(ignoreTypes && s.types) && !(int32Hint && s.int32_hint) && !contains(ignoreOperators, s.operator))
-  report at infix_site.offset
-  warn "Operator '{infix_site.operator}' must be spaced."
+  let infix_types parent is (ts_union, ts_intersection)
+  when parent is (ts_binary, ts_logical, ts_assignment)
+    || infix_types && contains(["|", "&"], text)
+    || parent is (ts_conditional, ts_conditional_type) && contains(["?", ":"], text)
+    || parent is (ts_assignment_pattern, ts_declarator, ts_parameter, ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter) && text == "="
+  when !(ignoreTypes && infix_types)
+  when !(int32Hint && parent is (ts_binary, ts_logical, ts_assignment, ts_assignment_pattern) && ends_with(parent_text, "|0"))
+  when !contains(ignoreOperators, text)
+  when !(space_before.spaced && space_after.spaced)
+  warn "Operator '{text}' must be spaced."
 }
 
 in ts_block, ts_switch, ts_class, ts_interface, ts_enum rule space-before-blocks {
@@ -356,13 +407,32 @@ in ts_program rule semi-spacing {
   warn if semi_site.spaced then "Unexpected whitespace {semi_site.side} semicolon." else "Missing whitespace {semi_site.side} semicolon."
 }
 
-in ts_program rule comma-spacing {
+in ts_comma rule comma-spacing:before {
   option before boolean = false "space before comma"
   option after boolean = true "space after comma"
-  each comma_site in filter(comma_spacing_sites, s => (if s.side == "before" then before else after) != s.spaced && !(s.line_comment && !after))
-  report at comma_site.offset
-  fix as slice(text, 0, comma_site.start - offset) (if comma_site.side == "before" && before || comma_site.side == "after" && after then " " else "") slice(text, comma_site.end - offset)
-  warn if comma_site.side == "before" && before || comma_site.side == "after" && after then "A space is required {comma_site.side} ','." else "There should be no space {comma_site.side} ','."
+  when previous_token != null && previous_token not ts_comma
+  when !(parent is (ts_array, ts_array_pattern) && previous_token is ts_open_bracket)
+  when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
+  let comma_space layout_comma_space(space_before.text, true)
+  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
+  when before != (comma_space != "")
+  fix space_before as if before then " " else ""
+  warn if before then "A space is required before ','." else "There should be no space before ','."
+}
+
+in ts_comma rule comma-spacing:after {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  when next_token != null
+  when space_after.comments || next_token not (ts_comma, ts_close_paren, ts_close_bracket, ts_close_brace)
+  when !(parent is (ts_array, ts_array_pattern) && previous_token is (ts_open_bracket, ts_comma) && next_token is (ts_comma, ts_close_bracket))
+  when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
+  when after || !starts_with(trim_start(space_after.text), "//")
+  let comma_space layout_comma_space(space_after.text, false)
+  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
+  when after != (comma_space != "")
+  fix space_after as if after then " " else ""
+  warn if after then "A space is required after ','." else "There should be no space after ','."
 }
 
 in ts_call, ts_new, ts_import_call rule function-call-spacing {

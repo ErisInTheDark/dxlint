@@ -49,7 +49,7 @@ pub fn metrics(file: &NativeFile, node: u32) -> Value<'static> {
     let counts = file.cached(file_counts);
     if s.is(node, K::Program) {
         let offset = s.all(node, F::Body).next().map_or(0, |n| s.tree.node(n).start as usize);
-        return Value::Record(vec![("classes".into(), Value::from(counts.classes)), ("class_declarations".into(), Value::from(counts.declarations)), ("offset".into(), Value::from(offset))]);
+        return Value::record(vec![("classes".into(), Value::from(counts.classes)), ("class_declarations".into(), Value::from(counts.declarations)), ("offset".into(), Value::from(offset))]);
     }
     let params: Vec<_> = s.all(node, F::Param).collect();
     let this = params.first().is_some_and(|&n| s.word(n, F::Name) == Some("this"));
@@ -100,7 +100,7 @@ pub fn metrics(file: &NativeFile, node: u32) -> Value<'static> {
         at = s.parent(n);
     }
     let iife = parent_expression(s, node).is_some_and(|p| s.is(p, K::Call) && s.get(p, F::Callee).is_some_and(|n| s.unparen(n) == node));
-    Value::Record(vec![
+    Value::record(vec![
         ("params".into(), Value::from(params.len())),
         ("this".into(), Value::Bool(this)),
         ("void_this".into(), Value::Bool(void_this)),

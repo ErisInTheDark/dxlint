@@ -56,7 +56,7 @@ pub(super) fn returned(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             "`Promise<any>`" => matches!(ck.awaited(target), Ty::Unknown | Ty::IntrinsicUnknown),
             _ => false,
         }) { return Value::Null }
-        return Value::Record(vec![
+        return Value::record(vec![
             ("kind".into(), Value::from(kind)),
             ("sender".into(), Value::Null),
             ("receiver".into(), Value::Null),
@@ -64,7 +64,7 @@ pub(super) fn returned(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     }
     if !empty_map(file, expr) {
         if let Some(receiver) = targets.first().filter(|receiver| sender.unsafe_assignment_to(receiver)) {
-            return Value::Record(vec![
+            return Value::record(vec![
                 ("kind".into(), Value::Null),
                 ("sender".into(), Value::from(ck.print(&sender))),
                 ("receiver".into(), Value::from(ck.print(receiver))),

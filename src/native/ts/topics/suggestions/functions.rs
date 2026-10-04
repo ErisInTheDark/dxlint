@@ -96,7 +96,7 @@ pub fn style(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("declaration".into(), Value::Bool(declaration)),
         ("exported".into(), Value::Bool(exported && !default_export)),
         ("exempt".into(), Value::Bool(default_export || overloaded || s.get(node, F::Body).is_none())),
@@ -119,7 +119,7 @@ pub fn arrow_body(file: &NativeFile, node: u32) -> Value<'static> {
         else if !single_return { "Unexpected block statement surrounding arrow body." }
         else if argument.is_some_and(|n| file.tokens(n).first() == Some(&"{")) { "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`." }
         else { "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`." };
-    Value::Record(vec![
+    Value::record(vec![
         ("block".into(), Value::Bool(block)),
         ("single_return".into(), Value::Bool(single_return)),
         ("object".into(), Value::Bool(object)),
@@ -144,7 +144,7 @@ pub fn empty_function(file: &NativeFile, node: u32) -> Value<'static> {
         else if s.has_word(node, F::Modifier, "*") { if method { "generatorMethods" } else { "generatorFunctions" } }
         else if s.has_word(node, F::Modifier, "async") { if method { "asyncMethods" } else { "asyncFunctions" } }
         else if method { "methods" } else { "functions" };
-    Value::Record(vec![
+    Value::record(vec![
         ("category".into(), Value::from(category)),
         ("name".into(), Value::from(file.function_name_with_kind(node).unwrap_or_else(|| "function".into()))),
         ("private_constructor".into(), Value::Bool(constructor && s.has_word(node, F::Modifier, "private"))),

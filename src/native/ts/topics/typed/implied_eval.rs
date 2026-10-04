@@ -81,7 +81,7 @@ pub(super) fn finding(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             Some((if name == "execScript" { "exec" } else { "core" }, node))
         } else { None }
     } else { None };
-    mode.map_or(Value::Null, |(mode, report)| Value::Record(vec![
+    mode.map_or(Value::Null, |(mode, report)| Value::record(vec![
         ("mode".into(), Value::from(mode)),
         ("offset".into(), Value::from(s.tree.node(report).start as usize)),
     ]))

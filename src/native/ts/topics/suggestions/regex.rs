@@ -5,7 +5,7 @@ use super::super::super::kinds::{Field as F, Kind as K};
 use crate::expr::Value;
 
 fn escape_finding(character: char, offset: usize, regex: bool) -> Value<'static> {
-    Value::Record(vec![
+    Value::record(vec![
         ("character".into(), Value::from(character.to_string())),
         ("offset".into(), Value::Num(offset as f64)),
         ("regex".into(), Value::Bool(regex)),
@@ -18,11 +18,11 @@ pub fn useless_escapes(file: &NativeFile, node: u32) -> Value<'static> {
     let mut findings = vec![];
     if s.is(node, K::Regex) {
         let text = s.text(node);
-        let Some(close) = text.rfind('/') else { return Value::List(findings) };
+        let Some(close) = text.rfind('/') else { return Value::list(findings) };
         let pattern = &text[1..close];
         let flags = &text[close + 1..];
         let sets = flags.contains('v');
-        let Ok(ast) = parse(pattern, flags.contains('u'), sets) else { return Value::List(findings) };
+        let Ok(ast) = parse(pattern, flags.contains('u'), sets) else { return Value::list(findings) };
         let offsets: Vec<_> = pattern.char_indices().map(|(i, _)| i).chain([pattern.len()]).collect();
         for (id, n) in ast.nodes.iter().enumerate() {
             let Kind::Character(value) = n.kind else { continue };
@@ -51,7 +51,7 @@ pub fn useless_escapes(file: &NativeFile, node: u32) -> Value<'static> {
     } else {
         let template = s.is(node, K::Template);
         if s.parent(node).is_some_and(|p| s.is(p, K::TaggedTemplate) && s.field(node) == Some(F::Quasi)
-            || matches!(s.kind(p), Some(K::JsxAttribute | K::JsxElement | K::JsxFragment))) { return Value::List(findings) }
+            || matches!(s.kind(p), Some(K::JsxAttribute | K::JsxElement | K::JsxFragment))) { return Value::list(findings) }
         let parts: Vec<_> = if template { s.all(node, F::Quasi).collect() } else { vec![node] };
         for part in parts {
             let text = s.text(part);
@@ -69,7 +69,7 @@ pub fn useless_escapes(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(findings)
+    Value::list(findings)
 }
 
 pub fn unnamed_captures(file: &NativeFile, node: u32) -> Value<'static> {
@@ -85,9 +85,9 @@ pub fn unnamed_captures(file: &NativeFile, node: u32) -> Value<'static> {
             Some((pattern, flags))
         })
     };
-    let Some((pattern, flags)) = pattern_flags else { return Value::List(vec![]) };
-    let Ok(ast) = super::super::super::regex::parse::parse(&pattern, flags.contains('u'), flags.contains('v')) else { return Value::List(vec![]) };
-    Value::List(ast.nodes.iter().enumerate()
+    let Some((pattern, flags)) = pattern_flags else { return Value::list(vec![]) };
+    let Ok(ast) = super::super::super::regex::parse::parse(&pattern, flags.contains('u'), flags.contains('v')) else { return Value::list(vec![]) };
+    Value::list(ast.nodes.iter().enumerate()
         .filter(|(_, n)| matches!(n.kind, super::super::super::regex::parse::Kind::CapturingGroup(None)))
         .map(|(i, _)| Value::from(ast.raw(i))).collect())
 }
@@ -114,13 +114,13 @@ pub fn literal_preference(file: &NativeFile, node: u32) -> Value<'static> {
     let args: Vec<_> = s.all(node, F::Arg).map(|n| s.unparen(n)).collect();
     if !(1..=2).contains(&args.len()) { return Value::Null }
     if args.iter().copied().all(is_static) {
-        return Value::Record(vec![
+        return Value::record(vec![
             ("wrapped".into(), Value::Bool(false)),
             ("message".into(), Value::from("Use a regular expression literal instead of the 'RegExp' constructor.")),
         ]);
     }
     if s.is(args[0], K::Regex) && (args.len() == 1 || is_static(args[1])) {
-        return Value::Record(vec![
+        return Value::record(vec![
             ("wrapped".into(), Value::Bool(true)),
             ("message".into(), Value::from(if args.len() == 1 {
                 "Regular expression literal is unnecessarily wrapped within a 'RegExp' constructor."
@@ -149,5 +149,5 @@ pub fn unicode_flags(file: &NativeFile, node: u32) -> Value<'static> {
             None => String::new(),
         }
     };
-    Value::Record(vec![("flags".into(), Value::from(flags))])
+    Value::record(vec![("flags".into(), Value::from(flags))])
 }

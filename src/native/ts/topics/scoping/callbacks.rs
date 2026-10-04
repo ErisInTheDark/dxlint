@@ -37,7 +37,7 @@ pub(super) fn arrow_callback(file: &NativeFile, node: u32) -> Value<'static> {
                 current = call;
             }
             Some(K::Call | K::New) if s.field(current) == Some(F::Arg) => {
-                return Value::Record(vec![
+                return Value::record(vec![
                     ("named".into(), Value::Bool(s.get(node, F::Name).is_some())),
                     ("this".into(), Value::Bool(flags & crate::native::ts::bind::USES_THIS != 0)),
                     ("lexical".into(), Value::Bool(lexical)),
@@ -71,7 +71,7 @@ pub(super) fn array_callback(file: &NativeFile, node: u32) -> Value<'static> {
     let full = if matches!(method.as_str(), "from" | "fromAsync") {
         format!("Array.{method}")
     } else { format!("Array.prototype.{method}") };
-    Value::Record(vec![
+    Value::record(vec![
         ("method".into(), Value::from(full)),
         ("foreach".into(), Value::Bool(method == "forEach")),
         ("name".into(), Value::from(file.function_name_with_kind(node).unwrap_or_else(|| "function".into()))),
@@ -80,9 +80,9 @@ pub(super) fn array_callback(file: &NativeFile, node: u32) -> Value<'static> {
         ("void".into(), Value::Bool(concise && void(body))),
         ("has_return".into(), Value::Bool(!returns.is_empty())),
         ("falls".into(), Value::Bool(!concise && file.reach().0.falls_off.get(&node).copied().unwrap_or(false))),
-        ("returns".into(), Value::List(returns.into_iter().map(|n| {
+        ("returns".into(), Value::list(returns.into_iter().map(|n| {
             let arg = s.get(n, F::Arg);
-            Value::Record(vec![
+            Value::record(vec![
                 ("value".into(), Value::Bool(arg.is_some())),
                 ("void".into(), Value::Bool(arg.is_some_and(void))),
                 ("offset".into(), Value::from(s.tree.node(n).start as usize)),

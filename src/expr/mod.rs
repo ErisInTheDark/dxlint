@@ -101,7 +101,7 @@ pub enum CExpr {
     /// A rule's own `let` value, by slot.
     Local(u16),
     /// `{ key: value }`
-    Record(Vec<(Box<str>, CExpr)>),
+    Record(Vec<(value::Key, CExpr)>),
     /// A lambda parameter, by depth (0 = outermost).
     Param(u16),
     /// `value.key` on a record.
@@ -112,6 +112,12 @@ pub enum CExpr {
     /// `fact(args)` on the node: the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>),
+    /// `field.builtin`: evaluated on the node(s) in a field of this one
+    /// (null without any, a list for several).
+    OnField(u16, Box<CExpr>),
+    /// `opener.x` / `closer.x`: evaluated on the node's first (`true`: last)
+    /// child whose layer is one of these.
+    OwnChild(bool, Vec<u32>, Box<CExpr>),
     /// A config `fn`, by index in [`Grammar::functions`], with its arguments.
     UserCall(u32, Vec<CExpr>),
     /// `reduce(list, initial, (state, item) => next)`; the body reads the
@@ -340,7 +346,7 @@ impl Scope<'_> {
                 CExpr::List(items.iter().map(|i| self.compile(i, errors)).collect::<Option<Vec<_>>>()?)
             }
             ExprKind::Record(entries) => CExpr::Record(
-                entries.iter().map(|(k, v)| Some((k.text.as_str().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
+                entries.iter().map(|(k, v)| Some((k.text.clone().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
             ),
             ExprKind::Key(base, key) => CExpr::Key(Box::new(self.compile(base, errors)?), key.text.as_str().into()),
             ExprKind::Lambda(..) => {
@@ -531,6 +537,15 @@ impl Scope<'_> {
         })
     }
 
+    /// `opener` / `closer` as the head of a path: the group of that name,
+    /// when nothing nearer (a field, a layer) has the name.
+    fn own_bracket(&self, head: &crate::config::ast::Name) -> bool {
+        matches!(head.text.as_str(), "opener" | "closer")
+            && !self.fields.iter().any(|(f, _)| *f == head.text)
+            && self.grammar.matcher(&head.text).is_none()
+            && self.grammar.group(&head.text).is_some()
+    }
+
     fn var(&self, path: &[crate::config::ast::Name], e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
         let first = &path[0];
         // Values holding records: lambda parameters, options and `let`s;
@@ -656,6 +671,34 @@ impl Scope<'_> {
                 errors.push(err);
                 None
             }
+            [layer, second, ..] if self.own_bracket(layer) => {
+                // `opener.x`, `closer.x` (then `.key`s): on the node's own
+                // first child in group `opener` (last in `closer`);
+                // `opener.ts_open_brace.x`: only brackets of that layer.
+                let members = |name: &str| -> Option<Vec<u32>> {
+                    if let Some(m) = self.grammar.matcher(name) {
+                        return Some(vec![m]);
+                    }
+                    Some(self.grammar.group(name)?.iter().filter_map(|m| match m {
+                        crate::config::ast::Parent::Matcher(n) => self.grammar.matcher(&n.text),
+                        _ => None,
+                    }).collect())
+                };
+                self.note(layer.span, Resolved::Group(layer.text.clone()));
+                let (ids, field, keys) = match (members(&second.text), path.get(2)) {
+                    (Some(ids), Some(field)) => {
+                        self.note(second.span, Resolved::Layer(second.text.clone()));
+                        (ids, field, &path[3..])
+                    }
+                    _ => (members(&layer.text).expect("checked"), second, &path[2..]),
+                };
+                let inner = self.relative_part(field, errors)?;
+                let mut value = CExpr::OwnChild(layer.text == "closer", ids, Box::new(inner));
+                for key in keys {
+                    value = CExpr::Key(Box::new(value), key.text.as_str().into());
+                }
+                Some(value)
+            }
             [layer, field] => {
                 // `field.attr`: an attribute of one of the node's fields.
                 let own_field = self.fields.iter().find(|(f, _)| *f == layer.text);
@@ -677,6 +720,14 @@ impl Scope<'_> {
                     self.note(layer.span, Resolved::Field(layer.text.clone()));
                     self.note(field.span, Resolved::Fact(facts::FACTS[fact].name));
                     return Some(CExpr::Fact(fact, FactOf::Field(*label)));
+                }
+                // `field.layer`, `field.offset`: a builtin read on the field's
+                // node(s).
+                let builtin = BUILTIN_VARS.iter().position(|(b, _)| *b == field.text);
+                if let (Some((_, label)), Some(b), None, None, false) = (own_field, builtin, attr, fact, ancestor_field) {
+                    self.note(layer.span, Resolved::Field(layer.text.clone()));
+                    self.note(field.span, Resolved::Builtin(BUILTIN_VARS[b].0));
+                    return Some(CExpr::OnField(*label, Box::new(CExpr::Builtin(b))));
                 }
                 // `parent.x`: a field, attribute or fact of the node's
                 // parent layer.
@@ -808,7 +859,7 @@ impl<'a> Ctx<'a> {
             return Ok(match values.len() {
                 0 => Value::Null,
                 1 => values.pop().expect("one"),
-                _ => Value::List(values),
+                _ => Value::list(values),
             });
         };
         if self.memo.busy.borrow().contains(&(node, attr)) {
@@ -859,7 +910,7 @@ impl<'a> Ctx<'a> {
         match items.len() {
             0 => Value::Null,
             1 => items.pop().expect("one"),
-            _ => Value::List(items),
+            _ => Value::list(items),
         }
     }
 
@@ -1085,9 +1136,29 @@ impl<'a> Ctx<'a> {
                         match values.len() {
                             0 => Value::Null,
                             1 => values.pop().expect("one"),
-                            _ => Value::List(values),
+                            _ => Value::list(values),
                         }
                     }
+                }
+            }
+            CExpr::OwnChild(last, ids, inner) => {
+                let fits = |e: &&crate::grammar::Edge| ids.iter().any(|&t| self.grammar.is_a(self.tree.node(e.node).matcher, t));
+                let children = &self.tree.node(self.node).children;
+                let child = if *last { children.iter().rev().find(fits) } else { children.iter().find(fits) };
+                match child {
+                    Some(e) => Ctx { node: e.node, ..*self }.eval(inner)?,
+                    None => Value::Null,
+                }
+            }
+            CExpr::OnField(label, inner) => {
+                let mut values = Vec::new();
+                for id in self.tree.fields(self.node, *label) {
+                    values.push(Ctx { node: id, ..*self }.eval(inner)?);
+                }
+                match values.len() {
+                    0 => Value::Null,
+                    1 => values.pop().expect("one"),
+                    _ => Value::list(values),
                 }
             }
             CExpr::UserCall(i, args) => {
@@ -1127,7 +1198,7 @@ impl<'a> Ctx<'a> {
                 match values.len() {
                     0 => Value::Null,
                     1 => values.pop().expect("one"),
-                    _ => Value::List(values),
+                    _ => Value::list(values),
                 }
             }
             CExpr::Opt(i) => self.options[*i].clone(),
@@ -1221,7 +1292,7 @@ impl<'a> Ctx<'a> {
                     for id in kids {
                         values.push(Ctx { node: id, ..*self }.eval(inner)?);
                     }
-                    Value::List(values)
+                    Value::list(values)
                 }
                 Relative::Previous | Relative::Next => match self.sibling(*rel == Relative::Next) {
                     Some(id) => Ctx { node: id, ..*self }.eval(inner)?,
@@ -1303,7 +1374,7 @@ fn each_over<'s>(each: Each, items: Vec<Value<'s>>, mut run: impl FnMut(&Value<'
                     out.push(item);
                 }
             }
-            Value::List(out)
+            Value::list(out)
         }
         Each::Find => {
             for item in items {

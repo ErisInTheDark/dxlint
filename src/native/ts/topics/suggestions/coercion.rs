@@ -99,7 +99,7 @@ fn classify(file: &NativeFile, node: u32) -> Option<(&'static str, &'static str,
 }
 
 pub fn coercion(file: &NativeFile, node: u32) -> Value<'static> {
-    classify(file, node).map_or(Value::Null, |(kind, op, recommendation)| Value::Record(vec![
+    classify(file, node).map_or(Value::Null, |(kind, op, recommendation)| Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("operator".into(), Value::from(op)),
         ("recommendation".into(), Value::from(recommendation)),
@@ -126,7 +126,7 @@ pub fn boolean_cast(file: &NativeFile, node: u32) -> Value<'static> {
             || s.is(parent, K::Unary) && s.word(parent, F::Op) == Some("!")
             || boolean_call(file, parent) && s.all(parent, F::Arg).next() == Some(current);
         if direct {
-            return Value::Record(vec![("negation".into(), Value::Bool(negation)), ("mode".into(), Value::Num(f64::from(mode)))]);
+            return Value::record(vec![("negation".into(), Value::Bool(negation)), ("mode".into(), Value::Num(f64::from(mode)))]);
         }
         match s.kind(parent) {
             Some(K::Paren) => {}

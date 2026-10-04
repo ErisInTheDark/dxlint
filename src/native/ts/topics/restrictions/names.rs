@@ -63,7 +63,7 @@ pub fn name(file: &NativeFile, node: u32) -> Value<'static> {
                         }
                     };
                     if check {
-                        checks.push(Value::Record(vec![
+                        checks.push(Value::record(vec![
                             ("properties".into(), Value::Bool(properties)),
                             ("classFields".into(), Value::Bool(class_fields)),
                             ("onlyDeclarations".into(), Value::Bool(only_declarations)),
@@ -74,12 +74,12 @@ pub fn name(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::Record(vec![
+    Value::record(vec![
         ("name".into(), Value::from(name.to_string())),
         ("deny".into(), Value::Bool(deny)),
         ("length".into(), Value::Bool(length && !attributes)),
         ("length_property".into(), Value::Bool(length_property)),
-        ("checks".into(), Value::List(checks)),
+        ("checks".into(), Value::list(checks)),
     ])
 }
 
@@ -106,9 +106,9 @@ pub fn properties(file: &NativeFile, node: u32) -> Value<'static> {
     };
     let object = object.filter(|&n| s.is(s.unparen(n), K::Ident)).map(|n| s.text(s.unparen(n)).to_string());
     let candidates = if pattern { s.all(node, F::Property).collect() } else { vec![node] };
-    Value::List(candidates.into_iter().filter_map(|n| {
+    Value::list(candidates.into_iter().filter_map(|n| {
         let name = property_name(s, n)?;
-        Some(Value::Record(vec![
+        Some(Value::record(vec![
             ("object".into(), object.clone().map_or(Value::Null, Value::from)),
             ("property".into(), Value::from(name)),
             ("offset".into(), Value::from(s.tree.node(node).start as usize)),
@@ -143,7 +143,7 @@ pub fn exports(file: &NativeFile, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(names.into_iter().map(|(name, n, kind)| Value::Record(vec![
+    Value::list(names.into_iter().map(|(name, n, kind)| Value::record(vec![
         ("name".into(), Value::from(name)), ("offset".into(), Value::from(s.tree.node(n).start as usize)), ("kind".into(), Value::from(kind)),
     ])).collect())
 }
@@ -161,7 +161,7 @@ pub fn global_member(file: &NativeFile, node: u32) -> Value<'static> {
             let object = s.text(n);
             if intermediates.iter().any(|name| name != object) { return Value::Null; }
             let offset = s.get(node, F::Property).or_else(|| s.get(node, F::Index)).map_or(s.tree.node(node).start, |n| s.tree.node(n).start);
-            return Value::Record(vec![("object".into(), Value::from(object.to_string())), ("property".into(), Value::from(property)), ("offset".into(), Value::from(offset as usize))]);
+            return Value::record(vec![("object".into(), Value::from(object.to_string())), ("property".into(), Value::from(property)), ("offset".into(), Value::from(offset as usize))]);
         }
         if matches!(s.kind(n), Some(K::Member | K::Index)) {
             let Some(name) = property_name(s, n) else { break };

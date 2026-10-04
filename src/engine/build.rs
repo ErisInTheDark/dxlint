@@ -192,7 +192,13 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
     let configs = std::mem::take(&mut config.configs);
     for (ci, c) in configs.iter().enumerate() {
         let pattern = &c.patch.name;
-        let matching: Vec<usize> = (0..config.rules.len()).filter(|&i| wildcard(&pattern.text, &config.rules[i].name.text)).collect();
+        let mut matching: Vec<usize> = (0..config.rules.len()).filter(|&i| wildcard(&pattern.text, &config.rules[i].name.text)).collect();
+        // A rule made of variants only (`comma-spacing:before`, `:after`)
+        // answers to its family name.
+        if matching.is_empty() && !pattern.text.contains(['*', ':']) {
+            let family = format!("{}:", pattern.text);
+            matching = (0..config.rules.len()).filter(|&i| config.rules[i].name.text.starts_with(&family)).collect();
+        }
         if matching.is_empty() {
             if c.soft {
                 continue;
@@ -234,6 +240,7 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             }
             if let Some(f) = &patch.fix {
                 def.fix = Some(f.clone());
+                def.fix_target = patch.fix_target;
             }
             if patch.report.is_some() {
                 def.report = patch.report;
@@ -385,6 +392,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         }
     }
     let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), ..Scope::new(g) };
+    let uses_before = uses.borrow().len();
     // Each `let` sees the ones before it.
     let mut locals = Vec::new();
     for (name, e) in &def.locals {
@@ -419,7 +427,10 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     if errors.len() > before {
         return None;
     }
+    // Reading a node's own brackets needs the file's token nodes.
+    let reads_tokens = uses.borrow()[uses_before..].iter().any(|(_, r)| matches!(r, crate::expr::Resolved::Group(g) if g == "opener" || g == "closer"));
     Some(Rule {
+        reads_tokens,
         name: def.name.text.clone(),
         span: def.name.span,
         targets,
@@ -437,6 +448,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         locals,
         message,
         fix,
+        fix_target: def.fix_target,
         report: def.report.unwrap_or_default(),
         report_at,
         each,

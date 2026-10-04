@@ -43,11 +43,11 @@ pub(super) fn checks(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             }
         }
     }
-    Value::List(checks.into_iter().map(Value::List).collect())
+    Value::list(checks.into_iter().map(Value::list).collect())
 }
 
 fn option(name: &'static str) -> Value<'static> {
-    Value::Record(vec![("option".into(), Value::from(name))])
+    Value::record(vec![("option".into(), Value::from(name))])
 }
 
 fn disjoin(left: Clauses, right: Clauses) -> Option<Clauses> {

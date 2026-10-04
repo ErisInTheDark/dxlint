@@ -7,64 +7,6 @@ use crate::native::ts::lexer::Tok;
 
 use super::{gap_has_space, lex};
 
-pub(super) fn infix_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    let lexed = file.cached(lex);
-    let mut ranges = Vec::new();
-    let types = matches!(syntax.kind(node), Some(K::Union | K::Intersection));
-    if let Some(op) = syntax.get(node, F::Op).filter(|_| matches!(syntax.kind(node), Some(K::Binary | K::Logical | K::Assign))) {
-        let span = syntax.tree.node(op);
-        ranges.push((span.start, span.end));
-    } else {
-        let pairs: Vec<_> = match syntax.kind(node) {
-            Some(K::AssignPattern) => vec![(syntax.get(node, F::Left).or_else(|| syntax.parent(node).and_then(|parent| syntax.get(parent, F::Key))), syntax.get(node, F::Right))],
-            Some(K::Conditional) => vec![(syntax.get(node, F::Test), syntax.get(node, F::Consequent)), (syntax.get(node, F::Consequent), syntax.get(node, F::Alternate))],
-            Some(K::ConditionalType) => vec![(syntax.get(node, F::Extends), syntax.get(node, F::Consequent)), (syntax.get(node, F::Consequent), syntax.get(node, F::Alternate))],
-            Some(K::Declarator | K::Param) => vec![(syntax.get(node, F::Type).or_else(|| syntax.get(node, F::Name)), syntax.get(node, F::Init))],
-            Some(K::ClassProp) => vec![(syntax.get(node, F::Type).or_else(|| syntax.get(node, F::Optional)).or_else(|| syntax.get(node, F::Key)), syntax.get(node, F::Init))],
-            Some(K::EnumMember) => vec![(syntax.get(node, F::Name), syntax.get(node, F::Init))],
-            Some(K::TypeAlias) => vec![(syntax.all(node, F::TypeParam).last().or_else(|| syntax.get(node, F::Name)), syntax.get(node, F::Type))],
-            Some(K::TypeParam) => vec![(syntax.get(node, F::Constraint).or_else(|| syntax.get(node, F::Name)), syntax.get(node, F::Default))],
-            _ => Vec::new(),
-        };
-        for (left, right) in pairs {
-            let (Some(left), Some(right)) = (left, right) else { continue };
-            let from = syntax.tree.node(left).end;
-            let end = syntax.tree.node(right).start;
-            let at = lexed.0.partition_point(|token| token.start < from);
-            if let Some(op) = lexed.0[at..].iter().take_while(|token| token.end <= end).find(|token| matches!(token.tok, Tok::P("=" | "?" | ":"))) {
-                ranges.push((op.start, op.end));
-            }
-        }
-        if types {
-            for ty in syntax.all(node, F::Type) {
-                let start = syntax.tree.node(ty).start;
-                if let Some(at) = lexed.0.partition_point(|token| token.start < start).checked_sub(1) {
-                    let op = lexed.0[at];
-                    if matches!(op.tok, Tok::P("|" | "&")) {
-                        ranges.push((op.start, op.end));
-                    }
-                }
-            }
-        }
-    }
-    let int32_hint = matches!(syntax.kind(node), Some(K::Binary | K::Logical | K::Assign | K::AssignPattern)) && syntax.text(node).ends_with("|0");
-    Value::List(ranges.into_iter().filter_map(|(start, end)| {
-        let at = lexed.0.partition_point(|token| token.start < start);
-        let before = lexed.0.get(at.checked_sub(1)?);
-        let after = lexed.0.get(lexed.0.partition_point(|token| token.start < end));
-        let (Some(before), Some(after)) = (before, after) else { return None };
-        let spaced = gap_has_space(&syntax.src[before.end as usize..start as usize]) && gap_has_space(&syntax.src[end as usize..after.start as usize]);
-        Some(Value::Record(vec![
-            ("operator".into(), Value::from(syntax.src[start as usize..end as usize].to_owned())),
-            ("offset".into(), Value::from(start as usize)),
-            ("spaced".into(), Value::Bool(spaced)),
-            ("types".into(), Value::Bool(types)),
-            ("int32_hint".into(), Value::Bool(int32_hint)),
-        ]))
-    }).collect())
-}
-
 pub(super) fn star_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
     let is_yield = syntax.is(node, K::Yield);
@@ -75,10 +17,10 @@ pub(super) fn star_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'sta
     } else {
         None
     };
-    let Some(star) = star else { return Value::List(Vec::new()) };
+    let Some(star) = star else { return Value::list(Vec::new()) };
     let lexed = file.cached(lex);
     let at = lexed.0.partition_point(|token| token.start < syntax.tree.node(star).start);
-    let Some(token) = lexed.0.get(at) else { return Value::List(Vec::new()) };
+    let Some(token) = lexed.0.get(at) else { return Value::list(Vec::new()) };
     let method = syntax.is(node, K::Method);
     let kind = if is_yield {
         "yield"
@@ -112,7 +54,7 @@ pub(super) fn star_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'sta
                 end = comment.start;
             }
         }
-        sites.push(Value::Record(vec![
+        sites.push(Value::record(vec![
             ("kind".into(), Value::from(kind)),
             ("side".into(), Value::from(side)),
             ("offset".into(), Value::from(token.start as usize)),
@@ -122,7 +64,7 @@ pub(super) fn star_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'sta
             ("spaced".into(), Value::Bool(gap_has_space(&syntax.src[start as usize..end as usize]))),
         ]));
     }
-    Value::List(sites)
+    Value::list(sites)
 }
 
 pub(super) fn unary_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -162,7 +104,7 @@ pub(super) fn unary_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static> 
     let first_bang = operator == "!" && prefix && syntax.get(node, F::Arg).is_some_and(|arg| syntax.is(arg, K::Unary) && syntax.get(arg, F::Op).is_some_and(|op| syntax.text(op) == "!"));
     let start = left.end as usize;
     let end = right.start as usize;
-    Value::Record(vec![
+    Value::record(vec![
         ("operator".into(), Value::from(operator.to_owned())),
         ("word".into(), Value::Bool(word)),
         ("prefix".into(), Value::Bool(prefix)),
@@ -195,31 +137,10 @@ pub(super) fn spread_spacing(file: &NativeFile<'_>, node: u32) -> Value<'static>
         (false, true) => "spread property",
         (false, false) => "spread",
     };
-    Value::Record(vec![
+    Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("start".into(), Value::from(start)),
         ("end".into(), Value::from(end)),
         ("spaced".into(), Value::Bool(gap_has_space(&syntax.src[start..end]))),
     ])
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn infix_spacing_covers_default_initializers() {
-        let lint = native_linter(r#"
-            in ts_parameter, ts_assignment_pattern, ts_declarator rule spacing {
-                each site in filter(infix_spacing_sites, s => !s.spaced)
-                report at site.offset
-                error "spacing"
-            }
-        "#);
-        let path = Path::new("/root/file.ts");
-        assert_eq!(lint.lint(path, "var {a=0}=bar; function foo(a: number=0) {}").len(), 3);
-        assert!(lint.lint(path, "var {a = 0} = bar; function foo(a: number = 0) {}").is_empty());
-    }
 }
