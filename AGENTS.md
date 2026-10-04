@@ -23,7 +23,9 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 
 ## Invariants
 
-- Rust answers questions about code; `.zlint` makes rule decisions. Native facts are properties any rule could ask (syntax, bindings, types, code paths, tokens, lines, comments, static values), read lazily like fields; never named after a rule, never taking rule options, never building messages. Options, what is wrong, positions, messages and fixes live in `.zlint`; shared logic there is a `fn`. Missing expressiveness: extend the DSL, not a rule-specific fact
+- Rust answers questions about code; `.zlint` makes rule decisions. Native facts are properties any rule could ask (syntax, bindings, types, code paths, tokens, static values), read lazily like fields; never named after a rule, never taking rule options, never building messages. Options, what is wrong, positions, messages and fixes live in `.zlint`; shared logic there is a `fn`. Missing expressiveness: extend the DSL, not a rule-specific fact
+- One owner per syntax. A native front end owns only syntax a pattern grammar cannot parse correctly (context-sensitive: regex vs division, ASI, generics, scopes, types). Regular or textual structure (lines, comments, escapes, whitespace runs, words) is a pattern layer, grafted into the native tree. Before adding native syntax, show patterns cannot own it; prefer making the pattern engine faster or more expressive
+- Engine/tree queries (`descendants`, `walk`, `paired_token`...) are language-neutral; they belong to the engine, not a front end
 
 - DFA path and interpreter must agree on semantics (looks: `regex-syntax` definitions; see `grammar/text.rs`)
 - matchers never match empty; no left recursion

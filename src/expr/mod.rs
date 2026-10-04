@@ -998,6 +998,13 @@ impl Scope<'_> {
         if rest.is_empty() {
             return self.relative_part(first, errors);
         }
+        // `n.parent.x`, `n.previous.x`: step to that node, read the rest there.
+        if first.text == "parent" && self.grammar.matcher("parent").is_none() {
+            return Some(CExpr::OnParent(Box::new(self.relative_path(rest, errors)?)));
+        }
+        if let Some(rel) = Relative::named(&first.text) {
+            return Some(CExpr::Relative(rel, Box::new(self.relative_path(rest, errors)?)));
+        }
         match self.node_part(first) {
             Some(CExpr::Field(label)) => Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?))),
             Some(value) => Some(self.member_path(value, rest)),

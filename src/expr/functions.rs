@@ -251,6 +251,14 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::from(a[0].text().len())),
     },
     Function {
+        name: "utf16_len",
+        signature: "utf16_len(text)",
+        doc: "UTF-16 units in a text: its length as JavaScript counts it (`😀` is 2)",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::from(a[0].text().encode_utf16().count())),
+    },
+    Function {
         name: "keys",
         signature: "keys(record)",
         doc: "a record's keys, in order",

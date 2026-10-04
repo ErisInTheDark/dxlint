@@ -1339,6 +1339,16 @@ fn trivia_layers_and_descendants() {
 }
 
 #[test]
+fn node_values_step_to_their_parent() {
+    let l = native_linter(r#"
+        fn grand(n) = n.parent.parent.layer
+        in ts_identifier rule p info "{node.parent.layer}/{grand(node)}" { when text == "a" }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "f(a);").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, ["ts_call/ts_expression_statement"]);
+}
+
+#[test]
 fn descendants_of_trivia_bring_their_nodes() {
     // No rule targets `ts_line`: reading it through `descendants` is enough.
     let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}""#);
