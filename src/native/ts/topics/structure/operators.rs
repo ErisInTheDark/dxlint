@@ -70,3 +70,71 @@ pub(super) fn mixed(file: &NativeFile, node: u32) -> Value<'static> {
         ("offsets".into(), Value::List(vec![Value::from(left.1), Value::from(right.1)])),
     ])
 }
+
+fn linebreak_site(file: &NativeFile, from: usize, right: u32, wanted: &str, exact: Option<u32>, alias: bool) -> Option<Value<'static>> {
+    let s = &file.syntax;
+    let end = s.tree.node(right).start as usize;
+    if from > end { return None }
+    let mut lexer = Lexer::new(&s.src[from..end]);
+    let mut tokens = Vec::new();
+    loop {
+        let token = lexer.next_token();
+        if token.tok == Tok::Eof { break }
+        tokens.push((from + token.start as usize, from + token.end as usize));
+    }
+    let (start, stop) = if let Some(op) = exact {
+        let bounds = s.tree.node(op);
+        (bounds.start as usize, bounds.end as usize)
+    } else { *tokens.iter().rev().find(|&&(start, end)| &s.src[start..end] == wanted)? };
+    let before = tokens.iter().rev().find(|&&(_, end)| end <= start).map_or(from, |&(_, end)| end);
+    let after = tokens.iter().find(|&&(at, _)| at >= stop).map_or(end, |&(at, _)| at);
+    let broken = |from: usize, to: usize| s.src[from..to].contains(['\n', '\r', '\u{2028}', '\u{2029}']);
+    let leading_union = alias && matches!(Lexer::new(&s.src[after..]).next_token().tok, Tok::P("|" | "&"));
+    Some(Value::Record(vec![
+        ("offset".into(), Value::from(start)),
+        ("operator".into(), Value::from(wanted.to_owned())),
+        ("before".into(), Value::Bool(broken(before, start))),
+        ("after".into(), Value::Bool(broken(stop, after))),
+        ("leading_union".into(), Value::Bool(leading_union)),
+    ]))
+}
+
+pub(super) fn linebreaks(file: &NativeFile, node: u32) -> Value<'static> {
+    let s = &file.syntax;
+    let mut out = Vec::new();
+    let mut add = |left: u32, right: u32, op: &str, exact: Option<u32>, alias: bool| {
+        if let Some(site) = linebreak_site(file, s.tree.node(left).end as usize, right, op, exact, alias) { out.push(site); }
+    };
+    match s.kind(node) {
+        Some(K::Binary | K::Logical | K::Assign) => {
+            if let (Some(left), Some(right), Some(op)) = (s.get(node, F::Left), s.get(node, F::Right), s.get(node, F::Op)) {
+                add(left, right, s.text(op), Some(op), false);
+            }
+        }
+        Some(K::Conditional | K::ConditionalType) => {
+            if let (Some(left), Some(consequent), Some(alternate)) = (
+                s.get(node, F::Test).or_else(|| s.get(node, F::Extends)), s.get(node, F::Consequent), s.get(node, F::Alternate),
+            ) {
+                add(left, consequent, "?", None, false);
+                add(consequent, alternate, ":", None, false);
+            }
+        }
+        Some(K::Union | K::Intersection) => {
+            let types: Vec<_> = s.all(node, F::Type).collect();
+            for pair in types.windows(2) { add(pair[0], pair[1], if s.is(node, K::Union) { "|" } else { "&" }, None, false); }
+        }
+        Some(K::Declarator | K::ClassProp | K::EnumMember | K::TypeParam | K::TypeAlias | K::ImportEquals) => {
+            let right = match s.kind(node) {
+                Some(K::TypeParam) => s.get(node, F::Default),
+                Some(K::TypeAlias) => s.get(node, F::Type),
+                Some(K::ImportEquals) => s.get(node, F::Value),
+                _ => s.get(node, F::Init),
+            };
+            if let Some(right) = right {
+                if let Some(site) = linebreak_site(file, s.tree.node(node).start as usize, right, "=", None, s.is(node, K::TypeAlias)) { out.push(site); }
+            }
+        }
+        _ => {}
+    }
+    Value::List(out)
+}

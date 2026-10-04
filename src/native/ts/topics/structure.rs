@@ -11,6 +11,10 @@ mod lines;
 mod declarations;
 mod operators;
 mod calls;
+mod statements;
+mod lists;
+mod indentation;
+mod padding;
 
 pub const FACTS: &[Fact] = &[
     Fact { name: "line_layout_findings", doc: "native ts_program: tab runs, mixed indentation and line endings", get: |f, n| f.with_file(line_layout_findings, n) },
@@ -23,10 +27,17 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "excess_parens", doc: "native parenthesized expressions and types: redundant parentheses with option contexts", get: |f, n| f.with_file(parens::excess, n) },
     Fact { name: "comment_layout", doc: "native program: line comment bodies, positions and directive status", get: |f, n| f.with_file(comments::layout, n) },
     Fact { name: "comment_style_findings", doc: "native program: multiline comment style findings", get: |f, n| f.with_file(comments::styles, n) },
+    Fact { name: "comment_gaps", doc: "native program: missing blank lines and immediate container boundaries around comments", get: |f, n| f.with_file(comments::gaps, n) },
     Fact { name: "line_lengths", doc: "native program: source lines, tab segments, literal and comment status", get: |f, n| f.with_file(lines::lengths, n) },
     Fact { name: "declaration_groups", doc: "native variable declarations: counts, previous statement and preceding groups in the owning scope", get: |f, n| f.with_file(declarations::groups, n) },
     Fact { name: "mixed_operators", doc: "native binary and logical expressions: adjacent unparenthesized operator pair and positions", get: |f, n| f.with_file(operators::mixed, n) },
+    Fact { name: "operator_linebreaks", doc: "native infix and initializer owners: operator positions and neighbouring token linebreaks", get: |f, n| f.with_file(operators::linebreaks, n) },
     Fact { name: "iife_layout", doc: "native calls: immediate function and prototype invocations with wrapping status", get: |f, n| f.with_file(calls::layout, n) },
+    Fact { name: "call_chain_layout", doc: "native calls: chain depth, member prefix and line layout", get: |f, n| f.with_file(calls::chain, n) },
+    Fact { name: "statement_line_events", doc: "native program: counted statement enter and exit lines in traversal order", get: |f, n| f.with_file(statements::events, n) },
+    Fact { name: "list_layout", doc: "native list owners: boundaries, item counts and spacing or wrapping pairs", get: |f, n| f.with_file(lists::sites, n) },
+    Fact { name: "binary_operand_indents", doc: "native program: operand-line indentation constraints in traversal order", get: |f, n| f.with_file(indentation::operands, n) },
+    Fact { name: "statement_padding", doc: "native program: adjacent body statements, matcher categories and intervening blank lines", get: |f, n| f.with_file(padding::sites, n) },
 ];
 
 fn ternary_linebreaks(file: &NativeFile, node: u32) -> Value<'static> {

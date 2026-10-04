@@ -215,6 +215,155 @@ in ts_binary rule eqeqeq {
   warn "Expected '{expected}' and instead saw '{operator}'."
 }
 
+macro padding_selector_matches(info, selector) (if type_of(selector) == "str" then contains(info.tags, selector) else contains(info.selectors, re_replace(selector.selector, /["']/, "")) && (default(selector.lineMode, "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
+
+in ts_program rule padding-line-between-statements {
+  option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
+  let findings map(statement_padding, info => {
+    offset: info.offset,
+    padded: info.padded,
+    policy: default(last(filter(options, config => any(map(config.prev, selector => padding_selector_matches(info.prev, selector))) && any(map(config.next, selector => padding_selector_matches(info.next, selector))))).blankLine, "any"),
+  })
+  each info in findings
+  when info.policy == "always" && !info.padded || info.policy == "never" && info.padded
+  report at info.offset
+  warn if info.policy == "always" then "Expected blank line before this statement." else "Unexpected blank line before this statement."
+}
+
+macro operand_cached_indent(records, row, fallback) default(last(filter(records, prior => prior.right_line == row)).expected, fallback)
+
+in ts_program rule indent-binary-ops {
+  option mode number | "tab" = 2 "indent width or tabs"
+  let width if mode == "tab" then 1 else mode
+  let unit if mode == "tab" then "\t" else " "
+  let measurements reduce(binary_operand_indents, [], (state, info) => state [{
+    offset: info.offset,
+    right_line: info.right_line,
+    actual: operand_cached_indent(state, info.right_line, info.right),
+    expected: if info.adjust > 0 then (operand_cached_indent(state, info.left_line, info.left) repeat(unit, width)) else if info.adjust < 0 then slice(operand_cached_indent(state, info.left_line, info.left), width) else operand_cached_indent(state, info.left_line, info.left),
+  }])
+  each info in measurements
+  when info.actual != info.expected
+  report at info.offset
+  warn "Expected indentation of " len(info.expected) " " (if mode == "tab" then "tab" else "space") (if len(info.expected) == 1 then "" else "s")
+}
+
+in ts_binary, ts_logical, ts_assignment, ts_declarator, ts_class_property, ts_conditional, ts_import_equals, ts_type_alias, ts_conditional_type, ts_union, ts_intersection, ts_type_parameter, ts_enum_member rule operator-linebreak {
+  option mode "before" | "after" | "none" | null = null "operator side of a line break"
+  option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
+  let policies map(operator_linebreaks, info => {
+    info: info,
+    policy: default(get(overrides, info.operator), if mode == null && contains(["?", ":"], info.operator) then "before" else default(mode, "after")),
+  })
+  let findings map(policies, entry => {
+    info: entry.info,
+    policy: if entry.policy != "ignore" && entry.info.leading_union then "after" else entry.policy,
+  })
+  each entry in findings
+  when entry.policy != "ignore" && (entry.info.before || entry.info.after)
+  when entry.info.before && entry.info.after || entry.policy == "before" && !entry.info.before || entry.policy == "after" && !entry.info.after || entry.policy == "none"
+  report at entry.info.offset
+  warn if entry.info.before && entry.info.after then "Bad line breaking before and after '{entry.info.operator}'." else if entry.policy == "before" then "'{entry.info.operator}' should be placed at the beginning of the line." else if entry.policy == "after" then "'{entry.info.operator}' should be placed at the end of the line." else "There should be no line break before or after '{entry.info.operator}'."
+}
+
+in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_call, ts_new, ts_if, ts_import, ts_export, ts_enum, ts_function_type, ts_interface, ts_type_literal, ts_tuple_type, ts_type_reference, ts_method, ts_class rule list-style {
+  option empty "ignore" | "always" | "never" = "ignore" "empty bracket spacing"
+  option singleLine { spacing?: "always" | "never"; maxItems?: number } = { spacing: "never" } "single-line lists"
+  option multiLine { minItems?: number } = { minItems: 0 } "multiline lists"
+  option overrides { [key: string]: "off" | { empty?: "ignore" | "always" | "never"; singleLine?: { spacing?: "always" | "never"; maxItems?: number }; multiLine?: { minItems?: number } } } = { "{}": { singleLine: { spacing: "always" } } } "bracket and node type overrides"
+  let sites map(list_layout, info => {
+    info: info,
+    byNode: get(overrides, info.kind),
+    byBracket: get(overrides, info.brackets),
+  })
+  let policies map(sites, entry => {
+    info: entry.info,
+    off: entry.byNode == "off" || entry.byNode == null && entry.byBracket == "off",
+    empty: default(entry.byNode.empty, default(entry.byBracket.empty, empty)),
+    spacing: default(entry.byNode.singleLine.spacing, default(entry.byBracket.singleLine.spacing, default(singleLine.spacing, "never"))),
+    maxItems: default(entry.byNode.singleLine.maxItems, default(entry.byBracket.singleLine.maxItems, default(singleLine.maxItems, 1000000000))),
+    minItems: default(entry.byNode.multiLine.minItems, default(entry.byBracket.multiLine.minItems, default(multiLine.minItems, 0))),
+  })
+  let findings map(policies, entry => {
+    info: entry.info,
+    off: entry.off || entry.info.count == 0 && entry.empty == "ignore",
+    spacing: entry.info.single && entry.info.count <= entry.maxItems,
+    shouldSpace: if entry.info.count == 0 then entry.empty == "always" else entry.spacing == "always",
+    emptyWrap: entry.info.count == 0,
+    ignoreEmptyWrap: !entry.info.empty_comments && entry.minItems == 0,
+    shouldWrap: if entry.info.count == 0 then entry.info.empty_comments else if entry.info.node_single then entry.info.count > entry.maxItems else entry.info.count >= entry.minItems && entry.info.first_broken,
+  })
+  each entry in findings
+  when !entry.off
+  when if entry.spacing then entry.info.mode == "spacing" && entry.shouldSpace != entry.info.spaced
+    else (if entry.emptyWrap then entry.info.mode == "empty_wrapping" && !entry.ignoreEmptyWrap else entry.info.mode == "wrapping") && entry.shouldWrap != entry.info.broken
+  report at entry.info.offset
+  warn (if entry.spacing then (if entry.shouldSpace then "Should have space between '" else "Should not have space(s) between '") else (if entry.shouldWrap then "Should have line break between '" else "Should not have line break(s) between '")) entry.info.prev "' and '" entry.info.next "'"
+}
+
+in ts_program rule max-statements-per-line {
+  option max number = 1 "maximum statements on one line"
+  option ignoredNodes string[] = [] "statement types excluded from counting"
+  let events filter(statement_line_events, event => !contains(ignoredNodes, event.kind))
+  let groups map(filter(events, current => default(last(filter(events, previous => previous.index < current.index)).line, 0) != current.line), current => {
+    startIndex: current.index,
+    endIndex: default(first(filter(events, next => next.index > current.index && next.line != current.line)).index, len(statement_line_events)),
+    carried: if current.enter then 0 else 1,
+  })
+  let measurements map(groups, group => {
+    carried: group.carried,
+    entries: filter(events, event => event.enter && event.index >= group.startIndex && event.index < group.endIndex),
+  })
+  each info in measurements
+  when count(info.entries) + info.carried > max
+  report at first(slice(info.entries, max - info.carried)).offset
+  warn "This line has {count(info.entries) + info.carried} statements. Maximum allowed is {max}."
+}
+
+in ts_program rule lines-around-comment {
+  option beforeBlockComment boolean = true "blank line before block comments"
+  option afterBlockComment boolean = false "blank line after block comments"
+  option beforeLineComment boolean = false "blank line before line comments"
+  option afterLineComment boolean = false "blank line after line comments"
+  option afterHashbangComment boolean = false "blank line after hashbangs"
+  option applyDefaultIgnorePatterns boolean = true "ignore directive comments"
+  option ignorePattern string = "" "ignore matching comment bodies"
+  option allowBlockStart boolean = false "allow comments at block starts"
+  option allowBlockEnd boolean = false "allow comments at block ends"
+  option allowClassStart boolean | null = null "override class start exceptions"
+  option allowClassEnd boolean | null = null "override class end exceptions"
+  option allowObjectStart boolean = false "allow comments at object starts"
+  option allowObjectEnd boolean = false "allow comments at object ends"
+  option allowArrayStart boolean = false "allow comments at array starts"
+  option allowArrayEnd boolean = false "allow comments at array ends"
+  option allowInterfaceStart boolean = false "allow comments at interface starts"
+  option allowInterfaceEnd boolean = false "allow comments at interface ends"
+  option allowTypeStart boolean = false "allow comments at type starts"
+  option allowTypeEnd boolean = false "allow comments at type ends"
+  option allowEnumStart boolean = false "allow comments at enum starts"
+  option allowEnumEnd boolean = false "allow comments at enum ends"
+  option allowModuleStart boolean = false "allow comments at module starts"
+  option allowModuleEnd boolean = false "allow comments at module ends"
+  let allowedStart compact([if allowClassStart == true then "Class" else null, if allowObjectStart then "Object" else null, if allowArrayStart then "Array" else null, if allowInterfaceStart then "Interface" else null, if allowTypeStart then "Type" else null, if allowEnumStart then "Enum" else null, if allowModuleStart then "Module" else null])
+  let allowedEnd compact([if allowClassEnd == true then "Class" else null, if allowObjectEnd then "Object" else null, if allowArrayEnd then "Array" else null, if allowInterfaceEnd then "Interface" else null, if allowTypeEnd then "Type" else null, if allowEnumEnd then "Enum" else null, if allowModuleEnd then "Module" else null])
+  each info in comment_gaps
+  when !(applyDefaultIgnorePatterns && info.directive) && (ignorePattern == "" || !re_test(info.body, ignorePattern))
+  when !any(map(info.targets, target => contains(if info.boundary == "before" then allowedStart else allowedEnd, target)))
+  when !(contains(info.targets, "Block") && (if info.boundary == "before" then allowBlockStart else allowBlockEnd) && !(contains(info.targets, "Class") && (if info.boundary == "before" then allowClassStart else allowClassEnd) == false))
+  when if info.boundary == "before" then (if info.block then beforeBlockComment else beforeLineComment)
+    else (if info.hashbang then afterHashbangComment else if info.block then afterBlockComment else afterLineComment)
+  report at info.offset
+  warn if info.boundary == "before" then "Expected line before comment." else "Expected line after comment."
+}
+
+in ts_call rule newline-per-chained-call {
+  option ignoreChainWithDepth number = 2 "allow chains up to this depth"
+  let info call_chain_layout
+  when info != null && info.depth > ignoreChainWithDepth && info.same_line
+  report at info.offset
+  warn "Expected line break before `{info.callee}`."
+}
+
 in ts_arrow.body rule implicit-arrow-linebreak {
   option mode "beside" | "below" = "beside"
   when layer != "ts_block"

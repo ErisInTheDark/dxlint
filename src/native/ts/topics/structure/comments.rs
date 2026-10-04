@@ -1,7 +1,7 @@
 //! Comment positions and grouped multiline styles.
 
 use crate::expr::Value;
-use crate::native::ts::{comments::Comment, facts::NativeFile, kinds::Kind};
+use crate::native::ts::{comments::Comment, facts::NativeFile, kinds::{Field, Kind}, lexer::{Lexer, Tok}};
 
 fn directive(body: &str) -> bool {
     let text = body.trim_start();
@@ -61,6 +61,106 @@ pub(super) fn layout(file: &NativeFile, node: u32) -> Value<'static> {
 }
 
 struct CommentStyles(Vec<Value<'static>>);
+
+struct CommentGaps(Vec<Value<'static>>);
+
+pub(super) fn gaps(file: &NativeFile, node: u32) -> Value<'static> {
+    if !file.syntax.is(node, Kind::Program) {
+        return Value::Null;
+    }
+    Value::List(file.cached(scan_gaps).0.clone())
+}
+
+fn scan_gaps(file: &NativeFile) -> CommentGaps {
+    let s = &file.syntax;
+    let src = s.src;
+    let mut starts = vec![0];
+    for (at, ch) in src.char_indices() {
+        if ch == '\n' && at > 0 && src.as_bytes()[at - 1] == b'\r' {
+            *starts.last_mut().expect("initial line exists") = at + 1;
+        } else if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+            starts.push(at + ch.len_utf8());
+        }
+    }
+    let line = |at: usize| starts.partition_point(|&start| start <= at) - 1;
+    let mut comments = file.comments().to_vec();
+    if src.starts_with("#!") {
+        comments.insert(0, Comment { start: 0, end: src.find(['\n', '\r', '\u{2028}', '\u{2029}']).unwrap_or(src.len()) as u32, block: false });
+    }
+    let code_between = |from: usize, to: usize| {
+        let mut cursor = from;
+        for comment in &comments {
+            let start = (comment.start as usize).max(from);
+            let end = (comment.end as usize).min(to);
+            if start >= end { continue }
+            if !src[cursor..start].trim().is_empty() { return true }
+            cursor = end;
+        }
+        !src[cursor..to].trim().is_empty()
+    };
+    let blocked = |row: usize| src[starts[row]..starts.get(row + 1).copied().unwrap_or(src.len())].trim().is_empty()
+        || comments.iter().any(|comment| line(comment.start as usize) == row || line(comment.end as usize) == row);
+    CommentGaps(comments.iter().enumerate().flat_map(|(index, comment)| {
+        let first = line(comment.start as usize);
+        let last = line(comment.end as usize);
+        let inline = code_between(starts[first], comment.start as usize)
+            || code_between(comment.end as usize, starts.get(last + 1).copied().unwrap_or(src.len()));
+        let parent = (0..s.tree.nodes.len() as u32).filter(|&id| {
+            let node = s.tree.node(id);
+            node.start <= comment.start && comment.end <= node.end
+        }).min_by_key(|&id| s.tree.node(id).end - s.tree.node(id).start);
+        let mut targets = Vec::new();
+        let mut parent_start = None;
+        let mut parent_end = None;
+        if let Some(parent) = parent {
+            let node = s.tree.node(parent);
+            let kind = s.kind(parent);
+            match kind {
+                Some(Kind::Class) => targets.extend(["Block", "Class"]),
+                Some(Kind::Block) if s.parent(parent).is_some_and(|p| s.is(p, Kind::Namespace)) => targets.push("Module"),
+                Some(Kind::Block | Kind::StaticBlock | Kind::Switch | Kind::Case) => targets.push("Block"),
+                Some(Kind::Object | Kind::ObjectPattern) => targets.push("Object"),
+                Some(Kind::Array | Kind::ArrayPattern) => targets.push("Array"),
+                Some(Kind::Interface) => targets.push("Interface"),
+                Some(Kind::TypeLit) => targets.push("Type"),
+                Some(Kind::Enum) => targets.push("Enum"),
+                _ => {}
+            }
+            let brace_start = if matches!(kind, Some(Kind::Class | Kind::Interface | Kind::Enum | Kind::StaticBlock | Kind::Switch)) {
+                let from = if kind == Some(Kind::Switch) {
+                    s.get(parent, Field::Discriminant).map_or(node.start, |id| s.tree.node(id).end)
+                } else { node.start };
+                let mut lexer = Lexer::new(&src[from as usize..node.end as usize]);
+                loop {
+                    let token = lexer.next_token();
+                    if token.tok == Tok::P("{") { break Some(from as usize + token.start as usize) }
+                    if token.tok == Tok::Eof { break None }
+                }
+            } else { Some(node.start as usize) };
+            if let Some(start) = brace_start.filter(|&start| start <= comment.start as usize) {
+                parent_start = Some(line(start));
+                parent_end = Some(line(node.end as usize));
+            } else { targets.clear() }
+        }
+        let boundaries = |at_boundary: bool| Value::List(if at_boundary {
+            targets.iter().map(|target| Value::from(*target)).collect()
+        } else { Vec::new() });
+        [
+            ("before", !inline && first > 0 && !blocked(first - 1)
+                && (index == 0 || line(comments[index - 1].end as usize) != first), parent_start.is_some_and(|row| row + 1 == first)),
+            ("after", !inline && last + 1 < starts.len() && !blocked(last + 1)
+                && comments.get(index + 1).is_none_or(|next| line(next.start as usize) != last), parent_end.is_some_and(|row| row == last + 1)),
+        ].into_iter().filter(|&(_, missing, _)| missing).map(|(boundary, _, at_boundary)| Value::Record(vec![
+            ("offset".into(), Value::from(comment.start as usize)),
+            ("body".into(), Value::from(comment.body(src).to_owned())),
+            ("block".into(), Value::Bool(comment.block)),
+            ("hashbang".into(), Value::Bool(comment.start == 0 && src.starts_with("#!"))),
+            ("directive".into(), Value::Bool(directive(comment.body(src)))),
+            ("boundary".into(), Value::from(boundary)),
+            ("targets".into(), boundaries(at_boundary)),
+        ])).collect::<Vec<_>>()
+    }).collect())
+}
 
 fn finding(mode: &'static str, offset: usize, message: &'static str, jsdoc: bool, exclamation: bool) -> Value<'static> {
     Value::Record(vec![
@@ -151,4 +251,20 @@ fn scan_styles(file: &NativeFile) -> CommentStyles {
         }
     }
     CommentStyles(findings)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn adjacent_comments_share_outer_blank_line_requirements() {
+        let lint = native_linter("rule lines-around-comment {\n set beforeBlockComment true\n set afterBlockComment true\n}");
+        let source = "before();\n/* first */ /* second\n continued */\nafter();";
+        let reports = lint.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(reports.len(), 2);
+        assert_eq!(reports[0].start, source.find("/* first").expect("first comment"));
+        assert_eq!(reports[1].start, source.find("/* second").expect("second comment"));
+    }
 }
