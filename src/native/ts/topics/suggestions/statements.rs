@@ -47,25 +47,6 @@ pub fn label_binding(file: &NativeFile, node: u32) -> Value<'static> {
     Value::Bool(collision)
 }
 
-pub fn empty_block(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let switch = s.is(node, K::Switch);
-    if s.all(node, if switch { F::Case } else { F::Body }).next().is_some() { return Value::Null }
-    let parent = s.parent(node);
-    if parent.is_some_and(|p| matches!(s.kind(p), Some(K::Function | K::Method | K::Arrow | K::StaticBlock))) { return Value::Null }
-    let span = s.tree.node(node);
-    let start = if switch {
-        let after = s.get(node, F::Discriminant).map_or(span.start, |n| s.tree.node(n).end);
-        s.src[after as usize..span.end as usize].find('{').map_or(span.start, |offset| after + offset as u32)
-    } else { span.start };
-    if file.comments().iter().any(|c| c.start > start && c.end < span.end) { return Value::Null }
-    Value::record(vec![
-        ("switch".into(), Value::Bool(switch)),
-        ("catch".into(), Value::Bool(parent.is_some_and(|p| s.is(p, K::Try)) && s.field(node) == Some(F::Handler))),
-        ("offset".into(), Value::Num(f64::from(start))),
-    ])
-}
-
 pub(super) fn strict(file: &NativeFile, node: u32) -> bool {
     let s = &file.syntax;
     if file.source_type() == "module" { return true }

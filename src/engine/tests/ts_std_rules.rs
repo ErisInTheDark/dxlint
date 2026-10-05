@@ -157,3 +157,22 @@ fn license_fixes_preserve_following_comments_and_are_idempotent() {
         assert_eq!(repeated.text, fixed.text, "{rule}");
     }
 }
+
+#[test]
+fn block_like_categories_do_not_leak_into_adjacent_empty_statements() {
+    let lint = native_linter("rule padding-line-between-statements { set options [{ blankLine: \"always\", prev: \"block-like\", next: \"block-like\" }] }");
+    assert!(lint.lint(Path::new("/root/a.ts"), "function test() {};").is_empty());
+    assert_eq!(lint.lint(Path::new("/root/a.ts"), "function test() {} function other() {}").len(), 1);
+}
+
+#[test]
+fn empty_switch_report_starts_at_its_body_not_a_comment_brace() {
+    let linter = native_linter("rule no-empty");
+    for source in ["switch (value) /* { */ {}", "switch (value) // {\n {}", "switch (value) /* { */ /* outside the body */ {}"] {
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:#?}");
+        let body_start = source.rfind('{').expect("switch body");
+        assert_eq!(diagnostics[0].start, body_start, "{source}: {diagnostics:#?}");
+        assert_eq!(diagnostics[0].end, source.len(), "{source}: {diagnostics:#?}");
+    }
+}

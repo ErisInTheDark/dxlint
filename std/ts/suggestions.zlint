@@ -471,12 +471,16 @@ in ts_function, ts_arrow rule func-style {
   warn "Expected a function {requested_style}."
 }
 
+in ts_switch let empty_switch count(case) == 0
 in ts_block, ts_switch rule no-empty {
   option allowEmptyCatch boolean = false "allow empty catch blocks"
-  let empty_info empty_statement_block
-  when empty_info != null && !(allowEmptyCatch && empty_info.catch)
-  report at empty_info.offset
-  warn "Empty {if empty_info.switch then 'switch' else 'block'} statement."
+  when parent not (ts_function_like, ts_static_block)
+  when !allowEmptyCatch || not ts_try.handler
+  let empty_start if is ts_switch then opener.ts_open_brace.offset else offset
+  when empty_start != null
+  when if is ts_switch then empty_switch && !any(descendants(ts_comment), comment => comment.offset > empty_start && comment.end_offset < end_offset) else uncommented_empty_block
+  report at empty_start
+  warn "Empty {if is ts_switch then 'switch' else 'block'} statement."
 }
 
 in ts_block rule no-lone-blocks {
