@@ -241,6 +241,9 @@ pub struct AttrMemo<'a> {
     values: RefCell<HashMap<(u32, u16), Value<'a>>>,
     busy: RefCell<Vec<(u32, u16)>>,
     locals: RefCell<HashMap<(u32, u32, u16), Value<'a>>>,
+    /// Native facts read without arguments, per (node, fact): a rule reading
+    /// `space_before.spaced` and `space_before.line_break` builds the gap once.
+    facts: RefCell<HashMap<(u32, u16), Value<'a>>>,
     /// Values of the lambda parameters being evaluated, outermost first.
     /// Nothing memoised above can read them: attributes and `let`s are
     /// written outside every lambda.
@@ -480,12 +483,22 @@ impl Scope<'_> {
                 }
                 CExpr::Template(out)
             }
+            // Lists and records of constants are built once, here, not per
+            // node (`contains(["a", "b", ...], text)` in hot rules).
             ExprKind::List(items) => {
-                CExpr::List(items.iter().map(|i| self.compile(i, errors)).collect::<Option<Vec<_>>>()?)
+                let items = items.iter().map(|i| self.compile(i, errors)).collect::<Option<Vec<_>>>()?;
+                match items.iter().map(|i| match i { CExpr::Const(v) => Some(v.clone()), _ => None }).collect::<Option<Vec<_>>>() {
+                    Some(values) => CExpr::Const(Value::list(values)),
+                    None => CExpr::List(items),
+                }
             }
-            ExprKind::Record(entries) => CExpr::Record(
-                entries.iter().map(|(k, v)| Some((k.text.clone().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
-            ),
+            ExprKind::Record(entries) => {
+                let entries = entries.iter().map(|(k, v)| Some((k.text.clone().into(), self.compile(v, errors)?))).collect::<Option<Vec<(value::Key, CExpr)>>>()?;
+                match entries.iter().map(|(k, v)| match v { CExpr::Const(v) => Some((k.clone(), v.clone())), _ => None }).collect::<Option<Vec<_>>>() {
+                    Some(values) => CExpr::Const(Value::record(values)),
+                    None => CExpr::Record(entries),
+                }
+            }
             // `first(declarations).offset`: a record's key, or a read on nodes.
             // `(x).callee.node`: the whole key chain is one path read, as
             // `x.callee.node` would be (`.callee` alone reads the field's
@@ -1562,7 +1575,15 @@ impl<'a> Ctx<'a> {
             }
             CExpr::Fact(i, of) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
-                let get = facts::FACTS[*i].get;
+                let get = |native: &dyn crate::native::ts::facts::Facts, id: u32| -> Value<'a> {
+                    let key = (id, *i as u16);
+                    if let Some(v) = self.memo.facts.borrow().get(&key) {
+                        return v.clone();
+                    }
+                    let v: Value<'a> = (facts::FACTS[*i].get)(native, id);
+                    self.memo.facts.borrow_mut().insert(key, v.clone());
+                    v
+                };
                 match of {
                     FactOf::Node => get(native, self.node),
                     FactOf::Parent => self.parent_layer().map_or(Value::Null, |p| get(native, p)),
