@@ -187,6 +187,14 @@ fn fold_num<'s>(a: &[Value<'s>], pick: fn(f64, f64) -> f64) -> Result<Value<'s>,
 
 pub static FUNCTIONS: &[Function] = &[
     Function {
+        name: "js_re_test",
+        signature: "js_re_test(text, pattern, flags?)",
+        doc: "stateless JavaScript regex match; unsupported features and work exhaustion fail the rule",
+        min: 2,
+        max: 3,
+        call: |a| crate::js_regex::test(&text(&a[0]), &text(&a[1]), &a.get(2).map(text).unwrap_or_default()).map(Value::Bool),
+    },
+    Function {
         name: "re_test",
         signature: "re_test(text, pattern)",
         doc: "does the regex match anywhere in the text?",

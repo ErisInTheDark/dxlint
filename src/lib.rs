@@ -17,3 +17,4 @@ pub mod native;
 pub mod path_globs;
 pub mod pattern;
 pub mod selector;
+pub(crate) mod js_regex;

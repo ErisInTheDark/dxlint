@@ -555,17 +555,20 @@ the neighbour itself with `is` (`previous is ts_comma`).
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `compact`, `sum`, `any`,
 `count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`,
-`compare_text`, `js_compare`, `js_number`.
+`compare_text`, `js_compare`, `js_number`, `js_re_test`.
 
 | function | value |
 |---|---|
 | `js_number(value)` | JavaScript Number conversion of primitives or `literal_value` records; NaN for nonnumeric strings, null for unsupported values (including symbols) |
+| `js_re_test(text, pattern, flags?)` | stateless JavaScript regex matching (`flags` defaults to empty); unsupported syntax and work exhaustion fail the rule. `re_test` keeps its existing regex dialect |
 
 **ESTree selectors.** Selector queries use logical ESTree kinds and fields, not `ts_*` layer names. The shared native view includes virtual nodes such as `ChainExpression`, `ClassBody` and method `FunctionExpression` values. `selector_spans` retains distinct logical matches; its `node` is the backing native node, so report using `{start, end}` for the logical span. `matches_selector` accepts any logical role of its backing native node.
 
 Selectors support type names, `*`, lists, compounds, descendant/child/sibling/adjacent relations, field paths, attribute paths and comparisons, `:not`, `:is`/`:matches`, relative `:has`, child indices and the statement, declaration, expression, pattern and function classes. Empty selectors and `!` subjects are unsupported. Selectors are limited to 64 KiB, 128 nested lists and 128 compounds per chain. Invalid, unsupported or oversized selectors produce rule-error diagnostics.
 
-Regex attributes use a bounded JavaScript subset with `i`, `m`, `s`, `u` flags. Lookarounds, backreferences, named groups and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors support LF; CR and Unicode line separators fail explicitly when encountered. Legacy `i` matching requires ASCII patterns and values; use `u` for Unicode case folding. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.
+Regex attributes and `js_re_test` share a bounded JavaScript subset with `i`, `m`, `s`, `u` flags and flat positive/negative lookaheads. Nested assertions, lookbehind, backreferences, named groups, control escapes and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors recognise LF, CR, U+2028 and U+2029, including positions inside CRLF. Legacy `i` supports ordinary Unicode folding; characters in fold groups that differ from JavaScript's non-`u` uppercase canonicalisation (such as Kelvin sign, long s and astral case pairs) fail explicitly in patterns or values. Use `u` for those groups. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.
+
+Regex sources are limited to 64 KiB and 128 nested groups; assertion patterns allow 64 assertions. Assertion/multiline execution allows 50,000 states per compiled program and 10 million state visits per match, shared with its assertion checks. Exhaustion produces a rule error, never a silent non-match.
 
 ```zlint
 rule no-restricted-syntax {
@@ -928,7 +931,7 @@ drop ignore "static/**"
 
 | import | loads |
 |---|---|
-| `import .ts`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.zlint` | a built-in language: its layers, and every rule written for it, off |
+| `import .ts`, `.rs`, `.py`, `.c`, `.toml`, `.md`, `.css`, `.json`, `.zlint` | a built-in language: its layers, and every rule written for it, off |
 | `import rules:recommended` | a built-in ruleset: `rule` lines turning on a category of rules |
 | `import some/path` | another `.zlint` file, relative to this one (`.zlint` is added when there is no extension; quotes are optional) |
 
@@ -941,6 +944,10 @@ and `final-newline`.
 | language | contents |
 |---|---|
 | `.rs`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
+| `.css` | pattern-owned textual delimiters, strings/escapes and block comments; not full CSS validation |
+| `.json` | pattern-owned JSON/JSONC objects/arrays, strings/escapes and comments; not full JSON validation |
+| `.core/lines` | shared line structure/hygiene with syntax-owner comment/raw adapters |
+| `.core/lists` | shared value-only list spacing/wrapping policy over syntax-owner records |
 | `.ts` | `native ts` for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
 | `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |

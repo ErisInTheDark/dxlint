@@ -6,7 +6,6 @@ use std::sync::{Mutex, OnceLock};
 
 mod parse;
 mod r#match;
-mod regex;
 
 pub enum Attribute<'a> {
     Missing,
@@ -63,7 +62,7 @@ enum Operator { Equal, Unequal, Less, LessEqual, Greater, GreaterEqual }
 enum Operand {
     Literal(String, bool),
     Type(String),
-    Regex(regex::Regex),
+    Regex(Arc<crate::js_regex::Regex>),
 }
 
 pub fn compile(source: &str) -> Result<Arc<Selector>, String> {
@@ -165,8 +164,14 @@ mod tests {
 
     #[test]
     fn malformed_and_unsupported_patterns_fail_explicitly() {
-        for source in ["Identifier[", ":unknown", "[name=/(?=a)/]", "[name=/(a)\\1/]", "[value=+2]", "[name=foo.bar]"] {
+        for source in ["Identifier[", ":unknown", "[name=/(?<=a)/]", "[name=/(a)\\1/]", "[value=+2]", "[name=foo.bar]"] {
             assert!(compile(source).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn javascript_regex_assertions_work_in_attributes() {
+        assert_eq!(selected("Identifier[name=/^c(?=all)/]"), vec![2]);
+        assert_eq!(selected("Identifier[name=/^(?!call)/]"), vec![3]);
     }
 }

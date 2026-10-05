@@ -156,7 +156,7 @@ impl Parser<'_> {
             }
             let start = self.at;
             while self.peek().is_some_and(|c| c.is_ascii_alphabetic()) { self.take(); }
-            Operand::Regex(super::regex::Regex::compile(&pattern, &self.source[start..self.at])?)
+            Operand::Regex(crate::js_regex::Regex::compile(&pattern, &self.source[start..self.at])?)
         } else if self.source[self.at..].starts_with("type(") {
             self.at += 5;
             let value = self.word()?;
