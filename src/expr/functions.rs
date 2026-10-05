@@ -502,6 +502,14 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::from(a[0].item_slice().len())),
     },
     Function {
+        name: "zip",
+        signature: "zip(a, b)",
+        doc: "pairs `[a_i, b_i]` of two lists, as long as the shorter: `zip(xs, slice(xs, 1))` is each item with the next",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::list(a[0].item_slice().iter().zip(a[1].item_slice().iter()).map(|(x, y)| Value::list(vec![x.clone(), y.clone()])).collect())),
+    },
+    Function {
         name: "slice",
         signature: "slice(text_or_list, from, to?)",
         doc: "part of a text (by characters) or list; negative indexes count from the end",
@@ -654,5 +662,14 @@ mod tests {
         assert_eq!(call("join", &[sorted, ",".into()]), Value::from("a,b"));
         assert_eq!(call("count", &[Value::Null]), Value::from(0usize));
         assert_eq!(call("max", &[Value::list(vec![1.0.into(), 5.0.into()])]), Value::from(5.0));
+    }
+
+    #[test]
+    fn zip_pairs_up_to_the_shorter_list() {
+        let xs = Value::list(vec!["a".into(), "b".into(), "c".into()]);
+        let next = call("slice", &[xs.clone(), 1.0.into()]);
+        let pairs = |v: Value<'static>| v.item_slice().iter().map(|p| p.item_slice().iter().map(text).collect::<Vec<_>>().join("")).collect::<Vec<_>>();
+        assert_eq!(pairs(call("zip", &[xs, next])), vec!["ab", "bc"]);
+        assert_eq!(pairs(call("zip", &[Value::Null, "x".into()])), Vec::<String>::new());
     }
 }
