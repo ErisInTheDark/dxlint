@@ -261,10 +261,13 @@ impl<'s> Parser<'s> {
         }
         let start = self.start();
         self.expect("{")?;
-        let e = self.assign_in()?;
-        self.expect("}")?;
         let mut kids = Kids::default();
-        kids.add(Field::Expr, e);
+        // Empty (`{/* note */}`), as in children: no expression.
+        if !self.is("}") {
+            let e = self.assign_in()?;
+            kids.add(Field::Expr, e);
+        }
+        self.expect("}")?;
         Ok(self.finish(Kind::JsxExpression, start, kids))
     }
 }
@@ -278,5 +281,14 @@ mod tests {
             assert!(r.is_ok(), "{src}: {:?}", r.err());
         }
         assert!(super::super::super::parse("const x = <A.B></A.C>;", true).is_err());
+    }
+
+    #[test]
+    fn attribute_containers_may_hold_only_a_comment() {
+        // An empty expression, as in children (`{/* note */}`).
+        for src in ["<A b={/* empty */} />", "<A b={} />"] {
+            let r = super::super::super::parse(&format!("const x = {src};"), true);
+            assert!(r.is_ok(), "{src}: {:?}", r.err());
+        }
     }
 }
