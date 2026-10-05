@@ -13,17 +13,28 @@ use std::collections::HashMap;
 mod spread_tests;
 
 pub(super) fn structure(file: &NativeFile<'_>, node: u32, properties: &[String]) -> Value<'static> {
+    let args = crate::expr::facts::args();
+    let fields = args.get(1).map(|value| value.items().iter().map(ToString::to_string).collect::<Vec<_>>())
+        .unwrap_or_else(|| ["kind", "parts", "names", "generic_names", "aliases", "members"].into_iter().map(String::from).collect());
+    let requested = |name: &str| fields.iter().any(|field| field == name);
     let ck = &file.typing().checker;
-    let aliases = specifiers::annotated_aliases(file, node).into_iter().filter_map(|r| {
+    let aliases = if requested("aliases") { specifiers::annotated_aliases(file, node).into_iter().filter_map(|r| {
         let retained = specifiers::retained_alias(ck, r, &mut Vec::new())?;
         Some(Value::from(ck.summary_of(retained.file)?.decls[retained.decl as usize].name.to_string()))
-    }).collect();
-    let Value::Record(entries) = describe(&file.constrained_type_of(node), ck, properties, aliases, 0) else { unreachable!() };
+    }).collect() } else { Vec::new() };
+    let value = describe(&file.constrained_type_of(node), ck, properties, &fields, aliases, 0);
+    if !requested("property_writes") { return value }
+    let Value::Record(entries) = value else { unreachable!() };
     let writes = file.decl_of(file.syntax.unparen(node)).and_then(|decl| file.cached(property_writes).0.get(&decl).cloned()).unwrap_or_default();
     Value::record(entries.iter().cloned().chain([("property_writes".into(), Value::list(writes))]).collect::<Vec<_>>())
 }
 
 struct PropertyWrites(HashMap<u32, Vec<Value<'static>>>);
+
+#[cfg(test)]
+thread_local! {
+    static PROPERTY_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 fn constructible(ty: &Ty, ck: &Checker<'_>) -> bool {
     match ty {
@@ -57,21 +68,22 @@ fn property_writes(file: &NativeFile<'_>) -> PropertyWrites {
     PropertyWrites(writes)
 }
 
-fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], aliases: Vec<Value<'static>>, depth: usize) -> Value<'static> {
+fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String], aliases: Vec<Value<'static>>, depth: usize) -> Value<'static> {
     if depth >= 64 { return Value::record(vec![("kind".into(), Value::from("recursive"))]) }
-    if let Some(source) = ck.readonly_source(ty) { return describe(source, ck, properties, aliases, depth + 1) }
-    let parts = match ty {
-        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().map(|part| describe(part, ck, properties, Vec::new(), depth + 1)).collect(),
-        Ty::Array(array) => vec![describe(&array.element, ck, properties, Vec::new(), depth + 1)],
+    if let Some(source) = ck.readonly_source(ty) { return describe(source, ck, properties, fields, aliases, depth + 1) }
+    let requested = |name: &str| fields.iter().any(|field| field == name);
+    let parts = if requested("parts") { match ty {
+        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().map(|part| describe(part, ck, properties, fields, Vec::new(), depth + 1)).collect(),
+        Ty::Array(array) => vec![describe(&array.element, ck, properties, fields, Vec::new(), depth + 1)],
         Ty::Tuple(tuple) => tuple.elements.iter().map(|element| {
-            if element.optional { describe(&element.ty.clone().or_undefined(), ck, properties, Vec::new(), depth + 1) }
-            else { describe(&element.ty, ck, properties, Vec::new(), depth + 1) }
+            if element.optional { describe(&element.ty.clone().or_undefined(), ck, properties, fields, Vec::new(), depth + 1) }
+            else { describe(&element.ty, ck, properties, fields, Vec::new(), depth + 1) }
         }).collect(),
         _ => Vec::new(),
-    };
-    let named = specifiers::named_types(ty, ck, &mut Vec::new());
+    } } else { Vec::new() };
+    let named = if requested("names") || requested("generic_names") || requested("declarations") { specifiers::named_types(ty, ck, &mut Vec::new()) } else { Vec::new() };
     let class_symbols = if let Ty::Class(symbols) = ty { &symbols[..] } else { &[] };
-    let declarations = named.iter().map(|(r, _)| r).chain(class_symbols).filter_map(|r| {
+    let declarations = if requested("declarations") { named.iter().map(|(r, _)| r).chain(class_symbols).filter_map(|r| {
         let summary = ck.summary_of(r.file)?;
         let decl = &summary.decls[r.decl as usize];
         Some(Value::record(vec![
@@ -80,36 +92,43 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], aliases: Vec<Value
             ("from".into(), Value::from(if ck.is_lib_decl(*r) { "lib" } else { "file" })),
             ("inherited".into(), Value::Bool(!matches!(ty, Ty::Named(symbols, _) | Ty::Class(symbols) if symbols.contains(r)))),
         ]))
-    }).collect();
+    }).collect() } else { Vec::new() };
     let mut property_names = Vec::new();
-    match ty {
-        Ty::Fn(_) => {}
-        Ty::Obj(members, _) => property_names.extend(members.iter().filter(|m| matches!(m.kind, MemberKind::Prop | MemberKind::Method)).map(|m| m.name.clone())),
-        Ty::Class(symbols) => {
-            for r in symbols.iter() {
-                if let Some(summary) = ck.summary_of(r.file) {
-                    property_names.extend(summary.decls[r.decl as usize].members.iter().filter(|m| m.is_static && matches!(m.kind, MemberKind::Prop | MemberKind::Method)).map(|m| m.name.clone()));
+    if requested("property_names") {
+        match ty {
+            Ty::Fn(_) => {}
+            Ty::Obj(members, _) => property_names.extend(members.iter().filter(|m| matches!(m.kind, MemberKind::Prop | MemberKind::Method)).map(|m| m.name.clone())),
+            Ty::Class(symbols) => {
+                for r in symbols.iter() {
+                    if let Some(summary) = ck.summary_of(r.file) {
+                        property_names.extend(summary.decls[r.decl as usize].members.iter().filter(|m| m.is_static && matches!(m.kind, MemberKind::Prop | MemberKind::Method)).map(|m| m.name.clone()));
+                    }
                 }
             }
+            _ => ck.member_names(ty, &mut property_names),
         }
-        _ => ck.member_names(ty, &mut property_names),
+        if matches!(ty, Ty::Named(..)) {
+            property_names.retain(|name| {
+                #[cfg(test)]
+                PROPERTY_LOOKUPS.with(|count| count.set(count.get() + 1));
+                ck.member_resolution(ty, name).declarations.iter().any(|d| matches!(d.member.kind, MemberKind::Prop | MemberKind::Method))
+            });
+        }
     }
-    if matches!(ty, Ty::Named(..)) {
-        property_names.retain(|name| ck.member_resolution(ty, name).declarations.iter().any(|d| matches!(d.member.kind, MemberKind::Prop | MemberKind::Method)));
-    }
-    let symbol_constructor = if let Ty::Named(symbols, _) = ty {
-        symbols.iter().any(|&r| ck.summary_of(r.file).is_some_and(|summary| {
+    let symbol_constructor = match ty {
+        Ty::Named(symbols, _) if requested("symbol_constructor") => symbols.iter().any(|&r| ck.summary_of(r.file).is_some_and(|summary| {
             let decl = &summary.decls[r.decl as usize];
             constructible(&ck.value_of(&ck.lookup(&ck.decl_env(r), &decl.name)), ck)
-        }))
-    } else { false };
-    let names = std::iter::once(Value::from(ck.print(ty))).chain(named.iter().map(|(_, ty)| Value::from(ck.print(ty)))).collect();
-    let generic_names = named.first().and_then(|(r, _)| {
+        })),
+        _ => false,
+    };
+    let names = if requested("names") { std::iter::once(Value::from(ck.print(ty))).chain(named.iter().map(|(_, ty)| Value::from(ck.print(ty)))).collect() } else { Vec::new() };
+    let generic_names = if requested("generic_names") { named.first().and_then(|(r, _)| {
         let summary = ck.summary_of(r.file)?;
         let decl = &summary.decls[r.decl as usize];
         (!decl.type_params.is_empty()).then(|| Value::from(decl.name.to_string()))
-    }).into_iter().collect();
-    let members = properties.iter().map(|name| {
+    }).into_iter().collect() } else { Vec::new() };
+    let members = if requested("members") { properties.iter().map(|name| {
         let resolution = ck.member_resolution(ty, name);
         let declarations = resolution.declarations.iter().map(|declaration| {
             let owner = declaration.owner.and_then(|r| ck.summary_of(r.file).map(|summary| {
@@ -133,8 +152,8 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], aliases: Vec<Value
             ])
         }).collect();
         Value::record(vec![("name".into(), Value::from(name.clone())), ("declarations".into(), Value::list(declarations))])
-    }).collect();
-    Value::record(vec![
+    }).collect() } else { Vec::new() };
+    let entries: Vec<(std::borrow::Cow<'static, str>, Value<'static>)> = vec![
         ("kind".into(), Value::from(ty.kind())),
         ("parts".into(), Value::list(parts)),
         ("names".into(), Value::list(names)),
@@ -142,13 +161,14 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], aliases: Vec<Value
         ("aliases".into(), Value::list(aliases)),
         ("members".into(), Value::list(members)),
         ("declarations".into(), Value::list(declarations)),
-        ("callable".into(), Value::Bool(ck.callable_type(ty))),
-        ("constructor".into(), Value::Bool(constructible(ty, ck))),
+        ("callable".into(), Value::Bool(requested("callable") && ck.callable_type(ty))),
+        ("constructor".into(), Value::Bool(requested("constructor") && constructible(ty, ck))),
         ("symbol_constructor".into(), Value::Bool(symbol_constructor)),
         ("class_value".into(), Value::Bool(matches!(ty, Ty::Class(_)))),
         ("property_names".into(), Value::list(property_names.into_iter().map(|n| Value::from(n.to_string())).collect())),
-        ("iterable".into(), ck.iterable_type(ty).map_or(Value::Null, Value::Bool)),
-    ])
+        ("iterable".into(), if requested("iterable") { ck.iterable_type(ty).map_or(Value::Null, Value::Bool) } else { Value::Null }),
+    ];
+    Value::record(entries.into_iter().filter(|(name, _)| requested(name)).collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -158,6 +178,20 @@ mod tests {
     use std::path::Path;
 
     const OBJECT: &str = "interface Object { toString(): string; toLocaleString(): string; valueOf(): Object; }";
+
+    #[test]
+    fn default_structure_does_not_resolve_unrequested_properties() {
+        with_native_file("interface Item { value: string; method(): void; } declare const items: [Item, Item[]]; const result = /*@*/items;", |file, nodes| {
+            super::PROPERTY_LOOKUPS.with(|count| count.set(0));
+            let structure = super::structure(file, nodes[0], &[]);
+            assert_eq!(structure.key("kind"), Value::from("tuple"));
+            assert_eq!(super::PROPERTY_LOOKUPS.with(std::cell::Cell::get), 0, "unrequested properties must not trigger member resolution, including within collection elements");
+            let requested = vec![Value::from("kind"), Value::from("parts"), Value::from("property_names")];
+            let projected = crate::expr::facts::with_args(vec![Value::list(Vec::new()), Value::list(requested)], || super::structure(file, nodes[0], &[]));
+            assert!(super::PROPERTY_LOOKUPS.with(std::cell::Cell::get) > 0);
+            assert!(projected.key("parts").items()[0].key("property_names").items().contains(&Value::from("value")));
+        });
+    }
 
     #[test]
     fn optional_tuple_elements_include_their_missing_value() {

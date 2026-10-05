@@ -15,7 +15,7 @@ fn spread_object_category(n, t) =
   else if any(spread_parts(t), part => !part.constructor && part.symbol_constructor) then "instance"
   else if any(spread_parts(t), part => part.class_value) then "class" else null
 
-in ts_node let spread_type type_structure([])
+in ts_node let spread_type type_structure([], ["kind", "parts", "declarations", "callable", "constructor", "symbol_constructor", "class_value", "property_names", "iterable", "property_writes"])
 in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
   option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "types safe to spread"
   let object_spread node is ts_jsx_spread_attribute || parent is ts_object

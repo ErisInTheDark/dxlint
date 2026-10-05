@@ -2,6 +2,11 @@ use crate::engine::tests::{native_linter, with_native_file};
 use crate::expr::Value;
 use std::path::Path;
 
+fn metadata(file: &crate::native::ts::facts::NativeFile<'_>, node: u32) -> Value<'static> {
+    let fields = ["kind", "parts", "declarations", "callable", "constructor", "symbol_constructor", "class_value", "property_names", "iterable", "property_writes"].into_iter().map(Value::from).collect();
+    crate::expr::facts::with_args(vec![Value::list(Vec::new()), Value::list(fields)], || super::structure(file, node, &[]))
+}
+
 fn spans(source: &str, options: &str) -> Vec<String> {
     let linter = native_linter(&format!("import .ts/spreads\nrule no-misused-spread {options}"));
     linter.lint(Path::new("/root/a.ts"), source).iter().map(|d| source[d.start..d.end].to_string()).collect()
@@ -28,20 +33,20 @@ fn allowed_names_follow_values_and_retained_type_aliases() {
 #[test]
 fn structural_metadata_distinguishes_calls_properties_and_class_sides() {
     with_native_file("interface Callable { (): void; value: string; } class C {} declare const callable: Callable; declare const instance: C; const a = /*@*/callable; const b = /*@*/instance; const c = /*@*/C;", |file, nodes| {
-        let callable = super::structure(file, nodes[0], &[]);
+        let callable = metadata(file, nodes[0]);
         assert_eq!(callable.key("callable"), Value::Bool(true));
         assert!(callable.key("property_names").items().contains(&Value::from("value")));
-        let instance = super::structure(file, nodes[1], &[]);
+        let instance = metadata(file, nodes[1]);
         assert!(instance.key("declarations").items().iter().any(|d| d.key("kind") == Value::from("class")));
         assert_eq!(instance.key("constructor"), Value::Bool(false));
-        assert_eq!(super::structure(file, nodes[2], &[]).key("constructor"), Value::Bool(true));
+        assert_eq!(metadata(file, nodes[2]).key("constructor"), Value::Bool(true));
     });
 }
 
 #[test]
 fn interface_instance_metadata_retains_its_constructible_value_side() {
     with_native_file("interface Box {} interface Factory { new(): Box; } declare const Box: Factory; declare const box: Box; const a = /*@*/box;", |file, nodes| {
-        let instance = super::structure(file, nodes[0], &[]);
+        let instance = metadata(file, nodes[0]);
         assert_eq!(instance.key("constructor"), Value::Bool(false));
         assert_eq!(instance.key("symbol_constructor"), Value::Bool(true));
     });
