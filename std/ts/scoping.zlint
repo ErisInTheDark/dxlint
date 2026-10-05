@@ -266,7 +266,29 @@ in ts_program, ts_function, ts_arrow, ts_method rule consistent-return:fallthrou
   warn "Expected to return a value at the end of {result.name}."
 }
 
-in ts_declarator, ts_function, ts_arrow, ts_method, ts_class_property, ts_member, ts_index rule no-underscore-dangle {
+in ts_node let underscore_declarator
+  if is ts_declarator.name then parent.node
+  else if parent is (ts_array_pattern, ts_object_pattern) || is (ts_pattern_property.value, ts_assignment_pattern.left, ts_rest.argument)
+    || is ts_pattern_property.key && (parent.value == null || parent.value is ts_assignment_pattern && parent.value.left == null) then parent.underscore_declarator
+  else null
+in ts_node let underscore_pattern
+  if parent is ts_array_pattern then "array"
+  else if parent is ts_object_pattern then "object"
+  else if parent is (ts_pattern_property, ts_assignment_pattern, ts_rest) then parent.underscore_pattern
+  else null
+in ts_parameter let underscore_parameter_position if parent is (ts_function, ts_arrow, ts_method) then {start: offset, end: parent.end_offset} else null
+in ts_rest let underscore_parameter_position if is ts_parameter.name then parent.underscore_parameter_position else null
+in ts_method let underscore_method_position if parent is ts_class || kind != "get" && kind != "set" then offset else null
+in ts_identifier, ts_private_name let underscore_candidate
+  if underscore_declarator != null then {context: default(underscore_pattern, "variable"), span: underscore_declarator}
+  else if is ts_function.name && declaration_kind == "function" then {context: "function", span: parent.node}
+  else if is (ts_parameter.name, ts_rest.argument) && parent.underscore_parameter_position != null then {context: "parameter", span: parent.underscore_parameter_position}
+  else if is ts_method.key && parent.underscore_method_position != null then {context: "method", span: parent.node}
+  else if is ts_class_property.key then {context: "field", span: parent.node}
+  else if is ts_identifier && is (ts_member.property, ts_index.index) then {context: "member", span: parent.node}
+  else null
+fn underscore_this_constructor(object) = object is ts_member && object.property == "constructor" && default(object.object.scoping_unparen_node, object.object.node) is ts_this
+in ts_identifier, ts_private_name rule no-underscore-dangle {
   option allow string[] = [] "names allowed to have dangling underscores"
   option allowAfterSuper boolean = false
   option allowAfterThis boolean = false
@@ -276,15 +298,18 @@ in ts_declarator, ts_function, ts_arrow, ts_method, ts_class_property, ts_member
   option allowInObjectDestructuring boolean = true
   option enforceInClassFields boolean = false
   option enforceInMethodNames boolean = false
-  each candidate in filter(scoping_underscore_names, c => !contains(allow, c.name)
-    && !(allowFunctionParams && c.context == "parameter")
-    && !(allowInArrayDestructuring && c.context == "array")
-    && !(allowInObjectDestructuring && c.context == "object")
-    && (enforceInClassFields || c.context != "field")
-    && (enforceInMethodNames || c.context != "method")
-    && !(c.context == "member" && (c.name == "__proto__" || allowAfterThis && c.this || allowAfterSuper && c.super || allowAfterThisConstructor && c.constructor)))
-  report at candidate.offset
-  warn "Unexpected dangling '_' in '{candidate.display}'."
+  let bare_name if is ts_private_name then slice(text, 1) else text
+  when bare_name != "_" && (starts_with(bare_name, "_") || ends_with(bare_name, "_")) && !contains(allow, bare_name)
+  let candidate underscore_candidate
+  when candidate != null
+  when !(allowFunctionParams && candidate.context == "parameter")
+  when !(allowInArrayDestructuring && candidate.context == "array")
+  when !(allowInObjectDestructuring && candidate.context == "object")
+  when (enforceInClassFields || candidate.context != "field") && (enforceInMethodNames || candidate.context != "method")
+  let receiver if candidate.context == "member" then default(parent.object.scoping_unparen_node, parent.object.node) else null
+  when !(candidate.context == "member" && (bare_name == "__proto__" || allowAfterThis && receiver is ts_this || allowAfterSuper && receiver is ts_super || allowAfterThisConstructor && underscore_this_constructor(receiver)))
+  report at candidate.span
+  warn "Unexpected dangling '_' in '{text}'."
 }
 
 in ts_identifier let scoping_promise_callee text == "Promise" && resolved == "global" && global != "off"

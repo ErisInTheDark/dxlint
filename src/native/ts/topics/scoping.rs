@@ -30,7 +30,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "scoping_shadow", doc: "on a declaration: outer declaration and shadowing exceptions", get: |f, n| f.with_file(bindings::shadow, n) },
     Fact { name: "scoping_redeclaration", doc: "on a declaration: repeated syntax, safe typescript merge and built-in collision", get: |f, n| f.with_file(bindings::redeclaration, n) },
     Fact { name: "scoping_outside_bindings", doc: "on a var reference: block declarations outside whose context it is used", get: |f, n| f.with_file(bindings::outside_bindings, n) },
-    Fact { name: "scoping_underscore_names", doc: "on declaration, function or member: names and context for underscore policy", get: |f, n| f.with_file(bindings::underscore_names, n) },
     Fact { name: "scoping_strict_code", doc: "native code is in a module, class or use-strict scope", get: |f, n| f.with_file(|file, n| Value::Bool(bindings::strict_code(file, n)), n) },
     Fact { name: "scoping_consistent_returns", doc: "on a function: its ordered return kinds, fallthrough and report positions", get: |f, n| f.with_file(returns::consistent_returns, n) },
     Fact { name: "scoping_global_redeclarations", doc: "on the program: explicit-global mentions colliding with declarations or other comments", get: |f, n| f.with_file(globals::redeclarations, n) },

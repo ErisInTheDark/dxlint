@@ -8,85 +8,6 @@ use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::syntax::Syntax;
 
-pub(super) fn underscore_names(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let mut names = Vec::new();
-    match s.kind(node) {
-        Some(K::Declarator) => {
-            if let Some(pattern) = s.get(node, F::Name) {
-                let mut declarations: Vec<_> = file.bindings().decl_scope.keys().copied().filter(|&n| inside(s, n, pattern)).collect();
-                declarations.sort_by_key(|&n| s.tree.node(n).start);
-                for name in declarations {
-                    let mut cursor = s.parent(name);
-                    let mut context = "variable";
-                    while let Some(parent) = cursor {
-                        if parent == node { break; }
-                        match s.kind(parent) {
-                            Some(K::ArrayPattern) => { context = "array"; break; }
-                            Some(K::ObjectPattern) => { context = "object"; break; }
-                            _ => {}
-                        }
-                        cursor = s.parent(parent);
-                    }
-                    names.push((name, node, context));
-                }
-            }
-        }
-        Some(K::Function | K::Arrow | K::Method) => {
-            if s.is(node, K::Function) {
-                if let Some(name) = s.get(node, F::Name).filter(|n| file.bindings().decls.get(n).is_some_and(|b| b.kind == "function")) {
-                    names.push((name, node, "function"));
-                }
-            }
-            for parameter in s.all(node, F::Param) {
-                if let Some(name) = s.get(parameter, F::Name).map(|n| {
-                    if s.is(n, K::Rest) { s.get(n, F::Arg).unwrap_or(n) } else { n }
-                }).filter(|&n| s.is(n, K::Ident)) {
-                    names.push((name, parameter, "parameter"));
-                }
-            }
-            if s.is(node, K::Method) {
-                let class = s.parent(node).is_some_and(|n| s.is(n, K::Class));
-                if class || !matches!(s.word(node, F::Kind), Some("get" | "set")) {
-                    if let Some(key) = s.get(node, F::Key).filter(|&n| matches!(s.kind(n), Some(K::Ident | K::PrivateName))) {
-                        names.push((key, node, "method"));
-                    }
-                }
-            }
-        }
-        Some(K::ClassProp) => {
-            if let Some(key) = s.get(node, F::Key).filter(|&n| matches!(s.kind(n), Some(K::Ident | K::PrivateName))) {
-                names.push((key, node, "field"));
-            }
-        }
-        Some(K::Member | K::Index) => {
-            if let Some(key) = s.get(node, F::Property).or_else(|| s.get(node, F::Index)).filter(|&n| s.is(n, K::Ident)) {
-                names.push((key, node, "member"));
-            }
-        }
-        _ => {}
-    }
-    Value::list(names.into_iter().filter_map(|(name, at, context)| {
-        let display = s.text(name);
-        let name = display.strip_prefix('#').unwrap_or(display);
-        if name == "_" || !(name.starts_with('_') || name.ends_with('_')) {
-            return None;
-        }
-        let object = s.get(node, F::Object).map(|n| s.unparen(n));
-        let this_constructor = object.is_some_and(|n| s.is(n, K::Member) && s.word(n, F::Property) == Some("constructor")
-            && s.get(n, F::Object).is_some_and(|o| s.is(s.unparen(o), K::This)));
-        Some(Value::record(vec![
-            ("name".into(), Value::from(name.to_string())),
-            ("display".into(), Value::from(display.to_string())),
-            ("context".into(), Value::from(context)),
-            ("this".into(), Value::Bool(object.is_some_and(|n| s.is(n, K::This)))),
-            ("super".into(), Value::Bool(object.is_some_and(|n| s.is(n, K::Super)))),
-            ("constructor".into(), Value::Bool(this_constructor)),
-            ("offset".into(), Value::from(s.tree.node(at).start as usize)),
-        ]))
-    }).collect())
-}
-
 struct OutsideBindings(HashMap<u32, Vec<u32>>);
 
 fn collect_outside_bindings(file: &NativeFile) -> OutsideBindings {
@@ -169,6 +90,7 @@ pub(super) fn strict_code(file: &NativeFile, node: u32) -> bool {
         if matches!(s.kind(n), Some(K::Program | K::Function | K::Arrow | K::Method)) {
             let block = if s.is(n, K::Program) { n } else { s.get(n, F::Body).unwrap_or(n) };
             for statement in s.all(block, F::Body) {
+                if !s.is(statement, K::ExprStmt) { break; }
                 let Some(expression) = s.get(statement, F::Expr).filter(|&n| s.is(n, K::String)) else { break };
                 if matches!(s.text(expression), "'use strict'" | "\"use strict\"") {
                     return true;
@@ -624,6 +546,20 @@ fn receiver_in(s: &Syntax, node: u32) -> bool {
 mod tests {
     use std::path::Path;
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn strict_code_requires_expression_statement_directives() {
+        let lint = native_linter("in ts_function rule strict_probe info 'strict' { when scoping_strict_code }");
+        for (source, expected) in [
+            ("'use strict'; function f() {}", 1),
+            ("'other'; 'use strict'; function f() {}", 1),
+            ("foo(); 'use strict'; function f() {}", 0),
+            ("export default 'use strict'; function f() {}", 0),
+            ("export = 'other'; 'use strict'; function f() {}", 0),
+        ] {
+            assert_eq!(lint.lint(Path::new("/root/file.cts"), source).len(), expected, "{source}");
+        }
+    }
 
     #[test]
     fn initialization_shadow_exception_stays_in_the_initializing_callback() {
