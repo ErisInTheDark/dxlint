@@ -19,7 +19,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.zlint`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
-- `src/config/std_lib.rs` lists both
+- `build.rs` embeds every file of both (`src/config/std_lib.rs` reads them); `ZLINT_LIBRARY=<checkout>` reads them from disk instead (no rebuild for .zlint edits)
 
 ## Invariants
 
@@ -31,7 +31,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - matchers never match empty; no left recursion
 - memoised runs are pure per (matcher, position); `Dead` states rely on it
 - new built-in expression functions (generic, value-only): one entry in `FUNCTIONS`; new facts: an entry in a `topics/*.rs` `FACTS`
-- new std module or ruleset: add to `std_lib.rs` and docs table
+- new std module or ruleset: add its file (and the docs table entry)
 - std rules and their layers live in `define { }`; library layers parse only while needed (`engine/prune.rs`), so a needed layer's parents and pattern references must stay reachable
 - with every rule on (`rule *`), std must build without errors (`engine/tests.rs` checks)
 - native code reads the filesystem only through `native/ts/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`). Else `.zlintcache` replays stale results
