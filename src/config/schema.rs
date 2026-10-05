@@ -169,7 +169,10 @@ impl Schema {
                 // option of the value's own kind, which is the most telling.
                 let mut closest = None;
                 for o in options {
-                    match o.fit(v, named, path, doc, depth) {
+                    let len = path.len();
+                    let result = o.fit(v, named, path, doc, depth);
+                    path.truncate(len);
+                    match result {
                         Ok(v) => return Ok(v),
                         Err(m) if o.kind_matches(v, named) && closest.is_none() => closest = Some(m),
                         Err(_) => {}
@@ -366,6 +369,39 @@ mod tests {
         let either = Schema::Union(vec![lit("never"), Schema::Record(vec![field("max", Schema::Int, FieldDefault::Value(Value::Num(1.0)), None)], None)]);
         assert_eq!(either.check(&rec(&[("max", Value::from("x"))]), &named).unwrap_err().path, "max");
         assert_eq!(either.check(&Value::from("x"), &named).unwrap_err().problem, "must be \"never\" | { max: int = 1 }, got \"x\"");
+    }
+
+    #[test]
+    fn union_alternatives_preserve_nested_misfits() {
+        let named = Schemas::new();
+        let pattern = Schema::Record(vec![field("pattern", Schema::JsRegex, FieldDefault::Required, Some("a module pattern"))], None);
+        let record = rec(&[("pattern", Value::from("("))]);
+        for (schema, value) in [
+            (pattern.clone(), record.clone()),
+            (Schema::List(Box::new(pattern.clone())), Value::list(vec![record.clone()])),
+            (Schema::Record(Vec::new(), Some(Box::new(pattern.clone()))), rec(&[("module", record)])),
+            (pattern, rec(&[])),
+        ] {
+            let expected = schema.check(&value, &named).expect_err("invalid nested value");
+            for options in [vec![Schema::Str, schema.clone()], vec![schema.clone(), Schema::Str]] {
+                assert_eq!(Schema::Union(options).check(&value, &named).expect_err("invalid union value"), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn nested_union_misfits_keep_the_enclosing_path() {
+        let named = Schemas::new();
+        let branch = Schema::Record(
+            vec![field("outer", Schema::Union(vec![Schema::Bool, Schema::Record(vec![field("value", Schema::Int, FieldDefault::Required, None)], None)]), FieldDefault::Required, None)],
+            None,
+        );
+        let value = rec(&[("outer", rec(&[("value", Value::from("not a number"))]))]);
+        let expected = Schema::Record(
+            vec![field("outer", Schema::Record(vec![field("value", Schema::Int, FieldDefault::Required, None)], None), FieldDefault::Required, None)],
+            None,
+        );
+        assert_eq!(branch.check(&value, &named), expected.check(&value, &named));
     }
 
     #[test]
