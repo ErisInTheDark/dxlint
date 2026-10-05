@@ -8,7 +8,8 @@ use super::lexer::{Lexer, Tok, Token};
 use super::Parsed;
 use crate::expr::Value;
 use crate::grammar::{Edge, Node, TEXT};
-use std::collections::HashMap;
+// Keyed by byte offsets, looked up per token: the fast hasher.
+use crate::fx_hash::FxHashMap as HashMap;
 
 /// Shared, so threads linting one file in rule groups scan it once.
 #[derive(Clone)]
@@ -45,7 +46,7 @@ pub(crate) fn lex_comments(file: &NativeFile<'_>) -> LexedComments {
 
 pub(crate) fn lex(file: &NativeFile<'_>) -> Lexed {
     let syntax = &file.syntax;
-    let mut opaque = HashMap::new();
+    let mut opaque = HashMap::default();
     for id in 0..syntax.tree.nodes.len() as u32 {
         if syntax.is(id, K::String) {
             let node = syntax.tree.node(id);
@@ -78,7 +79,7 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
         return;
     }
     let nodes = &parsed.nodes;
-    let mut opaque = HashMap::new();
+    let mut opaque = HashMap::default();
     for node in nodes {
         match raw_kind(node) {
             Some(K::String) => {
@@ -261,7 +262,7 @@ struct BracketPairs(HashMap<u32, usize>);
 
 fn bracket_pairs(file: &NativeFile<'_>) -> BracketPairs {
     let lexed = file.cached(lex);
-    let mut pairs = HashMap::new();
+    let mut pairs = HashMap::default();
     let mut open: Vec<usize> = Vec::new();
     for (i, t) in lexed.0.iter().enumerate() {
         let want = match t.tok {
