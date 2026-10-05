@@ -7,6 +7,7 @@ define {
 # `typeof x` in types), or used as a value.
 # A list of quoted names as eslint words it: "a", "b" and "c".
 macro word_list(xs) (if count(xs) == 1 then first(xs) else join(slice(xs, 0, -1), ', ') " and " last(xs))
+in ts_program let import_decorator_metadata compiler_options.experimentalDecorators == true && compiler_options.emitDecoratorMetadata == true && count(descendants(ts_decorator)) > 0
 in ts_identifier {
   let import_use if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
   let type_only_name if import_use == "type" then '"' text '"' else null
@@ -24,6 +25,7 @@ in ts_import rule consistent-type-imports {
   option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
   option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
   when prefer == "no-type-imports" && kind == "type" || prefer == "type-imports" && kind == null && contains(import_uses, "type")
+  when prefer == "no-type-imports" || !ts_program.import_decorator_metadata
   warn if prefer == "no-type-imports" then "Use an `import` instead of an `import type`." else if !contains(import_uses, "value") && !contains(import_uses, "unused") then "All imports in the declaration are only used as types. Use `import type`." else "Imports {word_list(type_only_names)} are only used as type."
 }
 in ts_import_specifier rule consistent-type-imports:inline {
