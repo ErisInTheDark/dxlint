@@ -31,6 +31,23 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 "#;
 
 #[test]
+fn zlint_library_reads_the_built_in_library_from_disk() {
+    // A library dir whose `whitespace` module defines a different rule.
+    let library = project("library-override", &[("std/whitespace.zlint", "in .* layer text match bang /!/ {\n  rule bang warn \"bang\"\n}\n")]);
+    let dir = project("library-user", &[(".zlint", "lang t \"*.t\"\nimport .whitespace\n"), ("a.t", "hi!\n")]);
+    let run = |library: Option<&Path>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_zlint"));
+        cmd.args(["--no-cache"]).current_dir(&dir).env("NO_COLOR", "1").env_remove("ZLINT_LIBRARY");
+        if let Some(l) = library {
+            cmd.env("ZLINT_LIBRARY", l);
+        }
+        stdout(&cmd.output().expect("run zlint"))
+    };
+    assert!(run(Some(&library)).contains("[bang]"));
+    assert!(!run(None).contains("[bang]"));
+}
+
+#[test]
 fn lint_defers_unreachable_bodies_but_check_and_activation_validate_them() {
     for definition in [
         "define {\n  in token rule deferred warn \"bad\" { when dormant() }\n}",

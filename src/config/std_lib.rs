@@ -70,9 +70,27 @@ pub fn short_name(name: &str) -> &str {
     ALIASES.iter().find(|(_, long)| *long == name).map_or(name, |(short, _)| short)
 }
 
+/// `ZLINT_LIBRARY=<checkout>`: read `std/` and `rules/` from that directory
+/// instead of the embedded copies, so editing the library needs no rebuild
+/// (development only; the set of modules stays the embedded one). Read once.
+fn from_disk(dir: &str, name: &str) -> Option<&'static str> {
+    static ROOT: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    static TEXTS: OnceLock<std::sync::Mutex<HashMap<String, &'static str>>> = OnceLock::new();
+    let root = ROOT.get_or_init(|| std::env::var_os("ZLINT_LIBRARY").map(std::path::PathBuf::from)).as_ref()?;
+    let key = format!("{dir}/{name}");
+    let mut texts = TEXTS.get_or_init(Default::default).lock().expect("library lock");
+    if let Some(&text) = texts.get(&key) {
+        return Some(text);
+    }
+    let text: &'static str = std::fs::read_to_string(root.join(format!("{key}.zlint"))).ok()?.leak();
+    texts.insert(key, text);
+    Some(text)
+}
+
 pub fn get(name: &str) -> Option<&'static str> {
     let name = name.strip_suffix(".zlint").unwrap_or(name);
-    FILES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)
+    let embedded = FILES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)?;
+    Some(from_disk("std", name).unwrap_or(embedded))
 }
 
 pub fn names() -> impl Iterator<Item = &'static str> {
@@ -80,7 +98,8 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 }
 
 pub fn ruleset(name: &str) -> Option<&'static str> {
-    RULESETS.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)
+    let embedded = RULESETS.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)?;
+    Some(from_disk("rules", name).unwrap_or(embedded))
 }
 
 pub fn rulesets() -> impl Iterator<Item = &'static str> {
