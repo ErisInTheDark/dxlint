@@ -64,19 +64,6 @@ pub(super) fn strict(file: &NativeFile, node: u32) -> bool {
     false
 }
 
-pub fn lone_block(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(parent) = s.parent(node) else { return Value::Null };
-    if s.is(parent, K::StaticBlock) { return Value::Null }
-    let nested = s.is(parent, K::Block);
-    let eligible = nested || s.is(parent, K::Program) || s.is(parent, K::Case) && s.all(parent, F::Body).count() != 1;
-    if !eligible { return Value::Null }
-    let binding = s.all(node, F::Body).any(|n| s.is(n, K::Var) && s.word(n, F::Kind) != Some("var")
-        || s.is(n, K::Class) || s.is(n, K::Function) && strict(file, n));
-    if binding && !(nested && s.all(parent, F::Body).count() == 1) { return Value::Null }
-    Value::from(if nested { "Nested block is redundant." } else { "Block is redundant." })
-}
-
 fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     let s = &file.syntax;
     let Some(mut tail) = s.all(block, F::Body).next() else { return false };

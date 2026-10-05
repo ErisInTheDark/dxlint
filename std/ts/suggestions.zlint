@@ -484,8 +484,10 @@ in ts_block, ts_switch rule no-empty {
 }
 
 in ts_block rule no-lone-blocks {
-  when lone_statement_block != null
-  warn lone_statement_block
+  let nested parent is ts_block
+  when nested || parent is ts_program || parent is ts_case && count(parent.body) != 1
+  when nested && count(parent.body) == 1 || !any([] body.node, statement => if statement is ts_variable_declaration then statement.kind != "var" else statement is ts_class || statement is ts_function && statement.scoping_strict_code)
+  warn if nested then "Nested block is redundant." else "Block is redundant."
 }
 
 in ts_if rule no-lonely-if {
