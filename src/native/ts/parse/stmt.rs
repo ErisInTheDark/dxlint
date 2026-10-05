@@ -180,8 +180,8 @@ impl<'s> Parser<'s> {
 
     fn declaration_after_decorators(&mut self, start: u32, mut kids: Kids) -> PResult<u32> {
         if self.is_word("export") {
-            // `@dec export class X`: keep the export, decorators on the class.
-            let estart = self.start();
+            // `@dec export class X`: keep the export, decorators on the class;
+            // the export spans them too, so it holds its class.
             self.bump();
             let mut ekids = Kids::default();
             if self.is_word("default") {
@@ -190,7 +190,7 @@ impl<'s> Parser<'s> {
             }
             let class = self.declaration_after_decorators(start, kids)?;
             ekids.add(Field::Decl, class);
-            return Ok(self.finish(Kind::Export, estart, ekids));
+            return Ok(self.finish(Kind::Export, start, ekids));
         }
         while self.is_word("abstract") || self.is_word("declare") {
             let m = self.token_text();
@@ -817,6 +817,19 @@ impl<'s> Parser<'s> {
 #[cfg(test)]
 mod tests {
     use crate::native::ts::{kinds::{Field, Kind}, parse};
+
+    #[test]
+    fn nodes_hold_their_children() {
+        for src in ["@dec\nexport class A {}", "@a() @b\nexport default class {}", "export @dec class C {}", "@dec class D {}"] {
+            let parsed = parse(src, false).unwrap_or_else(|error| panic!("{src}: {error:?}"));
+            for node in &parsed.nodes {
+                for edge in &node.children {
+                    let child = &parsed.nodes[edge.node as usize];
+                    assert!(node.start <= child.start && child.end <= node.end, "{src}: {}..{} outside {}..{}", child.start, child.end, node.start, node.end);
+                }
+            }
+        }
+    }
 
     #[test]
     fn class_modifiers_preserve_line_break_semantics() {
