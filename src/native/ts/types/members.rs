@@ -251,7 +251,9 @@ impl Checker<'_> {
                     Resolution::property::<METADATA>(name, value.clone())
                 } else { prototype };
             }
-            return Resolution::typed(if super::utilities::accepts_key(key, name) == Some(true) { value.clone() } else { Ty::Unknown });
+            return if super::utilities::accepts_key(key, name) == Some(true) {
+                Resolution::signature::<METADATA>(value.clone(), if METADATA { key.clone() } else { Ty::Unknown })
+            } else { Resolution::typed(Ty::Unknown) };
         }
         match t {
             Ty::Any => Resolution::typed(Ty::Any),
@@ -282,21 +284,31 @@ impl Checker<'_> {
                 let declared = !found.is_empty() && found.iter().all(|result| result.declared);
                 let opaque = found.iter().any(|result| result.ty.is_opaque());
                 let mut declarations = Vec::new();
+                let mut from_index = false;
+                let mut signature_keys = Vec::new();
                 let types = found.into_iter().map(|result| {
+                    from_index |= result.from_index;
+                    if METADATA { signature_keys.extend(result.signature_keys); }
                     if METADATA && declared { declarations.extend(result.declarations); }
                     result.ty
                 }).collect();
-                Resolution { ty: if opaque { Ty::Unknown } else { Ty::union(types) }, declared, from_index: false, declarations, signature_keys: Vec::new() }
+                Resolution { ty: if opaque { Ty::Unknown } else { Ty::union(types) }, declared, from_index, declarations, signature_keys }
             }
             // Every constituent that has it contributes (`T & { on: any }`
             // makes `on` any).
             Ty::Inter(items) => {
                 let mut declarations = Vec::new();
                 let mut declared = false;
+                let mut from_index = false;
+                let mut signature_keys = Vec::new();
                 let found: Vec<Ty> = items.iter().map(|i| {
                     let result = self.member_lookup::<METADATA, PROTOTYPE>(i, name, receiver);
                     declared |= result.declared;
-                    if METADATA { declarations.extend(result.declarations); }
+                    from_index |= result.from_index;
+                    if METADATA {
+                        declarations.extend(result.declarations);
+                        signature_keys.extend(result.signature_keys);
+                    }
                     result.ty
                 }).filter(|t| !t.is_opaque()).collect();
                 let ty = match found.len() {
@@ -305,7 +317,7 @@ impl Checker<'_> {
                     _ if found.iter().any(|t| matches!(t, Ty::Any)) => Ty::Any,
                     _ => Ty::Inter(found),
                 };
-                Resolution { ty, declared, from_index: false, declarations, signature_keys: Vec::new() }
+                Resolution { ty, declared, from_index, declarations, signature_keys }
             }
             Ty::Obj(members, env) => {
                 let env = Env { this: Some(Box::new(receiver.clone())), ..(**env).clone() };

@@ -96,3 +96,24 @@ fn unresolved_explicit_heritage_does_not_claim_implicit_object_members() {
         assert!(checker.member(&ty, "toString").is_opaque());
     });
 }
+
+#[test]
+fn record_fallback_provenance_survives_nullable_and_composite_receivers() {
+    for (shape, from_index, declared) in [
+        ("Record<string, number>", true, false),
+        ("Record<'value', number>", false, true),
+        ("Record<string, number> | null", true, false),
+        ("Record<string, number> | { value: number }", true, false),
+        ("Record<string, number> & { other: string }", true, false),
+        ("Record<string, number> & { value: number }", true, true),
+    ] {
+        let source = format!("type Record<K extends keyof any, T> = {{ [P in K]: T }}; type Target = {shape};");
+        with_library(&source, |checker| {
+            let ty = checker.eval(&TypeSyn::Ref(vec!["Target".into()].into(), Vec::new()), &Env::file(checker.file));
+            let resolution = checker.member_resolution(&ty, "value");
+            assert_eq!((resolution.from_index, resolution.declared), (from_index, declared), "{shape}: {resolution:?}");
+            assert_eq!(resolution.signature_keys.iter().any(|key| matches!(key, Ty::Prim("string"))), from_index);
+            assert_eq!(checker.print(&resolution.ty), checker.print(&checker.member(&ty, "value")), "{shape}");
+        });
+    }
+}
