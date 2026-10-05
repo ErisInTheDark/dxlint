@@ -483,7 +483,7 @@ pub struct NativeFile<'t> {
     supers: OnceCell<Supers>,
     pub(super) unused_members: OnceCell<HashMap<u32, (String, bool, bool)>>,
     /// Topic modules' per-file results ([`NativeFile::cached`]).
-    topic_cache: RefCell<HashMap<TypeId, Rc<dyn Any>>>,
+    topic_cache: RefCell<crate::fx_hash::FxHashMap<TypeId, Rc<dyn Any>>>,
     typing: OnceCell<Typing<'t>>,
     /// `(module, name)` of imports -> their declaration's JSDoc.
     import_docs: RefCell<HashMap<(String, String), Option<String>>>,
@@ -501,7 +501,7 @@ impl<'t> NativeFile<'t> {
             reach: OnceCell::new(),
             supers: OnceCell::new(),
             unused_members: OnceCell::new(),
-            topic_cache: RefCell::new(HashMap::new()),
+            topic_cache: RefCell::default(),
             typing: OnceCell::new(),
             import_docs: RefCell::new(HashMap::new()),
         }

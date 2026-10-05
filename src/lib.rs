@@ -10,6 +10,7 @@
 pub mod config;
 pub mod engine;
 pub mod expr;
+pub mod fx_hash;
 pub mod grammar;
 pub mod line_index;
 pub mod native;

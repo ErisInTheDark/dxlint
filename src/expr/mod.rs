@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use crate::config::ast::{BinOp, Dropped, Expr, ExprKind, TemplatePart, UnOp};
 use crate::config::error::{closest, ConfigError};
+use crate::fx_hash::FxHashMap;
 use crate::grammar::{full_match, Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
 use crate::pattern::compile::{compile, Labels, Program};
@@ -239,12 +240,12 @@ pub struct Attr {
 /// values are kept here too, per (node, rule, slot).
 #[derive(Default)]
 pub struct AttrMemo<'a> {
-    values: RefCell<HashMap<(u32, u16), Value<'a>>>,
+    values: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
     busy: RefCell<Vec<(u32, u16)>>,
-    locals: RefCell<HashMap<(u32, u32, u16), Value<'a>>>,
+    locals: RefCell<FxHashMap<(u32, u32, u16), Value<'a>>>,
     /// Native facts read without arguments, per (node, fact): a rule reading
     /// `space_before.spaced` and `space_before.line_break` builds the gap once.
-    facts: RefCell<HashMap<(u32, u16), Value<'a>>>,
+    facts: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
     /// Values of the lambda parameters being evaluated, outermost first.
     /// Nothing memoised above can read them: attributes and `let`s are
     /// written outside every lambda.
@@ -256,7 +257,7 @@ pub struct AttrMemo<'a> {
     js_lines: std::cell::OnceCell<Vec<usize>>,
     /// For `overlapping(layer)`: the file's nodes of those matchers by
     /// start, with the running maximum end.
-    spans: RefCell<HashMap<NodeSel, std::rc::Rc<LayerSpans>>>,
+    spans: RefCell<FxHashMap<NodeSel, std::rc::Rc<LayerSpans>>>,
 }
 
 /// Which nodes `descendants`, `overlapping` and `containing` look for:

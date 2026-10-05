@@ -143,11 +143,11 @@ pub(crate) fn token_layer(file: &NativeFile<'_>, token: &Token) -> Option<K> {
 }
 
 /// Syntax nodes by their exact span; the innermost wins.
-struct ExactNodes(HashMap<(u32, u32), K>);
+struct ExactNodes(crate::fx_hash::FxHashMap<(u32, u32), K>);
 
 fn exact_nodes(file: &NativeFile<'_>) -> ExactNodes {
     let s = &file.syntax;
-    let mut map = HashMap::new();
+    let mut map = crate::fx_hash::FxHashMap::default();
     for &id in &s.tree.order {
         if let Some(kind) = s.kind(id).filter(|k| !k.is_token()) {
             let n = s.tree.node(id);
@@ -286,6 +286,19 @@ pub(crate) fn paired(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 /// separates them, line breaks, blank lines and comments.
 pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
     let text = &src[from..to.max(from)];
+    // Most gaps are "" or a few spaces: no lines, no comments to walk.
+    if !text.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'/') || b >= 0x80) {
+        return Value::record(vec![
+            ("text".into(), Value::from(text.to_owned())),
+            ("start".into(), Value::from(from)),
+            ("end".into(), Value::from(to.max(from))),
+            ("spaced".into(), Value::Bool(text.bytes().any(|b| b.is_ascii_whitespace() || b == 0x0b))),
+            ("line_break".into(), Value::Bool(false)),
+            ("blank_lines".into(), Value::from(0usize)),
+            ("blank_gaps".into(), Value::from(0usize)),
+            ("comments".into(), Value::Bool(!text.trim().is_empty())),
+        ]);
+    }
     let unified = text.replace("\r\n", "\n");
     let lines: Vec<&str> = unified.split(['\n', '\r', '\u{2028}', '\u{2029}']).collect();
     let blank_lines = lines.iter().skip(1).take(lines.len().saturating_sub(2)).filter(|l| l.trim().is_empty()).count();
