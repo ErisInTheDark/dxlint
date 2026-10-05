@@ -61,6 +61,7 @@ impl Resolution {
                 owner: None,
                 environment: None,
                 member: Member {
+                    doc: None,
                     name: name.into(), kind: MemberKind::Prop, visibility: Visibility::Public,
                     signature: false, computed_key: None,
                     is_static: false, readonly: Some(false), optional: false, ty: None, index_key: None, sigs: Vec::new(), init: None,

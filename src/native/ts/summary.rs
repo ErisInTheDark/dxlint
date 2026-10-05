@@ -67,6 +67,7 @@ pub struct Param {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sig {
+    pub doc: Option<Box<str>>,
     pub type_params: Vec<TParam>,
     pub params: Vec<Param>,
     /// `None`: not annotated.
@@ -91,7 +92,7 @@ pub struct Predicate {
 /// content hash: other files only see whether there is a body.
 impl Hash for Sig {
     fn hash<H: Hasher>(&self, h: &mut H) {
-        (&self.type_params, &self.params, &self.ret, &self.predicate, self.is_async, self.body_at.is_some()).hash(h);
+        (&self.doc, &self.type_params, &self.params, &self.ret, &self.predicate, self.is_async, self.body_at.is_some()).hash(h);
     }
 }
 
@@ -122,6 +123,7 @@ impl Visibility {
 
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Member {
+    pub doc: Option<Box<str>>,
     /// The key as written (`name`, `"str"`, `[Symbol.dispose]`).
     pub name: Box<str>,
     pub kind: MemberKind,
@@ -247,6 +249,7 @@ pub enum Export {
 #[derive(Debug, Default)]
 pub struct Module {
     pub exports: HashMap<Box<str>, Export>,
+    pub export_docs: HashMap<Box<str>, Box<str>>,
     /// `export * from "x"`
     pub stars: Vec<Box<str>>,
     /// `export = name`
@@ -256,6 +259,7 @@ pub struct Module {
 impl Hash for Module {
     fn hash<H: Hasher>(&self, h: &mut H) {
         hash_sorted(&self.exports, h);
+        hash_sorted(&self.export_docs, h);
         (&self.stars, &self.equals).hash(h);
     }
 }
@@ -414,6 +418,7 @@ pub fn sig(v: &impl View, id: u32) -> Sig {
         })
     });
     Sig {
+        doc: leading_doc(v.src(), v.start(id) as usize).map(String::into_boxed_str),
         type_params: type_params(v, id),
         params,
         ret: v.get(id, F::ReturnType).map(|r| type_syn(v, r)),
@@ -465,6 +470,7 @@ fn key_name(v: &impl View, key: u32) -> Box<str> {
 
 /// A class member or type member.
 pub fn member(v: &impl View, id: u32) -> Option<Member> {
+    let doc = leading_doc(v.src(), v.start(id) as usize).map(String::into_boxed_str);
     let is_static = v.has_word(id, F::Modifier, "static");
     let readonly = Some(v.has_word(id, F::Modifier, "readonly"));
     let optional = v.get(id, F::Optional).is_some();
@@ -474,7 +480,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         .and_then(|key| v.get(key, F::Expr)).map(|key| path_of(v, key))
         .filter(|path| !path.is_empty()).map(Vec::into_boxed_slice);
     let named = |kind, ty, sigs| -> Option<Member> {
-        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
+        Some(Member { doc: doc.clone(), name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
     };
     match v.kind(id)? {
         K::Method | K::MethodSig => {
@@ -499,9 +505,10 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         }
         K::CallSig => {
             let kind = if v.get(id, F::Kind).is_some() { MemberKind::Construct } else { MemberKind::Call };
-            Some(Member { name: "()".into(), kind, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
+            Some(Member { doc, name: "()".into(), kind, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
         }
         K::IndexSig => Some(Member {
+            doc,
             name: "[index]".into(),
             kind: MemberKind::Index,
             visibility,
@@ -673,6 +680,7 @@ impl<V: View> Builder<'_, V> {
                             if v.get(p, F::Modifier).is_some() {
                                 if let Some(n) = v.get(p, F::Name).filter(|&n| v.is(n, K::Ident)) {
                                     decl.members.push(Member {
+                                        doc: leading_doc(v.src(), v.start(p) as usize).map(String::into_boxed_str),
                                         name: v.text(n).into(),
                                         kind: MemberKind::Prop,
                                         visibility: Visibility::of(v, p),
@@ -719,6 +727,7 @@ impl<V: View> Builder<'_, V> {
                         // String members make a string enum.
                         let ty = v.get(m, F::Init).filter(|&i| v.is(i, K::String)).map(|i| TypeSyn::Lit(v.text(i).into()));
                         Some(Member {
+                            doc: leading_doc(v.src(), v.start(m) as usize).map(String::into_boxed_str),
                             name: key_name(v, name),
                             kind: MemberKind::Prop,
                             visibility: Visibility::Public,
@@ -873,8 +882,15 @@ impl<V: View> Builder<'_, V> {
                 if let Some(decl) = v.get(s, F::Decl) {
                     let declared = self.statement(decl, scope, None, ambient);
                     for &id in &declared {
-                        if self.out.decls[id as usize].doc.is_none() {
-                            self.out.decls[id as usize].doc = doc.clone();
+                        let declaration = &mut self.out.decls[id as usize];
+                        if declaration.doc.is_none() {
+                            declaration.doc = doc.clone();
+                        }
+                        if declaration.kind == DeclKind::Function {
+                            if let Some(signature) = declaration.sigs.last_mut() {
+                                let signature = Arc::make_mut(signature);
+                                if signature.doc.is_none() { signature.doc = doc.clone(); }
+                            }
                         }
                         let name = self.out.decls[id as usize].name.clone();
                         if let Some(m) = module.as_deref_mut() {
@@ -887,6 +903,7 @@ impl<V: View> Builder<'_, V> {
                     ids.extend(declared);
                 } else if let Some(e) = v.get(s, F::Expr) {
                     if let Some(m) = module.as_deref_mut() {
+                        if let Some(doc) = &doc { m.export_docs.insert("default".into(), doc.clone()); }
                         if v.is(e, K::Ident) {
                             let local: Vec<u32> = scope.get(v.text(e)).to_vec();
                             // Declared later: resolved below by name.
@@ -908,7 +925,9 @@ impl<V: View> Builder<'_, V> {
                     match &from {
                         Some(from) if specs.is_empty() => match v.get(s, F::Namespace) {
                             Some(ns) => {
-                                m.exports.insert(key_name(v, ns), Export::Namespace(from.clone()));
+                                let name = key_name(v, ns);
+                                if let Some(doc) = &doc { m.export_docs.insert(name.clone(), doc.clone()); }
+                                m.exports.insert(name, Export::Namespace(from.clone()));
                             }
                             None => m.stars.push(from.clone()),
                         },
@@ -920,6 +939,9 @@ impl<V: View> Builder<'_, V> {
                         let local = key_name(v, local);
                         // Local names are resolved once every declaration is known.
                         let from = from.clone().unwrap_or_else(|| "".into());
+                        if let Some(doc) = leading_doc(v.src(), v.start(spec) as usize).map(String::into_boxed_str).or_else(|| doc.clone()) {
+                            m.export_docs.insert(exported.clone(), doc);
+                        }
                         m.exports.insert(exported, Export::Reexport { from, name: local });
                     }
                 }

@@ -1,0 +1,6 @@
+# Shared type/value origin matching.
+
+define {
+macro matches_type_specifier(spec, gate) (spec == gate.name || (spec.name == gate.name || contains(default(spec.name, []), gate.name)) && spec.from == gate.from && (spec.path == null || ends_with(gate.path, spec.path)) && (spec.package == null || spec.package == gate.package))
+macro type_is_allowed(allowed, groups) any(allowed, spec => all(groups, group => any(group, gate => matches_type_specifier(spec, gate))))
+}

@@ -30,6 +30,28 @@ pub struct DeclRef {
     pub decl: u32,
 }
 
+/// An intermediate binding traversed while resolving an exported name.
+#[derive(Debug, Clone)]
+pub struct ExportAlias {
+    pub file: FileId,
+    pub name: Box<str>,
+    pub module: Option<Box<str>>,
+    pub doc: Option<Box<str>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExportResolution {
+    pub declarations: Vec<DeclRef>,
+    pub aliases: Vec<ExportAlias>,
+}
+
+impl ExportResolution {
+    fn extend(&mut self, other: Self) {
+        self.declarations.extend(other.declarations);
+        self.aliases.extend(other.aliases);
+    }
+}
+
 /// Where a module specifier leads.
 #[derive(Clone, Copy, Debug)]
 pub enum ModRef {
@@ -344,47 +366,83 @@ impl Project {
 
     /// The declarations export `name` of module `m` leads to.
     pub fn export(&self, m: ModRef, name: &str) -> Vec<DeclRef> {
-        self.export_hops(m, name, MAX_HOPS)
+        self.export_hops::<false>(m, name, MAX_HOPS).declarations
     }
 
-    fn export_hops(&self, m: ModRef, name: &str, hops: usize) -> Vec<DeclRef> {
+    /// Export lookup retaining intermediate bindings, in lookup order.
+    pub fn export_resolution(&self, m: ModRef, name: &str) -> ExportResolution {
+        self.export_hops::<true>(m, name, MAX_HOPS)
+    }
+
+    fn export_hops<const METADATA: bool>(&self, m: ModRef, name: &str, hops: usize) -> ExportResolution {
         if hops == 0 {
-            return Vec::new();
+            return ExportResolution::default();
         }
-        let Some((file, s, at)) = self.module_of(m) else { return Vec::new() };
+        let Some((file, s, at)) = self.module_of(m) else { return ExportResolution::default() };
         let (module, scope) = at.get(&s);
-        let refs = |ids: &[u32]| ids.iter().map(|&decl| DeclRef { file, decl }).collect::<Vec<_>>();
+        let refs = |ids: &[u32]| ExportResolution {
+            declarations: ids.iter().map(|&decl| DeclRef { file, decl }).collect(),
+            aliases: Vec::new(),
+        };
+        let alias = || ExportAlias {
+            file,
+            name: name.into(),
+            module: match at { ModuleAt::Top => None, ModuleAt::Ambient(i) => Some(s.ambient_modules[i].0.clone()) },
+            doc: module.export_docs.get(name).cloned(),
+        };
         if name == "=" || (name == "default" && !module.exports.contains_key("default") && module.equals.is_some()) {
             if let Some(eq) = &module.equals {
                 return refs(eq);
             }
         }
         match module.exports.get(name) {
-            Some(Export::Decls(ids)) => refs(ids),
+            Some(Export::Decls(ids)) => {
+                let mut result = refs(ids);
+                if METADATA && module.export_docs.contains_key(name) { result.aliases.push(alias()); }
+                result
+            }
             Some(Export::Reexport { from, name: inner }) if from.is_empty() => {
                 let local = scope.get(inner);
                 // A local import re-exported: follow it.
-                local
-                    .iter()
-                    .flat_map(|&i| match &s.decls[i as usize].kind {
+                let mut result = ExportResolution::default();
+                if METADATA { result.aliases.push(alias()); }
+                for &i in local {
+                    let declaration = &s.decls[i as usize];
+                    let resolved = match &declaration.kind {
                         super::summary::DeclKind::Import { from, name } => {
-                            self.resolve(file, from).map(|m| self.export_hops(m, name, hops - 1)).unwrap_or_default()
+                            let mut resolved = self.resolve(file, from).map(|m| self.export_hops::<METADATA>(m, name, hops - 1)).unwrap_or_default();
+                            if METADATA {
+                                resolved.aliases.insert(0, ExportAlias {
+                                    file, name: declaration.name.clone(),
+                                    module: declaration.module.map(|i| s.ambient_modules[i].0.clone()),
+                                    doc: declaration.doc.clone(),
+                                });
+                            }
+                            resolved
                         }
-                        _ => vec![DeclRef { file, decl: i }],
-                    })
-                    .collect()
+                        _ => refs(&[i]),
+                    };
+                    result.extend(resolved);
+                }
+                result
             }
             Some(Export::Reexport { from, name: inner }) => {
-                self.resolve(file, from).map(|m| self.export_hops(m, inner, hops - 1)).unwrap_or_default()
+                let mut result = self.resolve(file, from).map(|m| self.export_hops::<METADATA>(m, inner, hops - 1)).unwrap_or_default();
+                if METADATA { result.aliases.insert(0, alias()); }
+                result
             }
-            Some(Export::Namespace(_)) => Vec::new(),
-            None if name == "default" => Vec::new(),
+            Some(Export::Namespace(_)) => {
+                let mut result = ExportResolution::default();
+                if METADATA { result.aliases.push(alias()); }
+                result
+            }
+            None if name == "default" => ExportResolution::default(),
             None => module
                 .stars
                 .iter()
                 .find_map(|from| {
-                    let found = self.resolve(file, from).map(|m| self.export_hops(m, name, hops - 1)).unwrap_or_default();
-                    (!found.is_empty()).then_some(found)
+                    let found = self.resolve(file, from).map(|m| self.export_hops::<METADATA>(m, name, hops - 1)).unwrap_or_default();
+                    (!found.declarations.is_empty()).then_some(found)
                 })
                 .unwrap_or_default(),
         }

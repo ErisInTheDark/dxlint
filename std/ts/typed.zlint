@@ -3,14 +3,15 @@
 # `type_members`, ...). Unresolved types differ from explicit unknown.
 
 import .ts/arithmetic
+import .ts/deprecation
+import .ts/spreads
+import .ts/type-specifiers
 
 define {
 
 macro thenable contains(default(type_members, []), "then")
 macro flags (default(type_flags, []))
 macro has_only_flags(fs, allowed) (count(fs) > 0 && count(unique(fs allowed)) == count(unique(allowed)))
-macro matches_type_specifier(spec, gate) (spec == gate.name || (spec.name == gate.name || contains(default(spec.name, []), gate.name)) && spec.from == gate.from && (spec.path == null || ends_with(gate.path, spec.path)) && (spec.package == null || spec.package == gate.package))
-macro type_is_allowed(allowed, groups) any(allowed, spec => all(groups, group => any(group, gate => matches_type_specifier(spec, gate))))
 macro matches_type_names(groups, names) all(groups, group => any(group, name => contains(names, name)))
 
 in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
@@ -468,14 +469,6 @@ in ts_logical rule prefer-optional-chain:empty-object {
   when !requireNullish || contains(default(left.type_flags, []), "nullable")
   report at enclosing.parent
   warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
-}
-
-# ---- no-deprecated --------------------------------------------------------------
-# Imported names whose declaration's JSDoc has `@deprecated`, at the import
-# and at every use.
-in ts_identifier rule no-deprecated {
-  when imported_from != null && re_test(default(declaration_doc, ""), /(?m)^@deprecated\b/)
-  warn "Deprecated{if re_test(declaration_doc, /(?m)^@deprecated[ \t]*\S/) then ': ' trim(re_replace(re_find(declaration_doc, /(?m)^@deprecated[^\n]*(?:\n[^@\n][^\n]*)*/), /^@deprecated\s*/, '')) else '.'}"
 }
 
 # ---- more type-aware rules (type_flags) ----------------------------------------
