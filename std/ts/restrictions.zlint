@@ -606,7 +606,7 @@ in ts_identifier, ts_private_name {
 }
 in ts_identifier, ts_private_name rule id-denylist {
   option options string[] = [] "restricted identifiers"
-  when !restriction_name_external && !restriction_name_attributes && !restriction_name_renamed && !restriction_name_alias
+  when (!restriction_name_external || is ts_property.key && !restriction_name_pattern) && !restriction_name_attributes && !restriction_name_renamed && !restriction_name_alias
   when parent not (ts_call, ts_new, ts_meta_property) && !(is ts_member.property && !restriction_name_assignment)
   when contains(options, restriction_identifier_name)
   warn "Identifier '{text}' is restricted."
