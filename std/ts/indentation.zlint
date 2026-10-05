@@ -22,6 +22,12 @@ fn indent_list_close(item) = if item.token_neighbours.after.text == "," then nod
 fn indent_list_anchor(item) =
   if item.indent_list_previous == null || position(item.indent_list_previous.last_token.end).js_line <= position(item.parent.indent_list_open.offset).js_line then item.offset
   else item.indent_list_previous.first_token.start
+fn indent_callee_tail(callee) =
+  last(walk(callee, item => if item is ts_member && position(item.object.last_token.end).js_line == position(item.property.first_token.start).js_line then item.object.node else null))
+fn indent_function_anchor(owner) =
+  if owner not (ts_call.argument, ts_new.argument) || position(owner.first_token.start).js_column == len(owner.indent) + 1 then owner.offset
+  else if indent_list_anchor(owner) != owner.offset then indent_list_anchor(owner)
+  else owner.parent.indent_call_anchor
 fn indent_template_parts(owner, at) = {
   previous: first(slice([] owner.quasi.node, at, at + 1)),
   next: first(slice([] owner.quasi.node, at + 1, at + 2)),
@@ -72,7 +78,13 @@ in ts_variable_declaration let indent_first_item first([] declaration.node)
 in ts_variable_declaration let indent_multiline_declaration position(last([] declaration.node).offset).js_line > position(offset).js_line
 in ts_node let indent_list_first if is (ts_call.argument, ts_new.argument, ts_import_call.argument, ts_function.parameter, ts_arrow.parameter, ts_method.parameter, ts_array.element, ts_array_pattern.element, ts_tuple_type.element, ts_object.property, ts_object_pattern.property, ts_import.specifier, ts_variable_declaration.declaration) then parent.indent_first_item else null
 in ts_node let indent_list_previous if indent_list_first != null && index > 0 && parent is indent_lists then first(slice(parent.indent_items, index - 1, index)) else null
-in indent_calls let indent_call_anchor if node.callee is ts_tagged_template then node.callee.quasi.token_neighbours.before.start else offset
+in indent_calls let indent_call_tail indent_callee_tail(node.callee.node)
+in indent_calls let indent_call_anchor
+  if node.callee == null then offset
+  else if node.callee is ts_tagged_template then node.callee.quasi.token_neighbours.before.start
+  else if node.optional != null then node.optional.offset
+  else if node_at(indent_call_tail.last_token.start) is (ts_close_paren, ts_close_bracket, ts_close_brace) then default(node_at(indent_call_tail.last_token.start).paired_token.start, indent_call_tail.offset)
+  else indent_call_tail.last_token.start
 
 in ts_expression_statement, ts_variable_declaration let indent_outer_context parent is ts_program
 in ts_call, ts_parenthesized, ts_assignment, ts_logical, ts_sequence, ts_declarator let indent_outer_context parent.indent_outer_context == true
@@ -128,10 +140,10 @@ in ts_line rule indent {
   indent ts_template.expression from indent_template_code_anchor(parent.node, index, mode, tab_length, false) by if indent_template_relative(indent_template_parts(parent.node, index)) then 1 else 0
   indent ts_template.quasi from if index == 0 then offset else indent_template_code_anchor(parent.node, index - 1, mode, tab_length, true) by 0
   indent in ts_index from indent_index_open
-  indent ts_index.token from if text == "]" then parent.indent_index_open else parent.offset by if text == "]" then 0 else indent_numeric(member_expression)
+  indent ts_index.token from if text == "]" then parent.indent_index_open else default(parent.optional.offset, parent.offset) by if text == "]" then 0 else indent_numeric(member_expression)
   indent in indent_calls from indent_call_anchor by indent_numeric(default(call_expression.arguments, 1))
-  indent indent_calls.token from if parent.callee is ts_tagged_template && is (ts_open_paren, ts_close_paren) then parent.indent_call_anchor else offset by 0
-  indent in ts_function.body, ts_arrow.body, ts_method.body from parent.offset by if parent.indent_outer_iife then indent_numeric(outerIIFEBody) else default(indent_function_mode(parent, function_declaration, function_expression).body, 1)
+  indent indent_calls.token from if is (ts_open_paren, ts_close_paren) then parent.indent_call_anchor else offset by 0
+  indent in ts_function.body, ts_arrow.body, ts_method.body from indent_function_anchor(parent.node) by if parent.indent_outer_iife then indent_numeric(outerIIFEBody) else default(indent_function_mode(parent, function_declaration, function_expression).body, 1)
   indent in ts_static_block.body by default(static_block.body, 1)
   indent ts_function.parameter, ts_arrow.parameter, ts_method.parameter by indent_numeric(default(indent_function_mode(parent, function_declaration, function_expression).parameters, 1))
   indent ts_function.return_type from parent.indent_return_anchor by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
@@ -144,6 +156,7 @@ in ts_line rule indent {
   indent in ts_variable_declaration class declarators by indent_declaration_level(node, indent_variable_mode(variable_declarator, kind.text), mode)
   indent ts_declarator.token from token_neighbours.before.start by if text == "=" then indent_numeric(assignment_operator) else 0
   indent ts_member.property, ts_member.token, ts_member.optional, ts_index.optional, ts_meta_property.token by indent_numeric(member_expression)
+  indent ts_call.optional from if position(parent.callee.last_token.end).js_line == position(parent.indent_list_open.offset).js_line then parent.callee.last_token.start else parent.callee.first_token.start
   indent ts_import.specifier by indent_numeric(import_declaration)
   indent ts_export.specifier
   indent ts_assignment.right, ts_assignment_pattern.right by indent_numeric(assignment_operator)
@@ -153,7 +166,7 @@ in ts_line rule indent {
   indent ts_declarator.init from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.value, ts_type_parameter.default from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.token, ts_type_parameter.token from if text == "=" then token_neighbours.before.start else offset by indent_numeric(assignment_operator)
-  indent ts_arrow.body from parent.offset by if is ts_block then 0 else 1
+  indent ts_arrow.body from indent_function_anchor(parent.node) by if is ts_block then 0 else 1
   indent ts_property.value, ts_return.argument, ts_throw.argument
   indent ts_conditional.consequent, ts_conditional.alternate by indent_ternary_level(node, flat_ternary_expressions, offset_ternary_expressions, containing(ts_statement))
   # An anchor at the branch itself skips this candidate; own-line branches keep ordinary collapsing.
@@ -189,7 +202,7 @@ in ts_line rule indent {
   when assignment_operator != "off" || equals == null && !any(first_nodes, item => item.first_token.start == first_offset && item.parent.indent_assignment_value.offset == item.offset)
   let member first(overlapping(ts_member, first_offset, first_offset + 1))
   let index first(overlapping(ts_index, first_offset, first_offset + 1))
-  when member_expression != "off" || (member == null || member.property.first_token.start != first_offset && member.property.previous_token.start != first_offset) && (index == null || index.index.first_token.start != first_offset && index.index.previous_token.start != first_offset)
+  when member_expression != "off" || (member == null || !contains([member.property.first_token.start, member.property.token_neighbours.before.start, member.optional.offset], first_offset)) && (index == null || !contains([index.index.first_token.start, index.indent_index_open, index.optional.offset], first_offset))
   let list_item reduce(first_nodes, null, (best, item) => if item.indent_list_first != null && item.first_token.start == first_offset && (best == null || item.end_offset < best.end_offset) then item else best)
   let list_mode indent_list_mode(list_item, call_expression, function_declaration, function_expression, array_expression, object_expression, import_declaration, variable_declarator)
   when list_mode != "off"
