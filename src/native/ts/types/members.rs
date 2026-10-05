@@ -106,6 +106,7 @@ impl Checker<'_> {
         match t {
             Ty::Any => Ty::Any,
             Ty::Array(element) if name.parse::<usize>().is_ok() => (*element.element).clone(),
+            Ty::Array(_) if name == "length" => Ty::Prim("number"),
             Ty::Tuple(tuple) if name == "length" => tuple.length(),
             Ty::Tuple(tuple) if name.parse::<usize>().is_ok() => tuple.at(name.parse().expect("checked index")),
             Ty::Named(symbols, args) if args.len() == 1 && name.parse::<usize>().is_ok() && self.is_builtin_symbol(symbols, "ReadonlyArray") => args[0].clone(),
@@ -305,7 +306,7 @@ impl Checker<'_> {
                 }
             }
             Ty::Union(items) | Ty::Inter(items) => items.iter().for_each(|i| self.member_names(i, out)),
-            Ty::Obj(members, _) => out.extend(members.iter().map(|m| m.name.clone())),
+            Ty::Obj(members, _) => out.extend(members.iter().filter(|m| m.kind != MemberKind::Index).map(|m| m.name.clone())),
             Ty::Struct(props) => out.extend(props.iter().map(|(n, _)| n.clone())),
             Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) => {
                 let a = self.apparent(t);
@@ -322,7 +323,7 @@ impl Checker<'_> {
         for &r in sym {
             let Some(s) = self.summary_of(r.file) else { continue };
             let decl = &s.decls[r.decl as usize];
-            for m in decl.members.iter().filter(|m| !m.is_static) {
+            for m in decl.members.iter().filter(|m| !m.is_static && m.kind != MemberKind::Index) {
                 if !out.contains(&m.name) {
                     out.push(m.name.clone());
                 }

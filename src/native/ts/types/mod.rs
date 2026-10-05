@@ -8,6 +8,7 @@
 
 mod calls;
 mod members;
+mod indexed;
 mod print;
 mod relate;
 mod utilities;
@@ -491,20 +492,6 @@ impl<'p> Checker<'p> {
             TypeSyn::Query(path) => self.value_path(path, env),
             TypeSyn::Keyof(t) => self.keyof(&self.eval(t, env)),
             TypeSyn::Ctor(_) | TypeSyn::Other => Ty::Unknown,
-        }
-    }
-
-    fn indexed_type(&self, object: &Ty, index: &Ty) -> Ty {
-        match index {
-            Ty::Union(parts) => Ty::union(parts.iter().map(|index| self.indexed_type(object, index)).collect()),
-            Ty::Lit(name, "string") => super::regex::cook(name).map_or(Ty::Unknown, |name| self.member(object, &name)),
-            Ty::Lit(name, "number") => super::statics::number(name).map_or(Ty::Unknown, |number| self.member(object, &super::statics::number_string(number))),
-            Ty::Prim("number") => match object {
-                Ty::Array(element) => (*element.element).clone(),
-                Ty::Tuple(tuple) if tuple.elements.iter().all(|element| !element.rest) => Ty::union((0..tuple.len()).map(|index| tuple.at(index)).collect()),
-                _ => Ty::Unknown,
-            },
-            _ => Ty::Unknown,
         }
     }
 

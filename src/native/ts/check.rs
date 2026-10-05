@@ -650,7 +650,7 @@ impl<'t> NativeFile<'t> {
                 }
                 let object = inner(F::Object);
                 let t = ck.member(&object, name);
-                if s.get(id, F::Optional).is_some() || self.in_optional_chain(id) {
+                if self.optional_chain_can_short_circuit(id) {
                     t.or_undefined()
                 } else {
                     self.narrow(id, t)
@@ -658,13 +658,14 @@ impl<'t> NativeFile<'t> {
             }
             K::Index => {
                 let object = inner(F::Object);
-                match object {
-                    Ty::Array(e) => *e.element,
-                    Ty::Tuple(items) => match s.get(id, F::Index).map(|i| s.text(i).parse::<usize>()) {
-                        Some(Ok(n)) => items.at(n),
-                        _ => Ty::Unknown,
-                    },
-                    _ => s.get(id, F::Index).and_then(|index| self.static_string(index)).map_or(Ty::Unknown, |name| ck.member(&object, &name)),
+                let index = s.get(id, F::Index).map_or(Ty::Unknown, |index| {
+                    self.static_string(index).map_or_else(|| self.type_of(index), |name| Ty::Lit(format!("{name:?}").into(), "string"))
+                });
+                let t = ck.indexed_type(&object, &index);
+                if self.optional_chain_can_short_circuit(id) {
+                    t.or_undefined()
+                } else {
+                    self.narrow(id, t)
                 }
             }
             K::Call => {
@@ -674,7 +675,7 @@ impl<'t> NativeFile<'t> {
                 }
                 let f = self.type_of(callee);
                 let t = self.call_type(&f, id);
-                if s.get(id, F::Optional).is_some() || self.in_optional_chain(id) {
+                if self.optional_chain_can_short_circuit(id) {
                     t.or_undefined()
                 } else {
                     t
@@ -854,8 +855,8 @@ impl<'t> NativeFile<'t> {
         }
     }
 
-    /// Inside `a?.b.c`: everything after a `?.` may be skipped.
-    fn in_optional_chain(&self, id: u32) -> bool {
+    /// Parentheses end a chain; narrowed receivers cannot short-circuit it.
+    pub(super) fn optional_chain_can_short_circuit(&self, id: u32) -> bool {
         let s = &self.syntax;
         let mut at = id;
         loop {
@@ -866,7 +867,7 @@ impl<'t> NativeFile<'t> {
                 _ => None,
             };
             let Some(n) = next else { return false };
-            if s.get(n, F::Optional).is_some() {
+            if s.get(at, F::Optional).is_some() && may_be_nullish(&self.type_of(n)) {
                 return true;
             }
             at = n;
@@ -874,10 +875,83 @@ impl<'t> NativeFile<'t> {
     }
 }
 
+fn may_be_nullish(ty: &Ty) -> bool {
+    match ty {
+        Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Null | Ty::Undefined | Ty::Void => true,
+        Ty::Union(parts) => parts.iter().any(may_be_nullish),
+        Ty::Inter(parts) => parts.iter().all(may_be_nullish),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::engine::tests::native_linter;
+    use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
+
+    #[test]
+    fn dynamic_indexes_use_generic_inherited_and_domain_specific_signatures() {
+        for (source, expected) in [
+            ("declare const values: { [key: string]: number }; declare const key: string; const result = /*@*/values[key];", vec!["number"]),
+            ("interface Base<T> { [key: string]: T } interface Values extends Base<number> {} declare const values: Values; declare const key: string; const result = /*@*/values[key];", vec!["number"]),
+            ("interface Values { [key: string]: string | number; [key: number]: number } declare const values: Values; declare const key: number; const result = /*@*/values[key];", vec!["number"]),
+            ("declare const values: { [key: symbol]: boolean }; declare const key: symbol; const result = /*@*/values[key];", vec!["boolean"]),
+            ("declare const values: { [key: string]: number } | { [key: string]: string }; declare const key: string; const result = /*@*/values[key];", vec!["number", "string"]),
+            ("declare const values: { named: number } | { [key: string]: string }; const result = /*@*/values['named'];", vec!["number", "string"]),
+            ("declare const values: { [key: string]: number } & { named: string }; declare const key: string; const result = /*@*/values[key];", vec!["number"]),
+            ("declare const values: string[]; const result = /*@*/values['length'];", vec!["number"]),
+            ("declare const values: [string, number?]; declare const key: number; const result = /*@*/values[key];", vec!["string", "number", "undefined"]),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let flags = file.type_flags(nodes[0]).unwrap_or_default();
+                let values: Vec<_> = flags.iter().filter(|flag| !matches!(**flag, "union" | "nullable" | "literal")).collect();
+                assert_eq!(values.len(), expected.len(), "{source}: {flags:?}");
+                for expected in expected {
+                    assert!(flags.contains(&expected), "{source}: {flags:?} lacks {expected}");
+                }
+                assert!(!flags.contains(&"unknown"), "{source}: {flags:?}");
+            });
+        }
+    }
+
+    #[test]
+    fn indexed_types_preserve_explicit_properties_and_missing_key_domains() {
+        for source in [
+            "interface Values { [key: string]: number; missing: Missing } declare const values: Values; const result = /*@*/values['missing'];",
+            "declare const values: { [key: number]: string }; declare const key: string; const result = /*@*/values[key];",
+            "declare const values: { [key: string]: number } | {}; declare const key: string; const result = /*@*/values[key];",
+            "declare const values: [string, number]; const result = /*@*/values[-1];",
+            "declare const values: [string, number]; const result = /*@*/values[0.5];",
+        ] {
+            with_native_file(source, |file, nodes| assert!(file.type_flags(nodes[0]).is_none(), "{source}"));
+        }
+        with_native_file("interface Values { [key: string]: number; named: string } declare const values: Values; const result = /*@*/values['named'];", |file, nodes| {
+            let flags = file.type_flags(nodes[0]).unwrap_or_default();
+            assert!(flags.contains(&"string") && !flags.contains(&"number"), "{flags:?}");
+        });
+    }
+
+    #[test]
+    fn optional_access_only_adds_undefined_when_a_receiver_can_short_circuit() {
+        for (source, undefined, null) in [
+            ("declare const value: { item: number } | null; const result = /*@*/value?.item;", true, false),
+            ("declare const value: { item: number } | null; value !== null && /*@*/value?.item;", false, false),
+            ("declare const value: { item: number } | null; value === null || /*@*/value?.item;", false, false),
+            ("declare const value: { item: number | null } | null; value !== null && /*@*/value?.item;", false, true),
+            ("declare const value: { item: { inner: number } | null } | null; value !== null && /*@*/value?.item?.inner;", true, false),
+            ("declare const value: { item: { inner: number } | null } | null; value !== null && value?.item !== null && /*@*/value?.item?.inner;", false, false),
+            ("declare const value: (() => number) | null; value !== null && /*@*/value?.();", false, false),
+            ("let value: { item: number } | null; if (value !== null) { value = null; const result = /*@*/value?.item; }", true, false),
+            ("declare const value: { item: number } | null; if (value !== null) { function later() { const result = /*@*/value?.item; } }", true, false),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let flags = file.type_flags(nodes[0]).unwrap_or_default();
+                assert!(flags.contains(&"number"), "{source}: {flags:?}");
+                assert_eq!(flags.contains(&"undefined"), undefined, "{source}: {flags:?}");
+                assert_eq!(flags.contains(&"null"), null, "{source}: {flags:?}");
+            });
+        }
+    }
 
     #[test]
     fn logical_types_exclude_unreachable_operands_but_keep_enum_fallbacks() {

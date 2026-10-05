@@ -37,7 +37,7 @@ impl NativeFile<'_> {
             K::Ident => Some(s.text(id).to_string()),
             K::This => Some("this".into()),
             K::Paren | K::NonNull => self.ref_key(s.get(id, F::Expr)?),
-            K::Member if s.get(id, F::Optional).is_none() => {
+            K::Member if s.get(id, F::Optional).is_none() || !self.optional_chain_can_short_circuit(id) => {
                 let object = self.ref_key(s.get(id, F::Object)?)?;
                 Some(format!("{object}.{}", s.text(s.get(id, F::Property)?)))
             }

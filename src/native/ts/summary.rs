@@ -104,6 +104,8 @@ pub struct Member {
     pub optional: bool,
     /// Property type (or a getter's return type).
     pub ty: Option<TypeSyn>,
+    /// Parameter type of an index signature; absent on named members.
+    pub index_key: Option<TypeSyn>,
     pub sigs: Vec<Arc<Sig>>,
     /// An unannotated property's initializer.
     pub init: Option<Init>,
@@ -420,7 +422,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
     let is_static = v.has_word(id, F::Modifier, "static");
     let optional = v.get(id, F::Optional).is_some();
     let named = |kind, ty, sigs| -> Option<Member> {
-        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, is_static, optional, ty, sigs, init: None })
+        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, is_static, optional, ty, index_key: None, sigs, init: None })
     };
     match v.kind(id)? {
         K::Method | K::MethodSig => {
@@ -442,7 +444,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         }
         K::CallSig => {
             let kind = if v.get(id, F::Kind).is_some() { MemberKind::Construct } else { MemberKind::Call };
-            Some(Member { name: "()".into(), kind, is_static, optional, ty: None, sigs: vec![Arc::new(sig(v, id))], init: None })
+            Some(Member { name: "()".into(), kind, is_static, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
         }
         K::IndexSig => Some(Member {
             name: "[index]".into(),
@@ -450,6 +452,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
             is_static,
             optional,
             ty: v.get(id, F::Type).map(|t| type_syn(v, t)),
+            index_key: v.all(id, F::Param).first().and_then(|&p| v.get(p, F::Type)).map(|t| type_syn(v, t)),
             sigs: Vec::new(),
             init: None,
         }),
@@ -616,6 +619,7 @@ impl<V: View> Builder<'_, V> {
                                         is_static: false,
                                         optional: false,
                                         ty: v.get(p, F::Type).map(|t| type_syn(v, t)),
+                                        index_key: None,
                                         sigs: Vec::new(),
                                         init: None,
                                     });
@@ -657,6 +661,7 @@ impl<V: View> Builder<'_, V> {
                             is_static: true,
                             optional: false,
                             ty,
+                            index_key: None,
                             sigs: Vec::new(),
                             init: None,
                         })
