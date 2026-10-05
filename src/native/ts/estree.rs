@@ -337,6 +337,7 @@ impl Builder<'_, '_> {
             K::FnType if self.syntax.word(origin, F::Kind) == Some("new") => "TSConstructorType",
             K::CallSig if self.syntax.word(origin, F::Kind) == Some("new") => "TSConstructSignatureDeclaration",
             K::Export if self.syntax.has_word(origin, F::Kind, "default") => "ExportDefaultDeclaration",
+            K::Export if self.exports_all(origin) => "ExportAllDeclaration",
             K::TypeRef if self.syntax.parent(origin).is_some_and(|parent| self.syntax.is(parent, K::Class)) && self.syntax.field(origin) == Some(F::Implements) => "TSClassImplements",
             K::TypeRef if self.syntax.parent(origin).is_some_and(|parent| self.syntax.is(parent, K::Interface)) && self.syntax.field(origin) == Some(F::Extends) => "TSInterfaceHeritage",
             _ => descriptor.name,
@@ -403,6 +404,7 @@ impl Builder<'_, '_> {
                 }
             }
             K::Export if self.syntax.get(origin, F::Expr).is_some() => self.child(id, origin, F::Expr, "declaration", false, false),
+            K::Export if self.exports_all(origin) => self.child(id, origin, F::Namespace, "exported", false, false),
             K::Prop | K::PatternProp if self.syntax.get(origin, F::Value).is_none() => {
                 if let Some(key) = self.syntax.get(origin, F::Key) {
                     if let Some(value) = self.project(key, Some(id), "value", None, false) { self.projection.set(id, "value", Property::Node(value)); }
@@ -421,6 +423,13 @@ impl Builder<'_, '_> {
             self.parameters(id, origin, F::TypeArg, "typeArguments", "TSTypeParameterInstantiation");
         }
         Some(id)
+    }
+    /// `export * from "m"` / `export * as ns from "m"` (`type` allowed).
+    fn exports_all(&self, origin: u32) -> bool {
+        let node = self.syntax.tree.node(origin);
+        self.syntax.get(origin, F::From).is_some()
+            && self.syntax.get(origin, F::Specifier).is_none()
+            && self.token_range(node.start, node.end).iter().skip(1).take(2).any(|token| token.tok == super::lexer::Tok::P("*"))
     }
     fn declaration(&self, origin: u32) -> bool {
         self.syntax.parent(origin).is_some_and(|parent| {
@@ -730,6 +739,8 @@ mod tests {
         assert_eq!(spans("class C implements I<number> {}", "TSClassImplements > Identifier.expression"), ["Identifier"]);
         assert_eq!(spans("export default () => 2;", "ExportDefaultDeclaration > ArrowFunctionExpression.declaration"), ["ArrowFunctionExpression"]);
         assert_eq!(selected_text("import * as ns from 'mod';", "ImportNamespaceSpecifier"), ["* as ns"]);
+        assert_eq!(selected_text("export * as ns from 'm' with { type: 'json' }; export {} from 'n';", "ExportAllDeclaration > Identifier.exported"), ["ns"]);
+        assert_eq!(selected_text("export type * from 'm'; export {} from 'n';", "ExportNamedDeclaration"), ["export {} from 'n';"]);
     }
 
     #[test]

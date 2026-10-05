@@ -674,16 +674,14 @@ impl<'s> Parser<'s> {
         Ok(self.finish(Kind::Import, start, kids))
     }
 
-    /// `with { type: "json" }` / `assert { ... }`
+    /// `with { type: "json" }`, which may follow a line break, or the older
+    /// `assert { ... }`, which may not. Their structure is the pattern layer
+    /// `ts_import_attributes`.
     fn import_attributes(&mut self) -> PResult<()> {
-        if (self.is_word("with") || self.is_word("assert")) && !self.tok.nl {
-            self.bump();
-            self.object_attrs()?;
+        if !(self.is_word("with") || self.is_word("assert") && !self.tok.nl) {
+            return Ok(());
         }
-        Ok(())
-    }
-
-    fn object_attrs(&mut self) -> PResult<()> {
+        self.bump();
         self.expect("{")?;
         let mut depth = 1;
         while depth > 0 {
@@ -866,5 +864,21 @@ mod tests {
             assert_eq!(ids.len(), 1, "{src}");
             assert!(parsed.nodes[ids[0] as usize].children.iter().all(|edge| edge.label != Field::Modifier as u16), "{src}");
         }
+    }
+
+    #[test]
+    fn import_attributes_may_follow_a_line_break_but_assert_may_not() {
+        // The statements of the program, as source text.
+        let statements = |src: &str| {
+            let parsed = parse(src, false).unwrap_or_else(|error| panic!("{src}: {error:?}"));
+            let program = parsed.nodes.iter().find(|node| node.matcher == Kind::Program as u32).expect("program");
+            program.children.iter().filter(|edge| edge.label == Field::Body as u16)
+                .map(|edge| src[parsed.nodes[edge.node as usize].start as usize..parsed.nodes[edge.node as usize].end as usize].to_owned())
+                .collect::<Vec<_>>()
+        };
+        for src in ["import a from 'a.json'\n  with { type: 'json' };", "export * from 'a'\nwith { type: 'json' };", "export { a } from 'a' assert { type: 'json' };"] {
+            assert_eq!(statements(src), [src], "{src}");
+        }
+        assert_eq!(statements("import a from 'a.json'\nassert\n"), ["import a from 'a.json'", "assert"]);
     }
 }
