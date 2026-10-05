@@ -6,7 +6,8 @@ schema indent_function_options { parameters?: indent_list_offset; body?: int(0..
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
 fn indent_variable_mode(mode, kind) = if type_of(mode) == "record" then default(get(mode, kind), 1) else mode
 fn indent_function_mode(owner, declaration, expression) = if owner is ts_function && owner.parent is (ts_program, ts_block, ts_export) then declaration else expression
-fn indent_expected(item, unit) = if item == null then null else item.indent_anchor repeat(unit, item.indent_level)
+fn indent_jsx_token_level(item) = if item is ts_jsx_fragment.token && item.text == "/" && item.space_after.line_break then 1 else 0
+fn indent_expected(item, unit) = if item == null then null else if item is (ts_jsx_element.token, ts_jsx_fragment.token) then item.parent.indent repeat(unit, indent_jsx_token_level(item)) else item.indent_anchor repeat(unit, item.indent_level)
 fn indent_list_mode(item, call, declaration, expression, array, object, imports, variable) =
   if item is (ts_call.argument, ts_new.argument, ts_import_call.argument) then default(call.arguments, 1)
   else if item is (ts_function.parameter, ts_arrow.parameter, ts_method.parameter) then default(indent_function_mode(item.parent, declaration, expression).parameters, 1)
@@ -36,6 +37,7 @@ in ts_parenthesized let indent_called_function expression.indent_called_function
 in ts_function, ts_arrow let indent_outer_iife containing(ts_call).indent_outer_context == true && containing(ts_call).callee.indent_called_function.offset == offset
 in ts_assignment, ts_assignment_pattern let indent_assignment_value right.node
 in ts_declarator, ts_parameter, ts_class_property let indent_assignment_value init.node
+in ts_jsx_attribute let indent_assignment_value value.node
 in ts_index let indent_index_open index.token_neighbours.before.start
 in ts_if let indent_control_tails [consequent.last_token.end, alternate.last_token.end]
 in ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_with let indent_control_tails [body.last_token.end]
@@ -84,8 +86,14 @@ in ts_line rule indent {
   indent ts_conditional.consequent, ts_conditional.alternate by indent_ternary_level(node, flat_ternary_expressions, offset_ternary_expressions, containing(ts_statement))
   indent ts_conditional.token
   indent ts_conditional_type.consequent, ts_conditional_type.alternate, ts_conditional_type.token
-  indent ts_jsx_element.property, ts_jsx_element.body, ts_jsx_fragment.body
-  indent ts_jsx_attribute.value, ts_jsx_expression.expression
+  indent in ts_jsx_element, ts_jsx_fragment
+  indent in ts_jsx_text from parent.offset
+  indent in ts_jsx_expression, ts_jsx_spread_attribute
+  indent ts_jsx_element.name, ts_jsx_element.property, ts_jsx_element.body, ts_jsx_fragment.body
+  indent ts_jsx_element.closing from token_neighbours.before.start
+  indent ts_jsx_element.token, ts_jsx_fragment.token from parent.offset by indent_jsx_token_level(node)
+  indent ts_jsx_attribute.token from parent.offset by indent_numeric(assignment_operator)
+  indent ts_jsx_attribute.value from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_function_type.parameter, ts_method_signature.parameter, ts_call_signature.parameter
   indent ts_function_type.return_type, ts_method_signature.return_type, ts_call_signature.return_type
   indent ts_type_reference.type_argument, ts_type_query.type_argument, ts_call.type_argument, ts_new.type_argument
@@ -121,6 +129,7 @@ in ts_line rule indent {
   let block_comment if comment is ts_block_comment then comment else null
   when !ignore_comments || comment == null
   let string_literal first(overlapping(ts_string, first_offset, first_offset + 1))
+  let jsx_text first(overlapping(ts_jsx_text, first_offset, first_offset + 1))
   when quasi == null || position(quasi.offset).js_line == position(first_offset).js_line
   when block_comment == null || position(block_comment.offset).js_line == position(first_offset).js_line
   when string_literal == null || position(string_literal.offset).js_line == position(first_offset).js_line
@@ -139,7 +148,7 @@ in ts_line rule indent {
   let tabs len(replace(indent, " ", ""))
   let unit_name if mode == "tab" then "tab" else "space"
   let actual if spaces > 0 then "{spaces}{if mode == 'tab' then if spaces == 1 then ' space' else ' spaces' else ''}" else if tabs > 0 then "{tabs}{if mode != 'tab' then if tabs == 1 then ' tab' else ' tabs' else ''}" else "0"
-  report at { start: offset, end: offset + byte_len(indent) }
+  report at if jsx_text != null then jsx_text.node else { start: offset, end: offset + byte_len(indent) }
   fix as wanted byte_slice(text, byte_len(indent))
   warn "Expected indentation of {len(wanted)} {unit_name}{if len(wanted) == 1 then '' else 's'} but found {actual}."
 }
