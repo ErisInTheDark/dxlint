@@ -99,7 +99,11 @@ impl<'t> NativeFile<'t> {
     /// The upper bound of open type parameters, without changing their
     /// identity in the ordinary type cache.
     pub fn constrained_type_of(&self, id: u32) -> Ty {
-        self.constrain_type(self.type_of(id), id, &mut Vec::new())
+        self.constrained_type(self.type_of(id), id)
+    }
+
+    pub(super) fn constrained_type(&self, ty: Ty, at: u32) -> Ty {
+        self.constrain_type(ty, at, &mut Vec::new())
     }
 
     pub fn type_parameter_bound(&self, name: &str, at: u32) -> Option<Ty> {

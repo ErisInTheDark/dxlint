@@ -12,6 +12,16 @@ pub struct ResolvedPredicate {
     pub target: Option<Ty>,
 }
 
+impl ResolvedPredicate {
+    fn agrees(&self, other: &Self) -> bool {
+        self.parameter == other.parameter && self.asserts == other.asserts && match (&self.target, &other.target) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.same_identity(b),
+            _ => false,
+        }
+    }
+}
+
 impl Checker<'_> {
     /// A fallback cannot be used only when every contextual signature requires
     /// this parameter; omitted, optional and rest parameters keep their defaults.
@@ -58,8 +68,13 @@ impl Checker<'_> {
     }
 
     pub fn call_predicate(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>) -> Option<ResolvedPredicate> {
+        if let Ty::Union(parts) = callee {
+            let mut parts = parts.iter();
+            let first = self.call_predicate(parts.next()?, args, targs.clone())?;
+            return parts.all(|part| self.call_predicate(part, args, targs.clone()).is_some_and(|other| first.agrees(&other))).then_some(first);
+        }
         let (sigs, env) = self.signatures(callee, false)?;
-        let sig = self.pick_matching(&sigs, &env, args, targs.len(), |a, b| a.ret == b.ret && a.is_async == b.is_async && a.predicate == b.predicate)?;
+        let sig = self.pick_matching(&sigs, &env, args, targs.len(), false, |a, b| a.ret == b.ret && a.is_async == b.is_async && a.predicate == b.predicate)?;
         let predicate = sig.predicate.as_ref()?;
         let env = self.signature_env(sig, &env, args, targs);
         Some(ResolvedPredicate {
@@ -160,10 +175,10 @@ impl Checker<'_> {
     /// else the first not known to reject them, else the first that fits
     /// by arity.
     fn pick<'s>(&self, sigs: &'s [Arc<Sig>], env: &Env, args: &[Ty], type_arguments: usize) -> Option<&'s Arc<Sig>> {
-        self.pick_matching(sigs, env, args, type_arguments, |a, b| a.ret == b.ret && a.is_async == b.is_async)
+        self.pick_matching(sigs, env, args, type_arguments, true, |a, b| a.ret == b.ret && a.is_async == b.is_async)
     }
 
-    fn pick_matching<'s>(&self, sigs: &'s [Arc<Sig>], env: &Env, args: &[Ty], type_arguments: usize, equivalent: impl Fn(&Sig, &Sig) -> bool) -> Option<&'s Arc<Sig>> {
+    fn pick_matching<'s>(&self, sigs: &'s [Arc<Sig>], env: &Env, args: &[Ty], type_arguments: usize, trust_any: bool, equivalent: impl Fn(&Sig, &Sig) -> bool) -> Option<&'s Arc<Sig>> {
         // An implementation behind overloads is not callable from outside.
         let overloaded = sigs.iter().any(|s| s.body_at.is_none());
         let visible = |s: &&Arc<Sig>| (!overloaded || s.body_at.is_none()) && (type_arguments == 0 || s.type_params.len() == type_arguments);
@@ -173,9 +188,14 @@ impl Checker<'_> {
             visible(s) && args.len() >= required && (rest || args.len() <= s.params.len())
         };
         let candidates: Vec<&Arc<Sig>> = sigs.iter().filter(fits).collect();
+        let definite = trust_any || !args.iter().any(|arg| matches!(arg, Ty::Any));
         if candidates.len() > 1 {
-            if let Some(&s) = candidates.iter().find(|s| self.accepts(s, env, args, true)) {
-                return Some(s);
+            // Any is assignable to an overload's parameters, not evidence
+            // that its assertion contract is the one the call selects.
+            if definite {
+                if let Some(&s) = candidates.iter().find(|s| self.accepts(s, env, args, true)) {
+                    return Some(s);
+                }
             }
             // Not provably one overload: only a choice when every
             // overload still possible returns the same.
@@ -183,10 +203,10 @@ impl Checker<'_> {
             return match possible.split_first() {
                 Some((first, rest)) if rest.iter().all(|s| equivalent(s, first)) => Some(first),
                 Some(_) => None,
-                None => candidates.first().copied(),
+                None => if definite { candidates.first().copied() } else { None },
             };
         }
-        candidates.first().copied().or_else(|| sigs.iter().find(visible))
+        candidates.first().copied().or_else(|| if definite { sigs.iter().find(visible) } else { None })
     }
 
     /// Every argument is known to be accepted by its parameter (`strict`),
@@ -436,6 +456,73 @@ impl Checker<'_> {
                 }).collect();
                 if values.is_empty() { t.clone() } else { Ty::union(values.iter().map(|value| self.awaited_at(value, depth + 1)).collect()) }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::with_native_file;
+    use crate::native::ts::facts::NativeFile;
+    use crate::native::ts::modules::DeclRef;
+    use super::Ty;
+
+    fn merged_function(file: &NativeFile<'_>, name: &str) -> Ty {
+        let checker = &file.typing().checker;
+        let declarations = checker.summary.decls.iter().enumerate().filter(|(_, declaration)| &*declaration.name == name)
+            .map(|(decl, _)| DeclRef { file: checker.file, decl: decl as u32 }).collect::<Vec<_>>();
+        checker.value_of(&declarations)
+    }
+
+    #[test]
+    fn predicates_require_agreement_when_any_cannot_choose_an_overload() {
+        for (fallback, expected) in [
+            ("void", false),
+            ("asserts value", true),
+            ("value is string", false),
+        ] {
+            let source = format!("function check(first: number, value: unknown): asserts value; function check(first: string, value: unknown): {fallback}; function check(first: any, value: any) {{ return true; }}");
+            with_native_file(&source, |file, _| {
+                let checker = &file.typing().checker;
+                let callee = merged_function(file, "check");
+                let result = checker.call_predicate(&callee, &[Ty::Any, Ty::IntrinsicUnknown], Vec::new());
+                assert_eq!(result.is_some(), expected);
+                let selected = checker.call_predicate(&callee, &[Ty::Prim("number"), Ty::IntrinsicUnknown], Vec::new()).expect("known argument chooses the assertion");
+                assert!(selected.asserts);
+                assert_eq!(selected.parameter, Some(1));
+            });
+        }
+        with_native_file("function result(value: number): string; function result(value: string): number; function result(value: any) { return ''; }", |file, _| {
+            let checker = &file.typing().checker;
+            assert!(matches!(checker.call(&merged_function(file, "result"), &[Ty::Any], Vec::new()), Ty::Prim("string")));
+        });
+    }
+
+    #[test]
+    fn union_predicates_require_matching_contracts_from_every_arm() {
+        for (other, expected) in [
+            ("value is string", true),
+            ("other is string", false),
+            ("value is number", false),
+            ("asserts value", false),
+            ("boolean", false),
+        ] {
+            let source = format!("declare function first(value: unknown, other: unknown): value is string; declare function second(value: unknown, other: unknown): {other};");
+            with_native_file(&source, |file, _| {
+                let checker = &file.typing().checker;
+                let first = merged_function(file, "first");
+                let second = merged_function(file, "second");
+                let union = Ty::Union(vec![first.clone(), second]);
+                let arguments = [Ty::IntrinsicUnknown, Ty::IntrinsicUnknown];
+                let result = checker.call_predicate(&union, &arguments, Vec::new());
+                assert_eq!(result.is_some(), expected);
+                if let Some(result) = result {
+                    assert_eq!(result.parameter, Some(0));
+                    assert!(!result.asserts);
+                    assert!(matches!(result.target, Some(Ty::Prim("string"))));
+                }
+                assert!(checker.call_predicate(&Ty::Union(vec![first, Ty::Unknown]), &arguments, Vec::new()).is_none());
+            });
         }
     }
 }

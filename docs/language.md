@@ -215,6 +215,7 @@ with `indent` lines; other rules never see it.
   owner starts on, sits `n` levels past that line (`indent ts_switch.case by
   1`: cases one level past `switch`).
 - `from <offset>` on either form measures from the line of that byte offset (or node), read on X: `indent in ts_function.body from parent.offset`.
+- `class name`: levels opened on one line collapse to one within a class (all unnamed lines share one); lines in different classes add up. An anchor in the middle of a line sits where the indent lines opened earlier on that line put it: `indent in ts_variable_declaration class declarators` indents a `var foo = {` object two levels past `var`.
 
 `dedent X` and `dedent in X` count the levels back from the anchor instead
 (`indent_level` goes negative). `X` is a layer, a group or `layer.field`;
@@ -721,10 +722,10 @@ is wrong, messages) is written in the rule.
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
-| `type_domains` | constrained truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal |
+| `type_domains` | constrained truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal; `kind` matches `type_structure`, `parts` retains union/intersection constituent domains |
 | `evaluated_type_domains` | the same domains before optional-chain short-circuiting, preserving intrinsic member and return nullability |
 | `access_resolution` | native member/index lookup: `from_index` signature origin, `optional` declaration and `evaluated` value domains before optional-chain short-circuiting |
-| `callable_return_domains` | domains of every callable return, including local inferred bodies |
+| `callable_return_domains` | domains of every callable return, including local inferred bodies and in-scope parameter bounds |
 | `predicate_call` | asserted argument index and `asserts`, argument/target domains, `to_target`/`from_target` assignability and `target_union`; null without a resolved argument |
 | `type_has_void` | a union or intersection constituent is void, distinct from undefined |
 | `type_iterable` | constrained type supports synchronous iteration; null when unresolved |
@@ -922,6 +923,7 @@ and `final-newline`.
 | `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
+| `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

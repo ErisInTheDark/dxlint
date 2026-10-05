@@ -13,7 +13,7 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         name: "type_domains",
-        doc: "native expressions: possible truthy, falsy and nullish values of the constrained type",
+        doc: "native expressions: constrained value domains, type kind and union/intersection constituent domains",
         get: |f, n| f.with_file(domains, n),
     },
     Fact {
@@ -28,7 +28,7 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         name: "callable_return_domains",
-        doc: "native expressions: value domains of every callable return, including locally inferred function bodies",
+        doc: "native expressions: constrained domains of every callable return, including locally inferred function bodies",
         get: |f, n| f.with_file(callable_returns, n),
     },
 ];
@@ -47,8 +47,26 @@ fn domains(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 }
 
 fn domain_record(file: &NativeFile<'_>, ty: &Ty) -> Value<'static> {
+    describe_domain(file, ty, 0)
+}
+
+fn describe_domain(file: &NativeFile<'_>, ty: &Ty, depth: usize) -> Value<'static> {
     let checker = &file.typing().checker;
+    let mut shape = ty;
+    let mut depth = depth;
+    while depth < 64 {
+        let Some(source) = checker.readonly_source(shape) else { break };
+        shape = source;
+        depth += 1;
+    }
+    if depth >= 64 {
+        return Value::record(vec![("kind".into(), Value::from("recursive")), ("opaque".into(), Value::Bool(true))]);
+    }
     let ValueDomains { truthy, falsy, nullish, non_nullish, opaque } = checker.value_domains(ty);
+    let parts = match shape {
+        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().map(|part| describe_domain(file, part, depth + 1)).collect(),
+        _ => Vec::new(),
+    };
     let mut flags = Vec::new();
     file.flags_of(ty, &mut flags);
     let literal = checker.literal_value(ty).map_or(Value::Null, |literal| {
@@ -63,6 +81,8 @@ fn domain_record(file: &NativeFile<'_>, ty: &Ty) -> Value<'static> {
         Value::record(vec![("type".into(), Value::from(kind)), ("value".into(), value)])
     });
     Value::record(vec![
+        ("kind".into(), Value::from(shape.kind())),
+        ("parts".into(), Value::list(parts)),
         ("truthy".into(), Value::Bool(truthy)),
         ("falsy".into(), Value::Bool(falsy)),
         ("nullish".into(), Value::Bool(nullish)),
@@ -98,13 +118,88 @@ fn predicate(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 }
 
 fn callable_returns(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    Value::list(file.callable_return_types(&file.constrained_type_of(node)).iter().map(|ty| domain_record(file, ty)).collect())
+    Value::list(file.callable_return_types(&file.constrained_type_of(node)).into_iter().map(|ty| {
+        domain_record(file, &file.constrained_type(ty, node))
+    }).collect())
 }
 
 #[cfg(test)]
 mod tests {
     use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
+
+    #[test]
+    fn strict_boolean_checks_logical_contexts_without_duplicate_reports() {
+        let linter = native_linter("rule strict-boolean-expressions { set allowNumber false\nset allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let source = "declare const a: number; declare const b: number; const fallback = a || b; if ((a || b)) {} !((a)); if (a ?? b) {}";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["a", "a", "b", "a", "a ?? b"]);
+    }
+
+    #[test]
+    fn strict_boolean_distinguishes_truthy_literals_from_nullable_primitive_groups() {
+        let linter = native_linter("rule strict-boolean-expressions { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let source = "declare const yes: 'yes' | null; declare const maybe: '' | 'yes' | null; declare const one: 1 | null; declare const zero: 0 | 1 | null; declare const truth: true | null; declare const bool: boolean | null; if (yes) {} if (maybe) {} if (one) {} if (zero) {} if (truth) {} if (bool) {}";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["maybe", "zero", "bool"]);
+    }
+
+    #[test]
+    fn strict_boolean_preserves_brand_policy_and_explicit_unknown() {
+        let linter = native_linter("rule strict-boolean-expressions { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let source = "declare const booleanBrand: boolean & { brand: true }; declare const numberBrand: number & { brand: true }; declare const unknownValue: unknown; declare const unresolvedValue: Missing; declare const unresolvedBrand: Missing & { brand: true }; if (booleanBrand) {} if (numberBrand) {} if (unknownValue) {} if (unresolvedValue) {} if (unresolvedBrand) {}";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["numberBrand", "unknownValue"]);
+        let permissive = native_linter("rule strict-boolean-expressions { set allowAny true\nset allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let diagnostics = permissive.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["numberBrand"]);
+    }
+
+    #[test]
+    fn strict_boolean_checks_asserted_logical_arguments_but_not_arguments_after_spread() {
+        let linter = native_linter("rule strict-boolean-expressions { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let source = "declare function assert(value: unknown): asserts value; declare function second(first: unknown, value: unknown): asserts value; declare const a: string | null; declare const b: string | null; declare const args: unknown[]; assert(a || b); second(...args, a);";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["a", "b"]);
+    }
+
+    #[test]
+    fn strict_boolean_combines_callback_contracts_and_reports_whole_callbacks() {
+        let linter = native_linter("rule strict-boolean-expressions { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let source = "declare const value: boolean | null; declare function predicate(): number; declare function predicate(): string; [1].filter(() => value); [1].some(async () => true); [1].every(predicate);";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["() => value", "async () => true", "predicate"]);
+        assert!(diagnostics.iter().all(|d| d.fix.is_none()));
+    }
+
+    #[test]
+    fn strict_boolean_uses_constraints_in_conditions_and_callback_returns() {
+        let linter = native_linter("rule strict-boolean-expressions { set allowNumber false\nset allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let source = "function check<T extends number>(value: T) { if (value) {} [1].filter((): T => value); } function safe<T extends boolean>(value: T) { if (value) {} [1].filter((): T => value); }";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["value", "(): T => value"]);
+    }
+
+    #[test]
+    fn strict_boolean_reports_disabled_null_checks_without_stopping_expression_checks() {
+        let source = "declare const value: {}; if (value) {}";
+        let linter = native_linter("rule strict-boolean-expressions");
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics.iter().any(|d| d.start == 0 && d.end == 0));
+        assert!(diagnostics.iter().any(|d| &source[d.start..d.end] == "value"));
+        let overridden = native_linter("rule strict-boolean-expressions { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let diagnostics = overridden.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(&source[diagnostics[0].start..diagnostics[0].end], "value");
+    }
 
     #[test]
     fn domains_distinguish_certainty_from_open_values_and_constraints() {

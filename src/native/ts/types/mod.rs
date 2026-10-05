@@ -158,6 +158,26 @@ impl Env {
 }
 
 impl Ty {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Ty::Unknown => "unresolved",
+            Ty::IntrinsicUnknown => "unknown",
+            Ty::Any => "any",
+            Ty::Never => "never",
+            Ty::Void => "void",
+            Ty::Undefined => "undefined",
+            Ty::Null => "null",
+            Ty::Prim(name) | Ty::Lit(_, name) => name,
+            Ty::Param(_) => "parameter",
+            Ty::Union(_) => "union",
+            Ty::Inter(_) => "intersection",
+            Ty::Array(_) => "array",
+            Ty::Tuple(_) => "tuple",
+            Ty::Fn(_) => "function",
+            _ => "object",
+        }
+    }
+
     pub fn array(element: Ty) -> Ty {
         Ty::Array(Array { element: Box::new(element), readonly: false })
     }

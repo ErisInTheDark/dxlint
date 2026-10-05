@@ -18,23 +18,6 @@ pub(super) fn structure(file: &NativeFile<'_>, node: u32, properties: &[String])
 fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], aliases: Vec<Value<'static>>, depth: usize) -> Value<'static> {
     if depth >= 64 { return Value::record(vec![("kind".into(), Value::from("recursive"))]) }
     if let Some(source) = ck.readonly_source(ty) { return describe(source, ck, properties, aliases, depth + 1) }
-    let kind = match ty {
-        Ty::Unknown => "unresolved",
-        Ty::IntrinsicUnknown => "unknown",
-        Ty::Any => "any",
-        Ty::Never => "never",
-        Ty::Void => "void",
-        Ty::Undefined => "undefined",
-        Ty::Null => "null",
-        Ty::Prim(name) | Ty::Lit(_, name) => name,
-        Ty::Param(_) => "parameter",
-        Ty::Union(_) => "union",
-        Ty::Inter(_) => "intersection",
-        Ty::Array(_) => "array",
-        Ty::Tuple(_) => "tuple",
-        Ty::Fn(_) => "function",
-        _ => "object",
-    };
     let parts = match ty {
         Ty::Union(parts) | Ty::Inter(parts) => parts.iter().map(|part| describe(part, ck, properties, Vec::new(), depth + 1)).collect(),
         Ty::Array(array) => vec![describe(&array.element, ck, properties, Vec::new(), depth + 1)],
@@ -77,7 +60,7 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], aliases: Vec<Value
         Value::record(vec![("name".into(), Value::from(name.clone())), ("declarations".into(), Value::list(declarations))])
     }).collect();
     Value::record(vec![
-        ("kind".into(), Value::from(kind)),
+        ("kind".into(), Value::from(ty.kind())),
         ("parts".into(), Value::list(parts)),
         ("names".into(), Value::list(names)),
         ("generic_names".into(), Value::list(generic_names)),
