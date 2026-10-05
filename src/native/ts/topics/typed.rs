@@ -38,6 +38,11 @@ fn is_typescript(file: &NativeFile<'_>) -> bool {
 
 pub const FACTS: &[Fact] = &[
     Fact {
+        name: "static_number",
+        doc: "native expressions: statically known numeric value, including numeric/boolean/bigint literals, arithmetic and unmodified local bindings; null when unresolved",
+        get: |f, n| f.with_file(|file, node| file.static_number(node).map_or(Value::Null, Value::from), n),
+    },
+    Fact {
         name: "type_flow",
         doc: "native expressions: type_flow(site, source) gives source and expected type relations for declared, contextual and heritage contracts; incomplete records indicate traversal limits",
         get: |f, n| f.with_file(enum_types::flow, n),
@@ -54,7 +59,7 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         name: "type_structure",
-        doc: "native values and types: constrained recursive kind, parts, names, retained aliases, declaration/value provenance, call/construct/property/iteration metadata, binding-backed property writes and queried winning member declarations",
+        doc: "native values and types: constrained recursive structure and queried winning members; optional second argument selects fields, default kind/parts/names/generic_names/aliases/members; declaration/value, call/construct/property/iteration metadata and root binding writes are opt-in",
         get: |f, n| f.with_file(|file, node| {
             let args = crate::expr::facts::args();
             let names = args.first().map(|value| value.items().iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default();
