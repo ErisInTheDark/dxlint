@@ -608,29 +608,29 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         .map(|decl| {
             let targets = g.indent_targets(&decl.targets, errors);
             layer_reads.borrow_mut().extend(targets.iter().map(|&(m, _)| m));
-            let by = decl.by.as_ref().and_then(|by| {
-                let mut fields = None::<Vec<_>>;
-                for &(m, field) in &targets {
-                    let these = if field.is_some() { Vec::new() } else { target_fields(g, Target::Matcher(m)) };
-                    fields = Some(match fields {
-                        None => these,
-                        Some(mut f) => {
-                            f.retain(|x| these.contains(x));
-                            f
-                        }
-                    });
-                }
-                let scope = Scope {
-                    fields: fields.unwrap_or_default(),
-                    options: scope.options.clone(),
-                    attrs,
-                    uses: Some(uses),
-                    layer_reads: Some(&layer_reads),
-                    ..Scope::new(g)
-                };
-                scope.compile(by, errors)
-            });
-            crate::expr::IndentRule { inside: decl.inside, dedent: decl.dedent, targets, by }
+            // `by` and `from` read X: its fields when X names only layers.
+            let mut fields = None::<Vec<_>>;
+            for &(m, field) in &targets {
+                let these = if field.is_some() { Vec::new() } else { target_fields(g, Target::Matcher(m)) };
+                fields = Some(match fields {
+                    None => these,
+                    Some(mut f) => {
+                        f.retain(|x| these.contains(x));
+                        f
+                    }
+                });
+            }
+            let on_target = Scope {
+                fields: fields.unwrap_or_default(),
+                options: scope.options.clone(),
+                attrs,
+                uses: Some(uses),
+                layer_reads: Some(&layer_reads),
+                ..Scope::new(g)
+            };
+            let by = decl.by.as_ref().and_then(|e| on_target.compile(e, errors));
+            let from = decl.from.as_ref().and_then(|e| on_target.compile(e, errors));
+            crate::expr::IndentRule { inside: decl.inside, dedent: decl.dedent, targets, by, from }
         })
         .collect();
 

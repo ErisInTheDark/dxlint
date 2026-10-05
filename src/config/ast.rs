@@ -116,6 +116,9 @@ pub struct IndentDecl {
     pub targets: Vec<(Parent, Option<Name>)>,
     /// `by n`: levels (default 1), read on X; may use the rule's options.
     pub by: Option<Expr>,
+    /// `from offset`: the anchor line is the line of this offset (or
+    /// node), read on X, instead of X's (or its owner's) first line.
+    pub from: Option<Expr>,
 }
 
 /// `group name a or b`: adds members to a named, open list of layers. Every

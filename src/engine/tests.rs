@@ -405,6 +405,17 @@ fn big_files_report_the_same_when_their_rules_run_in_groups() {
 }
 
 #[test]
+fn indent_lines_can_measure_from_another_offset() {
+    // `function f(a,⏎ b) {⏎ body⏎}`: the body measured from the function's
+    // first line, not the `{` line.
+    let l = native_linter(r#"
+        in ts_line rule ind info "{indent_level}:{len(indent_anchor)}" { indent in ts_function.body from parent.offset }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "  function f(a,\n      b) {\n    x();\n  }\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["0:0", "0:0", "1:2", "0:2"]);
+}
+
+#[test]
 fn dedent_counts_levels_back_from_the_anchor() {
     let l = linter(r#"
         in .t match blk /\{/ until /\}/

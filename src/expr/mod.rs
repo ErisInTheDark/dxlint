@@ -1248,6 +1248,9 @@ pub struct IndentRule {
     pub targets: Vec<(u32, Option<u16>)>,
     /// Levels, read on the indented node; 1 when absent.
     pub by: Option<CExpr>,
+    /// `from`: an offset (or node), read on the indented node, whose line
+    /// is the anchor.
+    pub from: Option<CExpr>,
 }
 
 /// Where a line's indentation comes from: the node an `indent` line matched,
@@ -1460,10 +1463,18 @@ impl<'a> Ctx<'a> {
                 .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (r.inside, t.1.is_some(), i)).max())
                 .max();
             if let Some((in_form, _, i)) = best {
-                return Some(match in_form {
-                    true => IndentHit { node: id, rule: i, anchor_line: self.lines.line_of(s), inside: Some(inside) },
-                    false => IndentHit { node: id, rule: i, anchor_line: owner_line.expect("node form applies"), inside: None },
-                });
+                let default_line = if in_form { self.lines.line_of(s) } else { owner_line.expect("node form applies") };
+                // `from`: read on the node with no indent lines in scope, so
+                // it cannot ask for indentation itself.
+                let anchor_line = self.indents[i]
+                    .from
+                    .as_ref()
+                    .and_then(|from| match (Ctx { node: id, indents: &[], ..*self }).eval(from).ok()? {
+                        Value::Node(n, _) => Some(self.tree.node(n).start as usize),
+                        v => v.num().ok().map(|n| (n.max(0.0) as usize).min(self.source.len())),
+                    })
+                    .map_or(default_line, |at| self.lines.line_of(at));
+                return Some(IndentHit { node: id, rule: i, anchor_line, inside: in_form.then_some(inside) });
             }
             p = self.tree.parent(id);
         }

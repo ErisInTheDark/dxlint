@@ -1439,17 +1439,26 @@ impl<'a> Parser<'a> {
                         self.ts.next_raw();
                     }
                     let targets = self.parent_items();
-                    self.skip(false, true);
-                    let by = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("by")) {
-                        self.ts.next_raw();
-                        self.expr()
-                    } else {
-                        None
-                    };
+                    // `from <offset>` and `by <levels>`, either order.
+                    let (mut from, mut by) = (None, None);
+                    loop {
+                        self.skip(false, true);
+                        match self.ts.peek_raw(0) {
+                            Some(t) if t.is_ident("from") && from.is_none() => {
+                                self.ts.next_raw();
+                                from = self.expr();
+                            }
+                            Some(t) if t.is_ident("by") && by.is_none() => {
+                                self.ts.next_raw();
+                                by = self.expr();
+                            }
+                            _ => break,
+                        }
+                    }
                     if targets.is_empty() {
                         self.error_here("expected layers after `indent`: `indent in braces`, `indent ts_switch.case by 1`".to_string());
                     } else {
-                        def.indents.push(IndentDecl { inside, dedent, targets, by });
+                        def.indents.push(IndentDecl { inside, dedent, targets, by, from });
                     }
                 }
                 (Tk::Ident, kw @ ("files" | "ignore")) => {
