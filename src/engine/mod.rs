@@ -357,10 +357,7 @@ impl Linter {
         if !suppressions.is_empty() {
             out.retain(|d| suppressions.allows(d, &lines));
         }
-        // One rule may reach a node twice (through several targets): one
-        // report. Different messages at one place are different problems.
-        out.sort_by(|a, b| (a.start, a.end, &a.rule, &a.message).cmp(&(b.start, b.end, &b.rule, &b.message)));
-        out.dedup_by(|a, b| a.start == b.start && a.end == b.end && a.rule == b.rule && a.message == b.message);
+        Diagnostic::dedup(&mut out);
         out
     }
 
