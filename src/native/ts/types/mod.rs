@@ -372,7 +372,7 @@ impl<'p> Checker<'p> {
     }
 
     /// The members of a namespace (or `import * as m`) named `name`.
-    fn namespace_member(&self, sym: &[DeclRef], name: &str) -> Vec<DeclRef> {
+    pub(crate) fn namespace_member(&self, sym: &[DeclRef], name: &str) -> Vec<DeclRef> {
         let mut out = Vec::new();
         for r in sym {
             let Some(s) = self.summary_of(r.file) else { continue };
