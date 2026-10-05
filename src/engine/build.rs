@@ -30,6 +30,50 @@ pub struct Built {
 /// How expressions resolved their names, collected while compiling.
 type Uses = RefCell<Vec<(crate::config::source::Span, crate::expr::Resolved)>>;
 
+/// Compile-time prerequisites of a helper, flattened into its consuming rules.
+#[derive(Default)]
+struct ReadDependencies {
+    layers: Vec<u32>,
+    helpers: Vec<usize>,
+    all_tokens: bool,
+}
+
+impl ReadDependencies {
+    fn collect(g: &Grammar, attrs: &[String], uses: &[(crate::config::source::Span, crate::expr::Resolved)], layers: Vec<u32>, all_tokens: bool) -> Self {
+        use crate::expr::Resolved;
+        let helpers = uses.iter().filter_map(|(_, resolved)| match resolved {
+            Resolved::Attr(name) => attrs.iter().position(|attr| attr == name),
+            Resolved::UserFunction(name) => g.function(name).map(|id| attrs.len() + id),
+            _ => None,
+        }).collect();
+        Self { layers, helpers, all_tokens }
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.layers.extend(other.layers);
+        self.helpers.extend(other.helpers);
+        self.all_tokens |= other.all_tokens;
+    }
+
+    fn resolve(self, helpers: &[Self]) -> (Vec<u32>, bool) {
+        let mut layers = self.layers;
+        let mut all_tokens = self.all_tokens;
+        let mut pending = self.helpers;
+        let mut seen = vec![false; helpers.len()];
+        // Recursive functions and cross-node attributes can refer back to themselves.
+        while let Some(id) = pending.pop() {
+            if std::mem::replace(&mut seen[id], true) {
+                continue;
+            }
+            let dependency = &helpers[id];
+            layers.extend(&dependency.layers);
+            all_tokens |= dependency.all_tokens;
+            pending.extend(&dependency.helpers);
+        }
+        (unique(layers), all_tokens)
+    }
+}
+
 pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     let Loaded { mut config, sources, mut errors, fingerprint } = loaded;
     // `rule name ...` lines: which rules are on, and their extra clauses
@@ -45,19 +89,25 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             attr_names.push(def.name.text.clone());
         }
     }
-    // Brackets read by `fn`s and attributes: any rule may reach them.
-    let shared_reads: RefCell<Vec<u32>> = RefCell::default();
+    let mut function_reads: Vec<_> = grammar.functions.iter().map(|_| ReadDependencies::default()).collect();
     for def in &config.functions {
         let Some(i) = grammar.function(&def.name.text) else { continue };
         let params = def.params.iter().map(|p| p.text.clone()).collect();
         // Parameters holding nodes read attributes too (`d.initialised`).
-        let scope = Scope { uses: Some(&uses), attrs: &attr_names, layer_reads: Some(&shared_reads), ..Scope::function_body(&grammar, &def.name.text, params) };
+        let layer_reads = RefCell::default();
+        let uses_before = uses.borrow().len();
+        let scope = Scope { uses: Some(&uses), attrs: &attr_names, layer_reads: Some(&layer_reads), ..Scope::function_body(&grammar, &def.name.text, params) };
         if let Some(body) = scope.compile(&def.body, &mut errors) {
             let _ = grammar.functions[i].body.set(body);
         }
+        let function_uses = uses.borrow();
+        let function_uses = &function_uses[uses_before..];
+        let (children, siblings) = reads_neighbours(function_uses);
+        // A function's node parameters can hold tokens of any kind.
+        function_reads[i] = ReadDependencies::collect(&grammar, &attr_names, function_uses, layer_reads.into_inner(), children || siblings);
     }
-    let (attrs, token_attr_neighbours) = attributes(&config, &grammar, &attr_names, &uses, &shared_reads, &mut errors);
-    let shared_layer_reads = unique(shared_reads.into_inner());
+    let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
+    helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -83,13 +133,13 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         // a layer it reads) is the library's business until it is turned on.
         if def.defined_only && !def.enabled() {
             let mut quiet = Vec::new();
-            match rule(def, &grammar, &schemas, &attr_names, &uses, &mut quiet) {
+            match rule(def, &grammar, &schemas, &attr_names, &uses, &helper_reads, &mut quiet) {
                 Some(r) if quiet.is_empty() && !def.broken => rules.push(r),
                 _ => inert.push(as_inert(def)),
             }
             continue;
         }
-        if let Some(r) = rule(def, &grammar, &schemas, &attr_names, &uses, &mut errors).filter(|_| !def.broken) {
+        if let Some(r) = rule(def, &grammar, &schemas, &attr_names, &uses, &helper_reads, &mut errors).filter(|_| !def.broken) {
             rules.push(r);
         }
     }
@@ -180,8 +230,6 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         by_field,
         by_lang,
         attrs,
-        token_attr_neighbours,
-        shared_layer_reads,
         forwards,
         project: Default::default(),
         fingerprint,
@@ -300,17 +348,15 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
 }
 
 /// Compiles every `let` attribute on each layer that defines it.
-/// The attributes, and whether one reads nodes that selecting token kinds
-/// would change: `children.x` anywhere, `previous.x` / `next.x` on a token.
+/// Attribute evaluation and the parsing prerequisites of each attribute.
 fn attributes(
     config: &crate::config::ast::Config,
     g: &Grammar,
     names: &[String],
     uses: &Uses,
-    layer_reads: &RefCell<Vec<u32>>,
     errors: &mut Vec<ConfigError>,
-) -> (Vec<Attr>, bool) {
-    let mut token_neighbours = false;
+) -> (Vec<Attr>, Vec<ReadDependencies>) {
+    let mut dependencies: Vec<_> = names.iter().map(|_| ReadDependencies::default()).collect();
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
@@ -335,17 +381,20 @@ fn attributes(
                     );
                     continue;
                 }
-                let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), layer_reads: Some(layer_reads), ..Scope::new(g) };
+                let layer_reads = RefCell::default();
+                let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g) };
                 let uses_before = uses.borrow().len();
                 if let Some(e) = scope.compile(&def.expr, errors) {
                     attrs[id].defs.push((m, e));
                 }
-                let (children, siblings) = reads_neighbours(&uses.borrow()[uses_before..]);
-                token_neighbours |= children || is_token_layer(g, m) && siblings;
+                let attribute_uses = uses.borrow();
+                let attribute_uses = &attribute_uses[uses_before..];
+                let (children, siblings) = reads_neighbours(attribute_uses);
+                dependencies[id].extend(ReadDependencies::collect(g, names, attribute_uses, layer_reads.into_inner(), children || is_token_layer(g, m) && siblings));
             }
         }
     }
-    (attrs, token_neighbours)
+    (attrs, dependencies)
 }
 
 fn unique(mut ids: Vec<u32>) -> Vec<u32> {
@@ -381,7 +430,7 @@ fn schemas(config: &Config, errors: &mut Vec<ConfigError>) -> Schemas {
     named
 }
 
-fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &Uses, errors: &mut Vec<ConfigError>) -> Option<Rule> {
+fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &Uses, helpers: &[ReadDependencies], errors: &mut Vec<ConfigError>) -> Option<Rule> {
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
@@ -475,13 +524,19 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     }
     // Reading brackets or descendants of token and trivia layers needs
     // those nodes.
-    let layer_reads = unique(layer_reads.into_inner());
-    let (reads_children, reads_siblings) = reads_neighbours(&uses.borrow()[uses_before..]);
+    let rule_uses = uses.borrow();
+    let rule_uses = &rule_uses[uses_before..];
+    let (reads_children, reads_siblings) = reads_neighbours(rule_uses);
+    let (layer_reads, helper_tokens) = ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
+    let needs_tokens = |m| is_token_layer(g, m) || g.native_hosts[m as usize].iter().any(|&host| is_token_layer(g, host));
+    let on_tokens = layer_reads.iter().any(|&m| needs_tokens(m)) || targets.iter().any(|target| match target {
+        Target::Matcher(m) | Target::Field(m, _) => needs_tokens(*m),
+        Target::Lang(_) => false,
+    });
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
     Some(Rule {
         layer_reads,
-        reads_children,
-        reads_siblings,
+        all_tokens: reads_children || helper_tokens || on_tokens && reads_siblings,
         target_layers,
         name: def.name.text.clone(),
         span: def.name.span,
@@ -618,4 +673,75 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
             }
         },
     })
+}
+
+#[cfg(test)]
+mod demand_tests {
+    use super::*;
+    use crate::config::source::Disk;
+    use std::path::Path;
+
+    fn native(rules: &str) -> Linter {
+        let source = format!("lang js \"*.ts\"\nnative ts\ngroup opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle\n{rules}");
+        let built = build(crate::config::load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:#?}", built.errors);
+        built.linter.expect("valid config")
+    }
+
+    fn messages(linter: &Linter, path: &str, source: &str) -> Vec<String> {
+        linter.lint(Path::new(path), source).into_iter().map(|diagnostic| diagnostic.message).collect()
+    }
+
+    const SHAPE: &str = "in ts_call rule shape info \"{count(children)}\"";
+
+    #[test]
+    fn unused_helpers_do_not_change_the_active_rules_tree() {
+        let source = "f(a, b);";
+        let expected = messages(&native(SHAPE), "/root/file.ts", source);
+        let actual: Vec<_> = [
+            "in ts_call let unused opener.text",
+            "fn unused(from, to) = overlapping(ts_open_paren, from, to)",
+        ].into_iter().map(|helper| messages(&native(&format!("{helper}\n{SHAPE}")), "/root/file.ts", source)).collect();
+        assert_eq!(actual, [expected.clone(), expected]);
+    }
+
+    #[test]
+    fn helper_demand_follows_the_consuming_rules_file_filters() {
+        let source = "f(a, b);";
+        let expected = messages(&native(SHAPE), "/root/excluded.ts", source);
+        let actual: Vec<_> = ["files \"included.ts\"", "ignore \"excluded.ts\""].into_iter().map(|filter| {
+            let linter = native(&format!(r#"
+                in ts_call let boundary opener.text
+                fn boundary_of(n) = n.boundary
+                {SHAPE}
+                in ts_call rule boundary info "{{boundary_of(node)}}" {{ {filter} }}
+            "#));
+            let included = messages(&linter, "/root/included.ts", source);
+            assert!(included.iter().any(|message| message == "("), "{included:?}");
+            messages(&linter, "/root/excluded.ts", source)
+        }).collect();
+        assert_eq!(actual, [expected.clone(), expected]);
+    }
+
+    #[test]
+    fn transitive_recursive_functions_and_forwarded_attributes_keep_their_layers() {
+        let linter = native(r#"
+            in ts_call let boundary_line opener.ts_open_paren.line
+            in ts_parenthesized forward boundary_line from expression
+            fn boundary_at(n, depth) = if depth == 0 then n.boundary_line else boundary_at(n, depth - 1)
+            fn outer_boundary(n) = boundary_at(n, 2)
+            in ts_parenthesized rule boundary info "{outer_boundary(node)}"
+        "#);
+        assert_eq!(messages(&linter, "/root/file.ts", "(f\n\n(a));"), ["3"]);
+    }
+
+    #[test]
+    fn consumed_token_attributes_keep_unselected_neighbours() {
+        let linter = native(r#"
+            in ts_comma let preceded_by_open previous is ts_open_paren
+            fn preceded(n) = n.preceded_by_open
+            in ts_comma rule preceded info "{preceded(node)}"
+        "#);
+        assert_eq!(messages(&linter, "/root/file.ts", "f(a, b);"), ["true"]);
+    }
 }

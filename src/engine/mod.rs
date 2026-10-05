@@ -71,9 +71,8 @@ pub struct Rule {
     /// Layers it reads by name (`opener.x`, `descendants(x)`): their nodes
     /// must be built.
     layer_reads: Vec<u32>,
-    /// Reads `children.x`; reads `previous.x` / `next.x`.
-    reads_children: bool,
-    reads_siblings: bool,
+    /// Its expressions or consumed helpers need unfiltered token neighbours.
+    all_tokens: bool,
     /// The layers it targets when all its targets are layers (else empty):
     /// where its `let`s can be read from another node (`previous.rank`).
     target_layers: Vec<u32>,
@@ -138,11 +137,6 @@ pub struct Linter {
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
     attrs: Vec<Attr>,
-    /// An attribute reads `children.x`, or `previous.x` on a token: files
-    /// then get every token kind, so those reads see the same nodes.
-    token_attr_neighbours: bool,
-    /// Layers attributes and `fn`s read by name.
-    shared_layer_reads: Vec<u32>,
     /// `in a forward x from field`: (matcher, attribute, label).
     forwards: Vec<(u32, u16, u16)>,
     /// Other files' exports, read on demand by native rules.
@@ -219,12 +213,14 @@ impl Linter {
         let (mut all_tokens, mut lang_layers) = (false, false);
         let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
         // A layer some active rule targets or reads by name (`opener.x`,
-        // `descendants(x)`): its nodes must be built. Returns whether it is
-        // a token layer.
-        let mut need = |m: u32, target: bool, targets: &mut [bool]| -> bool {
+        // `descendants(x)`): its nodes must be built.
+        let mut need = |m: u32, target: bool, targets: &mut [bool]| {
             if self.grammar.native_kind(m).is_some() {
                 wants_native |= target;
-                return token_kind(m).inspect(|&k| token_kinds[k] = true).is_some();
+                if let Some(k) = token_kind(m) {
+                    token_kinds[k] = true;
+                }
+                return;
             }
             targets[m as usize] = true;
             wants_layers = true;
@@ -234,27 +230,22 @@ impl Linter {
                     token_kinds[k] = true;
                 }
             }
-            false
         };
-        for &m in &self.shared_layer_reads {
-            need(m, false, &mut targets);
-        }
         for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
-            let mut on_tokens = false;
             for &m in &f.layer_reads {
-                on_tokens |= need(m, false, &mut targets);
+                need(m, false, &mut targets);
             }
             for t in &f.targets {
                 match *t {
-                    Target::Matcher(m) | Target::Field(m, _) => on_tokens |= need(m, true, &mut targets),
+                    Target::Matcher(m) | Target::Field(m, _) => need(m, true, &mut targets),
                     Target::Lang(_) => lang_layers = true,
                 }
             }
-            all_tokens |= f.reads_children || on_tokens && f.reads_siblings;
+            all_tokens |= f.all_tokens;
         }
         wants_layers |= lang_layers;
         let wants_tokens = token_kinds.iter().any(|&k| k);
-        if wants_tokens && (all_tokens || self.token_attr_neighbours) {
+        if wants_tokens && all_tokens {
             crate::native::ts::tokens::add_all_tokens(&mut token_kinds);
         }
         let lines = LineIndex::new(text);
