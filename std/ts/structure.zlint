@@ -459,12 +459,120 @@ in ts_binary rule eqeqeq {
 
 macro padding_selector_matches(info, selector) (if type_of(selector) == "str" then contains(info.tags, selector) else contains(info.selectors, re_replace(selector.selector, /["']/, "")) && (default(selector.lineMode, "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
 
-in ts_program rule padding-line-between-statements {
+group structure_padding_owner ts_program, ts_block, ts_static_block, ts_case, ts_switch, ts_interface, ts_type_literal
+group structure_padding_block ts_block, ts_switch
+in ts_program, ts_block, ts_static_block, ts_case let structure_padding_items body.node
+in ts_switch let structure_padding_items case.node
+in ts_interface, ts_type_literal let structure_padding_items filter(member.node, item => !(item is (ts_property_signature, ts_index_signature)))
+in structure_padding_owner let structure_padding_first_non_directive find(structure_padding_items, item => !item.structure_padding_directive)
+in ts_expression_statement let structure_padding_directive expression is ts_string
+  && (parent is ts_program || parent is ts_block && parent.parent is (ts_function, ts_arrow, ts_method))
+in ts_labeled let structure_padding_unlabel default(body.structure_padding_unlabel, body.node)
+in ts_sequence let structure_padding_sequence default((last(expression.node)).structure_padding_sequence, (last(expression.node)).structure_unwrapped)
+in ts_parenthesized let structure_padding_sequence default(expression.structure_padding_sequence, expression.structure_unwrapped)
+in ts_unary let structure_padding_iife_expression argument.structure_unwrapped
+in ts_parenthesized let structure_padding_iife_expression expression.structure_padding_iife_expression
+in ts_expression_statement let structure_padding_iife structure_padding_is_iife(default(expression.structure_padding_iife_expression, expression.structure_unwrapped))
+fn structure_padding_is_iife(n) = default(n.callee.structure_padding_sequence, n.callee.structure_unwrapped) is (ts_function, ts_arrow)
+in ts_member, ts_index let structure_padding_receiver default(object.structure_padding_receiver, object.structure_unwrapped)
+in ts_parenthesized let structure_padding_receiver default(expression.structure_padding_receiver, expression.structure_unwrapped)
+in ts_member, ts_index let structure_padding_exports
+  if object is ts_identifier then object.text == "exports" || object.text == "module" && node.property == "exports"
+  else object.structure_unwrapped.structure_padding_exports
+in ts_parenthesized let structure_padding_exports expression.structure_padding_exports
+in ts_function let structure_padding_declaration_type if body == null then "TSDeclareFunction" else "FunctionDeclaration"
+in ts_class let structure_padding_declaration_type "ClassDeclaration"
+in ts_variable_declaration let structure_padding_declaration_type "VariableDeclaration"
+in ts_interface let structure_padding_declaration_type "TSInterfaceDeclaration"
+in ts_type_alias let structure_padding_declaration_type "TSTypeAliasDeclaration"
+in ts_enum let structure_padding_declaration_type "TSEnumDeclaration"
+in ts_node let structure_padding_keyword first_token.text
+in ts_break let structure_padding_keyword_tag ["break", "BreakStatement"]
+in ts_case let structure_padding_keyword_tag [if test != null then "case" else "default", "SwitchCase"]
+in ts_class let structure_padding_keyword_tag ["class", "ClassDeclaration"]
+in ts_continue let structure_padding_keyword_tag ["continue", "ContinueStatement"]
+in ts_debugger let structure_padding_keyword_tag ["debugger", "DebuggerStatement"]
+in ts_do_while let structure_padding_keyword_tag ["do", "DoWhileStatement"]
+in ts_for, ts_for_in, ts_for_of let structure_padding_keyword_tag ["for", "ForStatement"]
+in ts_if let structure_padding_keyword_tag ["if", "IfStatement"]
+in ts_import let structure_padding_keyword_tag ["import", "ImportDeclaration"]
+in ts_switch let structure_padding_keyword_tag ["switch", "SwitchStatement"]
+in ts_throw let structure_padding_keyword_tag ["throw", "ThrowStatement"]
+in ts_try let structure_padding_keyword_tag ["try", "TryStatement"]
+in ts_while let structure_padding_keyword_tag ["while", "WhileStatement"]
+in ts_with let structure_padding_keyword_tag ["with", "WithStatement"]
+in ts_enum let structure_padding_keyword_tag ["enum", "TSEnumDeclaration"]
+in ts_interface let structure_padding_keyword_tag ["interface", "TSInterfaceDeclaration"]
+in ts_node let structure_padding_type structure_padding_node_type(node)
+fn structure_padding_node_type(n) =
+  if n is ts_block then "BlockStatement" else if n is ts_empty then "EmptyStatement"
+  else if n is ts_method_signature then "TSMethodSignature" else if n is ts_expression_statement then "ExpressionStatement"
+  else if n is ts_return then "ReturnStatement"
+  else if n is ts_export then (if n.kind == "default" then "ExportDefaultDeclaration" else if n.kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration")
+  else default(last(n.structure_padding_keyword_tag), default(n.structure_padding_declaration_type, ""))
+in ts_block let structure_padding_plain_tag "block"
+in ts_empty let structure_padding_plain_tag "empty"
+in ts_method_signature let structure_padding_plain_tag "ts-method"
+in ts_function let structure_padding_plain_tag if body == null then "function-overload" else "function"
+in ts_expression_statement let structure_padding_plain_tag if structure_padding_directive && (parent.structure_padding_first_non_directive == null || offset < (parent.structure_padding_first_non_directive).offset) then "directive" else null
+in ts_expression_statement let structure_padding_sized_tag if structure_padding_plain_tag == "directive" then null else "expression"
+in ts_variable_declaration let structure_padding_sized_tag if contains(["var", "let", "const"], structure_padding_keyword) then structure_padding_keyword else if contains(["using", "await using"], kind) then "using" else null
+in ts_export let structure_padding_sized_tag if structure_padding_keyword == "export" then "export" else null
+in ts_type_alias let structure_padding_sized_tag if structure_padding_keyword == "type" then "type" else null
+in ts_return let structure_padding_sized_tag if structure_padding_keyword == "return" then "return" else null
+in ts_declarator let structure_padding_init init.node
+in ts_variable_declaration let structure_padding_first_init first(declaration.structure_padding_init)
+in ts_variable_declaration let structure_padding_extra_tags compact([
+  if structure_padding_is_require(structure_padding_receiver(structure_padding_first_init)) then "require" else null,
+  if starts_with(structure_padding_first_init.text, "require(") then "cjs-import" else null
+])
+in ts_expression_statement let structure_padding_extra_tags compact([
+  if structure_padding_iife then "iife" else null,
+  if expression.structure_unwrapped is ts_assignment && re_test(re_replace(expression.structure_unwrapped.left.text, /\s/, ""), /^(?:module\.)?exports(?:$|[.\[])/) then "cjs-export" else null,
+  if expression.structure_unwrapped is ts_assignment && expression.structure_unwrapped.left.structure_padding_exports then "exports" else null
+])
+in ts_function let structure_padding_selectors compact([if name != null then structure_padding_type "[id.name=" name "]" else null, structure_padding_type])
+in ts_export let structure_padding_selectors compact([if declaration != null then structure_padding_type "[declaration.type=" default(declaration.structure_padding_declaration_type, "") "]" else null, structure_padding_type])
+in ts_expression_statement let structure_padding_selectors compact([if expression.structure_unwrapped.callee is ts_identifier then "ExpressionStatement[expression.callee.name=" expression.structure_unwrapped.callee.text "]" else null, structure_padding_type])
+in ts_node let structure_padding_trimmed trim_end(re_replace(trim_end(text), /;+$/, ""))
+in ts_node let structure_padding_block_like structure_padding_iife
+  || is ts_do_while && node.body is ts_block
+  || ends_with(structure_padding_trimmed, "}}") && (is structure_padding_block && end_offset == offset + byte_len(structure_padding_trimmed)
+    || any(overlapping(structure_padding_block, offset + byte_len(structure_padding_trimmed) - 1, offset + byte_len(structure_padding_trimmed)), block => block.end_offset == offset + byte_len(structure_padding_trimmed)))
+in ts_node let structure_padding_categories (default(structure_padding_unlabel, node)).structure_padding_category
+in ts_node let structure_padding_category {
+  tags: ["*"] compact([structure_padding_plain_tag, if structure_padding_keyword == first(structure_padding_keyword_tag) then first(structure_padding_keyword_tag) else null]) default(structure_padding_extra_tags, [])
+    structure_padding_tags(structure_padding_sized_tag, re_test(text, /[\n\r\u2028\u2029]/))
+    (if structure_padding_block_like then structure_padding_tags("block-like", re_test(text, /[\n\r\u2028\u2029]/)) else []),
+  selectors: default(structure_padding_selectors, [structure_padding_type]),
+  multiline: re_test(text, /[\n\r\u2028\u2029]/)
+}
+fn structure_padding_tags(tag, multiline) = if tag == null then [] else [tag, (if multiline then "multiline-" else "singleline-") tag]
+fn structure_padding_receiver(n) = default(n.structure_padding_receiver, n.structure_unwrapped)
+fn structure_padding_is_require(n) = n.callee is ts_identifier && n.callee.text == "require"
+fn structure_padding_blank(text) = re_test(replace(text, "\r\n", "\n"), /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/)
+fn structure_padding_gap_end(previous, next, source) = if ends_with(previous.text, ";")
+  && re_test(byte_slice(source, previous.offset + byte_len(trim_end(byte_slice(previous.text, 0, byte_len(previous.text) - 1))), previous.end_offset - 1), /[\n\r\u2028\u2029]/)
+  && !re_test(byte_slice(source, previous.end_offset - 1, next.offset), /[\n\r\u2028\u2029]/)
+  then previous.offset + byte_len(trim_end(byte_slice(previous.text, 0, byte_len(previous.text) - 1))) else previous.end_offset
+fn structure_padding_padded(source, end, start, comments) = any(zip([end] map(comments, comment => comment.end_offset), map(comments, comment => comment.offset) [start]),
+  segment => structure_padding_blank(byte_slice(source, first(segment), last(segment))))
+
+in structure_padding_owner rule padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
-  let findings map(statement_padding, info => {
-    offset: info.offset,
-    padded: info.padded,
-    policy: default(last(filter(options, config => any(map(config.prev, selector => padding_selector_matches(info.prev, selector))) && any(map(config.next, selector => padding_selector_matches(info.next, selector))))).blankLine, "any"),
+  let pairs map(zip(structure_padding_items, slice(structure_padding_items, 1)), pair => {
+    prior: (first(pair)).structure_padding_categories,
+    following: (last(pair)).structure_padding_categories,
+    end: structure_padding_gap_end(first(pair), last(pair), source),
+    start: (last(pair)).offset
+  })
+  let policies filter(map(pairs, pair => {
+    end: pair.end, start: pair.start,
+    policy: default(last(filter(options, config => any(map(config.prev, selector => padding_selector_matches(pair.prior, selector))) && any(map(config.next, selector => padding_selector_matches(pair.following, selector))))).blankLine, "any")
+  }), pair => pair.end <= pair.start && pair.policy != "any")
+  let findings map(policies, pair => {
+    offset: pair.start, policy: pair.policy,
+    padded: structure_padding_padded(source, pair.end, pair.start, filter(overlapping(ts_comment, pair.end, pair.start), comment => pair.end <= comment.offset && comment.end_offset <= pair.start))
   })
   each info in findings
   when info.policy == "always" && !info.padded || info.policy == "never" && info.padded

@@ -166,6 +166,16 @@ fn block_like_categories_do_not_leak_into_adjacent_empty_statements() {
 }
 
 #[test]
+fn padding_categories_follow_parenthesized_expressions() {
+    for (prev, source) in [("iife", "(!function(){}())\nfoo()"), ("exports", "(exports.foo) = 1\nfoo()")] {
+        let lint = native_linter(&format!("rule padding-line-between-statements {{ set options [{{ blankLine: \"always\", prev: \"{prev}\", next: \"*\" }}] }}"));
+        let diagnostics = lint.lint(Path::new("/root/a.js"), source);
+        assert_eq!(diagnostics.len(), 1, "{prev}: {diagnostics:#?}");
+        assert_eq!(diagnostics[0].start, source.rfind("foo()").expect("second statement"), "{prev}");
+    }
+}
+
+#[test]
 fn empty_switch_report_starts_at_its_body_not_a_comment_brace() {
     let linter = native_linter("rule no-empty");
     for source in ["switch (value) /* { */ {}", "switch (value) // {\n {}", "switch (value) /* { */ /* outside the body */ {}"] {
