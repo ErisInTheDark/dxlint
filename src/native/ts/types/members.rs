@@ -63,7 +63,7 @@ impl Resolution {
                 member: Member {
                     name: name.into(), kind: MemberKind::Prop, visibility: Visibility::Public,
                     signature: false, computed_key: None,
-                    is_static: false, optional: false, ty: None, index_key: None, sigs: Vec::new(), init: None,
+                    is_static: false, readonly: Some(false), optional: false, ty: None, index_key: None, sigs: Vec::new(), init: None,
                 },
             });
         }
@@ -75,6 +75,16 @@ impl Resolution {
 mod tests;
 
 impl Checker<'_> {
+    pub fn property_readonly(&self, object: &Ty, name: &str) -> Option<bool> {
+        if let Some(source) = self.readonly_source(object) {
+            return self.member_resolution(source, name).declared.then_some(true);
+        }
+        let resolution = self.member_resolution(object, name);
+        if !resolution.declared { return None }
+        let readonly = resolution.declarations.first()?.member.readonly?;
+        resolution.declarations.iter().all(|declaration| declaration.member.readonly == Some(readonly)).then_some(readonly)
+    }
+
     pub fn declaration_key_symbol<'m>(&self, declaration: &'m MemberDeclaration) -> Option<&'m str> {
         let key = declaration.member.computed_key.as_deref()?;
         if key.len() != 2 || &*key[0] != "Symbol" { return None }

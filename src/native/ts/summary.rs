@@ -131,6 +131,8 @@ pub struct Member {
     /// A reference path used as a computed key; absent on ordinary/literal keys.
     pub computed_key: Option<Box<[Box<str>]>>,
     pub is_static: bool,
+    /// Property mutability; `None` when accessor pairing is not modelled.
+    pub readonly: Option<bool>,
     pub optional: bool,
     /// Property type (or a getter's return type).
     pub ty: Option<TypeSyn>,
@@ -464,6 +466,7 @@ fn key_name(v: &impl View, key: u32) -> Box<str> {
 /// A class member or type member.
 pub fn member(v: &impl View, id: u32) -> Option<Member> {
     let is_static = v.has_word(id, F::Modifier, "static");
+    let readonly = Some(v.has_word(id, F::Modifier, "readonly"));
     let optional = v.get(id, F::Optional).is_some();
     let visibility = Visibility::of(v, id);
     let signature = matches!(v.kind(id), Some(K::MethodSig | K::PropSig | K::CallSig | K::IndexSig));
@@ -471,13 +474,16 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         .and_then(|key| v.get(key, F::Expr)).map(|key| path_of(v, key))
         .filter(|path| !path.is_empty()).map(Vec::into_boxed_slice);
     let named = |kind, ty, sigs| -> Option<Member> {
-        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, optional, ty, index_key: None, sigs, init: None })
+        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
     };
     match v.kind(id)? {
         K::Method | K::MethodSig => {
             let s = Arc::new(sig(v, id));
             match v.get(id, F::Kind).map(|k| v.text(k)) {
-                Some("get") => named(MemberKind::Prop, s.ret.clone(), Vec::new()),
+                Some("get") => named(MemberKind::Prop, s.ret.clone(), Vec::new()).map(|mut member| {
+                    member.readonly = None;
+                    member
+                }),
                 Some("set") => named(MemberKind::Prop, s.params.first().and_then(|p| p.ty.clone()), Vec::new()),
                 _ => named(MemberKind::Method, None, vec![s]),
             }
@@ -493,7 +499,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         }
         K::CallSig => {
             let kind = if v.get(id, F::Kind).is_some() { MemberKind::Construct } else { MemberKind::Call };
-            Some(Member { name: "()".into(), kind, visibility, signature, computed_key: None, is_static, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
+            Some(Member { name: "()".into(), kind, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
         }
         K::IndexSig => Some(Member {
             name: "[index]".into(),
@@ -502,6 +508,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
             signature,
             computed_key: None,
             is_static,
+            readonly,
             optional,
             ty: v.get(id, F::Type).map(|t| type_syn(v, t)),
             index_key: v.all(id, F::Param).first().and_then(|&p| v.get(p, F::Type)).map(|t| type_syn(v, t)),
@@ -672,6 +679,7 @@ impl<V: View> Builder<'_, V> {
                                         signature: false,
                                         computed_key: None,
                                         is_static: false,
+                                        readonly: Some(v.has_word(p, F::Modifier, "readonly")),
                                         optional: false,
                                         ty: v.get(p, F::Type).map(|t| type_syn(v, t)),
                                         index_key: None,
@@ -717,6 +725,7 @@ impl<V: View> Builder<'_, V> {
                             signature: false,
                             computed_key: None,
                             is_static: true,
+                            readonly: Some(true),
                             optional: false,
                             ty,
                             index_key: None,
@@ -1002,6 +1011,8 @@ mod tests {
     #[test]
     fn imported_type_modifiers_invalidate_dependents() {
         for (before, after) in [
+            ("interface T { value: number; }", "interface T { readonly value: number; }"),
+            ("class T { value: number; }", "class T { readonly value: number; }"),
             ("type T = number[];", "type T = readonly number[];"),
             ("type T = [number];", "type T = [number?];"),
             ("type T = [number[]];", "type T = [...number[]];"),

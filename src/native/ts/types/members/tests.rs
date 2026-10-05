@@ -17,6 +17,26 @@ fn with_library(src: &str, run: impl FnOnce(&Checker<'_>)) {
 }
 
 #[test]
+fn property_mutability_follows_declarations_and_readonly_utilities() {
+    for (shape, expected) in [
+        ("interface Target { readonly value: number; }", Some(true)),
+        ("class Target { readonly value: number; }", Some(true)),
+        ("type Target = { readonly value: number };", Some(true)),
+        ("interface Target { value: number; }", Some(false)),
+        ("class Base { readonly value: number; } class Target extends Base {}", Some(true)),
+        ("class Base { readonly value: number; } class Target extends Base { value: number; }", Some(false)),
+        ("type Target = Readonly<{ value: number }>;", Some(true)),
+    ] {
+        let source = format!("type Readonly<T> = {{ readonly [P in keyof T]: T[P] }}; {shape}");
+        with_library(&source, |checker| {
+            let ty = checker.eval(&TypeSyn::Ref(vec!["Target".into()].into(), Vec::new()), &Env::file(checker.file));
+            assert_eq!(checker.property_readonly(&ty, "value"), expected, "{shape}");
+            assert_eq!(checker.property_readonly(&ty, "missing"), None, "{shape}");
+        });
+    }
+}
+
+#[test]
 fn object_prototype_lookup_follows_explicit_properties_before_index_signatures() {
     for (shape, owner) in [
         ("class Target {}", Some("Object")),

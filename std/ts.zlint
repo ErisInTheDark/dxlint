@@ -48,6 +48,8 @@ import .ts/problems
 import .ts/style
 import .ts/typed
 import .ts/conditions
+import .ts/assertions
+import .ts/enums
 import .ts/layout
 import .ts/indentation
 import .ts/structure

@@ -15,10 +15,11 @@ pub mod scoping;
 pub mod structure;
 pub mod suggestions;
 pub mod syntax;
+pub mod type_relations;
 pub mod typed;
 
 /// Every family's facts (after the core list in `expr::facts`).
-pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS];
+pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, type_relations::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS];
 
 /// Every link between nodes.
 pub const LINK_GROUPS: &[&[Link]] = &[relations::LINKS];
