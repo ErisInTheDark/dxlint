@@ -20,6 +20,10 @@ pub struct Tree {
     pub too_deep: bool,
     /// `(root node, layer)` of each named layer's tree in this file.
     pub layer_roots: Vec<(u32, u16)>,
+    /// Nodes whose children overlap (`@dec export default class`: the
+    /// `default` keyword lies inside the decorated class), sorted. Lookups
+    /// by position search all their children.
+    overlapping: Vec<u32>,
 }
 
 impl Tree {
@@ -81,8 +85,19 @@ impl Tree {
 
     fn from_nodes(mut nodes: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
         let starts: Vec<u32> = nodes.iter().map(|n| n.start).collect();
-        for node in &mut nodes {
+        let ends: Vec<u32> = nodes.iter().map(|n| n.end).collect();
+        let mut overlapping = Vec::new();
+        for (id, node) in nodes.iter_mut().enumerate() {
             node.children.sort_by_key(|e| starts[e.node as usize]);
+            let mut reach = 0;
+            for e in &node.children {
+                let (s, e) = (starts[e.node as usize], ends[e.node as usize]);
+                if s < reach && s < e {
+                    overlapping.push(id as u32);
+                    break;
+                }
+                reach = reach.max(e);
+            }
         }
         let n = nodes.len();
         let mut parent = vec![NONE; n];
@@ -105,7 +120,7 @@ impl Tree {
                 }
             }
         }
-        Tree { nodes, parent, label, order, root, holes, too_deep, layer_roots: Vec::new() }
+        Tree { nodes, parent, label, order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
     }
 
     /// Where a node's inside (its `*`) starts and ends, if its pattern has one.
@@ -182,8 +197,10 @@ impl Tree {
         let mut id = self.root;
         'descend: loop {
             let children = &self.nodes[id as usize].children;
-            // Children are sorted by start and, overlays aside, disjoint: the
-            // container can only be a late child starting at or before `pos`.
+            // Children are sorted by start and mostly disjoint: the container
+            // can only be a late child starting at or before `pos`. Where
+            // they overlap, an earlier one may hold `pos` past a later one.
+            let overlap = self.overlapping.binary_search(&id).is_ok();
             let upto = children.partition_point(|e| self.nodes[e.node as usize].start <= pos);
             for e in children[..upto].iter().rev() {
                 let n = &self.nodes[e.node as usize];
@@ -196,7 +213,9 @@ impl Tree {
                     id = e.node;
                     continue 'descend;
                 }
-                break;
+                if !overlap {
+                    break;
+                }
             }
             break;
         }
@@ -213,5 +232,22 @@ impl Tree {
             }
             id = self.parent(id)?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn positions_find_the_child_holding_them_where_children_overlap() {
+        // The export's `default` lies inside its decorated class: the
+        // method's line is still found in the class.
+        let l = native_linter(r#"in ts_line rule ind info "{indent_level}" { indent ts_class.member }"#);
+        let src = "@Bar()\nexport default class Foo {\n  method() {}\n}\n";
+        let levels: Vec<String> = l.lint(Path::new("/root/a.ts"), src).into_iter().map(|d| d.message).collect();
+        assert_eq!(levels, ["0", "0", "1", "0"]);
     }
 }
