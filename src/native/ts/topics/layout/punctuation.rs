@@ -5,59 +5,7 @@ use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::lexer::Tok;
 
-use super::{gap_has_space, lex};
-
-pub(super) fn generic_spacing_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    let parameters: Vec<_> = syntax.all(node, F::TypeParam).collect();
-    let arguments: Vec<_> = syntax.all(node, F::TypeArg).collect();
-    if parameters.is_empty() && arguments.is_empty() {
-        return Value::list(Vec::new());
-    }
-    let lexed = file.cached(lex);
-    let mut sites = Vec::new();
-    for group in [&parameters, &arguments].into_iter().filter(|group| !group.is_empty()) {
-        let start = syntax.tree.node(group[0]).start;
-        let end = syntax.tree.node(*group.last().expect("nonempty generics")).end;
-        let Some(open) = lexed.0.partition_point(|token| token.end <= start).checked_sub(1).filter(|&i| lexed.0[i].tok == Tok::P("<")) else { continue };
-        let from = lexed.0.partition_point(|token| token.start < end);
-        let Some(close) = (from..lexed.0.len()).find(|&i| matches!(lexed.0[i].tok, Tok::P("," | ">"))).filter(|&i| lexed.0[i].tok == Tok::P(">")) else { continue };
-        let kind = syntax.kind(node);
-        let skip_before = matches!(kind, Some(K::CallSig | K::Arrow | K::FnType))
-            || matches!(kind, Some(K::Function | K::Class)) && syntax.get(node, F::Name).is_none();
-        let check_after = matches!(kind, Some(K::Call | K::New | K::TaggedTemplate | K::CallSig | K::MethodSig | K::FnType));
-        let before = open.checked_sub(1).map(|i| (lexed.0[i].end, lexed.0[open].start));
-        let after = lexed.0.get(close + 1).map(|next| (lexed.0[close].end, next.start));
-        for (side, bounds) in [
-            ("before", if skip_before { None } else { before }),
-            ("after", if check_after { after } else { None }),
-            ("inner", Some((lexed.0[open].end, lexed.0[open + 1].start))),
-            ("inner", Some((lexed.0[close - 1].end, lexed.0[close].start))),
-        ] {
-            let Some((mut start, mut end)) = bounds else { continue };
-            if side == "before" {
-                if let Some(comment) = file.comments().iter().rev().find(|comment| start <= comment.start && comment.end <= end) {
-                    start = comment.end;
-                }
-            } else if side == "after" {
-                if let Some(comment) = file.comments().iter().find(|comment| start <= comment.start && comment.end <= end) {
-                    end = comment.start;
-                }
-            }
-            let gap = &syntax.src[start as usize..end as usize];
-            if side == "inner" && gap.starts_with(['\n', '\r']) {
-                continue;
-            }
-            sites.push(Value::record(vec![
-                ("side".into(), Value::from(side)),
-                ("start".into(), Value::from(start as usize)),
-                ("end".into(), Value::from(end as usize)),
-                ("spaced".into(), Value::Bool(if side == "inner" { gap.chars().any(char::is_whitespace) } else { gap_has_space(gap) })),
-            ]));
-        }
-    }
-    Value::list(sites)
-}
+use super::lex;
 
 pub(super) fn statement_semicolon(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;

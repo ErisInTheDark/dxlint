@@ -477,11 +477,48 @@ in ts_function.modifier, ts_method.modifier rule generator-star-spacing:after {
   warn if star_space != "" then "Unexpected space after *." else "Missing space after *."
 }
 
-in ts_function, ts_arrow, ts_class, ts_interface, ts_type_alias, ts_method, ts_call, ts_new, ts_tagged_template, ts_type_reference, ts_function_type, ts_method_signature, ts_call_signature rule type-generic-spacing {
+group layout_generic_owner ts_function, ts_arrow, ts_class, ts_interface, ts_type_alias, ts_method,
+  ts_call, ts_new, ts_tagged_template, ts_type_reference, ts_function_type, ts_method_signature, ts_call_signature
+in layout_generic_owner let layout_generic_parameter_tokens type_parameter.token_neighbours
+in layout_generic_owner let layout_generic_argument_tokens type_argument.token_neighbours
+in layout_generic_owner let layout_generic_parameters { open: first(layout_generic_parameter_tokens).before.start, close: last(layout_generic_parameter_tokens).after.start, closed: last(layout_generic_parameter_tokens).after.text == ">" }
+in layout_generic_owner let layout_generic_arguments { open: first(layout_generic_argument_tokens).before.start, close: last(layout_generic_argument_tokens).after.start, closed: last(layout_generic_argument_tokens).after.text == ">" }
+in ts_open_angle, ts_close_angle let layout_generic_edge parent is layout_generic_owner && (parent.layout_generic_parameters.closed && offset == (if is ts_open_angle then parent.layout_generic_parameters.open else parent.layout_generic_parameters.close) || parent.layout_generic_arguments.closed && offset == (if is ts_open_angle then parent.layout_generic_arguments.open else parent.layout_generic_arguments.close))
+@macro layout_generic_policy {
   option before boolean = false "space before generic brackets"
   option after boolean = false "space after generic brackets"
-  each generic_site in filter(generic_spacing_sites, s => s.spaced != (if s.side == "before" then before else if s.side == "after" then after else false))
-  report at generic_site.start
+  when layout_generic_edge
+}
+
+in ts_open_angle rule type-generic-spacing {
+  @layout_generic_policy
+  when parent not (ts_arrow, ts_function_type, ts_call_signature)
+  when parent not (ts_function, ts_class) || parent.name != null
+  when previous_token != null
+  let generic_space layout_comma_space(space_before.text, true)
+  when before != (generic_space != "")
+  report at { start: offset - byte_len(generic_space), end: parent.end_offset }
+  warn "Generic spaces mismatch"
+}
+in ts_close_angle rule type-generic-spacing:after {
+  @layout_generic_policy
+  when parent is (ts_call, ts_new, ts_tagged_template, ts_call_signature, ts_method_signature, ts_function_type)
+  when next_token != null
+  let generic_space layout_comma_space(space_after.text, false)
+  when after != (generic_space != "")
+  report at { start: end_offset, end: parent.end_offset }
+  warn "Generic spaces mismatch"
+}
+in ts_open_angle rule type-generic-spacing:inner-open {
+  @layout_generic_policy
+  when re_test(space_after.text, /\s/) && !re_test(space_after.text, /^[\n\r]/)
+  report at { start: end_offset, end: parent.end_offset }
+  warn "Generic spaces mismatch"
+}
+in ts_close_angle rule type-generic-spacing:inner-close {
+  @layout_generic_policy
+  when re_test(space_before.text, /\s/) && !re_test(space_before.text, /^[\n\r]/)
+  report at { start: space_before.start, end: parent.end_offset }
   warn "Generic spaces mismatch"
 }
 

@@ -46,11 +46,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(token_neighbours, n),
     },
     Fact {
-        name: "generic_spacing_sites",
-        doc: "native generic owners: {side,start,end,spaced}; before/after boundaries plus inner bracket gaps, excludes context-owned outer boundaries",
-        get: |f, n| f.with_file(punctuation::generic_spacing_sites, n),
-    },
-    Fact {
         name: "trailing_comma_sites",
         doc: "native list owners: {kind,offset,trailing,multiline,allowed,tsx_single}; offset is comma or insertion point, multiline compares last item/comma with closing token",
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
