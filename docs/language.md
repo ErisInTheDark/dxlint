@@ -735,6 +735,7 @@ is wrong, messages) is written in the rule.
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `property_info` | on static member or index access: `{declared, visibility}` (`public`, `private`, `protected` or null), preserving declaration presence even when its value type is unresolved |
 | `index_key_types` | constrained index-signature key domains as `{text, string_like}` records, inherited domains included |
+| `type_flow(site, source)` | source/expected type relation records at declared, contextual and heritage sites: union domains and enum identities, tri-state assignability, aligned generic/index/property children, typed operands and receiver enum names; `complete: false` marks traversal limits |
 | `type_structure(names)` | constrained recursive `{kind, parts, names, generic_names, aliases, members}`: array/tuple elements or union/intersection parts; optional tuple slots include undefined. Explicit `unknown`, open `parameter` and `unresolved` are distinct. `names` includes printed base types; `generic_names` contains root generic declaration names. `aliases` contains retained root-annotation alias names, not aliases propagated through inferred values or calls. Queried members contain winning `{owner, kind, signature, key_symbol}` declarations; owner is `{name, kind, from}` or null, and `key_symbol` verifies standard-library Symbol computed-key identity. Also: `declarations` (`{name, kind, from, inherited}`), `callable`, `constructor` (declared construct signatures or class values), `symbol_constructor` (a named type's constructible value side), `class_value`, `property_names` (without signature markers or apparent function prototype members), `iterable` (null when unresolved) and, on the root, `property_writes` (property names assigned through the binding) |
 | `type_parameter_defaults`, `type_parameters_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
@@ -925,6 +926,7 @@ and `final-newline`.
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
+| `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

@@ -9,6 +9,7 @@ use crate::native::ts::types::{Checker, Ty};
 mod template;
 mod type_properties;
 mod type_structure;
+mod enum_types;
 mod properties;
 mod unsafe_types;
 mod awaitability;
@@ -24,7 +25,7 @@ mod transfers;
 mod assignments;
 mod arguments;
 mod enums;
-mod specifiers;
+pub(super) mod specifiers;
 mod errors;
 mod promises;
 mod empty_types;
@@ -37,6 +38,11 @@ fn is_typescript(file: &NativeFile<'_>) -> bool {
 
 pub const FACTS: &[Fact] = &[
     Fact {
+        name: "type_flow",
+        doc: "native expressions: type_flow(site, source) gives source and expected type relations for declared, contextual and heritage contracts; incomplete records indicate traversal limits",
+        get: |f, n| f.with_file(enum_types::flow, n),
+    },
+    Fact {
         name: "property_info",
         doc: "native expressions: static member or index access declaration presence and winning declaration visibility, even when its value type is unresolved",
         get: |f, n| f.with_file(properties::property_info, n),
@@ -48,7 +54,7 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         name: "type_structure",
-        doc: "native values and types: constrained recursive type kind, parts, names, retained annotation aliases and winning declarations for queried member names",
+        doc: "native values and types: constrained recursive kind, parts, names, retained aliases, declaration/value provenance, call/construct/property/iteration metadata, binding-backed property writes and queried winning member declarations",
         get: |f, n| f.with_file(|file, node| {
             let args = crate::expr::facts::args();
             let names = args.first().map(|value| value.items().iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default();

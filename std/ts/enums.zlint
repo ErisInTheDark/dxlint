@@ -1,0 +1,41 @@
+# Enum transfer policy; type identities and relations remain native facts.
+define {
+fn enum_root_bad(pair) =
+  any(zip(pair.sender, pair.assignable), entry =>
+    any(pair.receiver, target => len(target.enums) > 0 && any(target.domains, domain => contains(first(entry).domains, domain)))
+    && !any(pair.receiver, target => any(target.enums, identity => contains(first(entry).enums, identity)))
+    && !any(zip(pair.receiver, last(entry)), allowance => len(first(allowance).enums) == 0 && last(allowance) == true))
+fn enum_relation_bad(pair) = enum_root_bad(pair) || any(pair.children, child => enum_relation_bad(child))
+fn enum_names_text(contexts) = join(map(sort(unique(reduce(contexts, [], (names, context) => names context.enum_names))), name => "'" name "'"), ", ")
+fn enum_safe_operand(expression) = enum_safe_bitwise(expression) || !enum_root_bad(expression.relation)
+fn enum_safe_bitwise(expression) =
+  if expression.kind == "binary" && contains(["&", "|", "^"], expression.operator)
+  then len(expression.operands) == 2 && all(expression.operands, operand => enum_safe_operand(operand))
+  else expression.kind == "unary" && expression.operator == "~" && len(expression.operands) == 1 && enum_safe_operand(first(expression.operands))
+
+group enum_transfer ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_as, ts_type_assertion, ts_update
+in enum_transfer let enum_mutation is ts_update || is ts_assignment && !contains(["=", "&&=", "&=", "??=", "^=", "|=", "||="], node.operator)
+in enum_transfer let enum_value
+  if is (ts_declarator, ts_parameter, ts_class_property) then init.node
+  else if is (ts_assignment, ts_assignment_pattern) then (if enum_mutation then left.node else right.node)
+  else if is (ts_as, ts_type_assertion) then expression.node
+  else if is ts_update then argument.node
+  else default(value.node, key.node)
+in enum_transfer let enum_contexts type_flow(node, enum_value)
+in enum_transfer let enum_heritage filter(enum_contexts, context => context.origin == "heritage")
+in enum_transfer let enum_heritage_bad is ts_class_property && len(enum_heritage) > 0 && all(enum_heritage, context => context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression))
+in enum_transfer let enum_selected_contexts if enum_heritage_bad then enum_heritage else filter(enum_contexts, context => context.origin != "heritage")
+in enum_transfer let enum_reports enum_value != null && (enum_mutation || enum_heritage_bad || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then enum_value.type_has_enum else any(enum_selected_contexts, context => context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression)))
+in ts_node let enum_checked
+  if is ts_property then parent.enum_checked == true
+  else if is (ts_object, ts_array, ts_parenthesized, ts_as, ts_type_assertion, ts_non_null, ts_satisfies, ts_spread, ts_conditional, ts_logical)
+  then parent.enum_checked == true || parent is enum_transfer && node == parent.enum_value && parent.enum_reports
+  else false
+in enum_transfer rule no-unsafe-enum-assignment {
+  when enum_reports && !(is ts_property && enum_checked)
+  let contexts enum_selected_contexts
+  warn if enum_mutation then "This mutation can produce a value outside of the expected enum {enum_names_text(contexts)}."
+    else if is (ts_as, ts_type_assertion) then "The value asserted here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+    else "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
+}
