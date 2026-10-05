@@ -4,7 +4,7 @@ schema indent_list_offset int(0..) | "first" | "off"
 schema indent_function_options { parameters?: indent_list_offset; body?: int(0..); returnType?: int(0..) }
 
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
-fn indent_variable_mode(mode, kind) = if type_of(mode) == "record" then default(get(mode, kind), 1) else mode
+fn indent_variable_mode(mode, kind) = if type_of(mode) == "record" then default(get(mode, if kind == "await using" then "using" else kind), 1) else mode
 fn indent_steps(unit, levels) = repeat(byte_slice(unit, 0, 1), round(len(unit) * levels))
 fn indent_declaration_level(owner, style, mode) =
   if !owner.indent_multiline_declaration then 0
@@ -48,6 +48,10 @@ in ts_function, ts_arrow let indent_outer_iife containing(ts_call).indent_outer_
 in ts_assignment, ts_assignment_pattern let indent_assignment_value right.node
 in ts_declarator, ts_parameter, ts_class_property let indent_assignment_value init.node
 in ts_jsx_attribute let indent_assignment_value value.node
+in ts_import_equals let indent_assignment_value value.node
+in ts_type_parameter let indent_assignment_value default.node
+in ts_function let indent_return_colon return_type.token_neighbours.before.start
+in ts_function let indent_return_anchor node_at(indent_return_colon).token_neighbours.before.start
 in ts_index let indent_index_open index.token_neighbours.before.start
 in ts_if let indent_control_tails [consequent.last_token.end, alternate.last_token.end]
 in ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_with let indent_control_tails [body.last_token.end]
@@ -82,7 +86,8 @@ in ts_line rule indent {
   indent in ts_function.body, ts_arrow.body, ts_method.body from parent.offset by if parent.indent_outer_iife then indent_numeric(outerIIFEBody) else default(indent_function_mode(parent, function_declaration, function_expression).body, 1)
   indent in ts_static_block.body by default(static_block.body, 1)
   indent ts_function.parameter, ts_arrow.parameter, ts_method.parameter by indent_numeric(default(indent_function_mode(parent, function_declaration, function_expression).parameters, 1))
-  indent ts_function.return_type by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
+  indent ts_function.return_type from parent.indent_return_anchor by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
+  indent ts_function.token from if offset == parent.indent_return_colon then parent.indent_return_anchor else offset by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
   indent ts_arrow.return_type, ts_parameter.type
   indent ts_call.argument, ts_new.argument, ts_import_call.argument by indent_numeric(default(call_expression.arguments, 1))
   indent ts_switch.case by switch_case
@@ -95,6 +100,8 @@ in ts_line rule indent {
   indent ts_export.specifier
   indent ts_assignment.right, ts_assignment_pattern.right, ts_class_property.init by indent_numeric(assignment_operator)
   indent ts_declarator.init from token_neighbours.before.start by indent_numeric(assignment_operator)
+  indent ts_import_equals.value, ts_type_parameter.default from token_neighbours.before.start by indent_numeric(assignment_operator)
+  indent ts_import_equals.token, ts_type_parameter.token from if text == "=" then token_neighbours.before.start else offset by indent_numeric(assignment_operator)
   indent ts_arrow.body from parent.offset by if is ts_block then 0 else 1
   indent ts_property.value, ts_return.argument, ts_throw.argument
   indent ts_conditional.consequent, ts_conditional.alternate by indent_ternary_level(node, flat_ternary_expressions, offset_ternary_expressions, containing(ts_statement))
@@ -113,7 +120,7 @@ in ts_line rule indent {
   indent ts_function_type.return_type, ts_method_signature.return_type, ts_call_signature.return_type
   indent ts_type_reference.type_argument, ts_type_query.type_argument, ts_call.type_argument, ts_new.type_argument
   indent ts_function.type_parameter, ts_arrow.type_parameter, ts_method.type_parameter, ts_class.type_parameter, ts_interface.type_parameter
-  indent ts_type_parameter.constraint, ts_type_parameter.default
+  indent ts_type_parameter.constraint
   indent ts_for.init, ts_for.test, ts_for.update
   indent ts_if.consequent, ts_if.alternate, ts_for.body, ts_for_in.body, ts_for_of.body, ts_while.body, ts_do_while.body, ts_with.body from if is ts_empty then node.indent_semicolon_control else null by if is ts_block || is ts_empty && node.indent_semicolon_control != null then 0 else 1
   indent ts_semicolon from default(indent_semicolon_control, parent.node) by if indent_semicolon_control == null && parent is (ts_block, ts_class, ts_interface, ts_type_literal) then 1 else 0
