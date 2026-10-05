@@ -9,6 +9,7 @@ use crate::config::{self, ast::Severity};
 
 /// Behaviour of std's TypeScript rules that spans several owners.
 mod ts_std_rules;
+mod ts_arithmetic;
 
 const LANG: &str = r#"
 lang t "*.t"

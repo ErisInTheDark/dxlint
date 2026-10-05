@@ -1,6 +1,8 @@
 # .ts/typed: typescript-eslint rules that need type information, on the
 # native TypeScript layers and the type facts (`type`, `type_flags`,
-# `type_members`, ...). Where a type is unknown the rules stay quiet.
+# `type_members`, ...). Unresolved types differ from explicit unknown.
+
+import .ts/arithmetic
 
 define {
 
@@ -575,9 +577,7 @@ in ts_parameter rule prefer-readonly:parameter {
   warn "Member '{re_replace(text, /^(?:(?:private|public|protected|readonly|override)\s+)*/, '')}' is never reassigned; mark it as `readonly`."
 }
 
-# ---- the cheap type-checked trio ------------------------------------------------
-macro bad_in_string(fs) (contains(fs, "array") || contains(fs, "object") || contains(fs, "function") || contains(fs, "symbol") || contains(fs, "never"))
-macro stringifies_well(t) re_test(default(t, ""), /^(?:RegExp|Error|URL|URLSearchParams)$/)
+# ---- template interpolation ----------------------------------------------------
 in ts_template let tagged_template parent is ts_tagged_template
 in ts_template.expression rule restrict-template-expressions {
   option allowAny boolean = true "Allow any values"
@@ -593,22 +593,6 @@ in ts_template.expression rule restrict-template-expressions {
   when template_type_checks != null
   when any(template_type_checks, clause => !any(clause, gate => contains(enabled_template_options, gate.option) || gate.name != null && any(allow, spec => matches_type_specifier(spec, gate))))
   warn "Invalid type \"{template_type_display}\" of template literal expression."
-}
-
-in ts_binary {
-  let adds_string contains(default(left.type_flags, []), "string") || contains(default(right.type_flags, []), "string")
-  let left_is_number has_only_flags(default(left.type_flags, []), ["number", "literal", "enum"])
-  let right_is_number has_only_flags(default(right.type_flags, []), ["number", "literal", "enum"])
-  let left_is_bigint has_only_flags(default(left.type_flags, []), ["bigint", "literal"])
-  let right_is_bigint has_only_flags(default(right.type_flags, []), ["bigint", "literal"])
-}
-in ts_binary.left, ts_binary.right rule restrict-plus-operands {
-  when parent.operator == "+" && parent.adds_string && bad_in_string(flags) && !contains(flags, "any") && !stringifies_well(type)
-  warn "Invalid operand for a '+' operation. Operands must each be a number or string, allowing a string + any of: `any`, `boolean`, `null`, `RegExp`, `undefined`. Got `{type}`."
-}
-in ts_binary rule restrict-plus-operands:numeric {
-  when operator == "+" && (left_is_bigint && right_is_number || left_is_number && right_is_bigint)
-  warn "Numeric '+' operations must either be both bigints or both numbers. Got `{if left_is_bigint then 'bigint' else 'number'}` + `{if right_is_bigint then 'bigint' else 'number'}`."
 }
 
 in ts_unary rule no-unsafe-unary-minus {

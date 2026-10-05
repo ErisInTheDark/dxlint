@@ -1,0 +1,63 @@
+# Type-aware arithmetic policy; syntax and types remain native facts.
+define {
+
+fn arithmetic_type_name(t) =
+  if contains(["string", "number", "bigint", "boolean"], t.kind) then t.kind
+  else if t.kind == "union" then join(unique(map(t.parts, part => arithmetic_type_name(part))), " | ")
+  else default(first(t.aliases), default(first(t.names), if t.kind == "unresolved" then "unknown" else t.kind))
+
+fn arithmetic_union_parts(t) = if t.kind == "union" then reduce(t.parts, [], (parts, part) => parts arithmetic_union_parts(part)) else [t]
+fn arithmetic_has_type(t, kinds) = any(arithmetic_union_parts(t), part => contains(kinds, part.kind))
+fn arithmetic_object_type(t) = if contains(["union", "intersection"], t.kind) then all(t.parts, part => arithmetic_object_type(part))
+  else contains(["object", "array", "tuple", "function"], t.kind)
+fn arithmetic_regexp(t) = t.kind == "object" && contains(t.names, "RegExp")
+fn arithmetic_string_like(options) = ([]
+  (if options.allowAny then ["`any`"] else [])
+  (if options.allowBoolean then ["`boolean`"] else [])
+  (if options.allowNullish then ["`null`"] else [])
+  (if options.allowRegExp then ["`RegExp`"] else [])
+  (if options.allowNullish then ["`undefined`"] else []))
+fn arithmetic_operand_errors(subject, t, other, options) =
+  if arithmetic_has_type(t, ["symbol", "never", "unknown"])
+    || !options.allowAny && arithmetic_has_type(t, ["any"])
+    || !options.allowBoolean && arithmetic_has_type(t, ["boolean"])
+    || !options.allowNullish && arithmetic_has_type(t, ["null", "undefined"])
+  then [{ node: subject, type: arithmetic_type_name(t) }]
+  else reduce(arithmetic_union_parts(t), [], (errors, part) =>
+    if (if arithmetic_regexp(part) then !options.allowRegExp || other.kind == "number"
+      else !options.allowAny && part.kind == "any" || arithmetic_object_type(part))
+    then errors [{ node: subject, type: arithmetic_type_name(part) }] else errors)
+
+fn arithmetic_pair_error(left, right, options) =
+  if !options.allowNumberAndString && (arithmetic_has_type(left, ["string"]) && arithmetic_has_type(right, ["number", "bigint"])
+    || arithmetic_has_type(right, ["string"]) && arithmetic_has_type(left, ["number", "bigint"])) then "mismatched"
+  else if arithmetic_has_type(left, ["number"]) && arithmetic_has_type(right, ["bigint"])
+    || arithmetic_has_type(right, ["number"]) && arithmetic_has_type(left, ["bigint"]) then "numeric" else null
+
+in ts_node let arithmetic_type type_structure([])
+
+in ts_binary, ts_assignment rule restrict-plus-operands {
+  option allowAny boolean = true "allow any operands"
+  option allowBoolean boolean = true "allow boolean operands"
+  option allowNullish boolean = true "allow null and undefined operands"
+  option allowNumberAndString boolean = true "allow strings with numbers or bigints"
+  option allowRegExp boolean = true "allow regular expression operands"
+  option skipCompoundAssignments boolean = false "skip compound assignments"
+  when operator == "+" || operator == "+=" && !skipCompoundAssignments
+  let settings { allowAny: allowAny, allowBoolean: allowBoolean, allowNullish: allowNullish, allowNumberAndString: allowNumberAndString, allowRegExp: allowRegExp }
+  let left_type left.arithmetic_type
+  let right_type right.arithmetic_type
+  let errors (arithmetic_operand_errors(left.node, left_type, right_type, settings)
+    arithmetic_operand_errors(right.node, right_type, left_type, settings))
+  let pair_error if len(errors) == 0 then arithmetic_pair_error(left_type, right_type, settings) else null
+  let string_types arithmetic_string_like(settings)
+  let string_like (if len(string_types) == 0 then "string" else "string, allowing a string + "
+    (if len(string_types) == 1 then first(string_types) else "any of: " join(string_types, ", ")))
+  each finding in errors (if pair_error != null then [{ node: node, pair: pair_error }] else [])
+  report at finding.node
+  warn if finding.pair == "numeric" then "Numeric '+' operations must either be both bigints or both numbers. Got `{arithmetic_type_name(left_type)}` + `{arithmetic_type_name(right_type)}`."
+    else if finding.pair == "mismatched" then "Operands of '+' operations must be a number or {string_like}. Got `{arithmetic_type_name(left_type)}` + `{arithmetic_type_name(right_type)}`."
+    else "Invalid operand for a '+' operation. Operands must each be a number or {string_like}. Got `{finding.type}`."
+}
+
+}
