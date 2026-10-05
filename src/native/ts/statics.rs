@@ -95,7 +95,19 @@ fn bigint_decimal(text: &str) -> Option<String> {
 /// `null`. (`undefined` is a name that can be shadowed: rules decide.)
 pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
     let text = s.text(node);
-    Some(match s.kind(node)? {
+    let Some(kind) = s.kind(node) else {
+        if !text.starts_with(['\'', '"']) {
+            return None;
+        }
+        let mut lexer = super::lexer::Lexer::new(text);
+        let token = lexer.next_token();
+        return if token.tok == super::lexer::Tok::Str && token.end as usize == text.len() && lexer.broken.is_none() {
+            Some(("string", super::regex::cook(text)?))
+        } else {
+            None
+        };
+    };
+    Some(match kind {
         K::String => ("string", super::regex::cook(text)?),
         K::Template if s.all(node, F::Expr).next().is_none() => ("string", super::regex::cook(text)?),
         K::Number => ("number", number_string(number(text)?)),
@@ -206,6 +218,29 @@ pub fn property_name(s: &Syntax, node: u32) -> Option<String> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    #[test]
+    fn pattern_fields_read_complete_quoted_literals_not_expressions() {
+        use crate::grammar::{NativeFront, Node, Tree, TEXT};
+        let front = NativeFront { name: "ts", base: 0, labels: Vec::new() };
+        for (text, expected) in [
+            (r#""t\u0079pe""#, Some("type")),
+            (r"'a\nb'", Some("a\nb")),
+            (r#""""#, Some("")),
+            (r#""a" + "b""#, None),
+            (r#""unterminated"#, None),
+            (r#"'mismatched""#, None),
+            ("identifier", None),
+            ("`template`", None),
+        ] {
+            let tree = Tree::from_native(
+                vec![Node { matcher: TEXT, start: 0, end: text.len() as u32, children: Vec::new() }],
+                0,
+            );
+            let syntax = Syntax::new(&tree, text, &front);
+            assert_eq!(literal_value(&syntax, 0), expected.map(|s| ("string", s.to_string())), "{text:?}");
+        }
+    }
 
     #[test]
     fn natural_order_preserves_punctuation_and_numeric_semantics() {
