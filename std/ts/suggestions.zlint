@@ -498,8 +498,10 @@ in ts_if, ts_conditional rule no-negated-condition {
 
 in ts_switch rule default-case {
   option commentPattern regex | null = null "comments that allow a missing default"
-  when missing_switch_default != null
-  when !missing_switch_default.has_comment || !re_test(missing_switch_default.comment, default(commentPattern, "(?i)^no default$"))
+  when count(case) > 0 && !any([] case.node, branch => branch.test.node == null)
+  let case_end last([] case.end_offset)
+  let final_comment last(filter(descendants(ts_comment), comment => comment.offset >= case_end && comment.end_offset < end_offset))
+  when final_comment == null || !re_test(trim(final_comment.structure_comment_body), default(commentPattern, "(?i)^no default$"))
   warn "Expected a default case."
 }
 
@@ -549,16 +551,23 @@ in ts_arrow rule arrow-body-style {
   warn if !body_block then "Expected block statement surrounding arrow body." else if body.statement_count == 0 then "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`." else if body.single_return != true then "Unexpected block statement surrounding arrow body." else if body.return_value_braced == true then "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`." else "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`."
 }
 
+in ts_block let uncommented_empty_block count(body) == 0 && count(descendants(ts_comment)) == 0
+fn empty_function_constructor(n) = n is ts_method && n.parent is ts_class && n.key.text == "constructor" && !contains(n.modifier, "static")
+fn empty_function_category(n, constructor) = if n is ts_arrow then "arrowFunctions" else if constructor then "constructors" else if n is ts_method && n.kind == "get" then "getters" else if n is ts_method && n.kind == "set" then "setters" else if contains(n.modifier, "*") then (if n is ts_method then "generatorMethods" else "generatorFunctions") else if contains(n.modifier, "async") then (if n is ts_method then "asyncMethods" else "asyncFunctions") else if n is ts_method then "methods" else "functions"
+fn empty_function_decorated(n, constructor) = n is ts_method && !constructor && count(n.decorator.node) > 0
+
 in ts_function, ts_arrow, ts_method rule no-empty-function {
   option allow string[] = [] "function categories that may be empty"
-  let empty_function_info empty_function
-  when empty_function_info != null && !contains(allow, empty_function_info.category)
-  when !(empty_function_info.private_constructor && (contains(allow, "privateConstructors") || contains(allow, "private-constructors")))
-  when !(empty_function_info.protected_constructor && (contains(allow, "protectedConstructors") || contains(allow, "protected-constructors")))
-  when !(empty_function_info.decorated && contains(allow, "decoratedFunctions"))
-  when !(empty_function_info.overridden && contains(allow, "overrideMethods"))
-  report at empty_function_info.offset
-  warn "Unexpected empty {empty_function_info.name}."
+  when body.uncommented_empty_block == true
+  let constructor empty_function_constructor(node)
+  when !constructor || !any([] parameter.node, param => count(param.modifier) > 0)
+  when !contains(allow, empty_function_category(node, constructor))
+  when !(constructor && contains(modifier, "private") && (contains(allow, "privateConstructors") || contains(allow, "private-constructors")))
+  when !(constructor && contains(modifier, "protected") && (contains(allow, "protectedConstructors") || contains(allow, "protected-constructors")))
+  when !(empty_function_decorated(node, constructor) && contains(allow, "decoratedFunctions"))
+  when !(is ts_method && !constructor && contains(modifier, "override") && contains(allow, "overrideMethods"))
+  report at body.offset
+  warn "Unexpected empty {default(function_name, 'function')}."
 }
 
 in ts_call rule no-useless-call {

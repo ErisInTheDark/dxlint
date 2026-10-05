@@ -126,20 +126,6 @@ fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     false
 }
 
-pub fn switch_default(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let cases: Vec<_> = s.all(node, F::Case).collect();
-    let Some(&last) = cases.last() else { return Value::Null };
-    if cases.iter().any(|&case| s.get(case, F::Test).is_none()) { return Value::Null }
-    let end = s.tree.node(node).end;
-    let after = s.tree.node(last).end;
-    let comment = file.comments().iter().filter(|c| c.start >= after && c.end < end).next_back();
-    Value::record(vec![
-        ("has_comment".into(), Value::Bool(comment.is_some())),
-        ("comment".into(), Value::from(comment.map_or("", |c| c.body(s.src).trim()).to_owned())),
-    ])
-}
-
 fn brace_expectations(file: &NativeFile, owner: u32, body: u32) -> [i32; 3] {
     let s = &file.syntax;
     let block = s.is(body, K::Block);

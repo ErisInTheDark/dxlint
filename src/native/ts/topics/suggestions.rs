@@ -30,8 +30,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "unicode_regex_flags", doc: "native layers: known literal or global RegExp flags, including missing flags as empty, excluding spread patterns", get: |f, n| f.with_file(regex::unicode_flags, n) },
     Fact { name: "eval_usage", doc: "native layers: direct or indirect eval reference, optional-call status and identifier/property report offset", get: |f, n| f.with_file(expressions::eval_usage, n) },
     Fact { name: "extended_native", doc: "native layers: global builtin prototype being extended by assignment or Object property definition, or null", get: |f, n| f.with_file(expressions::extended_native, n) },
-    Fact { name: "empty_function", doc: "native layers: uncommented empty function category, display name, TypeScript exceptions and body offset", get: |f, n| f.with_file(functions::empty_function, n) },
-    Fact { name: "missing_switch_default", doc: "native layers: final trailing comment text and presence for a nonempty switch missing default, or null", get: |f, n| f.with_file(statements::switch_default, n) },
     Fact { name: "empty_statement_block", doc: "native layers: empty non-function block or switch without comments, catch status and report offset", get: |f, n| f.with_file(statements::empty_block, n) },
     Fact { name: "lone_statement_block", doc: "native layers: redundant block diagnostic, preserving lexical bindings except an only nested child", get: |f, n| f.with_file(statements::lone_block, n) },
     Fact { name: "function_style", doc: "native layers: function declaration/variable form, export policy, overload and arrow exceptions, and report offset", get: |f, n| f.with_file(functions::style, n) },

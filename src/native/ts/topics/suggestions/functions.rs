@@ -86,33 +86,6 @@ pub fn style(file: &NativeFile, node: u32) -> Value<'static> {
     ])
 }
 
-pub fn empty_function(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(body) = s.get(node, F::Body).filter(|&n| s.is(n, K::Block) && s.all(n, F::Body).next().is_none()) else { return Value::Null };
-    let span = s.tree.node(body);
-    if file.comments().iter().any(|c| c.start > span.start && c.end < span.end) { return Value::Null }
-    let method = s.is(node, K::Method);
-    let constructor = method && s.parent(node).is_some_and(|p| s.is(p, K::Class))
-        && s.word(node, F::Key) == Some("constructor") && !s.has_word(node, F::Modifier, "static");
-    if constructor && s.all(node, F::Param).any(|p| s.all(p, F::Modifier).next().is_some()) { return Value::Null }
-    let category = if s.is(node, K::Arrow) { "arrowFunctions" }
-        else if constructor { "constructors" }
-        else if method && s.word(node, F::Kind) == Some("get") { "getters" }
-        else if method && s.word(node, F::Kind) == Some("set") { "setters" }
-        else if s.has_word(node, F::Modifier, "*") { if method { "generatorMethods" } else { "generatorFunctions" } }
-        else if s.has_word(node, F::Modifier, "async") { if method { "asyncMethods" } else { "asyncFunctions" } }
-        else if method { "methods" } else { "functions" };
-    Value::record(vec![
-        ("category".into(), Value::from(category)),
-        ("name".into(), Value::from(file.function_name_with_kind(node).unwrap_or_else(|| "function".into()))),
-        ("private_constructor".into(), Value::Bool(constructor && s.has_word(node, F::Modifier, "private"))),
-        ("protected_constructor".into(), Value::Bool(constructor && s.has_word(node, F::Modifier, "protected"))),
-        ("decorated".into(), Value::Bool(method && !constructor && s.all(node, F::Decorator).next().is_some())),
-        ("overridden".into(), Value::Bool(method && !constructor && s.has_word(node, F::Modifier, "override"))),
-        ("offset".into(), Value::Num(f64::from(span.start))),
-    ])
-}
-
 pub(super) fn default_this(file: &NativeFile, node: u32) -> bool {
     let s = &file.syntax;
     let anonymous = s.get(node, F::Name).is_none();
