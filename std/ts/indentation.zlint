@@ -172,6 +172,9 @@ in ts_line rule indent {
   indent indent_generic_arguments.type_argument, indent_generic_parameters.type_parameter from parent.indent_angle_open
   indent ts_type_parameter.constraint
   indent ts_for.init, ts_for.test, ts_for.update
+  indent ts_if.test, ts_while.test, ts_do_while.test, ts_with.object from token_neighbours.before.start
+  # A forward anchor leaves non-block interiors under their existing owners.
+  indent in ts_if.consequent, ts_if.alternate, ts_for.body, ts_for_in.body, ts_for_of.body, ts_while.body, ts_do_while.body, ts_with.body from if is ts_block then parent.offset else end_offset
   indent ts_if.consequent, ts_if.alternate, ts_for.body, ts_for_in.body, ts_for_of.body, ts_while.body, ts_do_while.body, ts_with.body from if is ts_empty then node.indent_semicolon_control else null by if is ts_block || is ts_empty && node.indent_semicolon_control != null then 0 else 1
   indent ts_semicolon from default(indent_semicolon_control, parent.node) by if indent_semicolon_control == null && parent is (ts_block, ts_class, ts_interface, ts_type_literal) then 1 else 0
   indent ts_call.argument, ts_new.argument, ts_function.parameter, ts_arrow.parameter, ts_method.parameter, ts_array.element, ts_array_pattern.element, ts_tuple_type.element, ts_object.property, ts_object_pattern.property, ts_import.specifier from indent_list_anchor(node) by 0
