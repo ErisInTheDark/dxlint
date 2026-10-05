@@ -2,6 +2,8 @@ define {
 
 schema indent_list_offset int(0..) | "first" | "off"
 schema indent_function_options { parameters?: indent_list_offset; body?: int(0..); returnType?: int(0..) }
+group indent_generic_arguments ts_call, ts_new, ts_type_reference, ts_type_query
+group indent_generic_parameters ts_function, ts_arrow, ts_method, ts_class, ts_interface, ts_type_alias, ts_function_type, ts_method_signature, ts_call_signature
 
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
 fn indent_variable_mode(mode, kind) = if type_of(mode) == "record" then default(get(mode, if kind == "await using" then "using" else kind), 1) else mode
@@ -14,6 +16,7 @@ fn indent_declaration_level(owner, style, mode) =
 fn indent_function_mode(owner, declaration, expression) = if owner is ts_function && owner.parent is (ts_program, ts_block, ts_export) then declaration else expression
 fn indent_jsx_token_level(item) = if item is ts_jsx_fragment.token && item.text == "/" && item.space_after.line_break then 1 else 0
 fn indent_expected(item, unit) = if item == null then null else if item is (ts_jsx_element.token, ts_jsx_fragment.token) then item.parent.indent indent_steps(unit, indent_jsx_token_level(item)) else item.indent_anchor indent_steps(unit, item.indent_level)
+fn indent_list_close(item) = if item.token_neighbours.after.text == "," then node_at(item.token_neighbours.after.start).token_neighbours.after.start else item.token_neighbours.after.start
 fn indent_list_mode(item, call, declaration, expression, array, object, imports, variable) =
   if item is (ts_call.argument, ts_new.argument, ts_import_call.argument) then default(call.arguments, 1)
   else if item is (ts_function.parameter, ts_arrow.parameter, ts_method.parameter) then default(indent_function_mode(item.parent, declaration, expression).parameters, 1)
@@ -52,6 +55,11 @@ in ts_import_equals let indent_assignment_value value.node
 in ts_type_parameter let indent_assignment_value default.node
 in ts_function let indent_return_colon return_type.token_neighbours.before.start
 in ts_function let indent_return_anchor node_at(indent_return_colon).token_neighbours.before.start
+in ts_class let indent_class_head default(first(filter([] token.node, item => item.text == "class")).offset, offset)
+in indent_generic_arguments let indent_angle_open first([] type_argument.node).token_neighbours.before.start
+in indent_generic_parameters let indent_angle_open first([] type_parameter.node).token_neighbours.before.start
+in indent_generic_arguments let indent_angle_close indent_list_close(last([] type_argument.node))
+in indent_generic_parameters let indent_angle_close indent_list_close(last([] type_parameter.node))
 in ts_index let indent_index_open index.token_neighbours.before.start
 in ts_if let indent_control_tails [consequent.last_token.end, alternate.last_token.end]
 in ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_with let indent_control_tails [body.last_token.end]
@@ -76,7 +84,11 @@ in ts_line rule indent {
   option flat_ternary_expressions boolean = false
   option offset_ternary_expressions boolean | { CallExpression?: boolean; AwaitExpression?: boolean; NewExpression?: boolean } = false
 
-  indent in ts_block, ts_class, ts_interface, ts_namespace.body
+  indent in ts_block, ts_interface, ts_namespace.body
+  indent in ts_class from indent_class_head
+  indent ts_class.token from if is (ts_open_brace, ts_close_brace) then parent.indent_class_head else if contains(["class", "abstract", "declare"], text) then parent.offset else offset by 0
+  indent ts_enum.token from if is ts_open_brace then parent.offset else offset by 0
+  indent indent_generic_arguments.token, indent_generic_parameters.token from if offset == parent.indent_angle_close then parent.indent_angle_open else offset by 0
   indent in ts_array, ts_array_pattern, ts_tuple_type by indent_numeric(array_expression)
   indent in ts_object, ts_object_pattern, ts_enum, ts_type_literal by indent_numeric(object_expression)
   indent in ts_parenthesized, ts_parenthesized_type, ts_computed_key, ts_mapped_type
@@ -98,7 +110,10 @@ in ts_line rule indent {
   indent ts_member.property, ts_member.token, ts_member.optional, ts_index.optional, ts_meta_property.token by indent_numeric(member_expression)
   indent ts_import.specifier by indent_numeric(import_declaration)
   indent ts_export.specifier
-  indent ts_assignment.right, ts_assignment_pattern.right, ts_class_property.init by indent_numeric(assignment_operator)
+  indent ts_assignment.right, ts_assignment_pattern.right by indent_numeric(assignment_operator)
+  indent ts_class_property.key from if offset != parent.offset && (is ts_computed_key || first([] parent.decorator.node) == null) then parent.offset else offset by if is ts_computed_key then 0 else 1
+  indent ts_class_property.token from if text == "=" then token_neighbours.before.start else if text == ";" then default(parent.init.token_neighbours.before.start, parent.key.last_token.start) else offset by if text == ";" then 1 else indent_numeric(assignment_operator)
+  indent ts_class_property.init from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_declarator.init from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.value, ts_type_parameter.default from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.token, ts_type_parameter.token from if text == "=" then token_neighbours.before.start else offset by indent_numeric(assignment_operator)
@@ -118,8 +133,7 @@ in ts_line rule indent {
   indent ts_jsx_attribute.value from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_function_type.parameter, ts_method_signature.parameter, ts_call_signature.parameter
   indent ts_function_type.return_type, ts_method_signature.return_type, ts_call_signature.return_type
-  indent ts_type_reference.type_argument, ts_type_query.type_argument, ts_call.type_argument, ts_new.type_argument
-  indent ts_function.type_parameter, ts_arrow.type_parameter, ts_method.type_parameter, ts_class.type_parameter, ts_interface.type_parameter
+  indent indent_generic_arguments.type_argument, indent_generic_parameters.type_parameter from parent.indent_angle_open
   indent ts_type_parameter.constraint
   indent ts_for.init, ts_for.test, ts_for.update
   indent ts_if.consequent, ts_if.alternate, ts_for.body, ts_for_in.body, ts_for_of.body, ts_while.body, ts_do_while.body, ts_with.body from if is ts_empty then node.indent_semicolon_control else null by if is ts_block || is ts_empty && node.indent_semicolon_control != null then 0 else 1
