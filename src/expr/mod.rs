@@ -1455,17 +1455,19 @@ impl<'a> Ctx<'a> {
                 .filter(|&o| !self.tree.is_root(o))
                 .map(|o| self.lines.line_of(self.tree.node(o).start as usize));
             let node_applies = owner_line.is_some_and(|ol| own_line(s) && ol < self.lines.line_of(s)) && self.lines.line_of(s) <= line && line_start <= e;
-            let best = self
+            let mut candidates: Vec<(bool, bool, usize)> = self
                 .indents
                 .iter()
                 .enumerate()
                 .filter(|(_, r)| if r.inside { inside_applies } else { node_applies })
                 .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (r.inside, t.1.is_some(), i)).max())
-                .max();
-            if let Some((in_form, _, i)) = best {
+                .collect();
+            candidates.sort_unstable_by(|a, b| b.cmp(a));
+            for (in_form, _, i) in candidates {
                 let default_line = if in_form { self.lines.line_of(s) } else { owner_line.expect("node form applies") };
                 // `from`: read on the node with no indent lines in scope, so
-                // it cannot ask for indentation itself.
+                // it cannot ask for indentation itself. An anchor on this
+                // line or below does not apply: the next line in line does.
                 let anchor_line = self.indents[i]
                     .from
                     .as_ref()
@@ -1474,7 +1476,9 @@ impl<'a> Ctx<'a> {
                         v => v.num().ok().map(|n| (n.max(0.0) as usize).min(self.source.len())),
                     })
                     .map_or(default_line, |at| self.lines.line_of(at));
-                return Some(IndentHit { node: id, rule: i, anchor_line, inside: in_form.then_some(inside) });
+                if anchor_line < line {
+                    return Some(IndentHit { node: id, rule: i, anchor_line, inside: in_form.then_some(inside) });
+                }
             }
             p = self.tree.parent(id);
         }
