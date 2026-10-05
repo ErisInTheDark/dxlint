@@ -285,7 +285,7 @@ in ts_property, ts_method, ts_spread rule sort-keys {
   let reset is ts_spread || ignoreComputedKeys && restriction_sort_computed
   let name if reset then null else if type_of(static_name) == "str" then static_name else restriction_sort_key_fallback
   let carried if reset then null else if type_of(name) == "str" then name else previous.carried
-  let blank_gap re_test(default(gap_before, ""), /\n\s*\n/)
+  let blank_gap previous.space_after.blank_gaps > 0 || space_before.blank_gaps > 0
   let pending_blank if reset then previous.pending_blank else allowLineSeparatedGroups && (previous.pending_blank == true || blank_gap) && type_of(name) != "str"
   let separated previous.pending_blank == true || blank_gap
   let order compare_text(previous.carried, name, natural, !caseSensitive)

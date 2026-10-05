@@ -133,35 +133,46 @@ pub fn compare_names(a: &str, b: &str, insensitive: bool, natural: bool) -> std:
     let b = if insensitive { b.to_lowercase() } else { b.to_string() };
     let a: Vec<_> = a.encode_utf16().collect();
     let b: Vec<_> = b.encode_utf16().collect();
-    let digit = |u: u16| (48..=57).contains(&u);
+    if !natural {
+        return a.cmp(&b);
+    }
+    // natural-compare 1.4 weights punctuation before letters; a leading zero
+    // stays lexical, while nonzero digit runs use JavaScript Number precision.
+    let code = |text: &[u16], pos: usize| match text.get(pos).copied().unwrap_or(0) {
+        45 => 65,
+        n @ 46..=47 => n - 1,
+        n @ 48..=57 => n + 18,
+        n @ 58..=64 => n - 11,
+        n @ 65..=90 => n + 11,
+        n @ 91..=96 => n - 37,
+        n @ 97..=122 => n + 5,
+        n @ 123..=127 => n - 63,
+        n => n,
+    };
+    let digits = |text: &[u16], pos: &mut usize| {
+        let start = *pos;
+        while text.get(*pos).is_some_and(|n| (48..=57).contains(n)) {
+            *pos += 1;
+        }
+        String::from_utf16_lossy(&text[start..*pos]).parse::<f64>().expect("decimal digit run")
+    };
     let (mut i, mut j) = (0, 0);
-    while i < a.len() && j < b.len() {
-        if natural && digit(a[i]) && digit(b[j]) {
-            let (start_i, start_j) = (i, j);
-            while i < a.len() && digit(a[i]) {
-                i += 1;
-            }
-            while j < b.len() && digit(b[j]) {
-                j += 1;
-            }
-            let left = &a[start_i..i];
-            let right = &b[start_j..j];
-            let left = &left[left.iter().take_while(|&&n| n == 48).count()..];
-            let right = &right[right.iter().take_while(|&&n| n == 48).count()..];
-            let order = left.len().cmp(&right.len()).then_with(|| left.cmp(right));
-            if order != Ordering::Equal {
-                return order;
-            }
+    loop {
+        let (left, right) = (code(&a, i), code(&b, j));
+        let order = if (67..76).contains(&left) && (67..76).contains(&right) {
+            digits(&a, &mut i).partial_cmp(&digits(&b, &mut j)).expect("non-NaN digit values")
         } else {
-            let order = a[i].cmp(&b[j]);
-            if order != Ordering::Equal {
-                return order;
-            }
             i += 1;
             j += 1;
+            left.cmp(&right)
+        };
+        if order != Ordering::Equal {
+            return order;
+        }
+        if right == 0 {
+            return Ordering::Equal;
         }
     }
-    (a.len() - i).cmp(&(b.len() - j))
 }
 
 /// An identifier as JavaScript reads it: `foo` is `foo`.
@@ -194,6 +205,26 @@ pub fn property_name(s: &Syntax, node: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn natural_order_preserves_punctuation_and_numeric_semantics() {
+        for (a, b, expected) in [
+            ("_", "A", Ordering::Less),
+            ("a2", "a10", Ordering::Less),
+            ("a02", "a2", Ordering::Less),
+            ("a002", "a02", Ordering::Less),
+            ("9007199254740992", "9007199254740993", Ordering::Equal),
+            ("a2b", "a2c", Ordering::Less),
+            ("a\0b", "a\0c", Ordering::Equal),
+        ] {
+            assert_eq!(compare_names(a, b, false, true), expected, "{a:?} vs {b:?}");
+            assert_eq!(compare_names(b, a, false, true), expected.reverse(), "{b:?} vs {a:?}");
+        }
+        assert_eq!(compare_names("_", "A", false, false), Ordering::Greater);
+        assert_eq!(compare_names("A2", "a2", true, true), Ordering::Equal);
+        assert_eq!(compare_names(&"9".repeat(400), &"8".repeat(400), false, true), Ordering::Equal);
+    }
 
     #[test]
     fn identifier_escapes_decode() {

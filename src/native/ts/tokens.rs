@@ -228,13 +228,26 @@ pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
     let unified = text.replace("\r\n", "\n");
     let lines: Vec<&str> = unified.split(['\n', '\r', '\u{2028}', '\u{2029}']).collect();
     let blank_lines = lines.iter().skip(1).take(lines.len().saturating_sub(2)).filter(|l| l.trim().is_empty()).count();
+    let (mut spaced, mut blank_gaps) = (false, 0usize);
+    for gap in uncommented_gaps(text) {
+        let (mut breaks, mut previous) = (0usize, '\0');
+        for ch in gap.chars() {
+            spaced |= ch.is_whitespace();
+            if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') && !(ch == '\n' && previous == '\r') {
+                breaks += 1;
+            }
+            previous = ch;
+        }
+        blank_gaps += breaks.saturating_sub(1);
+    }
     Value::record(vec![
         ("text".into(), Value::from(text.to_owned())),
         ("start".into(), Value::from(from)),
         ("end".into(), Value::from(to.max(from))),
-        ("spaced".into(), Value::Bool(gap_has_space(text))),
+        ("spaced".into(), Value::Bool(spaced)),
         ("line_break".into(), Value::Bool(breaks_line(text))),
         ("blank_lines".into(), Value::from(blank_lines)),
+        ("blank_gaps".into(), Value::from(blank_gaps)),
         ("comments".into(), Value::Bool(!text.trim().is_empty())),
     ])
 }
@@ -292,21 +305,29 @@ fn lex_around(src: &str, opaque: &HashMap<u32, (u32, Tok)>) -> Vec<Token> {
     tokens
 }
 
-pub(crate) fn gap_has_space(mut gap: &str) -> bool {
-    while !gap.is_empty() {
-        if let Some(comment) = gap.strip_prefix("/*") {
-            gap = comment.find("*/").map_or("", |end| &comment[end + 2..]);
-        } else if gap.starts_with("//") {
-            gap = gap.find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or("", |end| &gap[end..]);
-        } else {
-            let ch = gap.chars().next().expect("nonempty gap");
-            if ch.is_whitespace() {
-                return true;
-            }
-            gap = &gap[ch.len_utf8()..];
+pub(crate) fn gap_has_space(gap: &str) -> bool {
+    uncommented_gaps(gap).any(|part| part.chars().any(char::is_whitespace))
+}
+
+/// Whitespace intervals between tokens/comments; comment boundaries must not join.
+fn uncommented_gaps(mut gap: &str) -> impl Iterator<Item = &str> {
+    std::iter::from_fn(move || {
+        if gap.is_empty() {
+            return None;
         }
-    }
-    false
+        let start = gap
+            .match_indices('/')
+            .find_map(|(pos, _)| (gap[pos..].starts_with("/*") || gap[pos..].starts_with("//")).then_some(pos))
+            .unwrap_or(gap.len());
+        let part = &gap[..start];
+        let comment = &gap[start..];
+        gap = if let Some(block) = comment.strip_prefix("/*") {
+            block.find("*/").map_or("", |end| &block[end + 2..])
+        } else {
+            comment.find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or("", |end| &comment[end..])
+        };
+        Some(part)
+    })
 }
 
 /// JavaScript line terminators.
@@ -490,6 +511,37 @@ mod lexical_tests {
                 }
             }
         });
+    }
+
+    #[test]
+    fn blank_gaps_exclude_comment_interiors_without_joining_intervals() {
+        for (text, count) in [
+            ("/*\n\n\n*/", 0usize),
+            ("\n/* note */\n", 0),
+            ("\n\n/*\n\n*/\n\n", 2),
+            ("// note\n\n", 1),
+            ("/* unterminated\n\n", 0),
+            ("// unterminated", 0),
+        ] {
+            let Value::Record(gap) = gap_value(text, 0, text.len()) else { unreachable!() };
+            assert_eq!(
+                gap.iter().find(|(key, _)| key == "blank_gaps").map(|(_, value)| value),
+                Some(&Value::from(count)),
+                "{text:?}"
+            );
+        }
+        for terminator in ["\n", "\r", "\r\n", "\u{2028}", "\u{2029}"] {
+            let text = format!("/*{terminator}{terminator}*/{terminator}{terminator}");
+            let Value::Record(gap) = gap_value(&text, 0, text.len()) else { unreachable!() };
+            assert_eq!(
+                gap.iter().find(|(key, _)| key == "blank_gaps").map(|(_, value)| value),
+                Some(&Value::from(1usize))
+            );
+            assert_eq!(
+                gap.iter().find(|(key, _)| key == "blank_lines").map(|(_, value)| value),
+                Some(&Value::from(2usize))
+            );
+        }
     }
 
     #[test]

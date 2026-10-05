@@ -659,7 +659,7 @@ last closing bracket; `opener.ts_open_brace.x` only one of that layer (a
 class's first opener is the `<` of `class A<T>`). Every native node knows `space_before` and
 `space_after` (the gap to the neighbouring token) and the layers of
 `previous_token` and `next_token`; `fix space_after as " "` rewrites just
-that whitespace. Spacing rules are one decision per token:
+that whitespace. Gap `blank_lines` counts physical blank lines; `blank_gaps` counts blank lines between tokens/comments, excluding comment interiors. Spacing rules are one decision per token:
 
 ```zlint
 in ts_comma rule comma-spacing:after warn "A space is required after ','." {
