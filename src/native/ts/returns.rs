@@ -88,6 +88,9 @@ impl NativeFile<'_> {
             if found.iter().any(Ty::is_unknown) {
                 return Ty::Unknown;
             }
+            if !found.is_empty() && self.reach().0.falls_off.get(&func).copied().unwrap_or(false) {
+                found.push(Ty::Undefined);
+            }
             if found.is_empty() {
                 Ty::Void
             } else {

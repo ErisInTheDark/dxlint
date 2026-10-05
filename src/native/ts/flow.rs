@@ -10,7 +10,6 @@
 
 use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
-use super::summary::type_syn;
 use super::types::{Checker, Ty};
 
 /// A condition known to hold (or not, `sense == false`) at a use.
@@ -287,8 +286,7 @@ impl NativeFile<'_> {
         }
     }
 
-    /// Local nongeneric predicates retain their target syntax; imported and
-    /// overloaded signatures need predicate metadata in the project summary.
+    /// Narrow only the local immutable nongeneric guard route already supported.
     fn predicate_type(&self, call: u32, key: &str) -> Option<Ty> {
         let s = &self.syntax;
         let callee = s.unparen(s.get(call, F::Callee)?);
@@ -298,13 +296,9 @@ impl NativeFile<'_> {
         let function = s.parent(decl).filter(|&parent| s.is(parent, K::Function))?;
         if s.all(function, F::TypeParam).next().is_some()
             || matches!(self.type_of(callee), Ty::Fn(callable) if callable.sigs.len() > 1) { return None }
-        let annotation = s.get(function, F::ReturnType).filter(|&annotation| s.is(annotation, K::TypePredicate) && !s.has_word(annotation, F::Modifier, "asserts"))?;
-        let name = s.get(annotation, F::Name)?;
-        let index = s.all(function, F::Param).position(|param| s.get(param, F::Name).is_some_and(|param| s.text(param) == s.text(name)))?;
-        let argument = s.all(call, F::Arg).nth(index)?;
-        if self.ref_key(argument).as_deref() != Some(key) || s.all(call, F::Arg).take(index + 1).any(|arg| s.is(arg, K::Spread)) { return None }
-        let target = s.get(annotation, F::Type)?;
-        let ty = self.typing().checker.eval(&type_syn(s, target), &self.env_at(target));
+        let (argument, predicate) = self.resolved_predicate(call)?;
+        if predicate.asserts || self.ref_key(argument).as_deref() != Some(key) { return None }
+        let ty = predicate.target?;
         (!matches!(ty, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_))).then_some(ty)
     }
 
@@ -368,14 +362,6 @@ fn predicate(t: Ty, target: &Ty, sense: bool, ck: &Checker<'_>) -> Ty {
 
 /// `t` where it tested truthy (`sense`) or falsy.
 pub(super) fn truthy(t: Ty, sense: bool, ck: &Checker<'_>) -> Ty {
-    let can_be_falsy = |m: &Ty| match m {
-        Ty::Null | Ty::Undefined | Ty::Void => Some(true),
-        Ty::Lit(text, _) => Some(matches!(&**text, "false" | "0" | "\"\"" | "''" | "0n")),
-        Ty::Prim("string" | "number" | "boolean" | "bigint") => None,
-        Ty::Named(sym, _) if ck.is_enum(sym) => None,
-        Ty::Named(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Obj(..) | Ty::Struct(_) | Ty::Ns(_) | Ty::Module(_) | Ty::Fn(_) | Ty::Class(_) | Ty::Prim(_) => Some(false),
-        _ => None,
-    };
     let items = match t {
         Ty::Union(items) => items,
         Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_) => return t,
@@ -386,7 +372,7 @@ pub(super) fn truthy(t: Ty, sense: bool, ck: &Checker<'_>) -> Ty {
     }
     let kept = items
         .into_iter()
-        .filter_map(|m| match (can_be_falsy(&m), sense) {
+        .filter_map(|m| match (ck.literal_falsy(&m), sense) {
             // Truthy: drop what is always falsy.
             (Some(true), true) => None,
             (Some(false), false) => None,

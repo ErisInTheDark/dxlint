@@ -62,7 +62,7 @@ pub fn literal_text(s: &Syntax, node: u32) -> Option<String> {
 }
 
 /// A bigint literal's value in decimal (`0x10n` is `16`), exactly.
-fn bigint_decimal(text: &str) -> Option<String> {
+pub(crate) fn bigint_decimal(text: &str) -> Option<String> {
     let digits = text.trim_end_matches('n').replace('_', "");
     let (radix, body) = match digits.get(..2).map(str::to_ascii_lowercase).as_deref() {
         Some("0x") => (16, &digits[2..]),

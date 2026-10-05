@@ -213,7 +213,7 @@ pub static FUNCTIONS: &[Function] = &[
     Function {
         name: "js_compare",
         signature: "js_compare(a, b)",
-        doc: "-1, 0 or 1 as JavaScript's `<` orders two literal values (`literal_value` records or plain values): two strings by UTF-16 unit, otherwise as numbers; null when unordered (NaN)",
+        doc: "-1, 0 or 1 as JavaScript's `<` orders two literal values (`literal_value` records or plain values): strings by UTF-16 unit, bigints exactly, otherwise as numbers; null when unordered",
         min: 2,
         max: 2,
         call: |a| {
@@ -238,6 +238,20 @@ pub static FUNCTIONS: &[Function] = &[
                     _ => crate::native::ts::statics::number(v.trim().trim_end_matches('n')).unwrap_or(f64::NAN),
                 }
             };
+            if ta == "bigint" || tb == "bigint" {
+                let order = if ta == "bigint" {
+                    BigIntDecimal::parse(&va, true).and_then(|x| match tb.as_str() {
+                        "bigint" | "string" => BigIntDecimal::parse(&vb, tb == "bigint").map(|y| x.compare(&y)),
+                        _ => x.compare_number(number(&tb, &vb)),
+                    })
+                } else {
+                    BigIntDecimal::parse(&vb, true).and_then(|y| match ta.as_str() {
+                        "string" => BigIntDecimal::parse(&va, false).map(|x| x.compare(&y)),
+                        _ => y.compare_number(number(&ta, &va)).map(std::cmp::Ordering::reverse),
+                    })
+                };
+                return Ok(order.map_or(Value::Null, |o| Value::Num(o as i8 as f64)));
+            }
             let (x, y) = (number(&ta, &va), number(&tb, &vb));
             Ok(x.partial_cmp(&y).map_or(Value::Null, |o| Value::Num(o as i8 as f64)))
         },
@@ -640,6 +654,56 @@ pub static FUNCTIONS: &[Function] = &[
     },
 ];
 
+struct BigIntDecimal {
+    negative: bool,
+    digits: String,
+}
+
+impl BigIntDecimal {
+    fn parse(text: &str, literal: bool) -> Option<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return (!literal).then(|| Self { negative: false, digits: "0".into() });
+        }
+        let body = text.strip_prefix(['-', '+']).unwrap_or(text);
+        if !literal && (body.contains(['_', 'n']) || (body != text && !body.bytes().all(|b| b.is_ascii_digit()))) {
+            return None;
+        }
+        if body.trim_end_matches('n').is_empty() {
+            return None;
+        }
+        if matches!(body.to_ascii_lowercase().as_str(), "0x" | "0o" | "0b") {
+            return None;
+        }
+        let digits = crate::native::ts::statics::bigint_decimal(body)?;
+        Some(Self { negative: text.starts_with('-') && digits != "0", digits })
+    }
+
+    fn compare(&self, other: &Self) -> std::cmp::Ordering {
+        let magnitude = self.digits.len().cmp(&other.digits.len()).then_with(|| self.digits.cmp(&other.digits));
+        match (self.negative, other.negative) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => magnitude.reverse(),
+            (false, false) => magnitude,
+        }
+    }
+
+    fn compare_number(&self, number: f64) -> Option<std::cmp::Ordering> {
+        if number.is_nan() {
+            return None;
+        }
+        if number.is_infinite() {
+            return Some(if number.is_sign_positive() { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
+        }
+        // Fixed decimal formatting of an integral f64 retains its exact integer,
+        // unlike conversion of an arbitrary bigint into a floating-point value.
+        let integer = Self::parse(&format!("{:.0}", number.trunc()), false)?;
+        let order = self.compare(&integer);
+        Some(if order.is_eq() { 0.0_f64.partial_cmp(&number.fract())? } else { order })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -653,6 +717,35 @@ mod tests {
         assert_eq!(call("trim_end", &["ab\r\n\n".into(), "\r\n".into()]), Value::from("ab"));
         assert_eq!(call("pad_start", &["7".into(), 3.0.into(), "0".into()]), Value::from("007"));
         assert_eq!(call("slice", &["hello".into(), (-3.0).into()]), Value::from("llo"));
+    }
+
+    #[test]
+    fn js_compare_keeps_bigint_order_exact_across_numeric_domains() {
+        let literal = |kind: &str, value: &str| Value::record(vec![
+            ("type".into(), Value::from(kind.to_owned())),
+            ("value".into(), Value::from(value.to_owned())),
+        ]);
+        for (left, right, expected) in [
+            ("9007199254740992n", "9007199254740993n", -1.0),
+            ("-9007199254740993n", "-9007199254740992n", -1.0),
+            ("0x20000000000001n", "9007199254740993n", 0.0),
+            ("-0n", "0n", 0.0),
+        ] {
+            let a = literal("bigint", left);
+            let b = literal("bigint", right);
+            assert_eq!(call("js_compare", &[a.clone(), b.clone()]), Value::Num(expected));
+            assert_eq!(call("js_compare", &[b, a]), Value::Num(-expected));
+        }
+        for (kind, value, expected) in [
+            ("number", "9007199254740992", 1.0),
+            ("string", "9007199254740993", 0.0),
+            ("number", "Infinity", -1.0),
+        ] {
+            assert_eq!(call("js_compare", &[literal("bigint", "9007199254740993n"), literal(kind, value)]), Value::Num(expected));
+        }
+        assert_eq!(call("js_compare", &[literal("bigint", "1n"), literal("number", "1.5")]), Value::Num(-1.0));
+        assert_eq!(call("js_compare", &[literal("bigint", "-1n"), literal("number", "-1.5")]), Value::Num(1.0));
+        assert_eq!(call("js_compare", &[literal("bigint", "1n"), literal("string", "1.5")]), Value::Null);
     }
 
     #[test]

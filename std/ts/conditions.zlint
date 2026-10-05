@@ -1,0 +1,138 @@
+# .ts/conditions: type-aware conditional policy.
+
+define {
+
+macro condition_options {
+  option allowConstantLoopConditions boolean | "always" | "never" | "only-allowed-literals" = "never" "Allow selected constant loop conditions"
+  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
+  option checkTypePredicates boolean = false "Check assertion functions and type guards"
+}
+
+fn condition_known(d) = d != null && !d.opaque && !any(d.flags, flag => contains(["any", "unknown"], flag))
+fn condition_never(d) = !d.truthy && !d.falsy
+fn condition_base(n) = if n is (ts_member, ts_index) then n.object.node else if n is ts_call then n.callee.node else null
+fn condition_unchecked_index(n) = n is ts_index && contains(n.object.type_domains.flags, "array") && !(contains(n.object.type_domains.flags, "tuple") && unparenthesised_node(n.index.node) is ts_literal)
+fn condition_array_origin(n) = any(walk(n, current => condition_base(current)), current => current.optional != null && condition_unchecked_index(condition_base(current)))
+fn condition_index_fallback(n, unchecked) = n.access_resolution.from_index && (n is ts_index || unchecked || condition_base(n).evaluated_type_domains.nullish)
+fn condition_access_domains(n) = if n.access_resolution != null then n.access_resolution.evaluated else n.evaluated_type_domains
+fn condition_boolean_use(n) = any(walk(n, current => if current.parent is (ts_logical, ts_parenthesized) then current.parent else null), current => current.parent is (ts_if, ts_while, ts_do_while, ts_for, ts_conditional) && current.parent.test.node == current || current.parent is ts_unary && current.parent.operator == "!" || current.parent is ts_logical && current.parent.operator == "&&" && current.parent.left.node == current)
+fn condition_steps(n) = walk(unparenthesised_node(n), current => if current is ts_unary && current.operator == "!" then unparenthesised_node(current.argument.node) else if current is ts_logical && current.operator != "??" && condition_boolean_use(current) then unparenthesised_node(current.right.node) else null)
+fn condition_boolean(n) = condition_boolean_branch(n, condition_steps(n))
+fn condition_boolean_branch(n, steps) = condition_boolean_leaf(if any(steps, current => current is ts_logical && current.operator != "??" && condition_boolean_use(current)) then unparenthesised_node(last(filter(steps, current => current is ts_logical && current.operator != "??" && condition_boolean_use(current))).right.node) else unparenthesised_node(n))
+fn condition_boolean_leaf(n) = { node: n, subject: last(walk(n, current => if current is ts_unary && current.operator == "!" then unparenthesised_node(current.argument.node) else null)), negated: count(filter(walk(n, current => if current is ts_unary && current.operator == "!" then unparenthesised_node(current.argument.node) else null), current => current is ts_unary && current.operator == "!")) % 2 == 1 }
+fn condition_loop_allowed(n, mode) = (mode == true || mode == "always") && n.type_domains.literal.type == "boolean" && n.type_domains.literal.value == true || mode == "only-allowed-literals" && n is ts_literal && (n.literal_value.type == "boolean" || n.literal_value.type == "number" && contains([0, 1], n.literal_value.value))
+fn condition_callback(n) = if n is (ts_arrow, ts_function) then if n.body not ts_block then n.body.node else if count(n.body.body.node) == 1 && first(n.body.body.node) is ts_return then first(n.body.body.node).argument.node else null else null
+fn condition_array_callback(n) = n.callee is (ts_member, ts_index) && contains(["every", "filter", "find", "findIndex", "findLast", "findLastIndex", "some"], n.callee.static_name) && n.callee.object.array_type
+fn condition_equal(left, right, strict) = if left.type == right.type then contains(["null", "undefined"], left.type) || js_compare(left, right) == 0 else if strict then false else if contains(["null", "undefined"], left.type) || contains(["null", "undefined"], right.type) then contains(["null", "undefined"], left.type) && contains(["null", "undefined"], right.type) else js_compare(left, right) == 0
+fn condition_compare(left, right, op) = if contains(["==", "==="], op) then condition_equal(left, right, op == "===") else if contains(["!=", "!=="], op) then !condition_equal(left, right, op == "!==") else if op == "<" then js_compare(left, right) == -1 else if op == ">" then js_compare(left, right) == 1 else if op == "<=" then js_compare(left, right) != null && js_compare(left, right) <= 0 else js_compare(left, right) != null && js_compare(left, right) >= 0
+fn condition_comparable_nullish(value, other, loose) = !contains(["null", "undefined"], value.literal.type) || !condition_known(other.type_domains) || contains(other.type_domains.flags, if value.literal.type == "null" then "null" else "undefined") || value.literal.type == "undefined" && other.type_has_void || loose && other.type_domains.nullish
+
+in ts_binary let condition_comparison { left: left.node, right: right.node, operator: operator, report: node }
+in ts_case let condition_comparison { left: parent.discriminant.node, right: test.node, operator: "===", report: test.node }
+
+macro condition_boolean_policy {
+  when checked.node != null && (checked.subject not ts_logical || checked.subject.operator == "??")
+  let domain checked.subject.type_domains
+  when condition_known(domain) && !condition_unchecked_index(checked.subject) && !(compiler_options.noUncheckedIndexedAccess == true && checked.subject.access_resolution.from_index)
+  when condition_never(domain) || !domain.truthy || !domain.falsy
+  report at { start: checked.node.offset, end: checked.node.end_offset }
+  warn if condition_never(domain) then "Unnecessary conditional, value is `never`." else if !domain.truthy != checked.negated then "Unnecessary conditional, value is always falsy." else "Unnecessary conditional, value is always truthy."
+}
+
+in ts_if.test, ts_conditional.test rule no-unnecessary-condition {
+  condition_options
+  let checked condition_boolean(node)
+  condition_boolean_policy
+}
+in ts_while.test, ts_do_while.test, ts_for.test rule no-unnecessary-condition:loop {
+  condition_options
+  when !condition_loop_allowed(unparenthesised_node(node), allowConstantLoopConditions)
+  let checked condition_boolean(node)
+  condition_boolean_policy
+}
+in ts_logical, ts_assignment rule no-unnecessary-condition:logical {
+  condition_options
+  when contains(["&&", "||", "&&=", "||="], operator)
+  let checked condition_boolean(left.node)
+  condition_boolean_policy
+}
+in ts_logical, ts_assignment rule no-unnecessary-condition:nullish {
+  condition_options
+  when contains(["??", "??="], operator)
+  let subject unparenthesised_node(left.node)
+  let domain subject.type_domains
+  when condition_known(domain)
+  when condition_never(domain) || !domain.non_nullish && !subject.type_has_void || !domain.nullish && !condition_unchecked_index(subject) && !condition_array_origin(subject) && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true) && !subject.access_resolution.optional
+  report at { start: subject.offset, end: subject.end_offset }
+  warn if condition_never(domain) then "Unnecessary conditional, value is `never`." else if !domain.non_nullish then "Unnecessary conditional, left-hand side of `??` operator is always `null` or `undefined`." else "Unnecessary conditional, expected left-hand side of `??` operator to be possibly null or undefined."
+}
+in ts_member, ts_index, ts_call rule no-unnecessary-condition:optional {
+  condition_options
+  when optional != null
+  let subject condition_base(node)
+  let domain condition_access_domains(subject)
+  when condition_known(domain) && !domain.nullish && !condition_unchecked_index(subject) && (!condition_array_origin(node) || compiler_options.noUncheckedIndexedAccess == true) && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true)
+  report at { start: optional.offset, end: optional.end_offset }
+  warn "Unnecessary optional chain on a non-nullish value."
+}
+in ts_call rule no-unnecessary-condition:truthiness-assertion {
+  condition_options
+  when checkTypePredicates && predicate_call.asserts && predicate_call.target == null
+  let checked condition_boolean(first(slice([] argument.node, predicate_call.argument_index, predicate_call.argument_index + 1)))
+  condition_boolean_policy
+}
+in ts_call rule no-unnecessary-condition:predicate {
+  condition_options
+  let predicate predicate_call
+  when checkTypePredicates && predicate.target != null && condition_known(predicate.argument) && predicate.to_target && (predicate.from_target || predicate.target_union)
+  let subject first(slice([] argument.node, predicate.argument_index, predicate.argument_index + 1))
+  report at { start: subject.offset, end: subject.end_offset }
+  warn "Unnecessary conditional, expression already has the type being checked by the " (if predicate.asserts then "assertion function" else "type guard") "."
+}
+in ts_call rule no-unnecessary-condition:callback {
+  condition_options
+  when condition_array_callback(node) && count([] argument.node) > 0
+  let checked condition_boolean(condition_callback(first([] argument.node)))
+  condition_boolean_policy
+}
+in ts_call rule no-unnecessary-condition:callback-return {
+  condition_options
+  when condition_array_callback(node) && count([] argument.node) > 0 && condition_callback(first([] argument.node)) == null
+  let subject first([] argument.node)
+  let returns subject.callable_return_domains
+  when count(returns) > 0 && all(returns, domain => condition_known(domain))
+  when all(returns, domain => !domain.falsy) || all(returns, domain => !domain.truthy)
+  report at { start: subject.offset, end: subject.end_offset }
+  warn if all(returns, domain => !domain.falsy) then "This callback should return a conditional, but return is always truthy." else "This callback should return a conditional, but return is always falsy."
+}
+in ts_program rule no-unnecessary-condition:strict {
+  condition_options
+  when compiler_options.strictNullChecks == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
+  report at { start: 0, end: 0 }
+  warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
+}
+in ts_binary, ts_case rule no-unnecessary-condition:comparison {
+  condition_options
+  let comparison condition_comparison
+  when comparison.right != null && contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], comparison.operator)
+  let left_value comparison.left.type_domains.literal
+  let right_value comparison.right.type_domains.literal
+  when left_value != null && right_value != null
+  let answer condition_compare(left_value, right_value, comparison.operator)
+  report at { start: comparison.report.offset, end: comparison.report.end_offset }
+  warn "Unnecessary conditional, comparison is always " answer ", since `" comparison.left.type " " comparison.operator " " comparison.right.type "` is " answer "."
+}
+in ts_binary, ts_case rule no-unnecessary-condition:overlap {
+  condition_options
+  let comparison condition_comparison
+  when compiler_options.strictNullChecks != false && comparison.right != null && contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], comparison.operator)
+  let left_value comparison.left.type_domains
+  let right_value comparison.right.type_domains
+  when left_value.literal == null || right_value.literal == null
+  let loose contains(["==", "!="], comparison.operator)
+  when !condition_comparable_nullish(left_value, comparison.right, loose) || !condition_comparable_nullish(right_value, comparison.left, loose)
+  report at { start: comparison.report.offset, end: comparison.report.end_offset }
+  warn "Unnecessary conditional, the types have no overlap."
+}
+
+}

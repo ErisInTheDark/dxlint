@@ -5,6 +5,7 @@
 
 use crate::expr::facts::{Fact, Link};
 
+pub mod conditions;
 pub mod jsx;
 pub mod layout;
 pub mod relations;
@@ -17,7 +18,7 @@ pub mod syntax;
 pub mod typed;
 
 /// Every family's facts (after the core list in `expr::facts`).
-pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS];
+pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS];
 
 /// Every link between nodes.
 pub const LINK_GROUPS: &[&[Link]] = &[relations::LINKS];

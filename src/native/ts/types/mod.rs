@@ -7,6 +7,7 @@
 //! `relate` (assignability) and `print` extend the same `Checker`.
 
 mod calls;
+mod domains;
 mod members;
 mod indexed;
 mod iterability;
@@ -21,6 +22,10 @@ use std::sync::Arc;
 
 use super::modules::{DeclRef, FileId, Globals, ModRef, ModuleAt, Project};
 use super::summary::{DeclKind, Member, Sig, Summary, TParam, TupleElement, TypeSyn};
+
+pub use domains::{LiteralValue, ValueDomains};
+pub use calls::ResolvedPredicate;
+pub use members::Resolution;
 
 /// All declarations merged under one name (`interface Promise` is spread
 /// over several lib files; `class X` + `namespace X`).

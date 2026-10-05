@@ -723,6 +723,7 @@ is wrong, messages) is written in the rule.
 | `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
 | `type_domains` | constrained truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal |
 | `evaluated_type_domains` | the same domains before optional-chain short-circuiting, preserving intrinsic member and return nullability |
+| `access_resolution` | native member/index lookup: `from_index` signature origin, `optional` declaration and `evaluated` value domains before optional-chain short-circuiting |
 | `callable_return_domains` | domains of every callable return, including local inferred bodies |
 | `predicate_call` | asserted argument index and `asserts`, argument/target domains, `to_target`/`from_target` assignability and `target_union`; null without a resolved argument |
 | `type_has_void` | a union or intersection constituent is void, distinct from undefined |
@@ -920,6 +921,7 @@ and `final-newline`.
 | `.ts` | `native ts` for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
 | `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
+| `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

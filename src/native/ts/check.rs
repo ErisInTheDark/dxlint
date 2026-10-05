@@ -9,7 +9,7 @@ use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
 use super::modules::{DeclRef, ModuleAt};
 use super::summary::{sig, type_syn, DeclKind, Sig, TParam, TypeSyn};
-use super::types::{Callable, Checker, Env, Ty};
+use super::types::{Callable, Checker, Env, ResolvedPredicate, Ty};
 
 fn prim_flag(p: &str) -> &'static str {
     match p {
@@ -378,6 +378,27 @@ impl<'t> NativeFile<'t> {
         self.syntax.all(node, F::TypeArg).collect::<Vec<_>>().into_iter().map(|t| self.annotation(t)).collect()
     }
 
+    pub(super) fn resolved_predicate(&self, call: u32) -> Option<(u32, ResolvedPredicate)> {
+        let s = &self.syntax;
+        if !s.is(call, K::Call) { return None }
+        let callee = s.get(call, F::Callee)?;
+        let predicate = self.ck().call_predicate(&self.type_of(callee), &self.args(call), self.type_args(call))?;
+        let index = predicate.parameter?;
+        let argument = s.all(call, F::Arg).nth(index)?;
+        if s.all(call, F::Arg).take(index + 1).any(|arg| s.is(arg, K::Spread)) { return None }
+        Some((argument, predicate))
+    }
+
+    pub(super) fn callable_return_types(&self, ty: &Ty) -> Vec<Ty> {
+        match ty {
+            Ty::Union(parts) | Ty::Inter(parts) => parts.iter().flat_map(|part| self.callable_return_types(part)).collect(),
+            Ty::Fn(callable) if callable.ret.is_none() => callable.sigs.iter().map(|sig| {
+                self.own_return(sig, callable.env.file).unwrap_or_else(|| self.ck().sig_result(sig, &callable.env, &[], Vec::new()))
+            }).collect(),
+            _ => self.ck().callable_returns(ty),
+        }
+    }
+
     /// A literal assigned directly to a destructuring target inherits its shape.
     fn destructuring_receiver(&self, node: u32) -> Option<u32> {
         let s = &self.syntax;
@@ -548,7 +569,7 @@ impl<'t> NativeFile<'t> {
         Some(out)
     }
 
-    fn flags_of(&self, t: &Ty, out: &mut Vec<&'static str>) {
+    pub(super) fn flags_of(&self, t: &Ty, out: &mut Vec<&'static str>) {
         let ck = self.ck();
         let mut add = |f: &'static str| {
             if !out.contains(&f) {
@@ -619,7 +640,7 @@ impl<'t> NativeFile<'t> {
             K::String => Ty::Lit(s.text(id).into(), "string"),
             K::Template => Ty::Prim("string"),
             K::Bool => Ty::Lit(s.text(id).into(), "boolean"),
-            K::BigInt => Ty::Prim("bigint"),
+            K::BigInt => Ty::Lit(s.text(id).into(), "bigint"),
             K::Null => Ty::Null,
             K::Hole => Ty::Undefined,
             K::Paren | K::Satisfies => inner(F::Expr),
@@ -640,43 +661,15 @@ impl<'t> NativeFile<'t> {
                 Some("+=" | "&&=" | "||=" | "??=") if matches!(inner(F::Left), Ty::Any) || matches!(inner(F::Right), Ty::Any) => Ty::Any,
                 _ => Ty::Unknown,
             },
-            K::Member => {
-                let name = s.get(id, F::Property).map_or("", |p| s.text(p));
-                // `globalThis.x`: the global `x`.
-                if let Some(o) = s.get(id, F::Object).filter(|&o| s.is(o, K::Ident) && s.text(o) == "globalThis") {
-                    if self.decl_of(o).is_none() {
-                        return ck.value_of(&ck.lookup(&Env::file(ck.file), name));
-                    }
+            K::Member | K::Index | K::Call => {
+                let t = self.access_type(id);
+                if kind == K::Member && s.get(id, F::Object).is_some_and(|object| s.is(object, K::Ident) && s.text(object) == "globalThis" && self.decl_of(object).is_none()) {
+                    return t;
                 }
-                let object = inner(F::Object);
-                let t = ck.member(&object, name);
                 if self.optional_chain_can_short_circuit(id) {
                     t.or_undefined()
-                } else {
+                } else if matches!(kind, K::Member | K::Index) {
                     self.narrow(id, t)
-                }
-            }
-            K::Index => {
-                let object = inner(F::Object);
-                let index = s.get(id, F::Index).map_or(Ty::Unknown, |index| {
-                    self.static_string(index).map_or_else(|| self.type_of(index), |name| Ty::Lit(format!("{name:?}").into(), "string"))
-                });
-                let t = ck.indexed_type(&object, &index);
-                if self.optional_chain_can_short_circuit(id) {
-                    t.or_undefined()
-                } else {
-                    self.narrow(id, t)
-                }
-            }
-            K::Call => {
-                let Some(callee) = s.get(id, F::Callee) else { return Ty::Unknown };
-                if s.is(callee, K::Super) {
-                    return Ty::Void;
-                }
-                let f = self.type_of(callee);
-                let t = self.call_type(&f, id);
-                if self.optional_chain_can_short_circuit(id) {
-                    t.or_undefined()
                 } else {
                     t
                 }
@@ -741,6 +734,11 @@ impl<'t> NativeFile<'t> {
                 Some("typeof") => Ty::Prim("string"),
                 Some("void") => Ty::Undefined,
                 Some("-" | "+") => {
+                    if s.word(id, F::Op) == Some("-") {
+                        if let Some(argument) = s.get(id, F::Arg).map(|argument| s.unparen(argument)).filter(|&argument| s.is(argument, K::BigInt)) {
+                            return Ty::Lit(format!("-{}", s.text(argument)).into(), "bigint");
+                        }
+                    }
                     if matches!(inner(F::Arg), Ty::Prim("bigint") | Ty::Lit(_, "bigint")) {
                         return if s.word(id, F::Op) == Some("-") { Ty::Prim("bigint") } else { Ty::Unknown };
                     }
@@ -839,6 +837,65 @@ impl<'t> NativeFile<'t> {
         Ty::Struct(props.into())
     }
 
+    /// The operation's own type, before an earlier optional segment skips it.
+    fn access_type(&self, id: u32) -> Ty {
+        let s = &self.syntax;
+        let ck = self.ck();
+        match s.kind(id) {
+            Some(K::Member) => {
+                let name = s.get(id, F::Property).map_or("", |property| s.text(property));
+                if let Some(object) = s.get(id, F::Object).filter(|&object| s.is(object, K::Ident) && s.text(object) == "globalThis") {
+                    if self.decl_of(object).is_none() {
+                        return ck.value_of(&ck.lookup(&Env::file(ck.file), name));
+                    }
+                }
+                let object = s.get(id, F::Object).map_or(Ty::Unknown, |object| self.type_of(object));
+                ck.member(&object, name)
+            }
+            Some(K::Index) => {
+                let object = s.get(id, F::Object).map_or(Ty::Unknown, |object| self.type_of(object));
+                let index = self.index_key_type(id);
+                ck.indexed_type(&object, &index)
+            }
+            Some(K::Call) => {
+                let Some(callee) = s.get(id, F::Callee) else { return Ty::Unknown };
+                if s.is(callee, K::Super) { return Ty::Void }
+                self.call_type(&self.type_of(callee), id)
+            }
+            _ => self.type_of(id),
+        }
+    }
+
+    fn index_key_type(&self, id: u32) -> Ty {
+        self.syntax.get(id, F::Index).map_or(Ty::Unknown, |index| {
+            self.static_string(index).map_or_else(|| self.type_of(index), |name| Ty::Lit(format!("{name:?}").into(), "string"))
+        })
+    }
+
+    pub(super) fn access_resolution(&self, id: u32) -> Option<super::types::Resolution> {
+        let s = &self.syntax;
+        let object = s.get(id, F::Object)?;
+        if s.is(object, K::Ident) && s.text(object) == "globalThis" && self.decl_of(object).is_none() {
+            return None;
+        }
+        let object_ty = self.constrained_type_of(object);
+        let mut resolution = match s.kind(id)? {
+            K::Member => self.ck().member_resolution(&object_ty, s.text(s.get(id, F::Property)?)),
+            K::Index => self.ck().index_resolution(&object_ty, &self.constrain_type(self.index_key_type(id), id, &mut Vec::new())),
+            _ => return None,
+        };
+        if !self.optional_chain_can_short_circuit(id) {
+            resolution.ty = self.narrow(id, resolution.ty);
+        }
+        resolution.ty = self.constrain_type(resolution.ty, id, &mut Vec::new());
+        Some(resolution)
+    }
+
+    pub(super) fn evaluated_type_of(&self, id: u32) -> Ty {
+        let ty = if self.optional_chain_can_short_circuit(id) { self.access_type(id) } else { self.type_of(id) };
+        self.constrain_type(ty, id, &mut Vec::new())
+    }
+
     /// A call's result; this file's own unannotated functions are typed
     /// from their bodies.
     fn call_type(&self, f: &Ty, id: u32) -> Ty {
@@ -888,6 +945,43 @@ fn may_be_nullish(ty: &Ty) -> bool {
 mod tests {
     use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
+
+    #[test]
+    fn bigint_literal_types_keep_signed_truthiness() {
+        for (expression, truthy) in [("0n", false), ("2n", true), ("-2n", true), ("-0x0n", false)] {
+            let source = format!("const result = /*@*/{expression};");
+            with_native_file(&source, |file, nodes| {
+                let ty = file.type_of(nodes[0]);
+                let domain = file.typing().checker.value_domains(&ty);
+                assert_eq!((domain.truthy, domain.falsy), (truthy, !truthy), "{expression}");
+                assert!(file.type_flags(nodes[0]).unwrap_or_default().contains(&"literal"));
+            });
+        }
+    }
+
+    #[test]
+    fn logical_truthiness_uses_literal_values_not_source_spellings() {
+        for source in [
+            "const result = /*@*/0x0 && 'unreachable';",
+            "const result = /*@*/0b0 && 'unreachable';",
+            "const result = /*@*/0o0 && 'unreachable';",
+            "const result = /*@*/0.0 && 'unreachable';",
+            "const result = /*@*/0e0 && 'unreachable';",
+        ] {
+            with_native_file(source, |file, nodes| {
+                let flags = file.type_flags(nodes[0]).unwrap_or_default();
+                assert!(flags.contains(&"number") && !flags.contains(&"string"), "{source}: {flags:?}");
+            });
+        }
+        with_native_file("declare const zero: 0x0n; const result = /*@*/zero && 'unreachable';", |file, nodes| {
+            let flags = file.type_flags(nodes[0]).unwrap_or_default();
+            assert!(flags.contains(&"bigint") && !flags.contains(&"string"), "{flags:?}");
+        });
+        with_native_file("const result = /*@*/'\\\n' && 1;", |file, nodes| {
+            let flags = file.type_flags(nodes[0]).unwrap_or_default();
+            assert!(flags.contains(&"string") && !flags.contains(&"number"), "{flags:?}");
+        });
+    }
 
     #[test]
     fn dynamic_indexes_use_generic_inherited_and_domain_specific_signatures() {

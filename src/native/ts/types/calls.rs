@@ -6,6 +6,12 @@ use std::sync::Arc;
 use super::super::summary::{MemberKind, Sig, TParam, TypeSyn};
 use super::{Checker, Env, Ty};
 
+pub struct ResolvedPredicate {
+    pub parameter: Option<usize>,
+    pub asserts: bool,
+    pub target: Option<Ty>,
+}
+
 impl Checker<'_> {
     /// A fallback cannot be used only when every contextual signature requires
     /// this parameter; omitted, optional and rest parameters keep their defaults.
@@ -38,6 +44,29 @@ impl Checker<'_> {
     pub fn declared_returns(&self, ty: &Ty) -> Vec<Ty> {
         let Some((sigs, env)) = self.signatures(ty, false) else { return Vec::new() };
         sigs.iter().filter_map(|sig| sig.ret.as_ref().map(|ty| self.eval(ty, &env))).collect()
+    }
+
+    pub fn callable_returns(&self, ty: &Ty) -> Vec<Ty> {
+        match ty {
+            Ty::Union(parts) | Ty::Inter(parts) => parts.iter().flat_map(|part| self.callable_returns(part)).collect(),
+            Ty::Fn(callable) if callable.ret.is_some() => callable.ret.iter().cloned().collect(),
+            _ => {
+                let Some((sigs, env)) = self.signatures(ty, false) else { return vec![Ty::Unknown] };
+                sigs.iter().map(|sig| sig.ret.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect()
+            }
+        }
+    }
+
+    pub fn call_predicate(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>) -> Option<ResolvedPredicate> {
+        let (sigs, env) = self.signatures(callee, false)?;
+        let sig = self.pick_matching(&sigs, &env, args, targs.len(), |a, b| a.ret == b.ret && a.is_async == b.is_async && a.predicate == b.predicate)?;
+        let predicate = sig.predicate.as_ref()?;
+        let env = self.signature_env(sig, &env, args, targs);
+        Some(ResolvedPredicate {
+            parameter: predicate.parameter,
+            asserts: predicate.asserts,
+            target: predicate.ty.as_ref().map(|ty| self.eval(ty, &env)),
+        })
     }
 
     pub fn is_thenable(&self, ty: &Ty) -> bool {
@@ -131,6 +160,10 @@ impl Checker<'_> {
     /// else the first not known to reject them, else the first that fits
     /// by arity.
     fn pick<'s>(&self, sigs: &'s [Arc<Sig>], env: &Env, args: &[Ty], type_arguments: usize) -> Option<&'s Arc<Sig>> {
+        self.pick_matching(sigs, env, args, type_arguments, |a, b| a.ret == b.ret && a.is_async == b.is_async)
+    }
+
+    fn pick_matching<'s>(&self, sigs: &'s [Arc<Sig>], env: &Env, args: &[Ty], type_arguments: usize, equivalent: impl Fn(&Sig, &Sig) -> bool) -> Option<&'s Arc<Sig>> {
         // An implementation behind overloads is not callable from outside.
         let overloaded = sigs.iter().any(|s| s.body_at.is_none());
         let visible = |s: &&Arc<Sig>| (!overloaded || s.body_at.is_none()) && (type_arguments == 0 || s.type_params.len() == type_arguments);
@@ -148,7 +181,7 @@ impl Checker<'_> {
             // overload still possible returns the same.
             let possible: Vec<&Arc<Sig>> = candidates.iter().copied().filter(|s| self.accepts(s, env, args, false)).collect();
             return match possible.split_first() {
-                Some((first, rest)) if rest.iter().all(|s| s.ret == first.ret && s.is_async == first.is_async) => Some(first),
+                Some((first, rest)) if rest.iter().all(|s| equivalent(s, first)) => Some(first),
                 Some(_) => None,
                 None => candidates.first().copied(),
             };
