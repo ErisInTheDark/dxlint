@@ -3,6 +3,38 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn typed_dot_notation_keeps_visibility_options_specific_to_winning_members() {
+    for (shape, option, expected) in [
+        ("class C { private value: unknown; }", "allowPrivateClassPropertyAccess", 0),
+        ("class C { private value: unknown; }", "allowProtectedClassPropertyAccess", 1),
+        ("class Base { protected value: number; } class C extends Base {}", "allowProtectedClassPropertyAccess", 0),
+        ("class Base { protected value: number; } class C extends Base { public value: unknown; }", "allowProtectedClassPropertyAccess", 1),
+        ("class C { constructor(private value: unknown) {} }", "allowPrivateClassPropertyAccess", 0),
+    ] {
+        let lint = native_linter(&format!("rule dot-notation {{ set {option} true }}"));
+        for access in ["object['value']", "object?.['value']"] {
+            let source = format!("{shape} declare const object: C | undefined; {access};");
+            assert_eq!(lint.lint(Path::new("/root/a.ts"), &source).len(), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn typed_dot_notation_index_exemption_never_hides_a_declared_unknown_property() {
+    let lint = native_linter("rule dot-notation { set allowIndexSignaturePropertyAccess true }");
+    for (shape, expected) in [
+        ("{ [key: string]: unknown }", 0),
+        ("{ value: unknown; [key: string]: unknown }", 1),
+        ("{ [key: number]: unknown }", 1),
+        ("unknown", 1),
+        ("{ [key: string]: unknown } | { value: unknown }", 1),
+    ] {
+        let source = format!("declare const object: {shape}; object['value'];");
+        assert_eq!(lint.lint(Path::new("/root/a.ts"), &source).len(), expected, "{source}");
+    }
+}
+
+#[test]
 fn typed_destructuring_distinguishes_iterables_from_numeric_properties() {
     let linter = native_linter("rule prefer-destructuring");
     let path = Path::new("/root/file.ts");

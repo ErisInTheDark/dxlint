@@ -6,6 +6,39 @@ use std::sync::Arc;
 use super::{Checker, Env, Sym, Ty};
 use super::super::summary::DeclKind;
 
+#[derive(Clone, Copy)]
+enum StringTransform { Upper, Lower, Capitalize, Uncapitalize }
+
+impl StringTransform {
+    fn text(self, text: &str) -> String {
+        match self {
+            Self::Upper => text.to_uppercase(),
+            Self::Lower => text.to_lowercase(),
+            Self::Capitalize | Self::Uncapitalize => {
+                let Some(first) = text.chars().next() else { return String::new() };
+                // TypeScript maps the first UTF-16 code unit, not an astral character.
+                if first.len_utf16() != 1 { return text.to_owned() }
+                let mut mapped = match self {
+                    Self::Capitalize => first.to_uppercase().collect::<String>(),
+                    _ => first.to_lowercase().collect(),
+                };
+                mapped.push_str(&text[first.len_utf8()..]);
+                mapped
+            }
+        }
+    }
+
+    fn ty(self, ty: &Ty) -> Ty {
+        match ty {
+            Ty::Any | Ty::Never | Ty::Prim("string") => ty.clone(),
+            Ty::Lit(text, "string") => super::super::regex::cook(text)
+                .map_or(Ty::Unknown, |text| Ty::Lit(format!("{:?}", self.text(&text)).into(), "string")),
+            Ty::Union(parts) => Ty::union(parts.iter().map(|part| self.ty(part)).collect()),
+            _ => Ty::Unknown,
+        }
+    }
+}
+
 pub(super) struct PropertyFilter<'a> {
     pub source: &'a Ty,
     keys: &'a Ty,
@@ -44,6 +77,11 @@ impl Checker<'_> {
     }
 
     pub(super) fn utility_type(&self, sym: &[super::super::modules::DeclRef], args: &[Ty], env: &Env) -> Option<Ty> {
+        if args.len() == 1 {
+            for (name, transform) in [("Uppercase", StringTransform::Upper), ("Lowercase", StringTransform::Lower), ("Capitalize", StringTransform::Capitalize), ("Uncapitalize", StringTransform::Uncapitalize)] {
+                if self.is_builtin_symbol(sym, name) { return Some(transform.ty(&args[0])) }
+            }
+        }
         if self.is_builtin_symbol(sym, "Awaited") && args.len() == 1 {
             return Some(self.awaited(&args[0]));
         }
@@ -216,6 +254,30 @@ mod tests {
     use std::path::Path;
 
     const FILTER_TYPES: &str = "type Pick<T, K extends keyof T> = { [P in K]: T[P] }; type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;";
+
+    #[test]
+    fn string_intrinsics_preserve_domains_and_transform_literal_unions() {
+        for (name, input, values) in [
+            ("Uppercase", "'aBc' | 'def'", "'ABC', 'DEF'"),
+            ("Lowercase", "'aBc' | 'DEF'", "'abc', 'def'"),
+            ("Capitalize", "'aBc' | ''", "'ABc', ''"),
+            ("Uncapitalize", "'ABc' | ''", "'aBc', ''"),
+            ("Capitalize", "'\\u{10428}BC' | '\\u{00df}abc'", "'\\u{10428}BC', 'SSabc'"),
+        ] {
+            let lint = native_linter(&format!("in ts_expression_statement.expression rule resolved {{ when count(type_literal_values) == 2 && all(type_literal_values, literal => contains([{values}], literal.value))\nwarn 'resolved' }}"));
+            let code = format!("type {name}<S extends string> = intrinsic; declare const value: {name}<{input}>; value;");
+            assert_eq!(lint.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1, "{code}");
+        }
+        let lint = native_linter("in ts_expression_statement.expression rule resolved { when type_is_string_like\nwarn 'resolved' }");
+        let preserved = native_linter("in ts_expression_statement.expression rule preserved { when contains(default(type_flags, []), 'any') || contains(default(type_flags, []), 'never')\nwarn 'preserved' }");
+        for name in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
+            let code = format!("type {name}<S extends string> = intrinsic; declare const broad: {name}<string>; declare const loose: {name}<any>; declare const empty: {name}<never>; declare const missing: {name}<Missing>; broad; loose; empty; missing;");
+            assert_eq!(lint.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1, "{code}");
+            assert_eq!(preserved.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 2, "{code}");
+            let local = format!("type {name}<S> = number; declare const value: {name}<string>; value;");
+            assert!(lint.lint(Path::new("/root/a.ts"), &local).is_empty());
+        }
+    }
 
     #[test]
     fn readonly_preserves_nested_property_types() {

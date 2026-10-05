@@ -54,6 +54,9 @@ fn structure_dot_keyword(name) = contains(["abstract", "boolean", "break", "byte
 @macro structure_dot_options {
   option allowKeywords boolean = true "allow ES3 keywords in dot notation"
   option allowPattern string = "" "property names exempt from dot notation"
+  option allowPrivateClassPropertyAccess boolean = false "allow bracket access to private properties"
+  option allowProtectedClassPropertyAccess boolean = false "allow bracket access to protected properties"
+  option allowIndexSignaturePropertyAccess boolean = false "allow bracket access through string-like index signatures"
 }
 
 in ts_index rule dot-notation:computed {
@@ -65,6 +68,10 @@ in ts_index rule dot-notation:computed {
   let name if template then key.static_name else literal.value
   when re_test(name, /^[a-zA-Z_$][a-zA-Z0-9_$]*$/) && (allowKeywords || !structure_dot_keyword(name))
   when allowPattern == "" || !re_test(name, allowPattern)
+  let property property_info
+  when !(allowPrivateClassPropertyAccess && property.visibility == "private" || allowProtectedClassPropertyAccess && property.visibility == "protected")
+  let allow_index allowIndexSignaturePropertyAccess || structure_typescript(file) && compiler_options.noPropertyAccessFromIndexSignature == true
+  when !allow_index || property.declared == true || !any(object.index_key_types, key_type => key_type.string_like)
   let open index.space_before.start - 1
   let fixable count(overlapping(ts_comment, open, end_offset)) == 0
   let prefix byte_slice(text, 0, open - offset)
