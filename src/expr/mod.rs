@@ -1311,9 +1311,22 @@ pub struct IndentRule {
 struct IndentHit {
     node: u32,
     rule: usize,
-    anchor_line: usize,
+    base: AnchorBase,
     extra: f64,
     inside: Option<(usize, usize)>,
+}
+
+/// What an indent line measures from: a line's indentation, or (`from` a
+/// text) that text itself, `""` being column 0.
+enum AnchorBase {
+    Line(usize),
+    Text(String),
+}
+
+/// Where an indent line's `from` (or default) puts its anchor.
+enum AnchorAt {
+    Offset(usize),
+    Text(String),
 }
 
 /// Mid-line anchors resolve through at most this many indent lines.
@@ -1522,12 +1535,16 @@ impl<'a> Ctx<'a> {
                 .collect();
             candidates.sort_unstable_by(|a, b| b.cmp(a));
             for (in_form, _, i) in candidates {
-                let at = self.indent_anchor_at(id, i, in_form);
-                // An anchor on this line or below does not apply: the next
-                // line in line does.
-                if self.lines.line_of(at) < line {
-                    let (anchor_line, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0);
-                    return Some(IndentHit { node: id, rule: i, anchor_line, extra, inside: in_form.then_some(inside) });
+                let inside = in_form.then_some(inside);
+                match self.indent_anchor_at(id, i, in_form) {
+                    AnchorAt::Text(text) => return Some(IndentHit { node: id, rule: i, base: AnchorBase::Text(text), extra: 0.0, inside }),
+                    // An anchor on this line or below does not apply: the
+                    // next line in line does.
+                    AnchorAt::Offset(at) if self.lines.line_of(at) < line => {
+                        let (anchor_line, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0);
+                        return Some(IndentHit { node: id, rule: i, base: AnchorBase::Line(anchor_line), extra, inside });
+                    }
+                    AnchorAt::Offset(_) => {}
                 }
             }
             p = self.tree.parent(id);
@@ -1535,19 +1552,21 @@ impl<'a> Ctx<'a> {
         None
     }
 
-    /// Where indent line `i` on node `id` measures from: its `from`, else
-    /// the node's start (`in` form) or its owner's (node form). `from` is
-    /// read on the node with no indent lines in scope, so it cannot ask for
-    /// indentation itself; null means the default.
-    fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> usize {
+    /// Where indent line `i` on node `id` measures from: its `from` (an
+    /// offset, a node, or a text to measure from directly), else the node's
+    /// start (`in` form) or its owner's (node form). `from` is read on the
+    /// node with no indent lines in scope, so it cannot ask for indentation
+    /// itself; null means the default.
+    fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> AnchorAt {
         let from = self.indents[i].from.as_ref().and_then(|from| match (Ctx { node: id, indents: &[], ..*self }).eval(from).ok()? {
-            Value::Node(n, _) => Some(self.tree.node(n).start as usize),
+            Value::Node(n, _) => Some(AnchorAt::Offset(self.tree.node(n).start as usize)),
             Value::Null => None,
-            v => v.num().ok().map(|n| (n.max(0.0) as usize).min(self.source.len())),
+            Value::Str(text) => Some(AnchorAt::Text(text.to_string())),
+            v => v.num().ok().map(|n| AnchorAt::Offset((n.max(0.0) as usize).min(self.source.len()))),
         });
         from.unwrap_or_else(|| {
             let owner = if in_form { None } else { self.tree.label(id).and_then(|_| self.tree.owner(id)).or_else(|| self.tree.parent(id)) };
-            self.tree.node(owner.unwrap_or(id)).start as usize
+            AnchorAt::Offset(self.tree.node(owner.unwrap_or(id)).start as usize)
         })
     }
 
@@ -1587,7 +1606,8 @@ impl<'a> Ctx<'a> {
                 .collect();
             candidates.sort_unstable_by(|a, b| b.cmp(a));
             for (in_form, _, i) in candidates {
-                let from = self.indent_anchor_at(id, i, in_form);
+                // A text anchor is no place on this line: the line stands.
+                let AnchorAt::Offset(from) = self.indent_anchor_at(id, i, in_form) else { return (line, 0.0) };
                 if from >= at {
                     continue;
                 }
@@ -1683,11 +1703,13 @@ impl<'a> Ctx<'a> {
                 None => Value::Num(0.0),
             },
             "indent_anchor" => match self.indent_hit() {
-                Some(hit) => self.line_indent(hit.anchor_line),
+                Some(IndentHit { base: AnchorBase::Line(line), .. }) => self.line_indent(line),
+                Some(IndentHit { base: AnchorBase::Text(text), .. }) => Value::from(text),
                 None => Value::from(""),
             },
             "indent_anchor_line" => match self.indent_hit() {
-                Some(hit) => self.whole_line(hit.anchor_line),
+                Some(IndentHit { base: AnchorBase::Line(line), .. }) => self.whole_line(line),
+                Some(IndentHit { base: AnchorBase::Text(text), .. }) => Value::from(text),
                 None => Value::from(""),
             },
             "indent_closes" => Value::Bool(self.indent_hit().is_some_and(|hit| self.indent_closes(&hit))),

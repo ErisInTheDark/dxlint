@@ -214,7 +214,7 @@ with `indent` lines; other rules never see it.
 - `indent X [by n]`: X itself, when it starts its own line below the line its
   owner starts on, sits `n` levels past that line (`indent ts_switch.case by
   1`: cases one level past `switch`).
-- `from <offset>` on either form measures from the line of that byte offset (or node), read on X: `indent in ts_function.body from parent.offset`.
+- `from <offset>` on either form measures from the line of that byte offset (or node), read on X: `indent in ts_function.body from parent.offset`. A text measures from that text itself (`from ""`: column 0); null keeps the default.
 - `class name`: levels opened on one line collapse to one within a class (all unnamed lines share one); lines in different classes add up. An anchor in the middle of a line sits where the indent lines opened earlier on that line put it: `indent in ts_variable_declaration class declarators` indents a `var foo = {` object two levels past `var`.
 
 `dedent X` and `dedent in X` count the levels back from the anchor instead

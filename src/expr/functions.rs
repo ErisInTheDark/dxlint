@@ -656,6 +656,22 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "ceil",
+        signature: "ceil(n)",
+        doc: "smallest whole number not below n",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::Num(a[0].num()?.ceil())),
+    },
+    Function {
+        name: "floor",
+        signature: "floor(n)",
+        doc: "largest whole number not above n",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::Num(a[0].num()?.floor())),
+    },
+    Function {
         name: "round",
         signature: "round(n)",
         doc: "nearest whole number",

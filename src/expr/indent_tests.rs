@@ -28,6 +28,16 @@ fn classes_give_mid_line_anchors_their_own_levels() {
 }
 
 #[test]
+fn text_anchors_measure_from_the_text_itself() {
+    // `from ""`: column 0, whatever the lines above hold.
+    let src = "  {\n      x;\n  }\n";
+    let rules = "indent in ts_block from \"\" by 1";
+    assert_eq!(levels(rules, src), ["0:0", "1:0", "0:0"]);
+    let rules = "indent in ts_block from \"\\t\"";
+    assert_eq!(levels(rules, src), ["0:0", "1:1", "0:1"]);
+}
+
+#[test]
 fn mid_line_anchors_stop_at_their_own_line() {
     // The consequent is anchored at the conditional, a line above the
     // arrow's `{`: the `{` stands for its own (`?`) line.
