@@ -134,9 +134,6 @@ fn prune_config(config: &mut Config, runtime: bool) {
         needed.extend(a.targets.iter().map(|t| t.text.clone()));
         needed.insert(a.name.text.clone());
     }
-    for i in config.indents.iter().filter(|i| !i.library) {
-        needed.extend(i.targets.iter().filter_map(|(p, _)| parent_name(p)).map(str::to_string));
-    }
     for f in config.forwards.iter().filter(|f| !f.library) {
         needed.extend(f.targets.iter().map(|t| t.text.clone()));
         needed.extend(f.attrs.iter().map(|a| a.text.clone()));
@@ -202,10 +199,6 @@ fn prune_config(config: &mut Config, runtime: bool) {
     for g in &mut config.groups {
         g.parents.retain(|p| parent_name(p).is_none_or(|n| !gone(n)));
     }
-    for i in &mut config.indents {
-        i.targets.retain(|(p, _)| parent_name(p).is_none_or(|n| !gone(n)));
-    }
-    config.indents.retain(|i| !i.targets.is_empty());
     let mut dropped_attrs: HashSet<String> = HashSet::new();
     for a in &mut config.attrs {
         if a.library && !needed.contains(&a.name.text) {
@@ -243,8 +236,12 @@ fn prune_config(config: &mut Config, runtime: bool) {
 
 /// Names a rule's clauses mention.
 fn rule_names(r: &crate::config::ast::RuleDef, out: &mut HashSet<String>) {
-    for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(&r.report_at).chain(r.each.as_ref().map(|(_, e)| e)).chain(r.locals.iter().map(|(_, e)| e)) {
+    let indent_levels = r.indents.iter().filter_map(|i| i.by.as_ref());
+    for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(&r.fix_when).chain(&r.report_at).chain(r.each.as_ref().map(|(_, e)| e)).chain(r.locals.iter().map(|(_, e)| e)).chain(indent_levels) {
         expr_names(e, out);
+    }
+    for i in &r.indents {
+        out.extend(i.targets.iter().filter_map(|(p, _)| parent_name(p)).map(str::to_string));
     }
 }
 

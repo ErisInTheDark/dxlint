@@ -23,7 +23,7 @@ pub enum Inst {
     /// Text capture boundary: slot `2 * label` opens, `2 * label + 1` closes.
     Save(u16),
     /// Where a `*` starts (`false`) and ends (`true`): the layer's inside,
-    /// which `in layer indent` indents.
+    /// which a rule's `indent in layer` indents.
     Hole(bool),
     Look(Look),
     /// Match another matcher here, as a child layer under `label`.

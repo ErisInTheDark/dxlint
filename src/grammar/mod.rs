@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use regex_automata::meta::Cache;
 
-use crate::config::ast::{Config, Dropped, MatcherDef, Parent};
+use crate::config::ast::{Config, Dropped, MatcherDef, Name, Parent};
 use crate::config::error::ConfigError;
 use crate::config::source::Span;
 use crate::path_globs::PathGlobs;
@@ -141,9 +141,6 @@ pub struct Grammar {
     pub matchers: Vec<Matcher>,
     pub langs: Vec<Lang>,
     pub labels: Labels,
-    /// `in x indent` / `in x.field indent`: (matcher, field) pairs whose
-    /// insides are indented.
-    indents: Vec<(u32, Option<u16>)>,
     /// Every group's final members.
     groups: HashMap<String, Vec<Parent>>,
     pub natives: Vec<NativeFront>,
@@ -454,7 +451,6 @@ impl Grammar {
             }
         }
         resolve_likes(&mut matchers, &defs, &by_name, &config.dropped, errors);
-        let indents = resolve_indents(config, &groups, &by_name, &matchers, &labels, errors);
 
         // First-byte sets: a fixpoint, since references can be mutual.
         loop {
@@ -491,7 +487,6 @@ impl Grammar {
             matchers,
             langs,
             labels,
-            indents,
             groups,
             natives,
             views,
@@ -512,14 +507,6 @@ impl Grammar {
         self.groups.get(name).map(Vec::as_slice)
     }
 
-    /// Is `node` (of `matcher`, labelled `label` inside a node of `owner`)
-    /// declared indenting? Specialisations count as their base.
-    pub fn indents(&self, matcher: u32, label: Option<u16>, owner: Option<u32>) -> bool {
-        self.indents.iter().any(|&(m, field)| match field {
-            None => matcher != ROOT && matcher != TEXT && self.is_a(matcher, m),
-            Some(f) => label == Some(f) && owner.is_some_and(|o| self.is_a(o, m)),
-        })
-    }
 }
 
 /// Registers the node kinds of every `native <name>` front end as matchers.
@@ -574,20 +561,13 @@ fn add_natives(
     fronts
 }
 
-/// `in a or b.field indent` targets, with groups expanded.
-fn resolve_indents(
-    config: &Config,
-    groups: &HashMap<String, Vec<Parent>>,
-    by_name: &HashMap<String, u32>,
-    matchers: &[Matcher],
-    labels: &Labels,
-    errors: &mut Vec<ConfigError>,
-) -> Vec<(u32, Option<u16>)> {
-    let mut out = Vec::new();
-    for def in &config.indents {
-        for (parent, field) in &def.targets {
+impl Grammar {
+    /// A rule's `indent` targets as (matcher, field) pairs, groups expanded.
+    pub fn indent_targets(&self, targets: &[(Parent, Option<Name>)], errors: &mut Vec<ConfigError>) -> Vec<(u32, Option<u16>)> {
+        let mut out = Vec::new();
+        for (parent, field) in targets {
             let members: Vec<&Parent> = match parent {
-                Parent::Matcher(n) if groups.contains_key(&n.text) => groups[&n.text].iter().collect(),
+                Parent::Matcher(n) if self.groups.contains_key(&n.text) => self.groups[&n.text].iter().collect(),
                 other => vec![other],
             };
             for member in members {
@@ -602,19 +582,19 @@ fn resolve_indents(
                         continue;
                     }
                 };
-                let Some(&id) = by_name.get(&name.text) else {
-                    errors.push(match Dropped::find(&config.dropped, &name.text) {
+                let Some(id) = self.matcher(&name.text) else {
+                    errors.push(match Dropped::find(&self.dropped, &name.text) {
                         Some(d) => d.still_used(name.span),
                         None => ConfigError::new(name.span, format!("unknown matcher `{}`", name.text))
-                            .suggest(&name.text, by_name.keys().map(String::as_str)),
+                            .suggest(&name.text, self.by_name.keys().map(String::as_str)),
                     });
                     continue;
                 };
                 let label = match field {
                     None => None,
                     Some(f) => {
-                        let has = matchers[id as usize].fields().iter().any(|(l, _)| *l == f.text);
-                        match labels.get(&f.text).filter(|_| has) {
+                        let has = self.matchers[id as usize].fields().iter().any(|(l, _)| *l == f.text);
+                        match self.labels.get(&f.text).filter(|_| has) {
                             Some(l) => Some(l),
                             None => {
                                 errors.push(ConfigError::new(f.span, format!("`{}` has no field `{}`", name.text, f.text)));
@@ -628,8 +608,8 @@ fn resolve_indents(
                 }
             }
         }
+        out
     }
-    out
 }
 
 /// The config's functions; a name taken twice, or by a built-in function

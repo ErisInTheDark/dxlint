@@ -104,7 +104,6 @@ match parentheses /\(/ until /\)/
 in parentheses {
   match parentheses                                 # parentheses nest
   match rs_string                                   # strings live in them too
-  indent                                            # lines inside are indented
 }
 in rs_string match rs_escape /\\./                  # escapes live in strings
 
@@ -128,9 +127,10 @@ rule long-calls error {                             # configure existing rules
 Layers can be specialised (`match js_object like braces ...` wins ties against
 plain braces and is still `braces` to rules), collected into open groups
 (`group js_code js_statement` adds to `js_code`, even for rules written
-earlier), and declared as indenting, so an indentation rule only decides
-units and continuation lines (a mis-indented block opener is one report: the
-lines inside are measured from where it will be once fixed). Regexes support
+earlier). An indentation rule declares what it indents (`indent in braces`,
+`indent ts_switch.case by SwitchCase`) and only decides units and
+continuation lines (a mis-indented block opener is one report: the lines
+inside are measured from where it will be once fixed). Regexes support
 lookahead and lookbehind, and rule expressions have line context
 (`previous_line`, `parent_before`, `indent_anchor`, ...), neighbours
 (`children.x`, `previous.x`, `next.x`), layer tests (`parent is [ts_block,

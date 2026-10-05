@@ -370,15 +370,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `in A indent`: lines inside A are indented.
-    fn indent(&mut self, ctx: Option<&Context>) {
+    /// `in A indent` is gone: indentation belongs to the rule that measures it.
+    fn indent(&mut self, _ctx: Option<&Context>) {
         let kw = self.bump().expect("peeked");
-        match ctx {
-            Some(c) if c.layer.is_none() => self.config.indents.push(IndentDef { targets: c.parents.clone(), library: self.defining > 0 }),
-            Some(_) => self.errors.push(ConfigError::new(kw.span, "`layer` names where matchers go, not `indent`")),
-            None => self.errors.push(ConfigError::new(kw.span, "`indent` needs a context: `in <layer> indent`")),
-        }
-        self.end_of_item();
+        self.errors.push(
+            ConfigError::new(kw.span, "`indent` goes inside the rule that measures indentation")
+                .note("write `rule name { indent in braces ... }`: `indent X` indents X itself, `indent in X` its inside"),
+        );
+        self.recover_if_mid_line();
     }
 
     /// `in a or b let name expr`: a computed attribute of those layers.
@@ -1077,7 +1076,7 @@ impl<'a> Parser<'a> {
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
             self.ts.next_raw();
-            (def.fix_target, def.fix) = self.fix_as();
+            (def.fix_target, def.fix_when, def.fix) = self.fix_as();
         }
         if self.errors.len() == before {
             self.skip(false, true);
@@ -1267,7 +1266,8 @@ impl<'a> Parser<'a> {
     }
 
     /// After `fix`: `as expr`, `space_before as expr` or `space_after as expr`.
-    fn fix_as(&mut self) -> (FixTarget, Option<Expr>) {
+    /// `fix [space_before|space_after] [if cond] as expr`.
+    fn fix_as(&mut self) -> (FixTarget, Option<Expr>, Option<Expr>) {
         self.skip(false, true);
         let target = match self.ts.peek_raw(0) {
             Some(t) if t.is_ident("space_before") => FixTarget::SpaceBefore,
@@ -1276,19 +1276,28 @@ impl<'a> Parser<'a> {
         };
         if target != FixTarget::Node {
             self.ts.next_raw();
+            self.skip(false, true);
         }
+        let when = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("if")) {
+            self.ts.next_raw();
+            let cond = self.expr();
+            self.skip(false, true);
+            cond
+        } else {
+            None
+        };
         match self.ts.peek_raw(0).cloned() {
             Some(t) if t.is_ident("as") => {
                 self.ts.next_raw();
-                (target, self.expr())
+                (target, when, self.expr())
             }
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
                 self.errors.push(
                     ConfigError::new(span, "expected `as` after `fix`: `fix as <what the text should be>`")
-                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite the whitespace next to the node"),
+                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite the whitespace next to the node; `fix if <cond> as ...` fixes only when cond holds"),
                 );
-                (target, None)
+                (target, when, None)
             }
         }
     }
@@ -1364,7 +1373,7 @@ impl<'a> Parser<'a> {
                                 .note("a rule has at most one fix: the expression saying what the text should be"),
                         );
                     } else {
-                        (def.fix_target, def.fix) = self.fix_as();
+                        (def.fix_target, def.fix_when, def.fix) = self.fix_as();
                     }
                 }
                 (Tk::Ident, "when") => {
@@ -1419,6 +1428,29 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                // `indent [in] a, b.field [by levels]`: this rule's
+                // indentation structure.
+                (Tk::Ident, "indent") => {
+                    self.bump();
+                    self.skip(false, true);
+                    let inside = self.ts.peek_raw(0).is_some_and(|t| t.is_ident("in"));
+                    if inside {
+                        self.ts.next_raw();
+                    }
+                    let targets = self.parent_items();
+                    self.skip(false, true);
+                    let by = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("by")) {
+                        self.ts.next_raw();
+                        self.expr()
+                    } else {
+                        None
+                    };
+                    if targets.is_empty() {
+                        self.error_here("expected layers after `indent`: `indent in braces`, `indent ts_switch.case by 1`".to_string());
+                    } else {
+                        def.indents.push(IndentDecl { inside, targets, by });
+                    }
+                }
                 (Tk::Ident, kw @ ("files" | "ignore")) => {
                     let kw = kw.to_string();
                     self.bump();
@@ -1434,7 +1466,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.errors.push(
                         ConfigError::new(t.span, format!("expected a rule clause, found {}", t.describe()))
-                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, each, fix, option (or set, when configuring), files, ignore, report"),
+                            .note("rule clauses: a severity and message (`warn \"...\"`), when, let, each, fix, indent, option (or set, when configuring), files, ignore, report"),
                     );
                     self.bump();
                 }
@@ -1547,7 +1579,6 @@ mod tests {
         let c = ok(r#"
             lang t "*.t" {
               match brace /\{/ until /\}/ {
-                indent
                 match inner /x/
                 rule braces warn "brace" { when true }
               }
@@ -1556,7 +1587,11 @@ mod tests {
               match line /^.+/
             }
             in brace { in .t match back /y/ }
-            in brace.body indent
+            in line rule depth {
+              indent in brace
+              indent brace.body by 2
+              fix if false as ""
+            }
         "#);
         let by_name = |n: &str| c.matchers.iter().find(|m| m.name.text == n).unwrap();
         assert_eq!(parents(by_name("brace")), vec![".t"]);
@@ -1566,8 +1601,11 @@ mod tests {
         // A nested `in` replaces the block's context.
         assert_eq!(parents(by_name("back")), vec![".t"]);
         assert!(matches!(&c.rules[0].targets[..], [Target::Matcher(n)] if n.text == "brace"));
-        assert_eq!(c.indents.len(), 2);
-        assert!(matches!(&c.indents[1].targets[..], [(Parent::Matcher(_), Some(f))] if f.text == "body"));
+        let depth = &c.rules[1];
+        assert_eq!(depth.indents.len(), 2);
+        assert!(depth.indents[0].inside && !depth.indents[1].inside && depth.indents[1].by.is_some());
+        assert!(matches!(&depth.indents[1].targets[..], [(Parent::Matcher(_), Some(f))] if f.text == "body"));
+        assert!(depth.fix_when.is_some() && depth.fix.is_some());
     }
 
     #[test]

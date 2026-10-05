@@ -597,7 +597,41 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     let when = compile_all(&def.when, errors);
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
     let fix = def.fix.as_ref().and_then(|s| scope.compile(s, errors));
+    let fix_when = def.fix_when.as_ref().and_then(|s| scope.compile(s, errors));
     let report_at = def.report_at.as_ref().and_then(|s| scope.compile(s, errors));
+    // `indent X by n`: `n` reads X (its fields when X names only layers) and
+    // the rule's options; X's layers must be built.
+    let indents: Vec<crate::expr::IndentRule> = def
+        .indents
+        .iter()
+        .map(|decl| {
+            let targets = g.indent_targets(&decl.targets, errors);
+            layer_reads.borrow_mut().extend(targets.iter().map(|&(m, _)| m));
+            let by = decl.by.as_ref().and_then(|by| {
+                let mut fields = None::<Vec<_>>;
+                for &(m, field) in &targets {
+                    let these = if field.is_some() { Vec::new() } else { target_fields(g, Target::Matcher(m)) };
+                    fields = Some(match fields {
+                        None => these,
+                        Some(mut f) => {
+                            f.retain(|x| these.contains(x));
+                            f
+                        }
+                    });
+                }
+                let scope = Scope {
+                    fields: fields.unwrap_or_default(),
+                    options: scope.options.clone(),
+                    attrs,
+                    uses: Some(uses),
+                    layer_reads: Some(&layer_reads),
+                    ..Scope::new(g)
+                };
+                scope.compile(by, errors)
+            });
+            crate::expr::IndentRule { inside: decl.inside, targets, by }
+        })
+        .collect();
 
     let globs = |list: &[(String, crate::config::source::Span)], errors: &mut Vec<ConfigError>| {
         PathGlobs::new(list.iter().map(|(g, _)| g.as_str())).unwrap_or_else(|(glob, e)| {
@@ -645,7 +679,9 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         locals,
         message,
         fix,
+        fix_when,
         fix_target: def.fix_target,
+        indents,
         report: def.report.unwrap_or_default(),
         report_at,
         each,

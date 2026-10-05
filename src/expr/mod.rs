@@ -25,11 +25,12 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("indent", "leading whitespace of the line the node starts on"),
     ("parent_indent", "leading whitespace of the line the node's layer starts on (empty for the file)"),
     ("parent_line", "the whole line the node's layer starts on (empty for the file)"),
-    ("indented", "the node's line starts inside the `until` of a layer declared with `in layer indent`"),
-    ("indent_anchor", "leading whitespace of the line that innermost `indent` layer opened on (empty when not indented); lines above the node read as their indentation fixes leave them"),
-    ("indent_anchor_line", "that whole opener line (empty when not indented)"),
-    ("indent_closes", "this line starts with that layer's end (what follows its `*`), so it sits at the anchor"),
-    ("indent_hangs", "that layer's inside starts on its opener line (`f(a,⏎ b)`)"),
+    ("indented", "one of the rule's `indent` lines applies to the node's line (the innermost node it names, walking out from the line's first character)"),
+    ("indent_level", "levels that `indent` line gives the line past its anchor (its `by`, default 1; 0 on an `in` form's closing line or when not indented)"),
+    ("indent_anchor", "leading whitespace of the line that `indent` line measures from: `indent in X` X's line, `indent X` X's owner's line (empty when not indented); lines above read as their indentation fixes leave them"),
+    ("indent_anchor_line", "that whole anchor line (empty when not indented)"),
+    ("indent_closes", "the line starts with the end of an `indent in X` inside (its closer), so it sits at the anchor"),
+    ("indent_hangs", "that `indent in X` inside starts on its opener line (`f(a,⏎ b)`)"),
     ("line", "1-based line of the node's start"),
     ("column", "1-based column of the node's start"),
     ("offset", "byte offset of the node's start in the file (for `report at`)"),
@@ -1233,6 +1234,26 @@ pub struct Ctx<'a> {
     pub locals: Option<(u32, &'a [CExpr], &'a [u32])>,
     /// Facts of the native front end, when `tree` is a native tree.
     pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
+    /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
+    pub indents: &'a [IndentRule],
+}
+
+/// A compiled `indent X by n` / `indent in X by n` rule line.
+pub struct IndentRule {
+    pub inside: bool,
+    /// (matcher, field) pairs; a field means "what fills that field".
+    pub targets: Vec<(u32, Option<u16>)>,
+    /// Levels, read on the indented node; 1 when absent.
+    pub by: Option<CExpr>,
+}
+
+/// Where a line's indentation comes from: the node an `indent` line matched,
+/// the line it is measured from, and for `in` forms the inside's span.
+struct IndentHit {
+    node: u32,
+    rule: usize,
+    anchor_line: usize,
+    inside: Option<(usize, usize)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -1380,33 +1401,89 @@ impl<'a> Ctx<'a> {
         &text[..text.len() - text.trim_start_matches([' ', '\t']).len()]
     }
 
-    /// The innermost ancestor declared `indent` whose inside (its `*`, or its
-    /// whole text without one) opened on an earlier line and still holds the
-    /// start of this node's line; with that inside's span.
-    fn indent_block(&self) -> Option<(u32, (usize, usize))> {
+    /// The `indent` line deciding this node's line: walking out from the
+    /// line's first character, the innermost node one of the rule's `indent`
+    /// lines applies to. `indent X` applies when X starts its own line, below
+    /// its owner's line; `indent in X` when X's inside (its `*`, or its text
+    /// after its first line) opened on an earlier line and holds this one.
+    /// On one node a field-qualified line beats a plain one, then the last.
+    fn indent_hit(&self) -> Option<IndentHit> {
+        if self.indents.is_empty() {
+            return None;
+        }
         let start = self.tree.node(self.node).start as usize;
         let line = self.lines.line_of(start);
         let line_start = self.lines.line_start(line);
-        let mut p = self.tree.parent(self.node);
+        let first = line_start + self.indent_at(line_start).len();
+        let own_line = |at: usize| self.lines.line_start(self.lines.line_of(at)) + self.indent_at(at).len() == at;
+        // Start from the node itself unless it is a layer's root.
+        let mut p = Some(self.node);
         while let Some(id) = p {
             // From a named layer, indentation is the default layer's: carry
-            // on from the node holding this one there.
-            if self.tree.layer_roots.iter().any(|&(r, _)| r == id) {
-                p = self.tree.innermost_at(self.grammar, start as u32, self.node);
+            // on from the node holding the line's first character there.
+            if self.tree.layer_roots.iter().any(|&(r, _)| r == id) || self.tree.layer_of(id).is_some() {
+                p = self.tree.innermost_at(self.grammar, first as u32, self.node);
+                if p == Some(id) {
+                    break;
+                }
                 continue;
+            }
+            if self.tree.is_root(id) {
+                break;
             }
             let n = self.tree.node(id);
             let label = self.tree.label(id);
-            let owner = label.and_then(|_| self.tree.owner(id)).map(|o| self.tree.node(o).matcher);
-            if !self.tree.is_root(id) && self.grammar.indents(n.matcher, label, owner) {
-                let (s, e) = self.tree.hole(id).map_or((n.start as usize, n.end as usize), |(s, e)| (s as usize, e as usize));
-                if self.lines.line_of(s) < line && line_start <= e {
-                    return Some((id, (s, e)));
+            let owner = label.and_then(|_| self.tree.owner(id));
+            let matches = |&(m, field): &(u32, Option<u16>)| match field {
+                None => n.matcher != ROOT && n.matcher != TEXT && self.grammar.is_a(n.matcher, m),
+                Some(f) => label == Some(f) && owner.is_some_and(|o| self.grammar.is_a(self.tree.node(o).matcher, m)),
+            };
+            let best = self
+                .indents
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (t.1.is_some(), i)).max())
+                .max();
+            if let Some((_, i)) = best {
+                let rule = &self.indents[i];
+                let (s, e) = (n.start as usize, n.end as usize);
+                if rule.inside {
+                    let (is, ie) = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
+                    if self.lines.line_of(is) < line && line_start <= ie {
+                        return Some(IndentHit { node: id, rule: i, anchor_line: self.lines.line_of(s), inside: Some((is, ie)) });
+                    }
+                } else {
+                    let anchor = owner.or_else(|| self.tree.parent(id)).filter(|&o| !self.tree.is_root(o)).map(|o| self.tree.node(o).start as usize);
+                    if let Some(anchor) = anchor {
+                        let anchor_line = self.lines.line_of(anchor);
+                        if own_line(s) && anchor_line < self.lines.line_of(s) && self.lines.line_of(s) <= line && line_start <= e {
+                            return Some(IndentHit { node: id, rule: i, anchor_line, inside: None });
+                        }
+                    }
                 }
             }
             p = self.tree.parent(id);
         }
         None
+    }
+
+    /// This line starts with the end of the `in` form's inside (its closer),
+    /// so it sits at the anchor.
+    fn indent_closes(&self, hit: &IndentHit) -> bool {
+        let Some((_, end)) = hit.inside else { return false };
+        let start = self.tree.node(self.node).start as usize;
+        let line = self.lines.line_of(start);
+        let line_start = self.lines.line_start(line);
+        if self.lines.line_of(end) != line {
+            return false;
+        }
+        let first = line_start + self.indent_at(line_start).len();
+        // An `until` ends where its closer starts; a node without one ends
+        // after its closing brackets.
+        match self.tree.hole(hit.node) {
+            Some(_) => self.source[line_start..end].trim().is_empty(),
+            None => first <= end && self.source[first..end].chars().all(|c| matches!(c, ')' | ']' | '}' | '>')) && first < end,
+        }
     }
 
     /// The layer node this node sits in, looking through labelled text.
@@ -1444,22 +1521,29 @@ impl<'a> Ctx<'a> {
                 Some(id) if !self.tree.is_root(id) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
                 _ => Value::from(""),
             },
-            "indented" => Value::Bool(self.indent_block().is_some()),
-            "indent_anchor" => match self.indent_block() {
-                Some((id, _)) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
+            "indented" => Value::Bool(self.indent_hit().is_some()),
+            "indent_level" => match self.indent_hit() {
+                Some(hit) if self.indent_closes(&hit) => Value::from(0usize),
+                Some(hit) => match &self.indents[hit.rule].by {
+                    Some(by) => Ctx { node: hit.node, ..*self }.eval(by).unwrap_or(Value::Null),
+                    None => Value::from(1usize),
+                },
+                None => Value::from(0usize),
+            },
+            "indent_anchor" => match self.indent_hit() {
+                Some(hit) => self.line_indent(hit.anchor_line),
                 None => Value::from(""),
             },
-            "indent_anchor_line" => match self.indent_block() {
-                Some((id, _)) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),
+            "indent_anchor_line" => match self.indent_hit() {
+                Some(hit) => self.whole_line(hit.anchor_line),
                 None => Value::from(""),
             },
-            "indent_closes" => Value::Bool(self.indent_block().is_some_and(|(_, (_, end))| {
-                let line_start = self.lines.line_start(self.lines.line_of(start));
-                self.lines.line_of(end) == self.lines.line_of(start) && self.source[line_start..end].trim().is_empty()
-            })),
-            "indent_hangs" => Value::Bool(self.indent_block().is_some_and(|(_, (inside, _))| {
-                let line_end = self.lines.line_end(self.source, self.lines.line_of(inside));
-                !self.source[inside..line_end.max(inside)].trim().is_empty()
+            "indent_closes" => Value::Bool(self.indent_hit().is_some_and(|hit| self.indent_closes(&hit))),
+            "indent_hangs" => Value::Bool(self.indent_hit().is_some_and(|hit| {
+                hit.inside.is_some_and(|(inside, _)| {
+                    let line_end = self.lines.line_end(self.source, self.lines.line_of(inside));
+                    !self.source[inside..line_end.max(inside)].trim().is_empty()
+                })
             })),
             "parent_line" => match self.parent_layer() {
                 Some(id) if !self.tree.is_root(id) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),

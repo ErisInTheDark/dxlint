@@ -21,7 +21,6 @@ pub struct Config {
     /// Global `ignore "glob"` items: files never linted.
     pub ignores: Vec<(String, Span)>,
     pub groups: Vec<GroupDef>,
-    pub indents: Vec<IndentDef>,
     /// `native ts`: native front ends whose node kinds become layers.
     pub natives: Vec<Name>,
     pub attrs: Vec<AttrDef>,
@@ -103,13 +102,18 @@ pub struct AttrDef {
     pub library: bool,
 }
 
-/// `in brace or fn.body indent`: lines inside these layers' `until` (or
-/// inside these fields) are one level deeper than the line the layer opened on.
-#[derive(Debug)]
-pub struct IndentDef {
-    /// A layer or group, optionally narrowed to one of its fields.
+/// A rule's `indent X by n` / `indent in X by n`: the indentation structure
+/// its `indented`, `indent_level` and `indent_anchor` read.
+#[derive(Clone, Debug)]
+pub struct IndentDecl {
+    /// `in`: X's inside (its `until`, or its text after its first line),
+    /// anchored at X's line; else X itself when it starts its own line,
+    /// anchored at its owner's line.
+    pub inside: bool,
+    /// Layers or groups, each maybe narrowed to a field.
     pub targets: Vec<(Parent, Option<Name>)>,
-    pub library: bool,
+    /// `by n`: levels (default 1), read on X; may use the rule's options.
+    pub by: Option<Expr>,
 }
 
 /// `group name a or b`: adds members to a named, open list of layers. Every
@@ -246,11 +250,16 @@ pub struct RuleDef {
     /// `fix as expr`: what the node should look like. Different text =>
     /// diagnostic + fix.
     pub fix: Option<Expr>,
+    /// `fix if cond as expr`: only then is the fix attached; otherwise the
+    /// diagnostic is reported without one.
+    pub fix_when: Option<Expr>,
     /// What `fix` rewrites: the node, or the whitespace next to it.
     pub fix_target: FixTarget,
     /// `let name expr` clauses: values computed once per node, usable in
     /// the rule's other clauses (and later `let`s).
     pub locals: Vec<(Name, Expr)>,
+    /// `indent [in] X by n` lines.
+    pub indents: Vec<IndentDecl>,
     /// Where diagnostics point (`report node | change | end`); the whole
     /// node when not given.
     pub report: Option<Report>,
@@ -302,8 +311,10 @@ impl RuleDef {
             ignore: Vec::new(),
             when: Vec::new(),
             fix: None,
+            fix_when: None,
             fix_target: FixTarget::Node,
             locals: Vec::new(),
+            indents: Vec::new(),
             report: None,
             report_at: None,
             each: None,

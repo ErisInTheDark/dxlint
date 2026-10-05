@@ -317,9 +317,8 @@ fn parent_before_spans_lines_within_the_parent_only() {
 #[test]
 fn indent_follows_the_inside_of_declared_layers() {
     let l = linter(r#"
-        in paren indent
         in .t, paren layer lines match line /^[ \t]*\S/ {
-          rule ind warn "[{if indented then indent_anchor else 'none'}|{indent_closes}|{indent_hangs}]"
+          rule ind warn "[{if indented then indent_anchor else 'none'}|{indent_closes}|{indent_hangs}]" { indent in paren }
         }
     "#);
     let text = "x (\n  a (b,\n    c)\n)";
@@ -339,9 +338,8 @@ fn indent_follows_the_inside_of_declared_layers() {
 fn indent_can_target_a_field_only() {
     let l = linter(r#"
         in .t match pair /\[/ body:paren /\]/
-        in pair.body indent
         in .t, paren layer lines match line /^[ \t]*\S/ {
-          rule ind warn "[{if indented then indent_anchor else 'none'}]"
+          rule ind warn "[{if indented then indent_anchor else 'none'}]" { indent in pair.body }
         }
     "#);
     let text = "[(\na\n)] (\nb\n)";
@@ -351,26 +349,55 @@ fn indent_can_target_a_field_only() {
 }
 
 #[test]
-fn indent_inside_a_matcher_block_indents_that_matcher() {
+fn indent_on_a_node_indents_it_when_it_starts_its_own_line() {
+    // `indent arg by depth`: an argument on its own line sits `depth` levels
+    // past its call's line; one sharing the call's line is not indented.
     let l = linter(r#"
-        in .t match blk /\[/ until /\]/ {
-          indent
-        }
-        in .t, blk layer lines match line /^[ \t]*\S/ {
-          rule ind warn "{indented}"
+        in .t match call /\w+\(/ until /\)/
+        in call match arg /[a-z]+/
+        in .t, call layer lines match line /^[ \t]*\S/ {
+          rule ind warn "{indented}/{indent_level}/{indent_closes}" {
+            option depth number = 2
+            indent arg by depth
+          }
         }
     "#);
-    let messages: Vec<String> = lint(&l, "[\na\n]").into_iter().map(|d| d.message).collect();
-    assert_eq!(messages, vec!["false", "true", "true"]);
+    let messages: Vec<String> = lint(&l, "f(\n  a,\nb)\ng(c,\n)").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["false/0/false", "true/2/false", "true/2/false", "false/0/false", "false/0/false"]);
+}
+
+#[test]
+fn rules_own_their_indentation_structure() {
+    // Two rules on the same lines: only the one declaring `indent in paren`
+    // sees it.
+    let l = linter(r#"
+        in .t, paren layer lines match line /^[ \t]*\S/ {
+          rule with warn "{indented}" { indent in paren }
+          rule without warn "{indented}"
+        }
+    "#);
+    let messages: Vec<String> = rule_messages(&l, "(\na\n)");
+    assert_eq!(messages, vec!["with: false", "without: false", "with: true", "without: false", "with: true", "without: false"]);
+}
+
+#[test]
+fn conditional_fixes_report_without_a_fix_when_the_condition_fails() {
+    let l = linter(r#"
+        in .t match word /[a-z]+/
+        in word rule up warn "up" { fix if text == "a" as "X" }
+    "#);
+    let diags = lint(&l, "a b");
+    assert_eq!(diags.len(), 2);
+    assert_eq!(diags.iter().map(|d| d.fix.is_some()).collect::<Vec<_>>(), vec![true, false]);
 }
 
 #[test]
 fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
     let l = linter(r#"
-        in paren indent
         in .t, paren layer lines match line /^[ \t]*\S/ {
           macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
           rule ind warn "indent" {
+            indent in paren
             when slice(text, 0, -1) != level
             fix as level slice(text, -1)
           }

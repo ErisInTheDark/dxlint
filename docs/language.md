@@ -43,7 +43,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `match name like base pattern` | a specialisation of `base`, see [Layers](#layers) |
 | `in A layer L match name pattern` | `name` goes in the named layer `L`: a tree of its own over the same text, searched across `A`'s text without consuming it, see [Layers](#layers) |
 | `group name A, B` | add layers to a named group, usable wherever a layer list is |
-| `in A, B.field indent` | lines inside these layers (or fields) are indented, see [Layers](#layers) |
+| `indent [in] A, B.field [by n]` | rule clause: the indentation structure that rule measures, see [Layers](#layers) |
 | `in A rule name ...` | define a rule checking `A`'s nodes (and turn it on), see [Rules](#rules) |
 | `rule name [severity] [{ ... }]` | turn an existing rule on, off, or configure it, see [Turning rules on](#turning-rules-on-and-configuring-them) |
 | `define { items }` | items inside define; their rules stay off until turned on |
@@ -83,14 +83,13 @@ and every line inside it is in that context:
 | `lang l ... {` | `in .l <line>` |
 | `rule r ... {` | rule clauses, see [Rules](#rules) |
 
-In a context, `match` defines or attaches children, `rule` checks the
-context's layers themselves, and `indent` indents them. Blocks nest, so a
-layer, its children and its rules can live together:
+In a context, `match` defines or attaches children and `rule` checks the
+context's layers themselves. Blocks nest, so a layer, its children and its
+rules can live together:
 
 ```zlint
 lang rust "*.rs" {
   match braces /\{/ until /\}/ {
-    indent
     match braces                                 # braces nest
     match rs_string /"/ until /"/ {
       match rs_escape /\\./
@@ -205,28 +204,41 @@ innermost node of that kind (any layer) holding the node, and
 `containing(ts_template.quasi)` is inside template text, not merely inside a
 template.
 
-**Indentation.** `in braces, parentheses, brackets indent` declares that a
-layer's inside, the text its `until` skips, is indented: a line starting
-there belongs one level deeper than the line the layer opened on, and the
-line where its end pattern starts (`}`) sits at the opener's level. `in
-function.body indent` does the same for one field, and `indent` alone inside a
-matcher's block indents that matcher. Measuring from the opener *line* means
-`foo(Bar {` adds one level, not two. The engine works out which layer a line
-is in; rules read it through `indented`, `indent_anchor`, `indent_closes`,
-`indent_hangs` and `indent_anchor_line` (see [Expressions](#expressions)) and
-decide the unit and any language-specific continuation lines:
+**Indentation.** A rule that measures indentation declares its structure
+with `indent` lines; other rules never see it.
+
+- `indent in X [by n]`: X's inside (the text its `until` skips; for a node
+  without one, its text after its first line) sits `n` levels (default 1)
+  past the line X starts on. The line where the inside ends (`}`) sits at
+  that line.
+- `indent X [by n]`: X itself, when it starts its own line below the line its
+  owner starts on, sits `n` levels past that line (`indent ts_switch.case by
+  1`: cases one level past `switch`).
+
+`X` is a layer, a group or `layer.field`; `n` is read on X and may use the
+rule's options (`by SwitchCase`; 0 keeps the line at its anchor). For a
+line, the innermost node, walking out from its first character, that an
+`indent` line applies to decides; on one node a `layer.field` line beats a
+plain one, then the later line. Measuring from lines means `foo(Bar {` adds
+one level, not two. Rules read the result through `indented`,
+`indent_level`, `indent_anchor`, `indent_closes`, `indent_hangs` and
+`indent_anchor_line` (see [Expressions](#expressions)) and decide the unit
+and any language-specific continuation lines:
 
 ```zlint
-in parentheses, brackets, braces indent
 in rs_code layer lines match line /^[ \t]*\S/   # each code line, first char included
 
 in line rule indent {
-  let level if !indented then "" else if indent_closes then indent_anchor else indent_anchor "    "
+  indent in parentheses, brackets, braces
+  let level indent_anchor repeat("    ", indent_level)
   when slice(text, 0, -1) != level
   warn "Expected {len(level)} spaces of indentation."
   fix as level slice(text, -1)
 }
 ```
+
+`fix if cond as expr` (or `fix space_before if cond as ...`) attaches the fix
+only when `cond` holds; otherwise the diagnostic is reported without one.
 
 Lines above the node are read as their fixes leave them: when a rule's fix
 only changes a line's leading whitespace, `indent_anchor`,
@@ -513,10 +525,11 @@ let wanted find_last(config, c => matches(c.prev, previous) && matches(c.next, n
 | `previous_sibling`, `previous_gap` | the previous node of the same layer in the same parent, and the text between |
 | `gap_before` | the text between the previous child of the parent (of any layer) and the node: blank lines, comments, separators; `null` for the first child |
 | `index` | the node's position among the parent's children in the same field, from 0 (the second `ts_call.argument` is `1`) |
-| `indented` | the node's line starts inside a layer declared with `indent` |
-| `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line that (innermost) layer opened on |
-| `indent_closes` | this line starts with that layer's end pattern, so it sits at the anchor |
-| `indent_hangs` | that layer's inside starts on its opener line (`f(a,⏎ b)`) |
+| `indented` | one of the rule's `indent` lines applies to the node's line |
+| `indent_level` | levels that line gives it past its anchor (`by`, default 1; 0 on a closing line or when not indented) |
+| `indent_anchor`, `indent_anchor_line` | leading whitespace and text of the line it is measured from (`indent in X`: X's line; `indent X`: X's owner's line) |
+| `indent_closes` | this line starts with the end of an `indent in X` inside, so it sits at the anchor |
+| `indent_hangs` | that inside starts on its opener line (`f(a,⏎ b)`) |
 
 **Neighbours.** `children`, `previous` and `next` reach other nodes:
 

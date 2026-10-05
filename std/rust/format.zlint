@@ -237,8 +237,6 @@ in rs_keyword_before rule rs-keyword-spacing:before warn "One space before `{tex
 # Continuation lines (`.method()`, `&& b`, a line after `=`) get one more
 # unit. Unlike topiary, nothing else moves: no staircases, no counter-indents.
 
-in parentheses, brackets, braces indent
-
 # Each code line: its indentation and first character. Its own layer, so the
 # character still belongs to whatever node starts there.
 in rs_code layer lines match rs_line /^[ \t]*\S/
@@ -297,6 +295,7 @@ macro expected_indent first(acceptable)
 macro describe_indent(whitespace) (if whitespace == "" then "none" else if !contains(whitespace, " ") then str(len(whitespace)) " tab(s)" else if !contains(whitespace, "\t") then str(len(whitespace)) " spaces" else "a mix of tabs and spaces")
 in rs_line rule rs-indent warn "Expected indentation of {describe_indent(expected_indent)}, found {describe_indent(line_indent)}." {
   option unit "auto" | string = "auto" "one level of indentation, or \"auto\" (tabs if the code around uses them, else 4 spaces)"
+  indent in parentheses, brackets, braces
   report change
   # Lines inside multi-line strings and block comments are their own business.
   when containing(rs_strings_and_comments) == null

@@ -67,7 +67,11 @@ pub struct Rule {
     message: Option<CExpr>,
     /// What the node (or the space next to it) should look like (`fix as expr`).
     fix: Option<CExpr>,
+    /// `fix if cond as ...`: without it holding, report without the fix.
+    fix_when: Option<CExpr>,
     fix_target: FixTarget,
+    /// `indent [in] X by n` lines.
+    indents: Vec<crate::expr::IndentRule>,
     /// Layers it reads by name (`opener.x`, `descendants(x)`): their nodes
     /// must be built.
     layer_reads: Vec<u32>,
@@ -348,6 +352,7 @@ impl Linter {
                         memo: &memo,
                         locals: Some((fi as u32, &self.rules[fi].locals, &self.rules[fi].target_layers)),
                         native,
+                        indents: &self.rules[fi].indents,
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
                     for d in self.apply_each(&self.rules[fi], &ctx) {
@@ -467,6 +472,14 @@ impl Linter {
                 }
             }
             None => (start, end),
+        };
+        let fix = match &f.fix_when {
+            Some(cond) => match ctx.eval(cond) {
+                Ok(v) if v.truthy() => fix,
+                Ok(_) => None,
+                Err(e) => return Some(failed(e)),
+            },
+            None => fix,
         };
         let fix = fix.map(|edit| vec![edit]);
         let message = match &f.message {

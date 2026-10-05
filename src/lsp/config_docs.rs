@@ -157,6 +157,10 @@ impl ConfigFile<'_> {
 fn is_layer_list(before: &str) -> bool {
     let words: Vec<&str> = before.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).collect();
     let head = words.first().copied().unwrap_or("");
+    // A rule's `indent [in] a, b.field [by n]` line.
+    if head == "indent" {
+        return !words.contains(&"by");
+    }
     let past_head = words.iter().any(|w| matches!(*w, "layer" | "match" | "rule" | "let" | "indent" | "forward"));
     (matches!(head, "in" | "group") || before.ends_with("is ") || before.ends_with("is (") || before.ends_with("not ") || before.ends_with("not (") || before.ends_with(", ")) && !past_head
 }

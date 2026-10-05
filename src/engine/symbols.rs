@@ -96,7 +96,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("ignore", "`ignore \"glob\" ...`: never lint these files"),
     ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
-    ("indent", "`in a indent`: lines inside `a` are one level deeper"),
+    ("indent", "rule clause: `indent in a by n` indents what is inside `a` (n levels, default 1) past `a`'s line; `indent a.field by n` indents those nodes themselves when they start their own line; the rule's `indented`, `indent_level` and `indent_anchor` read these"),
     ("like", "`match name like base pattern`: a specialisation of `base`"),
     ("until", "inside a pattern: lazily skip (letting children eat whole chunks) until the rest matches"),
     ("when", "rule clause: `when expr`; every `when` must hold"),
@@ -548,12 +548,10 @@ impl Symbols {
                 self.use_parent(p);
             }
         }
-        for i in &config.indents {
-            for (p, field) in &i.targets {
-                self.use_parent(p);
-                if let Some(f) = field {
-                    self.use_of(f.span, Kind::Field, &f.text);
-                }
+        for (p, field) in config.rules.iter().flat_map(|r| &r.indents).flat_map(|i| &i.targets) {
+            self.use_parent(p);
+            if let Some(f) = field {
+                self.use_of(f.span, Kind::Field, &f.text);
             }
         }
         for s in &config.schemas {
