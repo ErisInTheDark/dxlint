@@ -127,6 +127,20 @@ fn may_start(m: &super::Matcher, text: &[u8], pos: usize) -> bool {
     m.first.contains(text[pos]) && m.pairs.as_ref().is_none_or(|p| p.allows(text, pos)) && m.prev.as_ref().is_none_or(|p| p.allows(text, pos))
 }
 
+/// Does a byte of `first` lie in `span` outside the `covered` children
+/// (sorted here, as [`Parser::fill_gaps`] wants them)?
+fn gaps_hold(text: &[u8], span: (usize, usize), covered: &mut [(usize, usize)], first: &ByteSet) -> bool {
+    covered.sort_unstable();
+    let mut pos = span.0;
+    for &(start, end) in covered.iter().chain(std::iter::once(&(span.1, span.1))) {
+        if start > pos && text[pos..start].iter().any(|&b| first.contains(b)) {
+            return true;
+        }
+        pos = pos.max(end);
+    }
+    false
+}
+
 fn cache<'c>(slot: &'c mut Option<Cache>, dfa: &Dfa) -> &'c mut Cache {
     slot.get_or_insert_with(|| dfa.cache())
 }
@@ -225,12 +239,25 @@ impl<'g, 't> Parser<'g, 't> {
         hosts.push((root, root_host));
         for (id, n) in nodes.iter().enumerate() {
             let m = n.matcher;
-            if m == TEXT || m == ROOT || (view.children[m as usize].is_empty() && view.overlays[m as usize].is_empty()) {
+            if m == TEXT || m == ROOT {
+                continue;
+            }
+            let (kids, overlays) = (&view.children[m as usize], !view.overlays[m as usize].is_empty());
+            if kids.is_empty() && !overlays {
+                continue;
+            }
+            // Child layers start at their first bytes, in the node's gaps:
+            // most nodes (names, members, calls) hold none of those, and
+            // need no host.
+            let first = &view.child_first[m as usize];
+            let mut covered = if n.children.is_empty() { Vec::new() } else { spans(id as u32) };
+            let found = !kids.is_empty() && gaps_hold(self.text, (n.start as usize, n.end as usize), &mut covered, first);
+            if !found && !overlays {
                 continue;
             }
             let host = self.push(Node { matcher: m, start: n.start, end: n.end, children: Vec::new() });
-            if !view.children[m as usize].is_empty() {
-                self.fill_gaps(host, &view.children[m as usize], &view.child_first[m as usize], spans(id as u32));
+            if found {
+                self.fill_gaps(host, kids, first, covered);
             }
             hosts.push((id as u32, host));
         }
