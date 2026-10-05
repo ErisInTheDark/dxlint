@@ -1,6 +1,8 @@
 # .ts/layout: @stylistic spacing, punctuation and line-break rules on the
 # native TypeScript layers and token facts.
 
+import .ts/import-attributes
+
 define {
 
 fn layout_comma_space(gap, before_side) = default(re_find(gap, if before_side then /\s*$/ else /^\s*/), "")
@@ -375,7 +377,17 @@ in ts_open_paren rule space-before-function-paren {
 }
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
-in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature rule comma-dangle {
+in ts_import_attributes let layout_attribute_last last(descendants(ts_import_attribute))
+in ts_import_attributes let layout_attribute_comma first(filter(descendants(ts_import_attribute_comma), c => c.offset >= layout_attribute_last.end_offset))
+in ts_import_attributes let layout_attribute_comma_sites if layout_attribute_last == null then [] else [{
+  kind: "importAttributes",
+  offset: default(layout_attribute_comma.offset, layout_attribute_last.end_offset),
+  trailing: layout_attribute_comma != null,
+  multiline: position(default(layout_attribute_comma.end_offset, layout_attribute_last.end_offset)).js_line != position(close.end_offset).js_line,
+  allowed: true,
+  tsx_single: false
+}]
+in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature, ts_import_attributes rule comma-dangle {
   option style trailing_comma_mode = "never" "trailing comma policy"
   option arrays trailing_comma_mode | null = null "array policy"
   option objects trailing_comma_mode | null = null "object policy"
@@ -387,9 +399,9 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   option enums trailing_comma_mode | null = null "enum policy"
   option generics trailing_comma_mode | null = null "type parameter policy"
   option tuples trailing_comma_mode | null = null "tuple policy"
-  each dangle_check in map(trailing_comma_sites, s => {
+  each dangle_check in map(if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites, s => {
     site: s,
-    mode: if s.kind == "arrays" then default(arrays, style) else if s.kind == "objects" then default(objects, style) else if s.kind == "functions" then default(functions, style) else if s.kind == "imports" then default(imports, style) else if s.kind == "exports" then default(exports, style) else if s.kind == "dynamicImports" then default(dynamicImports, style) else if s.kind == "enums" then default(enums, style) else if s.kind == "generics" then default(generics, style) else if s.kind == "tuples" then default(tuples, style) else "never"
+    mode: if s.kind == "arrays" then default(arrays, style) else if s.kind == "objects" then default(objects, style) else if s.kind == "functions" then default(functions, style) else if s.kind == "imports" then default(imports, style) else if s.kind == "exports" then default(exports, style) else if s.kind == "importAttributes" then default(importAttributes, style) else if s.kind == "dynamicImports" then default(dynamicImports, style) else if s.kind == "enums" then default(enums, style) else if s.kind == "generics" then default(generics, style) else if s.kind == "tuples" then default(tuples, style) else "never"
   })
   when dangle_check.mode != "ignore"
   when if dangle_check.mode == "always" || dangle_check.mode == "always-multiline" && dangle_check.site.multiline then

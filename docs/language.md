@@ -214,6 +214,7 @@ with `indent` lines; other rules never see it.
 - `indent X [by n]`: X itself, when it starts its own line below the line its
   owner starts on, sits `n` levels past that line (`indent ts_switch.case by
   1`: cases one level past `switch`).
+- `from <offset>` on either form measures from the line of that byte offset (or node), read on X: `indent in ts_function.body from parent.offset`.
 
 `dedent X` and `dedent in X` count the levels back from the anchor instead
 (`indent_level` goes negative). `X` is a layer, a group or `layer.field`;
@@ -720,6 +721,10 @@ is wrong, messages) is written in the rule.
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
+| `type_domains` | constrained truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal |
+| `evaluated_type_domains` | the same domains before optional-chain short-circuiting, preserving intrinsic member and return nullability |
+| `callable_return_domains` | domains of every callable return, including local inferred bodies |
+| `predicate_call` | asserted argument index and `asserts`, argument/target domains, `to_target`/`from_target` assignability and `target_union`; null without a resolved argument |
 | `type_has_void` | a union or intersection constituent is void, distinct from undefined |
 | `type_iterable` | constrained type supports synchronous iteration; null when unresolved |
 | `could_be_error` | expression syntax permits an Error-valued result through a possible value branch; does not require type analysis |
@@ -910,6 +915,8 @@ and `final-newline`.
 |---|---|
 | `.rs`, `.py`, `.c`, `.toml`, `.zlint` | brackets, strings, escapes, comments (`rs_code` etc. name all code layers) |
 | `.ts` | `native ts` for every JS and TS file: `ts_*` layers, comments (`ts_comment`) and lines (`ts_line`), the groups `ts_node`, `ts_code`, `ts_function_like`, `ts_loop`, `ts_statement`, and the eslint, @stylistic and typescript-eslint ports |
+| `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
+| `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

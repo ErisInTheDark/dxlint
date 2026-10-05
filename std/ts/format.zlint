@@ -4,6 +4,8 @@
 # `family:variant` rules are parts of one eslint rule. All are off until
 # turned on: `rule semi:always`, `rule quotes:double { set style "double" }`.
 
+import .ts/import-attributes
+
 define {
 
 # ---- files ---------------------------------------------------------------
@@ -312,23 +314,16 @@ in ts_open_brace rule object-curly-spacing:empty {
   warn if emptyObjects == "always" then "A space is required in empty '{curly_kind}'." else "There should be no space in empty '{curly_kind}'."
 }
 
-# Import attributes are regular key/string pairs, outside the native tree.
-in ts_import, ts_export layer format_import_attributes match format_import_attributes format_import_attribute_string format_import_attribute_gap* /\b(?:with|assert)/ format_import_attribute_gap* open:/\{/ until close:/\}/ format_import_attribute_gap* /;?\z/
-in format_import_attributes match format_import_attribute_string /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'/
-in format_import_attributes match format_import_attribute_key /(?:[^\W\d]|\$)[\w$]*/ or format_import_attribute_string
-in format_import_attributes match format_import_attribute_comment /\/\*/ until /\*\// or /\/\/[^\n\r\u{2028}\u{2029}]*/
-in format_import_attributes match format_import_attribute_gap /\s+/ or format_import_attribute_comment
-in format_import_attributes match format_import_attribute_colon /:/
-in format_import_attributes match format_import_attribute key:format_import_attribute_key format_import_attribute_gap* colon:format_import_attribute_colon format_import_attribute_gap* value:format_import_attribute_string
-group format_key_owner ts_property, ts_pattern_property, ts_property_signature, ts_index_signature, ts_class_property, format_import_attribute
-group format_key_container ts_object, ts_object_pattern, ts_type_literal, ts_interface, ts_class, format_import_attributes
+# Keys and annotation colons belong to their property or member.
+group format_key_owner ts_property, ts_pattern_property, ts_property_signature, ts_index_signature, ts_class_property, ts_import_attribute
+group format_key_container ts_object, ts_object_pattern, ts_type_literal, ts_interface, ts_class, ts_import_attributes
 in ts_parenthesized, ts_computed_key let format_key_text default(expression.format_key_text, expression.text)
-in ts_property, ts_pattern_property, ts_property_signature, ts_class_property, format_import_attribute let format_key_label if key is ts_computed_key then key.format_key_text else default(key.literal_value.value, key.text)
+in ts_property, ts_pattern_property, ts_property_signature, ts_class_property, ts_import_attribute let format_key_label if key is ts_computed_key then key.format_key_text else default(key.literal_value.value, key.text)
 in ts_index_signature let format_key_label byte_slice(text, 0, opener.ts_open_bracket.paired_token.end - offset)
 in ts_property, ts_pattern_property let format_key_computed key is ts_computed_key
 in ts_property, ts_pattern_property, ts_property_signature, ts_index_signature, ts_class_property let format_key_colon first(filter(descendants(ts_colon), c => c.parent.node == node))
-in format_import_attribute let format_key_colon colon.node
-in format_key_owner let format_key_comments overlapping(ts_comment) overlapping(format_import_attribute_comment)
+in ts_import_attribute let format_key_colon colon.node
+in format_key_owner let format_key_comments overlapping(ts_comment) overlapping(ts_import_attribute_comment)
 in format_key_owner let format_key_width graphemes(byte_slice(text, 0, format_key_colon.token_neighbours.before.end - offset))
 in format_key_owner let format_key_column graphemes(byte_slice(source, position(format_key_colon.token_neighbours.before.end).js_line_start, format_key_colon.token_neighbours.before.end))
 in format_key_owner let format_key_colon_line position(format_key_colon.offset).js_line
@@ -337,9 +332,9 @@ in format_key_owner let format_key_before_comment if format_key_colon.space_befo
 in format_key_owner let format_key_after_comment if format_key_colon.space_after.comments then first(filter(format_key_comments, c => c.offset >= format_key_colon.end_offset && c.end_offset <= format_key_colon.space_after.end)) else null
 in format_key_owner let format_key_before default(re_find(format_key_colon.space_before.text, /\s*$/), "")
 in format_key_owner let format_key_after default(re_find(format_key_colon.space_after.text, /^\s*/), "")
-in ts_colon, format_import_attribute_colon let format_key_single_line parent.parent.format_key_single_line
-in ts_colon, format_import_attribute_colon let format_key_typed parent.parent.format_key_typed
-in ts_colon, format_import_attribute_colon let format_key_container_kind parent.parent.format_key_container_kind
+in ts_colon, ts_import_attribute_colon let format_key_single_line parent.parent.format_key_single_line
+in ts_colon, ts_import_attribute_colon let format_key_typed parent.parent.format_key_typed
+in ts_colon, ts_import_attribute_colon let format_key_container_kind parent.parent.format_key_container_kind
 in format_key_owner let format_key_site if format_key_colon == null then null else {
   owner: node,
   colon: format_key_colon,
@@ -349,16 +344,16 @@ in format_key_owner let format_key_site if format_key_colon == null then null el
 }
 in ts_object, ts_object_pattern let format_key_members map(property.node, p => p) map(rest.node, p => p)
 in ts_type_literal, ts_interface, ts_class let format_key_members member.node
-in format_import_attributes let format_key_members descendants(format_import_attribute)
+in ts_import_attributes let format_key_members descendants(ts_import_attribute)
 in ts_object let format_key_container_kind "ObjectExpression"
 in ts_object_pattern let format_key_container_kind "ObjectPattern"
 in ts_type_literal let format_key_container_kind "TSTypeLiteral"
 in ts_interface let format_key_container_kind "TSInterfaceBody"
 in ts_class let format_key_container_kind "ClassBody"
-in format_import_attributes let format_key_container_kind if containing(ts_import) != null then "ImportDeclaration" else if re_test(containing(ts_export).text, /^export(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r]*[\n\r])+(?:type(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r]*[\n\r])+)?\*/) then "ExportAllDeclaration" else "ExportNamedDeclaration"
+in ts_import_attributes let format_key_container_kind if containing(ts_import) != null then "ImportDeclaration" else if re_test(containing(ts_export).text, /^export(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r]*[\n\r])+(?:type(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r]*[\n\r])+)?\*/) then "ExportAllDeclaration" else "ExportNamedDeclaration"
 in format_key_container let format_key_typed is (ts_type_literal, ts_interface, ts_class)
 in ts_object, ts_object_pattern, ts_type_literal, ts_interface, ts_class let format_key_single_line position(default(opener.ts_open_brace.offset, offset)).js_line == position(end_offset).js_line
-in format_import_attributes let format_key_single_line position(open.offset).js_line == position(close.offset).js_line
+in ts_import_attributes let format_key_single_line position(open.offset).js_line == position(close.offset).js_line
 in format_key_container let format_key_anchors map(format_key_members, m => {
   node: m,
   start: m.offset,
@@ -367,7 +362,7 @@ in format_key_container let format_key_anchors map(format_key_members, m => {
   end_line: position(m.end_offset).js_line,
   site: m.format_key_site
 })
-in format_key_container let format_key_group_comments overlapping(ts_comment) overlapping(format_import_attribute_comment)
+in format_key_container let format_key_group_comments overlapping(ts_comment) overlapping(ts_import_attribute_comment)
 fn format_key_bridge(previous, current, comments, typed) = (
   if current == null || previous == null then false
   else if (if typed then default(current.site.owner.format_key_colon_line, current.start_line) else default(current.site.owner.format_key_value_line, current.start_line)) - previous.start_line <= 1 then true
@@ -471,7 +466,7 @@ fn format_key_fix(site, before, wanted) = (
   report at if key_entry.site.typed then { start: key_entry.site.owner.offset, end: key_entry.site.owner.end_offset } else if utf16_len(key_entry.site.after) > key_entry.policy.after then { start: key_entry.site.colon.offset, end: key_entry.site.colon.end_offset + byte_len(key_entry.site.after) } else { start: default(key_entry.site.owner.format_key_after_comment.offset, key_entry.site.colon.token_neighbours.after.start), end: default(key_entry.site.owner.format_key_after_comment.end_offset, key_entry.site.colon.token_neighbours.after.end) }
   warn if utf16_len(key_entry.site.after) > key_entry.policy.after then "Extra space before value for {if key_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{key_entry.site.owner.format_key_label}'." else "Missing space before value for {if key_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{key_entry.site.owner.format_key_label}'."
 }
-in ts_colon, format_import_attribute_colon rule key-spacing {
+in ts_colon, ts_import_attribute_colon rule key-spacing {
   @format_key_individual
   let key_gap default(re_find(space_before.text, /\s*$/), "")
   when format_key_wrong(utf16_len(key_gap), key_line.before, key_line.mode, parent is (ts_property_signature, ts_index_signature, ts_class_property))
@@ -479,7 +474,7 @@ in ts_colon, format_import_attribute_colon rule key-spacing {
   fix space_before as format_key_fixed_gap(key_gap, key_line.before, !format_key_typed, format_key_typed)
   @format_key_before_report
 }
-in ts_colon, format_import_attribute_colon rule key-spacing:after {
+in ts_colon, ts_import_attribute_colon rule key-spacing:after {
   @format_key_individual
   let key_gap default(re_find(space_after.text, /^\s*/), "")
   when format_key_wrong(utf16_len(key_gap), key_line.after, key_line.mode, parent is (ts_property_signature, ts_index_signature, ts_class_property))
