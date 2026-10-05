@@ -602,10 +602,19 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     let report_at = def.report_at.as_ref().and_then(|s| scope.compile(s, errors));
     // `indent X by n`: `n` reads X (its fields when X names only layers) and
     // the rule's options; X's layers must be built.
+    // Indent classes by name, numbered within the rule; 0 is the unnamed one.
+    let mut classes: Vec<&str> = Vec::new();
     let indents: Vec<crate::expr::IndentRule> = def
         .indents
         .iter()
         .map(|decl| {
+            let class = decl.class.as_deref().map_or(0, |name| match classes.iter().position(|c| *c == name) {
+                Some(i) => i as u32 + 1,
+                None => {
+                    classes.push(name);
+                    classes.len() as u32
+                }
+            });
             let targets = g.indent_targets(&decl.targets, errors);
             layer_reads.borrow_mut().extend(targets.iter().map(|&(m, _)| m));
             // `by` and `from` read X: its fields when X names only layers.
@@ -630,7 +639,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
             };
             let by = decl.by.as_ref().and_then(|e| on_target.compile(e, errors));
             let from = decl.from.as_ref().and_then(|e| on_target.compile(e, errors));
-            crate::expr::IndentRule { inside: decl.inside, dedent: decl.dedent, targets, by, from }
+            crate::expr::IndentRule { inside: decl.inside, dedent: decl.dedent, targets, by, from, class }
         })
         .collect();
 

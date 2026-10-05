@@ -1439,8 +1439,8 @@ impl<'a> Parser<'a> {
                         self.ts.next_raw();
                     }
                     let targets = self.parent_items();
-                    // `from <offset>` and `by <levels>`, either order.
-                    let (mut from, mut by) = (None, None);
+                    // `from <offset>`, `by <levels>` and `class <name>`, any order.
+                    let (mut from, mut by, mut class) = (None, None, None);
                     loop {
                         self.skip(false, true);
                         match self.ts.peek_raw(0) {
@@ -1452,13 +1452,27 @@ impl<'a> Parser<'a> {
                                 self.ts.next_raw();
                                 by = self.expr();
                             }
+                            Some(t) if t.is_ident("class") && class.is_none() => {
+                                self.ts.next_raw();
+                                self.skip(false, true);
+                                match self.ts.peek_raw(0) {
+                                    Some(name) if name.kind == Tk::Ident => {
+                                        class = Some(name.text.to_string());
+                                        self.ts.next_raw();
+                                    }
+                                    _ => {
+                                        self.error_here("expected a class name after `class`: `indent in ts_variable_declaration class declarators`".to_string());
+                                        break;
+                                    }
+                                }
+                            }
                             _ => break,
                         }
                     }
                     if targets.is_empty() {
                         self.error_here("expected layers after `indent`: `indent in braces`, `indent ts_switch.case by 1`".to_string());
                     } else {
-                        def.indents.push(IndentDecl { inside, dedent, targets, by, from });
+                        def.indents.push(IndentDecl { inside, dedent, targets, by, from, class });
                     }
                 }
                 (Tk::Ident, kw @ ("files" | "ignore")) => {

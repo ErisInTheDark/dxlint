@@ -96,7 +96,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("ignore", "`ignore \"glob\" ...`: never lint these files"),
     ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
-    ("indent", "rule clause: `indent in a by n` indents what is inside `a` (n levels, default 1) past `a`'s line; `indent a.field by n` indents those nodes themselves when they start their own line; the rule's `indented`, `indent_level` and `indent_anchor` read these"),
+    ("indent", "rule clause: `indent in a by n` indents what is inside `a` (n levels, default 1) past `a`'s line; `indent a.field by n` indents those nodes themselves when they start their own line; `from x` measures from x's line; an anchor in the middle of a line sits where the indent lines opened earlier on that line put it: levels opened on one line collapse to one, unless their indent lines are in different `class name`es; the rule's `indented`, `indent_level` and `indent_anchor` read these"),
     ("like", "`match name like base pattern`: a specialisation of `base`"),
     ("until", "inside a pattern: lazily skip (letting children eat whole chunks) until the rest matches"),
     ("when", "rule clause: `when expr`; every `when` must hold"),

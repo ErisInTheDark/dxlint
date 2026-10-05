@@ -239,7 +239,7 @@ impl Parser<'_> {
         self.skip(self.expr_depth > 0, false);
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
-            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "by" | "from"),
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "by" | "from" | "class"),
             _ => false,
         })
     }

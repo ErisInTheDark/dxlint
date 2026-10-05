@@ -119,6 +119,9 @@ pub struct IndentDecl {
     /// `from offset`: the anchor line is the line of this offset (or
     /// node), read on X, instead of X's (or its owner's) first line.
     pub from: Option<Expr>,
+    /// `class name`: levels opened on one line collapse to one within a
+    /// class (the unnamed one by default); different classes add up.
+    pub class: Option<String>,
 }
 
 /// `group name a or b`: adds members to a named, open list of layers. Every

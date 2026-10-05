@@ -4,6 +4,8 @@
 pub mod case;
 pub mod facts;
 pub mod functions;
+#[cfg(test)]
+mod indent_tests;
 pub(crate) mod re;
 pub mod value;
 
@@ -1297,16 +1299,25 @@ pub struct IndentRule {
     /// `from`: an offset (or node), read on the indented node, whose line
     /// is the anchor.
     pub from: Option<CExpr>,
+    /// `class`: levels opened on one line collapse within a class (0, the
+    /// unnamed one, by default) and add up across classes.
+    pub class: u32,
 }
 
 /// Where a line's indentation comes from: the node an `indent` line matched,
 /// the line it is measured from, and for `in` forms the inside's span.
+/// `extra`: levels between that line and an anchor in the middle of it
+/// (the anchor's virtual indentation).
 struct IndentHit {
     node: u32,
     rule: usize,
     anchor_line: usize,
+    extra: f64,
     inside: Option<(usize, usize)>,
 }
+
+/// Mid-line anchors resolve through at most this many indent lines.
+const MAX_VIRTUAL_DEPTH: u32 = 32;
 
 impl<'a> Ctx<'a> {
     /// Binds the next outermost parameter (a rule's `each` item).
@@ -1511,27 +1522,94 @@ impl<'a> Ctx<'a> {
                 .collect();
             candidates.sort_unstable_by(|a, b| b.cmp(a));
             for (in_form, _, i) in candidates {
-                let default_line = if in_form { self.lines.line_of(s) } else { owner_line.expect("node form applies") };
-                // `from`: read on the node with no indent lines in scope, so
-                // it cannot ask for indentation itself. An anchor on this
-                // line or below does not apply: the next line in line does.
-                let anchor_line = self.indents[i]
-                    .from
-                    .as_ref()
-                    .and_then(|from| match (Ctx { node: id, indents: &[], ..*self }).eval(from).ok()? {
-                        Value::Node(n, _) => Some(self.tree.node(n).start as usize),
-                        // null: no anchor given, the default one.
-                        Value::Null => None,
-                        v => v.num().ok().map(|n| (n.max(0.0) as usize).min(self.source.len())),
-                    })
-                    .map_or(default_line, |at| self.lines.line_of(at));
-                if anchor_line < line {
-                    return Some(IndentHit { node: id, rule: i, anchor_line, inside: in_form.then_some(inside) });
+                let at = self.indent_anchor_at(id, i, in_form);
+                // An anchor on this line or below does not apply: the next
+                // line in line does.
+                if self.lines.line_of(at) < line {
+                    let (anchor_line, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0);
+                    return Some(IndentHit { node: id, rule: i, anchor_line, extra, inside: in_form.then_some(inside) });
                 }
             }
             p = self.tree.parent(id);
         }
         None
+    }
+
+    /// Where indent line `i` on node `id` measures from: its `from`, else
+    /// the node's start (`in` form) or its owner's (node form). `from` is
+    /// read on the node with no indent lines in scope, so it cannot ask for
+    /// indentation itself; null means the default.
+    fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> usize {
+        let from = self.indents[i].from.as_ref().and_then(|from| match (Ctx { node: id, indents: &[], ..*self }).eval(from).ok()? {
+            Value::Node(n, _) => Some(self.tree.node(n).start as usize),
+            Value::Null => None,
+            v => v.num().ok().map(|n| (n.max(0.0) as usize).min(self.source.len())),
+        });
+        from.unwrap_or_else(|| {
+            let owner = if in_form { None } else { self.tree.label(id).and_then(|_| self.tree.owner(id)).or_else(|| self.tree.parent(id)) };
+            self.tree.node(owner.unwrap_or(id)).start as usize
+        })
+    }
+
+    /// The line an anchor at byte `at` stands for, and the levels on top of
+    /// that line's indentation. An anchor in the middle of a line sits where
+    /// the indent line deciding it puts it, when that line's own anchor is
+    /// earlier on the same line (so this ends); levels opened on one line
+    /// collapse, so it adds levels only for a class not counted on the line
+    /// yet (`seen`, starting with the indented line's own). Anything else
+    /// stands for its line, whose first token answers for what is above.
+    fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> (usize, f64) {
+        let line = self.lines.line_of(at);
+        let line_start = self.lines.line_start(line);
+        if depth >= MAX_VIRTUAL_DEPTH || line_start + self.indent_at(line_start).len() >= at {
+            return (line, 0.0);
+        }
+        let mut p = Some(self.tree.innermost_with_text(self.grammar, at as u32, u32::MAX)).filter(|&n| !self.tree.is_root(n));
+        while let Some(id) = p.filter(|&n| !self.tree.is_root(n)) {
+            let n = self.tree.node(id);
+            let label = self.tree.label(id);
+            let owner = label.and_then(|_| self.tree.owner(id));
+            let matches = |&(m, field): &(u32, Option<u16>)| match field {
+                None => n.matcher != ROOT && n.matcher != TEXT && self.grammar.is_a(n.matcher, m),
+                Some(f) => label == Some(f) && owner.is_some_and(|o| self.grammar.is_a(self.tree.node(o).matcher, m)),
+            };
+            let (s, e) = (n.start as usize, n.end as usize);
+            let inside = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
+            // The node's own first token is not inside it.
+            let inside_applies = inside.0 <= at && at < inside.1 && at > s;
+            let node_applies = s <= at && at < e;
+            let mut candidates: Vec<(bool, bool, usize)> = self
+                .indents
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| if r.inside { inside_applies } else { node_applies })
+                .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (r.inside, t.1.is_some(), i)).max())
+                .collect();
+            candidates.sort_unstable_by(|a, b| b.cmp(a));
+            for (in_form, _, i) in candidates {
+                let from = self.indent_anchor_at(id, i, in_form);
+                if from >= at {
+                    continue;
+                }
+                if self.lines.line_of(from) < line {
+                    return (line, 0.0);
+                }
+                let rule = &self.indents[i];
+                let counts = !seen.contains(&rule.class);
+                if counts {
+                    seen.push(rule.class);
+                }
+                let levels = match (&rule.by, counts) {
+                    (_, false) => 0.0,
+                    (Some(by), true) => Ctx { node: id, ..*self }.eval(by).ok().and_then(|v| v.num().ok()).unwrap_or(1.0),
+                    (None, true) => 1.0,
+                };
+                let (anchor_line, extra) = self.virtual_anchor(from, seen, depth + 1);
+                return (anchor_line, extra + if rule.dedent { -levels } else { levels });
+            }
+            p = self.tree.parent(id);
+        }
+        (line, 0.0)
     }
 
     /// This line starts with the end of the `in` form's inside (its closer),
@@ -1590,7 +1668,7 @@ impl<'a> Ctx<'a> {
             },
             "indented" => Value::Bool(self.indent_hit().is_some()),
             "indent_level" => match self.indent_hit() {
-                Some(hit) if self.indent_closes(&hit) => Value::Num(0.0),
+                Some(hit) if self.indent_closes(&hit) => Value::Num(hit.extra),
                 Some(hit) => {
                     let rule = &self.indents[hit.rule];
                     let levels = match &rule.by {
@@ -1598,7 +1676,7 @@ impl<'a> Ctx<'a> {
                         None => Some(1.0),
                     };
                     match levels {
-                        Some(n) => Value::Num(if rule.dedent { -n } else { n }),
+                        Some(n) => Value::Num(hit.extra + if rule.dedent { -n } else { n }),
                         None => Value::Null,
                     }
                 }
