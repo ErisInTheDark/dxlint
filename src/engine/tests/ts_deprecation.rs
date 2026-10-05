@@ -57,12 +57,29 @@ fn deprecation_reports_uses_not_declarations_or_unselected_overloads() {
         ("/** @deprecated */ function f(x: string): void; function f(x: number): void; function f(x: string | number) {} f(1); f('s');", vec!["f"]),
         ("function f(x: string): void; /** @deprecated */ function f(x: number): void; function f(x: string | number) {} f('s'); f(1);", vec!["f"]),
         ("interface A { /** @deprecated */ old: number } declare const a: A; const { old: local } = a; local;", vec!["old"]),
+        ("/** @deprecated */ const old = 1; void { old };", vec!["old"]),
+        ("/** @deprecated */ const old = 1; void { old: 2 };", vec![]),
+        ("/** @deprecated */ const old = 1; void { current: old };", vec!["old"]),
         ("const current = 1; current;", vec![]),
     ] {
         let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
         let actual: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
         assert_eq!(actual, spans, "{source}: {diagnostics:#?}");
     }
+}
+
+#[test]
+fn shorthand_properties_resolve_imported_declarations_and_export_aliases() {
+    let messages = lint_project(
+        "deprecated-shorthand",
+        &[
+            ("defs.ts", "/** @deprecated */ export const deprecatedVariable = 1; const normalVariable = 1; /** @deprecated */ export { normalVariable };"),
+            ("main.ts", "import { deprecatedVariable, normalVariable } from './defs'; void { deprecatedVariable }; void { normalVariable };"),
+        ],
+        "main.ts",
+        "rule no-deprecated",
+    );
+    assert_eq!(messages.len(), 2, "{messages:#?}");
 }
 
 #[test]
