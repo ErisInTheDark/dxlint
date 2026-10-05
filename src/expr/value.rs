@@ -74,8 +74,19 @@ impl<'s> Value<'s> {
         Value::List(items.into())
     }
 
-    pub fn record(entries: Vec<(Key, Value<'s>)>) -> Self {
+    /// From a `Vec` or, without an extra copy, an array.
+    pub fn record(entries: impl Into<Arc<[(Key, Value<'s>)]>>) -> Self {
         Value::Record(entries.into())
+    }
+
+    /// Text that outlives the file it came from, in one allocation; the
+    /// most common gaps (`""`, `" "`) in none.
+    pub fn text_copy(text: &str) -> Value<'static> {
+        Value::Str(match text {
+            "" => Text::Borrowed(""),
+            " " => Text::Borrowed(" "),
+            _ => Text::Shared(text.into()),
+        })
     }
 
     pub fn type_name(&self) -> &'static str {

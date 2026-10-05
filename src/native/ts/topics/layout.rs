@@ -140,11 +140,11 @@ fn edge(src: &str, token: Option<&Token>, start: usize, end: usize) -> Value<'st
     let token_end = token.end as usize;
     let gap = &src[start..end];
     let line_break = gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']);
-    Value::record(vec![
-        ("text".into(), Value::from(src[token_start..token_end].to_owned())),
+    Value::record([
+        ("text".into(), Value::text_copy(&src[token_start..token_end])),
         ("start".into(), Value::from(token_start)),
         ("end".into(), Value::from(token_end)),
-        ("gap".into(), Value::from(gap.to_owned())),
+        ("gap".into(), Value::text_copy(gap)),
         ("spaced".into(), Value::Bool(gap_has_space(gap))),
         ("same_line".into(), Value::Bool(!line_break)),
         ("line_break".into(), Value::Bool(line_break)),
@@ -159,7 +159,7 @@ fn token_neighbours(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let lexed = file.cached(lex);
     let before = lexed.0.partition_point(|token| token.end as usize <= start).checked_sub(1).and_then(|i| lexed.0.get(i));
     let after = lexed.0.get(lexed.0.partition_point(|token| (token.start as usize) < end));
-    Value::record(vec![
+    Value::record([
         ("before".into(), edge(src, before, before.map_or(start, |token| token.end as usize), start)),
         ("after".into(), edge(src, after, end, after.map_or(end, |token| token.start as usize))),
         ("parent_start".into(), file.syntax.parent(node).map_or(Value::Null, |parent| Value::from(file.syntax.tree.node(parent).start as usize))),

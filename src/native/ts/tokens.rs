@@ -10,7 +10,9 @@ use crate::expr::Value;
 use crate::grammar::{Edge, Node, TEXT};
 use std::collections::HashMap;
 
-pub(crate) struct Lexed(pub(crate) Vec<Token>);
+/// Shared, so threads linting one file in rule groups scan it once.
+#[derive(Clone)]
+pub(crate) struct Lexed(pub(crate) std::sync::Arc<[Token]>);
 pub(crate) struct LexedComments(pub(crate) Vec<Token>);
 
 /// Requested token kinds, indexed by the native kind registry.
@@ -27,7 +29,7 @@ pub fn add_all_tokens(mask: &mut TokenMask) {
 
 pub(crate) fn lex_comments(file: &NativeFile<'_>) -> LexedComments {
     let lexed = file.cached(lex);
-    let mut tokens = lexed.0.clone();
+    let mut tokens = lexed.0.to_vec();
     tokens.extend(file.comments().iter().filter(|comment| {
         let at = lexed.0.partition_point(|token| token.end <= comment.start);
         lexed.0.get(at).is_none_or(|token| token.start >= comment.end)
@@ -58,7 +60,7 @@ pub(crate) fn lex(file: &NativeFile<'_>) -> Lexed {
             }
         }
     }
-    Lexed(lex_around(syntax.src, &opaque))
+    Lexed(lex_around(syntax.src, &opaque).into())
 }
 
 /// The parser's nodes as written: kind and field numbers of this front end.
@@ -133,28 +135,43 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
         parsed.nodes.push(Node { matcher: kind as u32, start, end, children: Vec::new() });
         parsed.nodes[owner as usize].children.push(Edge { label: F::Token as u16, node: id });
     }
-    parsed.tokens = Some(Lexed(tokens));
+    parsed.tokens = Some(Lexed(tokens.into()));
 }
 
 /// The layer a token reads as from outside: the node written exactly as
 /// it (`ts_identifier`, `ts_number`...), else its token layer.
 pub(crate) fn token_layer(file: &NativeFile<'_>, token: &Token) -> Option<K> {
-    file.cached(exact_nodes).0.get(&(token.start, token.end)).copied().or_else(|| token_kind(file.syntax.src, token))
+    exact_node(file, token.start, token.end).or_else(|| token_kind(file.syntax.src, token))
 }
 
-/// Syntax nodes by their exact span; the innermost wins.
-struct ExactNodes(crate::fx_hash::FxHashMap<(u32, u32), K>);
-
-fn exact_nodes(file: &NativeFile<'_>) -> ExactNodes {
+/// The innermost syntax node spanning exactly `start..end`. Descends by
+/// binary search (children are sorted by start, and syntax children are
+/// disjoint), so a query costs the depth, not a whole-file index.
+fn exact_node(file: &NativeFile<'_>, start: u32, end: u32) -> Option<K> {
     let s = &file.syntax;
-    let mut map = crate::fx_hash::FxHashMap::default();
-    for &id in &s.tree.order {
-        if let Some(kind) = s.kind(id).filter(|k| !k.is_token()) {
-            let n = s.tree.node(id);
-            map.insert((n.start, n.end), kind);
+    let (mut id, mut found) = (s.root(), None);
+    loop {
+        let n = s.tree.node(id);
+        if (n.start, n.end) == (start, end) {
+            found = s.kind(id).filter(|k| !k.is_token()).or(found);
+        }
+        let upto = n.children.partition_point(|e| s.tree.node(e.node).start <= start);
+        let mut inside = None;
+        for e in n.children[..upto].iter().rev() {
+            let c = s.tree.node(e.node);
+            // Pattern layers and labelled text hold no syntax; empty nodes
+            // hold nothing.
+            if s.kind(e.node).is_none() || c.start == c.end {
+                continue;
+            }
+            inside = (end <= c.end).then_some(e.node);
+            break;
+        }
+        match inside {
+            Some(child) => id = child,
+            None => return found,
         }
     }
-    ExactNodes(map)
 }
 
 /// A code token as a value: `{text, kind, start, end}` (`is` reads its kind).
@@ -163,8 +180,8 @@ fn token_record(file: &NativeFile<'_>, t: &Token) -> Value<'static> {
 }
 
 fn token_record_kind(file: &NativeFile<'_>, t: &Token, kind: Option<K>) -> Value<'static> {
-    Value::record(vec![
-        ("text".into(), Value::from(file.syntax.src[t.start as usize..t.end as usize].to_string())),
+    Value::record([
+        ("text".into(), Value::text_copy(&file.syntax.src[t.start as usize..t.end as usize])),
         ("kind".into(), kind.map_or(Value::Null, |k| Value::from(k.name()))),
         ("start".into(), Value::from(t.start as usize)),
         ("end".into(), Value::from(t.end as usize)),
@@ -288,8 +305,8 @@ pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
     let text = &src[from..to.max(from)];
     // Most gaps are "" or a few spaces: no lines, no comments to walk.
     if !text.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'/') || b >= 0x80) {
-        return Value::record(vec![
-            ("text".into(), Value::from(text.to_owned())),
+        return Value::record([
+            ("text".into(), Value::text_copy(text)),
             ("start".into(), Value::from(from)),
             ("end".into(), Value::from(to.max(from))),
             ("spaced".into(), Value::Bool(text.bytes().any(|b| b.is_ascii_whitespace() || b == 0x0b))),
@@ -314,8 +331,8 @@ pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
         }
         blank_gaps += breaks.saturating_sub(1);
     }
-    Value::record(vec![
-        ("text".into(), Value::from(text.to_owned())),
+    Value::record([
+        ("text".into(), Value::text_copy(text)),
         ("start".into(), Value::from(from)),
         ("end".into(), Value::from(to.max(from))),
         ("spaced".into(), Value::Bool(spaced)),
@@ -513,6 +530,37 @@ mod lexical_tests {
             let expected = code.0.iter().find(|token| span.start <= token.start && token.end <= span.end)
                 .map_or(Value::Null, |token| token_record(file, token));
             assert_eq!(edge(file, node, false), expected, "{:?}: {:?}", file.syntax.kind(node), file.syntax.text(node));
+        }
+    }
+
+    #[test]
+    fn token_layers_find_the_innermost_node_written_exactly_as_the_token() {
+        use crate::engine::tests::native_linter;
+        use crate::grammar::Tree;
+        use crate::native::ts::{modules::Project, syntax::Syntax};
+        use std::path::Path;
+
+        let linter = native_linter("");
+        let front = linter.grammar.natives.first().expect("native ts");
+        let lang = linter.grammar.lang_for(Path::new("a.tsx")).expect("ts language");
+        for (src, jsx) in [
+            ("const a = [x, (y), f(z), -1, `t ${u} v`, /r/g, this, null]; // c\n", false),
+            ("class C<T> extends B { #p = 1; m(a?: T): void { super.m(a!); } }\n/* x */ type U = T[keyof T];", false),
+            ("const view = <Box a=\"s\" b={ value }>text {kid}</Box>;", true),
+        ] {
+            let mut parsed = super::super::parse(src, jsx).expect("valid syntax");
+            attach_selected(src, &mut parsed, &ALL_TOKENS);
+            let nodes = front.remap(parsed.nodes);
+            let tree = Tree::graft(&linter.grammar, lang, src, nodes, parsed.root, None, None);
+            let project = Project::default();
+            let file = NativeFile::new(Syntax::new(&tree, src, front), Path::new("/root/a.tsx"), &project);
+            for token in file.cached(lex).0.iter() {
+                // By definition: the last syntax node in document order.
+                let expected = tree.order.iter().rev().copied()
+                    .filter(|&id| (tree.node(id).start, tree.node(id).end) == (token.start, token.end))
+                    .find_map(|id| file.syntax.kind(id).filter(|k| !k.is_token()));
+                assert_eq!(exact_node(&file, token.start, token.end), expected, "{:?}", &src[token.start as usize..token.end as usize]);
+            }
         }
     }
 

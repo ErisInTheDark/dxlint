@@ -297,19 +297,18 @@ impl Linter {
                     } else {
                         // A big file sets the floor of a whole run: its rules
                         // run in groups on several threads, each with its own
-                        // facts (the parsed tree is shared).
-                        let mut tokens = Some(parsed.tokens);
+                        // facts (the parsed tree and token stream are shared).
                         std::thread::scope(|s| {
                             let tree = &tree;
                             let handles: Vec<_> = groups
                                 .iter()
                                 .map(|mask| {
-                                    let tokens = tokens.take();
+                                    let tokens = parsed.tokens.clone();
                                     let run = Run { active: mask, ..run };
                                     // Reads are tracked per thread: pass them on.
                                     s.spawn(move || {
                                         reads::track(|| {
-                                            let facts = NativeFile::new(Syntax::new(tree, text, front), path, &self.project).with_tokens(tokens.flatten());
+                                            let facts = NativeFile::new(Syntax::new(tree, text, front), path, &self.project).with_tokens(tokens);
                                             let mut part = Vec::new();
                                             self.check_tree(tree, &run, Some(&facts), &mut part);
                                             part
