@@ -17,6 +17,37 @@ fn imported_overload_docs_apply_only_to_the_selected_signature() {
 }
 
 #[test]
+fn constructor_deprecation_uses_selected_overloads_and_keeps_class_docs() {
+    let declarations = r#"
+export class ClassWithDeprecatedConstructor {
+    constructor();
+    /** @deprecated */
+    constructor(arg: string);
+    constructor(arg?: string) {}
+}
+/** @deprecated */
+export class DeprecatedClass {
+    constructor();
+    constructor(arg: string);
+    constructor(arg?: string) {}
+}
+"#;
+    let actual: Vec<_> = [
+        ("import { ClassWithDeprecatedConstructor } from './defs';", "ClassWithDeprecatedConstructor", "", 0),
+        ("import { ClassWithDeprecatedConstructor } from './defs';", "ClassWithDeprecatedConstructor", "'legacy'", 1),
+        ("import * as imported from './defs';", "imported.ClassWithDeprecatedConstructor", "", 0),
+        ("import * as imported from './defs';", "imported.ClassWithDeprecatedConstructor", "'legacy'", 1),
+        ("import { DeprecatedClass } from './defs';", "DeprecatedClass", "", 1),
+        ("import { DeprecatedClass } from './defs';", "DeprecatedClass", "'legacy'", 1),
+    ].into_iter().map(|(import, callee, args, expected)| {
+        let source = format!("{import}\nconst foo = new {callee}({args});");
+        let messages = lint_project("deprecated-constructors", &[("defs.ts", declarations), ("main.ts", &source)], "main.ts", "rule no-deprecated");
+        (messages.len(), expected)
+    }).collect();
+    assert_eq!(actual.iter().map(|(count, _)| *count).collect::<Vec<_>>(), actual.iter().map(|(_, expected)| *expected).collect::<Vec<_>>());
+}
+
+#[test]
 fn deprecation_reports_uses_not_declarations_or_unselected_overloads() {
     let lint = native_linter("rule no-deprecated");
     for (source, spans) in [

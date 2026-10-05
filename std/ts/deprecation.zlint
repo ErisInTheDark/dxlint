@@ -7,7 +7,7 @@ fn deprecation_tag(doc) =
   if doc == null || !re_test(doc, /(?m)^@deprecated\b/) then null
   else {reason: trim(re_replace(re_find(doc, /(?m)^@deprecated[^\n]*(?:\n[^@\n][^\n]*)*/), /^@deprecated[ \t]*/, ''))}
 fn deprecation_first(docs) = first(filter(map(docs, doc => deprecation_tag(doc)), reason => reason != null))
-fn deprecation_declarations(declarations) = first(filter(map(declarations, declaration => deprecation_first([declaration.doc] declaration.signature_docs)), reason => reason != null))
+fn deprecation_declarations(declarations) = first(filter(map(declarations, declaration => deprecation_first(if declaration.kind == "class" then [declaration.doc] else [declaration.doc] declaration.signature_docs)), reason => reason != null))
 fn deprecation_reason(metadata, computed) =
   if deprecation_first(map(metadata.aliases, alias => alias.doc)) != null then deprecation_first(map(metadata.aliases, alias => alias.doc))
   else if !computed && metadata.selected_signature != null && count(metadata.declarations) > 0 && all(metadata.declarations, declaration => contains(["function", "method"], declaration.kind)) then deprecation_tag(metadata.selected_signature.doc)
