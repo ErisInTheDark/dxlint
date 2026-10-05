@@ -20,7 +20,7 @@ fn modules(dir: &Path, rel: &str, out: &mut Vec<String>) {
 }
 
 fn list(root: &Path, dir: &str, name: &str, code: &mut String) {
-    println!("cargo:rerun-if-changed={dir}");
+    println!("cargo:rerun-if-changed={}", root.join(dir).display());
     let mut found = Vec::new();
     modules(&root.join(dir), "", &mut found);
     writeln!(code, "static {name}: &[(&str, &str)] = &[").expect("write");
@@ -32,7 +32,12 @@ fn list(root: &Path, dir: &str, name: &str, code: &mut String) {
 }
 
 fn main() {
-    let root = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    // `ZLINT_EMBED_LIBRARY=<dir>`: embed that copy (development builds keep
+    // it apart from the sources so .zlint edits recompile nothing).
+    println!("cargo:rerun-if-env-changed=ZLINT_EMBED_LIBRARY");
+    let root = std::env::var_os("ZLINT_EMBED_LIBRARY")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir")));
     let mut code = String::new();
     list(&root, "std", "FILES", &mut code);
     list(&root, "rules", "RULESETS", &mut code);
