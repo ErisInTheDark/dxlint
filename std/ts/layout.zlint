@@ -205,13 +205,14 @@ in layout_blank_run rule no-multiple-empty-lines {
   option max int(0..) = 2 "maximum consecutive blank lines"
   option maxEOF int(0..) | null = null "maximum final blank lines"
   option maxBOF int(0..) | null = null "maximum initial blank lines"
-  when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
   let blank_prefix if offset == 0 then 0 else if starts_with(text, "\r\n") then 2 else 1
   let blank_text byte_slice(text, blank_prefix)
   let blank_kind if offset == 0 then "bof" else if end_offset == byte_len(source) then "eof" else "middle"
   let blank_count re_count(blank_text, /\r\n|[\n\r]/) + (if re_test(blank_text, /[\r\n]\z/) then 0 else 1)
   let blank_limit if blank_kind == "bof" then default(maxBOF, max) else if blank_kind == "eof" then default(maxEOF, max) else max
   when blank_count > blank_limit
+  # Searching the syntax tree costs more than counting, so it comes after.
+  when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
   # Blank whitespace cannot contain NUL; split after line endings to retain their byte lengths.
   let blank_parts split(re_replace(blank_text, /(\r\n|[\r\n])/, "$1\0"), "\0")
   report at { start: offset + blank_prefix + byte_len(join(slice(blank_parts, 0, blank_limit), "")), end: byte_len(source) }

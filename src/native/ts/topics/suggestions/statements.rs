@@ -4,9 +4,10 @@ use std::collections::HashSet;
 
 use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
-use super::super::super::lexer::{Lexer, Tok};
+use super::super::super::lexer::Tok;
 use super::super::super::paths::{self, Domain};
 use super::super::super::syntax::Syntax;
+use super::super::super::tokens::lex;
 use crate::expr::Value;
 
 struct SingleIteration(HashSet<u32>);
@@ -100,24 +101,18 @@ fn brace_expectations(file: &NativeFile, owner: u32, body: u32) -> [i32; 3] {
     let statements: Vec<_> = s.all(body, F::Body).collect();
     if block && (statements.len() != 1 || braces_necessary(file, body)) { return [1; 3] }
     let span = s.tree.node(body);
-    let mut before = s.tree.node(owner).start;
-    let mut lexer = Lexer::new(&s.src[before as usize..span.start as usize]);
-    let from = before;
-    loop {
-        let token = lexer.next_token();
-        if token.tok == Tok::Eof { break }
-        before = from + token.start;
-    }
+    // The file's token stream, not a re-lex: `else` chains would rescan
+    // every earlier branch, and a big body all of its text.
+    let lexed = file.cached(lex);
+    let tokens = &lexed.0;
+    let owner_start = s.tree.node(owner).start;
+    let before = tokens.partition_point(|t| t.end <= span.start).checked_sub(1)
+        .map(|i| tokens[i].start).filter(|&start| start >= owner_start).unwrap_or(owner_start);
     let one_line = |node| {
         if s.is(node, K::Empty) { return true }
         let span = s.tree.node(node);
-        let mut end = span.start;
-        let mut lexer = Lexer::new(s.text(node));
-        loop {
-            let token = lexer.next_token();
-            if token.tok == Tok::Eof { break }
-            if token.tok != Tok::P(";") { end = span.start + token.end; }
-        }
+        let inside = &tokens[tokens.partition_point(|t| t.start < span.start)..tokens.partition_point(|t| t.end <= span.end)];
+        let end = inside.iter().rev().find(|t| t.tok != Tok::P(";")).map_or(span.start, |t| t.end);
         !s.src[span.start as usize..end as usize].contains(['\r', '\n', '\u{2028}', '\u{2029}'])
     };
     let collapsed = if block {
@@ -130,7 +125,11 @@ fn brace_expectations(file: &NativeFile, owner: u32, body: u32) -> [i32; 3] {
     };
     let nested = if block {
         let statement = statements[0];
-        !one_line(statement) || file.comments().iter().any(|c| c.start > span.start && c.end <= s.tree.node(statement).start)
+        // Comments are sorted and disjoint: only the first after the brace
+        // can end before the statement starts.
+        let comments = file.comments();
+        let first = comments.get(comments.partition_point(|c| c.start <= span.start));
+        !one_line(statement) || first.is_some_and(|c| c.end <= s.tree.node(statement).start)
     } else { !one_line(body) };
     [0, if collapsed { -1 } else { 1 }, i32::from(nested)]
 }
