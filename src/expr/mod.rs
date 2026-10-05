@@ -139,6 +139,8 @@ pub enum CExpr {
     Containing(NodeSel),
     /// `kind_name(n)`: the node's kind as text (`.lang` for the file).
     KindName(Box<CExpr>),
+    /// `node_at(offset)`: the innermost default-layer node holding it.
+    NodeAt(Box<CExpr>),
     /// The first value when it is a node, else the second (an `is`
     /// subject: `next_token` is a node read, or the fact's tag).
     Coalesce(Box<CExpr>, Box<CExpr>),
@@ -174,6 +176,7 @@ pub enum IsTest {
 pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
+    ("node_at(offset)", "the innermost node (default layer) holding a byte offset, null outside any: `node_at(token_neighbours.after.start).indent_level`"),
     ("kind_name(node)", "a node's kind as text (`ts_call`; `.lang` for the file), for messages: test kinds with `is`"),
     ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none); `kind.field` selects what fills that field, as `descendants` and `overlapping` also do"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
@@ -214,7 +217,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -684,6 +687,15 @@ impl Scope<'_> {
                 };
                 self.note(name.span, Resolved::Function("position"));
                 CExpr::Position(Box::new(self.compile(offset, errors)?))
+            }
+            // `node_at(offset)`: the innermost node holding a byte offset.
+            ExprKind::Call(name, args) if name.text == "node_at" && self.grammar.function("node_at").is_none() => {
+                let [offset] = args.as_slice() else {
+                    errors.push(ConfigError::new(e.span, "`node_at` takes one byte offset").note("usage: node_at(token_neighbours.after.start).indent_level"));
+                    return None;
+                };
+                self.note(name.span, Resolved::Function("node_at"));
+                CExpr::NodeAt(Box::new(self.compile(offset, errors)?))
             }
             // A config `fn`.
             ExprKind::Call(name, args) if self.grammar.function(&name.text).is_some() => {
@@ -1830,6 +1842,19 @@ impl<'a> Ctx<'a> {
                 v @ Value::Node(..) => v,
                 _ => self.eval(b)?,
             },
+            CExpr::NodeAt(offset) => {
+                let at = self.eval(offset)?;
+                match at {
+                    Value::Null => Value::Null,
+                    v => {
+                        let at = (v.num()?.max(0.0) as usize).min(self.source.len()) as u32;
+                        match self.tree.innermost_at(self.grammar, at, u32::MAX).filter(|&id| !self.tree.is_root(id)) {
+                            Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
+                            None => Value::Null,
+                        }
+                    }
+                }
+            }
             CExpr::KindName(n) => match self.eval(n)? {
                 Value::Node(id, _) => match self.tree.node(id).matcher {
                     ROOT => Value::from(format!(".{}", self.grammar.langs[self.lang].name)),

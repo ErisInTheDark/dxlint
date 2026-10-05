@@ -448,6 +448,16 @@ fn indent_lines_see_text_fields_and_paths_prefer_fields_over_builtins() {
 }
 
 #[test]
+fn node_at_reads_the_node_holding_an_offset() {
+    // A comment asks for the indentation of the code token after it.
+    let l = native_linter(r#"
+        in ts_line_comment rule c info "{kind_name(node_at(token_neighbours.after.start))}:{node_at(token_neighbours.after.start).indent_level}" { indent in ts_block }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "function f() {\n  // hi\n  b();\n}\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["ts_identifier:1"]);
+}
+
+#[test]
 fn dedent_counts_levels_back_from_the_anchor() {
     let l = linter(r#"
         in .t match blk /\{/ until /\}/
