@@ -158,17 +158,77 @@ fn exact_nodes(file: &NativeFile<'_>) -> ExactNodes {
 
 /// A code token as a value: `{text, kind, start, end}` (`is` reads its kind).
 fn token_record(file: &NativeFile<'_>, t: &Token) -> Value<'static> {
-    let kind = token_layer(file, t).map_or(Value::Null, |k| Value::from(k.name()));
+    token_record_kind(file, t, token_layer(file, t))
+}
+
+fn token_record_kind(file: &NativeFile<'_>, t: &Token, kind: Option<K>) -> Value<'static> {
     Value::record(vec![
         ("text".into(), Value::from(file.syntax.src[t.start as usize..t.end as usize].to_string())),
-        ("kind".into(), kind),
+        ("kind".into(), kind.map_or(Value::Null, |k| Value::from(k.name()))),
         ("start".into(), Value::from(t.start as usize)),
         ("end".into(), Value::from(t.end as usize)),
     ])
 }
 
+fn prefix_child(s: &super::syntax::Syntax<'_>, node: u32, at: u32) -> Option<u32> {
+    s.kids(node).filter_map(|(_, child)| {
+        let span = s.tree.node(child);
+        (span.start <= at && at < span.end && s.kind(child).is_some_and(|kind| !kind.is_token())).then_some(child)
+    }).last()
+}
+
+fn opaque_prefix(file: &NativeFile<'_>, mut node: u32, at: u32) -> Option<Token> {
+    let s = &file.syntax;
+    loop {
+        let span = s.tree.node(node);
+        let opaque = match s.kind(node) {
+            Some(K::String) => Some((span.start, span.end, Tok::Str)),
+            Some(K::Regex | K::JsxText) => Some((span.start, span.end, Tok::Regex)),
+            Some(K::Template | K::TemplateType) => s.all(node, F::Quasi).find_map(|quasi| {
+                let span = s.tree.node(quasi);
+                (span.start == at && span.end > at).then_some((span.start, span.end, Tok::Template))
+            }),
+            _ => None,
+        };
+        if let Some((start, end, tok)) = opaque.filter(|&(start, _, _)| start == at) {
+            return Some(Token { tok, start, end, nl: false });
+        }
+        node = prefix_child(s, node, at)?;
+    }
+}
+
+/// Native boundaries already identify the first token's lexical context.
+/// Walk only its boundary branch instead of indexing the entire file.
+fn first_native_token(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+    let s = &file.syntax;
+    let span = s.tree.node(node);
+    let token = opaque_prefix(file, node, span.start).unwrap_or_else(|| {
+        let mut lexer = Lexer::new(s.src);
+        lexer.pos = span.start as usize;
+        let token = lexer.next_token();
+        opaque_prefix(file, node, token.start).unwrap_or(token)
+    });
+    if token.tok == Tok::Eof || token.end > span.end {
+        return Value::Null;
+    }
+    let mut current = node;
+    let mut kind = None;
+    loop {
+        let span = s.tree.node(current);
+        if span.start == token.start && span.end == token.end {
+            kind = s.kind(current);
+        }
+        let Some(child) = prefix_child(s, current, token.start) else { break };
+        current = child;
+    }
+    token_record_kind(file, &token, kind.or_else(|| token_kind(s.src, &token)))
+}
+
 /// The first (`last`: last) code token inside a node.
 pub(crate) fn edge(file: &NativeFile<'_>, node: u32, last: bool) -> Value<'static> {
+    if !last && file.syntax.kind(node).is_some_and(|kind| !kind.is_token()) {
+        return first_native_token(file, node);
+    }
     let n = file.syntax.tree.node(node);
     let lexed = file.cached(lex);
     let from = lexed.0.partition_point(|t| t.start < n.start);
@@ -432,6 +492,28 @@ mod lexical_tests {
     use super::*;
     use crate::engine::tests::with_native_file;
 
+    fn assert_first_tokens(file: &NativeFile<'_>) {
+        let code = file.cached(lex);
+        for node in 0..file.syntax.tree.nodes.len() as u32 {
+            let span = file.syntax.tree.node(node);
+            let expected = code.0.iter().find(|token| span.start <= token.start && token.end <= span.end)
+                .map_or(Value::Null, |token| token_record(file, token));
+            assert_eq!(edge(file, node, false), expected, "{:?}: {:?}", file.syntax.kind(node), file.syntax.text(node));
+        }
+    }
+
+    #[test]
+    fn first_tokens_agree_with_parser_aware_token_boundaries() {
+        for source in [
+            "",
+            "/* before */ /[/*,;]/u.test(value); value / other; debugger\ntrue; false; null;",
+            "const value = `a ${other} z`; type Name = `a${string}z`; const empty = ``;",
+            "type Count = 1; function f<T>(x: T): T { return x; } const v = 'a\\\\b';",
+        ] {
+            with_native_file(source, |file, _| assert_first_tokens(file));
+        }
+    }
+
     #[test]
     fn selected_tokens_preserve_their_spans_and_owners() {
         let src = "function run<T>(left, right) { const values = [left, ...right]; if (left) return values; }";
@@ -473,7 +555,7 @@ mod lexical_tests {
         use crate::native::ts::{modules::Project, syntax::Syntax};
         use std::path::Path;
 
-        let src = r#"const view = <Box a="\" b={ value } />; function after() { return 1; }"#;
+        let src = "const view = <Box a=\"\\\" b={ value }> \n/* raw, text */ \\ </Box>; function after() { return 1; }";
         let linter = native_linter("");
         let front = linter.grammar.natives.first().expect("native ts");
         let mut parsed = super::super::parse(src, true).expect("valid jsx");
@@ -489,6 +571,7 @@ mod lexical_tests {
         let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
         let project = Project::default();
         let file = NativeFile::new(Syntax::new(&tree, src, front), Path::new("/root/a.tsx"), &project);
+        assert_first_tokens(&file);
         let code = file.cached(lex);
         for &(at, _, tok) in &boundaries {
             assert!(code.0.iter().any(|token| token.start == at && token.tok == tok), "missing code token at {at}");
