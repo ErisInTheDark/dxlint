@@ -4,6 +4,7 @@
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
+use crate::expr::value::js_number_text;
 
 /// A numeric literal's value: decimal, `0x`/`0o`/`0b`, legacy octal and
 /// `_` separators.
@@ -23,28 +24,6 @@ pub fn number(text: &str) -> Option<f64> {
     }
 }
 
-/// `String(n)` in JavaScript.
-pub fn number_string(n: f64) -> String {
-    if n.is_nan() {
-        return "NaN".into();
-    }
-    if n.is_infinite() {
-        return if n > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if n == 0.0 {
-        return "0".into();
-    }
-    let abs = n.abs();
-    if (1e-6..1e21).contains(&abs) {
-        return format!("{n}");
-    }
-    // Exponent form: shortest digits, `e+21` / `e-7`.
-    let s = format!("{n:e}");
-    let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
-    let exp: i32 = exp.parse().unwrap_or(0);
-    format!("{mantissa}e{}{}", if exp < 0 { "-" } else { "+" }, exp.abs())
-}
-
 /// The value of a literal expression as text (`String(value)`): strings,
 /// templates without substitutions, numbers, bigints, booleans, null and
 /// regexes.
@@ -53,7 +32,7 @@ pub fn literal_text(s: &Syntax, node: u32) -> Option<String> {
     match s.kind(node)? {
         K::String => super::regex::cook(text),
         K::Template if s.all(node, F::Expr).next().is_none() => super::regex::cook(text),
-        K::Number => Some(number_string(number(text)?)),
+        K::Number => Some(js_number_text(number(text)?)),
         K::BigInt => bigint_decimal(text),
         K::Bool | K::Null | K::Regex => Some(text.to_string()),
         K::Paren => literal_text(s, s.get(node, F::Expr)?),
@@ -110,7 +89,7 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
     Some(match kind {
         K::String => ("string", super::regex::cook(text)?),
         K::Template if s.all(node, F::Expr).next().is_none() => ("string", super::regex::cook(text)?),
-        K::Number => ("number", number_string(number(text)?)),
+        K::Number => ("number", js_number_text(number(text)?)),
         K::BigInt => ("bigint", bigint_decimal(text)?),
         K::Bool => ("boolean", text.to_string()),
         K::Null => ("null", "null".into()),
@@ -128,8 +107,8 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
                 _ => return None,
             };
             match op {
-                "-" => ("number", if n == 0.0 { "-0".into() } else { number_string(-n) }),
-                "+" => ("number", number_string(n)),
+                "-" => ("number", if n == 0.0 { "-0".into() } else { js_number_text(-n) }),
+                "+" => ("number", js_number_text(n)),
                 _ => return None,
             }
         }
@@ -269,16 +248,12 @@ mod tests {
     }
 
     #[test]
-    fn numbers_read_and_print_like_javascript() {
+    fn numbers_read_like_javascript() {
         assert_eq!(number("0x10"), Some(16.0));
         assert_eq!(number("0o17"), Some(15.0));
         assert_eq!(number("0b101"), Some(5.0));
         assert_eq!(number("017"), Some(15.0));
         assert_eq!(number("1_000"), Some(1000.0));
         assert_eq!(number(".5"), Some(0.5));
-        assert_eq!(number_string(1.0), "1");
-        assert_eq!(number_string(0.1), "0.1");
-        assert_eq!(number_string(1e21), "1e+21");
-        assert_eq!(number_string(1e-7), "1e-7");
     }
 }

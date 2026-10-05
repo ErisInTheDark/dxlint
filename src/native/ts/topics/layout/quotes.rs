@@ -69,7 +69,7 @@ fn quote_site(name: String, quoted: bool, numeric: bool, offset: usize, group: b
     let mut lexer = Lexer::new(&name);
     let token = lexer.next_token();
     let whole = token.start == 0 && token.end as usize == name.len() && lexer.next_token().tok == Tok::Eof;
-    let redundant_number = whole && token.tok == Tok::Num && statics::number(&name).is_some_and(|n| statics::number_string(n) == name);
+    let redundant_number = whole && token.tok == Tok::Num && statics::number(&name).is_some_and(|n| crate::expr::value::js_number_text(n) == name);
     let identifier = if name.contains('\\') { crate::native::ts::regex::cook(&format!("\"{name}\"")).unwrap_or_default() } else { name.clone() };
     let redundant = whole && token.tok == Tok::Ident && IDENTIFIER.is_match(&identifier) || redundant_number;
     let keyword = matches!(name.as_str(),

@@ -435,6 +435,8 @@ so nested rules compose.
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
 | `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
+| `matches_selector(selector)`, `matches_selector(node, selector)` | whether the current or supplied native node matches an ESTree selector |
+| `selector_spans(selector)` | distinct logical matches under the current node as `{node, type, start, end}`; use the record's span for virtual nodes, not its backing native `node` |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
@@ -553,7 +555,23 @@ the neighbour itself with `is` (`previous is ts_comma`).
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `compact`, `sum`, `any`,
 `count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`,
-`compare_text`, `js_compare`.
+`compare_text`, `js_compare`, `js_number`.
+
+| function | value |
+|---|---|
+| `js_number(value)` | JavaScript Number conversion of primitives or `literal_value` records; NaN for nonnumeric strings, null for unsupported values (including symbols) |
+
+**ESTree selectors.** Selector queries use logical ESTree kinds and fields, not `ts_*` layer names. The shared native view includes virtual nodes such as `ChainExpression`, `ClassBody` and method `FunctionExpression` values. `selector_spans` retains distinct logical matches; its `node` is the backing native node, so report using `{start, end}` for the logical span. `matches_selector` accepts any logical role of its backing native node.
+
+Selectors support type names, `*`, lists, compounds, descendant/child/sibling/adjacent relations, field paths, attribute paths and comparisons, `:not`, `:is`/`:matches`, relative `:has`, child indices and the statement, declaration, expression, pattern and function classes. Empty selectors and `!` subjects are unsupported. Selectors are limited to 64 KiB, 128 nested lists and 128 compounds per chain. Invalid, unsupported or oversized selectors produce rule-error diagnostics.
+
+Regex attributes use a bounded JavaScript subset with `i`, `m`, `s`, `u` flags. Lookarounds, backreferences, named groups and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors support LF; CR and Unicode line separators fail explicitly when encountered. Legacy `i` matching requires ASCII patterns and values; use `u` for Unicode case folding. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.
+
+```zlint
+rule no-restricted-syntax {
+  set options ["WithStatement", {selector: "CallExpression[callee.name=eval]", message: "Avoid eval."}]
+}
+```
 
 `slice` counts characters; offsets (`offset`, `end_offset`, native spans)
 count bytes, so cut source text at them with `byte_slice(text, from, to?)`.
@@ -718,6 +736,7 @@ is wrong, messages) is written in the rule.
 | `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
 | `imported_from` | on an identifier that is or refers to an import: the module it comes from |
 | `declaration_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
+| `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.zlint` decides deprecation |
 | `resolved`, `reference_kind` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file), and the `declaration_kind` of what it refers to |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
@@ -735,7 +754,7 @@ is wrong, messages) is written in the rule.
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `property_info` | on static member or index access: `{declared, visibility}` (`public`, `private`, `protected` or null), preserving declaration presence even when its value type is unresolved |
 | `index_key_types` | constrained index-signature key domains as `{text, string_like}` records, inherited domains included |
-| `static_number` | statically known numeric value of an expression (literals, arithmetic, unmodified local bindings); null when unresolved |
+| `static_number` | statically known numeric value of an expression (numeric, boolean and bigint literals, arithmetic, unmodified local bindings); null when unresolved |
 | `type_relations` | operand, annotation, original and context identity, bounded assignability, nested property mutability and generic shape; null when unresolved |
 | `type_flow(site, source)` | source/expected type relation records at declared, contextual and heritage sites: union domains and enum identities, tri-state assignability, aligned generic/index/property children, typed operands and receiver enum names; `complete: false` marks traversal limits |
 | `type_structure(names, fields?)` | constrained recursive `{kind, parts, names, generic_names, aliases, members}`: array/tuple elements or union/intersection parts; optional tuple slots include undefined. Explicit `unknown`, open `parameter` and `unresolved` are distinct. `names` includes printed base types; `generic_names` contains root generic declaration names. `aliases` contains retained root-annotation alias names, not aliases propagated through inferred values or calls. Queried members contain winning `{owner, kind, signature, key_symbol}` declarations; owner is `{name, kind, from}` or null, and `key_symbol` verifies standard-library Symbol computed-key identity. The second argument selects the recursive fields returned (default: the six above); opt-in fields: `declarations` (`{name, kind, from, inherited}`), `callable`, `constructor` (declared construct signatures or class values), `symbol_constructor` (a named type's constructible value side), `class_value`, `property_names` (without signature markers or apparent function prototype members), `iterable` (null when unresolved) and, on the root, `property_writes` (property names assigned through the binding) |
@@ -930,6 +949,10 @@ and `final-newline`.
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
 | `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
 | `.ts/assertions` | type-aware assertion and non-null policy, imported by `.ts` |
+| `.ts/deprecation` | declaration documentation policy (`no-deprecated`), imported by `.ts`; diagnostic-only |
+| `.ts/type-specifiers` | shared type/value origin matching helpers (`matches_type_specifier`, `type_is_allowed`) |
+| `.ts/methods` | type-aware method policy (`prefer-find`), imported by `.ts/typed`; filter result zero-index/bracket/at access, computed constant methods, sequences and both conditional branches; diagnostic-only |
+| `.ts/selectors` | configurable ESTree syntax policy (`no-restricted-syntax`), imported by `.ts` |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 

@@ -40,7 +40,7 @@ fn parts(file: &NativeFile<'_>, node: u32) -> Vec<Part> {
             Ty::Lit(text, p @ ("string" | "number" | "boolean" | "bigint")) => {
                 let name = match p {
                     "string" => crate::native::ts::regex::cook(&text).and_then(|text| serde_json::to_string(&text).ok()),
-                    "number" => crate::native::ts::statics::number(&text).map(crate::native::ts::statics::number_string),
+                    "number" => crate::native::ts::statics::number(&text).map(crate::expr::value::js_number_text),
                     _ => Some(text.to_string()),
                 };
                 name.map_or_else(|| vec![Part::other()], |name| vec![Part { primitive: Some(p), literal: true, name, special: None }])

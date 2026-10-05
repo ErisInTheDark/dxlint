@@ -445,14 +445,14 @@ fn key_name(v: &impl View, key: u32) -> Box<str> {
             if let Some(name) = super::regex::cook(v.text(literal)) { return name.into() }
         }
         Some(K::Number) => {
-            if let Some(number) = super::statics::number(v.text(literal)) { return super::statics::number_string(number).into() }
+            if let Some(number) = super::statics::number(v.text(literal)) { return crate::expr::value::js_number_text(number).into() }
         }
         Some(K::Unary) => {
             if let (Some(op), Some(value)) = (v.get(literal, F::Op), v.get(literal, F::Arg).filter(|&arg| v.is(arg, K::Number))) {
                 if let Some(number) = super::statics::number(v.text(value)) {
                     match v.text(op) {
-                        "+" => return super::statics::number_string(number).into(),
-                        "-" => return super::statics::number_string(-number).into(),
+                        "+" => return crate::expr::value::js_number_text(number).into(),
+                        "-" => return crate::expr::value::js_number_text(-number).into(),
                         _ => {}
                     }
                 }

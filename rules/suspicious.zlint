@@ -16,7 +16,6 @@ rule no-nonoctal-decimal-escape
 rule no-octal
 rule no-regex-spaces*
 rule no-require-imports
-rule no-restricted-syntax:with
 rule no-sequences
 rule no-shadow-restricted-names
 rule no-template-curly-in-string
@@ -27,5 +26,6 @@ rule no-unused-imports
 rule no-unused-labels
 rule no-useless-catch*
 rule no-useless-escape*
+rule no-with
 rule no-wrapper-object-types
 rule require-yield

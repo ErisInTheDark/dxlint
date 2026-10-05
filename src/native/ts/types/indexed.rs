@@ -153,7 +153,7 @@ impl Checker<'_> {
 
     fn index_key_priority(&self, index: &Ty, key: &Ty) -> u8 {
         let numeric = matches!(index, Ty::Prim("number") | Ty::Lit(_, "number")) || literal_key(index).is_some_and(|name| {
-            super::super::statics::number(&name).is_some_and(|value| super::super::statics::number_string(value) == name)
+            super::super::statics::number(&name).is_some_and(|value| crate::expr::value::js_number_text(value) == name)
         });
         if numeric && matches!(key, Ty::Prim("number")) {
             3
@@ -170,7 +170,7 @@ impl Checker<'_> {
 fn literal_key(index: &Ty) -> Option<String> {
     match index {
         Ty::Lit(value, "string") => super::super::regex::cook(value),
-        Ty::Lit(value, "number") => super::super::statics::number(value).map(super::super::statics::number_string),
+        Ty::Lit(value, "number") => super::super::statics::number(value).map(crate::expr::value::js_number_text),
         _ => None,
     }
 }

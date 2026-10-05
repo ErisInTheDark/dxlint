@@ -16,3 +16,4 @@ pub mod line_index;
 pub mod native;
 pub mod path_globs;
 pub mod pattern;
+pub mod selector;

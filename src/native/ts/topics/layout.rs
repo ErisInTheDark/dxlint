@@ -72,7 +72,7 @@ fn multiple_space_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         while active.peek().is_some_and(|entry| entry.0.1 <= point) {
             active.pop();
         }
-        let owner = active.peek().and_then(|entry| syntax.kind(entry.0.2)).map_or("", spacing_owner);
+        let owner = active.peek().and_then(|entry| syntax.kind(entry.0.2)).map_or("", super::super::estree::spacing_owner);
         let comment = matches!(right.tok, Tok::P("/*" | "//"));
         let raw = &syntax.src[right.start as usize..right.end as usize];
         let display = if comment {
@@ -99,39 +99,6 @@ fn multiple_space_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         ]));
     }
     Value::list(sites)
-}
-
-fn spacing_owner(kind: K) -> &'static str {
-    match kind {
-        K::Program => "Program",
-        K::Prop | K::PatternProp => "Property",
-        K::Var => "VariableDeclaration",
-        K::Declarator => "VariableDeclarator",
-        K::Array => "ArrayExpression",
-        K::Object => "ObjectExpression",
-        K::ArrayPattern => "ArrayPattern",
-        K::ObjectPattern => "ObjectPattern",
-        K::Import => "ImportDeclaration",
-        K::ImportSpec => "ImportSpecifier",
-        K::ClassProp => "PropertyDefinition",
-        K::Method => "MethodDefinition",
-        K::Binary => "BinaryExpression",
-        K::Logical => "LogicalExpression",
-        K::Assign => "AssignmentExpression",
-        K::AssignPattern => "AssignmentPattern",
-        K::Return => "ReturnStatement",
-        K::ExprStmt => "ExpressionStatement",
-        K::Conditional => "ConditionalExpression",
-        K::Call => "CallExpression",
-        K::New => "NewExpression",
-        K::Block => "BlockStatement",
-        K::PropSig => "TSPropertySignature",
-        K::TypeLit => "TSTypeLiteral",
-        K::TypeAlias => "TSTypeAliasDeclaration",
-        K::Interface => "TSInterfaceDeclaration",
-        K::EnumMember => "TSEnumMember",
-        _ => "",
-    }
 }
 
 fn edge(src: &str, token: Option<&Token>, start: usize, end: usize) -> Value<'static> {

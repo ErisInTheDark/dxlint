@@ -55,5 +55,6 @@ import .ts/indentation
 import .ts/structure
 import .ts/scoping
 import .ts/suggestions
+import .ts/selectors
 import .ts/restrictions
 import .ts/jsx

@@ -29,7 +29,6 @@ group structure_return_owner ts_return, ts_arrow, ts_function, ts_program
 
 in ts_parenthesized let structure_parens_inner expression.node
 in ts_parenthesized_type let structure_parens_inner type.node
-in ts_type_alias let structure_parens_type_annotation [] type.node
 in ts_node let structure_unwrapped if is structure_parens then structure_parens_inner.structure_unwrapped else node
 in structure_parens let structure_parens_outer if parent is structure_parens then parent.structure_parens_outer else node
 in structure_parens let structure_parens_count if parent is structure_parens then 1 + parent.structure_parens_count else 1
@@ -115,25 +114,6 @@ fn structure_parens_required(source, p, inner, outer) =
   else if outer is (ts_type_assertion.expression, ts_as.expression, ts_satisfies.expression) then structure_parens_need(inner.precedence < 15)
   else if outer is (ts_node.type, ts_node.return_type) then 0 else null
 
-# The existing ignoredNodes subset: parent kinds and five child-field tests.
-fn structure_parens_selector_type(n) =
-  if n is structure_member then "MemberExpression" else if n is ts_new then "NewExpression"
-  else if n is ts_call then "CallExpression" else if n is ts_spread then "SpreadElement"
-  else if n is ts_declarator then "VariableDeclarator" else if n is ts_conditional then "ConditionalExpression"
-  else if n is ts_binary then "BinaryExpression" else if n is ts_logical then "LogicalExpression"
-  else if n is ts_assignment then "AssignmentExpression" else if n is ts_await then "AwaitExpression"
-  else if n is ts_arrow then "ArrowFunctionExpression" else if n is ts_function then "FunctionExpression"
-  else if n is ts_type_alias then "TSTypeAliasDeclaration" else if n is ts_union then "TSUnionType"
-  else if n is ts_intersection then "TSIntersectionType" else if n is ts_identifier then "Identifier"
-  else if n is ts_object then "ObjectExpression" else if n is ts_array then "ArrayExpression" else ""
-fn structure_parens_selector_field(kind, name, child) = ([kind "[" name "]"]
-  (if structure_parens_selector_type(child.structure_unwrapped) == "" then [] else [kind "[" name ".type=" structure_parens_selector_type(child.structure_unwrapped) "]"]))
-fn structure_parens_selectors(p) = ([structure_parens_selector_type(p)]
-  reduce([{ name: "object", nodes: [] p.object.node }, { name: "argument", nodes: [] p.argument.node },
-    { name: "init", nodes: [] p.init.node }, { name: "body", nodes: [] p.body.node },
-    { name: "typeAnnotation", nodes: if p is ts_type_alias then p.structure_parens_type_annotation else [] }], [],
-    (selectors, field) => selectors reduce(field.nodes, [], (entries, child) => entries structure_parens_selector_field(structure_parens_selector_type(p), field.name, child))))
-
 in structure_parens rule no-extra-parens {
   option mode "all" | "functions" = "all"
   option conditionalAssign boolean = true "enforce assignments in conditions"
@@ -186,7 +166,7 @@ in structure_parens rule no-extra-parens {
     && (!allowNodesInSpreadElement.LogicalExpression || inner not ts_logical)
     && (!allowNodesInSpreadElement.AssignmentExpression || inner not ts_assignment)
     && (!allowNodesInSpreadElement.AwaitExpression || inner not ts_await)
-  when !any(ignoredNodes, selector => contains(structure_parens_selectors(owner), re_replace(selector, /["']/, "")))
+  when !any(ignoredNodes, selector => matches_selector(owner, selector))
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
   report at offset
   warn "Unnecessary parentheses around expression."

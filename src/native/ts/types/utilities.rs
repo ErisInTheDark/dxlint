@@ -187,7 +187,7 @@ pub(super) fn required_keys(ty: &Ty) -> Option<Vec<String>> {
     match ty {
         Ty::Prim("string" | "number" | "symbol") | Ty::Never => Some(Vec::new()),
         Ty::Lit(text, "string") => Some(vec![super::super::regex::cook(text)?]),
-        Ty::Lit(text, "number") => Some(vec![super::super::statics::number_string(super::super::statics::number(text)?)]),
+        Ty::Lit(text, "number") => Some(vec![crate::expr::value::js_number_text(super::super::statics::number(text)?)]),
         Ty::Union(parts) => {
             let strings = parts.iter().any(|part| matches!(part, Ty::Prim("string")));
             let numbers = parts.iter().any(|part| matches!(part, Ty::Prim("number")));
@@ -206,7 +206,7 @@ pub(super) fn required_keys(ty: &Ty) -> Option<Vec<String>> {
 pub(super) fn accepts_key(ty: &Ty, key: &str) -> Option<bool> {
     match ty {
         Ty::Prim("string") => Some(true),
-        Ty::Prim("number") => Some(super::super::statics::number(key).is_some_and(|n| super::super::statics::number_string(n) == key)),
+        Ty::Prim("number") => Some(super::super::statics::number(key).is_some_and(|n| crate::expr::value::js_number_text(n) == key)),
         Ty::Prim("symbol") | Ty::Never => Some(false),
         Ty::Lit(_, "string" | "number") => Some(required_keys(ty)?.iter().any(|name| name == key)),
         Ty::Union(parts) => {

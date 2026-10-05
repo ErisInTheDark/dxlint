@@ -26,6 +26,8 @@ pub trait Facts {
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static>;
     /// `f` on the file itself, for links (nodes a node leads to).
     fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
+    fn matches_selector(&self, node: u32, selector: &crate::selector::Selector) -> Result<bool, String>;
+    fn selector_spans(&self, node: u32, selector: &crate::selector::Selector) -> Result<Vec<crate::selector::Span>, String>;
     fn binding(&self, node: u32) -> Option<Binding>;
     fn import_of(&self, node: u32) -> Option<(String, String)>;
     fn decl_doc(&self, node: u32) -> Option<String>;
@@ -129,6 +131,14 @@ pub struct RegexFinding {
 pub type TypeParamFacts = (Vec<Option<String>>, Vec<Option<String>>);
 
 impl Facts for NativeFile<'_> {
+    fn matches_selector(&self, node: u32, selector: &crate::selector::Selector) -> Result<bool, String> {
+        super::estree::matches(self, node, selector)
+    }
+
+    fn selector_spans(&self, node: u32, selector: &crate::selector::Selector) -> Result<Vec<crate::selector::Span>, String> {
+        super::estree::spans(self, node, selector)
+    }
+
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static> {
         f(self, node)
     }
