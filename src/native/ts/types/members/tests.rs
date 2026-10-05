@@ -84,3 +84,15 @@ fn computed_symbol_origins_keep_signature_shape_and_declaration_scope() {
         }
     });
 }
+
+#[test]
+fn unresolved_explicit_heritage_does_not_claim_implicit_object_members() {
+    with_library("interface Object { toString(): string; } type Constructable<T> = abstract new (...args: any[]) => T; interface Custom { toString(): string; } declare const base: Constructable<Custom>; class Target extends base {}", |checker| {
+        let ty = checker.eval(&TypeSyn::Ref(vec!["Target".into()].into(), Vec::new()), &Env::file(checker.file));
+        let resolution = checker.member_resolution(&ty, "toString");
+        assert!(!resolution.declared, "{resolution:?}");
+        assert!(resolution.declarations.is_empty(), "{resolution:?}");
+        assert!(resolution.ty.is_opaque(), "{resolution:?}");
+        assert!(checker.member(&ty, "toString").is_opaque());
+    });
+}

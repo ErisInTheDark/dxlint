@@ -408,6 +408,7 @@ impl Checker<'_> {
             return Resolution { ty: Ty::Fn(Arc::new(Callable { sigs, env: Arc::new(env), ret: None })), from_index: false, declared: true, declarations, signature_keys: Vec::new() };
         }
         // Inherited.
+        let mut unresolved_base = false;
         for &r in sym {
             let Some(s) = self.summary_of(r.file) else { continue };
             let decl = &s.decls[r.decl as usize];
@@ -416,6 +417,7 @@ impl Checker<'_> {
             for base in self.bases(decl) {
                 let base_ty = self.eval(base, &env);
                 if base_ty.is_opaque() {
+                    unresolved_base = true;
                     continue;
                 }
                 let t = self.member_lookup::<METADATA, false>(&base_ty, name, receiver);
@@ -424,6 +426,7 @@ impl Checker<'_> {
                 }
             }
         }
+        if unresolved_base { return Resolution::typed(Ty::Unknown) }
         let object = self.global_named("Object", Vec::new());
         if matches!(&object, Ty::Named(declarations, _) if sym.iter().any(|decl| declarations.contains(decl))) {
             Resolution::typed(Ty::Unknown)
