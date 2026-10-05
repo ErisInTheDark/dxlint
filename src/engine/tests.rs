@@ -1587,6 +1587,18 @@ fn key_chains_on_any_node_value_read_like_paths() {
 }
 
 #[test]
+fn nodes_held_in_records_read_the_rest_of_a_path() {
+    let l = native_linter(r#"
+        in ts_call rule c {
+          let entry { callee: callee.node, args: { first: first([] argument.node) } }
+          info "{entry.callee.end_offset}/{entry.args.first.offset}/{kind_name(entry.args.first.node)}"
+        }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f(x);\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["1/2/ts_identifier"]);
+}
+
+#[test]
 fn forward_reads_attributes_through_wrappers() {
     let l = native_linter(r#"
         in ts_identifier let size len(text)

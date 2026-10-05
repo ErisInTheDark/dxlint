@@ -140,9 +140,9 @@ pub enum CExpr {
     /// The first value when it is a node, else the second (an `is`
     /// subject: `next_token` is a node read, or the fact's tag).
     Coalesce(Box<CExpr>, Box<CExpr>),
-    /// `base.a.b`: on node values the compiled read of `a.b`; on records
-    /// those keys.
-    Path(Box<CExpr>, Vec<value::Key>, Option<Box<CExpr>>),
+    /// `base.a.b`: records give their keys; a node, at the start or reached
+    /// part way, reads the rest of the path (`parts[i]` reads `keys[i..]`).
+    Path(Box<CExpr>, Vec<value::Key>, Vec<Option<CExpr>>),
     /// A field when the node has one by that label, else this (`parent.x`
     /// where `x` names both a field and a fact).
     FieldElse(u16, Box<CExpr>),
@@ -446,9 +446,18 @@ impl<'a> Scope<'a> {
             [] => base,
             [key] => self.member(base, key),
             _ => {
-                let mut quiet = Vec::new();
-                let part = self.relative_path(keys, &mut quiet).filter(|_| quiet.is_empty());
-                CExpr::Path(Box::new(base), keys.iter().map(|k| k.text.clone().into()).collect(), part.map(Box::new))
+                // The read of `keys[i..]` on a node, for each `i`: a node
+                // reached part way through a record (`rec.owner.line`) reads
+                // the rest there.
+                let parts = (0..keys.len())
+                    .map(|i| {
+                        let mut quiet = Vec::new();
+                        let rest = &keys[i..];
+                        let part = if rest.len() == 1 { self.node_part(&rest[0]) } else { self.relative_path(rest, &mut quiet) };
+                        part.filter(|_| quiet.is_empty())
+                    })
+                    .collect();
+                CExpr::Path(Box::new(base), keys.iter().map(|k| k.text.clone().into()).collect(), parts)
             }
         }
     }
@@ -1758,17 +1767,26 @@ impl<'a> Ctx<'a> {
                 }
                 Value::list(out)
             }
-            CExpr::Path(base, keys, part) => {
+            CExpr::Path(base, keys, parts) => {
                 let base = self.eval(base)?;
+                // From key `i` on: a node reads the rest of the path there
+                // (`.node` on a node is itself); a record its key.
                 let on = |v: &Value<'a>| -> Result<Value<'a>, String> {
-                    match (v, part) {
-                        (Value::Node(id, _), Some(part)) => Ctx { node: *id, ..*self }.eval(part),
-                        // `rec.owner.node`: a node held in a record is itself.
-                        (Value::Record(_), _) => {
-                            Ok(keys.iter().fold(v.clone(), |v, k| if &**k == "node" && matches!(v, Value::Node(..)) { v } else { v.key(k) }))
-                        }
-                        _ => Ok(Value::Null),
+                    let mut v = v.clone();
+                    for (i, k) in keys.iter().enumerate() {
+                        v = match v {
+                            Value::Node(..) if &**k == "node" => v,
+                            Value::Node(id, _) => {
+                                return match &parts[i] {
+                                    Some(part) => Ctx { node: id, ..*self }.eval(part),
+                                    None => Ok(Value::Null),
+                                };
+                            }
+                            Value::Record(_) => v.key(k),
+                            _ => return Ok(Value::Null),
+                        };
                     }
+                    Ok(v)
                 };
                 match &base {
                     Value::List(items) if items.iter().any(|i| matches!(i, Value::Node(..))) => {
