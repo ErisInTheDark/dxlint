@@ -117,9 +117,12 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
         let cache = cache.as_ref();
         let explicit: Vec<PathBuf> = roots.iter().filter(|r| r.is_file()).cloned().collect();
         s.spawn(move || {
+            // Walk first, then lint the biggest files first: a big file found
+            // late would otherwise be the tail every other thread waits on.
+            let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
             walker.build_parallel().run(|| {
-                let tx = tx.clone();
                 let explicit = &explicit;
+                let found = &found;
                 Box::new(move |entry| {
                     let Ok(entry) = entry else { return WalkState::Continue };
                     if !entry.file_type().is_some_and(|t| t.is_file()) {
@@ -128,12 +131,31 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
                     let path = entry.path();
                     // Explicitly named files are linted even if ignored by git.
                     let wanted = linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path));
-                    if wanted && tx.send(lint_file(linter, cache, path, fix)).is_err() {
-                        return WalkState::Quit;
+                    if wanted {
+                        let size = entry.metadata().map_or(0, |m| m.len());
+                        found.lock().expect("file list").push((size, path.to_path_buf()));
                     }
                     WalkState::Continue
                 })
             });
+            let mut queue = found.into_inner().expect("file list");
+            queue.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            let next = std::sync::atomic::AtomicUsize::new(0);
+            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            std::thread::scope(|w| {
+                for _ in 0..threads {
+                    let tx = tx.clone();
+                    let (queue, next) = (&queue, &next);
+                    w.spawn(move || {
+                        while let Some((_, path)) = queue.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                            if tx.send(lint_file(linter, cache, path, fix)).is_err() {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+            drop(tx);
         });
 
         let mut results: Vec<FileResult> = Vec::new();
