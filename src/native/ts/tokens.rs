@@ -133,6 +133,7 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
         parsed.nodes.push(Node { matcher: kind as u32, start, end, children: Vec::new() });
         parsed.nodes[owner as usize].children.push(Edge { label: F::Token as u16, node: id });
     }
+    parsed.tokens = Some(Lexed(tokens));
 }
 
 /// The layer a token reads as from outside: the node written exactly as
@@ -530,7 +531,7 @@ mod lexical_tests {
             tokens.sort_by_key(|token| (token.0, token.1));
             tokens
         };
-        let mut all = Parsed { nodes: parsed.nodes.clone(), root: parsed.root };
+        let mut all = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
         attach_selected(src, &mut all, &ALL_TOKENS);
         let all_tokens = projection(&all);
         let mut wanted = [false; ALL_KINDS.len()];
@@ -539,13 +540,68 @@ mod lexical_tests {
         }
         let expected: Vec<_> = all_tokens.into_iter().filter(|token| wanted[token.3 as usize]).collect();
         assert!(!expected.is_empty());
-        let mut selected = Parsed { nodes: parsed.nodes.clone(), root: parsed.root };
+        let mut selected = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
         attach_selected(src, &mut selected, &wanted);
         assert_eq!(projection(&selected), expected);
         let mut none = parsed;
         attach_selected(src, &mut none, &[false; ALL_KINDS.len()]);
         assert_eq!(none.nodes.len(), original_len);
         assert!(projection(&none).is_empty());
+    }
+
+    #[test]
+    fn attached_stream_is_reused_without_changing_indexed_queries() {
+        use crate::engine::tests::native_linter;
+        use crate::grammar::Tree;
+        use crate::native::ts::{modules::Project, syntax::Syntax};
+        use std::path::Path;
+
+        let linter = native_linter("");
+        let project = Project::default();
+        let front = linter.grammar.natives.first().expect("native ts");
+        let mut selected = [false; ALL_KINDS.len()];
+        selected[K::Comma as usize] = true;
+        for (src, jsx) in [
+            ("", false),
+            ("/* before */ /[/*,;]/u.test(value); value / other;\nconst a = [1, 2];", false),
+            ("const v = `a ${`b ${other} c`} z`; type Name = `a${string}z`; const empty = ``;", false),
+            ("function f<T>(x: T): T { return x; } const n = value >> 2; // after\n", false),
+            ("const view = <Box a=\"\\\" b={ value }> \n/* raw, text */ \\ </Box>;", true),
+        ] {
+            for (wanted, graft) in [(ALL_TOKENS, false), (selected, true), ([false; ALL_KINDS.len()], true)] {
+                let mut parsed = super::super::parse(src, jsx).expect("valid syntax");
+                attach_selected(src, &mut parsed, &wanted);
+                let attached = wanted.iter().any(|&wanted| wanted);
+                assert_eq!(parsed.tokens.is_some(), attached);
+                let nodes = front.remap(parsed.nodes);
+                let tree = if graft {
+                    let lang = linter.grammar.lang_for(Path::new("a.tsx")).expect("ts language");
+                    Tree::graft(&linter.grammar, lang, src, nodes, parsed.root, None, None)
+                } else {
+                    Tree::from_native(nodes, parsed.root)
+                };
+                let path = Path::new("/root/a.tsx");
+                let lazy = NativeFile::new(Syntax::new(&tree, src, front), path, &project);
+                let seeded = NativeFile::new(Syntax::new(&tree, src, front), path, &project)
+                    .with_tokens(parsed.tokens);
+                let code = if attached {
+                    seeded.cached::<Lexed>(|_| panic!("attached stream must not be lexed again"))
+                } else {
+                    seeded.cached(lex)
+                };
+                let projection = |tokens: &[Token]| tokens.iter()
+                    .map(|t| (t.tok, t.start, t.end, t.nl)).collect::<Vec<_>>();
+                assert_eq!(projection(&code.0), projection(&lazy.cached(lex).0));
+                assert_eq!(projection(&seeded.cached(lex_comments).0), projection(&lazy.cached(lex_comments).0));
+                for node in 0..tree.nodes.len() as u32 {
+                    assert_eq!(edge(&seeded, node, true), edge(&lazy, node, true));
+                    assert_eq!(paired(&seeded, node), paired(&lazy, node));
+                    for fact in super::super::topics::syntax::FACTS {
+                        assert_eq!((fact.get)(&seeded, node), (fact.get)(&lazy, node));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -507,6 +507,14 @@ impl<'t> NativeFile<'t> {
         }
     }
 
+    /// Reuse the complete stream already scanned for token attachment.
+    pub(crate) fn with_tokens(mut self, tokens: Option<super::tokens::Lexed>) -> Self {
+        if let Some(tokens) = tokens {
+            self.topic_cache.get_mut().insert(TypeId::of::<super::tokens::Lexed>(), Rc::new(tokens));
+        }
+        self
+    }
+
     /// A topic module's whole-file result of type `T`, computed on first use
     /// (one per type: give each analysis its own result type).
     pub fn cached<T: 'static>(&self, init: impl FnOnce(&Self) -> T) -> Rc<T> {

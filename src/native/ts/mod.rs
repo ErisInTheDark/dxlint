@@ -46,6 +46,7 @@ pub struct Parsed {
     /// [`kinds::Field`] (plain text nodes use `TEXT`).
     pub nodes: Vec<Node>,
     pub root: u32,
+    pub(crate) tokens: Option<tokens::Lexed>,
 }
 
 /// Which files this front end reads, and whether they may contain JSX.
@@ -62,7 +63,7 @@ pub fn reads(path: &Path) -> Option<bool> {
 pub fn parse(src: &str, jsx: bool) -> Result<Parsed, (u32, String)> {
     let mut p = parse::Parser::new(src, jsx);
     match p.parse_program() {
-        Ok(root) => Ok(Parsed { nodes: std::mem::take(&mut p.nodes), root }),
+        Ok(root) => Ok(Parsed { nodes: std::mem::take(&mut p.nodes), root, tokens: None }),
         Err(_) => Err(p.error.take().unwrap_or((0, "syntax error".into()))),
     }
 }
