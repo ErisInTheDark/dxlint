@@ -1,6 +1,44 @@
-//! Structural questions about constrained types, preserving enum identity.
+//! Structural type questions, preserving literal and enum identity.
 
+use crate::expr::Value;
 use crate::native::ts::types::{Checker, Ty};
+
+pub(super) fn has_void(ty: &Ty) -> bool {
+    match ty {
+        Ty::Void => true,
+        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(has_void),
+        _ => false,
+    }
+}
+
+pub(super) fn literal_values(ty: &Ty) -> Value<'static> {
+    let mut values = Vec::new();
+    collect_literals(ty, &mut values);
+    Value::list(values)
+}
+
+fn collect_literals(ty: &Ty, values: &mut Vec<Value<'static>>) {
+    match ty {
+        Ty::Union(parts) | Ty::Inter(parts) => {
+            for part in parts {
+                collect_literals(part, values);
+            }
+        }
+        Ty::Lit(text, kind) => {
+            let value = match *kind {
+                "string" => crate::native::ts::regex::cook(text).map(Value::from),
+                "number" => crate::native::ts::statics::number(text).map(Value::from),
+                "boolean" => Some(Value::Bool(text.as_ref() == "true")),
+                "bigint" => Some(Value::from(text.to_string())),
+                _ => None,
+            };
+            if let Some(value) = value {
+                values.push(Value::record(vec![("type".into(), Value::from(*kind)), ("value".into(), value)]));
+            }
+        }
+        _ => {}
+    }
+}
 
 pub(super) fn string_like(ty: &Ty, checker: &Checker<'_>) -> bool {
     match ty {

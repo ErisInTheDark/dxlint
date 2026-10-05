@@ -332,40 +332,65 @@ in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument,
   warn if type_argument_redundant == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
 }
 
-# prefer-optional-chain: `a && a.b`, `!a || !a.b`, and comparisons whose
-# result does not change when the chain stops early (`a && a.b === 1`,
-# `!a || a.b !== 1`). Each operand says what it checks (`chain_subject`).
-macro member_path_pattern /^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$#][\w$]*)*$/
-in ts_identifier, ts_member, ts_this let chain_subject text
-in ts_identifier, ts_member, ts_this let chain_check_kind "plain"
-in ts_unary let chain_subject if operator == "!" && re_test(argument, member_path_pattern) then argument else null
-in ts_unary let chain_check_kind "not"
-in ts_logical let chain_subject right.chain_subject
-in ts_logical let chain_check_kind if operator == parent.operator then right.chain_check_kind else null
-in ts_binary {
-  let compares_nullish left ~ /undefined|null/ || right ~ /undefined|null/
-  let is_equality operator == "===" || operator == "=="
-  let is_inequality operator == "!==" || operator == "!="
-  let chain_check_kind if is_equality && !compares_nullish || is_inequality && compares_nullish then "cmp_and" else if is_inequality && !compares_nullish || is_equality && compares_nullish then "cmp_or" else null
-  let chain_subject null
-  let chain_compared_left left
-  let chain_compared_right right
-}
-macro extends_chain(base, chain) (re_test(chain, "^" re_escape(base) "(?:\\??\\.|\\[)"))
-# The checked value's type: optional chaining only says the same thing when
-# it is nullable and has no other falsy values (`false | X` stays as is).
-in ts_identifier, ts_member, ts_this let chain_type_flags type_flags
-in ts_unary let chain_type_flags argument.chain_type_flags
-in ts_logical let chain_type_flags right.chain_type_flags
-macro chain_type_allows(fs) (fs == null || contains(fs, "any") || !contains(fs, "boolean") && !contains(fs, "number") && !contains(fs, "string") && !contains(fs, "bigint"))
-# `a?.b !== x` differs from `!a || a.b !== x` when `x` may be undefined.
-in ts_binary let compared_value_flags if re_test(default(left, ""), /\./) then right.type_flags else left.type_flags
+# Structural shapes keep computed access and calls distinct from dotted names.
+in ts_identifier, ts_private_name, ts_this, ts_super, ts_literal let optional_shape [kind_name(node), text]
+in ts_parenthesized let optional_shape if expression.in_optional_chain == true && parent is (ts_member, ts_index, ts_call) then ["boundary", expression.optional_shape] else expression.optional_shape
+in ts_non_null let optional_shape expression.optional_shape
+in ts_meta_property let optional_shape ["meta", text]
+in ts_await let optional_shape if argument.optional_shape != null then ["await", argument.optional_shape] else null
+in ts_member let optional_shape if object.optional_shape != null && property.optional_shape != null then ["member", object.optional_shape, property.optional_shape] else null
+in ts_index let optional_shape if object.optional_shape != null && index.optional_shape != null then ["index", object.optional_shape, index.optional_shape] else null
+in ts_call let optional_shape if callee.optional_shape != null && all([] argument.optional_shape, shape => shape != null) then ["call", callee.optional_shape, [] argument.optional_shape, [] type_argument.text] else null
+in ts_unary let optional_shape if argument.optional_shape != null then ["unary", operator, argument.optional_shape] else null
+in ts_binary let optional_shape if left.optional_shape != null && right.optional_shape != null then ["binary", operator, left.optional_shape, right.optional_shape] else null
+in ts_template let optional_shape ["template", [] quasi.text, [] expression.optional_shape]
+in ts_parenthesized let optional_operands expression.optional_operands
+in ts_logical let optional_operands (if unparenthesised_node(left.node) is ts_logical && unparenthesised_node(left.node).operator == operator then left.optional_operands else [left.node]) (if unparenthesised_node(right.node) is ts_logical && unparenthesised_node(right.node).operator == operator then right.optional_operands else [right.node])
+fn optional_base(n) = if n is (ts_member, ts_index) && n.property not ts_private_name then n.object.node else if n is ts_call then n.callee.node else if n is ts_non_null then n.expression.node else if n is ts_parenthesized && n.expression.in_optional_chain != true then n.expression.node else null
+fn optional_same(a, b) = a.optional_shape != null && a.optional_shape == b.optional_shape
+fn optional_extends(a, b) = last(walk(a, current => if current is ts_non_null then current.expression.node else null)) is (ts_identifier, ts_member, ts_index, ts_call, ts_meta_property) && !optional_same(a, b) && any(slice(walk(b, current => optional_base(current)), 1), current => optional_same(a, current))
+fn optional_nullish(n) = if n is ts_null then "null" else if n is ts_identifier && n.text == "undefined" then "undefined" else if n is ts_string && n.literal_value.value == "undefined" then "typeof" else null
+fn optional_subject(n, value) = if value == "typeof" && n is ts_unary && n.operator == "typeof" && !(n.argument is ts_identifier && n.argument.is_real_global) then n.argument.node else if value != "typeof" then n else null
+fn optional_comparison_kind(value, comparison, op) = if value != "typeof" && starts_with(comparison, "!") != (op == "&&") then "last" else if comparison == "==" || comparison == "!=" then "nullish" else if value == "typeof" then "undefined" else value
+fn optional_binary_operand(n, op) = if optional_nullish(n.right.node) != null then {node: n, subject: optional_subject(n.left.node, optional_nullish(n.right.node)), kind: optional_comparison_kind(optional_nullish(n.right.node), n.operator, op), matches: starts_with(n.operator, "!") == (op == "&&"), comparison: n.operator} else if optional_nullish(n.left.node) != null then {node: n, subject: optional_subject(n.right.node, optional_nullish(n.left.node)), kind: optional_comparison_kind(optional_nullish(n.left.node), n.operator, op), matches: starts_with(n.operator, "!") == (op == "&&"), comparison: n.operator} else {node: n, subject: null, kind: "last", matches: false, comparison: n.operator}
+fn optional_operand(n, op) = if n is ts_binary then optional_binary_operand(n, op) else if n is ts_unary && n.operator == "!" then {node: n, subject: unparenthesised_node(n.argument.node), kind: "not", matches: op == "||"} else {node: n, subject: unparenthesised_node(n), kind: "plain", matches: op == "&&"}
+fn optional_falsy_literal(n) = any(n.type_literal_values, literal => literal.type == "boolean" && literal.value == false || literal.type == "number" && literal.value == 0 || literal.type == "string" && literal.value == "" || literal.type == "bigint" && re_test(literal.value, /^-?0(?:[xXbBoO]0+|0*)n$/))
+fn optional_type_allowed(n, opts) = !n.type_has_void && all(default(n.type_flags, ["unknown"]), flag => !contains(["any", "unknown", "string", "number", "boolean", "bigint"], flag) || get(opts, flag))
+fn optional_uncertain(n, flag) = any(default(n.type_flags, ["unknown"]), part => contains([flag, "any", "unknown"], part))
+fn optional_span(items, opts) = if len(items) > 1 && (!opts.requireNullish || any(slice(items, 0, -1), item => contains(default(item.subject.type_flags, []), "nullable"))) then {start: if re_test(byte_slice(opts.boundary, 0, first(items).node.offset - opts.boundary.offset), /^(?:\s|\(|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*$/) then opts.boundary.offset else first(items).node.offset, end: last(items).end + byte_len(default(re_find(byte_slice(opts.boundary, last(items).end - opts.boundary.offset), /^(?:(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*\))+/), ""))} else null
+fn optional_flush(state, opts) = if optional_span(state.items, opts) != null then state.reports [optional_span(state.items, opts)] else state.reports
+# Paired strict guards form one logical unit; the fold consumes their next operand.
+fn optional_group(current, next) = current.matches && next.matches && contains(["null", "undefined"], current.kind) && contains(["null", "undefined"], next.kind) && current.kind != next.kind && optional_same(current.subject, next.subject)
+fn optional_valid(current, next, op, last, opts) = current.subject != null && current.matches && (if contains(["plain", "not"], current.kind) then last || optional_type_allowed(current.subject, opts) && !(current.kind == (if op == "&&" then "plain" else "not") && optional_falsy_literal(current.subject)) else current.kind == "nullish" || optional_group(current, next) || current.kind == "null" && (op == "||" || next != null) && !optional_uncertain(current.subject, "undefined") || current.kind == "undefined" && !optional_uncertain(current.subject, "null"))
+fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_uncertain(n, "undefined") else if comparison == (if op == "&&" then "==" else "!=") then !optional_uncertain(n, "null") && !optional_uncertain(n, "undefined") else if comparison == (if op == "&&" then "!==" else "===") then all(default(n.type_flags, ["unknown"]), flag => contains(["undefined", "nullable", "union"], flag)) else if comparison == (if op == "&&" then "!=" else "==") then all(default(n.type_flags, ["unknown"]), flag => contains(["null", "undefined", "nullable", "union"], flag)) else false
+fn optional_terminal(state, current, op, opts) = if len(state.items) > 0 && (optional_extends(last(state.items).subject, current.node.left.node) && !optional_extends(last(state.items).subject, current.node.right.node) && optional_terminal_allowed(current.node.right.node, current.comparison, op) || optional_extends(last(state.items).subject, current.node.right.node) && !optional_extends(last(state.items).subject, current.node.left.node) && optional_terminal_allowed(current.node.left.node, current.comparison, op)) then state.reports [optional_span(state.items [{node: current.node, subject: current.node, end: current.node.end_offset}], opts)] else optional_flush(state, opts)
+fn optional_accept(state, current, next, opts) = if len(state.items) == 0 || optional_extends(last(state.items).subject, current.subject) then {items: state.items [{node: current.node, subject: current.subject, end: if optional_group(current, next) then next.node.end_offset else current.node.end_offset}], reports: state.reports, skip: optional_group(current, next)} else if optional_same(last(state.items).subject, current.subject) then {items: state.items, reports: state.reports, skip: optional_group(current, next)} else {items: [{node: current.node, subject: current.subject, end: if optional_group(current, next) then next.node.end_offset else current.node.end_offset}], reports: optional_flush(state, opts), skip: optional_group(current, next)}
+fn optional_step(state, current, next, op, last, opts) = if state.skip then {items: state.items, reports: state.reports, skip: false} else if current.kind == "last" then {items: [], reports: optional_terminal(state, current, op, opts), skip: false} else if optional_valid(current, next, op, last, opts) then optional_accept(state, current, next, opts) else {items: [], reports: if current.kind == "undefined" && len(state.items) > 0 && optional_extends(last(state.items).subject, current.subject) then state.reports [optional_span(state.items [{node: current.node, subject: current.subject, end: current.node.end_offset}], opts)] else optional_flush(state, opts), skip: false}
 in ts_logical rule prefer-optional-chain {
-  when left.chain_subject != null && left.chain_check_kind == (if operator == "&&" then "plain" else "not") && chain_type_allows(left.chain_type_flags)
-  # A chain that goes on to test something else is left alone.
-  when !(parent is ts_logical && parent.operator == operator && index == 0)
-  when !(re_test(default(right.chain_check_kind, ""), /^cmp/) && !(right.compared_value_flags != null && !contains(right.compared_value_flags, "nullable") && !contains(right.compared_value_flags, "any")))
-  when if operator == "&&" then right.chain_check_kind == "plain" && extends_chain(left.chain_subject, right.chain_subject) || right.chain_check_kind == "cmp_and" && (extends_chain(left.chain_subject, right.chain_compared_left) || extends_chain(left.chain_subject, right.chain_compared_right)) else right.chain_check_kind == "not" && extends_chain(left.chain_subject, right.chain_subject) || right.chain_check_kind == "cmp_or" && (extends_chain(left.chain_subject, right.chain_compared_left) || extends_chain(left.chain_subject, right.chain_compared_right))
+  option checkAny boolean = true "Check any values"
+  option checkUnknown boolean = true "Check unknown values"
+  option checkString boolean = true "Check string values"
+  option checkNumber boolean = true "Check number values"
+  option checkBoolean boolean = true "Check boolean values"
+  option checkBigInt boolean = true "Check bigint values"
+  option requireNullish boolean = false "Require a nullable checked operand"
+  option allowPotentiallyUnsafeFixesThatModifyTheReturnTypeIKnowWhatImDoing boolean = false "Fix safety does not affect diagnostics"
+  let enclosing last(walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null))
+  when operator != "??" && !(enclosing.parent is ts_logical && enclosing.parent.operator == operator)
+  let opts {any: checkAny, unknown: checkUnknown, string: checkString, number: checkNumber, boolean: checkBoolean, bigint: checkBigInt, requireNullish: requireNullish, boundary: node}
+  let operands map(optional_operands, operand => optional_operand(unparenthesised_node(operand), operator))
+  let state reduce(zip(operands, slice(operands, 1) [null]), {items: [], reports: [], skip: false}, (state, pair) => optional_step(state, first(pair), last(pair), operator, last(pair) == null, opts))
+  each span in filter(optional_flush(state, opts), report => report != null)
+  report at span
+  warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
+}
+in ts_logical rule prefer-optional-chain:empty-object {
+  option requireNullish boolean = false "Require a nullable checked operand"
+  when contains(["||", "??"], operator) && unparenthesised_node(right.node) is ts_object && count(unparenthesised_node(right.node).property) == 0
+  let enclosing last(walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null))
+  when enclosing.parent is (ts_member, ts_index) && enclosing.parent.optional == null
+  when !requireNullish || contains(default(left.type_flags, []), "nullable")
+  report at enclosing.parent
   warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
 }
 
