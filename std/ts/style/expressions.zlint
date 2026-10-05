@@ -3,6 +3,15 @@
 define {
 
 # ---- expressions -----------------------------------------------------------------------
+in ts_assignment rule no-multi-assign {
+  option ignoreNonDeclaration boolean = false "Allow chained assignments outside declaration initializers."
+  let owner last(walk(parent.node, current => if current is ts_parenthesized then current.parent.node else null))
+  when owner is ts_declarator && unparenthesised_node(owner.init.node) == node
+    || owner is ts_class_property && unparenthesised_node(owner.init.node) == node
+    || !ignoreNonDeclaration && owner is ts_assignment && unparenthesised_node(owner.right.node) == node
+  warn "Unexpected chained assignment."
+}
+
 in ts_member, ts_index let loop_collection_read if object not ts_this && write_site == null then object else null
 in ts_identifier let loop_index_use { start: offset, end: end_offset, array: if is (ts_node.property, ts_node.index) then parent.loop_collection_read else null }
 in ts_identifier let loop_index_uses [] references.loop_index_use

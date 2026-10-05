@@ -11,6 +11,7 @@ use crate::config::{self, ast::Severity};
 mod ts_std_rules;
 mod ts_arithmetic;
 mod ts_collection_methods;
+mod ts_core_rules;
 mod ts_deprecation;
 mod ts_enums;
 
