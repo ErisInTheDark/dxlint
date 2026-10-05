@@ -756,10 +756,12 @@ impl<'a> Parser<'a> {
         let overriding = self.overriding.take();
         self.bump();
         let Some(name) = self.ident("a group name") else { return };
-        let parents = self.parent_list();
-        if parents.is_empty() {
-            return;
-        }
+        self.skip(false, true);
+        let parents = if self.ts.peek_raw(0).is_none_or(|t| matches!(t.kind, Tk::Newline | Tk::RBrace)) {
+            Vec::new()
+        } else {
+            self.parent_list()
+        };
         self.end_of_item();
         if overriding.is_some() {
             let before = self.config.groups.len();

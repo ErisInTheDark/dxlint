@@ -178,6 +178,8 @@ group js_code js_type_arguments                 # ...and now inside these too
 A macro listing the same layers would be pasted where it is used, so a later
 addition would not reach earlier uses.
 
+`group name` declares an empty extension point. Language adapters can add members later. A rule declared in `define { ... }` over an empty group stays dormant, even with `rule *`; a user-defined rule with no targets is an error.
+
 **Language gating.** A matcher attached to a `.lang` only runs inside files
 of the languages it is attached to (or attached through `.*`). That lets
 shared layers like `parentheses` carry Rust strings in Rust files and
@@ -875,7 +877,8 @@ in ts_program rule padding-line-between-statements {
 | type | takes |
 |---|---|
 | `string`, `number`, `int`, `boolean`, `any`, `null` | values of that kind (`int`: whole numbers) |
-| `regex` | a string that is a valid regex |
+| `regex` | a string that is a valid regex in the Rust `re_test` dialect |
+| `js_regex` | a string that is a valid JavaScript regex in Unicode (`u`) mode, checked when config loads |
 | `"x"`, `3`, `true` | exactly that value |
 | `a \| b` | either; a union may continue on a line starting with `\|` |
 | `T[]`, `T[1..]`, `T[..3]` | a list of `T`, with an optional length range |
@@ -889,6 +892,8 @@ Checking a value fills in record defaults, so a rule can read every key
 (`c.word`) without `default(...)`. Defaults are literal values, and an
 option's default must fit its own type. `override schema name ...` replaces
 a named type.
+
+Use `option pattern js_regex = "^(?!internal_).+$"` with `js_re_test(text, pattern, "u")`, or `"iu"` to ignore case.
 
 ## Changing imported definitions: `override`, `drop`
 

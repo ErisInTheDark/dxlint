@@ -161,8 +161,11 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             }
             continue;
         }
+        let before = errors.len();
         if let Some(r) = rule(def, &grammar, &schemas, &attr_names, &uses, &helper_reads, &mut errors).filter(|_| !def.broken) {
             rules.push(r);
+        } else if def.defined_only && !def.broken && errors.len() == before {
+            inert.push(as_inert(def));
         }
     }
     // Option values, in order; a rule that failed to build was reported.
@@ -171,8 +174,9 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         let Some(f) = rules.iter_mut().find(|r| r.name == *rule_name) else {
             // Off bodies are not compiled at runtime, but their explicit
             // settings still have to fit the declared option schemas.
-            if !tooling {
-                if let Some(def) = config.rules.iter().find(|r| r.name.text == *rule_name && !r.enabled()) {
+            let dormant = inert.iter().any(|r| r.name == *rule_name);
+            if !tooling || dormant {
+                if let Some(def) = config.rules.iter().find(|r| r.name.text == *rule_name && (!r.enabled() || dormant)) {
                     if let Some(option) = def.options.iter().find(|o| o.name.text == name.text) {
                         option_value(rule_name, name, value, &option.schema, &grammar, &schemas, &mut errors);
                     }
@@ -307,6 +311,29 @@ mod startup_tests {
     }
 
     #[test]
+    fn open_library_groups_can_wait_for_language_adapters() {
+        for compile in [build, build_for_lint] {
+            for (adapters, expected) in [
+                ("", 0),
+                ("in .t match item /x/\ngroup items item\n", 1),
+                ("in .t match item /x/\ngroup items item\ndrop group items item\n", 0),
+            ] {
+                let source = format!("lang t \"*.t\"\ndefine {{\ngroup items\nin items rule item-rule warn 'item'\n}}\n{adapters}rule *\n");
+                let built = compile(config::load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
+                assert!(built.errors.is_empty(), "{:#?}", built.errors);
+                let reports = built.linter.unwrap().lint(Path::new("/root/a.t"), "x");
+                assert_eq!(reports.len(), expected);
+            }
+            let source = "lang t \"*.t\"\ngroup items\nin items rule item-rule warn 'item'\n";
+            let built = compile(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+            assert!(!built.errors.is_empty());
+            let source = "lang t \"*.t\"\ndefine {\ngroup items\nin items rule item-rule warn 'item' { option max int = 1 }\n}\nrule item-rule { set max 'bad' }\n";
+            let built = compile(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+            assert!(!built.errors.is_empty());
+        }
+    }
+
+    #[test]
     fn runtime_and_tooling_preserve_helpers_added_by_rule_configuration() {
         let source = r#"
 lang t "*.t"
@@ -383,9 +410,9 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             match patch.severity {
                 Some(s) => def.configured = Some(s),
                 // `rule x`: on at its default, unless it already is on.
-                None if def.defined_only || def.configured == Some(Severity::Off) => {
-                    def.defined_only = false;
-                    def.configured = None;
+                None if !def.enabled() => {
+                    // Keep library provenance: its adapter group may still be empty.
+                    def.configured = Some(def.severity.unwrap_or(Severity::Warn));
                 }
                 None => {}
             }
@@ -540,7 +567,9 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     }
     let target_text = texts.join(", ");
     if targets.is_empty() {
-        errors.push(ConfigError::new(def.name.span, format!("rule `{}` has nothing to check: its group is empty", def.name.text)));
+        if !def.defined_only {
+            errors.push(ConfigError::new(def.name.span, format!("rule `{}` has nothing to check: its group is empty", def.name.text)));
+        }
         return None;
     }
 
