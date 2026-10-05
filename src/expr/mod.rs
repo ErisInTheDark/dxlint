@@ -261,6 +261,32 @@ pub struct AttrMemo<'a> {
     /// For `overlapping(layer)`: the file's nodes of those matchers by
     /// start, with the running maximum end.
     spans: RefCell<FxHashMap<NodeSel, std::rc::Rc<LayerSpans>>>,
+    /// The (node, rule) the engine is applying ([`AttrMemo::enter_node`]).
+    /// Most `let`s and facts are read there, by several rules, so they live
+    /// in small slots instead of the file-wide maps above, which grow to
+    /// millions of entries; reads on other nodes still go to the maps.
+    here: std::cell::Cell<Option<(u32, u32)>>,
+    /// The applied rule's `let`s on `here`, by slot.
+    here_locals: RefCell<Vec<Option<Value<'a>>>>,
+    /// Facts of `here`'s node, by fact, with the visit that computed them.
+    here_facts: RefCell<Vec<(u32, Value<'a>)>>,
+    visit: std::cell::Cell<u32>,
+}
+
+impl AttrMemo<'_> {
+    /// Rules are about to run on `node`.
+    pub fn enter_node(&self, node: u32) {
+        self.visit.set(self.visit.get() + 1);
+        self.here.set(Some((node, u32::MAX)));
+    }
+
+    /// `rule` is about to run on the node entered last.
+    pub fn enter_rule(&self, rule: u32) {
+        if let Some((node, _)) = self.here.get() {
+            self.here.set(Some((node, rule)));
+            self.here_locals.borrow_mut().clear();
+        }
+    }
 }
 
 /// Which nodes `descendants`, `overlapping` and `containing` look for:
@@ -1255,6 +1281,8 @@ pub struct Ctx<'a> {
     pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
     /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
     pub indents: &'a [IndentRule],
+    /// `--profile`: where fact time is added up.
+    pub profile: Option<&'a crate::engine::Profile>,
 }
 
 /// A compiled `indent X by n` / `indent in X by n` rule line.
@@ -1705,12 +1733,36 @@ impl<'a> Ctx<'a> {
             }
             CExpr::Fact(i, of) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
+                let compute = |native: &dyn crate::native::ts::facts::Facts, id: u32| -> Value<'a> {
+                    let started = self.profile.map(|_| std::time::Instant::now());
+                    let v: Value<'a> = (facts::FACTS[*i].get)(native, id);
+                    if let (Some(p), Some(s)) = (self.profile, started) {
+                        crate::engine::Profile::add_time(&p.fact_nanos[*i], s.elapsed());
+                        crate::engine::Profile::add(&p.fact_calls[*i], 1);
+                    }
+                    v
+                };
                 let get = |native: &dyn crate::native::ts::facts::Facts, id: u32| -> Value<'a> {
+                    if self.memo.here.get().is_some_and(|(node, _)| node == id) {
+                        let visit = self.memo.visit.get();
+                        if let Some((at, v)) = self.memo.here_facts.borrow().get(*i) {
+                            if *at == visit {
+                                return v.clone();
+                            }
+                        }
+                        let v = compute(native, id);
+                        let mut slots = self.memo.here_facts.borrow_mut();
+                        if slots.len() <= *i {
+                            slots.resize(facts::FACTS.len().max(*i + 1), (0, Value::Null));
+                        }
+                        slots[*i] = (visit, v.clone());
+                        return v;
+                    }
                     let key = (id, *i as u16);
                     if let Some(v) = self.memo.facts.borrow().get(&key) {
                         return v.clone();
                     }
-                    let v: Value<'a> = (facts::FACTS[*i].get)(native, id);
+                    let v = compute(native, id);
                     self.memo.facts.borrow_mut().insert(key, v.clone());
                     v
                 };
@@ -1796,7 +1848,13 @@ impl<'a> Ctx<'a> {
             CExpr::FactCall(i, args) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
                 let args = args.iter().map(|a| self.eval(a).map(Value::into_static)).collect::<Result<Vec<_>, _>>()?;
-                facts::with_args(args, || (facts::FACTS[*i].get)(native, self.node))
+                let started = self.profile.map(|_| std::time::Instant::now());
+                let v = facts::with_args(args, || (facts::FACTS[*i].get)(native, self.node));
+                if let (Some(p), Some(s)) = (self.profile, started) {
+                    crate::engine::Profile::add_time(&p.fact_nanos[*i], s.elapsed());
+                    crate::engine::Profile::add(&p.fact_calls[*i], 1);
+                }
+                v
             }
             CExpr::Attr(a) => self.attr(self.node, *a)?,
             CExpr::ParentField(label) => match self.parent_layer() {
@@ -2052,11 +2110,24 @@ impl<'a> Ctx<'a> {
                 if !targets.is_empty() && !targets.iter().any(|&t| self.grammar.is_a(matcher, t)) {
                     return Ok(Value::Null);
                 }
+                let slot = *i as usize;
+                if self.memo.here.get() == Some((self.node, rule)) {
+                    if let Some(Some(v)) = self.memo.here_locals.borrow().get(slot) {
+                        return Ok(v.clone());
+                    }
+                    let v = self.unbound(|| self.eval(&exprs[slot]))?;
+                    let mut slots = self.memo.here_locals.borrow_mut();
+                    if slots.len() <= slot {
+                        slots.resize(slot + 1, None);
+                    }
+                    slots[slot] = Some(v.clone());
+                    return Ok(v);
+                }
                 let key = (self.node, rule, *i);
                 if let Some(v) = self.memo.locals.borrow().get(&key) {
                     return Ok(v.clone());
                 }
-                let v = self.unbound(|| self.eval(&exprs[*i as usize]))?;
+                let v = self.unbound(|| self.eval(&exprs[slot]))?;
                 self.memo.locals.borrow_mut().insert(key, v.clone());
                 v
             }

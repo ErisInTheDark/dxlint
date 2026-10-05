@@ -387,8 +387,10 @@ impl Linter {
         let memo = AttrMemo::default();
         for &id in &tree.order {
             let node = tree.node(id);
+            memo.enter_node(id);
             let mut apply = |fi: usize| {
                 if run.active[fi] {
+                    memo.enter_rule(fi as u32);
                     let ctx = Ctx {
                         grammar: &self.grammar,
                         lang: run.lang,
@@ -405,6 +407,7 @@ impl Linter {
                         locals: Some((fi as u32, &self.rules[fi].locals, &self.rules[fi].target_layers)),
                         native,
                         indents: &self.rules[fi].indents,
+                        profile: self.profile.as_ref(),
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
                     for d in self.apply_each(&self.rules[fi], &ctx) {

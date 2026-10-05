@@ -13,6 +13,10 @@ pub struct Profile {
     /// Nanoseconds spent evaluating each rule, and how often.
     pub rule_nanos: Vec<AtomicU64>,
     pub rule_evals: Vec<AtomicU64>,
+    /// Nanoseconds spent computing each native fact (memo misses only, so
+    /// a whole-file analysis counts against the fact that first needs it).
+    pub fact_nanos: Vec<AtomicU64>,
+    pub fact_calls: Vec<AtomicU64>,
     pub parse_nanos: AtomicU64,
     /// Time spent running rules, all together.
     pub rules_nanos: AtomicU64,
@@ -29,6 +33,8 @@ impl Profile {
             matcher_runs: counters(matchers),
             rule_nanos: counters(rules),
             rule_evals: counters(rules),
+            fact_nanos: counters(crate::expr::facts::FACTS.len()),
+            fact_calls: counters(crate::expr::facts::FACTS.len()),
             ..Profile::default()
         }
     }

@@ -285,6 +285,17 @@ pub fn profile(linter: &Linter) {
     for (nanos, evals, name) in rules.iter().take(15) {
         eprintln!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
     }
+    let mut facts: Vec<(u64, u64, &str)> = zoomie_lint::expr::facts::FACTS
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (Profile::get(&p.fact_nanos[i]), Profile::get(&p.fact_calls[i]), f.name))
+        .filter(|(_, calls, _)| *calls > 0)
+        .collect();
+    facts.sort_by(|a, b| b.0.cmp(&a.0));
+    eprintln!("\n  {BOLD}facts{BOLD:#} {DIM}by time, part of the rules' (a whole-file analysis counts on the first fact needing it){DIM:#}");
+    for (nanos, calls, name) in facts.iter().take(15) {
+        eprintln!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*nanos));
+    }
 }
 
 pub fn functions() -> ExitCode {
