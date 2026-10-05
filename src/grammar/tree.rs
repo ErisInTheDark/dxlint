@@ -168,6 +168,17 @@ impl Tree {
     /// ignoring `skip` (the node asking) and its descendants, in the default
     /// layer.
     pub fn innermost_at(&self, g: &Grammar, pos: u32, skip: u32) -> Option<u32> {
+        let mut id = self.innermost_with_text(g, pos, skip);
+        // Labelled text inside a layer belongs to that layer.
+        while self.nodes[id as usize].matcher == TEXT {
+            id = self.parent(id)?;
+        }
+        Some(id)
+    }
+
+    /// As [`Tree::innermost_at`], but labelled text (a native node's `?.`,
+    /// a field of text) counts as a node.
+    pub fn innermost_with_text(&self, g: &Grammar, pos: u32, skip: u32) -> u32 {
         let mut id = self.root;
         'descend: loop {
             let children = &self.nodes[id as usize].children;
@@ -189,11 +200,7 @@ impl Tree {
             }
             break;
         }
-        // Labelled text inside a layer belongs to that layer.
-        while self.nodes[id as usize].matcher == TEXT {
-            id = self.parent(id)?;
-        }
-        Some(id)
+        id
     }
 
     /// The closest node of matcher `m` (or a specialisation of it), starting

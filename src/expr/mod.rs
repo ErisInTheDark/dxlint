@@ -1178,6 +1178,12 @@ impl Scope<'_> {
         }
         match self.node_part(first) {
             Some(CExpr::Field(label)) => Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?))),
+            // `n.index.node`: a builtin is a plain value with nothing to read
+            // on, so a field of that name is meant (`index`, `kind`...).
+            Some(CExpr::Builtin(_)) if self.grammar.labels.get(&first.text).is_some() => {
+                let label = self.grammar.labels.get(&first.text).expect("checked");
+                Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?)))
+            }
             Some(value) => Some(self.member_path(value, rest)),
             None => self.relative_part(first, errors),
         }
@@ -1428,7 +1434,8 @@ impl<'a> Ctx<'a> {
             // From a named layer, indentation is the default layer's: carry
             // on from the node holding the line's first character there.
             if self.tree.layer_roots.iter().any(|&(r, _)| r == id) || self.tree.layer_of(id).is_some() {
-                p = self.tree.innermost_at(self.grammar, first as u32, self.node);
+                // Labelled text counts: a line can start with a `?.` field.
+                p = Some(self.tree.innermost_with_text(self.grammar, first as u32, self.node)).filter(|&n| !self.tree.is_root(n));
                 if p == Some(id) {
                     break;
                 }

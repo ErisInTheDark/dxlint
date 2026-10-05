@@ -431,6 +431,23 @@ fn indent_lines_can_measure_from_another_offset() {
 }
 
 #[test]
+fn indent_lines_see_text_fields_and_paths_prefer_fields_over_builtins() {
+    // `?.` opening a line is the member's `optional` field (text).
+    let l = native_linter(r#"
+        in ts_line rule ind info "{indent_level}" { indent ts_member.optional by 2 }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "foo\n  ?.bar;\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["0", "2"]);
+    // `n.index.node` in a function: the `index` field, not the builtin.
+    let l = native_linter(r#"
+        fn idx(n) = n.index.node
+        in ts_index rule i info "{kind_name(idx(node))}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a[1];\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["ts_number"]);
+}
+
+#[test]
 fn dedent_counts_levels_back_from_the_anchor() {
     let l = linter(r#"
         in .t match blk /\{/ until /\}/
