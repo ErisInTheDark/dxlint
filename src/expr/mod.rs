@@ -1608,7 +1608,7 @@ impl<'a> Ctx<'a> {
                 }
             }
             "parent" => match self.parent_layer() {
-                Some(id) => Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id))),
+                Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
                 None => Value::Null,
             },
             "text_before" => Value::from(&self.source[..start]),
@@ -1630,7 +1630,7 @@ impl<'a> Ctx<'a> {
                 None => Value::Null,
             },
             "source" => Value::from(self.source),
-            "node" => Value::Node(self.node, std::borrow::Cow::Borrowed(self.node_text(self.node))),
+            "node" => Value::Node(self.node, value::Text::Borrowed(self.node_text(self.node))),
             other => unreachable!("builtin {other}"),
         }
     }
@@ -1697,7 +1697,7 @@ impl<'a> Ctx<'a> {
                 let nodes = (link.get)(native, self.node);
                 let node = |id: u32| {
                     let n = self.tree.node(id);
-                    Value::Node(id, std::borrow::Cow::Borrowed(&self.source[n.start as usize..n.end as usize]))
+                    Value::Node(id, value::Text::Borrowed(&self.source[n.start as usize..n.end as usize]))
                 };
                 if link.many {
                     Value::list(nodes.into_iter().map(node).collect())
@@ -1802,7 +1802,7 @@ impl<'a> Ctx<'a> {
                     stack.extend(n.children.iter().map(|e| e.node));
                 }
                 found.sort_unstable();
-                Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
+                Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
             }
             CExpr::Coalesce(a, b) => match self.eval(a)? {
                 v @ Value::Node(..) => v,
@@ -1832,7 +1832,7 @@ impl<'a> Ctx<'a> {
                     }
                 }
                 match best {
-                    Some((_, _, id)) => Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id))),
+                    Some((_, _, id)) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
                     None => Value::Null,
                 }
             }
@@ -1863,7 +1863,7 @@ impl<'a> Ctx<'a> {
                     }
                 }
                 found.reverse();
-                Value::list(found.into_iter().map(|id| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
+                Value::list(found.into_iter().map(|id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
             }
             CExpr::Walk(roots, next) => {
                 let mut seen = std::collections::HashSet::new();

@@ -12,13 +12,58 @@ pub enum Value<'s> {
     Null,
     Bool(bool),
     Num(f64),
-    Str(Cow<'s, str>),
+    Str(Text<'s>),
     List(Arc<[Value<'s>]>),
     /// `{ key: value }`, keys in written order.
     Record(Arc<[(Key, Value<'s>)]>),
     /// A node of the file's tree (from a link such as `declaration`): reads
     /// as its text, and `.x` reads `x` on it.
-    Node(u32, Cow<'s, str>),
+    Node(u32, Text<'s>),
+}
+
+/// Text of a value: borrowed from the linted file, or shared, so copying a
+/// value (a memoised fact's `space_before.text`) never copies the text.
+#[derive(Clone)]
+pub enum Text<'s> {
+    Borrowed(&'s str),
+    Shared(Arc<str>),
+}
+
+impl std::ops::Deref for Text<'_> {
+    type Target = str;
+    fn deref(&self) -> &str {
+        match self {
+            Text::Borrowed(s) => s,
+            Text::Shared(s) => s,
+        }
+    }
+}
+
+impl Text<'_> {
+    fn into_static(self) -> Text<'static> {
+        match self {
+            Text::Borrowed(s) => Text::Shared(s.into()),
+            Text::Shared(s) => Text::Shared(s),
+        }
+    }
+}
+
+impl PartialEq for Text<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl fmt::Display for Text<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl fmt::Debug for Text<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
 }
 
 /// A record key: usually a literal name, which costs no allocation.
@@ -71,10 +116,10 @@ impl<'s> Value<'s> {
             Value::Null => Value::Null,
             Value::Bool(b) => Value::Bool(b),
             Value::Num(n) => Value::Num(n),
-            Value::Str(s) => Value::Str(Cow::Owned(s.into_owned())),
+            Value::Str(s) => Value::Str(s.into_static()),
             Value::List(items) => Value::List(items.iter().cloned().map(Value::into_static).collect()),
             Value::Record(entries) => Value::Record(entries.iter().map(|(k, v)| (k.clone(), v.clone().into_static())).collect()),
-            Value::Node(id, s) => Value::Node(id, Cow::Owned(s.into_owned())),
+            Value::Node(id, s) => Value::Node(id, s.into_static()),
         }
     }
 
@@ -90,7 +135,7 @@ impl<'s> Value<'s> {
     pub fn literal(&self) -> String {
         match self {
             Value::Null => "null".into(),
-            Value::Str(s) | Value::Node(_, s) => format!("{:?}", s.as_ref()),
+            Value::Str(s) | Value::Node(_, s) => format!("{:?}", &**s),
             Value::List(items) => format!("[{}]", items.iter().map(Value::literal).collect::<Vec<_>>().join(", ")),
             Value::Record(entries) => {
                 if entries.is_empty() {
@@ -150,7 +195,7 @@ impl<'s> Value<'s> {
         match (self, other) {
             // The same node; otherwise nodes compare as their text.
             (Value::Node(a, _), Value::Node(b, _)) => a == b,
-            (Value::Node(_, s), v) | (v, Value::Node(_, s)) => Value::Str(Cow::Borrowed(s)).loose_eq(v),
+            (Value::Node(_, s), v) | (v, Value::Node(_, s)) => Value::Str(Text::Borrowed(s)).loose_eq(v),
             (Value::Num(a), Value::Str(s)) | (Value::Str(s), Value::Num(a)) => s.trim().parse::<f64>().is_ok_and(|b| b == *a),
             (Value::Null, Value::Str(s)) | (Value::Str(s), Value::Null) => s.is_empty(),
             (Value::Str(a), Value::Str(b)) => a == b,
@@ -199,13 +244,22 @@ impl fmt::Display for Value<'_> {
 
 impl<'s> From<&'s str> for Value<'s> {
     fn from(s: &'s str) -> Self {
-        Value::Str(Cow::Borrowed(s))
+        Value::Str(Text::Borrowed(s))
     }
 }
 
 impl From<String> for Value<'_> {
     fn from(s: String) -> Self {
-        Value::Str(Cow::Owned(s))
+        Value::Str(Text::Shared(s.into()))
+    }
+}
+
+impl<'s> From<Cow<'s, str>> for Value<'s> {
+    fn from(s: Cow<'s, str>) -> Self {
+        match s {
+            Cow::Borrowed(s) => Value::from(s),
+            Cow::Owned(s) => Value::from(s),
+        }
     }
 }
 
