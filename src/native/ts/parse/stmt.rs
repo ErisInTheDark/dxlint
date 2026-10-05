@@ -460,7 +460,10 @@ impl<'s> Parser<'s> {
         }
         const MODS: &[&str] =
             &["public", "private", "protected", "static", "readonly", "abstract", "override", "declare", "accessor", "async"];
-        while self.tok.tok == Tok::Ident && MODS.contains(&self.cur()) && self.word_is_modifier() {
+        while self.tok.tok == Tok::Ident
+            && MODS.contains(&self.cur())
+            && if self.is_word("static") { self.word_is_accessor() } else { self.word_is_modifier() }
+        {
             let m = self.token_text();
             kids.add(Field::Modifier, m);
         }
@@ -808,5 +811,47 @@ impl<'s> Parser<'s> {
         };
         kids.add(Field::Decl, decl);
         Ok(self.finish(Kind::Export, start, kids))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::native::ts::{kinds::{Field, Kind}, parse};
+
+    #[test]
+    fn class_modifiers_preserve_line_break_semantics() {
+        let members = |src: &str| {
+            let parsed = parse(src, false).unwrap_or_else(|error| panic!("{src}: {error:?}"));
+            let class = parsed.nodes.iter().find(|node| node.matcher == Kind::Class as u32).expect("class");
+            let ids: Vec<_> = class.children.iter().filter(|edge| edge.label == Field::Member as u16).map(|edge| edge.node).collect();
+            (parsed, ids)
+        };
+        for newline in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+            for (member, kind) in [("method() {}", Kind::Method), ("[key]() {}", Kind::Method), ("field;", Kind::ClassProp)] {
+                let src = format!("class C {{ static{newline}{member} }}");
+                let (parsed, ids) = members(&src);
+                assert_eq!(ids.len(), 1, "{src}");
+                let node = &parsed.nodes[ids[0] as usize];
+                assert_eq!(node.matcher, kind as u32, "{src}");
+                assert_eq!(node.start as usize, src.find("static").unwrap(), "{src}");
+                let modifier = node.children.iter().find(|edge| edge.label == Field::Modifier as u16).expect("static modifier");
+                let modifier = &parsed.nodes[modifier.node as usize];
+                assert_eq!(&src[modifier.start as usize..modifier.end as usize], "static");
+            }
+        }
+        for modifier in ["async", "public", "private", "protected", "readonly", "abstract", "override", "declare", "accessor"] {
+            let src = format!("class C {{ {modifier}\nmethod() {{}} }}");
+            let (parsed, ids) = members(&src);
+            assert_eq!(ids.len(), 2, "{src}");
+            assert_eq!(parsed.nodes[ids[0] as usize].matcher, Kind::ClassProp as u32, "{src}");
+            assert_eq!(parsed.nodes[ids[1] as usize].matcher, Kind::Method as u32, "{src}");
+            assert!(ids.iter().all(|id| parsed.nodes[*id as usize].children.iter().all(|edge| edge.label != Field::Modifier as u16)), "{src}");
+        }
+        for member in ["static;", "static() {}", "static = 1;"] {
+            let src = format!("class C {{ {member} }}");
+            let (parsed, ids) = members(&src);
+            assert_eq!(ids.len(), 1, "{src}");
+            assert!(parsed.nodes[ids[0] as usize].children.iter().all(|edge| edge.label != Field::Modifier as u16), "{src}");
+        }
     }
 }
