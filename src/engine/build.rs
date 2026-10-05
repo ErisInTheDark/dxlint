@@ -658,9 +658,14 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         Target::Lang(_) => false,
     });
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
+    // `ts_member.token` (an `indent` or rule target): nodes' own tokens.
+    let token_label = g.labels.get("token");
+    let targets_tokens = token_label.is_some()
+        && (indents.iter().flat_map(|i| &i.targets).any(|t| t.1 == token_label) || targets.iter().any(|t| matches!(t, Target::Field(_, l) if Some(*l) == token_label)));
     Some(Rule {
         layer_reads,
         all_tokens: reads_children || helper_tokens || on_tokens && reads_siblings,
+        token_fields: targets_tokens,
         target_layers,
         name: def.name.text.clone(),
         span: def.name.span,

@@ -102,10 +102,14 @@ impl Matcher {
     /// The field names nodes of this matcher can have.
     pub fn labels(&self) -> Vec<String> {
         match self.native {
-            Some(n) if n.front == 0 => crate::native::ts::kinds::KINDS[n.kind as usize].1
-                .iter()
-                .map(|f| crate::native::ts::kinds::FIELD_NAMES[*f as usize].to_string())
-                .collect(),
+            // Every non-token node also holds its own punctuation and
+            // keywords as `token` (`ts_member.token`: the `.`).
+            Some(n) if n.front == 0 => {
+                let kind = crate::native::ts::kinds::ALL_KINDS[n.kind as usize];
+                let own = crate::native::ts::kinds::KINDS[n.kind as usize].1.iter().map(|f| crate::native::ts::kinds::FIELD_NAMES[*f as usize].to_string());
+                let token = crate::native::ts::kinds::FIELD_NAMES[crate::native::ts::kinds::Field::Token as usize];
+                own.chain((!kind.is_token()).then(|| token.to_string())).collect()
+            }
             _ => self.pat.labels(),
         }
     }

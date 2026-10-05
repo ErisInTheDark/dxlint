@@ -382,6 +382,16 @@ fn inside_forms_beat_node_forms() {
 }
 
 #[test]
+fn indent_can_target_a_nodes_own_tokens() {
+    // `foo⏎  .bar()`: the leading `.` is the member's token, on its own line.
+    let l = native_linter(r#"
+        in ts_line rule ind info "{indent_level}" { indent ts_member.token by 2 }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "foo\n  .bar();\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["0", "2"]);
+}
+
+#[test]
 fn dedent_counts_levels_back_from_the_anchor() {
     let l = linter(r#"
         in .t match blk /\{/ until /\}/

@@ -77,6 +77,9 @@ pub struct Rule {
     layer_reads: Vec<u32>,
     /// Its expressions or consumed helpers need unfiltered token neighbours.
     all_tokens: bool,
+    /// It targets or indents nodes' own tokens (`ts_member.token`): every
+    /// token must be attached.
+    token_fields: bool,
     /// The layers it targets when all its targets are layers (else empty):
     /// where its `let`s can be read from another node (`previous.rank`).
     target_layers: Vec<u32>,
@@ -214,7 +217,7 @@ impl Linter {
         // read would see the difference (`children.x`, `previous.x` on a token).
         use crate::native::ts::kinds::ALL_KINDS;
         let mut token_kinds = [false; ALL_KINDS.len()];
-        let (mut all_tokens, mut lang_layers) = (false, false);
+        let (mut all_tokens, mut token_fields, mut lang_layers) = (false, false, false);
         let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
         // A layer some active rule targets or reads by name (`opener.x`,
         // `descendants(x)`): its nodes must be built.
@@ -246,12 +249,13 @@ impl Linter {
                 }
             }
             all_tokens |= f.all_tokens;
+            token_fields |= f.token_fields;
         }
         wants_layers |= lang_layers;
-        let wants_tokens = token_kinds.iter().any(|&k| k);
-        if wants_tokens && all_tokens {
+        if token_kinds.iter().any(|&k| k) && all_tokens || token_fields {
             crate::native::ts::tokens::add_all_tokens(&mut token_kinds);
         }
+        let wants_tokens = token_kinds.iter().any(|&k| k);
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
         let options: Vec<Vec<Value<'static>>> = self.rules.iter().map(Rule::option_values).collect();
