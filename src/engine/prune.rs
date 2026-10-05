@@ -220,6 +220,23 @@ fn prune_config(config: &mut Config, runtime: bool) {
     config.forwards.retain(|f| !f.targets.is_empty() && !f.attrs.is_empty());
     if runtime {
         config.functions.retain(|f| needed.contains(&f.name.text));
+    } else {
+        // Tooling keeps unneeded helpers, but not ones that read (or call
+        // helpers that read) a pruned layer or attribute: they cannot compile.
+        let mut unusable: HashSet<String> = HashSet::new();
+        loop {
+            let before = unusable.len();
+            for f in config.functions.iter().filter(|f| !needed.contains(&f.name.text)) {
+                let reads = &dependencies[&f.name.text];
+                if reads.iter().any(|n| gone(n) || dropped_attrs.contains(n) || unusable.contains(n)) {
+                    unusable.insert(f.name.text.clone());
+                }
+            }
+            if unusable.len() == before {
+                break;
+            }
+        }
+        config.functions.retain(|f| !unusable.contains(&f.name.text));
     }
 
     for r in config.rules.iter_mut().filter(|r| !r.enabled()) {
@@ -311,4 +328,20 @@ in wrapper rule active warn "{read(node)}" fix as lower(text) { when accepted(no
         }
     }
 
+    #[test]
+    fn tooling_pruning_drops_helpers_that_read_pruned_layers() {
+        let source = r#"
+lang t "*.t"
+define {
+  in .t match pair /</ close:/>/
+  fn closer(n) = n is pair.close
+  fn uses_closer(n) = closer(n)
+}
+in .t match token /X/
+in token rule active warn "x"
+"#;
+        let built = build(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:#?}", built.errors);
+        assert_eq!(built.linter.unwrap().lint(Path::new("/root/test.t"), "X").len(), 1);
+    }
 }
