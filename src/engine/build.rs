@@ -35,7 +35,10 @@ type Uses = RefCell<Vec<(crate::config::source::Span, crate::expr::Resolved)>>;
 struct ReadDependencies {
     layers: Vec<u32>,
     helpers: Vec<usize>,
+    /// Every token kind, when some are built (a read would see the others missing).
     all_tokens: bool,
+    /// Every token kind, always: reads of nodes' own `token` field.
+    own_tokens: bool,
 }
 
 impl ReadDependencies {
@@ -46,18 +49,23 @@ impl ReadDependencies {
             Resolved::UserFunction(name) => g.function(name).map(|id| attrs.len() + id),
             _ => None,
         }).collect();
-        Self { layers, helpers, all_tokens }
+        let own_tokens = uses.iter().any(|(_, resolved)| matches!(resolved, Resolved::Field(name) if name == "token"));
+        Self { layers, helpers, all_tokens, own_tokens }
     }
 
     fn extend(&mut self, other: Self) {
         self.layers.extend(other.layers);
         self.helpers.extend(other.helpers);
         self.all_tokens |= other.all_tokens;
+        self.own_tokens |= other.own_tokens;
     }
 
-    fn resolve(self, helpers: &[Self]) -> (Vec<u32>, bool) {
+    /// The layers read, and whether every token kind is needed when some
+    /// are / always.
+    fn resolve(self, helpers: &[Self]) -> (Vec<u32>, bool, bool) {
         let mut layers = self.layers;
         let mut all_tokens = self.all_tokens;
+        let mut own_tokens = self.own_tokens;
         let mut pending = self.helpers;
         let mut seen = vec![false; helpers.len()];
         // Recursive functions and cross-node attributes can refer back to themselves.
@@ -68,9 +76,10 @@ impl ReadDependencies {
             let dependency = &helpers[id];
             layers.extend(&dependency.layers);
             all_tokens |= dependency.all_tokens;
+            own_tokens |= dependency.own_tokens;
             pending.extend(&dependency.helpers);
         }
-        (unique(layers), all_tokens)
+        (unique(layers), all_tokens, own_tokens)
     }
 }
 
@@ -661,7 +670,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     let rule_uses = uses.borrow();
     let rule_uses = &rule_uses[uses_before..];
     let (reads_children, reads_siblings) = reads_neighbours(rule_uses);
-    let (layer_reads, helper_tokens) = ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
+    let (layer_reads, helper_tokens, own_tokens) = ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
     let needs_tokens = |m| is_token_layer(g, m) || g.native_hosts[m as usize].iter().any(|&host| is_token_layer(g, host));
     let on_tokens = layer_reads.iter().any(|&m| needs_tokens(m)) || targets.iter().any(|target| match target {
         Target::Matcher(m) | Target::Field(m, _) => needs_tokens(*m),
@@ -675,7 +684,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     Some(Rule {
         layer_reads,
         all_tokens: reads_children || helper_tokens || on_tokens && reads_siblings,
-        token_fields: targets_tokens,
+        token_fields: targets_tokens || own_tokens,
         target_layers,
         name: def.name.text.clone(),
         span: def.name.span,
@@ -884,5 +893,14 @@ mod demand_tests {
             in ts_comma rule preceded info "{preceded(node)}"
         "#);
         assert_eq!(messages(&linter, "/root/file.ts", "f(a, b);"), ["true"]);
+    }
+
+    #[test]
+    fn reading_a_nodes_own_tokens_builds_them() {
+        let actual: Vec<_> = [
+            "in ts_call rule tokens info \"{count([] token.node)}\"",
+            "in ts_call let own_tokens count([] token.node)\nin ts_call rule tokens info \"{own_tokens}\"",
+        ].into_iter().map(|rules| messages(&native(rules), "/root/file.ts", "f(a, b);")).collect();
+        assert_eq!(actual, [["3"], ["3"]]);
     }
 }
