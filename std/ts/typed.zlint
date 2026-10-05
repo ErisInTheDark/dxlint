@@ -4,6 +4,7 @@
 
 import .ts/arithmetic
 import .ts/deprecation
+import .ts/methods
 import .ts/spreads
 import .ts/type-specifiers
 
@@ -521,19 +522,7 @@ in ts_template, ts_template_type rule no-unnecessary-template-expression {
 # Receivers: what the object of `x.method(...)` is.
 in ts_member let receiver_flags object.type_flags
 macro receiver_is(kind) (contains(default(callee.receiver_flags, []), kind) && !contains(default(callee.receiver_flags, []), "unknown"))
-in ts_call {
-  let is_array_filter re_test(callee, /\.\s*filter$/) && receiver_is("array")
-  let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) == 1 && (receiver_is("array") || receiver_is("string"))
-}
-in ts_member let object_is_array_filter object.is_array_filter == true
-in ts_index rule prefer-find {
-  when object.is_array_filter == true && index == "0" && optional == null
-  warn "Prefer .find(...) instead of .filter(...)[0]."
-}
-in ts_call rule prefer-find:at {
-  when re_test(callee, /\.\s*at$/) && callee.object_is_array_filter == true && first([] argument) == "0"
-  warn "Prefer .find(...) instead of .filter(...)[0]."
-}
+in ts_call let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) == 1 && (receiver_is("array") || receiver_is("string"))
 
 in ts_binary rule prefer-includes {
   when left.is_index_of == true && (re_test(operator, /^!==?$/) && right == "-1" || re_test(operator, /^===?$/) && right == "-1" || operator == ">" && right == "-1" || operator == ">=" && right == "0" || operator == "<" && right == "0")

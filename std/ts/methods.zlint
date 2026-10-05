@@ -1,0 +1,49 @@
+# String and collection method policies.
+
+define {
+
+in ts_node let collection_type type_structure([], ["kind", "parts"])
+
+fn collection_value_node(n) = last(walk(n, current =>
+  if current is (ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion) then current.expression.node
+  else if current is ts_identifier && current.declaration.writes == 0 && contains(["const", "let", "var"], current.declaration.declaration_kind) && current.declaration.parent is ts_declarator then current.declaration.parent.init.node
+  else null))
+
+fn collection_value(n) =
+  if n.literal_value != null then n.literal_value
+  else if n is ts_identifier && n.resolved == "global" && contains(["readonly", "writable"], n.global) && contains(["NaN", "undefined", "Infinity"], n.text) then {type: if n.text == "undefined" then "undefined" else "number", value: n.text}
+  else if n.static_number != null && n.collection_type.kind == "number" then {type: "number", value: n.static_number}
+  else if n.static_string != null && contains(default(n.type_flags, []), "string") then {type: "string", value: n.static_string}
+  else null
+
+fn collection_static_value(n) = collection_value(collection_value_node(n))
+fn collection_method(n, name) = n is ts_member && n.property == name || n is ts_index && collection_static_value(n.index.node).type == "string" && collection_static_value(n.index.node).value == name
+
+fn collection_nonnull_parts(t) =
+  if t.kind == "union" then reduce(t.parts, [], (parts, part) => parts collection_nonnull_parts(part))
+  else if contains(["null", "undefined"], t.kind) then [] else [t]
+fn collection_array_part(t) = contains(["array", "tuple"], t.kind) || contains(["union", "intersection"], t.kind) && len(t.parts) > 0 && all(t.parts, part => collection_array_part(part))
+fn collection_arrayish(t) = len(collection_nonnull_parts(t)) > 0 && all(collection_nonnull_parts(t), part => collection_array_part(part))
+
+fn collection_filter(n) =
+  if n is ts_parenthesized then collection_filter(n.expression.node)
+  else if n is ts_sequence then collection_filter(last([] n.expression.node))
+  else if n is ts_conditional then collection_filter(n.consequent.node) && collection_filter(n.alternate.node)
+  else n is ts_call && n.optional == null && collection_method(unparenthesised_node(n.callee.node), "filter") && collection_arrayish(unparenthesised_node(n.callee.node).object.collection_type)
+
+fn collection_index_zero(v) = v != null && (contains(["string", "bigint"], v.type) && v.value == "0" || v.type == "number" && js_compare(v, 0) == 0)
+fn collection_at_number_zero(n) = n != null && (js_compare(n, n) == null || n > -1 && n < 1)
+fn collection_at_zero(v) = v != null && collection_at_number_zero(js_number(v))
+
+in ts_index rule prefer-find {
+  when optional == null && collection_index_zero(collection_static_value(index.node)) && collection_filter(object.node)
+  warn "Prefer .find(...) instead of .filter(...)[0]."
+}
+
+in ts_call rule prefer-find:at {
+  let method unparenthesised_node(callee.node)
+  when count(argument) == 1 && method.optional == null && collection_method(method, "at") && collection_at_zero(collection_static_value(first([] argument.node))) && collection_filter(method.object.node)
+  warn "Prefer .find(...) instead of .filter(...)[0]."
+}
+
+}

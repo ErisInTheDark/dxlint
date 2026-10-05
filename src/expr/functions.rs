@@ -39,6 +39,48 @@ fn count(v: &Value) -> Result<usize, String> {
     Ok(n as usize)
 }
 
+fn javascript_number_text(text: &str) -> f64 {
+    // JavaScript StringNumericLiteral whitespace differs from Rust's trim.
+    let text = text.trim_matches(|c| matches!(c,
+        '\t' | '\u{000b}' | '\u{000c}' | ' ' | '\u{00a0}' | '\u{feff}' | '\n' | '\r'
+        | '\u{2028}' | '\u{2029}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}'));
+    match text {
+        "" => return 0.0,
+        "Infinity" | "+Infinity" => return f64::INFINITY,
+        "-Infinity" => return f64::NEG_INFINITY,
+        _ => {}
+    }
+    let radix = match text.get(..2) {
+        Some("0x" | "0X") => Some(16),
+        Some("0o" | "0O") => Some(8),
+        Some("0b" | "0B") => Some(2),
+        _ => None,
+    };
+    if let Some(radix) = radix {
+        let digits = &text[2..];
+        if digits.is_empty() || !digits.bytes().all(|digit| char::from(digit).is_digit(radix)) {
+            return f64::NAN;
+        }
+        return BigIntDecimal::parse(text, false).map_or(f64::NAN, |value| value.to_number());
+    }
+    if !text.bytes().all(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.' | b'e' | b'E')) {
+        return f64::NAN;
+    }
+    text.parse().unwrap_or(f64::NAN)
+}
+
+fn javascript_literal_number(kind: &str, text: &str) -> Option<f64> {
+    match kind {
+        "string" => Some(javascript_number_text(text)),
+        "boolean" => match text { "true" => Some(1.0), "false" => Some(0.0), _ => None },
+        "null" => Some(0.0),
+        "undefined" | "regex" => Some(f64::NAN),
+        "number" => crate::native::ts::statics::number(text),
+        "bigint" => BigIntDecimal::parse(text, true).map(|value| value.to_number()),
+        _ => None,
+    }
+}
+
 macro_rules! text_fn {
     ($name:literal, $doc:literal, $f:expr) => {
         Function { name: $name, signature: concat!($name, "(text)"), doc: $doc, min: 1, max: 1, call: |a| {
@@ -211,6 +253,24 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "js_number",
+        signature: "js_number(value)",
+        doc: "JavaScript Number conversion of primitive values or literal_value records; NaN for non-numeric strings, null for unsupported values (including symbols)",
+        min: 1,
+        max: 1,
+        call: |a| {
+            let number = match &a[0] {
+                Value::Num(n) => Some(*n),
+                Value::Bool(b) => Some(f64::from(u8::from(*b))),
+                Value::Null => Some(0.0),
+                Value::Str(s) | Value::Node(_, s) => Some(javascript_number_text(s)),
+                Value::Record(_) => javascript_literal_number(&a[0].key("type").text(), &a[0].key("value").text()),
+                _ => None,
+            };
+            Ok(number.map_or(Value::Null, Value::Num))
+        },
+    },
+    Function {
         name: "js_compare",
         signature: "js_compare(a, b)",
         doc: "-1, 0 or 1 as JavaScript's `<` orders two literal values (`literal_value` records or plain values): strings by UTF-16 unit, bigints exactly, otherwise as numbers; null when unordered",
@@ -230,14 +290,7 @@ pub static FUNCTIONS: &[Function] = &[
             if ta == "string" && tb == "string" {
                 return Ok(Value::Num(va.encode_utf16().cmp(vb.encode_utf16()) as i8 as f64));
             }
-            let number = |t: &str, v: &str| -> f64 {
-                match t {
-                    "boolean" => if v == "true" { 1.0 } else { 0.0 },
-                    "null" => 0.0,
-                    "string" if v.trim().is_empty() => 0.0,
-                    _ => crate::native::ts::statics::number(v.trim().trim_end_matches('n')).unwrap_or(f64::NAN),
-                }
-            };
+            let number = |t: &str, v: &str| javascript_literal_number(t, v).unwrap_or(f64::NAN);
             if ta == "bigint" || tb == "bigint" {
                 let order = if ta == "bigint" {
                     BigIntDecimal::parse(&va, true).and_then(|x| match tb.as_str() {
@@ -687,6 +740,11 @@ struct BigIntDecimal {
 }
 
 impl BigIntDecimal {
+    fn to_number(&self) -> f64 {
+        let number = self.digits.parse().unwrap_or(f64::INFINITY);
+        if self.negative { -number } else { number }
+    }
+
     fn parse(text: &str, literal: bool) -> Option<Self> {
         let text = text.trim();
         if text.is_empty() {
@@ -744,6 +802,42 @@ mod tests {
         assert_eq!(call("trim_end", &["ab\r\n\n".into(), "\r\n".into()]), Value::from("ab"));
         assert_eq!(call("pad_start", &["7".into(), 3.0.into(), "0".into()]), Value::from("007"));
         assert_eq!(call("slice", &["hello".into(), (-3.0).into()]), Value::from("llo"));
+    }
+
+    #[test]
+    fn js_numeric_strings_follow_runtime_conversion_not_literal_syntax() {
+        for (input, expected) in [
+            ("", 0.0), (" \t\n", 0.0), ("010", 10.0), ("0x10", 16.0),
+            ("0o10", 8.0), ("0b10", 2.0), ("-.25", -0.25), ("5e-1", 0.5),
+            ("\u{feff}2\u{feff}", 2.0), ("Infinity", f64::INFINITY),
+            ("+Infinity", f64::INFINITY), ("-Infinity", f64::NEG_INFINITY),
+        ] {
+            let actual = call("js_number", &[Value::from(input)]).num().unwrap();
+            assert_eq!(actual, expected, "{input:?}");
+        }
+        for input in ["1_0", "1n", "inf", "infinity", "+0x0", "-0x0", "\u{0085}2", "0x2\u{0085}", "not a number"] {
+            assert!(call("js_number", &[Value::from(input)]).num().unwrap().is_nan(), "{input:?}");
+        }
+        for (kind, value, expected) in [("boolean", "false", 0.0), ("null", "null", 0.0), ("bigint", "0n", 0.0), ("string", "0x10", 16.0)] {
+            let literal = Value::record(vec![("type".into(), Value::from(kind)), ("value".into(), Value::from(value))]);
+            assert_eq!(call("js_number", &[literal]).num().unwrap(), expected);
+        }
+        let undefined = Value::record(vec![("type".into(), Value::from("undefined")), ("value".into(), Value::from("undefined"))]);
+        assert!(call("js_number", &[undefined]).num().unwrap().is_nan());
+        let symbol = Value::record(vec![("type".into(), Value::from("symbol")), ("value".into(), Value::from("key"))]);
+        assert_eq!(call("js_number", &[symbol]), Value::Null);
+    }
+
+    #[test]
+    fn js_numeric_comparison_shares_string_coercion_and_preserves_text_order() {
+        for input in ["1_0", "1n", "inf", "\u{0085}2"] {
+            assert_eq!(call("js_compare", &[Value::from(input), Value::Num(0.0)]), Value::Null, "{input:?}");
+            let literal = Value::record(vec![("type".into(), Value::from("string")), ("value".into(), Value::from(input))]);
+            assert_eq!(call("js_compare", &[literal, Value::Num(0.0)]), Value::Null, "{input:?}");
+        }
+        assert_eq!(call("js_compare", &[Value::from("010"), Value::Num(9.0)]), Value::Num(1.0));
+        assert_eq!(call("js_compare", &[Value::from("\u{feff}2"), Value::Num(1.0)]), Value::Num(1.0));
+        assert_eq!(call("js_compare", &[Value::from("10"), Value::from("2")]), Value::Num(-1.0));
     }
 
     #[test]
