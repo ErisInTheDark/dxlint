@@ -16,6 +16,7 @@ in ts_method, ts_class_property let style_key_offset default(key.member_key_offs
 in ts_parameter let style_key_offset name.offset
 in ts_method, ts_class_property, ts_parameter let style_head_offset default(last([] decorator.after_decorator), offset)
 in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, public: public_modifier_offset([] modifier, [] modifier.offset, style_head_offset), key: style_key_offset }
+in ts_method let class_constructor parent is ts_class && key is (ts_identifier, ts_string) && static_name == "constructor" && !contains([] modifier, "static") && kind != "get" && kind != "set"
 in ts_class_property rule explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
@@ -30,7 +31,7 @@ in ts_method rule explicit-member-accessibility:method {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
-  let check default(if key == "constructor" then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods, accessibility)
+  let check default(if class_constructor then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods, accessibility)
   let shape style_member
   when parent is ts_class && !re_test(key, /^#/) && !contains(ignoredMethodNames, shape.name)
   when check == "explicit" && !has_accessibility(modifiers) || check == "no-public" && contains([] modifier, "public")
@@ -61,7 +62,7 @@ in ts_method, ts_class_property let member_static_name default(static_name, key.
 in ts_method let setter_member_name if kind == "set" then member_static_name else null
 in ts_member, ts_index let written_this_member if object is ts_this && write_site != null then static_name else null
 in style_tree_node let constructor_write_names if is (ts_function, ts_arrow, ts_method, ts_class) then [] else [] written_this_member reduce([] children.constructor_write_names, [], (names, child) => names child)
-in ts_method let constructor_member_writes if key == "constructor" then body.constructor_write_names else []
+in ts_method let constructor_member_writes if class_constructor then body.constructor_write_names else []
 in ts_class let constructor_member_writes reduce([] member.constructor_member_writes, [], (names, child) => names child)
 in ts_class let setter_member_names [] member.setter_member_name
 in ts_method let literal_member_candidate kind == "get" && !contains([] modifier, "override") && body.first_member_literal && (member_static_name == null || !contains(parent.setter_member_names, member_static_name))
@@ -84,9 +85,9 @@ in ts_class_property.key rule class-literal-property-style:getters {
 in ts_parameter let is_parameter_property re_test(modifiers, /\b(?:public|private|protected|readonly)\b/)
 in ts_method, ts_class_property let is_static contains([] modifier, "static")
 in ts_method let constructor_parameter_properties any([] parameter.is_parameter_property, p => p == true)
-in ts_method let class_constructor_only key == "constructor" && !constructor_parameter_properties
+in ts_method let class_constructor_only class_constructor && !constructor_parameter_properties
 in ts_class_property, ts_index_signature, ts_static_block, ts_empty let class_constructor_only false
-in ts_method let class_static_only if key == "constructor" then !constructor_parameter_properties else is_static && !contains([] modifier, "abstract")
+in ts_method let class_static_only if class_constructor then !constructor_parameter_properties else is_static && !contains([] modifier, "abstract")
 in ts_class_property let class_static_only is_static && !contains([] modifier, "abstract")
 in ts_index_signature let class_static_only false
 in ts_static_block, ts_empty let class_static_only true
@@ -104,13 +105,23 @@ in ts_class rule no-extraneous-class {
 }
 
 # Constructors that do nothing a missing one would not.
-in ts_parameter let parameter_name re_replace(name, /\s+/, "")
+in ts_identifier let constructor_forwarding_key {spread: false, name: text}
+in ts_rest, ts_spread let constructor_forwarding_key if argument is ts_identifier then {spread: true, name: argument} else null
+in ts_parenthesized forward constructor_forwarding_key, constructor_super_call from expression
+in ts_parameter let constructor_forwarding_key if init == null then name.constructor_forwarding_key else null
+in ts_parameter let constructor_parameter_exempt is_parameter_property || count(decorator) > 0
+in ts_call let constructor_super_call if callee is ts_super then node else null
+in ts_expression_statement let constructor_super_call expression.constructor_super_call
+in ts_block let constructor_super_call if count(body) == 1 then first([] body.constructor_super_call) else null
+fn constructor_spreads_arguments(arg) = arg is ts_spread && arg.argument is ts_identifier && arg.argument == "arguments"
 in ts_method rule no-useless-constructor {
   # A public constructor of a derived class may widen a protected one.
-  when key == "constructor" && body != null && count(decorator) == 0 && !re_test(modifiers, /\b(?:private|protected)\b/)
+  when class_constructor && body != null && count(decorator) == 0 && !re_test(modifiers, /\b(?:private|protected)\b/)
   when !(ts_class.extends != null && re_test(modifiers, /\bpublic\b/))
-  when !any(compact([] parameter.is_parameter_property)) && !re_test(join([] parameter, ","), /[=@{\[?]/)
-  when if ts_class.extends == null then re_test(body, /^\{\s*\}$/) else re_test(re_replace(body, /\s+/, ""), "^\\x7Bsuper\\((?:\\.\\.\\.arguments|" re_escape(join([] parameter.parameter_name, ",")) ")\\);?\\x7D$")
+  when !any([] parameter.constructor_parameter_exempt)
+  let super_call body.constructor_super_call
+  when if ts_class.extends == null then count(body.body) == 0 else super_call != null && count(parameter) == count([] parameter.constructor_forwarding_key)
+    && (count(super_call.argument) == 1 && constructor_spreads_arguments(first([] super_call.argument.node)) || count(parameter) == count(super_call.argument) && [] parameter.constructor_forwarding_key == [] super_call.argument.constructor_forwarding_key)
   warn "Useless constructor."
 }
 

@@ -50,6 +50,7 @@ in ts_declarator, ts_class_property, ts_parameter rule consistent-generic-constr
   let construction init.constructor_arguments
   let annotation type.annotation_arguments
   when construction != null
+  when mode != "constructor" || compiler_options.isolatedDeclarations != true
   when if mode == "constructor" then annotation != null && annotation.name == construction.name && !annotation.typed_array && annotation.count > 0 && construction.count == 0 else type == null && construction.count > 0
   warn if mode == "constructor" then "The generic type arguments should be specified as part of the constructor type arguments." else "The generic type arguments should be specified as part of the type annotation."
 }
