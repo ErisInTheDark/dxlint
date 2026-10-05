@@ -1,0 +1,44 @@
+# Spread policy over constrained constituent types and declaration provenance.
+
+define {
+
+fn spread_parts(t) = if contains(["union", "intersection"], t.kind) then reduce(t.parts, [], (parts, part) => parts spread_parts(part)) else [t]
+fn spread_builtin(t, names) = any(t.declarations, d => d.from == "lib" && contains(names, d.name))
+fn spread_string(t) = any(spread_parts(t), part => part.kind == "string")
+fn spread_expando(n) = n.declaration.parent is ts_function || n.declaration.parent is ts_declarator && n.declaration.parent.type == null && unparenthesised_node(n.declaration.parent.init.node) is (ts_function, ts_arrow)
+fn spread_object_category(n, t) =
+  if any(spread_parts(t), part => spread_builtin(part, ["Promise"])) then "promise"
+  else if !(spread_expando(n) && len(default(t.property_writes, [])) > 0) && any(spread_parts(t), part => part.callable && len(part.property_names) == 0) then "function"
+  else if any(spread_parts(t), part => spread_builtin(part, ["Map", "ReadonlyMap", "WeakMap"])) then "map"
+  else if any(spread_parts(t), part => contains(["array", "tuple"], part.kind)) then "array"
+  else if !spread_string(t) && any(spread_parts(t), part => part.iterable == true) then "iterable"
+  else if any(spread_parts(t), part => !part.constructor && part.symbol_constructor) then "instance"
+  else if any(spread_parts(t), part => part.class_value) then "class" else null
+
+in ts_node let spread_type type_structure([])
+in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
+  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "types safe to spread"
+  let object_spread node is ts_jsx_spread_attribute || parent is ts_object
+  let sequence_spread parent is (ts_array, ts_call)
+  when object_spread || sequence_spread
+  let subject argument.node
+  when !type_is_allowed(allow, subject.type_specifier_groups)
+  let category if object_spread then spread_object_category(subject, subject.spread_type) else if spread_string(subject.spread_type) then "string" else null
+  when category != null
+  warn if category == "promise" then "Using the spread operator on Promise in an object can cause unexpected behavior. Did you forget to await the promise?"
+    else if category == "function" then "Using the spread operator on a function without additional properties can cause unexpected behavior. Did you forget to call the function?"
+    else if category == "map" then "Using the spread operator on a Map in an object will result in an empty object. Did you mean to use `Object.fromEntries(map)` instead?"
+    else if category == "array" then "Using the spread operator on an array in an object will result in a list of indices."
+    else if category == "iterable" then "Using the spread operator on an Iterable in an object can cause unexpected behavior."
+    else if category == "instance" then "Using the spread operator on class instances will lose their class prototype."
+    else if category == "class" then "Using the spread operator on class declarations will spread only their static properties, and will lose their class prototype."
+    else """
+Using the spread operator on a string can mishandle special characters, as can `.split("")`.
+- `...` produces Unicode code points, which will decompose complex emojis into individual emojis
+- .split("") produces UTF-16 code units, which breaks rich characters in many languages
+Consider using `Intl.Segmenter` for locale-aware string decomposition.
+Otherwise, if you don't need to preserve emojis or other non-Ascii characters, disable this lint rule on this line or configure the 'allow' rule option.
+"""
+}
+
+}

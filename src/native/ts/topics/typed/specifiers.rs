@@ -5,7 +5,7 @@ use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::modules::DeclRef;
 use crate::native::ts::summary::{type_syn, DeclKind, TypeSyn};
 
-pub(super) fn named_gate(ck: &Checker<'_>, decl: DeclRef) -> Value<'static> {
+pub(crate) fn named_gate(ck: &Checker<'_>, decl: DeclRef) -> Value<'static> {
     let name = ck.summary_of(decl.file).map_or_else(String::new, |summary| summary.decls[decl.decl as usize].name.to_string());
     let path = ck.project.path(decl.file).to_string_lossy().replace('\\', "/");
     let package = path.split("/node_modules/").nth(1).map(|tail| {
@@ -46,9 +46,9 @@ pub(super) fn named_types(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) ->
 fn candidates(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Value<'static>> {
     if depth >= 64 { return Vec::new() }
     match ty {
-        Ty::Named(sym, _) => sym.iter().map(|&decl| named_gate(ck, decl)).collect(),
+        Ty::Named(sym, _) | Ty::Class(sym) => sym.iter().map(|&decl| named_gate(ck, decl)).collect(),
         Ty::Inter(parts) => parts.iter().flat_map(|part| candidates(part, ck, depth + 1)).collect(),
-        Ty::Prim(name) => vec![Value::record(vec![("name".into(), Value::from(*name)), ("from".into(), Value::from("lib"))])],
+        Ty::Prim(name) | Ty::Lit(_, name) => vec![Value::record(vec![("name".into(), Value::from(*name)), ("from".into(), Value::from("lib"))])],
         Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Never | Ty::Void | Ty::Undefined | Ty::Null => {
             let name = match ty { Ty::Any => "any", Ty::Unknown | Ty::IntrinsicUnknown => "unknown", Ty::Never => "never", Ty::Void => "void", Ty::Undefined => "undefined", _ => "null" };
             vec![Value::record(vec![("name".into(), Value::from(name)), ("from".into(), Value::from("lib"))])]
@@ -98,6 +98,11 @@ pub(super) fn groups(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     };
     if !matches!(ty, Ty::Union(_)) {
         groups[0].extend(annotated_aliases(file, node).into_iter().map(|decl| named_gate(ck, decl)));
+        if matches!(ty, Ty::Fn(_)) && file.syntax.is(file.syntax.unparen(node), K::Ident) {
+            groups[0].extend(ck.lookup(&file.env_at(node), file.syntax.text(file.syntax.unparen(node))).into_iter().filter(|r| {
+                ck.summary_of(r.file).is_some_and(|s| s.decls[r.decl as usize].kind == DeclKind::Function)
+            }).map(|decl| named_gate(ck, decl)));
+        }
     }
     Value::list(groups.into_iter().map(Value::list).collect())
 }
