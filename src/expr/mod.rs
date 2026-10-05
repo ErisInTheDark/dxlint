@@ -482,6 +482,10 @@ impl<'a> Scope<'a> {
     /// `base.a.b...`: on records the keys; on node values the whole rest
     /// read there (`n.callee.object.layer`).
     fn member_path(&self, base: CExpr, keys: &[crate::config::ast::Name]) -> CExpr {
+        // `n.token`: a node's own tokens, which must then be built.
+        for key in keys.iter().filter(|key| key.text == "token" && self.grammar.labels.get("token").is_some()) {
+            self.note(key.span, Resolved::Field(key.text.clone()));
+        }
         match keys {
             [] => base,
             [key] => self.member(base, key),
@@ -1593,7 +1597,8 @@ impl<'a> Ctx<'a> {
     /// the same line (so this ends); levels opened on one line collapse, so
     /// it adds levels only for a class not counted on the line yet (`seen`,
     /// starting with the indented line's own). Anything else stands for its
-    /// line, whose first token answers for what is above.
+    /// line, whose first token answers for what is above, unless the line
+    /// starts inside a token: it continues the line above, as one line.
     fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> (AnchorBase, f64) {
         let line = self.lines.line_of(at);
         let line_start = self.lines.line_start(line);
@@ -1626,7 +1631,12 @@ impl<'a> Ctx<'a> {
                 let from = self.indent_anchor_at(id, i, in_form);
                 match from {
                     AnchorAt::Offset(from) if from >= at => continue,
-                    AnchorAt::Offset(from) if self.lines.line_of(from) < line => return (AnchorBase::Line(line), 0.0),
+                    // A line starting inside a token (template text, a string,
+                    // a block comment) has no code indentation to stand for:
+                    // it continues the line above, so follow the anchor up.
+                    AnchorAt::Offset(from) if self.lines.line_of(from) < line && !self.native.is_some_and(|facts| facts.inside_token(line_start)) => {
+                        return (AnchorBase::Line(line), 0.0);
+                    }
                     _ => {}
                 }
                 let rule = &self.indents[i];

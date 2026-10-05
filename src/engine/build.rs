@@ -900,7 +900,8 @@ mod demand_tests {
         let actual: Vec<_> = [
             "in ts_call rule tokens info \"{count([] token.node)}\"",
             "in ts_call let own_tokens count([] token.node)\nin ts_call rule tokens info \"{own_tokens}\"",
+            "fn own_tokens(n) = count([] n.token.node)\nin ts_call rule tokens info \"{own_tokens(node)}\"",
         ].into_iter().map(|rules| messages(&native(rules), "/root/file.ts", "f(a, b);")).collect();
-        assert_eq!(actual, [["3"], ["3"]]);
+        assert_eq!(actual, [["3"], ["3"], ["3"]]);
     }
 }

@@ -57,3 +57,16 @@ fn mid_line_anchors_stop_at_their_own_line() {
     let rules = "indent in ts_block\nindent ts_conditional.consequent from token_neighbours.before.start class branches";
     assert_eq!(levels(rules, src), ["0:0", "0:0", "2:2", "1:2", "0:0"]);
 }
+
+#[test]
+fn lines_starting_inside_a_token_follow_their_anchor_up() {
+    // The `{` shares a line with template text, which has no code
+    // indentation: it sits where the call's tag line puts it.
+    let src = "tag`raw\n        text`(() => {\n  value();\n});\n";
+    let found = levels("indent in ts_call from 0\nindent in ts_block", src);
+    assert_eq!(found[2..], ["1:0", "0:0"]);
+    // Code lines still stand for themselves.
+    let src = "tag(\n        x, () => {\n  value();\n});\n";
+    let found = levels("indent in ts_call from 0\nindent in ts_block", src);
+    assert_eq!(found[2..], ["1:8", "0:8"]);
+}
