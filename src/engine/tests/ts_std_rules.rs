@@ -3,6 +3,66 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn precedence_and_statement_context_preserve_required_parentheses() {
+    let lint = native_linter("rule no-extra-parens");
+    for (source, count) in [
+        ("const x = (a + b) * c;", 0),
+        ("const x = a + (b * c);", 1),
+        ("const x = a - (b - c);", 0),
+        ("({}).method();", 0),
+        ("const x = ((a));", 1),
+        ("for (let a = (b in c);;);", 0),
+        ("for (let a = (b + c);;);", 1),
+        ("const x: (string) = \"\";", 1),
+        ("type Foo = ((string | number))[];", 1),
+        ("type Foo = (string | number)[];", 0),
+        ("function foo(x: (number)): (boolean) {}", 2),
+    ] {
+        assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), count, "{source}");
+    }
+}
+
+#[test]
+fn construct_parens_count_but_argument_separators_do_not() {
+    for (source, outside, inside) in [
+        ("import(function (){}());", 0, 1),
+        ("consume(function (){}());", 0, 1),
+        ("consume(function (){}(), other);", 1, 1),
+        ("consume(function (){}(),);", 1, 1),
+        ("consume((function (){})());", 0, 0),
+    ] {
+        for (mode, count) in [("outside", outside), ("inside", inside)] {
+            let lint = native_linter(&format!("rule wrap-iife {{ set mode \"{mode}\" }}"));
+            assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), count, "{mode}: {source}");
+        }
+    }
+}
+
+#[test]
+fn chain_depth_tracks_receiver_invocations_through_parentheses() {
+    let lint = native_linter("rule newline-per-chained-call");
+    for (source, count) in [
+        ("a().b().c();", 1),
+        ("((a().b())).c();", 1),
+        ("((a().b))().c();", 1),
+        ("new A().b().c();", 1),
+        ("a(foo()).b();", 0),
+        ("a().b.c();", 0),
+        ("((a().b())\n).c();", 0),
+    ] {
+        assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), count, "{source}");
+    }
+}
+
+#[test]
+fn chain_breaks_use_code_positions_after_unicode() {
+    let lint = native_linter("rule newline-per-chained-call");
+    let source = "\u{03b1}\u{03b1}; a().b()\n.c();";
+    let reports = lint.lint(Path::new("/root/a.ts"), source);
+    assert!(reports.is_empty(), "{reports:?}");
+}
+
+#[test]
 fn adjacent_comments_share_outer_blank_line_requirements() {
     let lint = native_linter("rule lines-around-comment {\n set beforeBlockComment true\n set afterBlockComment true\n}");
     let source = "before();\n/* first */ /* second\n continued */\nafter();";
