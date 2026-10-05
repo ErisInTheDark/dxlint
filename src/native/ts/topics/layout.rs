@@ -11,7 +11,6 @@ use crate::native::ts::tokens::{gap_has_space, lex, lex_comments};
 mod punctuation;
 mod delimiters;
 mod lists;
-mod lines;
 mod quotes;
 
 pub const FACTS: &[Fact] = &[
@@ -34,11 +33,6 @@ pub const FACTS: &[Fact] = &[
         name: "property_quote_sites",
         doc: "native properties/signatures/enums and object/interface/type/enum groups: {group,quoted,numeric,redundant,redundant_number,keyword,name,offset}; computed keys, methods and shorthand object properties exempt",
         get: |f, n| f.with_file(quotes::property_quote_sites, n),
-    },
-    Fact {
-        name: "empty_line_runs",
-        doc: "native program: {kind,count,offsets} runs of empty lines; kind bof/eof/middle, offsets line starts, final editor newline ignored and template quasi lines protected",
-        get: |f, n| f.with_file(lines::empty_line_runs, n),
     },
     Fact {
         name: "token_neighbours",

@@ -193,17 +193,27 @@ in ts_number rule no-floating-decimal:trailing {
   fix as text "0"
 }
 
-in ts_program rule no-multiple-empty-lines {
+# Non-BOF runs include the previous line ending: physical boundaries without lookbehind.
+in .js layer layout_blank_lines match layout_blank_run (
+  /\A(?:(?:[^\S\r\n]*[\r\n])+(?:[^\S\r\n]+\z)?|[^\S\r\n]+\z)/
+  or /(?:\r\n[^\S\r\n]*[\r\n]|\n[^\S\r\n]*[\r\n]|\r\r|\r[^\S\r\n]+[\r\n])(?:[^\S\r\n]*[\r\n])*(?:[^\S\r\n]+\z)?/
+  or /(?:\r\n|[\r\n])[^\S\r\n]+\z/
+)
+in layout_blank_run rule no-multiple-empty-lines {
   option max int(0..) = 2 "maximum consecutive blank lines"
   option maxEOF int(0..) | null = null "maximum final blank lines"
   option maxBOF int(0..) | null = null "maximum initial blank lines"
-  each blank_run in map(empty_line_runs, s => {
-    site: s,
-    limit: if s.kind == "bof" then default(maxBOF, max) else if s.kind == "eof" then default(maxEOF, max) else max
-  })
-  when blank_run.site.count > blank_run.limit
-  report at first(slice(blank_run.site.offsets, blank_run.limit))
-  warn if blank_run.site.kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_run.limit} allowed." else if blank_run.site.kind == "eof" then "Too many blank lines at the end of file. Max of {blank_run.limit} allowed." else "More than {blank_run.limit} blank {if blank_run.limit == 1 then 'line' else 'lines'} not allowed."
+  when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
+  let blank_prefix if offset == 0 then 0 else if starts_with(text, "\r\n") then 2 else 1
+  let blank_text byte_slice(text, blank_prefix)
+  let blank_kind if offset == 0 then "bof" else if end_offset == byte_len(source) then "eof" else "middle"
+  let blank_count re_count(blank_text, /\r\n|[\n\r]/) + (if re_test(blank_text, /[\r\n]\z/) then 0 else 1)
+  let blank_limit if blank_kind == "bof" then default(maxBOF, max) else if blank_kind == "eof" then default(maxEOF, max) else max
+  when blank_count > blank_limit
+  # Blank whitespace cannot contain NUL; split after line endings to retain their byte lengths.
+  let blank_parts split(re_replace(blank_text, /(\r\n|[\r\n])/, "$1\0"), "\0")
+  report at { start: offset + blank_prefix + byte_len(join(slice(blank_parts, 0, blank_limit), "")), end: byte_len(source) }
+  warn if blank_kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_limit} allowed." else if blank_kind == "eof" then "Too many blank lines at the end of file. Max of {blank_limit} allowed." else "More than {blank_limit} blank {if blank_limit == 1 then 'line' else 'lines'} not allowed."
 }
 
 schema annotation_gap_options { before?: boolean; after?: boolean }
