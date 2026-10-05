@@ -478,7 +478,19 @@ impl Scope<'_> {
                 entries.iter().map(|(k, v)| Some((k.text.clone().into(), self.compile(v, errors)?))).collect::<Option<Vec<_>>>()?,
             ),
             // `first(declarations).offset`: a record's key, or a read on nodes.
-            ExprKind::Key(base, key) => self.member(self.compile(base, errors)?, key),
+            // `(x).callee.node`: the whole key chain is one path read, as
+            // `x.callee.node` would be (`.callee` alone reads the field's
+            // value, which has no `.node`).
+            ExprKind::Key(..) => {
+                let mut keys = Vec::new();
+                let mut at = e;
+                while let ExprKind::Key(base, key) = &at.kind {
+                    keys.push(key.clone());
+                    at = base;
+                }
+                keys.reverse();
+                self.member_path(self.compile(at, errors)?, &keys)
+            }
             ExprKind::Lambda(..) => {
                 errors.push(ConfigError::new(
                     e.span,

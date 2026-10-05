@@ -1577,6 +1577,16 @@ fn span_queries_find_native_text_fields() {
 }
 
 #[test]
+fn key_chains_on_any_node_value_read_like_paths() {
+    // `(n).callee.node` and `first(...).callee.node` read as `n.callee.node`.
+    let l = native_linter(r#"
+        in ts_expression_statement rule s info "{kind_name((expression.node).callee.node)}/{kind_name(first([] expression.node).callee.node)}/{kind_name(expression.callee.node)}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f();\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["ts_identifier/ts_identifier/ts_identifier"]);
+}
+
+#[test]
 fn forward_reads_attributes_through_wrappers() {
     let l = native_linter(r#"
         in ts_identifier let size len(text)
