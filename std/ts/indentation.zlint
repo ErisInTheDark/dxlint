@@ -6,6 +6,10 @@ group indent_generic_arguments ts_call, ts_new, ts_type_reference, ts_type_query
 group indent_generic_parameters ts_function, ts_arrow, ts_method, ts_class, ts_interface, ts_type_alias, ts_function_type, ts_method_signature, ts_call_signature
 group indent_calls ts_call, ts_new, ts_import_call
 group indent_lists ts_call, ts_new, ts_function, ts_arrow, ts_method, ts_array, ts_array_pattern, ts_tuple_type, ts_object, ts_object_pattern, ts_import
+# Closing dotted names are text, not component references; native token children require an overlay.
+in ts_jsx_name layer indent_jsx_names match indent_jsx_name_member dot:/\./ /\s*/ property:/[^\s.:]+/
+in indent_jsx_name_member let indent_jsx_closing containing(ts_jsx_element.closing)
+in indent_jsx_name_member let indent_jsx_closing_anchor if position(indent_jsx_closing.offset).js_column == len(indent_jsx_closing.indent) + 1 then indent_jsx_closing else node_at(indent_jsx_closing.token_neighbours.before.start)
 
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
 fn indent_variable_mode(mode, kind) = if type_of(mode) == "record" then default(get(mode, if kind == "await using" then "using" else kind), 1) else mode
@@ -59,8 +63,9 @@ fn indent_list_mode(item, call, declaration, expression, array, object, imports,
   else if item is ts_import.specifier then imports
   else if item is ts_variable_declaration.declaration then indent_variable_mode(variable, item.parent.kind.text)
   else 1
+fn indent_flat_ternary(owner, statement) = position(owner.test.offset).js_line == position(owner.consequent.offset).js_line && position(owner.offset).js_line != position(statement.offset).js_line
 fn indent_ternary_level(branch, flat, offsets, statement) =
-  if flat && position(branch.parent.test.offset).js_line == position(branch.parent.consequent.offset).js_line && position(branch.parent.offset).js_line != position(statement.offset).js_line then 0
+  if flat && indent_flat_ternary(branch.parent, statement) then 0
   else if offsets != false && (branch.first_token is (opener, closer, ts_comma, ts_semicolon, ts_colon, ts_dot, ts_question, ts_ellipsis, ts_equals, ts_punctuator) || branch is (ts_call, ts_await, ts_new) && (type_of(offsets) == "bool" || default(get(offsets, if branch is ts_call then "CallExpression" else if branch is ts_await then "AwaitExpression" else "NewExpression"), true))) then 2
   else 1
 fn indent_ternary_anchor_level(branch, flat, offsets, statement) =
@@ -69,6 +74,7 @@ fn indent_ternary_anchor_level(branch, flat, offsets, statement) =
 
 in indent_calls let indent_items [] argument.node
 in ts_function, ts_arrow, ts_method let indent_items [] parameter.node
+in ts_function, ts_arrow, ts_method let indent_body_root last(walk(node, item => if item is ts_arrow.body && position(item.first_token.start).js_column > len(item.indent) + 1 then item.parent.node else null))
 in ts_array, ts_array_pattern, ts_tuple_type let indent_items [] element.node
 in ts_object, ts_object_pattern let indent_items [] property.node
 in ts_import let indent_items [] specifier.node
@@ -109,6 +115,9 @@ in ts_if let indent_control_tails [consequent.last_token.end, alternate.last_tok
 in ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_with let indent_control_tails [body.last_token.end]
 in ts_semicolon, ts_empty let indent_semicolon_control if space_before.line_break && space_after.line_break == false && next_token != null then last(filter(walk(node, item => item.parent.node), item => contains(default(item.indent_control_tails, []), end_offset))) else null
 in ts_semicolon let indent_tail_unchecked parent is (ts_variable_declaration, ts_declarator, ts_type_alias, ts_import_equals, ts_export_assignment)
+in ts_comment let indent_comment_switch containing(ts_switch)
+in ts_comment let indent_comment_list containing(indent_lists)
+in ts_switch let indent_switch_open first(filter([] token.node, item => item is ts_open_brace))
 
 in ts_line rule indent {
   option mode int(0..) | "tab" = 4 "spaces per level, or tab"
@@ -143,15 +152,16 @@ in ts_line rule indent {
   indent ts_index.token from if text == "]" then parent.indent_index_open else default(parent.optional.offset, parent.offset) by if text == "]" then 0 else indent_numeric(member_expression)
   indent in indent_calls from indent_call_anchor by indent_numeric(default(call_expression.arguments, 1))
   indent indent_calls.token from if is (ts_open_paren, ts_close_paren) then parent.indent_call_anchor else offset by 0
-  indent in ts_function.body, ts_arrow.body, ts_method.body from indent_function_anchor(parent.node) by if parent.indent_outer_iife then indent_numeric(outerIIFEBody) else default(indent_function_mode(parent, function_declaration, function_expression).body, 1)
+  indent in ts_function.body, ts_arrow.body, ts_method.body from indent_function_anchor(parent.indent_body_root) by if parent.indent_outer_iife then indent_numeric(outerIIFEBody) else default(indent_function_mode(parent, function_declaration, function_expression).body, 1)
   indent in ts_static_block.body by default(static_block.body, 1)
   indent ts_function.parameter, ts_arrow.parameter, ts_method.parameter by indent_numeric(default(indent_function_mode(parent, function_declaration, function_expression).parameters, 1))
   indent ts_function.return_type from parent.indent_return_anchor by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
-  indent ts_function.token from if offset == parent.indent_return_colon then parent.indent_return_anchor else offset by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
+  indent ts_function.token from if is ts_close_paren then indent_function_anchor(parent.indent_body_root) else if offset == parent.indent_return_colon then parent.indent_return_anchor else offset by if is ts_close_paren then 0 else default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
+  indent ts_arrow.token, ts_method.token from if is ts_close_paren then indent_function_anchor(parent.indent_body_root) else offset by 0
   indent ts_arrow.return_type, ts_parameter.type
   indent ts_call.argument, ts_new.argument, ts_import_call.argument from parent.indent_call_anchor by indent_numeric(default(call_expression.arguments, 1))
   indent ts_switch.case by switch_case
-  indent ts_case.body
+  indent ts_case.body by if is ts_block && count([] parent.body.node) == 1 then 0 else 1
   indent ts_variable_declaration.declaration class declarators by indent_declaration_level(parent, indent_variable_mode(variable_declarator, parent.kind.text), mode)
   indent in ts_variable_declaration class declarators by indent_declaration_level(node, indent_variable_mode(variable_declarator, kind.text), mode)
   indent ts_declarator.token from token_neighbours.before.start by if text == "=" then indent_numeric(assignment_operator) else 0
@@ -166,13 +176,13 @@ in ts_line rule indent {
   indent ts_declarator.init from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.value, ts_type_parameter.default from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_import_equals.token, ts_type_parameter.token from if text == "=" then token_neighbours.before.start else offset by indent_numeric(assignment_operator)
-  indent ts_arrow.body from indent_function_anchor(parent.node) by if is ts_block then 0 else 1
+  indent ts_arrow.body from indent_function_anchor(parent.indent_body_root) by if is ts_block then 0 else 1
   indent ts_property.value, ts_return.argument, ts_throw.argument
   indent ts_conditional.consequent, ts_conditional.alternate by indent_ternary_level(node, flat_ternary_expressions, offset_ternary_expressions, containing(ts_statement))
   # An anchor at the branch itself skips this candidate; own-line branches keep ordinary collapsing.
   indent ts_conditional.consequent, ts_conditional.alternate from if position(first_token.start).js_line == position(token_neighbours.before.start).js_line && position(parent.offset).js_line < position(first_token.start).js_line then token_neighbours.before.start else offset class branches by indent_ternary_anchor_level(node, flat_ternary_expressions, offset_ternary_expressions, containing(ts_statement))
-  indent ts_conditional.token
-  indent ts_conditional_type.consequent, ts_conditional_type.alternate, ts_conditional_type.token
+  indent ts_conditional.token by if flat_ternary_expressions && indent_flat_ternary(parent, containing(ts_statement)) then 0 else 1
+  indent ts_conditional_type.consequent, ts_conditional_type.alternate, ts_conditional_type.token by if parent is ts_conditional_type.alternate && position(parent.extends.last_token.end).js_line == position(parent.consequent.first_token.start).js_line then 0 else 1
   indent in ts_jsx_element, ts_jsx_fragment
   indent in ts_jsx_expression, ts_jsx_spread_attribute
   indent ts_jsx_element.name, ts_jsx_element.property, ts_jsx_element.body, ts_jsx_fragment.body
@@ -202,7 +212,8 @@ in ts_line rule indent {
   when assignment_operator != "off" || equals == null && !any(first_nodes, item => item.first_token.start == first_offset && item.parent.indent_assignment_value.offset == item.offset)
   let member first(overlapping(ts_member, first_offset, first_offset + 1))
   let index first(overlapping(ts_index, first_offset, first_offset + 1))
-  when member_expression != "off" || (member == null || !contains([member.property.first_token.start, member.property.token_neighbours.before.start, member.optional.offset], first_offset)) && (index == null || !contains([index.index.first_token.start, index.indent_index_open, index.optional.offset], first_offset))
+  let jsx_member first(overlapping(indent_jsx_name_member, first_offset, first_offset + 1))
+  when member_expression != "off" || (member == null || !contains([member.property.first_token.start, member.property.token_neighbours.before.start, member.optional.offset], first_offset)) && (index == null || !contains([index.index.first_token.start, index.indent_index_open, index.optional.offset], first_offset)) && (jsx_member == null || !contains([jsx_member.offset, jsx_member.property.offset], first_offset))
   let list_item reduce(first_nodes, null, (best, item) => if item.indent_list_first != null && item.first_token.start == first_offset && (best == null || item.end_offset < best.end_offset) then item else best)
   let list_mode indent_list_mode(list_item, call_expression, function_declaration, function_expression, array_expression, object_expression, import_declaration, variable_declarator)
   when list_mode != "off"
@@ -213,6 +224,10 @@ in ts_line rule indent {
   when binary_right == null || binary_right.first_token.start != first_offset
   when logical_right == null || logical_right.first_token.start != first_offset
   when binary_operator == null && logical_operator == null
+  let type_operator first(overlapping(ts_union.token, first_offset, first_offset + 1))
+  let intersection_operator first(overlapping(ts_intersection.token, first_offset, first_offset + 1))
+  when type_operator.text != "|" && intersection_operator.text != "&"
+  when !any(first_nodes, item => item is (ts_union.type, ts_intersection.type) && item.first_token.start == first_offset)
   let quasi first(overlapping(ts_template.quasi, first_offset, first_offset + 1))
   let comment first(overlapping(ts_comment, first_offset, first_offset + 1))
   let block_comment if comment is ts_block_comment then comment else null
@@ -225,17 +240,25 @@ in ts_line rule indent {
   let unit if mode == "tab" then "\t" else repeat(" ", mode)
   let comment_before if comment == null then null else node_at(comment.token_neighbours.before.start)
   let comment_after if comment == null then null else node_at(comment.token_neighbours.after.start)
+  let comment_switch comment.indent_comment_switch
+  let comment_last_case last([] comment_switch.case.node)
+  when comment_last_case == null || comment.offset < comment_last_case.end_offset
+  let comment_empty_switch comment_switch != null && comment_last_case == null && comment.offset > comment_switch.indent_switch_open.offset
+  let comment_list comment.indent_comment_list
+  let comment_next first(filter(comment_list.indent_items, item => item.first_token.start >= comment.end_offset))
+  let comment_list_mode indent_list_mode(comment_next, call_expression, function_declaration, function_expression, array_expression, object_expression, import_declaration, variable_declarator)
+  let comment_list_range comment_next.indent_list_previous != null && comment_next.indent_list_previous.last_token.end <= comment.offset && position(comment_next.indent_list_previous.last_token.end).js_line > position(comment_list.indent_list_open.offset).js_line && !(comment_list_mode == "first" && position(comment_next.first_token.start).js_column == len(comment_next.indent) + 1)
   let before_wanted indent_expected(comment_before, unit)
   # Only line-leading declaration semicolons are unchecked; inline ones retain their declaration offset.
-  let after_wanted if comment_after.indent_tail_unchecked then if position(comment_after.offset).js_line == position(comment.offset).js_line then indent_expected(comment_after.parent.node, unit) indent_steps(unit, if comment_after.parent is ts_variable_declaration then indent_numeric(indent_variable_mode(variable_declarator, comment_after.parent.kind.text)) else 1) else comment_after.indent else indent_expected(comment_after, unit)
-  when comment == null || !(comment_before != null && comment.space_before.blank_gaps == 0 && indent == before_wanted || comment_after != null && comment.space_after.blank_gaps == 0 && indent == after_wanted)
+  let after_wanted if comment_list_range then indent_expected(comment_next, unit) else if comment_after.indent_tail_unchecked then if position(comment_after.offset).js_line == position(comment.offset).js_line then indent_expected(comment_after.parent.node, unit) indent_steps(unit, if comment_after.parent is ts_variable_declaration then indent_numeric(indent_variable_mode(variable_declarator, comment_after.parent.kind.text)) else 1) else comment_after.indent else indent_expected(comment_after, unit)
+  when comment == null || comment_list_range || !(comment_before != null && comment.space_before.blank_gaps == 0 && indent == before_wanted || comment_after != null && comment.space_after.blank_gaps == 0 && indent == after_wanted)
   let aligned_first if list_mode == "first" && list_item.offset != list_item.indent_list_first.offset then list_item.indent_list_first else null
   let aligned_line_start position(aligned_first.first_token.start).js_line_start
   let aligned_quasi if aligned_first == null then null else first(filter(overlapping(ts_template.quasi, aligned_line_start, aligned_line_start + 1), item => position(item.offset).js_line < position(aligned_first.first_token.start).js_line))
-  let aligned_anchor if aligned_first == null then "" else indent_expected(if aligned_quasi == null then aligned_first else aligned_quasi, unit)
+  let aligned_anchor if aligned_first == null then "" else if aligned_quasi != null then indent_expected(aligned_quasi, unit) else if position(aligned_first.first_token.start).js_line == position(aligned_first.parent.offset).js_line then list_item.parent_indent else indent_expected(aligned_first, unit)
   let aligned_column if aligned_quasi == null then len(aligned_first.indent) else position(aligned_quasi.offset).js_column - 1
   # Raw JSX text uses the tag line's actual indentation, not virtual code-token offsets.
-  let wanted if jsx_text != null then jsx_text.parent.indent unit else if comment != null && comment_after is ts_semicolon then after_wanted else if aligned_first != null then aligned_anchor repeat(if mode == "tab" then "\t" else " ", position(aligned_first.first_token.start).js_column - 1 - aligned_column) else indent_anchor indent_steps(unit, indent_level)
+  let wanted if jsx_text != null then jsx_text.parent.indent unit else if jsx_member != null then indent_expected(jsx_member.indent_jsx_closing_anchor, unit) indent_steps(unit, indent_numeric(member_expression)) else if comment_empty_switch then indent_expected(comment_switch.indent_switch_open, unit) indent_steps(unit, switch_case) else if comment_list_range || comment != null && comment_after is ts_semicolon then after_wanted else if aligned_first != null then aligned_anchor repeat(if mode == "tab" then "\t" else " ", position(aligned_first.first_token.start).js_column - 1 - aligned_column) else indent_anchor indent_steps(unit, indent_level)
   when indent != wanted
   let spaces len(replace(indent, "\t", ""))
   let tabs len(replace(indent, " ", ""))
