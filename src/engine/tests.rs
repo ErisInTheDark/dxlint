@@ -367,6 +367,37 @@ fn indent_on_a_node_indents_it_when_it_starts_its_own_line() {
 }
 
 #[test]
+fn inside_forms_beat_node_forms() {
+    // An argument on the call's line does not hide the array's inside; an
+    // argument on its own line is the anchor for the array's inside.
+    let l = native_linter(r#"
+        in ts_line rule ind info "{indent_level}:{len(indent_anchor)}" {
+          indent in ts_array
+          indent ts_call.argument by 2
+        }
+    "#);
+    let levels = |text: &str| -> Vec<String> { l.lint(Path::new("/root/a.ts"), text).into_iter().map(|d| d.message).collect() };
+    assert_eq!(levels("foo([\n  bar,\n]);\n"), vec!["0:0", "1:0", "0:0"]);
+    assert_eq!(levels("foo(\n  [\n    bar,\n  ],\n);\n"), vec!["0:0", "2:0", "1:2", "0:2", "0:0"]);
+}
+
+#[test]
+fn dedent_counts_levels_back_from_the_anchor() {
+    let l = linter(r#"
+        in .t match blk /\{/ until /\}/
+        in blk match label /[a-z]+:/
+        in .t, blk layer lines match line /^[ \t]*\S/ {
+          rule ind warn "{indent_level}" {
+            indent in blk
+            dedent label
+          }
+        }
+    "#);
+    let messages: Vec<String> = lint(&l, "{\nx\nab:\n}").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["0", "1", "-1", "0"]);
+}
+
+#[test]
 fn rules_own_their_indentation_structure() {
     // Two rules on the same lines: only the one declaring `indent in paren`
     // sees it.

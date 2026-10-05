@@ -26,7 +26,7 @@ pub const BUILTIN_VARS: &[(&str, &str)] = &[
     ("parent_indent", "leading whitespace of the line the node's layer starts on (empty for the file)"),
     ("parent_line", "the whole line the node's layer starts on (empty for the file)"),
     ("indented", "one of the rule's `indent` lines applies to the node's line (the innermost node it names, walking out from the line's first character)"),
-    ("indent_level", "levels that `indent` line gives the line past its anchor (its `by`, default 1; 0 on an `in` form's closing line or when not indented)"),
+    ("indent_level", "levels that `indent` line gives the line past its anchor (its `by`, default 1; negative for `dedent`; 0 on an `in` form's closing line or when not indented)"),
     ("indent_anchor", "leading whitespace of the line that `indent` line measures from: `indent in X` X's line, `indent X` X's owner's line (empty when not indented); lines above read as their indentation fixes leave them"),
     ("indent_anchor_line", "that whole anchor line (empty when not indented)"),
     ("indent_closes", "the line starts with the end of an `indent in X` inside (its closer), so it sits at the anchor"),
@@ -1241,6 +1241,8 @@ pub struct Ctx<'a> {
 /// A compiled `indent X by n` / `indent in X by n` rule line.
 pub struct IndentRule {
     pub inside: bool,
+    /// `dedent`: the levels count back from the anchor.
+    pub dedent: bool,
     /// (matcher, field) pairs; a field means "what fills that field".
     pub targets: Vec<(u32, Option<u16>)>,
     /// Levels, read on the indented node; 1 when absent.
@@ -1438,29 +1440,29 @@ impl<'a> Ctx<'a> {
                 None => n.matcher != ROOT && n.matcher != TEXT && self.grammar.is_a(n.matcher, m),
                 Some(f) => label == Some(f) && owner.is_some_and(|o| self.grammar.is_a(self.tree.node(o).matcher, m)),
             };
+            // Every line that applies here; an `in` form (the node's inside)
+            // beats the node form (the node's own start line decides that
+            // one), then a field-qualified line, then the later one.
+            let (s, e) = (n.start as usize, n.end as usize);
+            let inside = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
+            let inside_applies = self.lines.line_of(inside.0) < line && line_start <= inside.1;
+            let owner_line = owner
+                .or_else(|| self.tree.parent(id))
+                .filter(|&o| !self.tree.is_root(o))
+                .map(|o| self.lines.line_of(self.tree.node(o).start as usize));
+            let node_applies = owner_line.is_some_and(|ol| own_line(s) && ol < self.lines.line_of(s)) && self.lines.line_of(s) <= line && line_start <= e;
             let best = self
                 .indents
                 .iter()
                 .enumerate()
-                .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (t.1.is_some(), i)).max())
+                .filter(|(_, r)| if r.inside { inside_applies } else { node_applies })
+                .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (r.inside, t.1.is_some(), i)).max())
                 .max();
-            if let Some((_, i)) = best {
-                let rule = &self.indents[i];
-                let (s, e) = (n.start as usize, n.end as usize);
-                if rule.inside {
-                    let (is, ie) = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
-                    if self.lines.line_of(is) < line && line_start <= ie {
-                        return Some(IndentHit { node: id, rule: i, anchor_line: self.lines.line_of(s), inside: Some((is, ie)) });
-                    }
-                } else {
-                    let anchor = owner.or_else(|| self.tree.parent(id)).filter(|&o| !self.tree.is_root(o)).map(|o| self.tree.node(o).start as usize);
-                    if let Some(anchor) = anchor {
-                        let anchor_line = self.lines.line_of(anchor);
-                        if own_line(s) && anchor_line < self.lines.line_of(s) && self.lines.line_of(s) <= line && line_start <= e {
-                            return Some(IndentHit { node: id, rule: i, anchor_line, inside: None });
-                        }
-                    }
-                }
+            if let Some((in_form, _, i)) = best {
+                return Some(match in_form {
+                    true => IndentHit { node: id, rule: i, anchor_line: self.lines.line_of(s), inside: Some(inside) },
+                    false => IndentHit { node: id, rule: i, anchor_line: owner_line.expect("node form applies"), inside: None },
+                });
             }
             p = self.tree.parent(id);
         }
@@ -1523,12 +1525,19 @@ impl<'a> Ctx<'a> {
             },
             "indented" => Value::Bool(self.indent_hit().is_some()),
             "indent_level" => match self.indent_hit() {
-                Some(hit) if self.indent_closes(&hit) => Value::from(0usize),
-                Some(hit) => match &self.indents[hit.rule].by {
-                    Some(by) => Ctx { node: hit.node, ..*self }.eval(by).unwrap_or(Value::Null),
-                    None => Value::from(1usize),
-                },
-                None => Value::from(0usize),
+                Some(hit) if self.indent_closes(&hit) => Value::Num(0.0),
+                Some(hit) => {
+                    let rule = &self.indents[hit.rule];
+                    let levels = match &rule.by {
+                        Some(by) => Ctx { node: hit.node, ..*self }.eval(by).ok().and_then(|v| v.num().ok()),
+                        None => Some(1.0),
+                    };
+                    match levels {
+                        Some(n) => Value::Num(if rule.dedent { -n } else { n }),
+                        None => Value::Null,
+                    }
+                }
+                None => Value::Num(0.0),
             },
             "indent_anchor" => match self.indent_hit() {
                 Some(hit) => self.line_indent(hit.anchor_line),

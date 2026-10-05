@@ -110,6 +110,8 @@ pub struct IndentDecl {
     /// anchored at X's line; else X itself when it starts its own line,
     /// anchored at its owner's line.
     pub inside: bool,
+    /// `dedent`: the levels count back from the anchor.
+    pub dedent: bool,
     /// Layers or groups, each maybe narrowed to a field.
     pub targets: Vec<(Parent, Option<Name>)>,
     /// `by n`: levels (default 1), read on X; may use the rule's options.

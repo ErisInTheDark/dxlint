@@ -215,10 +215,12 @@ with `indent` lines; other rules never see it.
   owner starts on, sits `n` levels past that line (`indent ts_switch.case by
   1`: cases one level past `switch`).
 
-`X` is a layer, a group or `layer.field`; `n` is read on X and may use the
-rule's options (`by SwitchCase`; 0 keeps the line at its anchor). For a
-line, the innermost node, walking out from its first character, that an
-`indent` line applies to decides; on one node a `layer.field` line beats a
+`dedent X` and `dedent in X` count the levels back from the anchor instead
+(`indent_level` goes negative). `X` is a layer, a group or `layer.field`;
+`n` is read on X and may use the rule's options (`by SwitchCase`; 0 keeps
+the line at its anchor). For a line, the innermost node, walking out from
+its first character, that an `indent` line applies to decides; on one node
+an applying `in` form beats the node form, then a `layer.field` line beats a
 plain one, then the later line. Measuring from lines means `foo(Bar {` adds
 one level, not two. Rules read the result through `indented`,
 `indent_level`, `indent_anchor`, `indent_closes`, `indent_hangs` and

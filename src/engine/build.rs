@@ -629,7 +629,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
                 };
                 scope.compile(by, errors)
             });
-            crate::expr::IndentRule { inside: decl.inside, targets, by }
+            crate::expr::IndentRule { inside: decl.inside, dedent: decl.dedent, targets, by }
         })
         .collect();
 

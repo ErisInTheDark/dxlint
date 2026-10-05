@@ -22,7 +22,7 @@ use crate::pattern::Pat;
 /// Words with a meaning in items, clauses or patterns; they cannot name
 /// macros or matchers.
 const RESERVED: &[&str] = &[
-    "import", "macro", "lang", "group", "match", "in", "layer", "rule", "indent", "like", "set", "ignore", "option", "when",
+    "import", "macro", "lang", "group", "match", "in", "layer", "rule", "indent", "dedent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
     "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each",
 ];
@@ -1428,9 +1428,10 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                // `indent [in] a, b.field [by levels]`: this rule's
-                // indentation structure.
-                (Tk::Ident, "indent") => {
+                // `indent [in] a, b.field [by levels]` (or `dedent`): this
+                // rule's indentation structure.
+                (Tk::Ident, word @ ("indent" | "dedent")) => {
+                    let dedent = word == "dedent";
                     self.bump();
                     self.skip(false, true);
                     let inside = self.ts.peek_raw(0).is_some_and(|t| t.is_ident("in"));
@@ -1448,7 +1449,7 @@ impl<'a> Parser<'a> {
                     if targets.is_empty() {
                         self.error_here("expected layers after `indent`: `indent in braces`, `indent ts_switch.case by 1`".to_string());
                     } else {
-                        def.indents.push(IndentDecl { inside, targets, by });
+                        def.indents.push(IndentDecl { inside, dedent, targets, by });
                     }
                 }
                 (Tk::Ident, kw @ ("files" | "ignore")) => {
