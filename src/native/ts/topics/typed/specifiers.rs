@@ -24,17 +24,21 @@ pub(super) fn named_gate(ck: &Checker<'_>, decl: DeclRef) -> Value<'static> {
 
 /// Template policy also permits named base types.
 pub(super) fn named_gates(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) -> Vec<Value<'static>> {
+    named_types(ty, ck, seen).into_iter().map(|(decl, _)| named_gate(ck, decl)).collect()
+}
+
+pub(super) fn named_types(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) -> Vec<(DeclRef, Ty)> {
     let Ty::Named(sym, args) = ty else { return Vec::new() };
     let mut gates = Vec::new();
     for &r in sym.iter() {
         if seen.contains(&r) { continue }
         seen.push(r);
-        gates.push(named_gate(ck, r));
+        gates.push((r, Ty::Named(vec![r].into(), args.clone())));
         let Some(summary) = ck.summary_of(r.file) else { continue };
         let decl = &summary.decls[r.decl as usize];
         let mut env = ck.decl_env(r);
         env.tparams = ck.bind_tparams(&decl.type_params, args.clone(), &env);
-        for base in ck.bases(decl) { gates.extend(named_gates(&ck.eval(base, &env), ck, seen)); }
+        for base in ck.bases(decl) { gates.extend(named_types(&ck.eval(base, &env), ck, seen)); }
     }
     gates
 }
@@ -53,28 +57,47 @@ fn candidates(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Value<'static>> {
     }
 }
 
+pub(super) fn annotated_aliases(file: &NativeFile<'_>, node: u32) -> Vec<DeclRef> {
+    let s = &file.syntax;
+    let bare = s.unparen(node);
+    let annotation = if s.is(bare, K::As) { s.get(bare, F::Type) } else { file.decl_of(bare).and_then(|decl| s.parent(decl)).and_then(|owner| s.get(owner, F::Type)) };
+    let Some(annotation) = annotation else { return Vec::new() };
+    let TypeSyn::Ref(path, _) = type_syn(s, annotation) else { return Vec::new() };
+    let ck = &file.typing().checker;
+    ck.type_decls(&path, &file.env_at(annotation)).into_iter().filter(|decl| {
+        ck.summary_of(decl.file).is_some_and(|summary| summary.decls[decl.decl as usize].kind == DeclKind::Alias)
+    }).collect()
+}
+
+pub(super) fn retained_alias(ck: &Checker<'_>, r: DeclRef, seen: &mut Vec<DeclRef>) -> Option<DeclRef> {
+    if seen.contains(&r) { return None }
+    seen.push(r);
+    let summary = ck.summary_of(r.file)?;
+    let decl = &summary.decls[r.decl as usize];
+    match decl.ty.as_ref()? {
+        TypeSyn::Obj(_) | TypeSyn::Union(_) | TypeSyn::Inter(_) | TypeSyn::Array(_) | TypeSyn::Tuple(_) | TypeSyn::Readonly(_) => Some(r),
+        TypeSyn::Ref(path, _) => {
+            let retained = ck.type_decls(path, &ck.decl_env(r)).into_iter().find_map(|target| {
+                let summary = ck.summary_of(target.file)?;
+                (summary.decls[target.decl as usize].kind == DeclKind::Alias).then(|| retained_alias(ck, target, seen)).flatten()
+            })?;
+            Some(if decl.type_params.is_empty() { retained } else { r })
+        }
+        _ => None,
+    }
+}
+
 /// A single allowed specifier must match every union arm; intersections need one candidate.
 pub(super) fn groups(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     if super::unsafe_types::category(file, node) == Some("error") { return Value::list(vec![Value::list(Vec::new())]) }
     let ty = file.type_of(node);
     let ck = &file.typing().checker;
-    let s = &file.syntax;
     let mut groups = match &ty {
         Ty::Union(parts) => parts.iter().map(|part| candidates(part, ck, 0)).collect::<Vec<_>>(),
         _ => vec![candidates(&ty, ck, 0)],
     };
     if !matches!(ty, Ty::Union(_)) {
-        let bare = s.unparen(node);
-        let annotation = if s.is(bare, K::As) { s.get(bare, F::Type) } else { file.decl_of(bare).and_then(|decl| s.parent(decl)).and_then(|owner| s.get(owner, F::Type)) };
-        if let Some(annotation) = annotation {
-            if let TypeSyn::Ref(path, _) = type_syn(s, annotation) {
-                for decl in ck.type_decls(&path, &file.env_at(annotation)) {
-                    if ck.summary_of(decl.file).is_some_and(|summary| summary.decls[decl.decl as usize].kind == DeclKind::Alias) {
-                        groups[0].push(named_gate(ck, decl));
-                    }
-                }
-            }
-        }
+        groups[0].extend(annotated_aliases(file, node).into_iter().map(|decl| named_gate(ck, decl)));
     }
     Value::list(groups.into_iter().map(Value::list).collect())
 }

@@ -8,6 +8,8 @@ use crate::native::ts::types::{Checker, Ty};
 
 mod template;
 mod type_properties;
+mod type_structure;
+mod properties;
 mod unsafe_types;
 mod awaitability;
 mod assertions;
@@ -34,6 +36,25 @@ fn is_typescript(file: &NativeFile<'_>) -> bool {
 }
 
 pub const FACTS: &[Fact] = &[
+    Fact {
+        name: "property_info",
+        doc: "native expressions: static member or index access declaration presence and winning declaration visibility, even when its value type is unresolved",
+        get: |f, n| f.with_file(properties::property_info, n),
+    },
+    Fact {
+        name: "index_key_types",
+        doc: "native values and types: constrained index-signature key domains as text and string_like records, inherited domains included",
+        get: |f, n| f.with_file(properties::index_key_types, n),
+    },
+    Fact {
+        name: "type_structure",
+        doc: "native values and types: constrained recursive type kind, parts, names, retained annotation aliases and winning declarations for queried member names",
+        get: |f, n| f.with_file(|file, node| {
+            let args = crate::expr::facts::args();
+            let names = args.first().map(|value| value.items().iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default();
+            type_structure::structure(file, node, &names)
+        }, n),
+    },
     Fact {
         name: "type_has_void",
         doc: "native values and types: a union or intersection constituent is void, distinct from undefined",

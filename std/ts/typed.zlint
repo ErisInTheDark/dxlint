@@ -90,6 +90,51 @@ in ts_call rule prefer-promise-reject-errors {
   warn "Expected the Promise rejection reason to be an Error."
 }
 
+fn stringification_compound(parts, kind) =
+  if kind == "union" then if all(parts, part => part == 2) then 2 else if all(parts, part => part == 0) then 0 else 1
+  else if any(parts, part => part == 0) then 0 else 2
+fn stringification_collection(parts) = if any(parts, part => part == 2) then 2 else if any(parts, part => part == 1) then 1 else 0
+fn stringification_object_member(declaration) = declaration.owner.kind == "interface" && declaration.owner.name == "Object"
+fn stringification_leaf(t, unknown) =
+  if any(t.members, member => member.name == "[Symbol.toPrimitive]" && any(member.declarations, declaration => declaration.signature && declaration.key_symbol == "toPrimitive")) then 0
+  else if any(t.members, member => member.name != "[Symbol.toPrimitive]" && any(member.declarations, declaration => !stringification_object_member(declaration))) then 0
+  else if any(t.members, member => member.name != "[Symbol.toPrimitive]" && any(member.declarations, declaration => stringification_object_member(declaration))) then 2
+  else if unknown && contains(["unknown", "parameter"], t.kind) then 1 else 0
+fn stringification_certainty(t, ignored, unknown) =
+  if t.kind == "boolean" || any(t.names t.generic_names t.aliases, name => contains(ignored, name)) then 0
+  else if contains(["union", "intersection"], t.kind) then stringification_compound(map(t.parts, part => stringification_certainty(part, ignored, unknown)), t.kind)
+  else if contains(["array", "tuple"], t.kind) then stringification_collection(map(t.parts, part => stringification_certainty(part, ignored, unknown)))
+  else stringification_leaf(t, unknown)
+fn stringification_join(t, ignored, unknown) =
+  if contains(["union", "intersection"], t.kind) then stringification_compound(map(t.parts, part => stringification_join(part, ignored, unknown)), t.kind)
+  else if contains(["array", "tuple"], t.kind) then stringification_collection(map(t.parts, part => stringification_certainty(part, ignored, unknown)))
+  else 0
+in ts_node let stringification_type type_structure(["toString", "toLocaleString", "valueOf", "[Symbol.toPrimitive]"])
+in ts_call let stringification_subjects
+  if callee is ts_identifier && global_callee == "String" then [{node: unparenthesised_node(first([] argument.node)), join: false}]
+  else if callee is ts_member && callee.property is ts_identifier && contains(["toString", "toLocaleString", "join"], callee.property.text) then [{node: unparenthesised_node(callee.object.node), join: callee.property.text == "join"}]
+  else []
+in ts_binary, ts_assignment let stringification_subjects
+  if contains(["+", "+="], operator) && left.type_is_string_like then [{node: unparenthesised_node(right.node), join: false}]
+  else if contains(["+", "+="], operator) && right.type_is_string_like && left not ts_private_name then [{node: unparenthesised_node(left.node), join: false}]
+  else []
+in ts_template let stringification_subjects if parent is ts_tagged_template then [] else map([] expression.node, n => {node: unparenthesised_node(n), join: false})
+in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
+  option ignoredTypeNames string[] = ["Error", "RegExp", "URL", "URLSearchParams"] "Types whose string conversion is permitted"
+  option checkUnknown boolean = false "Check explicit unknown and unconstrained type parameters"
+  let findings map(stringification_subjects, subject => {
+    node: subject.node,
+    join: subject.join,
+    certainty: if subject.join then stringification_join(subject.node.stringification_type, ignoredTypeNames, checkUnknown) else stringification_certainty(subject.node.stringification_type, ignoredTypeNames, checkUnknown)
+  })
+  each subject in findings
+  when subject.node != null && subject.node not (ts_literal, ts_spread)
+  when subject.certainty > 0
+  report at {start: subject.node.offset, end: subject.node.end_offset}
+  warn if subject.join then "Using `join()` for " subject.node.text " " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
+    else "'" subject.node.text "' " (if subject.certainty == 2 then "will" else "may") " use Object's default stringification format ('[object Object]') when stringified."
+}
+
 in ts_identifier {
   let eval_name text
   let eval_identifier true
