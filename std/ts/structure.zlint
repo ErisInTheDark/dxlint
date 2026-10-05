@@ -3,6 +3,83 @@
 
 define {
 
+in ts_declarator let structure_destructure_left name.node
+in ts_declarator let structure_destructure_right init.structure_unwrapped
+in ts_declarator let structure_destructure_role "VariableDeclarator"
+in ts_declarator let structure_destructure_eligible !contains(["using", "await using"], parent.kind)
+in ts_declarator let structure_destructure_annotated type.node != null
+in ts_assignment let structure_destructure_left left.structure_unwrapped
+in ts_assignment let structure_destructure_right right.structure_unwrapped
+in ts_assignment let structure_destructure_role "AssignmentExpression"
+in ts_assignment let structure_destructure_eligible operator == "="
+in ts_member, ts_index let structure_access_optional optional != null || object is (ts_member, ts_index) && object.structure_access_optional
+in ts_member let structure_access_key property.node
+in ts_index let structure_access_key index.structure_unwrapped
+
+fn structure_destructure_enabled(settings, role, kind) =
+  if settings == null then true
+  else if settings.array != null || settings.object != null then get(settings, kind) == true
+  else get(get(settings, role), kind) == true
+
+in ts_declarator, ts_assignment rule prefer-destructuring {
+  option options ({ array?: boolean; object?: boolean; VariableDeclarator?: { array?: boolean; object?: boolean }; AssignmentExpression?: { array?: boolean; object?: boolean }; enforceForRenamedProperties?: boolean })[] = [] "destructuring categories, per declaration or assignment, and renamed-property enforcement"
+  when structure_destructure_eligible
+  let access structure_destructure_right
+  when access is (ts_member, ts_index) && !access.structure_access_optional
+  when access.object.structure_unwrapped not ts_super && access.structure_access_key not ts_private_name
+  let key access.structure_access_key
+  let value key.literal_value
+  let array_index access is ts_index && key is ts_number && value.type == "number" && !contains(["Infinity", "-Infinity", "NaN"], value.value) && num(value.value) == round(num(value.value))
+  let category if array_index then "array" else "object"
+  let settings first(options)
+  when structure_destructure_enabled(settings, structure_destructure_role, category)
+  let renamed first(slice(options, 1)).enforceForRenamedProperties == true
+  when array_index || renamed || structure_destructure_left is ts_identifier && (access is ts_member && structure_destructure_left.text == key.text || access is ts_index && key is ts_string && structure_destructure_left.text == value.value)
+  let receiver access.object.node
+  let fixable is ts_declarator && !structure_destructure_annotated && structure_destructure_left is ts_identifier && access is ts_member && structure_destructure_left.text == key.text
+    && !any(overlapping(ts_comment), comment => comment.offset < receiver.offset || comment.end_offset > receiver.end_offset)
+  warn "Use {category} destructuring."
+  fix if fixable as "{{" key.text "}} = " receiver.text
+}
+
+fn structure_dot_keyword(name) = contains(["abstract", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "debugger", "default", "delete", "do", "double", "else", "enum", "export", "extends", "false", "final", "finally", "float", "for", "function", "goto", "if", "implements", "import", "in", "instanceof", "int", "interface", "long", "native", "new", "null", "package", "private", "protected", "public", "return", "short", "static", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "true", "try", "typeof", "var", "void", "volatile", "while", "with"], name)
+
+@macro structure_dot_options {
+  option allowKeywords boolean = true "allow ES3 keywords in dot notation"
+  option allowPattern string = "" "property names exempt from dot notation"
+}
+
+in ts_index rule dot-notation:computed {
+  @structure_dot_options
+  let key index.structure_unwrapped
+  let literal key.literal_value
+  let template key is ts_template && count(key.expression) == 0
+  when key is (ts_string, ts_boolean, ts_null) || template
+  let name if template then key.static_name else literal.value
+  when re_test(name, /^[a-zA-Z_$][a-zA-Z0-9_$]*$/) && (allowKeywords || !structure_dot_keyword(name))
+  when allowPattern == "" || !re_test(name, allowPattern)
+  let open index.space_before.start - 1
+  let fixable count(overlapping(ts_comment, open, end_offset)) == 0
+  let prefix byte_slice(text, 0, open - offset)
+  let separator if optional != null then "" else if object is ts_number && re_test(object.text, /^(?:0|[1-9][0-9]*)$/) then " ." else "."
+  let trailing if space_after.text == "" && next_token is (ts_identifier, ts_keyword, ts_number, ts_boolean, ts_null) then " " else ""
+  let quoted if template then "`" name "`" else if literal.type == "string" then "\"" name "\"" else name
+  report at key
+  warn "[{quoted}] is better written in dot notation."
+  fix if fixable as prefix separator name trailing
+}
+
+in ts_member rule dot-notation:keyword {
+  @structure_dot_options
+  when !allowKeywords && structure_dot_keyword(property.text)
+  let dot property.space_before.start - 1
+  let fixable !(object is ts_identifier && object.text == "let" && optional == null) && count(overlapping(ts_comment, dot, property.offset)) == 0
+  let prefix byte_slice(text, 0, dot - offset)
+  report at property.node
+  warn ".{property} is a syntax error."
+  fix if fixable as prefix (if optional != null then "." else "") "[\"" property "\"]"
+}
+
 in ts_conditional let structure_ternary_jsx if parent is ts_conditional then parent.structure_ternary_jsx else parent is ts_jsx_expression
 in ts_binary, ts_logical let structure_operator operator
 in ts_conditional let structure_operator "?:"

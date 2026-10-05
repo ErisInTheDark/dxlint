@@ -3,6 +3,52 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn destructuring_fixes_preserve_comments_and_leave_unsafe_rewrites_reported() {
+    let linter = native_linter("rule prefer-destructuring");
+    let path = Path::new("/root/file.js");
+    for (source, expected) in [
+        ("const value = object.value;", Some("const {value} = object;")),
+        ("const value = (/* keep */ object).value;", Some("const {value} = (/* keep */ object);")),
+        ("const value /* keep */ = object.value;", None),
+        ("const value: number = object.value;", None),
+        ("const value = array[0];", None),
+    ] {
+        let diagnostics = linter.lint(path, source);
+        assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:#?}");
+        assert_eq!(diagnostics[0].fix.is_some(), expected.is_some(), "{source}");
+        if let Some(expected) = expected {
+            let fixed = linter.fix(path, source);
+            assert_eq!(fixed.text, expected);
+            assert!(fixed.remaining.is_empty(), "{:#?}", fixed.remaining);
+            assert_eq!(linter.fix(path, &fixed.text).applied, 0);
+        }
+    }
+}
+
+#[test]
+fn dot_notation_fixes_keep_token_boundaries_and_report_unfixable_comments() {
+    let linter = native_linter("rule dot-notation");
+    let path = Path::new("/root/file.js");
+    for (source, expected) in [
+        ("42[\"foo\"];", Some("42 .foo;")),
+        ("object?.[\"foo\"];", Some("object?.foo;")),
+        ("object[\"foo\"]in other;", Some("object.foo in other;")),
+        ("object[/* keep */ \"foo\"];", None),
+    ] {
+        let diagnostics = linter.lint(path, source);
+        assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:#?}");
+        assert_eq!(diagnostics[0].start, source.find("\"foo\"").expect("property"));
+        assert_eq!(diagnostics[0].fix.is_some(), expected.is_some(), "{source}");
+        if let Some(expected) = expected {
+            let fixed = linter.fix(path, source);
+            assert_eq!(fixed.text, expected);
+            assert!(fixed.remaining.is_empty(), "{:#?}", fixed.remaining);
+            assert_eq!(linter.fix(path, &fixed.text).applied, 0);
+        }
+    }
+}
+
+#[test]
 fn precedence_and_statement_context_preserve_required_parentheses() {
     let lint = native_linter("rule no-extra-parens");
     for (source, count) in [
