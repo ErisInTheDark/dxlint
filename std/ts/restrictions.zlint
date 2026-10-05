@@ -420,7 +420,7 @@ in restriction_parameter_function rule max-params {
   let amount count(parameter) - (if this_parameter && (countThis == "never" || countThis == "except-void" && !countVoidThis && void_this_parameter) then 1 else 0)
   let limit default(maximum, max)
   when amount > limit
-  report at default(function_head, offset)
+  report at if is ts_function_type then default(first(filter([] token.node, t => t.text == "=>")).offset, offset) else default(function_head, offset)
   warn "{restriction_function_name} has too many parameters ({amount}). Maximum allowed is {limit}."
 }
 in ts_function_like rule max-statements {
