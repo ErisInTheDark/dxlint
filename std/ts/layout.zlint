@@ -660,12 +660,13 @@ in ts_semicolon rule semi-spacing:after {
 in ts_comma rule comma-spacing:before {
   option before boolean = false "space before comma"
   option after boolean = true "space after comma"
+  # Cheapest and most selective first: most commas are spaced as wanted.
+  let comma_space layout_comma_space(space_before.text, true)
+  when before != (comma_space != "")
+  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
   when previous_token != null && previous_token not ts_comma
   when !(parent is (ts_array, ts_array_pattern) && previous_token is ts_open_bracket)
   when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
-  let comma_space layout_comma_space(space_before.text, true)
-  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
-  when before != (comma_space != "")
   fix space_before as if before then " " else ""
   warn if before then "A space is required before ','." else "There should be no space before ','."
 }
@@ -673,14 +674,15 @@ in ts_comma rule comma-spacing:before {
 in ts_comma rule comma-spacing:after {
   option before boolean = false "space before comma"
   option after boolean = true "space after comma"
+  # Cheapest and most selective first: most commas are spaced as wanted.
+  let comma_space layout_comma_space(space_after.text, false)
+  when after != (comma_space != "")
+  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
   when next_token != null
   when space_after.comments || next_token not (ts_comma, ts_close_paren, ts_close_bracket, ts_close_brace)
   when !(parent is (ts_array, ts_array_pattern) && previous_token is (ts_open_bracket, ts_comma) && next_token is (ts_comma, ts_close_bracket))
   when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
   when after || !starts_with(trim_start(space_after.text), "//")
-  let comma_space layout_comma_space(space_after.text, false)
-  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
-  when after != (comma_space != "")
   fix space_after as if after then " " else ""
   warn if after then "A space is required after ','." else "There should be no space after ','."
 }

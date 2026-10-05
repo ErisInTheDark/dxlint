@@ -515,29 +515,31 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
 }
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule keyword-spacing:before {
   @format_keyword_options
+  # Cheapest and most selective first: most keywords are spaced as wanted.
+  let keyword_required default(keyword_policy.before, before)
+  when space_before != null && space_before.spaced != keyword_required
   when keyword_around || keyword_leading
   when !(contains(["in", "of"], text) && previous_token is ts_private_name)
   when !(token_neighbours.before.text == ">" && ts_binary.operator == ">" && offset == ts_binary.right.offset)
-  let keyword_required default(keyword_policy.before, before)
-  when space_before != null && !space_before.line_break && (keyword_required || !space_before.comments)
+  when !space_before.line_break && (keyword_required || !space_before.comments)
   when previous_token is (ts_regex, ts_string, ts_template, ts_private_name) || re_test(token_neighbours.before.text, if keyword_module then /^[)\]}>*]$/ else /^[)\]}>]$/)
   when !re_test(token_neighbours.before.text, /\$\{$/)
-  when space_before.spaced != keyword_required
   report at if keyword_required then offset else space_before.start
   fix space_before as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) before \"{keyword_label}\"." else "Unexpected space(s) before \"{keyword_label}\"."
 }
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_debugger, ts_break, ts_continue, ts_return rule keyword-spacing:after {
   @format_keyword_options
+  # Cheapest and most selective first: most keywords are spaced as wanted.
+  let keyword_required default(keyword_policy.after, after)
+  when space_after != null && space_after.spaced != keyword_required
   when keyword_around
   when !(parent is ts_try && text == "catch" && parent.parameter != null)
   when !(parent is ts_import_specifier && text == "as" || parent is ts_import && text == "as")
   when !(parent is ts_variable_declaration && starts_with(text, "await"))
-  let keyword_required default(keyword_policy.after, after)
-  when space_after != null && !space_after.line_break && (keyword_required || !space_after.comments)
+  when !space_after.line_break && (keyword_required || !space_after.comments)
   when next_token is (ts_regex, ts_string, ts_template, ts_private_name) || re_test(token_neighbours.after.text, if keyword_module then /^[{*]$/ else /^(?:[(\[{<~!]|\+\+?|--?)$/)
   when !re_test(token_neighbours.after.text, /^\}/)
-  when space_after.spaced != keyword_required
   report at if !keyword_required then end_offset else if is ts_for_of.modifier then parent.offset else offset
   fix space_after as if keyword_required then " " else ""
   warn if keyword_required then "Expected space(s) after \"{keyword_label}\"." else "Unexpected space(s) after \"{keyword_label}\"."
