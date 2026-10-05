@@ -226,6 +226,7 @@ impl Parser<'_> {
                     "any" => Schema::Any,
                     "null" => Schema::Null,
                     "regex" => Schema::Regex,
+                    "js_regex" => Schema::JsRegex,
                     "true" => Schema::Lit(Value::Bool(true)),
                     "false" => Schema::Lit(Value::Bool(false)),
                     "str" | "num" | "bool" => {
@@ -254,7 +255,7 @@ impl Parser<'_> {
             }
             _ => {
                 self.errors.push(ConfigError::new(t.span, format!("expected a type, found {}", t.describe())).note(
-                    "types: string, number, int, boolean, any, null, regex, a literal (\"x\", 3, true), T[], { key: T }, a | b, int(0..), or a `schema` name",
+                    "types: string, number, int, boolean, any, null, regex, js_regex, a literal (\"x\", 3, true), T[], { key: T }, a | b, int(0..), or a `schema` name",
                 ));
                 None
             }

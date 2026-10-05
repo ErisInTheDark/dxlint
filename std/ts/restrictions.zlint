@@ -14,13 +14,13 @@ schema restriction_import_path string | {
 }
 schema restriction_import_pattern string | {
   group?: string[]
-  regex?: regex
+  regex?: js_regex
   message?: string
   caseSensitive: boolean = false
   importNames?: string[]
   allowImportNames?: string[]
-  importNamePattern?: regex
-  allowImportNamePattern?: regex
+  importNamePattern?: js_regex
+  allowImportNamePattern?: js_regex
   allowTypeImports: boolean = false
 }
 schema restriction_import_options restriction_import_path | {
@@ -35,7 +35,7 @@ macro restriction_import_custom(entry) (if entry.message != null && entry.messag
 macro restriction_import_glob(path, glob, sensitive) (!starts_with(glob, "#") && re_test(path, (if sensitive then "" else "(?i)") (if contains(trim_start(glob, "!"), "/") then "^" else "(?:^|/)") replace(replace(replace(re_escape(replace(replace(trim_start(glob, "!/"), "\\#", "#"), "\\!", "!")), "\\*\\*/", "(?:.*/)?"), "\\*", "[^/]*"), "\\?", "[^/]") "(?:/|$)"))
 macro restriction_import_group(path, entry) find_last(default(entry.group, []), import_glob_pattern => restriction_import_glob(path, import_glob_pattern, entry.caseSensitive))
 macro restriction_import_group_blocked(path, entry) ((restriction_import_group(path, entry)) != null && !starts_with(restriction_import_group(path, entry), "!"))
-macro restriction_import_pattern_matches(entry) (if entry.regex != null then re_test(info.source, (if entry.caseSensitive then "" else "(?i)") entry.regex) else restriction_import_group_blocked(info.source, entry) || any(info.parents, p => restriction_import_group_blocked(p, entry)))
+macro restriction_import_pattern_matches(entry) (if entry.regex != null then js_re_test(info.source, entry.regex, if entry.caseSensitive then "u" else "iu") else restriction_import_group_blocked(info.source, entry) || any(info.parents, p => restriction_import_group_blocked(p, entry)))
 fn restriction_import_parent(path) = join(slice(split(path, "/"), 0, len(split(path, "/")) - 1), "/")
 fn restriction_import_parents(path) = if contains(path, "/") && restriction_import_parent(path) != "" then [restriction_import_parent(path)] restriction_import_parents(restriction_import_parent(path)) else []
 fn restriction_import_source(value) = if type_of(value) == "str" then trim(value) else null
@@ -124,7 +124,7 @@ in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export
   @restriction_import_info
   when info.item && info != null
   @each entry in restriction_import_patterns
-  when restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.importNamePattern != null && (info.name == "*" || re_test(info.name, entry.importNamePattern)) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name) || entry.allowImportNamePattern != null && (info.name == "*" || !re_test(info.name, entry.allowImportNamePattern)))
+  when restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.importNamePattern != null && (info.name == "*" || js_re_test(info.name, entry.importNamePattern, "u")) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name) || entry.allowImportNamePattern != null && (info.name == "*" || !js_re_test(info.name, entry.allowImportNamePattern, "u")))
   report at info.offset
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " restriction_import_list(entry.allowImportNames) " from '{info.source}' " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else restriction_import_list(entry.importNames) " from '{info.source}' " restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " restriction_import_list(entry.allowImportNames) " " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) restriction_import_custom(entry)
 }
@@ -708,10 +708,10 @@ schema restriction_default_exports {
 }
 @macro restriction_export_options {
   option restrictedNamedExports string[] = [] "restricted exported names"
-  option restrictedNamedExportsPattern regex = "" "restricted exported-name pattern"
+  option restrictedNamedExportsPattern js_regex = "" "restricted exported-name pattern"
   option restrictDefaultExports restriction_default_exports = {} "restricted default-export forms"
 }
-fn restriction_export_forbidden(name, names, pattern) = contains(names, name) || name != "default" && pattern != "" && re_test(name, pattern)
+fn restriction_export_forbidden(name, names, pattern) = contains(names, name) || name != "default" && pattern != "" && js_re_test(name, pattern, "u")
 in ts_variable_declaration let restriction_exported_declaration parent is ts_export && parent.kind != "default"
 in ts_declarator let restriction_exported_declaration parent.restriction_exported_declaration == true
 in ts_export rule no-restricted-exports {

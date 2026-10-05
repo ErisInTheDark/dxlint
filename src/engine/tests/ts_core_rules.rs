@@ -49,3 +49,64 @@ fn parameter_limits_locate_each_function_type_at_its_own_arrow() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].start, 0);
 }
+
+#[test]
+fn restriction_name_patterns_use_javascript_unicode_classes() {
+    let linter = native_linter(r#"rule no-restricted-imports {
+      set options [{patterns: [{group: ["pkg"], importNamePattern: "^\\w+$"}]}]
+    }"#);
+    let source = "import { ascii, \u{00e9} } from 'pkg';";
+    let reports = linter.lint(Path::new("/root/a.js"), source);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].start, source.find("ascii").expect("ascii import"));
+}
+
+#[test]
+fn restriction_patterns_accept_negative_lookahead_for_each_name_route() {
+    for (config, source, expected) in [
+        (
+            r#"rule no-restricted-exports { set restrictedNamedExportsPattern "^(?!foo)(?!bar).+$" }"#,
+            "export { foo, bar, baz };",
+            1,
+        ),
+        (
+            r#"rule no-restricted-imports { set options [{patterns: [{group: ["pkg"], importNamePattern: "^(?!foo)(?!bar).+$"}]}] }"#,
+            "import { foo, bar, baz } from 'pkg';",
+            1,
+        ),
+        (
+            r#"rule no-restricted-imports { set options [{patterns: [{group: ["pkg"], allowImportNamePattern: "^(?!foo)(?!bar).+$"}]}] }"#,
+            "import { foo, bar, baz } from 'pkg';",
+            2,
+        ),
+    ] {
+        let linter = native_linter(config);
+        assert_eq!(linter.lint(Path::new("/root/a.js"), source).len(), expected, "{config}");
+    }
+}
+
+#[test]
+fn restriction_import_regexes_preserve_case_sensitive_and_insensitive_flags() {
+    let source = "import a from 'FOO/baz'; import b from 'foo/Bar';";
+    for (sensitive, expected) in [(false, 0), (true, source.find("import b").expect("second import"))] {
+        let config = format!(r#"rule no-restricted-imports {{
+          set options [{{patterns: [{{regex: "foo/(?!bar)", caseSensitive: {sensitive}}}]}}]
+        }}"#);
+        let reports = native_linter(&config).lint(Path::new("/root/a.js"), source);
+        assert_eq!(reports.len(), 1, "{config}");
+        assert_eq!(reports[0].start, expected, "{config}");
+    }
+}
+
+#[test]
+fn restricted_pattern_options_reject_invalid_javascript_syntax_before_linting() {
+    for config in [
+        r#"rule no-restricted-exports { set restrictedNamedExportsPattern "(?i)foo" }"#,
+        r#"rule no-restricted-imports { set options [{patterns: [{regex: "(?i)foo"}]}] }"#,
+        r#"rule no-restricted-imports { set options [{patterns: [{group: ["pkg"], importNamePattern: "(?i)foo"}]}] }"#,
+        r#"rule no-restricted-imports { set options [{patterns: [{group: ["pkg"], allowImportNamePattern: "(?i)foo"}]}] }"#,
+    ] {
+        let errors = super::errors(&format!("import .ts\n{config}"));
+        assert!(!errors.is_empty(), "{config}");
+    }
+}

@@ -19,6 +19,8 @@ pub enum Schema {
     Null,
     /// A string that compiles as a regex.
     Regex,
+    /// A JavaScript regex string, validated in Unicode mode.
+    JsRegex,
     /// Exactly this value.
     Lit(Value<'static>),
     /// A number (or a string's or list's length) within bounds.
@@ -97,6 +99,10 @@ impl Schema {
             (Schema::Null, Value::Null) => Ok(Value::Null),
             (Schema::Int, Value::Num(n)) if n.fract() == 0.0 => Ok(value.clone()),
             (Schema::Regex, Value::Str(s)) => match crate::expr::re::compile(s) {
+                Ok(_) => Ok(value.clone()),
+                Err(e) => Err(misfit(path, format!("is not a valid regex: {e}"))),
+            },
+            (Schema::JsRegex, Value::Str(s)) => match crate::js_regex::Regex::compile(s, "u") {
                 Ok(_) => Ok(value.clone()),
                 Err(e) => Err(misfit(path, format!("is not a valid regex: {e}"))),
             },
@@ -258,6 +264,7 @@ impl fmt::Display for Schema {
             Schema::Bool => f.write_str("boolean"),
             Schema::Null => f.write_str("null"),
             Schema::Regex => f.write_str("regex"),
+            Schema::JsRegex => f.write_str("js_regex"),
             Schema::Lit(v) => f.write_str(&v.literal()),
             Schema::Range(inner, min, max) => {
                 let range = format!("{}..{}", min.map(bound).unwrap_or_default(), max.map(bound).unwrap_or_default());
@@ -359,5 +366,27 @@ mod tests {
         let either = Schema::Union(vec![lit("never"), Schema::Record(vec![field("max", Schema::Int, FieldDefault::Value(Value::Num(1.0)), None)], None)]);
         assert_eq!(either.check(&rec(&[("max", Value::from("x"))]), &named).unwrap_err().path, "max");
         assert_eq!(either.check(&Value::from("x"), &named).unwrap_err().problem, "must be \"never\" | { max: int = 1 }, got \"x\"");
+    }
+
+    #[test]
+    fn javascript_regex_schemas_validate_unicode_patterns_without_changing_rust_regexes() {
+        let loaded = crate::config::load_text("pattern.zlint", "schema pattern js_regex", &crate::config::source::Disk);
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let schema = &loaded.config.schemas[0].schema;
+        let named = Schemas::new();
+        for (pattern, valid) in [
+            ("^(?!foo)(?!bar).+$", true),
+            ("foo/(?!bar)", true),
+            ("@app/(?!(api/enums$)).*", true),
+            ("(", false),
+            ("(?i)word", false),
+            (r"\q", false),
+            ("(?=a)?", false),
+        ] {
+            assert_eq!(schema.check(&Value::from(pattern), &named).is_ok(), valid, "{pattern}");
+        }
+        assert!(schema.check(&Value::Bool(true), &named).is_err());
+        assert!(Schema::Regex.check(&Value::from("(?i)word"), &named).is_ok());
+        assert!(Schema::Regex.check(&Value::from("^(?!foo).+$"), &named).is_err());
     }
 }
