@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use super::symbols::Symbols;
 use super::{InertRule, Linter, OptionSlot, Rule, Target};
-use crate::config::ast::{Config, Dropped, Parent, RuleDef, Severity, Target as AstTarget, Use};
-use crate::config::schema::Schemas;
+use crate::config::ast::{Config, Dropped, Expr, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
+use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
@@ -23,8 +23,8 @@ pub struct Built {
     pub linter: Option<Linter>,
     pub errors: Vec<ConfigError>,
     pub sources: std::sync::Arc<SourceMap>,
-    /// Every name, its definitions and uses (for tooling).
-    pub symbols: std::sync::Arc<Symbols>,
+    /// Every name, its definitions and uses; absent in runtime-only builds.
+    pub symbols: Option<std::sync::Arc<Symbols>>,
 }
 
 /// How expressions resolved their names, collected while compiling.
@@ -75,11 +75,24 @@ impl ReadDependencies {
 }
 
 pub fn build(loaded: Loaded, root: PathBuf) -> Built {
+    compile(loaded, root, true)
+}
+
+/// Compiles enabled rules and reachable helpers without tooling symbols.
+pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
+    compile(loaded, root, false)
+}
+
+fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let Loaded { mut config, sources, mut errors, fingerprint } = loaded;
     // `rule name ...` lines: which rules are on, and their extra clauses
     // (merged before compiling); option values are set after.
     let option_values = configure(&mut config, &mut errors);
-    super::prune::prune(&mut config);
+    if tooling {
+        super::prune::prune(&mut config);
+    } else {
+        super::prune::prune_for_lint(&mut config, &mut errors);
+    }
     let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
     let uses: Uses = RefCell::default();
@@ -146,7 +159,18 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     // Option values, in order; a rule that failed to build was reported.
     for (rule_name, config_index, option_index) in &option_values {
         let (name, value) = &config.configs[*config_index].options[*option_index];
-        let Some(f) = rules.iter_mut().find(|r| r.name == *rule_name) else { continue };
+        let Some(f) = rules.iter_mut().find(|r| r.name == *rule_name) else {
+            // Off bodies are not compiled at runtime, but their explicit
+            // settings still have to fit the declared option schemas.
+            if !tooling {
+                if let Some(def) = config.rules.iter().find(|r| r.name.text == *rule_name && !r.enabled()) {
+                    if let Some(option) = def.options.iter().find(|o| o.name.text == name.text) {
+                        option_value(rule_name, name, value, &option.schema, &grammar, &schemas, &mut errors);
+                    }
+                }
+            }
+            continue;
+        };
         let Some(slot) = f.options.iter_mut().find(|o| o.name == name.text) else {
             let mut err = ConfigError::new(name.span, format!("no option `{}` on `{}`", name.text, rule_name))
                 .suggest(&name.text, f.options.iter().map(|o| o.name.as_str()));
@@ -156,16 +180,8 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
             errors.push(err);
             continue;
         };
-        let Some(compiled) = Scope::constants(&grammar).compile(value, &mut errors) else { continue };
-        match Ctx::eval_static(&compiled, &[]) {
-            Ok(v) => match slot.schema.check(&v.into_owned(), &schemas) {
-                Ok(v) => slot.value = v,
-                Err(misfit) => errors.push(
-                    ConfigError::new(value.span, format!("option `{}` of `{}`: {misfit}", slot.name, f.name))
-                        .note(format!("`{}` takes {}", slot.name, slot.schema)),
-                ),
-            },
-            Err(err) => errors.push(ConfigError::new(value.span, format!("option values must be constants: {err}"))),
+        if let Some(value) = option_value(rule_name, name, value, &slot.schema, &grammar, &schemas, &mut errors) {
+            slot.value = value;
         }
     }
 
@@ -188,7 +204,7 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
     });
 
     let sources = std::sync::Arc::new(sources);
-    let symbols = std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, &inert, uses.into_inner(), sources.clone()));
+    let symbols = tooling.then(|| std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, &inert, uses.into_inner(), sources.clone())));
     // The rules as parsed, and where paths are relative to: what cached
     // results are only valid for.
     let fingerprint = {
@@ -235,6 +251,80 @@ pub fn build(loaded: Loaded, root: PathBuf) -> Built {
         fingerprint,
     };
     Built { linter: Some(linter), errors, sources, symbols }
+}
+
+fn option_value(
+    rule: &str,
+    name: &Name,
+    value: &Expr,
+    schema: &Schema,
+    grammar: &Grammar,
+    schemas: &Schemas,
+    errors: &mut Vec<ConfigError>,
+) -> Option<Value<'static>> {
+    let compiled = Scope::constants(grammar).compile(value, errors)?;
+    match Ctx::eval_static(&compiled, &[]) {
+        Ok(v) => match schema.check(&v.into_owned(), schemas) {
+            Ok(v) => Some(v),
+            Err(misfit) => {
+                errors.push(
+                    ConfigError::new(value.span, format!("option `{}` of `{rule}`: {misfit}", name.text))
+                        .note(format!("`{}` takes {schema}", name.text)),
+                );
+                None
+            }
+        },
+        Err(err) => {
+            errors.push(ConfigError::new(value.span, format!("option values must be constants: {err}")));
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use std::path::Path;
+
+    use crate::config::{self, source::Disk};
+
+    use super::*;
+
+    #[test]
+    fn all_std_rules_compile_at_runtime() {
+        let source = "import .rs\nimport .ts\nimport .py\nimport .c\nimport .zlint\nimport .md\nimport .toml\nrule *\n";
+        let built = build_for_lint(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:#?}", built.errors);
+    }
+
+    #[test]
+    fn runtime_and_tooling_preserve_helpers_added_by_rule_configuration() {
+        let source = r#"
+lang t "*.t"
+define {
+  in .t match leaf /X/
+  in .t match wrapper /</ value:leaf />/
+  group words leaf
+  in words let letter upper(text)
+  in wrapper forward letter from value
+  fn read(n) = n.letter
+  fn accepted(n) = read(n) == "X"
+  in wrapper rule active warn "unused"
+}
+rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }
+"#;
+        let root = PathBuf::from("/root");
+        let runtime = build_for_lint(config::load_text("test.zlint", source, &Disk), root.clone());
+        let tooling = build(config::load_text("test.zlint", source, &Disk), root);
+        assert!(runtime.errors.is_empty(), "{:#?}", runtime.errors);
+        assert!(tooling.errors.is_empty(), "{:#?}", tooling.errors);
+        let runtime = runtime.linter.unwrap();
+        let tooling = tooling.linter.unwrap();
+        let path = Path::new("/root/test.t");
+        let summaries = |linter: &Linter| linter.lint(path, "<X>").into_iter().map(|d| (d.rule, d.severity, d.message, d.start, d.end, d.fix)).collect::<Vec<_>>();
+        assert_eq!(summaries(&runtime), summaries(&tooling));
+        assert_eq!(runtime.fix(path, "<X>").text, tooling.fix(path, "<X>").text);
+        assert_eq!(runtime.fix(path, "<X>").text, "<x>");
+    }
 }
 
 /// Applies `rule name ...` lines to the definitions, in order: turning

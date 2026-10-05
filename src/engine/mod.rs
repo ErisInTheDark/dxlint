@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub use build::{build, Built};
+pub use build::{build, build_for_lint, Built};
 pub use diagnostic::{Diagnostic, Edit, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
 pub use profile::Profile;
@@ -280,7 +280,7 @@ impl Linter {
                     if let Some(p) = &self.profile {
                         Profile::add_time(&p.parse_nanos, rules_started - parse_started);
                     }
-                    let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project);
+                    let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project).with_tokens(parsed.tokens);
                     self.check_tree(&tree, &run, Some(&facts), &mut out);
                     if tree.too_deep {
                         out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));

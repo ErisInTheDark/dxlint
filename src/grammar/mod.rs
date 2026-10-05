@@ -632,22 +632,29 @@ fn resolve_indents(
     out
 }
 
-/// DFAs for pure matchers and guards, and `*` fast-forward stop sets.
 /// The config's functions; a name taken twice, or by a built-in function
 /// or fact, is an error (the later definition is left out).
-fn user_functions(config: &Config, errors: &mut Vec<ConfigError>) -> Vec<UserFn> {
-    let mut out: Vec<UserFn> = Vec::new();
+pub(crate) fn function_declarations<'a>(config: &'a Config, errors: &mut Vec<ConfigError>) -> Vec<&'a crate::config::ast::FnDef> {
+    let mut out = Vec::new();
+    let mut names = std::collections::HashSet::new();
     for def in &config.functions {
         let name = &def.name.text;
         if crate::expr::is_builtin_call(name) {
             errors.push(ConfigError::new(def.name.span, format!("`{name}` is a built-in function or fact; pick another name")));
-        } else if out.iter().any(|f| f.name == *name) {
+        } else if !names.insert(name.as_str()) {
             errors.push(ConfigError::new(def.name.span, format!("function `{name}` is defined twice")));
         } else {
-            out.push(UserFn { name: name.clone(), arity: def.params.len(), body: std::sync::OnceLock::new() });
+            out.push(def);
         }
     }
     out
+}
+
+fn user_functions(config: &Config, errors: &mut Vec<ConfigError>) -> Vec<UserFn> {
+    function_declarations(config, errors)
+        .into_iter()
+        .map(|def| UserFn { name: def.name.text.clone(), arity: def.params.len(), body: std::sync::OnceLock::new() })
+        .collect()
 }
 
 fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, errors: &mut Vec<ConfigError>) {

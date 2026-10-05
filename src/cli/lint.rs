@@ -9,7 +9,7 @@ use std::time::Instant;
 use ignore::{WalkBuilder, WalkState};
 use serde::Serialize;
 
-use super::{load, render, ConfigArg, Format, LintArgs};
+use super::{load_for_lint, render, ConfigArg, Format, LintArgs};
 use zoomie_lint::config::ast::Severity;
 use zoomie_lint::engine::cache::{self, Cache};
 use zoomie_lint::engine::{Diagnostic, Linter};
@@ -82,7 +82,7 @@ fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> 
 
 pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
     let started = Instant::now();
-    let (mut linter, config_ok) = match load(config) {
+    let (mut linter, config_ok) = match load_for_lint(config) {
         Ok(p) => (p.linter, p.config_ok),
         Err(code) => return code,
     };

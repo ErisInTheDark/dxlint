@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use zoomie_lint::config::source::{normalize_path, Disk, SourceProvider};
 use zoomie_lint::config;
 use zoomie_lint::engine::symbols::Symbols;
-use zoomie_lint::engine::{build, Linter};
+use zoomie_lint::engine::{build, build_for_lint, Linter};
 
 #[derive(Parser)]
 #[command(name = "zlint", version, about = "Extremely fast linting with rules written in .zlint", subcommand_precedence_over_arg = true)]
@@ -121,7 +121,7 @@ pub fn run() -> ExitCode {
             Err(code) => code,
         },
         Some(Command::Describe { name }) => match load(config) {
-            Ok(p) => info::describe(&p.symbols, &name),
+            Ok(p) => info::describe(p.symbols.as_deref().expect("tooling symbols"), &name),
             Err(code) => code,
         },
         Some(Command::Tree { file, all, at }) => match load(config) {
@@ -140,7 +140,7 @@ pub fn run() -> ExitCode {
 /// A built linter, and whether its config had no errors.
 pub struct Project {
     pub linter: Linter,
-    pub symbols: std::sync::Arc<Symbols>,
+    pub symbols: Option<std::sync::Arc<Symbols>>,
     /// `false` when config errors were printed: the linter still runs with
     /// every part that built, but the command should fail in the end.
     pub config_ok: bool,
@@ -150,6 +150,14 @@ pub struct Project {
 /// explicit `--config`, else the nearest `.zlint` upward. Only a
 /// missing config is fatal: a broken one lints with what still works.
 pub fn load(arg: &ConfigArg) -> Result<Project, ExitCode> {
+    load_with(arg, false)
+}
+
+pub fn load_for_lint(arg: &ConfigArg) -> Result<Project, ExitCode> {
+    load_with(arg, true)
+}
+
+fn load_with(arg: &ConfigArg, runtime: bool) -> Result<Project, ExitCode> {
     let path = match &arg.config {
         Some(p) => normalize_path(p),
         None => match config::find(&std::env::current_dir().unwrap_or_default()) {
@@ -160,12 +168,17 @@ pub fn load(arg: &ConfigArg) -> Result<Project, ExitCode> {
             }
         },
     };
-    load_from(&path, &Disk)
+    load_from_with(&path, &Disk, runtime)
 }
 
 pub fn load_from(path: &Path, provider: &dyn SourceProvider) -> Result<Project, ExitCode> {
+    load_from_with(path, provider, false)
+}
+
+fn load_from_with(path: &Path, provider: &dyn SourceProvider, runtime: bool) -> Result<Project, ExitCode> {
     let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    let built = build(config::load_file(path, provider), root);
+    let loaded = config::load_file(path, provider);
+    let built = if runtime { build_for_lint(loaded, root) } else { build(loaded, root) };
     let config_ok = built.errors.is_empty();
     if !config_ok {
         render::config_errors(&built.errors, &built.sources);

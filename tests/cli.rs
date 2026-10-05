@@ -31,6 +31,51 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 "#;
 
 #[test]
+fn lint_defers_unreachable_bodies_but_check_and_activation_validate_them() {
+    for definition in [
+        "define {\n  in token rule deferred warn \"bad\" { when dormant() }\n}",
+        "in token rule deferred off \"bad\" { when dormant() }",
+    ] {
+        let source = format!(r#"
+lang t "*.t"
+in .t match token /X/
+fn dormant() = missing()
+{definition}
+in token rule active warn "active" fix as lower(text)
+"#);
+        let dir = project("cli-runtime-config", &[(".zlint", &source), ("test.t", "X")]);
+        let out = zlint(&dir, &["--no-cache", "--format", "jsonl", "test.t"]);
+        assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+        let diagnostics: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).expect("json")).collect();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0]["fixable"], true);
+
+        let check = zlint(&dir, &["check"]);
+        assert_eq!(check.status.code(), Some(2), "{}", String::from_utf8_lossy(&check.stderr));
+
+        let fixed = zlint(&dir, &["--no-cache", "--fix", "test.t"]);
+        assert_eq!(fixed.status.code(), Some(0), "{}", String::from_utf8_lossy(&fixed.stderr));
+        assert_eq!(std::fs::read_to_string(dir.join("test.t")).unwrap(), "x");
+
+        std::fs::write(dir.join(".zlint"), format!("{source}\nrule deferred warn\n")).unwrap();
+        let activated = zlint(&dir, &["--no-cache", "test.t"]);
+        assert_eq!(activated.status.code(), Some(2), "{}", String::from_utf8_lossy(&activated.stderr));
+    }
+}
+
+#[test]
+fn lint_validates_configured_options_even_when_the_rule_is_off() {
+    for (value, status) in [("2", 0), ("\"bad\"", 2), ("unknown()", 2)] {
+        let source = format!(
+            "lang t \"*.t\"\nin .t match token /X/\ndefine {{\n in token rule dormant warn \"x\" {{ option max int = 1 }}\n}}\nrule dormant off {{ set max {value} }}\n"
+        );
+        let dir = project("cli-runtime-off-options", &[(".zlint", &source), ("test.t", "X")]);
+        let out = zlint(&dir, &["--no-cache", "test.t"]);
+        assert_eq!(out.status.code(), Some(status), "{value}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+#[test]
 fn relative_imports_errors_exit_codes_and_fixing() {
     let dir = project(
         "cli-basic",

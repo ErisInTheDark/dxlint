@@ -279,7 +279,10 @@ pub struct RuleDef {
 impl RuleDef {
     /// On after its configuration.
     pub fn enabled(&self) -> bool {
-        self.configured.map_or(!self.defined_only, |s| s != Severity::Off)
+        match self.configured {
+            Some(s) => s != Severity::Off,
+            None => !self.defined_only && self.severity.unwrap_or(Severity::Warn) != Severity::Off,
+        }
     }
 }
 

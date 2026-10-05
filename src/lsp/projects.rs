@@ -153,7 +153,7 @@ impl Projects {
         let built = build(config::load_file(config, sources), dir.to_path_buf());
         let project = self.by_dir.entry(dir.to_path_buf()).or_default();
         project.files = built.sources.files().filter_map(|(_, f)| f.path.clone()).collect();
-        project.symbols = Some(built.symbols.clone());
+        project.symbols = built.symbols.clone();
         project.errors.clear();
         let file_uri = |id| built.sources.get(id).path.as_deref().map(|p: &Path| uri_of(p));
         for e in &built.errors {

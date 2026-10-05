@@ -13,10 +13,17 @@
 //! Off rules that read a pruned layer or attribute stay defined but are not
 //! compiled (`RuleDef::inert`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::ast::{Config, Expr, ExprKind, Parent, Target, TemplatePart};
 use crate::pattern::Pat;
+
+/// Runtime compilation keeps only helpers reachable from enabled rules
+/// and explicit grammar items. Tooling still uses [`prune`].
+pub fn prune_for_lint(config: &mut Config, errors: &mut Vec<crate::config::error::ConfigError>) {
+    crate::grammar::function_declarations(config, errors);
+    prune_config(config, true);
+}
 
 /// Every name an expression mentions: path segments, function arguments,
 /// `is` names, pattern references and string literals. An over-estimate,
@@ -91,11 +98,14 @@ fn parent_name(p: &Parent) -> Option<&str> {
 /// indents and forwards on them) that nothing needs, and marks the off
 /// rules that would read them as inert.
 pub fn prune(config: &mut Config) {
+    prune_config(config, false);
+}
+
+fn prune_config(config: &mut Config, runtime: bool) {
     let library: HashSet<&str> = config.matchers.iter().filter(|m| m.library).map(|m| m.name.text.as_str()).collect();
-    if library.is_empty() {
+    if library.is_empty() && !runtime {
         return;
     }
-    let groups: HashSet<&str> = config.groups.iter().map(|g| g.name.text.as_str()).collect();
     let mut needed: HashSet<String> = HashSet::new();
 
     // What turned-on rules and the config's own items mention.
@@ -131,47 +141,57 @@ pub fn prune(config: &mut Config) {
         needed.extend(f.targets.iter().map(|t| t.text.clone()));
         needed.extend(f.attrs.iter().map(|a| a.text.clone()));
     }
+    if runtime {
+        for c in &config.configs {
+            for (_, value) in &c.options {
+                expr_names(value, &mut needed);
+            }
+        }
+    }
 
-    // What needed layers and attributes need in turn.
+    // Build each dependency set once; closure traversal must not scan the
+    // entire library again for every name.
+    let mut dependencies: HashMap<String, HashSet<String>> = HashMap::new();
+    for m in &config.matchers {
+        let found = dependencies.entry(m.name.text.clone()).or_default();
+        if let Some((pat, _)) = &m.pattern {
+            pattern_names(pat, found);
+        }
+        found.extend(m.like.iter().map(|l| l.text.clone()));
+        found.extend(m.parents.iter().filter_map(parent_name).map(str::to_string));
+    }
+    for a in &config.attrs {
+        let found = dependencies.entry(a.name.text.clone()).or_default();
+        expr_names(&a.expr, found);
+        if runtime {
+            found.extend(a.targets.iter().map(|t| t.text.clone()));
+        }
+    }
+    for f in &config.functions {
+        expr_names(&f.body, dependencies.entry(f.name.text.clone()).or_default());
+    }
+    for g in &config.groups {
+        dependencies.entry(g.name.text.clone()).or_default().extend(g.parents.iter().filter_map(parent_name).map(str::to_string));
+    }
+    if runtime {
+        for f in &config.forwards {
+            for a in &f.attrs {
+                dependencies.entry(a.text.clone()).or_default().extend(f.targets.iter().map(|t| t.text.clone()));
+            }
+        }
+    }
+
     let mut queue: Vec<String> = needed.iter().cloned().collect();
     while let Some(name) = queue.pop() {
-        let mut found = HashSet::new();
-        for m in config.matchers.iter().filter(|m| m.name.text == name) {
-            if let Some((pat, _)) = &m.pattern {
-                pattern_names(pat, &mut found);
-            }
-            found.extend(m.like.iter().map(|l| l.text.clone()));
-            // Its parents keep the tree it sits in as it would be with every
-            // library layer present; a group parent means all its members.
-            for p in m.parents.iter().filter_map(parent_name) {
-                found.insert(p.to_string());
-                if groups.contains(p) {
-                    for g in config.groups.iter().filter(|g| g.name.text == p) {
-                        found.extend(g.parents.iter().filter_map(parent_name).map(str::to_string));
-                    }
-                }
-            }
-        }
-        for a in config.attrs.iter().filter(|a| a.name.text == name) {
-            expr_names(&a.expr, &mut found);
-        }
-        for f in config.functions.iter().filter(|f| f.name.text == name) {
-            expr_names(&f.body, &mut found);
-        }
-        // A group read by name (`descendants(group)`, `x is group`) needs
-        // its members.
-        for g in config.groups.iter().filter(|g| g.name.text == name) {
-            found.extend(g.parents.iter().filter_map(parent_name).map(str::to_string));
-        }
-        for n in found {
+        for n in dependencies.get(&name).into_iter().flatten() {
             if needed.insert(n.clone()) {
-                queue.push(n);
+                queue.push(n.clone());
             }
         }
     }
 
     let pruned: HashSet<String> = library.iter().filter(|n| !needed.contains(**n)).map(|n| n.to_string()).collect();
-    if pruned.is_empty() {
+    if pruned.is_empty() && !runtime {
         return;
     }
     let gone = |n: &str| pruned.contains(n);
@@ -205,6 +225,9 @@ pub fn prune(config: &mut Config) {
         f.attrs.retain(|a| !dropped_attrs.contains(&a.text));
     }
     config.forwards.retain(|f| !f.targets.is_empty() && !f.attrs.is_empty());
+    if runtime {
+        config.functions.retain(|f| needed.contains(&f.name.text));
+    }
 
     for r in config.rules.iter_mut().filter(|r| !r.enabled()) {
         let mut names = HashSet::new();
@@ -214,7 +237,7 @@ pub fn prune(config: &mut Config) {
             }
         }
         rule_names(r, &mut names);
-        r.inert = names.iter().any(|n| gone(n) || dropped_attrs.contains(n));
+        r.inert = runtime || names.iter().any(|n| gone(n) || dropped_attrs.contains(n));
     }
 }
 
@@ -223,4 +246,72 @@ fn rule_names(r: &crate::config::ast::RuleDef, out: &mut HashSet<String>) {
     for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(&r.report_at).chain(r.each.as_ref().map(|(_, e)| e)).chain(r.locals.iter().map(|(_, e)| e)) {
         expr_names(e, out);
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use crate::config::{self, source::Disk};
+    use crate::engine::build;
+
+    use super::*;
+
+    #[test]
+    fn lint_pruning_skips_unreachable_helpers_without_removable_layers() {
+        for definitions in [
+            "fn dormant() = missing()\nin .t match token /X/",
+            "define {\n in .t match token /X/\n in token let dormant missing()\n}",
+        ] {
+            let source = format!("lang t \"*.t\"\n{definitions}\nin token rule active warn \"x\"\n");
+            let mut loaded = config::load_text("test.zlint", &source, &Disk);
+            assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
+            prune_for_lint(&mut loaded.config, &mut loaded.errors);
+            let built = build(loaded, PathBuf::from("/root"));
+            assert!(built.errors.is_empty(), "{definitions}: {:#?}", built.errors);
+            let diagnostics = built.linter.unwrap().lint(Path::new("/root/test.t"), "X");
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        }
+    }
+
+    #[test]
+    fn lint_pruning_preserves_indirect_attributes_groups_and_forwards() {
+        let source = r#"
+lang t "*.t"
+define {
+  in .t match leaf /X/
+  in .t match wrapper /</ value:leaf />/
+  group words leaf
+  in words let letter upper(text)
+  in wrapper forward letter from value
+  fn read(n) = n.letter
+  fn accepted(n) = read(n) == "X"
+}
+in wrapper rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }
+"#;
+        let mut loaded = config::load_text("test.zlint", source, &Disk);
+        assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
+        prune_for_lint(&mut loaded.config, &mut loaded.errors);
+        let built = build(loaded, PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:#?}", built.errors);
+        let linter = built.linter.unwrap();
+        let path = Path::new("/root/test.t");
+        let diagnostics = linter.lint(path, "<X>");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].message, "X");
+        assert_eq!(linter.fix(path, "<X>").text, "<x>");
+    }
+
+    #[test]
+    fn lint_pruning_preserves_function_declaration_errors() {
+        for definitions in ["fn unused() = 1\nfn unused() = 2", "fn len(x) = 1"] {
+            let source = format!("lang t \"*.t\"\n{definitions}\n");
+            let mut loaded = config::load_text("test.zlint", &source, &Disk);
+            assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
+            prune_for_lint(&mut loaded.config, &mut loaded.errors);
+            let built = build(loaded, PathBuf::from("/root"));
+            assert!(!built.errors.is_empty(), "{definitions}");
+        }
+    }
+
 }

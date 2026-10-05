@@ -704,6 +704,8 @@ is wrong, messages) is written in the rule.
 | `resolved`, `reference_kind` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file), and the `declaration_kind` of what it refers to |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
+| `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
+| `type_has_void` | a union or intersection constituent is void, distinct from undefined |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `type_parameter_defaults`, `type_parameters_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
@@ -974,6 +976,8 @@ well as the files they lint:
 - with `zlint.inspectHover`, hovering in a linted file shows the layers at
   the cursor and their facts
 
+Normal CLI linting compiles enabled rules and reachable helpers only. Errors in off-rule bodies and unreachable function bodies are deferred until activation. Parse errors and configured option errors still report. `zlint check`, tooling commands and the language server keep full compilation and validation.
+
 ## Performance and caching
 
 `zlint --stats` prints throughput, and `zlint --profile` lists the matchers
@@ -982,8 +986,7 @@ Matchers that compile to a DFA never show up there; slow ones are usually
 nullable, use fields, or have no leading literal or lookaround to tell zlint
 where they can start.
 
-Built-in rules that are off cost nothing: the layers only they need are not
-even parsed.
+CLI linting skips compilation of off-rule bodies, unreachable functions and library attributes, and does not build tooling symbols. Layers only off rules need are not parsed.
 
 **`.zlintcache`.** zlint keeps each file's results beside the config and
 reuses them while the file's text is unchanged and so is everything its lint
