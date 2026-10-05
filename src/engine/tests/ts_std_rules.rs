@@ -118,6 +118,73 @@ fn dot_notation_fixes_keep_token_boundaries_and_report_unfixable_comments() {
 }
 
 #[test]
+fn parentheses_follow_leading_tokens_and_constructor_receivers() {
+    let lint = native_linter("rule no-extra-parens");
+    for (source, count) in [
+        ("for ((let.foo) of values);", 0),
+        ("for ((let()).foo of values);", 0),
+        ("for (((let.a).b) of values);", 1),
+        ("for ((let) in values);", 1),
+        ("for ((let).a in values);", 1),
+        ("(let).a;", 1),
+        ("(let)[a];", 0),
+        ("for ((let)[a].b;;);", 0),
+        ("for (((let)[a]).b in values);", 1),
+        ("new (a()).b.c;", 0),
+        ("new (a().b).c;", 0),
+        ("new (function(){});", 1),
+        ("new (new A);", 1),
+        ("new (new A)();", 0),
+        ("(0123).a;", 1),
+        ("(123).a;", 0),
+        ("(09).a;", 0),
+    ] {
+        let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), count, "{source}: {diagnostics:#?}");
+        assert!(diagnostics.iter().all(|d| d.fix.is_none()));
+    }
+}
+
+#[test]
+fn parentheses_protect_only_unenclosed_for_initialiser_in_expressions() {
+    let lint = native_linter("rule no-extra-parens");
+    for (source, count) in [
+        ("for (let a = (b in c);;);", 0),
+        ("for (let a = ((b in c) in d);;);", 1),
+        ("for (let a = ((b in c) && (d in e));;);", 2),
+        ("for (let [a = (b in c)] = [];;);", 1),
+        ("for (let { a = b && (c in d) } = {};;);", 1),
+        ("for (let a = (b = c && (d in e)) => {};;);", 1),
+        ("for (let a = new b(c && (d in e));;);", 1),
+        ("for (let a = b[c && (d in e)];;);", 1),
+        ("for (let a = b ? c && (d in e) : f;;);", 1),
+        ("for (let a = b ? c : (d in e);;);", 0),
+        ("for (let a = (!(b in c));;);", 1),
+    ] {
+        assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), count, "{source}");
+    }
+}
+
+#[test]
+fn parentheses_distinguish_statement_wrappers_from_expression_wrappers() {
+    let lint = native_linter("rule no-extra-parens");
+    for (source, count) in [
+        ("((function(){ return bar(); })());", 1),
+        ("async function f(){ await (+a); }", 1),
+        ("switch(0){ case (1): break; }", 1),
+        ("switch(0){ case (1 as 1): break; }", 0),
+        ("export default (a);", 1),
+        ("export default (a => a);", 1),
+        ("export default (a, b);", 0),
+        ("function f(){ return (\na % b == 0\n) || (a % b == 1); }", 1),
+        ("function f(){ return (\na\n); }", 0),
+        ("function f(){ return (\n(a % b == 0)\n || a % b == 1\n); }", 1),
+    ] {
+        assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), count, "{source}");
+    }
+}
+
+#[test]
 fn precedence_and_statement_context_preserve_required_parentheses() {
     let lint = native_linter("rule no-extra-parens");
     for (source, count) in [
