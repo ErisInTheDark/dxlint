@@ -23,7 +23,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "scoping_loop_captures", doc: "on a function: unsafe mutable bindings captured across loop iterations", get: |f, n| f.with_file(loops::captures, n) },
     Fact { name: "scoping_unmodified_condition", doc: "on a condition reference: unmodified with grouped or independent conditional branches", get: |f, n| f.with_file(loops::unmodified_condition, n) },
     Fact { name: "scoping_array_callback", doc: "on a function: array callback method, returns and fallthrough", get: |f, n| f.with_file(callbacks::array_callback, n) },
-    Fact { name: "scoping_arrow_callback", doc: "on a function: callback eligibility and lexical receiver binding", get: |f, n| f.with_file(callbacks::arrow_callback, n) },
     Fact { name: "param_property_write", doc: "on a parameter reference: a write to a property reached through that parameter", get: |f, n| f.with_file(bindings::param_property_write, n) },
     Fact { name: "scoping_receiver_use", doc: "on a class method or field: its own body uses this or super", get: |f, n| f.with_file(bindings::scoping_receiver_use, n) },
     Fact { name: "scoping_global_declarations", doc: "script-global declarations in a variable, function or class statement", get: |f, n| f.with_file(globals::declarations, n) },

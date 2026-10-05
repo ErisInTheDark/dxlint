@@ -82,12 +82,31 @@ in ts_this rule no-invalid-this {
   warn "Unexpected 'this'."
 }
 
+in ts_this let arrow_bound_this true
+in ts_parenthesized forward arrow_bound_this from expression
+in ts_call let arrow_bind_lexical count(argument) == 1 && first([] argument.arrow_bound_this) == true
+in ts_node let arrow_bound_callback
+  if parent is ts_parenthesized then parent.arrow_bound_callback
+  else if is ts_call.callee && parent.arrow_callback_receiver != null then parent.arrow_bind_lexical
+  else null
+# Null: not a callback; boolean: its receiver is lexical.
+in ts_node let arrow_callback_receiver
+  if is (ts_call.argument, ts_new.argument) then false
+  else if parent is (ts_parenthesized, ts_logical) || parent is ts_conditional && not ts_conditional.test then parent.arrow_callback_receiver
+  else if is ts_member.object && parent.property == "bind" then parent.arrow_bound_callback
+  else null
+in ts_node let arrow_callback_barrier
+  if is (ts_function, ts_method) then false
+  else is ts_super || is ts_meta_property && starts_with(text, "new") || any(children.arrow_callback_barrier, b => b == true)
 in ts_function rule prefer-arrow-callback {
   option allowNamedFunctions boolean = false
   option allowUnboundThis boolean = true
-  let callback scoping_arrow_callback
-  when callback != null && !(allowNamedFunctions && callback.named)
-  when !allowUnboundThis || !callback.this || callback.lexical
+  # Cheap checks first: the barrier scan walks the whole body.
+  let callback arrow_callback_receiver
+  when callback != null && !(allowNamedFunctions && name != null)
+  when !contains([] modifier, "*") && default(name.uses, 0) + default(name.self_uses, 0) + default(name.writes, 0) == 0 && !uses_arguments
+  when !allowUnboundThis || !uses_this || callback
+  when !any(children.arrow_callback_barrier, b => b == true)
   warn "Unexpected function expression."
 }
 

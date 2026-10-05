@@ -4,50 +4,6 @@ use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 
-pub(super) fn arrow_callback(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    if s.has_word(node, F::Modifier, "*") { return Value::Null; }
-    let binding = s.get(node, F::Name).and_then(|id| file.bindings().decls.get(&id));
-    if binding.is_some_and(|b| b.uses + b.self_uses + b.writes > 0) { return Value::Null; }
-    let flags = file.bindings().functions.get(&node).copied().unwrap_or(0);
-    if flags & crate::native::ts::bind::USES_ARGUMENTS != 0 { return Value::Null; }
-    let mut stack: Vec<_> = s.kids(node).map(|(_, n)| n).collect();
-    while let Some(n) = stack.pop() {
-        if matches!(s.kind(n), Some(K::Function | K::Method)) { continue; }
-        if s.is(n, K::Super) || s.is(n, K::MetaProperty) && s.text(n).starts_with("new") { return Value::Null; }
-        stack.extend(s.kids(n).map(|(_, c)| c));
-    }
-    let mut current = node;
-    let mut bound = false;
-    let mut lexical = false;
-    loop {
-        let Some(parent) = s.parent(current) else { return Value::Null };
-        match s.kind(parent) {
-            Some(K::Paren | K::Logical) => current = parent,
-            Some(K::Conditional) if s.field(current) != Some(F::Test) => current = parent,
-            Some(K::Member) if s.get(parent, F::Object) == Some(current) && s.word(parent, F::Property) == Some("bind") => {
-                let mut member = parent;
-                while let Some(p) = s.parent(member).filter(|&n| s.is(n, K::Paren)) { member = p; }
-                let Some(call) = s.parent(member).filter(|&n| s.is(n, K::Call) && s.get(n, F::Callee) == Some(member)) else { return Value::Null };
-                if !bound {
-                    bound = true;
-                    let args: Vec<_> = s.all(call, F::Arg).collect();
-                    lexical = args.len() == 1 && s.is(s.unparen(args[0]), K::This);
-                }
-                current = call;
-            }
-            Some(K::Call | K::New) if s.field(current) == Some(F::Arg) => {
-                return Value::record(vec![
-                    ("named".into(), Value::Bool(s.get(node, F::Name).is_some())),
-                    ("this".into(), Value::Bool(flags & crate::native::ts::bind::USES_THIS != 0)),
-                    ("lexical".into(), Value::Bool(lexical)),
-                ]);
-            }
-            _ => return Value::Null,
-        }
-    }
-}
-
 pub(super) fn array_callback(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     if s.has_word(node, F::Modifier, "*") { return Value::Null; }
