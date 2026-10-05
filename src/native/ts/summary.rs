@@ -105,11 +105,31 @@ pub enum MemberKind {
     Index,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Visibility {
+    Public,
+    Private,
+    Protected,
+}
+
+impl Visibility {
+    fn of(v: &impl View, id: u32) -> Self {
+        if v.has_word(id, F::Modifier, "private") { Self::Private }
+        else if v.has_word(id, F::Modifier, "protected") { Self::Protected }
+        else { Self::Public }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Member {
     /// The key as written (`name`, `"str"`, `[Symbol.dispose]`).
     pub name: Box<str>,
     pub kind: MemberKind,
+    pub visibility: Visibility,
+    /// A type signature rather than an executable class/object member.
+    pub signature: bool,
+    /// A reference path used as a computed key; absent on ordinary/literal keys.
+    pub computed_key: Option<Box<[Box<str>]>>,
     pub is_static: bool,
     pub optional: bool,
     /// Property type (or a getter's return type).
@@ -445,8 +465,13 @@ fn key_name(v: &impl View, key: u32) -> Box<str> {
 pub fn member(v: &impl View, id: u32) -> Option<Member> {
     let is_static = v.has_word(id, F::Modifier, "static");
     let optional = v.get(id, F::Optional).is_some();
+    let visibility = Visibility::of(v, id);
+    let signature = matches!(v.kind(id), Some(K::MethodSig | K::PropSig | K::CallSig | K::IndexSig));
+    let computed_key = v.get(id, F::Key).filter(|&key| v.is(key, K::Computed))
+        .and_then(|key| v.get(key, F::Expr)).map(|key| path_of(v, key))
+        .filter(|path| !path.is_empty()).map(Vec::into_boxed_slice);
     let named = |kind, ty, sigs| -> Option<Member> {
-        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, is_static, optional, ty, index_key: None, sigs, init: None })
+        Some(Member { name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, optional, ty, index_key: None, sigs, init: None })
     };
     match v.kind(id)? {
         K::Method | K::MethodSig => {
@@ -468,11 +493,14 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         }
         K::CallSig => {
             let kind = if v.get(id, F::Kind).is_some() { MemberKind::Construct } else { MemberKind::Call };
-            Some(Member { name: "()".into(), kind, is_static, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
+            Some(Member { name: "()".into(), kind, visibility, signature, computed_key: None, is_static, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
         }
         K::IndexSig => Some(Member {
             name: "[index]".into(),
             kind: MemberKind::Index,
+            visibility,
+            signature,
+            computed_key: None,
             is_static,
             optional,
             ty: v.get(id, F::Type).map(|t| type_syn(v, t)),
@@ -640,6 +668,9 @@ impl<V: View> Builder<'_, V> {
                                     decl.members.push(Member {
                                         name: v.text(n).into(),
                                         kind: MemberKind::Prop,
+                                        visibility: Visibility::of(v, p),
+                                        signature: false,
+                                        computed_key: None,
                                         is_static: false,
                                         optional: false,
                                         ty: v.get(p, F::Type).map(|t| type_syn(v, t)),
@@ -682,6 +713,9 @@ impl<V: View> Builder<'_, V> {
                         Some(Member {
                             name: key_name(v, name),
                             kind: MemberKind::Prop,
+                            visibility: Visibility::Public,
+                            signature: false,
+                            computed_key: None,
                             is_static: true,
                             optional: false,
                             ty,
@@ -943,6 +977,26 @@ mod tests {
     fn fingerprint(src: &str) -> u64 {
         let parsed = super::super::parse(src, false).unwrap();
         summarise(&Raw { src, nodes: &parsed.nodes }, parsed.root, false).fingerprint()
+    }
+
+    #[test]
+    fn member_visibility_changes_invalidate_dependents() {
+        for (before, after) in [
+            ("class C { private value: number; }", "class C { protected value: number; }"),
+            ("class C { protected value: number; }", "class C { public value: number; }"),
+            ("class C { private method(): void; }", "class C { public method(): void; }"),
+            ("class C { constructor(private value: number) {} }", "class C { constructor(public value: number) {} }"),
+        ] {
+            assert_ne!(fingerprint(before), fingerprint(after), "{before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn computed_reference_keys_do_not_share_literal_key_identity() {
+        assert_ne!(
+            fingerprint("interface T { '[Symbol.toPrimitive]'(): string; }"),
+            fingerprint("interface T { [Symbol.toPrimitive](): string; }"),
+        );
     }
 
     #[test]

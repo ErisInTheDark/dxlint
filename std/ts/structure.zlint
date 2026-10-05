@@ -21,19 +21,26 @@ fn structure_destructure_enabled(settings, role, kind) =
   else if settings.array != null || settings.object != null then get(settings, kind) == true
   else get(get(settings, role), kind) == true
 
+fn structure_typescript(path) = re_test(path, /\.(?:ts|tsx|mts|cts)$/)
+
 in ts_declarator, ts_assignment rule prefer-destructuring {
-  option options ({ array?: boolean; object?: boolean; VariableDeclarator?: { array?: boolean; object?: boolean }; AssignmentExpression?: { array?: boolean; object?: boolean }; enforceForRenamedProperties?: boolean })[] = [] "destructuring categories, per declaration or assignment, and renamed-property enforcement"
+  option options ({ array?: boolean; object?: boolean; VariableDeclarator?: { array?: boolean; object?: boolean }; AssignmentExpression?: { array?: boolean; object?: boolean }; enforceForRenamedProperties?: boolean; enforceForDeclarationWithTypeAnnotation?: boolean })[] = [] "destructuring categories, per declaration or assignment, renamed-property and annotated-declaration enforcement"
   when structure_destructure_eligible
+  let typed structure_typescript(file)
+  let enforcement first(slice(options, 1))
+  when !(typed && is ts_declarator && structure_destructure_annotated) || enforcement.enforceForDeclarationWithTypeAnnotation == true
   let access structure_destructure_right
   when access is (ts_member, ts_index) && !access.structure_access_optional
   when access.object.structure_unwrapped not ts_super && access.structure_access_key not ts_private_name
   let key access.structure_access_key
   let value key.literal_value
   let array_index access is ts_index && key is ts_number && value.type == "number" && !contains(["Infinity", "-Infinity", "NaN"], value.value) && num(value.value) == round(num(value.value))
-  let category if array_index then "array" else "object"
+  let renamed enforcement.enforceForRenamedProperties == true
+  let iterable if typed && array_index then access.object.type_iterable else true
+  when iterable != false || renamed
+  let category if array_index && iterable != false then "array" else "object"
   let settings first(options)
   when structure_destructure_enabled(settings, structure_destructure_role, category)
-  let renamed first(slice(options, 1)).enforceForRenamedProperties == true
   when array_index || renamed || structure_destructure_left is ts_identifier && (access is ts_member && structure_destructure_left.text == key.text || access is ts_index && key is ts_string && structure_destructure_left.text == value.value)
   let receiver access.object.node
   let fixable is ts_declarator && !structure_destructure_annotated && structure_destructure_left is ts_identifier && access is ts_member && structure_destructure_left.text == key.text

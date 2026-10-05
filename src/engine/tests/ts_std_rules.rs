@@ -3,6 +3,43 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn typed_destructuring_distinguishes_iterables_from_numeric_properties() {
+    let linter = native_linter("rule prefer-destructuring");
+    let path = Path::new("/root/file.ts");
+    for (ty, expected) in [
+        ("{ 0: unknown }", 0),
+        ("unknown", 0),
+        ("{ [key: number]: unknown }", 0),
+        ("unknown[]", 1),
+        ("string", 1),
+        ("any", 1),
+        ("{ [Symbol.iterator]: unknown }", 1),
+        ("unknown[] | { 0: unknown }", 0),
+        ("unknown[] | { [Symbol.iterator]: unknown }", 1),
+        ("unknown[] & object", 1),
+    ] {
+        let source = format!("declare let xs: {ty}; const x = xs[0]; x = xs[0];");
+        assert_eq!(linter.lint(path, &source).len(), expected * 2, "{source}");
+    }
+}
+
+#[test]
+fn typed_destructuring_keeps_annotation_controls_and_category_options() {
+    let path = Path::new("/root/file.ts");
+    let annotated = "declare const object: { value: number }; const value: number = object.value;";
+    assert!(native_linter("rule prefer-destructuring").lint(path, annotated).is_empty());
+    let enforced = native_linter("rule prefer-destructuring { set options [{ object: true }, { enforceForDeclarationWithTypeAnnotation: true }] }");
+    let diagnostics = enforced.lint(path, annotated);
+    assert_eq!(diagnostics.len(), 1);
+    assert!(diagnostics[0].fix.is_none());
+    for (category, expected) in [("object", 2), ("array", 0)] {
+        let linter = native_linter(&format!("rule prefer-destructuring {{ set options [{{ {category}: true }}, {{ enforceForRenamedProperties: true }}] }}"));
+        let source = "declare let object: { 0: unknown }; const value = object[0]; value = object[0];";
+        assert_eq!(linter.lint(path, source).len(), expected);
+    }
+}
+
+#[test]
 fn destructuring_fixes_preserve_comments_and_leave_unsafe_rewrites_reported() {
     let linter = native_linter("rule prefer-destructuring");
     let path = Path::new("/root/file.js");
