@@ -7,6 +7,7 @@ use crate::native::ts::kinds::{Field, Kind};
 use crate::native::ts::types::{Checker, Ty};
 
 mod template;
+mod type_properties;
 mod unsafe_types;
 mod awaitability;
 mod assertions;
@@ -33,6 +34,21 @@ fn is_typescript(file: &NativeFile<'_>) -> bool {
 }
 
 pub const FACTS: &[Fact] = &[
+    Fact {
+        name: "type_is_string_like",
+        doc: "native values and types: every constrained union arm is provably string-like, excluding any and unresolved intersections",
+        get: |f, n| f.with_file(|file, node| Value::Bool(type_properties::string_like(&file.constrained_type_of(node), &file.typing().checker)), n),
+    },
+    Fact {
+        name: "type_is_parameter",
+        doc: "native values and types: the type is an open type parameter, before applying its constraint",
+        get: |f, n| f.with_file(|file, node| Value::Bool(matches!(file.type_of(node), Ty::Param(_))), n),
+    },
+    Fact {
+        name: "type_has_enum",
+        doc: "native values and types: a constrained union or intersection constituent has enum identity",
+        get: |f, n| f.with_file(|file, node| Value::Bool(type_properties::has_enum(&file.constrained_type_of(node), &file.typing().checker)), n),
+    },
     Fact {
         name: "callable",
         doc: "native expressions: the type supplies call signatures (every union arm, or an intersection arm)",
@@ -304,6 +320,49 @@ fn void_argument_kind(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 mod tests {
     use std::path::Path;
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn template_interpolations_report_each_redundant_value() {
+        let linter = native_linter("rule no-unnecessary-template-expression");
+        let source = "const value = `before ${1} middle ${true} after`;";
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        let expected: Vec<_> = ["${1}", "${true}"].into_iter().map(|text| {
+            let start = source.find(text).unwrap();
+            (start, start + text.len())
+        }).collect();
+        assert_eq!(diagnostics.iter().map(|d| (d.start, d.end)).collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn template_interpolations_preserve_comments_tags_and_line_spacing() {
+        let linter = native_linter("rule no-unnecessary-template-expression");
+        for source in [
+            "const value = `before ${/* keep */ 1} after`;",
+            "const value = `before ${1 /* keep */} after`;",
+            "const value = tag`${1}`;",
+            "const value = `before ${'  '}\n after`;",
+            "const value = `before ${''}\n after`;",
+            "declare const value: string; const result = `before ${value} after`;",
+        ] {
+            assert!(linter.lint(Path::new("/root/file.ts"), source).is_empty(), "{source}");
+        }
+        assert_eq!(linter.lint(Path::new("/root/file.ts"), "const value = `before ${'x'}\n after`;").len(), 1);
+    }
+
+    #[test]
+    fn template_type_interpolations_preserve_parameter_and_enum_identity() {
+        let linter = native_linter("rule no-unnecessary-template-expression");
+        for (source, expected) in [
+            ("type Plain = `${string}`;", 1),
+            ("type Generic<T extends string> = `${T}`;", 0),
+            ("enum E { A = 'a' } type Enum = `${E.A}`;", 0),
+            ("type Literal = `prefix${1}suffix`;", 1),
+            ("type Whitespace = `prefix${''}\n`;", 0),
+            ("type Unresolved = `${Missing.A & string}`;", 0),
+        ] {
+            assert_eq!(linter.lint(Path::new("/root/file.ts"), source).len(), expected, "{source}");
+        }
+    }
 
     #[test]
     fn unresolved_annotations_are_distinct_from_unknown_values() {
