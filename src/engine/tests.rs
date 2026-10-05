@@ -413,6 +413,12 @@ fn indent_lines_can_measure_from_another_offset() {
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "  function f(a,\n      b) {\n    x();\n  }\n").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["0:0", "0:0", "1:2", "0:2"]);
+    // `from null` keeps the default anchor.
+    let l = native_linter(r#"
+        in ts_line rule ind info "{indent_level}:{len(indent_anchor)}" { indent in ts_block from null }
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "  {\n    x();\n  }\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["0:0", "1:2", "0:2"]);
     // A library attribute read only by `from` stays reachable.
     let l = native_linter(r#"
         define {

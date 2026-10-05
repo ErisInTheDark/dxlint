@@ -1492,6 +1492,8 @@ impl<'a> Ctx<'a> {
                     .as_ref()
                     .and_then(|from| match (Ctx { node: id, indents: &[], ..*self }).eval(from).ok()? {
                         Value::Node(n, _) => Some(self.tree.node(n).start as usize),
+                        // null: no anchor given, the default one.
+                        Value::Null => None,
                         v => v.num().ok().map(|n| (n.max(0.0) as usize).min(self.source.len())),
                     })
                     .map_or(default_line, |at| self.lines.line_of(at));
