@@ -45,15 +45,33 @@ fn decidable(pat: &Pat, resolve: Resolve, depth: usize) -> bool {
     ok
 }
 
-/// The longest leading part of `pat` a DFA can decide, used as a cheap
-/// guard before running the interpreter. `None` if it would be useless.
+/// A DFA-decidable pattern that matches wherever `pat` does (and maybe
+/// elsewhere), used as a cheap guard before running the interpreter: the
+/// longest leading part a DFA can decide, with lookarounds dropped (they
+/// only narrow), except that a final lookahead's text must still follow.
+/// `None` if it would be useless.
 pub fn guard_prefix(pat: &Pat, resolve: Resolve) -> Option<Pat> {
-    let items: Vec<Pat> = match pat {
-        Pat::Seq(items) => items.iter().take_while(|p| is_decidable(p, resolve)).cloned().collect(),
-        _ => return None,
-    };
-    let prefix = Pat::Seq(items);
-    (!prefix.nullable()).then_some(prefix)
+    let Pat::Seq(items) = pat else { return None };
+    let mut guard = Vec::new();
+    for (i, p) in items.iter().enumerate() {
+        match p {
+            // Lookarounds read `\b` as ASCII; keep their word boundaries out.
+            Pat::Around { behind: false, negate: false, inner } if i + 1 == items.len() && is_decidable(inner, resolve) && !has_word_boundary(inner) => {
+                guard.push((**inner).clone())
+            }
+            Pat::Around { .. } => {}
+            p if is_decidable(p, resolve) => guard.push(p.clone()),
+            _ => break,
+        }
+    }
+    let guard = Pat::Seq(guard);
+    (!guard.nullable()).then_some(guard)
+}
+
+fn has_word_boundary(pat: &Pat) -> bool {
+    let mut found = false;
+    pat.walk(&mut |p| found |= matches!(p, Pat::Look(Look::WordBoundary | Look::NotWordBoundary)));
+    found
 }
 
 fn named(n: Named) -> &'static ClassUnicode {

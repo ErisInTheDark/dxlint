@@ -400,9 +400,12 @@ impl<'g, 't> Parser<'g, 't> {
                 let mut hole = 0;
                 let mut pos = start;
                 while pos < end {
-                    let found = match &om.dfa {
-                        Some(dfa) => dfa.find(cache(&mut self.caches.dfa[o as usize], dfa), &text[..end], pos),
-                        None => om.prefilter.next(&text[..end], pos).map(|p| (p, p)),
+                    let found = match (&om.dfa, &om.guard) {
+                        (Some(dfa), _) => dfa.find(cache(&mut self.caches.dfa[o as usize], dfa), &text[..end], pos),
+                        // The guard matches wherever the matcher does: its
+                        // leftmost match is the next place worth trying.
+                        (None, Some(guard)) => guard.find(cache(&mut self.caches.guard[o as usize], guard), &text[..end], pos),
+                        (None, None) => om.prefilter.next(&text[..end], pos).map(|p| (p, p)),
                     };
                     let Some((s, e)) = found else { break };
                     // Matches may run into a nested host, but not start there.
