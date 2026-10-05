@@ -236,6 +236,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let linter = Linter {
         reach: grammar.reach(),
         profile: None,
+        split_at: 128 * 1024,
         grammar,
         rules,
         inert,

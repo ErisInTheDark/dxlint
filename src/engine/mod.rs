@@ -151,6 +151,8 @@ pub struct Linter {
     /// Identifies these rules: the tokens parsed (imports and macros
     /// expanded) and the project root.
     pub fingerprint: u64,
+    /// Files at least this big run their rules in groups on several threads.
+    pub(crate) split_at: usize,
 }
 
 impl Linter {
@@ -288,8 +290,40 @@ impl Linter {
                     if let Some(p) = &self.profile {
                         Profile::add_time(&p.parse_nanos, rules_started - parse_started);
                     }
-                    let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project).with_tokens(parsed.tokens);
-                    self.check_tree(&tree, &run, Some(&facts), &mut out);
+                    let groups = self.rule_groups(&active, text.len());
+                    if groups.len() <= 1 {
+                        let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project).with_tokens(parsed.tokens);
+                        self.check_tree(&tree, &run, Some(&facts), &mut out);
+                    } else {
+                        // A big file sets the floor of a whole run: its rules
+                        // run in groups on several threads, each with its own
+                        // facts (the parsed tree is shared).
+                        let mut tokens = Some(parsed.tokens);
+                        std::thread::scope(|s| {
+                            let tree = &tree;
+                            let handles: Vec<_> = groups
+                                .iter()
+                                .map(|mask| {
+                                    let tokens = tokens.take();
+                                    let run = Run { active: mask, ..run };
+                                    // Reads are tracked per thread: pass them on.
+                                    s.spawn(move || {
+                                        reads::track(|| {
+                                            let facts = NativeFile::new(Syntax::new(tree, text, front), path, &self.project).with_tokens(tokens.flatten());
+                                            let mut part = Vec::new();
+                                            self.check_tree(tree, &run, Some(&facts), &mut part);
+                                            part
+                                        })
+                                    })
+                                })
+                                .collect();
+                            for h in handles {
+                                let (part, group_reads) = h.join().expect("rule group");
+                                reads::note_group(&std::sync::Arc::new(group_reads));
+                                out.extend(part);
+                            }
+                        });
+                    }
                     if tree.too_deep {
                         out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));
                     }
@@ -331,11 +365,29 @@ impl Linter {
         out
     }
 
+    /// The active rules split into masks to run side by side: one group
+    /// unless the file is big enough to be worth the duplicated attribute
+    /// and fact work.
+    fn rule_groups(&self, active: &[bool], len: usize) -> Vec<Vec<bool>> {
+        let on: Vec<usize> = (0..active.len()).filter(|&i| active[i]).collect();
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let k = if len < self.split_at { 1 } else { (len / self.split_at.max(1)).clamp(2, 4).min(threads).min(on.len().max(1)) };
+        if k <= 1 {
+            return vec![active.to_vec()];
+        }
+        let mut groups = vec![vec![false; active.len()]; k];
+        for (i, &fi) in on.iter().enumerate() {
+            groups[i % k][fi] = true;
+        }
+        groups
+    }
+
     /// Runs every active rule on the nodes of `tree` they target.
     fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a dyn Facts>, out: &mut Vec<Diagnostic>) {
-        // Nodes run in document order, so a line's indentation fix is known
-        // before the lines below it are checked.
-        let reindented: RefCell<HashMap<usize, String>> = RefCell::default();
+        // Nodes run in document order, so a rule's indentation fix of a line
+        // is known before it checks the lines below. Per rule: what one rule
+        // fixes never changes what another sees, so rules can run apart.
+        let reindented: Vec<RefCell<HashMap<usize, String>>> = self.rules.iter().map(|_| RefCell::default()).collect();
         let memo = AttrMemo::default();
         for &id in &tree.order {
             let node = tree.node(id);
@@ -350,7 +402,7 @@ impl Linter {
                         lines: run.lines,
                         file: run.file,
                         options: &run.options[fi],
-                        reindented: &reindented,
+                        reindented: &reindented[fi],
                         attrs: &self.attrs,
                         forwards: &self.forwards,
                         memo: &memo,
@@ -361,7 +413,7 @@ impl Linter {
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
                     for d in self.apply_each(&self.rules[fi], &ctx) {
                         if let Some([edit]) = d.fix.as_deref() {
-                            record_reindent(&mut reindented.borrow_mut(), run.text, run.lines, edit);
+                            record_reindent(&mut reindented[fi].borrow_mut(), run.text, run.lines, edit);
                         }
                         out.push(d);
                     }

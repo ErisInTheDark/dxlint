@@ -392,6 +392,19 @@ fn indent_can_target_a_nodes_own_tokens() {
 }
 
 #[test]
+fn big_files_report_the_same_when_their_rules_run_in_groups() {
+    let mut l = native_linter("rule semi\nrule comma-spacing\nrule keyword-spacing\nrule no-unused-vars\nrule prefer-const\nrule eqeqeq\nrule indent-binary-ops");
+    let text = (0..300).map(|i| format!("let a{i} = f(1 ,2)\nif(a{i} == 1){{ return }}\n")).collect::<String>();
+    let path = Path::new("/root/big.ts");
+    l.split_at = usize::MAX;
+    let together = l.lint(path, &text);
+    l.split_at = 1;
+    let split = l.lint(path, &text);
+    assert!(together.len() > 300, "{}", together.len());
+    assert_eq!(together.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>(), split.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>());
+}
+
+#[test]
 fn dedent_counts_levels_back_from_the_anchor() {
     let l = linter(r#"
         in .t match blk /\{/ until /\}/
