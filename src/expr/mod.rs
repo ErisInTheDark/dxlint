@@ -1541,8 +1541,8 @@ impl<'a> Ctx<'a> {
                     // An anchor on this line or below does not apply: the
                     // next line in line does.
                     AnchorAt::Offset(at) if self.lines.line_of(at) < line => {
-                        let (anchor_line, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0);
-                        return Some(IndentHit { node: id, rule: i, base: AnchorBase::Line(anchor_line), extra, inside });
+                        let (base, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0);
+                        return Some(IndentHit { node: id, rule: i, base, extra, inside });
                     }
                     AnchorAt::Offset(_) => {}
                 }
@@ -1570,18 +1570,18 @@ impl<'a> Ctx<'a> {
         })
     }
 
-    /// The line an anchor at byte `at` stands for, and the levels on top of
-    /// that line's indentation. An anchor in the middle of a line sits where
-    /// the indent line deciding it puts it, when that line's own anchor is
-    /// earlier on the same line (so this ends); levels opened on one line
-    /// collapse, so it adds levels only for a class not counted on the line
-    /// yet (`seen`, starting with the indented line's own). Anything else
-    /// stands for its line, whose first token answers for what is above.
-    fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> (usize, f64) {
+    /// What an anchor at byte `at` stands for, and the levels on top of it.
+    /// An anchor in the middle of a line sits where the indent line deciding
+    /// it puts it, when that line measures from a text or from earlier on
+    /// the same line (so this ends); levels opened on one line collapse, so
+    /// it adds levels only for a class not counted on the line yet (`seen`,
+    /// starting with the indented line's own). Anything else stands for its
+    /// line, whose first token answers for what is above.
+    fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> (AnchorBase, f64) {
         let line = self.lines.line_of(at);
         let line_start = self.lines.line_start(line);
         if depth >= MAX_VIRTUAL_DEPTH || line_start + self.indent_at(line_start).len() >= at {
-            return (line, 0.0);
+            return (AnchorBase::Line(line), 0.0);
         }
         let mut p = Some(self.tree.innermost_with_text(self.grammar, at as u32, u32::MAX)).filter(|&n| !self.tree.is_root(n));
         while let Some(id) = p.filter(|&n| !self.tree.is_root(n)) {
@@ -1606,13 +1606,11 @@ impl<'a> Ctx<'a> {
                 .collect();
             candidates.sort_unstable_by(|a, b| b.cmp(a));
             for (in_form, _, i) in candidates {
-                // A text anchor is no place on this line: the line stands.
-                let AnchorAt::Offset(from) = self.indent_anchor_at(id, i, in_form) else { return (line, 0.0) };
-                if from >= at {
-                    continue;
-                }
-                if self.lines.line_of(from) < line {
-                    return (line, 0.0);
+                let from = self.indent_anchor_at(id, i, in_form);
+                match from {
+                    AnchorAt::Offset(from) if from >= at => continue,
+                    AnchorAt::Offset(from) if self.lines.line_of(from) < line => return (AnchorBase::Line(line), 0.0),
+                    _ => {}
                 }
                 let rule = &self.indents[i];
                 let counts = !seen.contains(&rule.class);
@@ -1624,12 +1622,18 @@ impl<'a> Ctx<'a> {
                     (Some(by), true) => Ctx { node: id, ..*self }.eval(by).ok().and_then(|v| v.num().ok()).unwrap_or(1.0),
                     (None, true) => 1.0,
                 };
-                let (anchor_line, extra) = self.virtual_anchor(from, seen, depth + 1);
-                return (anchor_line, extra + if rule.dedent { -levels } else { levels });
+                let levels = if rule.dedent { -levels } else { levels };
+                return match from {
+                    AnchorAt::Text(text) => (AnchorBase::Text(text), levels),
+                    AnchorAt::Offset(from) => {
+                        let (base, extra) = self.virtual_anchor(from, seen, depth + 1);
+                        (base, extra + levels)
+                    }
+                };
             }
             p = self.tree.parent(id);
         }
-        (line, 0.0)
+        (AnchorBase::Line(line), 0.0)
     }
 
     /// This line starts with the end of the `in` form's inside (its closer),

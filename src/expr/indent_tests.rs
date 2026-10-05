@@ -38,6 +38,16 @@ fn text_anchors_measure_from_the_text_itself() {
 }
 
 #[test]
+fn mid_line_anchors_sit_at_their_deciding_text_anchor() {
+    // The call's `(` is in an expression measured from a text (three
+    // spaces), so its arguments are a level past that, not past the
+    // `    x = foo(` line.
+    let src = "    x = foo(\n      a\n    );\n";
+    let rules = "indent in ts_call\nindent ts_assignment.right from \"   \" by 0";
+    assert_eq!(levels(rules, src), ["0:0", "1:3", "0:3"]);
+}
+
+#[test]
 fn mid_line_anchors_stop_at_their_own_line() {
     // The consequent is anchored at the conditional, a line above the
     // arrow's `{`: the `{` stands for its own (`?`) line.
