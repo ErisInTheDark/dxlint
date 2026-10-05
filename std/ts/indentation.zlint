@@ -6,6 +6,7 @@ schema indent_function_options { parameters?: indent_list_offset; body?: int(0..
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
 fn indent_variable_mode(mode, kind) = if type_of(mode) == "record" then default(get(mode, kind), 1) else mode
 fn indent_function_mode(owner, declaration, expression) = if owner is ts_function && owner.parent is (ts_program, ts_block, ts_export) then declaration else expression
+fn indent_expected(item, unit) = if item == null then null else item.indent_anchor repeat(unit, item.indent_level)
 fn indent_list_mode(item, call, declaration, expression, array, object, imports, variable) =
   if item is (ts_call.argument, ts_new.argument, ts_import_call.argument) then default(call.arguments, 1)
   else if item is (ts_function.parameter, ts_arrow.parameter, ts_method.parameter) then default(indent_function_mode(item.parent, declaration, expression).parameters, 1)
@@ -36,6 +37,10 @@ in ts_function, ts_arrow let indent_outer_iife containing(ts_call).indent_outer_
 in ts_assignment, ts_assignment_pattern let indent_assignment_value right.node
 in ts_declarator, ts_parameter, ts_class_property let indent_assignment_value init.node
 in ts_index let indent_index_open index.token_neighbours.before.start
+in ts_if let indent_control_tails [consequent.last_token.end, alternate.last_token.end]
+in ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_with let indent_control_tails [body.last_token.end]
+in ts_semicolon, ts_empty let indent_semicolon_control if space_before.line_break && space_after.line_break == false && next_token != null then last(filter(walk(node, item => item.parent.node), item => contains(default(item.indent_control_tails, []), end_offset))) else null
+in ts_semicolon let indent_tail_unchecked parent is (ts_variable_declaration, ts_declarator, ts_type_alias, ts_import_equals, ts_export_assignment)
 
 in ts_line rule indent {
   option mode int(0..) | "tab" = 4 "spaces per level, or tab"
@@ -87,11 +92,14 @@ in ts_line rule indent {
   indent ts_function.type_parameter, ts_arrow.type_parameter, ts_method.type_parameter, ts_class.type_parameter, ts_interface.type_parameter
   indent ts_type_parameter.constraint, ts_type_parameter.default
   indent ts_for.init, ts_for.test, ts_for.update
-  indent ts_if.consequent, ts_if.alternate, ts_for.body, ts_for_in.body, ts_for_of.body, ts_while.body, ts_do_while.body, ts_with.body by if is ts_block then 0 else 1
+  indent ts_if.consequent, ts_if.alternate, ts_for.body, ts_for_in.body, ts_for_of.body, ts_while.body, ts_do_while.body, ts_with.body from if is ts_empty then node.indent_semicolon_control else null by if is ts_block || is ts_empty && node.indent_semicolon_control != null then 0 else 1
+  indent ts_semicolon from default(indent_semicolon_control, parent.node) by if indent_semicolon_control == null && parent is (ts_block, ts_class, ts_interface, ts_type_literal) then 1 else 0
 
   when trim(text) != ""
   let first_offset offset + byte_len(indent)
   let first_nodes overlapping(ts_node, first_offset, first_offset + 1)
+  let semicolon first(overlapping(ts_semicolon, first_offset, first_offset + 1))
+  when semicolon == null || !semicolon.indent_tail_unchecked
   when outerIIFEBody != "off" || !any(first_nodes, item => item is ts_block.body && item.first_token.start == first_offset && item.parent.parent.indent_outer_iife == true)
   let equals first(overlapping(ts_equals, first_offset, first_offset + 1))
   when assignment_operator != "off" || equals == null && !any(first_nodes, item => item.first_token.start == first_offset && item.parent.indent_assignment_value.offset == item.offset)
@@ -109,16 +117,23 @@ in ts_line rule indent {
   when logical_right == null || logical_right.first_token.start != first_offset
   when binary_operator == null && logical_operator == null
   let quasi first(overlapping(ts_template.quasi, first_offset, first_offset + 1))
-  let block_comment first(overlapping(ts_block_comment, first_offset, first_offset + 1))
-  when !ignore_comments || count(overlapping(ts_comment, first_offset, first_offset + 1)) == 0
+  let comment first(overlapping(ts_comment, first_offset, first_offset + 1))
+  let block_comment if comment is ts_block_comment then comment else null
+  when !ignore_comments || comment == null
   let string_literal first(overlapping(ts_string, first_offset, first_offset + 1))
   when quasi == null || position(quasi.offset).js_line == position(first_offset).js_line
   when block_comment == null || position(block_comment.offset).js_line == position(first_offset).js_line
   when string_literal == null || position(string_literal.offset).js_line == position(first_offset).js_line
   let unit if mode == "tab" then "\t" else repeat(" ", mode)
+  let comment_before if comment == null then null else node_at(comment.token_neighbours.before.start)
+  let comment_after if comment == null then null else node_at(comment.token_neighbours.after.start)
+  let before_wanted indent_expected(comment_before, unit)
+  # Only line-leading declaration semicolons are unchecked; inline ones retain their declaration offset.
+  let after_wanted if comment_after.indent_tail_unchecked then if position(comment_after.offset).js_line == position(comment.offset).js_line then indent_expected(comment_after.parent.node, unit) repeat(unit, if comment_after.parent is ts_variable_declaration then indent_numeric(indent_variable_mode(variable_declarator, comment_after.parent.kind.text)) else 1) else comment_after.indent else indent_expected(comment_after, unit)
+  when comment == null || !(comment_before != null && comment.space_before.blank_gaps == 0 && indent == before_wanted || comment_after != null && comment.space_after.blank_gaps == 0 && indent == after_wanted)
   let aligned_first if list_mode == "first" && list_item.offset != list_item.indent_list_first.offset then list_item.indent_list_first else null
   let aligned_anchor if aligned_first == null then "" else aligned_first.indent_anchor repeat(unit, aligned_first.indent_level)
-  let wanted if aligned_first != null then aligned_anchor repeat(if mode == "tab" then "\t" else " ", position(aligned_first.first_token.start).js_column - 1 - len(aligned_first.indent)) else indent_anchor repeat(unit, indent_level)
+  let wanted if comment != null && comment_after is ts_semicolon then after_wanted else if aligned_first != null then aligned_anchor repeat(if mode == "tab" then "\t" else " ", position(aligned_first.first_token.start).js_column - 1 - len(aligned_first.indent)) else indent_anchor repeat(unit, indent_level)
   when indent != wanted
   let spaces len(replace(indent, "\t", ""))
   let tabs len(replace(indent, " ", ""))
