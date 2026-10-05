@@ -127,15 +127,14 @@ pub enum CExpr {
     /// `walk(roots, n => next)`; the body reads the node as the innermost
     /// `Param`.
     Walk(Box<CExpr>, Box<CExpr>),
-    /// `descendants(layer)`: nodes under this one of these matchers (or
-    /// their specialisations), in source order.
-    Descendants(Vec<u32>),
-    /// `overlapping(layer)`: nodes of these matchers anywhere in the file
-    /// whose span overlaps this node's, in source order.
-    Overlapping(Vec<u32>, Option<Box<(CExpr, CExpr)>>),
-    /// `containing(layer)`: the innermost node of these matchers, in any
-    /// named layer, whose span holds this node's (not the node itself).
-    Containing(Vec<u32>),
+    /// `descendants(layer)`: selected nodes under this one, in source order.
+    Descendants(NodeSel),
+    /// `overlapping(layer)`: selected nodes anywhere in the file whose span
+    /// overlaps this node's, in source order.
+    Overlapping(NodeSel, Option<Box<(CExpr, CExpr)>>),
+    /// `containing(layer)`: the innermost selected node, in any named layer,
+    /// whose span holds this node's (not the node itself).
+    Containing(NodeSel),
     /// `kind_name(n)`: the node's kind as text (`.lang` for the file).
     KindName(Box<CExpr>),
     /// The first value when it is a node, else the second (an `is`
@@ -174,7 +173,7 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
     ("kind_name(node)", "a node's kind as text (`ts_call`; `.lang` for the file), for messages: test kinds with `is`"),
-    ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none)"),
+    ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none); `kind.field` selects what fills that field, as `descendants` and `overlapping` also do"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
     ("overlapping(layer, from?, to?)", "the nodes of a layer or group anywhere in the file whose span overlaps the node's (or the byte range `from..to`), in source order (`ts_line` and the comments or strings on it)"),
     ("walk(roots, n => next)", "the nodes reachable from `roots` (nodes) by `next` (nodes, or a list of them), each once, in visiting order, roots included"),
@@ -253,7 +252,26 @@ pub struct AttrMemo<'a> {
     js_lines: std::cell::OnceCell<Vec<usize>>,
     /// For `overlapping(layer)`: the file's nodes of those matchers by
     /// start, with the running maximum end.
-    spans: RefCell<HashMap<Vec<u32>, std::rc::Rc<LayerSpans>>>,
+    spans: RefCell<HashMap<NodeSel, std::rc::Rc<LayerSpans>>>,
+}
+
+/// Which nodes `descendants`, `overlapping` and `containing` look for:
+/// `kind` (or a group), or `kind.field` (what fills that field of such a
+/// node, text included: `ts_template.quasi`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NodeSel {
+    kinds: Vec<u32>,
+    field: Option<u16>,
+}
+
+impl NodeSel {
+    fn matches(&self, grammar: &Grammar, tree: &Tree, id: u32) -> bool {
+        let is_a = |m: u32| m != ROOT && m != TEXT && self.kinds.iter().any(|&k| grammar.is_a(m, k));
+        match self.field {
+            None => is_a(tree.node(id).matcher),
+            Some(label) => tree.label(id) == Some(label) && tree.owner(id).is_some_and(|o| is_a(tree.node(o).matcher)),
+        }
+    }
 }
 
 /// Nodes of some layers sorted by start; `max_end[i]` is the furthest end
@@ -498,9 +516,20 @@ impl Scope<'_> {
                     [l, from, to] if name.text == "overlapping" => (Some(l), Some((from, to))),
                     _ => (None, None),
                 };
-                let layer = match layer_arg {
-                    Some(Expr { kind: ExprKind::Var(path), .. }) if path.len() == 1 => Some(&path[0]),
-                    _ => None,
+                // `kind` or `kind.field`.
+                let (layer, field) = match layer_arg {
+                    Some(Expr { kind: ExprKind::Var(path), .. }) if path.len() <= 2 => (path.first(), path.get(1)),
+                    _ => (None, None),
+                };
+                let label = match field {
+                    Some(f) => match self.grammar.labels.get(&f.text) {
+                        Some(l) => Some(l),
+                        None => {
+                            errors.push(ConfigError::new(f.span, format!("no layer has a field `{}`", f.text)));
+                            return None;
+                        }
+                    },
+                    None => None,
                 };
                 let ids = layer.and_then(|l| match self.grammar.matcher(&l.text) {
                     Some(m) => Some(vec![m]),
@@ -513,7 +542,10 @@ impl Scope<'_> {
                 });
                 let overlapping = name.text == "overlapping";
                 let Some(ids) = ids else {
-                    errors.push(ConfigError::new(e.span, format!("`{}` takes a layer or group name", name.text)).note(format!("usage: {}(ts_comment)", name.text)));
+                    errors.push(
+                        ConfigError::new(e.span, format!("`{}` takes a layer or group name, or `name.field`", name.text))
+                            .note(format!("usage: {}(ts_comment), {}(ts_template.quasi)", name.text, name.text)),
+                    );
                     return None;
                 };
                 let containing = name.text == "containing";
@@ -528,12 +560,13 @@ impl Scope<'_> {
                     Some((from, to)) => Some(Box::new((self.compile(from, errors)?, self.compile(to, errors)?))),
                     None => None,
                 };
+                let sel = NodeSel { kinds: ids, field: label };
                 if containing {
-                    CExpr::Containing(ids)
+                    CExpr::Containing(sel)
                 } else if overlapping {
-                    CExpr::Overlapping(ids, range)
+                    CExpr::Overlapping(sel, range)
                 } else {
-                    CExpr::Descendants(ids)
+                    CExpr::Descendants(sel)
                 }
             }
             // `kind_name(n)`: a node's kind as text, for messages.
@@ -1242,15 +1275,15 @@ impl<'a> Ctx<'a> {
     }
 
     /// The file's nodes of these matchers, indexed once per file.
-    fn layer_spans(&self, ids: &[u32]) -> std::rc::Rc<LayerSpans> {
-        if let Some(s) = self.memo.spans.borrow().get(ids) {
+    fn layer_spans(&self, sel: &NodeSel) -> std::rc::Rc<LayerSpans> {
+        if let Some(s) = self.memo.spans.borrow().get(sel) {
             return s.clone();
         }
         let mut nodes = Vec::new();
         let mut stack = vec![self.tree.root];
         while let Some(id) = stack.pop() {
             let n = self.tree.node(id);
-            if n.matcher != ROOT && n.matcher != TEXT && ids.iter().any(|&m| self.grammar.is_a(n.matcher, m)) {
+            if sel.matches(self.grammar, self.tree, id) {
                 nodes.push((n.start, n.end, id));
             }
             stack.extend(n.children.iter().map(|e| e.node));
@@ -1263,7 +1296,7 @@ impl<'a> Ctx<'a> {
             max_end.push(far);
         }
         let spans = std::rc::Rc::new(LayerSpans { nodes, max_end });
-        self.memo.spans.borrow_mut().insert(ids.to_vec(), spans.clone());
+        self.memo.spans.borrow_mut().insert(sel.clone(), spans.clone());
         spans
     }
 
@@ -1619,17 +1652,18 @@ impl<'a> Ctx<'a> {
                     ("js_line_start".into(), Value::from(starts[js_line - 1])),
                 ])
             }
-            CExpr::Descendants(ids) => {
+            CExpr::Descendants(sel) => {
                 let mut found = Vec::new();
                 let mut stack: Vec<u32> = self.tree.node(self.node).children.iter().map(|e| e.node).collect();
                 while let Some(id) = stack.pop() {
                     let n = self.tree.node(id);
-                    if n.matcher != ROOT && n.matcher != TEXT {
-                        if ids.iter().any(|&m| self.grammar.is_a(n.matcher, m)) {
-                            found.push((n.start, std::cmp::Reverse(n.end), id));
-                        }
-                        stack.extend(n.children.iter().map(|e| e.node));
+                    if n.matcher == ROOT {
+                        continue;
                     }
+                    if sel.matches(self.grammar, self.tree, id) {
+                        found.push((n.start, std::cmp::Reverse(n.end), id));
+                    }
+                    stack.extend(n.children.iter().map(|e| e.node));
                 }
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, std::borrow::Cow::Borrowed(self.node_text(id)))).collect())
@@ -1646,8 +1680,8 @@ impl<'a> Ctx<'a> {
                 },
                 _ => Value::Null,
             },
-            CExpr::Containing(ids) => {
-                let spans = self.layer_spans(ids);
+            CExpr::Containing(sel) => {
+                let spans = self.layer_spans(sel);
                 let me = self.tree.node(self.node);
                 let mut i = spans.nodes.partition_point(|&(s, _, _)| s <= me.start);
                 let mut best: Option<(u32, u32, u32)> = None;
@@ -1666,8 +1700,8 @@ impl<'a> Ctx<'a> {
                     None => Value::Null,
                 }
             }
-            CExpr::Overlapping(ids, range) => {
-                let spans = self.layer_spans(ids);
+            CExpr::Overlapping(sel, range) => {
+                let spans = self.layer_spans(sel);
                 let (start, end) = match range {
                     Some(r) => {
                         // Clamped to the file: out-of-range bounds overlap nothing past it.

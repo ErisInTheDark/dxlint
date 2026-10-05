@@ -200,7 +200,10 @@ in .rust layer lines match line /^.*$/
 `parent`, `previous`, `children` and `descendants` stay within a node's own
 layer; other layers are read by position: `containing(kind)` is the
 innermost node of that kind (any layer) holding the node, and
-`overlapping(kind)` the nodes sharing its span.
+`overlapping(kind)` the nodes sharing its span. All three also take
+`kind.field`, selecting what fills that field (text too):
+`containing(ts_template.quasi)` is inside template text, not merely inside a
+template.
 
 **Indentation.** `in braces, parentheses, brackets indent` declares that a
 layer's inside, the text its `until` skips, is indented: a line starting

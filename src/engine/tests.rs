@@ -1550,6 +1550,33 @@ fn is_tests_kinds_groups_specialisations_fields_and_languages() {
 }
 
 #[test]
+fn span_queries_select_what_fills_a_field() {
+    // `containing(pair.inner)`: inside what fills `inner` of a `pair`, not
+    // merely inside a `pair` or a `box`.
+    let l = linter(r#"
+        match word /[a-z]+/
+        match box /<[a-z ]+>/
+        in box match word
+        in .t match pair /\[/ inner:box /\]/
+        in .t match box
+        in word rule w info "{text}:{containing(pair.inner) != null}"
+        in pair rule p info "{count(descendants(pair.inner))}"
+    "#);
+    assert_eq!(rule_messages(&l, "<ab> [<cd>]"), vec!["w: ab:false", "p: 1", "w: cd:true"]);
+}
+
+#[test]
+fn span_queries_find_native_text_fields() {
+    // Template text is unkinded text filling `quasi`: still selectable.
+    let l = native_linter(r#"
+        in ts_template rule t info "{count(descendants(ts_template.quasi))}"
+        in ts_identifier rule i info "{text}:{containing(ts_template.quasi) != null}/{containing(ts_template) != null}"
+    "#);
+    let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "`x${b}y`;\n").into_iter().map(|d| d.message).collect();
+    assert_eq!(messages, vec!["2", "b:false/true"]);
+}
+
+#[test]
 fn forward_reads_attributes_through_wrappers() {
     let l = native_linter(r#"
         in ts_identifier let size len(text)
