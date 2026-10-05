@@ -428,19 +428,14 @@ fn breaks_line(text: &str) -> bool {
 }
 
 impl NativeFile<'_> {
-    /// The tokens of a node's text (comments and spacing dropped).
+    /// Parser-aware tokens inside a node; trivia outside literals is dropped.
     pub fn tokens(&self, node: u32) -> Vec<&str> {
-        let text = self.syntax.text(node);
-        let mut lx = Lexer::new(text);
-        let mut out = Vec::new();
-        loop {
-            let t = lx.next_token();
-            if t.tok == Tok::Eof {
-                break;
-            }
-            out.push(&text[t.start as usize..t.end as usize]);
-        }
-        out
+        let span = self.syntax.tree.node(node);
+        let code = self.cached(lex);
+        let from = code.0.partition_point(|token| token.start < span.start);
+        code.0[from..].iter().take_while(|token| token.end <= span.end)
+            .map(|token| &self.syntax.src[token.start as usize..token.end as usize])
+            .collect()
     }
 
     /// After byte `from`: the first `open` character outside comments, past
@@ -523,6 +518,28 @@ impl NativeFile<'_> {
 mod lexical_tests {
     use super::*;
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn token_equality_preserves_literal_contents_but_ignores_code_trivia() {
+        for (left, right, equal) in [
+            ("`${0} `", "`${0}`", false),
+            ("`${0} `", "`${0 /* comment */} `", true),
+            ("`a ${`b ${x} `} z`", "`a ${`b ${x}`} z`", false),
+            ("a + b", "a /* comment */ + b", true),
+            ("/a b/", "/ab/", false),
+            ("'a b'", "'ab'", false),
+        ] {
+            let source = format!("const left = {left}; const right = {right};");
+            with_native_file(&source, |file, _| {
+                let find = |text| (0..file.syntax.tree.nodes.len() as u32)
+                    .find(|&node| file.syntax.kind(node).is_some() && file.syntax.text(node) == text)
+                    .expect("expression");
+                let (a, b) = (find(left), find(right));
+                assert_eq!(file.equal_tokens(a, b), equal, "{left} vs {right}");
+                assert_eq!(file.equal_tokens(b, a), equal, "{right} vs {left}");
+            });
+        }
+    }
 
     fn assert_first_tokens(file: &NativeFile<'_>) {
         let code = file.cached(lex);
