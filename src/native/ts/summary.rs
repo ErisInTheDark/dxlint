@@ -71,17 +71,27 @@ pub struct Sig {
     pub params: Vec<Param>,
     /// `None`: not annotated.
     pub ret: Option<TypeSyn>,
+    pub predicate: Option<Predicate>,
     pub is_async: bool,
     /// Where the declaring function starts, when it has a body: its file
     /// can type unannotated returns from it.
     pub body_at: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Hash)]
+pub struct Predicate {
+    /// Runtime argument index; `None` denotes the receiver (`this`).
+    pub parameter: Option<usize>,
+    pub asserts: bool,
+    /// Absent on truthiness assertions (`asserts value`).
+    pub ty: Option<TypeSyn>,
+}
+
 /// Positions only mean something in the declaring file, which has its own
 /// content hash: other files only see whether there is a body.
 impl Hash for Sig {
     fn hash<H: Hasher>(&self, h: &mut H) {
-        (&self.type_params, &self.params, &self.ret, self.is_async, self.body_at.is_some()).hash(h);
+        (&self.type_params, &self.params, &self.ret, &self.predicate, self.is_async, self.body_at.is_some()).hash(h);
     }
 }
 
@@ -354,7 +364,7 @@ fn type_params(v: &impl View, id: u32) -> Vec<TParam> {
 }
 
 pub fn sig(v: &impl View, id: u32) -> Sig {
-    let params = v
+    let params: Vec<_> = v
         .all(id, F::Param)
         .into_iter()
         .map(|p| {
@@ -368,10 +378,24 @@ pub fn sig(v: &impl View, id: u32) -> Sig {
             }
         })
         .collect();
+    let predicate = v.get(id, F::ReturnType).filter(|&annotation| v.is(annotation, K::TypePredicate)).and_then(|annotation| {
+        let name = super::statics::identifier_name(v.text(v.get(annotation, F::Name)?));
+        let parameter = if name == "this" {
+            None
+        } else {
+            Some(params.iter().filter(|param| &*param.name != "this").position(|param| super::statics::identifier_name(&param.name) == name)?)
+        };
+        Some(Predicate {
+            parameter,
+            asserts: v.has_word(annotation, F::Modifier, "asserts"),
+            ty: v.get(annotation, F::Type).map(|ty| type_syn(v, ty)),
+        })
+    });
     Sig {
         type_params: type_params(v, id),
         params,
         ret: v.get(id, F::ReturnType).map(|r| type_syn(v, r)),
+        predicate,
         is_async: v.has_word(id, F::Modifier, "async"),
         body_at: v.get(id, F::Body).map(|_| v.start(id)),
     }
@@ -937,6 +961,17 @@ mod tests {
         for (before, after) in [
             ("type T = O['a'];", "type T = O['b'];"),
             ("type T<X> = X extends string ? number : boolean;", "type T<X> = X extends string ? number : string;"),
+        ] {
+            assert_ne!(fingerprint(before), fingerprint(after), "{before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn predicate_contract_changes_invalidate_dependents() {
+        for (before, after) in [
+            ("declare function guard(x: unknown): x is string;", "declare function guard(x: unknown): x is number;"),
+            ("declare function guard(x: unknown, y: unknown): x is string;", "declare function guard(x: unknown, y: unknown): y is string;"),
+            ("declare function guard(x: unknown): asserts x;", "declare function guard(x: unknown): asserts x is string;"),
         ] {
             assert_ne!(fingerprint(before), fingerprint(after), "{before} -> {after}");
         }
