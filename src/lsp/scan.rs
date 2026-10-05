@@ -375,9 +375,11 @@ impl Scan {
     /// no longer owned by any language) get cleared.
     fn sweep(&self) {
         let touched = self.touched.lock().expect("lock");
-        let open_uris: HashSet<String> = self.shared.editor.lock().expect("lock").iter().map(|p| uri::from_path(p)).collect();
+        // By path: the editor's URIs for open files are spelled its own way.
+        let editor = self.shared.editor.lock().expect("lock").clone();
+        let owned = |u: &str| uri::to_path(u).is_some_and(|p| editor.contains(&p));
         let stale: Vec<String> =
-            self.shared.published.lock().expect("lock").iter().filter(|u| !touched.contains(*u) && !open_uris.contains(*u)).cloned().collect();
+            self.shared.published.lock().expect("lock").iter().filter(|u| !touched.contains(*u) && !owned(u)).cloned().collect();
         for u in stale {
             self.shared.publish(&self.out, &u, None, json!([]));
         }

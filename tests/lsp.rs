@@ -202,6 +202,35 @@ fn streams_workspace_diagnostics_and_serves_fixes() {
 }
 
 #[test]
+fn rescans_leave_open_buffers_diagnostics_alone() {
+    let dir = project("lsp-rescan-open");
+    let config = dir.join(".zlint");
+    let mut c = Client::start(&dir);
+    let scan_end = |m: &Value| m["method"] == "$/progress" && m["params"]["value"]["kind"] == "end";
+    c.wait("first scan", scan_end);
+
+    let open = dir.join("open.t");
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&open), "languageId": "t", "version": 1, "text": "BAD\n" } }));
+    assert_eq!(c.diagnostics_for(&open).len(), 1);
+
+    // A config change rescans the workspace; the buffer is the editor's, so
+    // the scan's sweep of stale files must not clear it.
+    std::fs::write(&config, format!("{CONFIG}# touched\n")).expect("config");
+    c.notify("workspace/didChangeWatchedFiles", json!({ "changes": [{ "uri": uri(&config), "type": 2 }] }));
+    let u = uri(&open);
+    loop {
+        let m = c.wait("rescan", |m| scan_end(m) || m["method"] == "textDocument/publishDiagnostics");
+        if scan_end(&m) {
+            break;
+        }
+        if same_uri(m["params"]["uri"].as_str().unwrap_or(""), &u) {
+            assert_eq!(m["params"]["diagnostics"].as_array().map(Vec::len), Some(1), "{m:#}");
+        }
+    }
+    c.shutdown();
+}
+
+#[test]
 fn zlint_files_have_hover_definitions_references_and_completion() {
     let dir = project("lsp-config-docs");
     let config = dir.join(".zlint");
