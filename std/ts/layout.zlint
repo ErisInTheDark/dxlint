@@ -279,19 +279,36 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
   warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
 }
 
-in ts_class rule lines-between-class-members {
+in ts_code match layout_class_line_gap /[\r\n](?:[^\S\r\n]*[\r\n])+/
+in layout_class_line_gap let layout_class_blank re_count(text, /\r\n|[\r\n]/) > 1
+in ts_semicolon let layout_member_before token_neighbours.before
+in ts_semicolon let layout_member_preceding_end max(layout_member_before.end, default(last(overlapping(ts_comment, layout_member_before.end, offset).end_offset), 0))
+
+in ts_class.member rule lines-between-class-members {
   option style "always" | "never" = "always" "blank lines between class members"
   option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
   option exceptAfterSingleLine boolean = false "skip after single-line members"
   option exceptAfterOverload boolean = true "skip overload signatures"
   let skip_overloads exceptAfterOverload && (count(enforce) == 0 && style == "always" || any(enforce, e => e.blankLine == "always" && e.prev != "field" && e.next != "field"))
-  each class_gap in map(filter(class_member_gaps, s => s.overloads_skipped == skip_overloads), s => {
-    site: s,
-    mode: if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == s.prev) && (e.next == "*" || e.next == s.next)).blankLine
-  })
-  when class_gap.mode == "never" && class_gap.site.padded || class_gap.mode == "always" && !class_gap.site.padded && !(exceptAfterSingleLine && class_gap.site.single_line)
-  report at class_gap.site.offset
-  warn if class_gap.site.padded then "Unexpected blank line between class members." else "Expected blank line between class members."
+  let member_skipped skip_overloads && is ts_method && ts_method.body == null
+  let member_tail last_token
+  let retained_member if member_skipped then previous.retained_member else {
+    start: offset,
+    kind: if is ts_method then "method" else if is ts_class_property then "field" else "*",
+    tail: member_tail,
+    before_tail: if member_tail is ts_semicolon then last(overlapping(ts_semicolon, offset, end_offset).layout_member_preceding_end) else null
+  }
+  let prior_member previous.retained_member
+  when !member_skipped && prior_member != null
+  let gap_moved_semicolon prior_member.tail.text == ";" && position(prior_member.before_tail).line != position(prior_member.tail.start).line && position(prior_member.tail.end).line == position(first_token.start).line
+  let gap_start if gap_moved_semicolon then prior_member.before_tail else prior_member.tail.end
+  let gap_end if gap_moved_semicolon then prior_member.tail.start else first_token.start
+  let gap_padded contains(overlapping(layout_class_line_gap, gap_start, gap_end).layout_class_blank, true)
+  let gap_mode if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == prior_member.kind) && (e.next == "*" || e.next == retained_member.kind)).blankLine
+  let gap_single_line position(prior_member.start).line == position(gap_start).line
+  when gap_mode == "never" && gap_padded || gap_mode == "always" && !gap_padded && !(exceptAfterSingleLine && gap_single_line)
+  report at { start: offset, end: parent.end_offset }
+  warn if gap_padded then "Unexpected blank line between class members." else "Expected blank line between class members."
 }
 
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule space-infix-ops {

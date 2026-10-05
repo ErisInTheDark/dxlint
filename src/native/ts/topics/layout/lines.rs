@@ -4,9 +4,6 @@ use crate::expr::Value;
 use crate::line_index::LineIndex;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
-use crate::native::ts::lexer::Tok;
-
-use super::lex_comments;
 
 struct Lines(LineIndex);
 
@@ -49,51 +46,4 @@ pub(super) fn empty_line_runs(file: &NativeFile<'_>, node: u32) -> Value<'static
         }
     }
     Value::list(runs)
-}
-
-pub(super) fn class_member_gaps(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    if !syntax.is(node, K::Class) {
-        return Value::list(Vec::new());
-    }
-    let lexed = file.cached(lex_comments);
-    let lines = file.cached(lines);
-    let line = |at: u32| lines.0.line_of(at as usize);
-    let kind = |id| if syntax.is(id, K::Method) { "method" } else if syntax.is(id, K::ClassProp) { "field" } else { "*" };
-    let mut gaps = Vec::new();
-    for overloads_skipped in [false, true] {
-        let members: Vec<_> = syntax.all(node, F::Member).filter(|&id| !overloads_skipped || !syntax.is(id, K::Method) || syntax.get(id, F::Body).is_some()).collect();
-        for pair in members.windows(2) {
-            let current = syntax.tree.node(pair[0]);
-            let next = syntax.tree.node(pair[1]);
-            let Some(mut cur_last) = lexed.0.partition_point(|token| token.end <= current.end).checked_sub(1) else { continue };
-            let mut next_first = lexed.0.partition_point(|token| token.start < next.start);
-            if next_first >= lexed.0.len() {
-                continue;
-            }
-            if lexed.0[cur_last].tok == Tok::P(";") && cur_last > 0
-                && line(lexed.0[cur_last - 1].end) != line(lexed.0[cur_last].start)
-                && line(lexed.0[cur_last].end) == line(lexed.0[next_first].start) {
-                next_first = cur_last;
-                cur_last -= 1;
-            }
-            let mut before = cur_last;
-            while before + 1 < next_first && line(lexed.0[before + 1].start).saturating_sub(line(lexed.0[before].end)) <= 1 {
-                before += 1;
-            }
-            let mut after = next_first;
-            while after > cur_last + 1 && line(lexed.0[after].start).saturating_sub(line(lexed.0[after - 1].end)) <= 1 {
-                after -= 1;
-            }
-            gaps.push(Value::record(vec![
-                ("prev".into(), Value::from(kind(pair[0]))),
-                ("next".into(), Value::from(kind(pair[1]))),
-                ("offset".into(), Value::from(next.start as usize)),
-                ("padded".into(), Value::Bool(line(lexed.0[after].start).saturating_sub(line(lexed.0[before].end)) > 1)),
-                ("single_line".into(), Value::Bool(line(current.start) == line(lexed.0[cur_last].end))),
-                ("overloads_skipped".into(), Value::Bool(overloads_skipped)),
-            ]));
-        }
-    }
-    Value::list(gaps)
 }

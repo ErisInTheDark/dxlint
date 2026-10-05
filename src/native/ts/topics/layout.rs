@@ -50,11 +50,6 @@ pub const FACTS: &[Fact] = &[
         doc: "native list owners: {kind,offset,trailing,multiline,allowed,tsx_single}; offset is comma or insertion point, multiline compares last item/comma with closing token",
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
     },
-    Fact {
-        name: "class_member_gaps",
-        doc: "native class: member pairs {prev,next,offset,padded,single_line,overloads_skipped}; both ordinary and overload-filtered pairs, comments attach to neighbouring members across consecutive lines",
-        get: |f, n| f.with_file(lines::class_member_gaps, n),
-    },
 ];
 
 fn multiple_space_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
