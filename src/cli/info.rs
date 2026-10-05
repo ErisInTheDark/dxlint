@@ -256,8 +256,11 @@ pub fn profile(linter: &Linter) {
     let Some(p) = &linter.profile else { return };
     let ms = |nanos: u64| nanos as f64 / 1e6;
     eprintln!(
-        "{BOLD}profile{BOLD:#} {DIM}(summed over threads){DIM:#}\n  parsing {:.1} ms, rules {:.1} ms",
+        "{BOLD}profile{BOLD:#} {DIM}(summed over threads){DIM:#}\n  parsing {:.1} ms {DIM}(native {:.1}, tokens {:.1}, pattern layers {:.1}){DIM:#}, rules {:.1} ms",
         ms(Profile::get(&p.parse_nanos)),
+        ms(Profile::get(&p.native_nanos)),
+        ms(Profile::get(&p.token_nanos)),
+        ms(Profile::get(&p.layer_nanos)),
         ms(Profile::get(&p.rules_nanos))
     );
     let mut matchers: Vec<(u64, u64, &str)> = linter
@@ -272,6 +275,19 @@ pub fn profile(linter: &Linter) {
     eprintln!("\n  {BOLD}matchers{BOLD:#} {DIM}by interpreter steps (DFA-only matchers do not show up){DIM:#}");
     for (steps, runs, name) in matchers.iter().take(15) {
         eprintln!("  {steps:>14} steps {runs:>11} runs  {CYAN}{name}{CYAN:#}");
+    }
+    let mut overlays: Vec<(u64, u64, &str)> = linter
+        .grammar
+        .matchers
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (Profile::get(&p.overlay_nanos[i]), Profile::get(&p.overlay_nodes[i]), m.name.as_str()))
+        .filter(|(nanos, _, _)| *nanos > 0)
+        .collect();
+    overlays.sort_by(|a, b| b.0.cmp(&a.0));
+    eprintln!("\n  {BOLD}layer searches{BOLD:#} {DIM}by time, part of parsing{DIM:#}");
+    for (nanos, nodes, name) in overlays.iter().take(10) {
+        eprintln!("  {:>11.1} ms {nodes:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
     }
     let mut rules: Vec<(u64, u64, &str)> = linter
         .rules

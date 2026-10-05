@@ -275,10 +275,12 @@ impl Linter {
         if let Some((front, jsx)) = front {
             let parse_started = std::time::Instant::now();
             let mut parsed = crate::native::ts::parse(text, jsx);
+            let native_done = std::time::Instant::now();
             // Token layers cost a node per token: only the kinds rules use.
             if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
                 crate::native::ts::tokens::attach_selected(text, parsed, &token_kinds);
             }
+            let tokens_done = std::time::Instant::now();
             match parsed {
                 Ok(parsed) => {
                     let nodes = front.remap(parsed.nodes);
@@ -289,6 +291,9 @@ impl Linter {
                     let rules_started = std::time::Instant::now();
                     if let Some(p) = &self.profile {
                         Profile::add_time(&p.parse_nanos, rules_started - parse_started);
+                        Profile::add_time(&p.native_nanos, native_done - parse_started);
+                        Profile::add_time(&p.token_nanos, tokens_done - native_done);
+                        Profile::add_time(&p.layer_nanos, rules_started - tokens_done);
                     }
                     let groups = self.rule_groups(&active, text.len());
                     if groups.len() <= 1 {
@@ -344,6 +349,7 @@ impl Linter {
             let rules_started = std::time::Instant::now();
             if let Some(p) = &self.profile {
                 Profile::add_time(&p.parse_nanos, rules_started - parse_started);
+                Profile::add_time(&p.layer_nanos, rules_started - parse_started);
             }
             self.check_tree(&tree, &run, None, &mut out);
             if tree.too_deep {

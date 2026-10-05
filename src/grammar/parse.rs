@@ -396,6 +396,7 @@ impl<'g, 't> Parser<'g, 't> {
                     continue;
                 }
                 let om = &g.matchers[o as usize];
+                let started = self.profile.map(|_| (std::time::Instant::now(), self.nodes.len()));
                 let holes = self.overlay_holes(id, o);
                 let mut hole = 0;
                 let mut pos = start;
@@ -435,6 +436,10 @@ impl<'g, 't> Parser<'g, 't> {
                         }
                         None => pos = s + utf8_len(text[s]),
                     }
+                }
+                if let (Some(p), Some((t, nodes))) = (self.profile, started) {
+                    crate::engine::Profile::add_time(&p.overlay_nanos[o as usize], t.elapsed());
+                    crate::engine::Profile::add(&p.overlay_nodes[o as usize], (self.nodes.len() - nodes) as u64);
                 }
             }
             stack.extend(self.nodes[id as usize].children.iter().map(|e| e.node));

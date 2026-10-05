@@ -645,6 +645,17 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(Value::Num(a[0].num()?.abs())),
     },
     Function {
+        name: "divide",
+        signature: "divide(a, b)",
+        doc: "a divided by b (`/` starts a regex); null when b is 0",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let b = a[1].num()?;
+            Ok(if b == 0.0 { Value::Null } else { Value::Num(a[0].num()? / b) })
+        },
+    },
+    Function {
         name: "round",
         signature: "round(n)",
         doc: "nearest whole number",
