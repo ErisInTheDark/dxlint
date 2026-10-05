@@ -65,6 +65,11 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(|file, node| Value::Bool(file.typing().checker.callable_type(&file.type_of(node))), n),
     },
     Fact {
+        name: "type_iterable",
+        doc: "native expressions: constrained type supports synchronous iteration; null when type analysis is unresolved",
+        get: |f, n| f.with_file(|file, node| file.typing().checker.iterable_type(&file.constrained_type_of(node)).map_or(Value::Null, Value::Bool), n),
+    },
+    Fact {
         name: "type_opaque",
         doc: "native expressions: type computation is unsupported or unresolved, distinct from explicit unknown and open type parameters",
         get: |f, n| f.with_file(|file, node| Value::Bool(file.type_of(node).is_opaque()), n),
@@ -75,6 +80,14 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(|file, node| {
             let args = crate::expr::facts::args();
             args.first().map_or(Value::Null, |name| Value::Bool(file.typing().checker.is_builtin_type_or_base(&file.type_of(node), &name.to_string())))
+        }, n),
+    },
+    Fact {
+        name: "builtin_constructor",
+        doc: "native expressions: builtin_constructor(name) asks whether the value is a standard-library constructor or derives from it",
+        get: |f, n| f.with_file(|file, node| {
+            let args = crate::expr::facts::args();
+            args.first().map_or(Value::Null, |name| Value::Bool(file.typing().checker.is_builtin_constructor_or_base(&file.type_of(node), &name.to_string())))
         }, n),
     },
     Fact {
@@ -118,9 +131,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(promises::function, n),
     },
     Fact {
-        name: "throw_policy",
-        doc: "native thrown values: error/any/unknown/undefined category and caught-binding provenance",
-        get: |f, n| f.with_file(errors::thrown, n),
+        name: "error_value",
+        doc: "native values: error/any/unknown/undefined category and caught-binding provenance",
+        get: |f, n| f.with_file(errors::value, n),
     },
     Fact {
         name: "type_specifier_groups",

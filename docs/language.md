@@ -721,6 +721,10 @@ is wrong, messages) is written in the rule.
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
 | `type_has_void` | a union or intersection constituent is void, distinct from undefined |
+| `type_iterable` | constrained type supports synchronous iteration; null when unresolved |
+| `could_be_error` | expression syntax permits an Error-valued result through a possible value branch; does not require type analysis |
+| `error_value` | constrained value category (`error`, `any`, `unknown`, `undefined`, `other`), caught-binding provenance (`rethrown`), and unparenthesised byte `offset` |
+| `builtin_type(name)`, `builtin_constructor(name)` | standard-library type identity through instance heritage, or constructor value identity through class heritage; names alone do not identify user-defined types |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `type_parameter_defaults`, `type_parameters_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
@@ -910,7 +914,7 @@ and `final-newline`.
 | `.md` | code fences, inline code, HTML comments |
 
 A language's rules live in topic files it imports itself (`.ts/format`,
-`.ts/layout`, `.ts/style` with its parts `.ts/style/ordering`,
+`.ts/layout`, `.ts/indentation`, `.ts/style` with its parts `.ts/style/ordering`,
 `.ts/style/signatures`, ...; `.rs/format`): internal building blocks, not
 separate bundles.
 

@@ -55,10 +55,20 @@ impl Checker<'_> {
                 ty => ty.clone().non_null(),
             });
         }
+        if args.len() == 1 && self.is_builtin_symbol(sym, "Readonly") {
+            return Some(Ty::Named(Sym::from(sym), args.to_vec()));
+        }
         if args.len() == 2 && ["Record", "Pick", "Omit"].iter().any(|name| self.is_builtin_symbol(sym, name)) {
             return Some(Ty::Named(Sym::from(sym), args.to_vec()));
         }
         None
+    }
+
+    pub fn readonly_source<'a>(&self, ty: &'a Ty) -> Option<&'a Ty> {
+        match ty {
+            Ty::Named(symbols, args) if args.len() == 1 && self.is_builtin_symbol(symbols, "Readonly") => Some(&args[0]),
+            _ => None,
+        }
     }
 
     pub(super) fn property_filter<'a>(&self, ty: &'a Ty) -> Option<PropertyFilter<'a>> {
@@ -72,6 +82,7 @@ impl Checker<'_> {
 
     pub(super) fn known_property_names(&self, ty: &Ty, depth: usize) -> Option<Vec<Box<str>>> {
         if depth >= 32 { return None }
+        if let Some(source) = self.readonly_source(ty) { return self.known_property_names(source, depth + 1) }
         if let Some(filter) = self.property_filter(ty) { return filter.names(self, depth + 1) }
         if let Some((keys, _)) = self.record_parts(ty) { return finite_keys(keys).map(|names| names.into_iter().map(String::into_boxed_str).collect()) }
         match ty {
@@ -205,6 +216,15 @@ mod tests {
     use std::path::Path;
 
     const FILTER_TYPES: &str = "type Pick<T, K extends keyof T> = { [P in K]: T[P] }; type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;";
+
+    #[test]
+    fn readonly_preserves_nested_property_types() {
+        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when contains(default(type_flags, []), 'any')\nwarn 'unsafe result' }");
+        let code = "type Readonly<T> = { readonly [P in keyof T]: T[P] }; interface Shape { value: any; safe: number; } declare const wrapped: Readonly<Readonly<Shape>>; wrapped.value; wrapped.safe;";
+        assert_eq!(linter.lint(Path::new("/root/lib.fixture.d.ts"), code).len(), 1);
+        let code = "type Readonly<T> = { safe: number }; declare const wrapped: Readonly<{ value: any }>; wrapped.value; wrapped.safe;";
+        assert!(linter.lint(Path::new("/root/a.ts"), code).is_empty());
+    }
 
     #[test]
     fn mapped_key_filters_keep_inherited_generic_properties_and_methods() {

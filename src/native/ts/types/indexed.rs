@@ -40,6 +40,9 @@ impl Checker<'_> {
     }
 
     fn index_signature_inner(&self, object: &Ty, index: &Ty, receiver: &Ty) -> Option<Ty> {
+        if let Some(source) = self.readonly_source(object) {
+            return self.index_signature(source, index, source);
+        }
         if let Some((key, value)) = self.record_parts(object) {
             return (self.index_key_priority(index, key) > 0).then(|| value.clone());
         }
@@ -160,5 +163,20 @@ fn intersection(parts: Vec<Ty>) -> Ty {
         parts.into_iter().next().expect("one")
     } else {
         Ty::Inter(parts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::native_linter;
+    use std::path::Path;
+
+    #[test]
+    fn readonly_dynamic_indexes_keep_source_values_and_key_domains() {
+        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when contains(default(type_flags, []), 'any')\nwarn 'unsafe result' }");
+        let source = "type Readonly<T> = { readonly [P in keyof T]: T[P] }; declare const at: number; declare const key: string; declare const array: Readonly<any[]>; declare const dictionary: Readonly<{ [name: string]: any }>; array[at]; array[key]; dictionary[key];";
+        let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["array[at]", "dictionary[key]"]);
     }
 }

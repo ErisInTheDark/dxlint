@@ -35,7 +35,7 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "redundant_boolean_cast", doc: "native layers: cast kind and minimum context policy (0 direct, 1 logical, 2 inner)", get: |f, n| f.with_file(coercion::boolean_cast, n) },
     Fact { name: "global_callee", doc: "native layers: an unshadowed, enabled global identifier called by this call or constructor, through parentheses", get: |f, n| f.with_file(expressions::global_callee, n) },
     Fact { name: "global_method_callee", doc: "native layers: global object and static method called, through parentheses and unwritten aliases", get: |f, n| f.with_file(expressions::global_method_callee, n) },
-    Fact { name: "thrown_error", doc: "native layers: diagnostic when a thrown expression cannot produce an error object or is global undefined", get: |f, n| f.with_file(expressions::thrown_error, n) },
+    Fact { name: "could_be_error", doc: "native expressions: syntax permits an Error-valued result through possible value branches", get: |f, n| f.with_file(|file, node| crate::expr::Value::Bool(expressions::could_be_error(file, node)), n) },
     Fact { name: "accessor_pair", doc: "native layers: accessor kind, scope, display name, pairing and unique pair grouping", get: |f, n| f.with_file(accessors::pair, n) },
     Fact { name: "property_descriptor", doc: "native layers: getter/setter presence in a global Object or Reflect property descriptor", get: |f, n| f.with_file(accessors::descriptor, n) },
     Fact { name: "object_shorthand_member", doc: "native layers: object member shorthand eligibility, constructor and annotation exceptions, and arrow lexical safety", get: |f, n| f.with_file(objects::shorthand, n) },

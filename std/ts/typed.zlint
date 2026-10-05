@@ -52,13 +52,42 @@ in ts_throw.argument rule only-throw-error {
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
-  when throw_policy.kind != "error"
-  when !allowRethrowing || !throw_policy.rethrown
-  when !allowThrowingAny || throw_policy.kind != "any"
-  when !allowThrowingUnknown || throw_policy.kind != "unknown"
+  when error_value.kind != "error"
+  when !allowRethrowing || !error_value.rethrown
+  when !allowThrowingAny || error_value.kind != "any"
+  when !allowThrowingUnknown || error_value.kind != "unknown"
   when !type_is_allowed(allow, type_specifier_groups)
-  report at throw_policy.offset
-  warn if throw_policy.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+  report at error_value.offset
+  warn if error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
+}
+
+in ts_identifier let rejection_global_promise text == "Promise" && resolved == "global" && global != "off"
+in ts_identifier, ts_member, ts_index let rejection_constructor
+  if re_test(file, /\.[cm]?tsx?$/) then builtin_constructor("Promise") else default(rejection_global_promise, false)
+in ts_identifier, ts_member, ts_index let rejection_receiver
+  rejection_constructor || re_test(file, /\.[cm]?tsx?$/) && builtin_type("Promise")
+in ts_member, ts_index let rejection_member static_name == "reject" && object.rejection_receiver == true
+in ts_parenthesized forward rejection_global_promise, rejection_constructor, rejection_receiver, rejection_member from expression
+in ts_new let rejection_promise_constructor callee.rejection_constructor == true
+in ts_function, ts_arrow, ts_parenthesized let rejection_executor
+  if parent is ts_parenthesized then parent.rejection_executor
+  else is ts_new.argument && index == 0 && parent.rejection_promise_constructor
+in ts_parameter let rejection_parameter index == 1 && init == null && parent.rejection_executor == true
+in ts_identifier let rejection_binding is ts_parameter.name && parent.rejection_parameter == true
+in ts_call let rejection_call
+  callee.rejection_member == true || any(callee.declarations, d => d.rejection_binding == true)
+in ts_node let rejection_reason
+  {possible: could_be_error && error_global_undefined != true, kind: error_value.kind, groups: type_specifier_groups}
+in ts_call rule prefer-promise-reject-errors {
+  option allowEmptyReject boolean = false "Allow rejection without a reason"
+  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "Additional allowed rejection types"
+  option allowThrowingAny boolean = false "Allow any values"
+  option allowThrowingUnknown boolean = false "Allow unknown values"
+  when rejection_call
+  let reason first([] argument.rejection_reason)
+  when reason != null || !allowEmptyReject
+  when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && !type_is_allowed(allow, reason.groups) else !reason.possible)
+  warn "Expected the Promise rejection reason to be an Error."
 }
 
 in ts_identifier {

@@ -169,9 +169,11 @@ in ts_sequence rule no-sequences {
   warn "Unexpected use of comma operator."
 }
 
+in ts_identifier let error_global_undefined text == "undefined" && resolved == "global" && global != "off"
+in ts_parenthesized forward error_global_undefined from expression
 in ts_throw rule no-throw-literal {
-  when thrown_error != null
-  warn thrown_error
+  when !argument.could_be_error || argument.error_global_undefined == true
+  warn if argument.could_be_error then "Do not throw undefined." else "Expected an error object to be thrown."
 }
 
 in ts_declarator rule no-undef-init {

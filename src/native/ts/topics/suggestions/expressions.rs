@@ -158,13 +158,3 @@ pub(crate) fn could_be_error(file: &NativeFile, node: u32) -> bool {
         _ => false,
     }
 }
-
-pub fn thrown_error(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(arg) = s.get(node, F::Arg).map(|n| s.unparen(n)) else { return Value::Null };
-    let message = if !could_be_error(file, arg) { Some("Expected an error object to be thrown.") }
-        else if s.is(arg, K::Ident) && s.text(arg) == "undefined" && file.resolved(arg) == Some("global") && file.global_setting(arg) != Some("off") {
-            Some("Do not throw undefined.")
-        } else { None };
-    message.map_or(Value::Null, Value::from)
-}

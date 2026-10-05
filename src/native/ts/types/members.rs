@@ -35,6 +35,45 @@ impl Checker<'_> {
         self.builtin_type_or_base(ty, name, &mut Vec::new())
     }
 
+    /// Constructor value identity, including a class's value-side heritage.
+    pub fn is_builtin_constructor_or_base(&self, ty: &Ty, name: &str) -> bool {
+        let mut standard: Vec<_> = self.globals.names.get(name).into_iter().flatten().copied().filter(|&decl| self.is_lib_decl(decl)).collect();
+        for decl in self.lookup(&Env::file(self.file), name) {
+            if self.is_lib_decl(decl) && !standard.contains(&decl) { standard.push(decl); }
+        }
+        let constructor = self.value_of(&standard);
+        self.builtin_constructor_or_base(ty, &constructor, &mut Vec::new())
+    }
+
+    fn builtin_constructor_or_base(&self, ty: &Ty, constructor: &Ty, seen: &mut Vec<DeclRef>) -> bool {
+        match ty {
+            Ty::Named(..) => match constructor {
+                Ty::Named(symbols, _) => symbols.iter().any(|&decl| self.summary_of(decl.file).is_some_and(|summary| {
+                    self.builtin_type_or_base(ty, &summary.decls[decl.decl as usize].name, &mut Vec::new())
+                })),
+                _ => false,
+            },
+            Ty::Class(symbols) => {
+                if let Ty::Class(standard) = constructor {
+                    if symbols.iter().any(|decl| standard.contains(decl)) { return true }
+                }
+                for &decl in symbols.iter() {
+                    if seen.contains(&decl) || seen.len() >= MAX_DEPTH as usize { continue }
+                    seen.push(decl);
+                    let Some(summary) = self.summary_of(decl.file) else { continue };
+                    let declaration = &summary.decls[decl.decl as usize];
+                    if let Some(TypeSyn::Ref(path, _)) = declaration.extends.first().filter(|_| declaration.kind == DeclKind::Class) {
+                        if self.builtin_constructor_or_base(&self.value_path(path, &self.decl_env(decl)), constructor, seen) { return true }
+                    }
+                }
+                false
+            },
+            Ty::Union(parts) => !parts.is_empty() && parts.iter().all(|part| self.builtin_constructor_or_base(part, constructor, &mut seen.clone())),
+            Ty::Inter(parts) => parts.iter().any(|part| self.builtin_constructor_or_base(part, constructor, &mut seen.clone())),
+            _ => false,
+        }
+    }
+
     fn builtin_type_or_base(&self, ty: &Ty, name: &str, seen: &mut Vec<DeclRef>) -> bool {
         match ty {
             Ty::Named(sym, args) => {
@@ -96,6 +135,9 @@ impl Checker<'_> {
     }
 
     fn member_core(&self, t: &Ty, name: &str, receiver: &Ty) -> Ty {
+        if let Some(source) = self.readonly_source(t) {
+            return self.member_inner(source, name, source);
+        }
         if let Some(filter) = self.property_filter(t) {
             if filter.names(self, 0).is_some_and(|names| !names.iter().any(|key| &**key == name)) { return Ty::Unknown }
             return if filter.allows(name) == Some(true) { self.member_inner(filter.source, name, filter.source) } else { Ty::Unknown };
@@ -281,7 +323,9 @@ impl Checker<'_> {
             return;
         }
         self.depth.set(self.depth.get() + 1);
-        if let Some(filter) = self.property_filter(t) {
+        if let Some(source) = self.readonly_source(t) {
+            self.member_names(source, out);
+        } else if let Some(filter) = self.property_filter(t) {
             if let Some(names) = filter.names(self, 0) { out.extend(names); }
         } else { match t {
             // Named types repeat a lot (and their heritage is deep): the
