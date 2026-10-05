@@ -4,7 +4,8 @@
 //! counts, split by whether the use needs the runtime value: `typeof x` and
 //! computed keys inside types do not.
 
-use std::collections::{HashMap, HashSet};
+// Keyed by node ids and names, built for every file: the fast hasher.
+use crate::fx_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
@@ -186,17 +187,17 @@ pub fn bind(s: &Syntax) -> Bindings {
         s,
         scopes: Vec::new(),
         refs: Vec::new(),
-        decls: HashMap::new(),
-        owners: HashMap::new(),
-        merged: HashMap::new(),
+        decls: HashMap::default(),
+        owners: HashMap::default(),
+        merged: HashMap::default(),
         current: ("", 0),
-        class_members: HashMap::new(),
-        members: HashMap::new(),
-        functions: HashMap::new(),
-        write_sites: HashMap::new(),
+        class_members: HashMap::default(),
+        members: HashMap::default(),
+        functions: HashMap::default(),
+        write_sites: HashMap::default(),
         site: 0,
-        merged_kinds: HashMap::new(),
-        decl_scope: HashMap::new(),
+        merged_kinds: HashMap::default(),
+        decl_scope: HashMap::default(),
         infer_scope: None,
     };
     let module = b.scope(None, true, s.root());
@@ -224,7 +225,7 @@ fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
 
 impl<'t> Binder<'_, 't> {
     fn scope(&mut self, parent: Option<usize>, function: bool, node: u32) -> usize {
-        self.scopes.push(Scope { info: ScopeInfo { parent, function, node }, names: HashMap::new() });
+        self.scopes.push(Scope { info: ScopeInfo { parent, function, node }, names: HashMap::default() });
         self.scopes.len() - 1
     }
 
@@ -518,7 +519,7 @@ impl<'t> Binder<'_, 't> {
     /// key, and constructor parameter properties.
     fn class_members(&mut self, class: u32) {
         let s = self.s;
-        let mut names: HashMap<&'t str, u32> = HashMap::new();
+        let mut names: HashMap<&'t str, u32> = HashMap::default();
         for m in s.all(class, F::Member).filter(|&m| matches!(s.kind(m), Some(K::ClassProp | K::Method))) {
             let Some(k) = s.get(m, F::Key).filter(|&k| matches!(s.kind(k), Some(K::Ident | K::PrivateName))) else { continue };
             if s.text(k) == "constructor" {
@@ -1054,10 +1055,10 @@ impl<'t> Binder<'_, 't> {
 
     fn resolve(self) -> Bindings {
         let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, write_sites, merged_kinds, decl_scope, .. } = self;
-        let mut out_refs = HashMap::with_capacity(refs.len());
-        let mut unresolved = HashSet::new();
-        let mut access = HashMap::with_capacity(refs.len());
-        let mut ref_scope = HashMap::with_capacity(refs.len());
+        let mut out_refs = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
+        let mut unresolved = HashSet::default();
+        let mut access = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
+        let mut ref_scope = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
         for (ident, scope, use_) in refs {
             ref_scope.insert(ident, scope);
             let name = s.text(ident);

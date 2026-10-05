@@ -66,7 +66,7 @@ fn analyze(file: &NativeFile) -> AtomicResults {
 
 struct Atomic<'a, 'f> {
     file: &'a NativeFile<'f>,
-    references: &'a HashMap<u32, u32>,
+    references: &'a crate::fx_hash::FxHashMap<u32, u32>,
     escaped: &'a HashSet<u32>,
     out: &'a mut AtomicResults,
 }

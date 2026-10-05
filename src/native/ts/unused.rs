@@ -3,9 +3,10 @@
 //! and what its options look at. The rule (`std/ts/scopes`) applies the
 //! options.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::expr::Value;
+use crate::fx_hash::FxHashMap as HashMap;
 
 use super::bind::Bindings;
 use super::facts::NativeFile;
@@ -81,7 +82,7 @@ pub fn analyze(file: &NativeFile) -> Unused {
     for (&later, &first) in &b.merged {
         idents.entry(first).or_default().push(later);
     }
-    let mut refs: HashMap<u32, Vec<Ref>> = HashMap::new();
+    let mut refs: HashMap<u32, Vec<Ref>> = HashMap::default();
     for (&r, &d) in &b.refs {
         let access = b.access.get(&r).copied().unwrap_or("read");
         refs.entry(d).or_default().push(Ref {
@@ -103,7 +104,7 @@ pub fn analyze(file: &NativeFile) -> Unused {
     // typescript-eslint's default JSX pragma: JSX uses `React`.
     let jsx = ts && (0..s.tree.nodes.len() as u32).any(|n| matches!(s.kind(n), Some(K::JsxElement | K::JsxFragment)));
 
-    let mut vars = HashMap::new();
+    let mut vars = HashMap::default();
     for (&d, binding) in &b.decls {
         // Function and class expression names; `namespace a.b` (no
         // variable for typescript-eslint).
