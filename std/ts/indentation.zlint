@@ -7,6 +7,7 @@ schema indent_function_options { parameters?: indent_list_offset; body?: int(0..
 group indent_generic_arguments ts_call, ts_new, ts_type_reference, ts_type_query
 group indent_generic_parameters ts_function, ts_arrow, ts_method, ts_class, ts_interface, ts_type_alias, ts_function_type, ts_method_signature, ts_call_signature
 group indent_calls ts_call, ts_new, ts_import_call
+group indent_offset_ternary_expressions ts_call, ts_await, ts_new
 group indent_lists ts_call, ts_new, ts_function, ts_arrow, ts_method, ts_array, ts_array_pattern, ts_tuple_type, ts_object, ts_object_pattern, ts_import, ts_import_attributes
 group indent_attribute_parts ts_import_attribute, ts_import_attribute_comma, ts_import_attribute_comment
 # Closing dotted names are text, not component references; native token children require an overlay.
@@ -80,7 +81,7 @@ fn indent_list_mode(item, call, declaration, expression, array, object, imports,
 fn indent_flat_ternary(owner, statement) = position(owner.test.offset).js_line == position(owner.consequent.offset).js_line && position(owner.offset).js_line != position(statement.offset).js_line
 fn indent_ternary_level(branch, flat, offsets, statement) =
   if flat && indent_flat_ternary(branch.parent, statement) then 0
-  else if offsets != false && (branch.first_token is (opener, closer, ts_comma, ts_semicolon, ts_colon, ts_dot, ts_question, ts_ellipsis, ts_equals, ts_punctuator) || branch is (ts_call, ts_await, ts_new) && (type_of(offsets) == "bool" || default(get(offsets, if branch is ts_call then "CallExpression" else if branch is ts_await then "AwaitExpression" else "NewExpression"), true))) then 2
+  else if offsets && (branch.first_token is (opener, closer, ts_comma, ts_semicolon, ts_colon, ts_dot, ts_question, ts_ellipsis, ts_equals, ts_punctuator) || branch is indent_offset_ternary_expressions) then 2
   else 1
 fn indent_ternary_anchor_level(branch, flat, offsets, statement) =
   if branch is ts_conditional.alternate && position(branch.parent.consequent.last_token.end).js_line == position(branch.first_token.start).js_line then 0
@@ -173,7 +174,7 @@ in ts_line rule indent {
   option outerIIFEBody int(0..) | "off" = 1
   option ignore_comments boolean = false
   option flat_ternary_expressions boolean = false
-  option offset_ternary_expressions boolean | { CallExpression?: boolean; AwaitExpression?: boolean; NewExpression?: boolean } = false
+  option offset_ternary_expressions boolean = false "extra depth for grouped ternary branches"
 
   indent in ts_block, ts_interface, ts_namespace.body
   indent in ts_class from indent_class_head
