@@ -659,24 +659,20 @@ in ts_pattern_property, ts_property rule no-restricted-properties:patterns {
   report at {start: parent.restriction_property_offset, end: parent.end_offset}
   @restriction_property_body
 }
-schema restriction_default_exports {
-  direct: boolean = false
-  named: boolean = false
-  defaultFrom: boolean = false
-  namedFrom: boolean = false
-  namespaceFrom: boolean = false
-}
 @macro restriction_export_options {
   option restrictedNamedExports string[] = [] "restricted exported names"
   option restrictedNamedExportsPattern js_regex = "" "restricted exported-name pattern"
-  option restrictDefaultExports restriction_default_exports = {} "restricted default-export forms"
 }
 fn restriction_export_forbidden(name, names, pattern) = contains(names, name) || name != "default" && pattern != "" && js_re_test(name, pattern, "u")
+in ts_export let restriction_export_form if kind == "default" then "direct" else null
+in ts_export_specifier let restriction_export_form if parent.from == null then "named" else if default(local.static_name, local) == "default" then "defaultFrom" else "namedFrom"
+in ts_identifier, ts_string let restriction_export_form if is ts_export.namespace then "namespaceFrom" else null
+in ts_export, ts_export_specifier, ts_identifier, ts_string let no_restricted_default_export_checked false
 in ts_variable_declaration let restriction_exported_declaration parent is ts_export && parent.kind != "default"
 in ts_declarator let restriction_exported_declaration parent.restriction_exported_declaration == true
-in ts_export rule no-restricted-exports {
+in ts_export rule no-restricted-exports:direct {
   @restriction_export_options
-  when kind == "default" && restrictDefaultExports.direct
+  when kind == "default" && no_restricted_default_export_checked
   warn "Exporting 'default' is restricted."
 }
 in ts_identifier rule no-restricted-exports:declarations {
@@ -690,9 +686,8 @@ in ts_identifier rule no-restricted-exports:declarations {
 in ts_export_specifier rule no-restricted-exports:names {
   @restriction_export_options
   let export_name if exported == null then (if local is ts_string then local.static_name else local) else (if exported is ts_string then exported.static_name else exported)
-  let export_form if parent.from == null then "named" else if default(local.static_name, local) == "default" then "defaultFrom" else "namedFrom"
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
-  when restricted_name || export_name == "default" && (if export_form == "named" then restrictDefaultExports.named else if export_form == "defaultFrom" then restrictDefaultExports.defaultFrom else restrictDefaultExports.namedFrom)
+  when restricted_name || export_name == "default" && no_restricted_default_export_checked
   report at {start: default(exported.offset, local.offset), end: parent.end_offset}
   warn if restricted_name then "'{export_name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
 }
@@ -700,7 +695,7 @@ in ts_export.namespace rule no-restricted-exports:namespace {
   @restriction_export_options
   let export_name if is ts_string then static_name else text
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
-  when restricted_name || export_name == "default" && restrictDefaultExports.namespaceFrom
+  when restricted_name || export_name == "default" && no_restricted_default_export_checked
   report at {start: offset, end: parent.end_offset}
   warn if restricted_name then "'{export_name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
 }
