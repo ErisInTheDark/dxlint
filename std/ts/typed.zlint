@@ -667,20 +667,20 @@ in ts_index.index rule no-unsafe-member-access:key {
   warn if unsafe_member_key.kind == "error" then "The type of computed name [{unsafe_member_key.text}] cannot be resolved." else "Computed name [{unsafe_member_key.text}] resolves to an `any` value."
 }
 
-in ts_logical, ts_assignment, ts_conditional, ts_if rule prefer-nullish-coalescing {
-  option ignoreBooleanCoercion boolean = false "Ignore Boolean conversion"
-  option ignoreConditionalTests boolean = true "Ignore conditional tests"
-  option ignoreIfStatements boolean = false "Ignore if statements"
-  option ignoreMixedLogicalExpressions boolean = false "Ignore mixed logical expressions"
-  option ignorePrimitives (boolean | { bigint?: boolean; boolean?: boolean; number?: boolean; string?: boolean }) = {} "Primitive types to ignore"
-  option ignoreTernaryTests boolean = false "Ignore ternary tests"
+group nullish_coalescing_expression ts_logical, ts_assignment, ts_conditional, ts_if
+in nullish_coalescing_expression let prefer_nullish_coalescing_checked !nullish_coalescing.truthiness || !nullish_coalescing.conditional
+in nullish_coalescing_expression rule prefer-nullish-coalescing {
+  option ignoreBigint boolean = false "Ignore bigint truthiness"
+  option ignoreBoolean boolean = false "Ignore boolean truthiness"
+  option ignoreNumber boolean = false "Ignore number truthiness"
+  option ignoreString boolean = false "Ignore string truthiness"
+  option ignoreUnknown boolean = false "Ignore unknown truthiness"
   let replacement nullish_coalescing
   let nullish_flags replacement.flags
   when replacement != null
-  when !(replacement.truthiness && (ignoreConditionalTests && replacement.conditional || ignoreBooleanCoercion && replacement.boolean))
-  when !(ignoreMixedLogicalExpressions && replacement.mixed)
-  when !replacement.truthiness || !(ignorePrimitives == true || replacement.unknown && (ignorePrimitives.bigint == true || ignorePrimitives.boolean == true || ignorePrimitives.number == true || ignorePrimitives.string == true) || contains(default(nullish_flags, []), "bigint") && ignorePrimitives.bigint == true || contains(default(nullish_flags, []), "boolean") && ignorePrimitives.boolean == true || contains(default(nullish_flags, []), "number") && ignorePrimitives.number == true || contains(default(nullish_flags, []), "string") && ignorePrimitives.string == true)
-  when !(replacement.kind == "ternary" && ignoreTernaryTests) && !(replacement.kind == "if" && ignoreIfStatements)
+  when !replacement.truthiness || replacement.unknown || contains(default(nullish_flags, []), "nullable")
+  when prefer_nullish_coalescing_checked
+  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || contains(default(nullish_flags, []), "bigint") && ignoreBigint || contains(default(nullish_flags, []), "boolean") && ignoreBoolean || contains(default(nullish_flags, []), "number") && ignoreNumber || contains(default(nullish_flags, []), "string") && ignoreString)
   report at replacement.offset
   warn if replacement.kind == "ternary" then "Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read." else if replacement.kind == "if" then "Prefer using nullish coalescing operator (`??=`) instead of an assignment expression, as it is simpler to read." else if replacement.kind == "assignment" then "Prefer using nullish coalescing operator (`??=`) instead of a logical assignment (`||=`), as it is a safer operator." else "Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator."
 }
