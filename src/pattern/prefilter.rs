@@ -5,6 +5,49 @@ use memchr::memmem;
 
 use super::{Look, Pat};
 
+/// At least one needle must occur in any successful match. Overlay searches
+/// check this once per host, never once per candidate position.
+pub struct RequiredLiteral(Vec<memmem::Finder<'static>>);
+
+impl RequiredLiteral {
+    pub fn build(pat: &Pat) -> Option<Self> {
+        let needles = Self::needles(pat)?;
+        Some(Self(needles.into_iter().map(|needle| memmem::Finder::new(needle).into_owned()).collect()))
+    }
+
+    pub fn is_possible(&self, text: &[u8]) -> bool {
+        self.0.iter().any(|needle| needle.find(text).is_some())
+    }
+
+    fn needles(pat: &Pat) -> Option<Vec<&[u8]>> {
+        const MAX_ALTERNATIVES: usize = 8;
+        match pat {
+            Pat::Lit { bytes, fold: false } if bytes.len() >= 2 => Some(vec![bytes]),
+            Pat::Capture { inner, .. } | Pat::Repeat { inner, min: 1.., .. } => Self::needles(inner),
+            Pat::Seq(items) => items.iter().filter_map(Self::needles).max_by_key(|needles| {
+                (needles.iter().map(|needle| needle.len()).min().unwrap_or(0), usize::MAX - needles.len())
+            }),
+            Pat::Alt(items) if !items.is_empty() => {
+                let mut needles = Vec::new();
+                for item in items {
+                    for needle in Self::needles(item)? {
+                        if !needles.contains(&needle) {
+                            if needles.len() == MAX_ALTERNATIVES {
+                                return None;
+                            }
+                            needles.push(needle);
+                        }
+                    }
+                }
+                Some(needles)
+            }
+            // References stay opaque: no cycles, expansion or assumptions
+            // about native syntax. Optional text and assertions need not occur.
+            _ => None,
+        }
+    }
+}
+
 /// Set of bytes that can begin a match. Never contains UTF-8 continuation
 /// bytes, so every hit is a char boundary.
 #[derive(Clone, PartialEq, Eq)]
@@ -479,6 +522,29 @@ mod tests {
 
     fn no_refs(_: &str) -> ByteSet {
         ByteSet::default()
+    }
+
+    #[test]
+    fn required_text_accepts_every_branch_and_rejects_absence() {
+        let required = RequiredLiteral::build(&parse(r"\b(?:with|assert)").unwrap()).unwrap();
+        assert!(required.is_possible(b"with") && required.is_possible(b"assert"));
+        assert!(!required.is_possible(b"ordinary module"));
+        let alternatives: Vec<Pat> = (0..20).map(|i| Pat::lit(&format!("word{i}"))).collect();
+        let required = RequiredLiteral::build(&Pat::Alt(alternatives));
+        for i in 0..20 {
+            assert!(required.as_ref().is_none_or(|r| r.is_possible(format!("word{i}").as_bytes())));
+        }
+    }
+
+    #[test]
+    fn required_text_never_rejects_optional_folded_or_opaque_branches() {
+        let optional = parse(r"(?:with)?").unwrap();
+        let opaque = Pat::Ref { name: "unknown".into(), label: None };
+        let folded = Pat::Lit { bytes: b"WITH".to_vec(), fold: true };
+        for (pattern, text) in [(optional, b"" as &[u8]), (opaque, b"anything"), (folded, b"with"), (parse(r"with|.").unwrap(), b"x")] {
+            let required = RequiredLiteral::build(&pattern);
+            assert!(required.as_ref().is_none_or(|r| r.is_possible(text)));
+        }
     }
 
     #[test]

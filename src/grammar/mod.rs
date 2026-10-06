@@ -22,7 +22,7 @@ use crate::path_globs::PathGlobs;
 use crate::pattern::class::CharClass;
 use crate::pattern::compile::{compile, Inst, Labels, Program};
 use crate::pattern::dfa::{guard_prefix, is_pure, Dfa};
-use crate::pattern::prefilter::{first_set, max_len, ByteSet, PairSet, Prefilter, PrevSet};
+use crate::pattern::prefilter::{first_set, max_len, ByteSet, PairSet, Prefilter, PrevSet, RequiredLiteral};
 use crate::pattern::Pat;
 
 pub struct Matcher {
@@ -33,6 +33,8 @@ pub struct Matcher {
     pub first: ByteSet,
     /// Where overlay searches for this matcher may start.
     pub prefilter: Prefilter,
+    /// Text required somewhere in an overlay host before searching candidates.
+    pub required: Option<RequiredLiteral>,
     /// Which first two bytes can start a match, when that is selective.
     pub pairs: Option<PairSet>,
     /// Which byte can come right before a match (from a leading lookbehind).
@@ -351,6 +353,7 @@ impl Grammar {
                 prog,
                 first: ByteSet::default(),
                 prefilter: Prefilter::All,
+                required: None,
                 pairs: None,
                 prev,
                 dfa: None,
@@ -545,6 +548,7 @@ fn add_natives(
                 prog: Program::default(),
                 first: ByteSet::default(),
                 prefilter: Prefilter::All,
+                required: None,
                 pairs: None,
                 prev: None,
                 dfa: None,
@@ -668,6 +672,7 @@ fn compile_fast_paths(matchers: &mut [Matcher], by_name: &HashMap<String, u32>, 
     for (m, (dfa, guard)) in matchers.iter_mut().zip(built) {
         m.dfa = dfa;
         m.guard = guard;
+        m.required = if m.dfa.is_none() && m.native.is_none() { RequiredLiteral::build(&m.pat) } else { None };
         m.has_captures = m.prog.insts.iter().any(|i| matches!(i, Inst::Save(_)));
         m.has_skip = m.prog.insts.iter().any(|i| matches!(i, Inst::Skip(_)));
         let call_first = |id: u32| firsts[id as usize].clone();
@@ -891,5 +896,95 @@ fn leading_calls(pat: &Pat, by_name: &HashMap<String, u32>, children: &[u32], ou
         Pat::Repeat { inner, min, .. } => leading_calls(inner, by_name, children, out) || *min == 0,
         Pat::Capture { inner, .. } => leading_calls(inner, by_name, children, out),
         other => other.nullable(),
+    }
+}
+
+#[cfg(test)]
+mod precheck_tests {
+    use super::*;
+    use crate::config::source::Disk;
+
+    fn fixture() -> Grammar {
+        grammar(r#"
+lang t "*.t"
+match quoted /"(?:\\[\s\S]|[^"\\])*"/
+match comment /\/\*/ until /\*\//
+in comment match quoted
+match gap /\s+/ or comment
+in .t layer attributes match attributes module:quoted gap* /\b(?:with|assert)/ gap* open:/\{/ until close:/\}/ /\s*\z/
+in attributes {
+  match quoted
+  match gap
+}
+"#)
+    }
+
+    fn grammar(source: &str) -> Grammar {
+        let loaded = crate::config::load_text("guard.zlint", source, &Disk);
+        assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
+        let mut errors = Vec::new();
+        let grammar = Grammar::build(&loaded.config, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        grammar
+    }
+
+    #[test]
+    fn definitive_rejection_preserves_depth_limits_when_matching_is_needed() {
+        let grammar = grammar(r#"
+lang t "*.t"
+match prefix "prefix"
+match branch "a" branch or "b"
+in .t layer candidate match candidate prefix branch "suffix"
+"#);
+        let deep = format!("prefix{}b", "a".repeat(4096));
+        assert!(!Tree::parse(&grammar, 0, &deep).too_deep);
+        assert!(Tree::parse(&grammar, 0, &(deep + "suffix")).too_deep);
+    }
+
+    #[test]
+    fn missing_required_text_skips_overlay_interpreter() {
+        use std::sync::atomic::Ordering;
+        let grammar = fixture();
+        let id = grammar.matcher("attributes").unwrap();
+        for source in [r#""module""#, r#""module" /* irrelevant */"#] {
+            let profile = crate::engine::Profile::new(grammar.matchers.len(), 0);
+            Tree::parse_with(&grammar, 0, source, None, Some(&profile));
+            assert_eq!(profile.matcher_runs[id as usize].load(Ordering::Relaxed), 0, "{source}");
+        }
+    }
+
+    #[test]
+    fn prechecks_preserve_reachable_children_fields_order_and_inside_ranges() {
+        for source in [
+            r#""module" with {a:"x"}"#,
+            r#""module" /* gap */ assert {a:"x"}"#,
+            r#""module" /* "*/" hidden */ with {a:"x"}"#,
+            "\"m\u{e9}\\\"odule\"\r\n/* gap */\u{2028}with\u{2029}{a:\"x\"}",
+            r#""with-assert-module" /* with { } */"#,
+            r#""module" /* early */ junk /* late */ with {a:"x"}"#,
+        ] {
+            let mut grammar = fixture();
+            let observed = |tree: Tree| {
+                let signature = tree.order.iter().map(|&id| {
+                    let node = tree.node(id);
+                    let edges = node.children.iter().map(|edge| {
+                        let child = tree.node(edge.node);
+                        (edge.label, child.matcher, child.start, child.end)
+                    }).collect::<Vec<_>>();
+                    let parent = tree.parent(id).map(|p| {
+                        let node = tree.node(p);
+                        (node.matcher, node.start, node.end)
+                    });
+                    (node.matcher, node.start, node.end, tree.label(id), parent, tree.hole(id), edges)
+                }).collect::<Vec<_>>();
+                (tree.too_deep, signature)
+            };
+            let filtered = observed(Tree::parse(&grammar, 0, source));
+            for matcher in &mut grammar.matchers {
+                matcher.guard = None;
+                matcher.required = None;
+            }
+            assert_eq!(filtered, observed(Tree::parse(&grammar, 0, source)), "{source}");
+        }
     }
 }

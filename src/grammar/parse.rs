@@ -397,9 +397,7 @@ impl<'g, 't> Parser<'g, 't> {
     /// Searches overlay matchers inside every node that has them. Overlay
     /// searches are never repeated, so they skip the memo.
     fn overlays(&mut self, root: u32) {
-        let g = self.g;
         let view = self.view;
-        let text = self.text;
         let mut seen = vec![false; self.nodes.len()];
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
@@ -409,10 +407,7 @@ impl<'g, 't> Parser<'g, 't> {
             if std::mem::replace(&mut seen[id as usize], true) {
                 continue;
             }
-            let (m, start, end) = {
-                let n = &self.nodes[id as usize];
-                (n.matcher, n.start as usize, n.end as usize)
-            };
+            let m = self.nodes[id as usize].matcher;
             let list: &[u32] = match m {
                 ROOT => &view.root_overlays,
                 TEXT => &[],
@@ -422,54 +417,64 @@ impl<'g, 't> Parser<'g, 't> {
                 if self.enabled_overlays.is_some_and(|e| !e[o as usize]) {
                     continue;
                 }
-                let om = &g.matchers[o as usize];
                 let started = self.profile.map(|_| (std::time::Instant::now(), self.nodes.len()));
-                let holes = self.overlay_holes(id, o);
-                let mut hole = 0;
-                let mut pos = start;
-                while pos < end {
-                    let found = match (&om.dfa, &om.guard) {
-                        (Some(dfa), _) => dfa.find(cache(&mut self.caches.dfa[o as usize], dfa), &text[..end], pos),
-                        // The guard matches wherever the matcher does: its
-                        // leftmost match is the next place worth trying.
-                        (None, Some(guard)) => guard.find(cache(&mut self.caches.guard[o as usize], guard), &text[..end], pos),
-                        (None, None) => om.prefilter.next(&text[..end], pos).map(|p| (p, p)),
-                    };
-                    let Some((s, e)) = found else { break };
-                    // Matches may run into a nested host, but not start there.
-                    while hole < holes.len() && holes[hole].1 <= s {
-                        hole += 1;
-                    }
-                    if hole < holes.len() && holes[hole].0 <= s {
-                        pos = holes[hole].1;
-                        continue;
-                    }
-                    let node = match &om.dfa {
-                        Some(_) if !om.has_captures => Some(self.leaf(o, s, e)),
-                        _ if !may_start(om, text, s) => None,
-                        _ => self.match_at(o, s, end),
-                    };
-                    match node {
-                        Some(n) => {
-                            // A named layer's nodes go in that layer's tree.
-                            match om.layer {
-                                Some(l) => {
-                                    self.layered[l as usize].push(n);
-                                    stack.push(n);
-                                }
-                                None => self.nodes[id as usize].children.push(Edge { label: NO_LABEL, node: n }),
-                            }
-                            pos = (self.nodes[n as usize].end as usize).max(s + 1);
-                        }
-                        None => pos = s + utf8_len(text[s]),
-                    }
-                }
+                self.search_overlay(id, o, &mut stack);
                 if let (Some(p), Some((t, nodes))) = (self.profile, started) {
                     crate::engine::Profile::add_time(&p.overlay_nanos[o as usize], t.elapsed());
                     crate::engine::Profile::add(&p.overlay_nodes[o as usize], (self.nodes.len() - nodes) as u64);
                 }
             }
             stack.extend(self.nodes[id as usize].children.iter().map(|e| e.node));
+        }
+    }
+
+    fn search_overlay(&mut self, id: u32, o: u32, stack: &mut Vec<u32>) {
+        let text = self.text;
+        let om = &self.g.matchers[o as usize];
+        let host = &self.nodes[id as usize];
+        let (start, end) = (host.start as usize, host.end as usize);
+        if om.required.as_ref().is_some_and(|required| !required.is_possible(&text[start..end])) {
+            return;
+        }
+        let holes = self.overlay_holes(id, o);
+        let mut hole = 0;
+        let mut pos = start;
+        while pos < end {
+            let found = match (&om.dfa, &om.guard) {
+                (Some(dfa), _) => dfa.find(cache(&mut self.caches.dfa[o as usize], dfa), &text[..end], pos),
+                // The guard matches wherever the matcher does: its
+                // leftmost match is the next place worth trying.
+                (None, Some(guard)) => guard.find(cache(&mut self.caches.guard[o as usize], guard), &text[..end], pos),
+                (None, None) => om.prefilter.next(&text[..end], pos).map(|p| (p, p)),
+            };
+            let Some((s, e)) = found else { break };
+            // Matches may run into a nested host, but not start there.
+            while hole < holes.len() && holes[hole].1 <= s {
+                hole += 1;
+            }
+            if hole < holes.len() && holes[hole].0 <= s {
+                pos = holes[hole].1;
+                continue;
+            }
+            let node = match &om.dfa {
+                Some(_) if !om.has_captures => Some(self.leaf(o, s, e)),
+                _ if !may_start(om, text, s) => None,
+                _ => self.match_at(o, s, end),
+            };
+            match node {
+                Some(n) => {
+                    // A named layer's nodes go in that layer's tree.
+                    match om.layer {
+                        Some(l) => {
+                            self.layered[l as usize].push(n);
+                            stack.push(n);
+                        }
+                        None => self.nodes[id as usize].children.push(Edge { label: NO_LABEL, node: n }),
+                    }
+                    pos = (self.nodes[n as usize].end as usize).max(s + 1);
+                }
+                None => pos = s + utf8_len(text[s]),
+            }
         }
     }
 
