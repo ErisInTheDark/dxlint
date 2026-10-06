@@ -230,20 +230,20 @@ in ts_import_specifier rule sort-imports:members {
   warn "Member '{restriction_declaration_local}' of the import declaration should be sorted alphabetically."
 }
 fn restriction_import_mergeable(a, b) = !(a.type_only && b.type_only && (a.category == "default" && b.category == "named" || a.category == "named" && b.category == "default")) && !(a.category == "all" && contains(["named", "namespace", "default"], b.category) || b.category == "all" && contains(["named", "namespace", "default"], a.category) || a.category == "namespace" && b.category == "named" || a.category == "named" && b.category == "namespace")
+group duplicate_imports_checked ts_import
 @macro restriction_duplicate_import_body {
-  option includeExports boolean = false "also check re-exports"
   option allowSeparateTypeImports boolean = false "allow separate type and value imports"
   let own restriction_declaration_entry
   let module trim(own.module)
-  when own != null && module != "" && (includeExports || !own.export && !previous_export)
-  when any(ts_program.restriction_declarations, entry => entry.offset < offset && entry.export == previous_export && trim(entry.module) == module && (!allowSeparateTypeImports || entry.type_only == own.type_only) && restriction_import_mergeable(own, entry))
+  when own != null && module != ""
+  when any(ts_program.restriction_declarations, entry => entry.node is duplicate_imports_checked && entry.offset < offset && entry.export == previous_export && trim(entry.module) == module && (!allowSeparateTypeImports || entry.type_only == own.type_only) && restriction_import_mergeable(own, entry))
   warn "'{module}' {if own.export then 'export' else 'import'} is duplicated{if own.export == previous_export then '' else if own.export then ' as import' else ' as export'}."
 }
-in ts_import, ts_export rule no-duplicate-imports {
+in duplicate_imports_checked rule no-duplicate-imports:imports {
   let previous_export false
   @restriction_duplicate_import_body
 }
-in ts_import, ts_export rule no-duplicate-imports:exports {
+in duplicate_imports_checked rule no-duplicate-imports:exports {
   let previous_export true
   @restriction_duplicate_import_body
 }

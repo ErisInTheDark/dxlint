@@ -30,7 +30,7 @@ mod tests {
 
     #[test]
     fn duplicate_imports_report_each_matching_origin_once() {
-        let l = native_linter("rule no-duplicate-imports { set includeExports true }");
+        let l = native_linter("rule no-duplicate-imports\ngroup duplicate_imports_checked ts_export");
         let text = "namespace X { import {A} from 'x'; }\nimport {B} from 'x';\nexport {C} from 'x';\nimport {D} from 'x';";
         let diags = l.lint(Path::new("/root/file.ts"), text);
         assert_eq!(diags.len(), 4);
