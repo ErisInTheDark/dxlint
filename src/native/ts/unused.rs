@@ -694,6 +694,7 @@ pub(super) fn pattern_names(s: &Syntax, pat: u32, out: &mut Vec<u32>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
@@ -719,11 +720,48 @@ mod tests {
 
     #[test]
     fn options_choose_what_is_ignored() {
-        let rule = "rule no-unused-vars {\n  set varsIgnorePattern \"^_\"\n  set reportUsedIgnorePattern true\n  set args \"all\"\n}";
+        let rule = "rule no-unused-vars\nrule no-unused-vars:variables {\n  set ignorePattern \"^_\"\n  set reportUsedIgnorePattern true\n}\nrule no-unused-vars:parameters set all";
         assert_eq!(
             report("/root/a.js", rule, "var _a = 1, b; f(_a); function f(x) {}"),
             ["'_a' is marked as ignored but is used. Used vars must not match /^_/u.@4", "'b' is defined but never used. Allowed unused vars must match /^_/u.@12", "'x' is defined but never used.@33"]
         );
+    }
+
+    #[test]
+    fn arrays_have_independent_patterns_and_report_each_binding_once() {
+        let l = native_linter("rule no-unused-vars\nrule no-unused-vars:variables { set ignorePattern \"^_\" }\nrule no-unused-vars:array-elements { set ignorePattern \"\" }");
+        let source = "const [_value] = source; const _other = 1; function run([_arg]) {} run(source); try {} catch ([_error]) {}";
+        let diagnostics = l.lint(Path::new("/root/a.js"), source);
+        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+        let offsets: HashSet<_> = diagnostics.iter().map(|d| d.start).collect();
+        let expected: HashSet<_> = ["_value", "_arg", "_error"].map(|name| source.find(name).unwrap()).into_iter().collect();
+        assert_eq!(offsets, expected, "{diagnostics:?}");
+        assert!(diagnostics.iter().all(|d| d.severity != crate::config::ast::Severity::Error), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn ignored_binding_overrides_feed_both_unused_and_used_checks() {
+        let l = native_linter("override in ts_identifier let no_unused_vars_ignored if text == \"forced\" then false else if text == \"checked\" then true else null\nrule no-unused-vars:array-elements { set ignorePattern \"^(forced|_)\"\nset reportUsedIgnorePattern true }");
+        let source = "const [forced, checked, _default, _unused] = source; consume(checked, _default);";
+        let diagnostics = l.lint(Path::new("/root/a.js"), source);
+        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+        let offsets: HashSet<_> = diagnostics.iter().map(|d| d.start).collect();
+        let expected: HashSet<_> = ["forced", "checked", "_default"].map(|name| source.find(name).unwrap()).into_iter().collect();
+        assert_eq!(offsets, expected, "{diagnostics:?}");
+        assert!(diagnostics.iter().all(|d| d.severity != crate::config::ast::Severity::Error), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn binding_pattern_overrides_drive_ignore_and_reported_policy() {
+        let l = native_linter("override in ts_identifier let no_unused_vars_ignored if text == \"_empty\" then \"\" else if text == \"custom\" then \"^custom$\" else null\nrule no-unused-vars:variables { set ignorePattern \"^_\"\nset reportUsedIgnorePattern true }");
+        let source = "const _empty = 1, custom = 2, _fallback = 3; consume(custom, _fallback);";
+        let diagnostics = l.lint(Path::new("/root/a.js"), source);
+        let offsets: HashSet<_> = diagnostics.iter().map(|d| d.start).collect();
+        let expected: HashSet<_> = ["_empty", "custom", "_fallback"].map(|name| source.find(name).unwrap()).into_iter().collect();
+        assert_eq!(offsets, expected, "{diagnostics:?}");
+        let custom = diagnostics.iter().find(|d| d.start == source.find("custom").unwrap()).unwrap();
+        assert!(custom.message.contains("^custom$"), "{custom:?}");
+        assert!(diagnostics.iter().all(|d| d.severity != crate::config::ast::Severity::Error), "{diagnostics:?}");
     }
 
     #[test]
