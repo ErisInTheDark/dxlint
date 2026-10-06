@@ -32,23 +32,27 @@ in ts_call rule use-unknown-in-catch-callback-variable {
   warn "Prefer the safe `: unknown` for a `" finding.method "`" (if finding.method == "then" then " rejection" else "") " callback variable." (if finding.pattern == "array" then " The thrown error may not be iterable." else if finding.pattern == "object" then " The thrown error may be nullable, or may not have the expected shape." else "")
 }
 
-in ts_function, ts_arrow, ts_method rule promise-function-async {
+group promise_function_async_function ts_function, ts_arrow, ts_method
+in promise_function_async_function let promise_function_async_kind
+  if is ts_arrow then "arrow"
+  else if is ts_method then if parent is ts_class then "method" else "expression"
+  else if parent is (ts_program, ts_block, ts_export, ts_case, ts_if, ts_labeled) then "declaration"
+  else "expression"
+in promise_function_async_function let promise_function_async_checked true
+in ts_method let promise_function_async_exempt
+  contains(["get", "set"], kind)
+  || parent is ts_class && !contains([] modifier, "static") && key not ts_computed_key && static_name == "constructor"
+in promise_function_async_function rule promise-function-async {
   option allowAny boolean = true "Allow any and unknown return types"
   option allowedPromiseNames string[] = [] "Additional promise type names"
-  option checkArrowFunctions boolean = true "Check arrow functions"
-  option checkFunctionDeclarations boolean = true "Check function declarations"
-  option checkFunctionExpressions boolean = true "Check function expressions"
-  option checkMethodDeclarations boolean = true "Check class methods"
-  when promise_function != null
-  when promise_function.kind != "arrow" || checkArrowFunctions
-  when promise_function.kind != "declaration" || checkFunctionDeclarations
-  when promise_function.kind != "expression" || checkFunctionExpressions
-  when promise_function.kind != "method" || checkMethodDeclarations
+  when body != null && !contains([] modifier, "async")
+  when !default(promise_function_async_exempt, false)
+  when promise_function_async_checked
   let names ("Promise" allowedPromiseNames)
-  let disallowed_unknown (!allowAny && any(promise_function.returns, result => result.unknown))
-  when disallowed_unknown || all(promise_function.returns, result => if promise_function.explicit then matches_type_names(result.groups, names) else any(result.groups, group => any(group, name => contains(names, name))))
-  report at promise_function.offset
-  warn if !disallowed_unknown && any(promise_function.returns, result => result.union && !matches_type_names(result.groups, names)) then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
+  let disallowed_unknown (!allowAny && any(function_return_info.returns, result => result.unknown))
+  when disallowed_unknown || all(function_return_info.returns, result => if function_return_info.explicit then matches_type_names(result.groups, names) else any(result.groups, group => any(group, name => contains(names, name))))
+  report at function_return_info.offset
+  warn if !disallowed_unknown && any(function_return_info.returns, result => result.union && !matches_type_names(result.groups, names)) then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
 }
 
 in ts_throw.argument rule only-throw-error {

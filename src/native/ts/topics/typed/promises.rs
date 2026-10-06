@@ -1,4 +1,4 @@
-//! Promise-returning function policies.
+//! Function return information and promise callback facts.
 
 use super::*;
 use crate::native::ts::kinds::{Field as F, Kind as K};
@@ -36,21 +36,9 @@ fn head(file: &NativeFile<'_>, node: u32) -> usize {
     s.kids(holder).filter(|(field, _)| matches!(field, Some(F::Modifier | F::Key | F::Kind))).map(|(_, child)| s.tree.node(child).start as usize).min().unwrap_or(offset)
 }
 
-pub(super) fn function(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+pub(super) fn return_info(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let s = &file.syntax;
-    if s.get(node, F::Body).is_none() || s.has_word(node, F::Modifier, "async") { return Value::Null }
-    let parent = s.parent(node);
-    let kind = match s.kind(node) {
-        Some(K::Arrow) => "arrow",
-        Some(K::Method) if matches!(s.word(node, F::Kind), Some("get" | "set"))
-            || parent.is_some_and(|parent| s.is(parent, K::Class)) && !s.has_word(node, F::Modifier, "static")
-                && s.get(node, F::Key).is_some_and(|key| !s.is(key, K::Computed)) && statics::property_name(s, node).as_deref() == Some("constructor") => return Value::Null,
-        Some(K::Method) if parent.is_some_and(|parent| s.is(parent, K::Class)) => "method",
-        Some(K::Method) => "expression",
-        Some(K::Function) if parent.is_some_and(|parent| matches!(s.kind(parent), Some(K::Program | K::Block | K::Export | K::Case | K::If | K::Labeled))) => "declaration",
-        Some(K::Function) => "expression",
-        _ => return Value::Null,
-    };
+    if !matches!(s.kind(node), Some(K::Function | K::Arrow | K::Method)) { return Value::Null }
     let ck = &file.typing().checker;
     let signature = sig(s, node);
     let mut returns = Vec::new();
@@ -65,7 +53,6 @@ pub(super) fn function(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         ));
     }
     Value::record(vec![
-        ("kind".into(), Value::from(kind)),
         ("explicit".into(), Value::Bool(s.get(node, F::ReturnType).is_some())),
         ("offset".into(), Value::from(head(file, node))),
         ("returns".into(), Value::list(returns.iter().map(|ty| Value::record(vec![
@@ -187,10 +174,50 @@ mod tests {
     }
 
     #[test]
-    fn function_options_skip_only_the_selected_owner_kind() {
-        let linter = native_linter("rule promise-function-async { set checkArrowFunctions false }");
+    fn function_group_skips_only_the_selected_syntax() {
+        let linter = native_linter("drop group promise_function_async_function ts_arrow\nrule promise-function-async");
         let code = "interface Promise<T> {} declare const p: Promise<number>; const arrow = () => p; const expression = function () { return p; }; function declared() { return p; } const methods = { method() { return p; }, constructor() { return p; }, get value() { return p; } }; class C { constructor() { return p; } static constructor() { return p; } }";
         assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 5);
+    }
+
+    #[test]
+    fn function_hook_selects_context_without_conflating_object_and_class_methods() {
+        let code = "interface Promise<T> {} declare const p: Promise<number>; function declared() { return p; } const arrow = () => p; const expression = function () { return p; }; const object = { method() { return p; } }; class C { method() { return p; } }";
+        for (kind, heads) in [
+            ("declaration", vec!["function declared"]),
+            ("arrow", vec!["=> p"]),
+            ("expression", vec!["function ()", "method()"]),
+            ("method", vec!["method() { return p; } }"]),
+        ] {
+            let linter = native_linter(&format!("override in promise_function_async_function let promise_function_async_checked promise_function_async_kind == \"{kind}\"\nrule promise-function-async"));
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
+            let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+            let expected: Vec<_> = heads.iter().map(|head| if kind == "method" { code.rfind(head).unwrap() } else { code.find(head).unwrap() }).collect();
+            assert_eq!(starts, expected, "{kind}: {diagnostics:?}");
+        }
+    }
+
+    #[test]
+    fn function_hook_cannot_enable_intrinsically_exempt_functions() {
+        let linter = native_linter("override in promise_function_async_function let promise_function_async_checked true\nrule promise-function-async");
+        let code = "interface Promise<T> {} declare const p: Promise<number>; async function ready(): Promise<number> { return p; } declare function signature(): Promise<number>; const object = { get value(): Promise<number> { return p; }, set value(v: Promise<number>) {}, constructor() { return p; } }; abstract class C { abstract absent(): Promise<number>; constructor() { return p; } static constructor() { return p; } ['constructor']() { return p; } }";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
+        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].start, code.find("constructor()").unwrap());
+        assert_eq!(diagnostics[1].start, code.find("static constructor").unwrap());
+        assert_eq!(diagnostics[2].start, code.find("['constructor']").unwrap());
+    }
+
+    #[test]
+    fn return_information_is_available_without_promise_rule_eligibility() {
+        let linter = native_linter(r#"in ts_function, ts_method rule return-info {
+            when function_return_info != null
+            when all(function_return_info.returns, result => any(result.groups, group => contains(group, "Promise")))
+            warn "promise result"
+        }
+        rule return-info"#);
+        let code = "interface Promise<T> {} declare const p: Promise<number>; async function ready(): Promise<number> { return p; } declare function signature(): Promise<number>; class C { get value(): Promise<number> { return p; } constructor() { return p; } }";
+        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 4);
     }
 
     #[test]

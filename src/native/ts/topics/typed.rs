@@ -158,9 +158,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(promises::unsafe_catch, n),
     },
     Fact {
-        name: "promise_function",
-        doc: "native functions: return-type name clauses, inferred hybrid policy and function-head offset",
-        get: |f, n| f.with_file(promises::function, n),
+        name: "function_return_info",
+        doc: "native functions: explicit annotation, return-type name clauses, unknown and union kinds, function-head offset",
+        get: |f, n| f.with_file(promises::return_info, n),
     },
     Fact {
         name: "error_value",
