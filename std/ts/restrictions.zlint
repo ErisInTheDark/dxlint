@@ -572,14 +572,15 @@ in ts_identifier, ts_private_name rule id-denylist {
   when contains(names, restriction_identifier_name)
   warn "Identifier '{text}' is restricted."
 }
+in ts_identifier, ts_private_name let id_length_checked true
 in ts_identifier, ts_private_name rule id-length {
   option min int = 2 "minimum identifier length"
   option max int | null = null "maximum identifier length"
-  option properties "always" | "never" = "always" "check author-defined properties"
   option exceptions string[] = [] "names exempt from length limits"
   option exceptionPatterns regex[] = [] "name patterns exempt from length limits"
   let amount graphemes(restriction_identifier_name)
-  when restriction_name_length && !restriction_name_attributes && !(properties == "never" && restriction_name_property)
+  when restriction_name_length && !restriction_name_attributes
+  when id_length_checked
   when !contains(exceptions, restriction_identifier_name) && !any(exceptionPatterns, p => re_test(restriction_identifier_name, p))
   when amount < min || max != null && amount > max
   warn if amount < min then "Identifier name '{text}' is too short (< {min})." else "Identifier name '{text}' is too long (> {max})."
