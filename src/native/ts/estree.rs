@@ -8,15 +8,14 @@ use std::borrow::Cow;
 
 struct Descriptor {
     name: &'static str,
-    spacing: bool,
     fields: &'static [(F, &'static str, bool)],
 }
 
 macro_rules! descriptors {
-    ($($kind:ident => $name:literal, $spacing:literal, [$($field:ident => $key:literal : $array:literal),*];)*) => {
+    ($($kind:ident => $name:literal, [$($field:ident => $key:literal : $array:literal),*];)*) => {
         fn descriptor(kind: K) -> Option<Descriptor> {
             Some(match kind {
-                $(K::$kind => Descriptor { name: $name, spacing: $spacing, fields: &[$((F::$field, $key, $array)),*] },)*
+                $(K::$kind => Descriptor { name: $name, fields: &[$((F::$field, $key, $array)),*] },)*
                 _ => return None,
             })
         }
@@ -24,123 +23,119 @@ macro_rules! descriptors {
 }
 
 descriptors! {
-    Program => "Program", true, [Body => "body": true];
-    Block => "BlockStatement", true, [Body => "body": true];
-    ExprStmt => "ExpressionStatement", true, [Expr => "expression": false];
-    Var => "VariableDeclaration", true, [Decl => "declarations": true];
-    Declarator => "VariableDeclarator", true, [Name => "id": false, Init => "init": false];
-    If => "IfStatement", false, [Test => "test": false, Consequent => "consequent": false, Alternate => "alternate": false];
-    For => "ForStatement", false, [Init => "init": false, Test => "test": false, Update => "update": false, Body => "body": false];
-    ForIn => "ForInStatement", false, [Left => "left": false, Right => "right": false, Body => "body": false];
-    ForOf => "ForOfStatement", false, [Left => "left": false, Right => "right": false, Body => "body": false];
-    While => "WhileStatement", false, [Test => "test": false, Body => "body": false];
-    DoWhile => "DoWhileStatement", false, [Body => "body": false, Test => "test": false];
-    Return => "ReturnStatement", true, [Arg => "argument": false];
-    Throw => "ThrowStatement", false, [Arg => "argument": false];
-    Break => "BreakStatement", false, [Label => "label": false];
-    Continue => "ContinueStatement", false, [Label => "label": false];
-    Switch => "SwitchStatement", false, [Discriminant => "discriminant": false, Case => "cases": true];
-    Case => "SwitchCase", false, [Test => "test": false, Body => "consequent": true];
-    Try => "TryStatement", false, [Block => "block": false, Finalizer => "finalizer": false];
-    Labeled => "LabeledStatement", false, [Label => "label": false, Body => "body": false];
-    Empty => "EmptyStatement", false, [];
-    Debugger => "DebuggerStatement", false, [];
-    With => "WithStatement", false, [Object => "object": false, Body => "body": false];
-    Function => "FunctionDeclaration", false, [Name => "id": false, Param => "params": true, Body => "body": false, Decorator => "decorators": true];
-    Arrow => "ArrowFunctionExpression", false, [Param => "params": true, Body => "body": false];
-    Class => "ClassDeclaration", false, [Name => "id": false, Extends => "superClass": false, Implements => "implements": true, Decorator => "decorators": true];
-    Method => "MethodDefinition", true, [Key => "key": false, Decorator => "decorators": true];
-    ClassProp => "PropertyDefinition", true, [Key => "key": false, Init => "value": false, Decorator => "decorators": true];
-    StaticBlock => "StaticBlock", false, [Body => "body": true];
-    IndexSig => "TSIndexSignature", false, [Param => "parameters": true];
-    Decorator => "Decorator", false, [Expr => "expression": false];
-    Import => "ImportDeclaration", true, [Specifier => "specifiers": true, From => "source": false];
-    ImportSpec => "ImportSpecifier", true, [Imported => "imported": false, Local => "local": false];
-    ImportEquals => "TSImportEqualsDeclaration", false, [Name => "id": false, Value => "moduleReference": false];
-    Export => "ExportNamedDeclaration", false, [Decl => "declaration": false, Specifier => "specifiers": true, From => "source": false];
-    ExportSpec => "ExportSpecifier", false, [Local => "local": false, Exported => "exported": false];
-    ExportAssign => "TSExportAssignment", false, [Expr => "expression": false];
-    Interface => "TSInterfaceDeclaration", true, [Name => "id": false, Extends => "extends": true];
-    TypeAlias => "TSTypeAliasDeclaration", true, [Name => "id": false, Type => "typeAnnotation": false];
-    Enum => "TSEnumDeclaration", false, [Name => "id": false];
-    EnumMember => "TSEnumMember", true, [Name => "id": false, Init => "initializer": false];
-    Namespace => "TSModuleDeclaration", false, [Name => "id": false, Body => "body": false];
-    ObjectPattern => "ObjectPattern", true, [Property => "properties": true, Rest => "properties": true];
-    ArrayPattern => "ArrayPattern", true, [Element => "elements": true];
-    AssignPattern => "AssignmentPattern", true, [Left => "left": false, Right => "right": false];
-    PatternProp => "Property", true, [Key => "key": false, Value => "value": false];
-    Rest => "RestElement", false, [Arg => "argument": false];
-    Ident => "Identifier", false, [];
-    PrivateName => "PrivateIdentifier", false, [];
-    This => "ThisExpression", false, [];
-    Super => "Super", false, [];
-    Null => "Literal", false, [];
-    Bool => "Literal", false, [];
-    Number => "Literal", false, [];
-    BigInt => "Literal", false, [];
-    String => "Literal", false, [];
-    Regex => "Literal", false, [];
-    Template => "TemplateLiteral", false, [Expr => "expressions": true];
-    TaggedTemplate => "TaggedTemplateExpression", false, [Tag => "tag": false, Quasi => "quasi": false];
-    Array => "ArrayExpression", true, [Element => "elements": true];
-    Object => "ObjectExpression", true, [Property => "properties": true];
-    Prop => "Property", true, [Key => "key": false, Value => "value": false];
-    Spread => "SpreadElement", false, [Arg => "argument": false];
-    Member => "MemberExpression", false, [Object => "object": false, Property => "property": false];
-    Index => "MemberExpression", false, [Object => "object": false, Index => "property": false];
-    Call => "CallExpression", true, [Callee => "callee": false, Arg => "arguments": true];
-    New => "NewExpression", true, [Callee => "callee": false, Arg => "arguments": true];
-    Unary => "UnaryExpression", false, [Arg => "argument": false];
-    Update => "UpdateExpression", false, [Arg => "argument": false];
-    Await => "AwaitExpression", false, [Arg => "argument": false];
-    Yield => "YieldExpression", false, [Arg => "argument": false];
-    Binary => "BinaryExpression", true, [Left => "left": false, Right => "right": false];
-    Logical => "LogicalExpression", true, [Left => "left": false, Right => "right": false];
-    Assign => "AssignmentExpression", true, [Left => "left": false, Right => "right": false];
-    Conditional => "ConditionalExpression", true, [Test => "test": false, Consequent => "consequent": false, Alternate => "alternate": false];
-    Sequence => "SequenceExpression", false, [Expr => "expressions": true];
-    As => "TSAsExpression", false, [Expr => "expression": false, Type => "typeAnnotation": false];
-    Satisfies => "TSSatisfiesExpression", false, [Expr => "expression": false, Type => "typeAnnotation": false];
-    NonNull => "TSNonNullExpression", false, [Expr => "expression": false];
-    TypeAssertion => "TSTypeAssertion", false, [Type => "typeAnnotation": false, Expr => "expression": false];
-    MetaProperty => "MetaProperty", false, [];
-    ImportCall => "ImportExpression", false, [Arg => "source": false];
-    Instantiation => "TSInstantiationExpression", false, [Expr => "expression": false];
-    JsxElement => "JSXElement", false, [Body => "children": true];
-    JsxFragment => "JSXFragment", false, [Body => "children": true];
-    JsxAttribute => "JSXAttribute", false, [Name => "name": false, Value => "value": false];
-    JsxSpreadAttribute => "JSXSpreadAttribute", false, [Arg => "argument": false];
-    JsxExpression => "JSXExpressionContainer", false, [Expr => "expression": false];
-    JsxText => "JSXText", false, [];
-    JsxName => "JSXIdentifier", false, [];
-    TypeRef => "TSTypeReference", false, [Name => "typeName": false];
-    QualifiedName => "TSQualifiedName", false, [Left => "left": false, Right => "right": false];
-    TypeParam => "TSTypeParameter", false, [Name => "name": false, Constraint => "constraint": false, Default => "default": false];
-    TypeKeyword => "TSKeyword", false, [];
-    Union => "TSUnionType", false, [Type => "types": true];
-    Intersection => "TSIntersectionType", false, [Type => "types": true];
-    ArrayType => "TSArrayType", false, [Type => "elementType": false];
-    TupleType => "TSTupleType", false, [Element => "elementTypes": true];
-    TupleMember => "TSNamedTupleMember", false, [Name => "label": false, Type => "elementType": false];
-    FnType => "TSFunctionType", false, [Param => "params": true];
-    TypeLit => "TSTypeLiteral", true, [Member => "members": true];
-    PropSig => "TSPropertySignature", true, [Key => "key": false];
-    MethodSig => "TSMethodSignature", false, [Key => "key": false, Param => "params": true];
-    CallSig => "TSCallSignatureDeclaration", false, [Param => "params": true];
-    TypeQuery => "TSTypeQuery", false, [Name => "exprName": false];
-    TypeOperator => "TSTypeOperator", false, [Type => "typeAnnotation": false];
-    IndexedAccess => "TSIndexedAccessType", false, [Object => "objectType": false, Index => "indexType": false];
-    ConditionalType => "TSConditionalType", false, [Check => "checkType": false, Extends => "extendsType": false, Consequent => "trueType": false, Alternate => "falseType": false];
-    Infer => "TSInferType", false, [TypeParam => "typeParameter": false];
-    Mapped => "TSMappedType", false, [Name => "nameType": false, Type => "typeAnnotation": false];
-    TemplateType => "TSTemplateLiteralType", false, [Type => "types": true];
-    TypePredicate => "TSTypePredicate", false, [Name => "parameterName": false];
-    ImportType => "TSImportType", false, [Arg => "argument": false, Qualifier => "qualifier": false];
-    LiteralType => "TSLiteralType", false, [Value => "literal": false];
-}
-
-pub(super) fn spacing_owner(kind: K) -> &'static str {
-    descriptor(kind).filter(|d| d.spacing).map_or("", |d| d.name)
+    Program => "Program", [Body => "body": true];
+    Block => "BlockStatement", [Body => "body": true];
+    ExprStmt => "ExpressionStatement", [Expr => "expression": false];
+    Var => "VariableDeclaration", [Decl => "declarations": true];
+    Declarator => "VariableDeclarator", [Name => "id": false, Init => "init": false];
+    If => "IfStatement", [Test => "test": false, Consequent => "consequent": false, Alternate => "alternate": false];
+    For => "ForStatement", [Init => "init": false, Test => "test": false, Update => "update": false, Body => "body": false];
+    ForIn => "ForInStatement", [Left => "left": false, Right => "right": false, Body => "body": false];
+    ForOf => "ForOfStatement", [Left => "left": false, Right => "right": false, Body => "body": false];
+    While => "WhileStatement", [Test => "test": false, Body => "body": false];
+    DoWhile => "DoWhileStatement", [Body => "body": false, Test => "test": false];
+    Return => "ReturnStatement", [Arg => "argument": false];
+    Throw => "ThrowStatement", [Arg => "argument": false];
+    Break => "BreakStatement", [Label => "label": false];
+    Continue => "ContinueStatement", [Label => "label": false];
+    Switch => "SwitchStatement", [Discriminant => "discriminant": false, Case => "cases": true];
+    Case => "SwitchCase", [Test => "test": false, Body => "consequent": true];
+    Try => "TryStatement", [Block => "block": false, Finalizer => "finalizer": false];
+    Labeled => "LabeledStatement", [Label => "label": false, Body => "body": false];
+    Empty => "EmptyStatement", [];
+    Debugger => "DebuggerStatement", [];
+    With => "WithStatement", [Object => "object": false, Body => "body": false];
+    Function => "FunctionDeclaration", [Name => "id": false, Param => "params": true, Body => "body": false, Decorator => "decorators": true];
+    Arrow => "ArrowFunctionExpression", [Param => "params": true, Body => "body": false];
+    Class => "ClassDeclaration", [Name => "id": false, Extends => "superClass": false, Implements => "implements": true, Decorator => "decorators": true];
+    Method => "MethodDefinition", [Key => "key": false, Decorator => "decorators": true];
+    ClassProp => "PropertyDefinition", [Key => "key": false, Init => "value": false, Decorator => "decorators": true];
+    StaticBlock => "StaticBlock", [Body => "body": true];
+    IndexSig => "TSIndexSignature", [Param => "parameters": true];
+    Decorator => "Decorator", [Expr => "expression": false];
+    Import => "ImportDeclaration", [Specifier => "specifiers": true, From => "source": false];
+    ImportSpec => "ImportSpecifier", [Imported => "imported": false, Local => "local": false];
+    ImportEquals => "TSImportEqualsDeclaration", [Name => "id": false, Value => "moduleReference": false];
+    Export => "ExportNamedDeclaration", [Decl => "declaration": false, Specifier => "specifiers": true, From => "source": false];
+    ExportSpec => "ExportSpecifier", [Local => "local": false, Exported => "exported": false];
+    ExportAssign => "TSExportAssignment", [Expr => "expression": false];
+    Interface => "TSInterfaceDeclaration", [Name => "id": false, Extends => "extends": true];
+    TypeAlias => "TSTypeAliasDeclaration", [Name => "id": false, Type => "typeAnnotation": false];
+    Enum => "TSEnumDeclaration", [Name => "id": false];
+    EnumMember => "TSEnumMember", [Name => "id": false, Init => "initializer": false];
+    Namespace => "TSModuleDeclaration", [Name => "id": false, Body => "body": false];
+    ObjectPattern => "ObjectPattern", [Property => "properties": true, Rest => "properties": true];
+    ArrayPattern => "ArrayPattern", [Element => "elements": true];
+    AssignPattern => "AssignmentPattern", [Left => "left": false, Right => "right": false];
+    PatternProp => "Property", [Key => "key": false, Value => "value": false];
+    Rest => "RestElement", [Arg => "argument": false];
+    Ident => "Identifier", [];
+    PrivateName => "PrivateIdentifier", [];
+    This => "ThisExpression", [];
+    Super => "Super", [];
+    Null => "Literal", [];
+    Bool => "Literal", [];
+    Number => "Literal", [];
+    BigInt => "Literal", [];
+    String => "Literal", [];
+    Regex => "Literal", [];
+    Template => "TemplateLiteral", [Expr => "expressions": true];
+    TaggedTemplate => "TaggedTemplateExpression", [Tag => "tag": false, Quasi => "quasi": false];
+    Array => "ArrayExpression", [Element => "elements": true];
+    Object => "ObjectExpression", [Property => "properties": true];
+    Prop => "Property", [Key => "key": false, Value => "value": false];
+    Spread => "SpreadElement", [Arg => "argument": false];
+    Member => "MemberExpression", [Object => "object": false, Property => "property": false];
+    Index => "MemberExpression", [Object => "object": false, Index => "property": false];
+    Call => "CallExpression", [Callee => "callee": false, Arg => "arguments": true];
+    New => "NewExpression", [Callee => "callee": false, Arg => "arguments": true];
+    Unary => "UnaryExpression", [Arg => "argument": false];
+    Update => "UpdateExpression", [Arg => "argument": false];
+    Await => "AwaitExpression", [Arg => "argument": false];
+    Yield => "YieldExpression", [Arg => "argument": false];
+    Binary => "BinaryExpression", [Left => "left": false, Right => "right": false];
+    Logical => "LogicalExpression", [Left => "left": false, Right => "right": false];
+    Assign => "AssignmentExpression", [Left => "left": false, Right => "right": false];
+    Conditional => "ConditionalExpression", [Test => "test": false, Consequent => "consequent": false, Alternate => "alternate": false];
+    Sequence => "SequenceExpression", [Expr => "expressions": true];
+    As => "TSAsExpression", [Expr => "expression": false, Type => "typeAnnotation": false];
+    Satisfies => "TSSatisfiesExpression", [Expr => "expression": false, Type => "typeAnnotation": false];
+    NonNull => "TSNonNullExpression", [Expr => "expression": false];
+    TypeAssertion => "TSTypeAssertion", [Type => "typeAnnotation": false, Expr => "expression": false];
+    MetaProperty => "MetaProperty", [];
+    ImportCall => "ImportExpression", [Arg => "source": false];
+    Instantiation => "TSInstantiationExpression", [Expr => "expression": false];
+    JsxElement => "JSXElement", [Body => "children": true];
+    JsxFragment => "JSXFragment", [Body => "children": true];
+    JsxAttribute => "JSXAttribute", [Name => "name": false, Value => "value": false];
+    JsxSpreadAttribute => "JSXSpreadAttribute", [Arg => "argument": false];
+    JsxExpression => "JSXExpressionContainer", [Expr => "expression": false];
+    JsxText => "JSXText", [];
+    JsxName => "JSXIdentifier", [];
+    TypeRef => "TSTypeReference", [Name => "typeName": false];
+    QualifiedName => "TSQualifiedName", [Left => "left": false, Right => "right": false];
+    TypeParam => "TSTypeParameter", [Name => "name": false, Constraint => "constraint": false, Default => "default": false];
+    TypeKeyword => "TSKeyword", [];
+    Union => "TSUnionType", [Type => "types": true];
+    Intersection => "TSIntersectionType", [Type => "types": true];
+    ArrayType => "TSArrayType", [Type => "elementType": false];
+    TupleType => "TSTupleType", [Element => "elementTypes": true];
+    TupleMember => "TSNamedTupleMember", [Name => "label": false, Type => "elementType": false];
+    FnType => "TSFunctionType", [Param => "params": true];
+    TypeLit => "TSTypeLiteral", [Member => "members": true];
+    PropSig => "TSPropertySignature", [Key => "key": false];
+    MethodSig => "TSMethodSignature", [Key => "key": false, Param => "params": true];
+    CallSig => "TSCallSignatureDeclaration", [Param => "params": true];
+    TypeQuery => "TSTypeQuery", [Name => "exprName": false];
+    TypeOperator => "TSTypeOperator", [Type => "typeAnnotation": false];
+    IndexedAccess => "TSIndexedAccessType", [Object => "objectType": false, Index => "indexType": false];
+    ConditionalType => "TSConditionalType", [Check => "checkType": false, Extends => "extendsType": false, Consequent => "trueType": false, Alternate => "falseType": false];
+    Infer => "TSInferType", [TypeParam => "typeParameter": false];
+    Mapped => "TSMappedType", [Name => "nameType": false, Type => "typeAnnotation": false];
+    TemplateType => "TSTemplateLiteralType", [Type => "types": true];
+    TypePredicate => "TSTypePredicate", [Name => "parameterName": false];
+    ImportType => "TSImportType", [Arg => "argument": false, Qualifier => "qualifier": false];
+    LiteralType => "TSLiteralType", [Value => "literal": false];
 }
 
 enum Property {

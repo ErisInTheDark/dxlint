@@ -39,6 +39,11 @@ pub fn comments(s: &Syntax) -> Vec<Comment> {
     scan(s.src, literals.collect())
 }
 
+/// Byte offset of the first JavaScript line terminator, or the end.
+pub(super) fn line_comment_end(src: &str) -> usize {
+    src.find(['\n', '\r', '\u{2028}', '\u{2029}']).unwrap_or(src.len())
+}
+
 /// The comments of `src` outside the `literals` spans.
 fn scan(src: &str, mut literals: Vec<(usize, usize)>) -> Vec<Comment> {
     literals.sort_unstable();
@@ -59,8 +64,7 @@ fn scan(src: &str, mut literals: Vec<(usize, usize)>) -> Vec<Comment> {
         }
         match (b[i], b[i + 1]) {
             (b'/', b'/') => {
-                let end = memchr::memchr(b'\n', &b[i..]).map_or(b.len(), |n| i + n);
-                let end = if end > i && b[end - 1] == b'\r' { end - 1 } else { end };
+                let end = i + line_comment_end(&src[i..]);
                 out.push(Comment { start: i as u32, end: end as u32, block: false });
                 i = end;
             }
@@ -73,4 +77,21 @@ fn scan(src: &str, mut literals: Vec<(usize, usize)>) -> Vec<Comment> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_comments_do_not_swallow_following_code_or_comments() {
+        for terminator in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+            let src = format!("// first{terminator}value; // second");
+            let comments = scan(&src, Vec::new());
+            assert_eq!(comments.len(), 2, "{terminator:?}");
+            assert_eq!(comments[0].body(&src), " first", "{terminator:?}");
+            assert_eq!(comments[1].body(&src), " second", "{terminator:?}");
+            assert!(comments.iter().all(|comment| !comment.block));
+        }
+    }
 }

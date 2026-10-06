@@ -80,13 +80,13 @@ impl<'s> Lexer<'s> {
         let mut nl = false;
         while self.pos < b.len() {
             match b[self.pos] {
-                b'\n' => {
+                b'\n' | b'\r' => {
                     nl = true;
                     self.pos += 1;
                 }
-                b' ' | b'\t' | b'\r' | 0x0b | 0x0c => self.pos += 1,
+                b' ' | b'\t' | 0x0b | 0x0c => self.pos += 1,
                 b'/' if b.get(self.pos + 1) == Some(&b'/') => {
-                    self.pos = memchr::memchr(b'\n', &b[self.pos..]).map_or(b.len(), |n| self.pos + n);
+                    self.pos += super::comments::line_comment_end(&self.src[self.pos..]);
                 }
                 b'/' if b.get(self.pos + 1) == Some(&b'*') => {
                     let body = &b[self.pos + 2..];
@@ -321,6 +321,19 @@ impl<'s> Lexer<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_comments_leave_following_tokens_on_a_new_line() {
+        for terminator in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+            let src = format!("return // note{terminator}value");
+            let mut lexer = Lexer::new(&src);
+            assert_eq!(lexer.next_token().tok, Tok::Ident);
+            let value = lexer.next_token();
+            assert_eq!(&src[value.start as usize..value.end as usize], "value", "{terminator:?}");
+            assert!(value.nl, "{terminator:?}");
+            assert_eq!(lexer.next_token().tok, Tok::Eof);
+        }
+    }
 
     #[test]
     fn unicode_spaces_end_names_and_line_separators_break_lines() {

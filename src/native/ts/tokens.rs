@@ -416,7 +416,7 @@ fn uncommented_gaps(mut gap: &str) -> impl Iterator<Item = &str> {
         gap = if let Some(block) = comment.strip_prefix("/*") {
             block.find("*/").map_or("", |end| &block[end + 2..])
         } else {
-            comment.find(['\n', '\r', '\u{2028}', '\u{2029}']).map_or("", |end| &comment[end..])
+            &comment[super::comments::line_comment_end(comment)..]
         };
         Some(part)
     })
@@ -451,7 +451,7 @@ impl NativeFile<'_> {
                     i += 1;
                     last = i;
                 }
-                b'/' if b.get(i + 1) == Some(&b'/') => i = src[i..].find('\n').map_or(b.len(), |n| i + n),
+                b'/' if b.get(i + 1) == Some(&b'/') => i += super::comments::line_comment_end(&src[i..]),
                 b'/' if b.get(i + 1) == Some(&b'*') => i = src[i + 2..].find("*/").map_or(b.len(), |n| i + 2 + n + 2),
                 c if c.is_ascii_whitespace() => i += 1,
                 _ => {
@@ -729,6 +729,22 @@ mod lexical_tests {
                 }
             }
         });
+    }
+
+    #[test]
+    fn line_comments_preserve_following_tokens_and_continuation_punctuation() {
+        for terminator in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+            let src = format!("callee // note{terminator}(argument);");
+            with_native_file(&src, |file, _| {
+                let tokens = file.tokens(file.syntax.root());
+                assert_eq!(tokens, ["callee", "(", "argument", ")", ";"], "{terminator:?}");
+                let open = src.find('(').expect("call opener");
+                assert_eq!(file.punctuation_after("callee".len(), '('), Some((open, "callee".len())), "{terminator:?}");
+                let comments = file.comments();
+                assert_eq!(comments.len(), 1);
+                assert_eq!(comments[0].body(&src), " note", "{terminator:?}");
+            });
+        }
     }
 
     #[test]

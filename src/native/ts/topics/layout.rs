@@ -3,10 +3,9 @@
 use crate::expr::facts::Fact;
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
-use crate::native::ts::kinds::Kind as K;
-use crate::native::ts::lexer::{Tok, Token};
+use crate::native::ts::lexer::Token;
 
-use crate::native::ts::tokens::{gap_has_space, lex, lex_comments};
+use crate::native::ts::tokens::{gap_has_space, lex};
 
 mod punctuation;
 mod delimiters;
@@ -25,11 +24,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(lists::comma_line_sites, n),
     },
     Fact {
-        name: "multiple_space_sites",
-        doc: "native program: same-line token/comment gaps {start,end,gap,display,owner,eol_comment}; opaque spans excluded, owner is the smallest node containing the last gap byte",
-        get: |f, n| f.with_file(multiple_space_sites, n),
-    },
-    Fact {
         name: "property_quote_sites",
         doc: "native properties/signatures/enums and object/interface/type/enum groups: {group,quoted,numeric,redundant,redundant_number,keyword,name,offset}; computed keys, methods and shorthand object properties exempt",
         get: |f, n| f.with_file(quotes::property_quote_sites, n),
@@ -45,61 +39,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
     },
 ];
-
-fn multiple_space_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    if !file.syntax.is(node, K::Program) {
-        return Value::Null;
-    }
-    let syntax = &file.syntax;
-    let lexed = file.cached(lex_comments);
-    let mut nodes: Vec<_> = (0..syntax.tree.nodes.len() as u32).collect();
-    nodes.sort_unstable_by_key(|&id| syntax.tree.node(id).start);
-    let mut at = 0;
-    let mut active = std::collections::BinaryHeap::new();
-    let mut sites = Vec::new();
-    for (index, pair) in lexed.0.windows(2).enumerate() {
-        let [left, right] = pair else { unreachable!() };
-        let gap = &syntax.src[left.end as usize..right.start as usize];
-        if gap.contains(['\n', '\r', '\u{2028}', '\u{2029}']) || !gap.as_bytes().windows(2).any(|p| p.iter().all(|b| matches!(b, b' ' | b'\t'))) {
-            continue;
-        }
-        let point = right.start - 1;
-        while let Some(&id) = nodes.get(at).filter(|&&id| syntax.tree.node(id).start <= point) {
-            let span = syntax.tree.node(id);
-            active.push(std::cmp::Reverse((span.end - span.start, span.end, id)));
-            at += 1;
-        }
-        while active.peek().is_some_and(|entry| entry.0.1 <= point) {
-            active.pop();
-        }
-        let owner = active.peek().and_then(|entry| syntax.kind(entry.0.2)).map_or("", super::super::estree::spacing_owner);
-        let comment = matches!(right.tok, Tok::P("/*" | "//"));
-        let raw = &syntax.src[right.start as usize..right.end as usize];
-        let display = if comment {
-            let block = right.tok == Tok::P("/*");
-            let body = &raw[2..raw.len() - if block { 2 } else { 0 }];
-            let first = body.split('\n').next().unwrap_or("");
-            let value = if body.contains('\n') || first.chars().count() > 12 {
-                format!("{}...", first.chars().take(12).collect::<String>())
-            } else {
-                first.to_owned()
-            };
-            format!("{}{}{}", if block { "/*" } else { "//" }, value, if block { "*/" } else { "" })
-        } else {
-            raw.to_owned()
-        };
-        let eol_comment = comment && lexed.0.get(index + 2).is_none_or(|next| syntax.src[right.end as usize..next.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']));
-        sites.push(Value::record(vec![
-            ("start".into(), Value::from(left.end as usize)),
-            ("end".into(), Value::from(right.start as usize)),
-            ("gap".into(), Value::from(gap.to_owned())),
-            ("display".into(), Value::from(display)),
-            ("owner".into(), Value::from(owner)),
-            ("eol_comment".into(), Value::Bool(eol_comment)),
-        ]));
-    }
-    Value::list(sites)
-}
 
 fn edge(src: &str, token: Option<&Token>, start: usize, end: usize) -> Value<'static> {
     let Some(token) = token else { return Value::Null };
@@ -138,6 +77,39 @@ mod tests {
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn repeated_whitespace_fixes_preserve_surrounding_unicode_and_opaque_text() {
+        let lint = native_linter("rule no-multi-spaces");
+        let path = Path::new("/root/file.tsx");
+        for (text, expected) in [
+            ("const \u{754c} =  1;", "const \u{754c} = 1;"),
+            ("foo();\u{feff}  \u{feff}bar();", "foo(); bar();"),
+            ("const x = `a  b ${x +  y}`;", "const x = `a  b ${x + y}`;"),
+        ] {
+            let fixed = lint.fix(path, text);
+            assert_eq!(fixed.text, expected);
+            assert!(fixed.remaining.is_empty());
+            assert_eq!(lint.fix(path, &fixed.text).applied, 0);
+            assert!(lint.lint(path, text).iter().all(|diagnostic| {
+                text[diagnostic.start..diagnostic.end].chars().all(|ch| ch.is_whitespace() || ch == '\u{feff}')
+            }));
+        }
+    }
+
+    #[test]
+    fn repeated_whitespace_selection_uses_gap_parent_and_comment_boundary() {
+        let lint = native_linter("
+            rule no-multi-spaces
+            override in multiple_space_gap let multiple_spaces_checked !(parent is ts_property) && !multiple_space_eol_comment
+        ");
+        let text = "const x =  {a:  1};  /* inline */  use();  // final\n";
+        let fixed = lint.fix(Path::new("/root/file.ts"), text);
+        assert_eq!(fixed.text, "const x = {a:  1}; /* inline */ use();  // final\n");
+        assert_eq!(fixed.applied, 3);
+        assert!(fixed.remaining.is_empty());
+    }
+
     #[test]
     fn neighbours_preserve_parser_template_spans_and_comment_gaps() {
         let lint = native_linter(r#"

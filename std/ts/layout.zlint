@@ -84,14 +84,25 @@ in ts_variable_declaration, ts_array, ts_array_pattern, ts_object, ts_object_pat
   warn if comma_line.before_break && comma_line.after_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
 }
 
-in ts_program rule no-multi-spaces {
-  option ignoreEOLComments boolean = false "ignore final comments on a line"
+@macro multiple_space_horizontal "[ \\t\\u{{b}}\\u{{c}}\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
+@macro multiple_space_nonspace "[^ \\t\\u{{b}}\\u{{c}}\\r\\n\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{2028}}\\u{{2029}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
+in ts_code match multiple_space_gap /[ \t\u{b}\u{c}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{feff}]+/
+fn multiple_space_preview_body(body) = if contains(body, "\n") || len(body) > 12 then slice(first(split(body, "\n")), 0, 12) "..." else body
+fn multiple_space_comment_preview(comment) = (if comment is ts_block_comment then "/*" else "//") multiple_space_preview_body(slice(comment.text, 2, if comment is ts_block_comment then -2 else len(comment.text))) (if comment is ts_block_comment then "*/" else "")
+in multiple_space_gap {
+  let multiple_space_right node_at(end_offset)
+  let multiple_space_eol_comment multiple_space_right is ts_comment && re_test(multiple_space_right.text_after, "^" @multiple_space_horizontal "*(?:$|[\\r\\n\\u{{2028}}\\u{{2029}}])")
+  let multiple_space_display if multiple_space_right is ts_comment then multiple_space_comment_preview(multiple_space_right) else token_neighbours.after.text
+  let multiple_spaces_checked true
+}
+in multiple_space_gap rule no-multi-spaces {
   option includeTabs boolean = true "include tabs in repeated whitespace"
-  option exceptions { [key: string]: boolean } = {} "exempt node kinds"
-  each multiple_gap in filter(multiple_space_sites, s => (includeTabs || contains(s.gap, "  ")) && !(ignoreEOLComments && s.eol_comment) && get(exceptions, s.owner) != true)
-  report at multiple_gap.start
-  fix as slice(text, 0, multiple_gap.start) " " slice(text, multiple_gap.end)
-  warn "Multiple spaces found before '{multiple_gap.display}'."
+  when multiple_spaces_checked && re_test(text, if includeTabs then /[ \t]{2}/ else / {2}/)
+    && re_test(byte_slice(source, position(offset).js_line_start, offset), @multiple_space_nonspace)
+    && re_test(text_after, "^" @multiple_space_nonspace)
+    && !any(overlapping(ts_comment), comment => true)
+  fix as " "
+  warn "Multiple spaces found before '{multiple_space_display}'."
 }
 
 in ts_string let layout_quote_fixed_string is (ts_property.key, ts_pattern_property.key, ts_method.key, ts_class_property.key, ts_method_signature.key, ts_property_signature.key, ts_import.from, ts_export.from, ts_import.namespace, ts_export.namespace, ts_import_specifier.imported, ts_namespace.name, ts_enum_member.name, ts_import_type.argument) || parent is ts_export_specifier
