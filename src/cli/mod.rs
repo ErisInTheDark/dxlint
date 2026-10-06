@@ -147,6 +147,9 @@ pub struct Project {
     /// `false` when config errors were printed: the linter still runs with
     /// every part that built, but the command should fail in the end.
     pub config_ok: bool,
+    /// Reading the config with its imports, then building the linter.
+    pub load_time: std::time::Duration,
+    pub build_time: std::time::Duration,
 }
 
 /// Loads and builds the linter, printing any config errors. Uses the
@@ -180,14 +183,17 @@ pub fn load_from(path: &Path, provider: &dyn SourceProvider) -> Result<Project, 
 
 fn load_from_with(path: &Path, provider: &dyn SourceProvider, runtime: bool) -> Result<Project, ExitCode> {
     let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let started = std::time::Instant::now();
     let loaded = config::load_file(path, provider);
+    let load_time = started.elapsed();
     let built = if runtime { build_for_lint(loaded, root) } else { build(loaded, root) };
+    let build_time = started.elapsed() - load_time;
     let config_ok = built.errors.is_empty();
     if !config_ok {
         render::config_errors(&built.errors, &built.sources);
     }
     match built.linter {
-        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok }),
+        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok, load_time, build_time }),
         None => Err(ExitCode::from(2)),
     }
 }

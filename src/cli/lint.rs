@@ -82,8 +82,8 @@ fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> 
 
 pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
     let started = Instant::now();
-    let (mut linter, config_ok) = match load_for_lint(config) {
-        Ok(p) => (p.linter, p.config_ok),
+    let (mut linter, config_ok, load_time, build_time) = match load_for_lint(config) {
+        Ok(p) => (p.linter, p.config_ok, p.load_time, p.build_time),
         Err(code) => return code,
     };
     if args.profile {
@@ -241,6 +241,12 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
             bytes as f64 / 1048576.0,
             secs * 1000.0,
             bytes as f64 / 1048576.0 / secs.max(1e-9)
+        );
+        eprintln!(
+            "  config {:.1} ms (reading {:.1}, building {:.1})",
+            (load_time + build_time).as_secs_f64() * 1000.0,
+            load_time.as_secs_f64() * 1000.0,
+            build_time.as_secs_f64() * 1000.0
         );
     }
     // A broken config still lints with what built, but never passes.
