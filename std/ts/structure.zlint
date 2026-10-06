@@ -533,51 +533,53 @@ group core_ts_list ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_
 group core_list core_ts_list
 in core_ts_list let core_list_layout list_layout
 
-group structure_statement ts_break, ts_class, ts_continue, ts_debugger, ts_do_while, ts_expression_statement,
-  ts_for_in, ts_for_of, ts_for, ts_function, ts_if, ts_import, ts_labeled, ts_return, ts_switch,
-  ts_throw, ts_try, ts_variable_declaration, ts_while, ts_with, ts_export
 group structure_declaration_parent ts_program, ts_block, ts_if, ts_for, ts_for_in, ts_for_of,
   ts_while, ts_do_while, ts_labeled, ts_with, ts_export
 group structure_suppress_statement_entry ts_do_while, ts_for, ts_for_in, ts_for_of, ts_if, ts_labeled, ts_while
-@macro structure_statement_type(target, name) {
-  in target let structure_statement_type name
+@macro register_max_statements_counted(target, eligible) {
+  group max_statements_counted target
+  in target let max_statements_counted_here eligible
 }
-@structure_statement_type(ts_break, "BreakStatement")
-@structure_statement_type(ts_continue, "ContinueStatement")
-@structure_statement_type(ts_debugger, "DebuggerStatement")
-@structure_statement_type(ts_do_while, "DoWhileStatement")
-@structure_statement_type(ts_expression_statement, "ExpressionStatement")
-@structure_statement_type(ts_for_in, "ForInStatement")
-@structure_statement_type(ts_for_of, "ForOfStatement")
-@structure_statement_type(ts_for, "ForStatement")
-@structure_statement_type(ts_if, "IfStatement")
-@structure_statement_type(ts_import, "ImportDeclaration")
-@structure_statement_type(ts_labeled, "LabeledStatement")
-@structure_statement_type(ts_return, "ReturnStatement")
-@structure_statement_type(ts_switch, "SwitchStatement")
-@structure_statement_type(ts_throw, "ThrowStatement")
-@structure_statement_type(ts_try, "TryStatement")
-@structure_statement_type(ts_variable_declaration, "VariableDeclaration")
-@structure_statement_type(ts_while, "WhileStatement")
-@structure_statement_type(ts_with, "WithStatement")
-in ts_class let structure_statement_type if parent is structure_declaration_parent then "ClassDeclaration" else null
-in ts_function let structure_statement_type if parent is structure_declaration_parent then "FunctionDeclaration" else null
-in ts_export let structure_statement_type if kind == "default" then "ExportDefaultDeclaration" else if kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration"
-in structure_statement let structure_statement_enter !(parent is structure_suppress_statement_entry && not ts_node.alternate || parent is ts_export && parent.kind != "*")
-in structure_statement let structure_statement_exit offset + byte_len(trim_end(trim_end(trim_end(text), ";")))
+@register_max_statements_counted(ts_break, true)
+@register_max_statements_counted(ts_class, parent is structure_declaration_parent)
+@register_max_statements_counted(ts_continue, true)
+@register_max_statements_counted(ts_debugger, true)
+@register_max_statements_counted(ts_do_while, true)
+@register_max_statements_counted(ts_expression_statement, true)
+@register_max_statements_counted(ts_for_in, true)
+@register_max_statements_counted(ts_for_of, true)
+@register_max_statements_counted(ts_for, true)
+@register_max_statements_counted(ts_function, parent is structure_declaration_parent)
+@register_max_statements_counted(ts_if, true)
+@register_max_statements_counted(ts_import, true)
+@register_max_statements_counted(ts_labeled, true)
+@register_max_statements_counted(ts_return, true)
+@register_max_statements_counted(ts_switch, true)
+@register_max_statements_counted(ts_throw, true)
+@register_max_statements_counted(ts_try, true)
+@register_max_statements_counted(ts_variable_declaration, true)
+@register_max_statements_counted(ts_while, true)
+@register_max_statements_counted(ts_with, true)
+@register_max_statements_counted(ts_export, true)
+in max_statements_counted let max_statements_entry_line if parent is structure_suppress_statement_entry && not ts_node.alternate || parent is ts_export && parent.kind != "*" then null else position(offset).js_line
+in max_statements_counted let max_statements_exit_offset offset + byte_len(default(trim_end(trim_end(trim_end(text), ";")), text))
+in max_statements_counted let max_statements_exit_line position(max_statements_exit_offset).js_line
 
 in ts_line rule max-statements-per-line {
-  option max number = 1 "maximum statements on one line"
-  option ignoredNodes string[] = [] "statement types excluded from counting"
+  option max int(1..) = 1 "maximum statements on one line"
   let row position(offset).js_line
-  let statements filter(overlapping(structure_statement), statement => statement.structure_statement_type != null && !contains(ignoredNodes, statement.structure_statement_type))
-  let entries filter(statements, statement => statement.structure_statement_enter && position(statement.offset).js_line == row)
-  let exits filter(statements, statement => position(statement.structure_statement_exit).js_line == row)
-  when count(entries) > 0 || count(exits) > 0
-  let carried if any(exits, statement => count(entries) == 0 || statement.structure_statement_exit <= first(entries).offset) then 1 else 0
-  when count(entries) + carried > max
-  report at default(first(slice(entries, max - carried)).offset, first(overlapping(ts_program)).node)
-  warn "This line has {count(entries) + carried} statements. Maximum allowed is {max}."
+  let statements filter(overlapping(max_statements_counted), statement => default(statement.max_statements_counted_here, true))
+  let tally reduce(statements, { count: 0, first_entry: null, first_exit: null, at_limit: null, after_limit: null }, (state, statement) => {
+    count: state.count + (if statement.max_statements_entry_line == row then 1 else 0),
+    first_entry: if statement.max_statements_entry_line == row then default(state.first_entry, statement.offset) else state.first_entry,
+    first_exit: if statement.max_statements_exit_line == row then min(default(state.first_exit, statement.max_statements_exit_offset), statement.max_statements_exit_offset) else state.first_exit,
+    at_limit: if statement.max_statements_entry_line == row && state.count + 1 == max then statement.offset else state.at_limit,
+    after_limit: if statement.max_statements_entry_line == row && state.count == max then statement.offset else state.after_limit,
+  })
+  let carried if tally.first_exit != null && (tally.first_entry == null || tally.first_exit <= tally.first_entry) then 1 else 0
+  when tally.count + carried > max
+  report at if carried == 1 then tally.at_limit else tally.after_limit
+  warn "This line has {tally.count + carried} statements. Maximum allowed is {max}."
 }
 
 fn structure_gap_parts(source, from, to, comments) = reduce(filter(comments, comment => comment.offset < to && comment.end_offset > from), { cursor: from, code: false }, (state, comment) => {
