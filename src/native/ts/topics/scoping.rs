@@ -1,9 +1,8 @@
-//! Declaration, naming and return analyses (`std/ts/scoping`).
+//! Declaration, scope and return analyses (`std/ts/scoping`).
 
 mod bindings;
 mod atomic;
 mod callbacks;
-mod conventions;
 mod constness;
 mod globals;
 mod loops;
@@ -26,8 +25,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "directive_statement", doc: "expression statement belongs to a string directive prologue", get: |f, n| f.with_file(directives::statement, n) },
     Fact { name: "directive_scope", doc: "on a program or function: exact use-strict directives, inherited strictness, enclosing functions/classes and parameter simplicity", get: |f, n| f.with_file(directives::scope, n) },
     Fact { name: "scoping_const_binding", doc: "on a let declaration: unique-writer position, early reads and destructuring group eligibility", get: |f, n| f.with_file(constness::binding, n) },
-    Fact { name: "scoping_naming_candidate", doc: "on a declaration or member key: naming selector and semantic modifiers", get: |f, n| f.with_file(conventions::candidate, n) },
-    Fact { name: "scoping_naming_types", doc: "on a naming candidate: primitive, callable and array types after removing nullish parts", get: |f, n| f.with_file(conventions::types, n) },
     Fact { name: "scoping_atomic_update", doc: "on an assignment: shared bindings written using a pre-suspension read", get: |f, n| f.with_file(atomic::updates, n) },
     Fact { name: "scoping_this_context", doc: "on this: validity of its lexical receiver, with capitalised constructor exception", get: |f, n| f.with_file(receivers::context, n) },
     Fact { name: "scoping_loop_captures", doc: "on a function: unsafe mutable bindings captured across loop iterations", get: |f, n| f.with_file(loops::captures, n) },

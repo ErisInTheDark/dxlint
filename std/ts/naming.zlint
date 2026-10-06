@@ -1,0 +1,154 @@
+# .ts/naming: declaration and member names, ordinary context policies.
+
+define {
+
+group naming_name_node ts_identifier, ts_private_name, ts_string, ts_number
+group naming_variable ts_identifier
+group naming_function ts_identifier
+group naming_parameter ts_identifier
+group naming_parameter_property ts_identifier
+group naming_import ts_identifier
+group naming_class ts_identifier
+group naming_interface ts_identifier
+group naming_type_alias ts_identifier
+group naming_enum ts_identifier
+group naming_type_parameter ts_identifier
+group naming_enum_member naming_name_node
+group naming_class_method naming_name_node
+group naming_object_method naming_name_node
+group naming_type_method naming_name_node
+group naming_class_property naming_name_node
+group naming_object_property naming_name_node
+group naming_type_property naming_name_node
+group naming_classic_accessor naming_name_node
+group naming_auto_accessor naming_name_node
+
+in ts_node let naming_binding_owner if is (ts_declarator, ts_parameter, ts_function, ts_class, ts_interface, ts_type_alias, ts_enum, ts_type_parameter, ts_import, ts_import_specifier, ts_program) then node else parent.naming_binding_owner
+in naming_name_node let naming_binding declaration_kinds != null
+in naming_name_node let naming_member is (ts_method.key, ts_class_property.key, ts_property.key, ts_method_signature.key, ts_property_signature.key, ts_enum_member.name)
+in naming_name_node let naming_owner if naming_binding then parent.naming_binding_owner else if naming_member then parent.node else null
+# Empty names are strings; default() and null equality also match them.
+in naming_name_node let naming_name if is ts_private_name then re_replace(text, /^#+/, "") else if is (ts_string, ts_number) then if type_of(static_name) == "str" then static_name else text else text
+# Resolve the written field on its signature; dynamic `.type` reads the type fact.
+in ts_property_signature let naming_type_member_context if type is ts_function_type then "type-method" else "type-property"
+in naming_name_node let naming_context if naming_owner == null then null else if naming_binding then (
+  if naming_owner is ts_declarator then "variable"
+  else if naming_owner is ts_parameter then if any([] naming_owner.modifier, m => contains(["public", "protected", "private", "readonly"], m)) then "parameter-property" else "parameter"
+  else if naming_owner is ts_function then "function"
+  else if naming_owner is ts_class then "class"
+  else if naming_owner is ts_interface then "interface"
+  else if naming_owner is ts_type_alias then "type-alias"
+  else if naming_owner is ts_enum then "enum"
+  else if naming_owner is ts_type_parameter then "type-parameter"
+  else if naming_owner is ts_import || naming_owner is ts_import_specifier && naming_owner.imported == "default" then "import"
+  else null
+) else (
+  if naming_owner is ts_enum_member then "enum-member"
+  else if naming_owner is ts_method then
+    if contains(["get", "set"], naming_owner.kind) then "classic-accessor"
+    else if naming_owner.parent is ts_class then if naming_name == "constructor" then null else "class-method"
+    else "object-method"
+  else if naming_owner is ts_class_property then
+    if contains([] naming_owner.modifier, "accessor") then "auto-accessor"
+    else if naming_owner.init is (ts_function, ts_arrow) then "class-method" else "class-property"
+  else if naming_owner is ts_property then if naming_owner.value is (ts_function, ts_arrow) then "object-method" else "object-property"
+  else if naming_owner is ts_method_signature then "type-method"
+  else if naming_owner is ts_property_signature then naming_owner.naming_type_member_context
+  else null
+)
+in naming_name_node let naming_requires_quotes naming_member && !re_test(naming_name, /^[\p{Alphabetic}_$][\p{Alphabetic}\p{N}_$]*$/)
+in naming_name_node let naming_convention_checked naming_context != null
+
+fn naming_underscore_required(policy) = if policy == "requireDouble" then 2 else if policy == "require" then 1 else 0
+fn naming_underscore_trim(count, policy) = (
+  if contains(["requireDouble", "allowDouble"], policy) && count >= 2 then 2
+  else if policy == "allowSingleOrDouble" then min(count, 2)
+  else if contains(["require", "allow"], policy) then min(count, 1) else 0
+)
+fn naming_underscore(name, policy, trailing) = naming_underscore_count(name, policy, trailing, len(default(re_find(name, if trailing then /_+$/ else /^_+/), "")))
+fn naming_underscore_count(name, policy, trailing, count) = {
+  name: if trailing then slice(name, 0, len(name) - naming_underscore_trim(count, policy)) else slice(name, naming_underscore_trim(count, policy)),
+  error: policy == "forbid" && count > 0 || count < naming_underscore_required(policy)
+}
+fn naming_affix(name, choices, suffix) = naming_affix_match(name, choices, suffix, first(filter(choices, p => if suffix then ends_with(name, p) else starts_with(name, p))))
+fn naming_affix_match(name, choices, suffix, matched) = {
+  name: if suffix then slice(name, 0, len(name) - len(matched)) else slice(name, len(matched)),
+  error: len(choices) > 0 && matched == null
+}
+fn naming_format(name, format) = name == ""
+  || format == "camelCase" && slice(name, 0, 1) == lower(slice(name, 0, 1)) && !contains(name, "_")
+  || format == "PascalCase" && slice(name, 0, 1) == upper(slice(name, 0, 1)) && !contains(name, "_")
+  || format == "strictCamelCase" && slice(name, 0, 1) == lower(slice(name, 0, 1)) && !contains(name, "_") && !re_test(name, /\p{Lu}\p{Lu}/)
+  || format == "StrictPascalCase" && slice(name, 0, 1) == upper(slice(name, 0, 1)) && !contains(name, "_") && !re_test(name, /\p{Lu}\p{Lu}/)
+  || format == "snake_case" && name == lower(name) && !re_test(name, /^_|_$|__/)
+  || format == "UPPER_CASE" && name == upper(name) && !re_test(name, /^_|_$|__/)
+fn naming_failure(name, requires_quotes, settings) = naming_leading_failure(requires_quotes, settings, naming_underscore(name, settings.leadingUnderscore, false))
+fn naming_leading_failure(quotes, settings, step) = (
+  if step.error then {kind: "leading", settings: settings}
+  else naming_trailing_failure(quotes, settings, naming_underscore(step.name, settings.trailingUnderscore, true))
+)
+fn naming_trailing_failure(quotes, settings, step) = (
+  if step.error then {kind: "trailing", settings: settings}
+  else naming_prefix_failure(quotes, settings, naming_affix(step.name, settings.prefix, false))
+)
+fn naming_prefix_failure(quotes, settings, step) = (
+  if step.error then {kind: "prefix", settings: settings}
+  else naming_suffix_failure(quotes, settings, naming_affix(step.name, settings.suffix, true))
+)
+fn naming_suffix_failure(quotes, settings, step) = (
+  if step.error then {kind: "suffix", settings: settings}
+  else if settings.customRegex != null && re_test(step.name, settings.customRegex) != default(settings.customMatch, true) then {kind: "custom", settings: settings}
+  else if len(settings.formats) > 0 && (quotes || !any(settings.formats, format => naming_format(step.name, format))) then {kind: "format", settings: settings, processed: step.name}
+  else null
+)
+fn naming_message(name, failure) = "name `" name "` " (
+  if failure.kind == "leading" || failure.kind == "trailing" then naming_underscore_message(get(failure.settings, if failure.kind == "leading" then "leadingUnderscore" else "trailingUnderscore"), failure.kind)
+  else if failure.kind == "prefix" then "must have one of the following prefixes: " join(failure.settings.prefix, ", ")
+  else if failure.kind == "suffix" then "must have one of the following suffixes: " join(failure.settings.suffix, ", ")
+  else if failure.kind == "custom" then "must " (if default(failure.settings.customMatch, true) then "match" else "not match") " the RegExp: /" replace(failure.settings.customRegex, "/", "\\/") "/u"
+  else (if name != failure.processed then "trimmed as `" failure.processed "` " else "") "must match one of the following formats: " join(failure.settings.formats, ", ")
+)
+fn naming_underscore_message(policy, side) = if policy == "forbid" then "must not have a " side " underscore." else "must have " (if naming_underscore_required(policy) == 2 then "two" else "one") " " side " underscore(s)."
+
+@macro naming_rule(rule-id, context, targets, default-formats, underscore-policy, label) {
+  in targets rule rule-id {
+    option formats enum(camelCase, PascalCase, strictCamelCase, StrictPascalCase, snake_case, UPPER_CASE)[] = default-formats
+    option leadingUnderscore enum(allow, allowDouble, allowSingleOrDouble, forbid, require, requireDouble) | null = underscore-policy
+    option trailingUnderscore enum(allow, allowDouble, allowSingleOrDouble, forbid, require, requireDouble) | null = underscore-policy
+    option prefix string[] = []
+    option suffix string[] = []
+    option customRegex string | null = null
+    option customMatch boolean = true
+    when naming_context == context
+    when naming_convention_checked
+    let failure naming_failure(naming_name, naming_requires_quotes, {
+      formats: formats, leadingUnderscore: leadingUnderscore, trailingUnderscore: trailingUnderscore,
+      prefix: prefix, suffix: suffix, customRegex: customRegex, customMatch: customMatch
+    })
+    when failure != null
+    let naming_label label
+    warn naming_label " " naming_message(naming_name, failure)
+  }
+}
+
+@naming_rule(naming-convention:variable, "variable", naming_variable, ["camelCase", "UPPER_CASE"], allow, "Variable")
+@naming_rule(naming-convention:function, "function", naming_function, ["camelCase"], allow, "Function")
+@naming_rule(naming-convention:parameter, "parameter", naming_parameter, ["camelCase"], allow, "Parameter")
+@naming_rule(naming-convention:parameter-property, "parameter-property", naming_parameter_property, ["camelCase"], allow, "Parameter Property")
+@naming_rule(naming-convention:import, "import", naming_import, ["camelCase", "PascalCase"], null, "Import")
+@naming_rule(naming-convention:class, "class", naming_class, ["PascalCase"], null, "Class")
+@naming_rule(naming-convention:interface, "interface", naming_interface, ["PascalCase"], null, "Interface")
+@naming_rule(naming-convention:type-alias, "type-alias", naming_type_alias, ["PascalCase"], null, "Type Alias")
+@naming_rule(naming-convention:enum, "enum", naming_enum, ["PascalCase"], null, "Enum")
+@naming_rule(naming-convention:type-parameter, "type-parameter", naming_type_parameter, ["PascalCase"], null, "Type Parameter")
+@naming_rule(naming-convention:enum-member, "enum-member", naming_enum_member, ["camelCase"], allow, "Enum Member")
+@naming_rule(naming-convention:class-method, "class-method", naming_class_method, ["camelCase"], allow, "Class Method")
+@naming_rule(naming-convention:object-method, "object-method", naming_object_method, ["camelCase"], allow, "Object Literal Method")
+@naming_rule(naming-convention:type-method, "type-method", naming_type_method, ["camelCase"], allow, "Type Method")
+@naming_rule(naming-convention:class-property, "class-property", naming_class_property, ["camelCase"], allow, "Class Property")
+@naming_rule(naming-convention:object-property, "object-property", naming_object_property, ["camelCase"], allow, "Object Literal Property")
+@naming_rule(naming-convention:type-property, "type-property", naming_type_property, ["camelCase"], allow, "Type Property")
+@naming_rule(naming-convention:classic-accessor, "classic-accessor", naming_classic_accessor, ["camelCase"], allow, "Classic Accessor")
+@naming_rule(naming-convention:auto-accessor, "auto-accessor", naming_auto_accessor, ["camelCase"], allow, "Auto Accessor")
+
+}

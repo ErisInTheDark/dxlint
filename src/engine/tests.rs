@@ -11,6 +11,8 @@ mod text_hygiene;
 
 /// Behaviour of std's TypeScript rules that spans several owners.
 mod ts_std_rules;
+mod ts_naming;
+mod ts_type_constituents;
 mod ts_arithmetic;
 mod ts_collection_methods;
 mod ts_core_rules;
