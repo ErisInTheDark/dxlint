@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn prop_limits_use_opening_tag_and_consecutive_attribute_lines() {
-        let l = native_linter("rule jsx-max-props-per-line { set maximum {single: 2, multi: 1} }");
+        let l = native_linter("rule jsx-max-props-per-line:singleline set 2\nrule jsx-max-props-per-line:multiline set 1");
         assert!(l.lint(Path::new("/root/file.tsx"), "const x = <Box a b><Child\n /></Box>;").is_empty());
         assert_eq!(l.lint(Path::new("/root/file.tsx"), "const x = <Box a={(\nfoo\n)} b c />;").len(), 1);
     }
