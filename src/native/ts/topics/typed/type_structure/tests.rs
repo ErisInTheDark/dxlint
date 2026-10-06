@@ -27,7 +27,7 @@ fn object_spreads_report_one_category_and_respect_function_properties() {
 #[test]
 fn allowed_names_follow_values_and_retained_type_aliases() {
     let source = "function safe() {} function unsafe() {} type Branded = string & { brand: true }; declare const text: Branded; ({...safe}); ({...unsafe}); [...text];";
-    assert_eq!(spans(source, "{ set allow ['safe', {from: 'file', name: 'Branded'}] }"), ["...unsafe"]);
+    assert_eq!(spans(source, "{ set allow ['safe'] }\noverride in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked !all(node.argument.type_specifier_groups, group => any(group, gate => gate.from == 'file' && gate.name == 'Branded'))"), ["...unsafe"]);
 }
 
 #[test]

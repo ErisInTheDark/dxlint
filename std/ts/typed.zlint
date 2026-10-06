@@ -55,8 +55,9 @@ in promise_function_async_function rule promise-function-async {
   warn if !disallowed_unknown && any(function_return_info.returns, result => result.union && !matches_type_names(result.groups, names)) then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
 }
 
+in ts_node let only_throw_error_checked true
 in ts_throw.argument rule only-throw-error {
-  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "Additional allowed thrown types"
+  option allow string[] = [] "Additional allowed thrown types"
   option allowRethrowing boolean = true "Allow rethrowing catch and Promise rejection parameters"
   option allowThrowingAny boolean = true "Allow any values"
   option allowThrowingUnknown boolean = true "Allow unknown values"
@@ -64,6 +65,7 @@ in ts_throw.argument rule only-throw-error {
   when !allowRethrowing || !error_value.rethrown
   when !allowThrowingAny || error_value.kind != "any"
   when !allowThrowingUnknown || error_value.kind != "unknown"
+  when only_throw_error_checked
   when !type_is_allowed(allow, type_specifier_groups)
   report at error_value.offset
   warn if error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
@@ -86,15 +88,17 @@ in ts_call let rejection_call
   callee.rejection_member == true || any(callee.declarations, d => d.rejection_binding == true)
 in ts_node let rejection_reason
   {possible: could_be_error && error_global_undefined != true, kind: error_value.kind, groups: type_specifier_groups}
+in ts_call let prefer_promise_reject_errors_checked true
 in ts_call rule prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
-  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "Additional allowed rejection types"
+  option allow string[] = [] "Additional allowed rejection types"
   option allowThrowingAny boolean = false "Allow any values"
   option allowThrowingUnknown boolean = false "Allow unknown values"
   when rejection_call
   let reason first([] argument.rejection_reason)
   when reason != null || !allowEmptyReject
   when reason == null || (if re_test(file, /\.[cm]?tsx?$/) then reason.kind != "error" && !(allowThrowingAny && reason.kind == "any") && !(allowThrowingUnknown && reason.kind == "unknown") && !type_is_allowed(allow, reason.groups) else !reason.possible)
+  when prefer_promise_reject_errors_checked
   warn "Expected the Promise rejection reason to be an Error."
 }
 
@@ -564,6 +568,7 @@ in ts_parameter rule prefer-readonly:parameter {
 
 # ---- template interpolation ----------------------------------------------------
 in ts_template let tagged_template parent is ts_tagged_template
+in ts_node let restrict_template_expressions_type_checks template_type_checks
 in ts_template.expression rule restrict-template-expressions {
   option allowAny boolean = true "Allow any values"
   option allowArray boolean = false "Allow arrays whose elements can be interpolated"
@@ -572,11 +577,11 @@ in ts_template.expression rule restrict-template-expressions {
   option allowNumber boolean = true "Allow numbers and bigints"
   option allowRegExp boolean = true "Allow regular expressions"
   option allowNever boolean = false "Allow never values"
-  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [{ from: "lib", name: ["Error", "URL", "URLSearchParams"] }] "Additional allowed types and values"
+  option allow string[] | null = null "Allowed types and values; null keeps standard library Error, URL and URLSearchParams"
   let enabled_template_options ["string"] (if allowAny then ["any"] else []) (if allowArray then ["array"] else []) (if allowBoolean then ["boolean"] else []) (if allowNullish then ["nullish"] else []) (if allowNumber then ["number"] else []) (if allowRegExp then ["regexp"] else []) (if allowNever then ["never"] else [])
   when parent.tagged_template != true
   when template_type_checks != null
-  when any(template_type_checks, clause => !any(clause, gate => contains(enabled_template_options, gate.option) || gate.name != null && any(allow, spec => matches_type_specifier(spec, gate))))
+  when any(restrict_template_expressions_type_checks, clause => !any(clause, gate => contains(enabled_template_options, gate.option) || gate.name != null && (if allow == null then gate.from == "lib" && contains(["Error", "URL", "URLSearchParams"], gate.name) else contains(allow, gate.name))))
   warn "Invalid type \"{template_type_display}\" of template literal expression."
 }
 

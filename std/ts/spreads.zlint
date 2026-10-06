@@ -16,8 +16,9 @@ fn spread_object_category(n, t) =
   else if any(spread_parts(t), part => part.class_value) then "class" else null
 
 in ts_node let spread_type type_structure([], ["kind", "parts", "declarations", "callable", "constructor", "symbol_constructor", "class_value", "property_names", "iterable", "property_writes"])
+in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked true
 in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
-  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "types safe to spread"
+  option allow string[] = [] "types safe to spread"
   let object_spread node is ts_jsx_spread_attribute || parent is ts_object
   let sequence_spread parent is (ts_array, ts_call)
   when object_spread || sequence_spread
@@ -25,6 +26,7 @@ in ts_spread, ts_jsx_spread_attribute rule no-misused-spread {
   when !type_is_allowed(allow, subject.type_specifier_groups)
   let category if object_spread then spread_object_category(subject, subject.spread_type) else if spread_string(subject.spread_type) then "string" else null
   when category != null
+  when no_misused_spread_checked
   warn if category == "promise" then "Using the spread operator on Promise in an object can cause unexpected behavior. Did you forget to await the promise?"
     else if category == "function" then "Using the spread operator on a function without additional properties can cause unexpected behavior. Did you forget to call the function?"
     else if category == "map" then "Using the spread operator on a Map in an object will result in an empty object. Did you mean to use `Object.fromEntries(map)` instead?"

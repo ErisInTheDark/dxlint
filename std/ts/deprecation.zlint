@@ -13,8 +13,8 @@ fn deprecation_reason(metadata, computed) =
   else if !computed && metadata.selected_signature != null && count(metadata.declarations) > 0 && all(metadata.declarations, declaration => contains(["function", "method"], declaration.kind)) then deprecation_tag(metadata.selected_signature.doc)
   else if deprecation_declarations(metadata.declarations) != null then deprecation_declarations(metadata.declarations)
   else deprecation_tag(metadata.selected_signature.doc)
-fn deprecation_allowed(specifiers, metadata) =
-  any(specifiers, spec => any(metadata.declarations, declaration => any(declaration.provenance, gate => matches_type_specifier(spec, gate))))
+fn deprecation_allowed(names, metadata) =
+  any(metadata.declarations, declaration => any(declaration.provenance, gate => contains(names, gate.name)))
 
 in ts_node let deprecation_import
   if is ts_import || is ts_import_equals then true
@@ -24,15 +24,18 @@ in ts_node let deprecation_shorthand is ts_property.key && parent.value.node == 
 in ts_node let deprecation_excluded
   deprecation_import || uses != null && !(is ts_pattern_property.key) || is ts_function.name || is ts_class.name || is ts_interface.name || is ts_type_alias.name || is ts_enum.name || is ts_namespace.name || is ts_method.key || is ts_class_property.key || is ts_property_signature.key || is ts_method_signature.key || is ts_property.key && !deprecation_shorthand || is ts_enum_member.name || is ts_parameter.name || is ts_type_parameter.name || is ts_import_equals.name || is ts_export_specifier.local || is ts_jsx_element.closing || is ts_index.index
 in ts_index let deprecation_key index.node
+in ts_node let deprecation_metadata if deprecation_shorthand then declaration.symbol_metadata else symbol_metadata
+in ts_node let no_deprecated_checked true
 
 in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rule no-deprecated {
-  option allow (string | { from: string; name: string | string[]; path?: string; package?: string })[] = [] "Allowed deprecated symbols"
+  option allow string[] = [] "Allowed deprecated symbols"
   when !deprecation_excluded
-  let metadata if deprecation_shorthand then declaration.symbol_metadata else symbol_metadata
+  let metadata deprecation_metadata
   when !(is ts_export_specifier.exported) || deprecation_tag(metadata.own_doc) == null
   let computed is ts_index
   let tag deprecation_reason(metadata, computed)
   when tag != null
+  when no_deprecated_checked
   when if computed then !type_is_allowed(allow, object.type_specifier_groups) else !deprecation_allowed(allow, metadata)
   report at if computed then deprecation_key else node
   warn "`" metadata.name "` is deprecated." (if tag.reason == "" then "" else " " tag.reason)

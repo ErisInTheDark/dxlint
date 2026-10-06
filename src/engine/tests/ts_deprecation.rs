@@ -85,17 +85,20 @@ fn shorthand_properties_resolve_imported_declarations_and_export_aliases() {
 #[test]
 fn deprecation_allow_matches_the_referenced_value_and_its_origin() {
     let source = "/** @deprecated */ const old = 1; old;";
-    for (allow, spans) in [
-        ("[]", vec!["old"]),
-        ("['old']", vec![]),
-        ("[{ from: 'file', name: 'old' }]", vec![]),
-        ("[{ from: 'file', name: 'other' }]", vec!["old"]),
-        ("[{ from: 'lib', name: 'old' }]", vec!["old"]),
+    for (options, selection, spans) in [
+        ("{ set allow [] }", "", vec!["old"]),
+        ("{ set allow ['old'] }", "", vec![]),
+        ("", "true", vec!["old"]),
+        ("", "false", vec![]),
+        ("", "!any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'file' && gate.name == 'old'))", vec![]),
+        ("", "!any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'file' && gate.name == 'other'))", vec!["old"]),
+        ("", "!any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'lib' && gate.name == 'old'))", vec!["old"]),
     ] {
-        let lint = native_linter(&format!("rule no-deprecated {{ set allow {allow} }}"));
+        let selection = if selection.is_empty() { String::new() } else { format!("override in ts_node let no_deprecated_checked {selection}") };
+        let lint = native_linter(&format!("rule no-deprecated {options}\n{selection}"));
         let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
         let actual: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(actual, spans, "{allow}: {diagnostics:#?}");
+        assert_eq!(actual, spans, "{options} {selection}: {diagnostics:#?}");
     }
 }
 
@@ -122,15 +125,16 @@ fn inferred_object_properties_keep_declaration_docs_through_aliases_and_spreads(
 #[test]
 fn inferred_property_allow_uses_the_property_name_and_source_file() {
     let source = "const a = { /** @deprecated */ old: 1 }; const copy = { ...a }; copy.old;";
-    for (allow, reports) in [
-        ("[]", 1),
-        ("['old']", 0),
-        ("[{ from: 'file', name: 'old' }]", 0),
-        ("[{ from: 'file', name: 'other' }]", 1),
-        ("[{ from: 'lib', name: 'old' }]", 1),
+    for (options, selection, reports) in [
+        ("{ set allow [] }", "", 1),
+        ("{ set allow ['old'] }", "", 0),
+        ("", "!any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'file' && gate.name == 'old'))", 0),
+        ("", "!any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'file' && gate.name == 'other'))", 1),
+        ("", "!any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'lib' && gate.name == 'old'))", 1),
     ] {
-        let lint = native_linter(&format!("rule no-deprecated {{ set allow {allow} }}"));
+        let selection = if selection.is_empty() { String::new() } else { format!("override in ts_node let no_deprecated_checked {selection}") };
+        let lint = native_linter(&format!("rule no-deprecated {options}\n{selection}"));
         let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
-        assert_eq!(diagnostics.len(), reports, "{allow}: {diagnostics:#?}");
+        assert_eq!(diagnostics.len(), reports, "{options} {selection}: {diagnostics:#?}");
     }
 }
