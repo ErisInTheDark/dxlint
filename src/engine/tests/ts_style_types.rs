@@ -3,6 +3,40 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn inferrable_annotation_hook_preserves_widening_exceptions_and_parameter_positions() {
+    let source = "let variable: number = 1; let inferred = 1; let other: number = f(); class C { public property: number = 1; readonly wide: number = 1; optional?: number = 1; constructor(public promoted: number = 1) {} } function f(parameter: number = 1) {}";
+    for (predicate, heads) in [
+        (None, vec!["variable:", "public property:", "promoted:", "parameter:"]),
+        (Some("true"), vec!["variable:", "public property:", "promoted:", "parameter:"]),
+        (Some("node not ts_parameter"), vec!["variable:", "public property:"]),
+        (Some("node is ts_class_property && node.key == \"property\""), vec!["public property:"]),
+        (Some("false"), vec![]),
+    ] {
+        let config = predicate.map_or_else(String::new, |predicate| format!("override in inferrable_annotation let no_inferrable_types_checked {predicate}\n"));
+        let linter = native_linter(&format!("{config}rule no-inferrable-types"));
+        let diagnostics = linter.lint(Path::new("file.ts"), source);
+        let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        let expected: Vec<_> = heads.iter().map(|head| source.find(head).expect("declaration in source")).collect();
+        assert_eq!(starts, expected, "{predicate:?}: {diagnostics:?}");
+    }
+}
+
+#[test]
+fn inferrable_annotation_group_drops_only_selected_declaration_kinds() {
+    let source = "let value: number = 1; class C { property: number = 1; } function f(parameter: number = 1) {}";
+    for (kind, omitted) in [
+        ("ts_declarator", "value:"),
+        ("ts_class_property", "property:"),
+        ("ts_parameter", "parameter:"),
+    ] {
+        let linter = native_linter(&format!("drop group inferrable_annotation {kind}\nrule no-inferrable-types"));
+        let diagnostics = linter.lint(Path::new("file.ts"), source);
+        assert_eq!(diagnostics.len(), 2, "{kind}: {diagnostics:?}");
+        assert!(!diagnostics.iter().any(|diagnostic| diagnostic.start == source.find(omitted).expect("omitted declaration in source")));
+    }
+}
+
+#[test]
 fn explicit_any_hook_selects_rest_array_context_without_hiding_other_annotations() {
     let source = "type Ordinary = any; function arrays(...args: any[]) {} type Callback = (...args: ReadonlyArray<any>) => void; function immutable(...args: readonly any[]) {} function bare(...args: any) {} function nested(...args: any[][]) {} function tuple(...args: [any]) {} let value: Array<any>; let marker: number; function unrelated(...args: Foo<any>) {} function genericNested(...args: Array<Array<any>>) {}";
     for (predicate, expected) in [
