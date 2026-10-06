@@ -97,7 +97,14 @@ fn class(layout: Layout) -> Option<usize> {
 
 pub struct Pooled;
 
+// Never inlined: calls to the global allocator carry allocation semantics
+// the optimiser reasons with (calls elided, moved to the stack, returned
+// memory assumed fresh). Release builds with LTO, which could inline these
+// bodies across crates, aborted on a failed small allocation, while builds
+// without LTO did not; the exact interaction was not pinned down. Behind an
+// opaque call the pools are only ever touched by the code below.
 unsafe impl GlobalAlloc for Pooled {
+    #[inline(never)]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         match class(layout) {
             // SAFETY: the pool hands out blocks of the class size.
@@ -107,6 +114,7 @@ unsafe impl GlobalAlloc for Pooled {
         }
     }
 
+    #[inline(never)]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         match class(layout) {
             Some(_) => {
@@ -122,6 +130,7 @@ unsafe impl GlobalAlloc for Pooled {
         }
     }
 
+    #[inline(never)]
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
         match class(layout) {
             // SAFETY: `block` came from `alloc` with this layout, so from a pool.
@@ -131,6 +140,7 @@ unsafe impl GlobalAlloc for Pooled {
         }
     }
 
+    #[inline(never)]
     unsafe fn realloc(&self, block: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         // SAFETY: `layout.align()` is a valid alignment and the caller keeps
         // `new_size` within isize after rounding.
