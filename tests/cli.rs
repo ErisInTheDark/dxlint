@@ -31,6 +31,25 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 "#;
 
 #[test]
+fn worker_limits_preserve_single_file_and_project_diagnostics() {
+    let dir = project("cli-jobs", &[(".zlint", RULES), ("a.t", "LOUD SMALL"), ("b.t", "QUIET")]);
+    for paths in [&["a.t"][..], &["a.t", "b.t"][..]] {
+        let run = |jobs: &str| {
+            let mut args = vec!["--jobs", jobs, "--no-cache", "--format", "jsonl"];
+            args.extend(paths);
+            let out = zlint(&dir, &args);
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            let mut diagnostics: Vec<String> = stdout(&out).lines().map(str::to_owned).collect();
+            diagnostics.sort();
+            diagnostics
+        };
+        let serial = run("1");
+        assert!(!serial.is_empty());
+        assert_eq!(serial, run("3"));
+    }
+}
+
+#[test]
 fn zlint_library_reads_the_built_in_library_from_disk() {
     // A library dir whose `whitespace` module defines a different rule.
     let library = project("library-override", &[("std/whitespace.zlint", "in .* layer text match bang /!/ {\n  rule bang warn \"bang\"\n}\n")]);

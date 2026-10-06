@@ -250,6 +250,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         reach: grammar.reach(),
         profile: None,
         split_at: 128 * 1024,
+        rule_jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
         grammar,
         rules,
         inert,

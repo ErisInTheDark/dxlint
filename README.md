@@ -190,7 +190,7 @@ Release build, 16 threads, files from this repository's own sources:
 | one 27 MiB file, the whitespace rules | ~490 ms | ~55 MiB/s |
 | one 27 MiB file, full self-lint config | ~1.2 s | ~23 MiB/s |
 
-A single file is parsed on one thread. Files are linted in parallel.
+A single file is parsed on one thread. Files are linted in parallel; large native files can also run independent rule groups in parallel. `--jobs N` limits the shared file/rule worker budget and directory traversal threads. It defaults to available CPUs; use `--jobs 1` for serial linting.
 
 Where the speed comes from:
 

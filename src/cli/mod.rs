@@ -37,6 +37,9 @@ pub struct ConfigArg {
 pub struct LintArgs {
     /// Files or directories to lint (default: the project root)
     pub paths: Vec<PathBuf>,
+    /// Limit lint workers and parallel rule groups (default: available CPUs)
+    #[arg(long)]
+    pub jobs: Option<std::num::NonZeroUsize>,
     /// Apply fixes in place
     #[arg(long)]
     pub fix: bool,

@@ -156,9 +156,15 @@ pub struct Linter {
     pub fingerprint: u64,
     /// Files at least this big run their rules in groups on several threads.
     pub(crate) split_at: usize,
+    rule_jobs: usize,
 }
 
 impl Linter {
+    /// Limit parallel rule groups per file; zero selects serial evaluation.
+    pub fn set_rule_jobs(&mut self, jobs: usize) {
+        self.rule_jobs = jobs.max(1);
+    }
+
     /// Collect `--profile` counters from now on.
     pub fn enable_profile(&mut self) {
         self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len()));
@@ -375,8 +381,7 @@ impl Linter {
     /// and fact work.
     fn rule_groups(&self, active: &[bool], len: usize) -> Vec<Vec<bool>> {
         let on: Vec<usize> = (0..active.len()).filter(|&i| active[i]).collect();
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-        let k = if len < self.split_at { 1 } else { (len / self.split_at.max(1)).clamp(2, 4).min(threads).min(on.len().max(1)) };
+        let k = if len < self.split_at { 1 } else { (len / self.split_at.max(1)).clamp(2, 4).min(self.rule_jobs).min(on.len().max(1)) };
         if k <= 1 {
             return vec![active.to_vec()];
         }

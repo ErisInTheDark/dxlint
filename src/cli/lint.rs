@@ -93,12 +93,13 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
     let cache = (!args.no_cache && !args.profile).then(|| Cache::open(&linter));
     let cwd = std::env::current_dir().unwrap_or_default();
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
+    let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
     let mut walker = WalkBuilder::new(&roots[0]);
     for r in &roots[1..] {
         walker.add(r);
     }
-    walker.hidden(false).filter_entry(|e| e.file_name() != ".git");
+    walker.hidden(false).threads(jobs).filter_entry(|e| e.file_name() != ".git");
 
     let (tx, rx) = mpsc::channel::<Msg>();
     let fix = args.fix;
@@ -113,7 +114,7 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
     let mut failed = false;
 
     std::thread::scope(|s| {
-        let linter = &linter;
+        let linter = &mut linter;
         let cache = cache.as_ref();
         let explicit: Vec<PathBuf> = roots.iter().filter(|r| r.is_file()).cloned().collect();
         s.spawn(move || {
@@ -121,6 +122,7 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
             // late would otherwise be the tail every other thread waits on.
             let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
             walker.build_parallel().run(|| {
+                let linter = &*linter;
                 let explicit = &explicit;
                 let found = &found;
                 Box::new(move |entry| {
@@ -141,7 +143,10 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
             let mut queue = found.into_inner().expect("file list");
             queue.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
             let next = std::sync::atomic::AtomicUsize::new(0);
-            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let threads = jobs.min(queue.len().max(1));
+            // File and rule workers share one budget, rather than multiplying it.
+            linter.set_rule_jobs(jobs / threads);
+            let linter = &*linter;
             std::thread::scope(|w| {
                 for _ in 0..threads {
                     let tx = tx.clone();
