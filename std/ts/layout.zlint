@@ -29,10 +29,6 @@ in ts_block let layout_block_module parent is ts_namespace
 in ts_block let layout_brace_excluded parent is (ts_program, ts_block, ts_case)
 in ts_block let layout_brace_keyword parent is (ts_if, ts_try)
 in ts_block, ts_static_block, ts_switch, ts_class let layout_brace_single opener.ts_open_brace.line == closer.ts_close_brace.line
-group generator_named_functions ts_function
-group generator_anonymous_functions ts_function
-group generator_methods ts_method
-group generator_shorthand_methods ts_method
 in ts_function let generator_star_named name != null
 in ts_method let generator_star_shorthand parent is ts_object
 @macro layout_yield_star_options {
@@ -187,30 +183,28 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
   option style "always" | "never" = "always" "spacing inside comment delimiters"
   option exceptions string[] = [] "repeated sequences exempt from spacing"
   option markers string[] = [] "comment prefix markers"
-  option line { exceptions?: string[]; markers?: string[] } = {} "line-comment options"
-  option block { exceptions?: string[]; markers?: string[]; balanced?: boolean } = {} "block-comment options"
   let comment_block is ts_block_comment
   let comment_body byte_slice(text, 2, byte_len(text) - (if comment_block then 2 else 0))
-  let comment_options if comment_block then block else line
-  let comment_markers if comment_options.markers != null then comment_options.markers else markers
-  let comment_exceptions if comment_options.exceptions != null then comment_options.exceptions else exceptions
-  let comment_marker_pattern "(?:" join(map(comment_markers, m => re_escape(m)), "|") (if count(comment_markers) > 0 then "|\\*)" else "\\*)")
-  let comment_exception_pattern if count(comment_exceptions) == 0 then "\\s" else "(?:\\s|(?:" join(map(comment_exceptions, e => "(?:" re_escape(e) ")+"), "|") ")(?:$|[\\n\\r\\u{{2028}}\\u{{2029}}]))"
+  let comment_marker_pattern "(?:" join(map(markers, m => re_escape(m)), "|") (if count(markers) > 0 then "|\\*)" else "\\*)")
+  let comment_exception_pattern if count(exceptions) == 0 then "\\s" else "(?:\\s|(?:" join(map(exceptions, e => "(?:" re_escape(e) ")+"), "|") ")(?:$|[\\n\\r\\u{{2028}}\\u{{2029}}]))"
   let comment_marker default(re_find(comment_body, "^" comment_marker_pattern), "")
-  when comment_body != "" && comment_body != "*" && !contains(comment_markers, comment_body)
+  when comment_body != "" && comment_body != "*" && !contains(markers, comment_body)
   when comment_block || !re_test(comment_body, /^\/\s*<(?:reference|amd-)/)
 }
-in ts_comment rule spaced-comment {
+fn layout_comment_open_wrong(body, style, marker_pattern, exception_pattern) = if style == "always" then !re_test(body, "^" marker_pattern "?" exception_pattern) else re_test(body, "^" marker_pattern "?[ \\t]+")
+fn layout_comment_open_message(style, exceptions, marker, identifier) = if style == "always" then (if count(exceptions) > 0 then "Expected exception block, space or tab after '{identifier}{marker}' in comment." else "Expected space or tab after '{identifier}{marker}' in comment.") else if marker != "" then "Unexpected space or tab after marker ({marker}) in comment." else "Unexpected space or tab after '{identifier}' in comment."
+in ts_line_comment rule spaced-comment:line {
   @layout_comment_policy
-  when if style == "always" then !re_test(comment_body, "^" comment_marker_pattern "?" comment_exception_pattern) else re_test(comment_body, "^" comment_marker_pattern "?[ \\t]+")
-  let comment_identifier if comment_block then "/*" else "//"
-  warn if style == "always" then (if count(comment_exceptions) > 0 then "Expected exception block, space or tab after '{comment_identifier}{comment_marker}' in comment." else "Expected space or tab after '{comment_identifier}{comment_marker}' in comment.") else if comment_marker != "" then "Unexpected space or tab after marker ({comment_marker}) in comment." else "Unexpected space or tab after '{comment_identifier}' in comment."
+  when layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+  warn layout_comment_open_message(style, exceptions, comment_marker, "//")
 }
-in ts_block_comment rule spaced-comment:end {
+in ts_block_comment rule spaced-comment:block {
   @layout_comment_policy
-  when block.balanced == true
-  when if style == "always" then !re_test(comment_body, comment_exception_pattern "$") else re_test(comment_body, /[ \t]+$/)
-  warn if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment."
+  option balanced boolean = false "require matching closing delimiter spacing"
+  each comment_end in [false, true]
+  when !comment_end || balanced
+  when if comment_end then (if style == "always" then !re_test(comment_body, comment_exception_pattern "$") else re_test(comment_body, /[ \t]+$/)) else layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+  warn if !comment_end then layout_comment_open_message(style, exceptions, comment_marker, "/*") else if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment."
 }
 
 in ts_number rule no-floating-decimal:leading {
@@ -524,19 +518,19 @@ in ts_yield.operator rule yield-star-spacing:after {
 }
 
 in ts_function.modifier rule generator-star-spacing:named {
-  when parent is generator_named_functions && parent.generator_star_named
+  when parent.generator_star_named
   @layout_generator_star_options
 }
 in ts_function.modifier rule generator-star-spacing:anonymous {
-  when parent is generator_anonymous_functions && !parent.generator_star_named
+  when !parent.generator_star_named
   @layout_generator_star_options
 }
 in ts_method.modifier rule generator-star-spacing:method {
-  when parent is generator_methods && !parent.generator_star_shorthand
+  when !parent.generator_star_shorthand
   @layout_generator_star_options
 }
 in ts_method.modifier rule generator-star-spacing:shorthand {
-  when parent is generator_shorthand_methods && parent.generator_star_shorthand
+  when parent.generator_star_shorthand
   @layout_generator_star_options
 }
 
