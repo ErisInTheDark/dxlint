@@ -12,7 +12,7 @@ use serde::Serialize;
 use super::{load_for_lint, render, ConfigArg, Format, LintArgs};
 use zoomie_lint::config::ast::Severity;
 use zoomie_lint::engine::cache::{self, Cache};
-use zoomie_lint::engine::{Diagnostic, Linter};
+use zoomie_lint::engine::{Diagnostic, Edit, Linter};
 use zoomie_lint::line_index::LineIndex;
 
 struct FileResult {
@@ -38,6 +38,49 @@ struct JsonDiag<'a> {
     end_line: usize,
     end_col: usize,
     fixable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix: Option<JsonFix<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonFix<'a> {
+    #[serde(serialize_with = "serialize_edits")]
+    edits: &'a [Edit],
+}
+
+#[derive(Serialize)]
+struct JsonEdit<'a> {
+    start: usize,
+    end: usize,
+    text: &'a str,
+}
+
+fn serialize_edits<S: serde::Serializer>(edits: &[Edit], serializer: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(edits.len()))?;
+    for edit in edits {
+        sequence.serialize_element(&JsonEdit { start: edit.start, end: edit.end, text: &edit.text })?;
+    }
+    sequence.end()
+}
+
+impl<'a> JsonDiag<'a> {
+    fn new(file: &'a str, text: &str, lines: &LineIndex, diagnostic: &'a Diagnostic) -> Self {
+        let (line, col) = lines.line_col(text, diagnostic.start);
+        let (end_line, end_col) = lines.line_col(text, diagnostic.end);
+        Self {
+            file,
+            rule: &diagnostic.rule,
+            severity: diagnostic.severity,
+            message: &diagnostic.message,
+            line: line + 1,
+            col: col + 1,
+            end_line: end_line + 1,
+            end_col: end_col + 1,
+            fixable: diagnostic.fix.is_some(),
+            fix: diagnostic.fix.as_deref().map(|edits| JsonFix { edits }),
+        }
+    }
 }
 
 fn display(path: &Path, cwd: &Path) -> String {
@@ -188,19 +231,7 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
                             let name = display(&r.path, &cwd);
                             let lines = LineIndex::new(&r.text);
                             for d in &r.diags {
-                                let (line, col) = lines.line_col(&r.text, d.start);
-                                let (end_line, end_col) = lines.line_col(&r.text, d.end);
-                                let json = JsonDiag {
-                                    file: &name,
-                                    rule: &d.rule,
-                                    severity: d.severity,
-                                    message: &d.message,
-                                    line: line + 1,
-                                    col: col + 1,
-                                    end_line: end_line + 1,
-                                    end_col: end_col + 1,
-                                    fixable: d.fix.is_some(),
-                                };
+                                let json = JsonDiag::new(&name, &r.text, &lines, d);
                                 let _ = writeln!(stdout, "{}", serde_json::to_string(&json).unwrap_or_default());
                             }
                         }
@@ -256,5 +287,37 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zoomie_lint::engine::Edit;
+
+    #[test]
+    fn json_preserves_every_edit_of_an_atomic_fix() {
+        let source = "\u{e9} abc";
+        let diagnostic = Diagnostic {
+            rule: "replace".into(),
+            severity: Severity::Warn,
+            message: "replace".into(),
+            start: 3,
+            end: source.len(),
+            fix: Some(vec![
+                Edit { start: 0, end: 2, text: "E".into() },
+                Edit { start: 4, end: 4, text: "!".into() },
+            ]),
+        };
+        let json = serde_json::to_value(JsonDiag::new("test", source, &LineIndex::new(source), &diagnostic)).unwrap();
+        let edits = json["fix"]["edits"].as_array().expect("fix edits");
+        assert_eq!(edits.len(), 2);
+        let mut external = source.to_owned();
+        for edit in edits.iter().rev() {
+            let start = edit["start"].as_u64().unwrap() as usize;
+            let end = edit["end"].as_u64().unwrap() as usize;
+            external.replace_range(start..end, edit["text"].as_str().unwrap());
+        }
+        assert_eq!(external, "E a!bc");
     }
 }

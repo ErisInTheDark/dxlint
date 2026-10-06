@@ -31,6 +31,56 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 "#;
 
 #[test]
+fn json_fix_edits_reproduce_fixing_unicode_files_and_survive_cache_replay() {
+    let config = r#"
+lang t "*.t"
+in .t {
+  match shout /LOUD/ { rule lower warn "lower" fix as lower(text) }
+  match remove /DEL/ { rule remove warn "remove" fix as "" }
+  match insert /\+/ { rule insert warn "insert" fix space_after as " " }
+  match question /\?/ { rule question warn "question" }
+}
+"#;
+    let source = "\u{e9} LOUD DEL +?";
+    let dir = project("cli-json-fix-edits", &[(".zlint", config), ("a.t", source)]);
+    let mut first = None;
+    for cached in [false, true] {
+        let out = zlint(&dir, &["--jobs", "1", "--format", "jsonl", "--stats", "a.t"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let reports: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(reports.len(), 4);
+        if cached {
+            assert!(String::from_utf8_lossy(&out.stderr).contains("1 from cache"));
+            assert_eq!(first.as_ref(), Some(&reports));
+        }
+        let mut edits = Vec::new();
+        for report in &reports {
+            if report["fixable"] == true {
+                for edit in report["fix"]["edits"].as_array().expect("fix edits") {
+                    let start = edit["start"].as_u64().unwrap() as usize;
+                    let end = edit["end"].as_u64().unwrap() as usize;
+                    assert!(source.is_char_boundary(start) && source.is_char_boundary(end));
+                    edits.push((start, end, edit["text"].as_str().unwrap().to_owned()));
+                }
+            } else {
+                assert!(report["fix"].is_null());
+            }
+        }
+        assert_eq!(edits.len(), 3);
+        edits.sort_by_key(|&(start, end, _)| (start, end));
+        let mut external = source.to_owned();
+        for (start, end, replacement) in edits.into_iter().rev() {
+            external.replace_range(start..end, &replacement);
+        }
+        assert_eq!(external, "\u{e9} loud  + ?");
+        first = Some(reports);
+    }
+    let fixed = zlint(&dir, &["--jobs", "1", "--fix", "a.t"]);
+    assert!(fixed.status.success(), "{}", String::from_utf8_lossy(&fixed.stderr));
+    assert_eq!(std::fs::read_to_string(dir.join("a.t")).unwrap(), "\u{e9} loud  + ?");
+}
+
+#[test]
 fn worker_limits_preserve_single_file_and_project_diagnostics() {
     let dir = project("cli-jobs", &[(".zlint", RULES), ("a.t", "LOUD SMALL"), ("b.t", "QUIET")]);
     for paths in [&["a.t"][..], &["a.t", "b.t"][..]] {
