@@ -472,7 +472,6 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
   option overrides { [keyword: string]: format_keyword_policy } = {} "spacing by keyword"
   let keyword_value if is ts_for_of.modifier then "for" else if parent is ts_variable_declaration && starts_with(text, "await") then "await" else text
   let keyword_label if parent is ts_for_of && parent.modifier != null && (text == "for" || is ts_for_of.modifier) then "for await" else keyword_value
-  let keyword_policy get(overrides, keyword_value)
   let keyword_module parent is (ts_import, ts_export, ts_import_specifier, ts_export_specifier) && contains(["import", "export", "from", "as", "type"], text)
   let keyword_statement parent is (ts_debugger, ts_with, ts_break, ts_continue, ts_return, ts_throw, ts_try, ts_if, ts_switch, ts_case, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_while, ts_static_block) && contains(["debugger", "with", "break", "continue", "return", "throw", "try", "catch", "finally", "if", "else", "switch", "case", "default", "do", "for", "in", "of", "while", "static", "await"], text)
   let keyword_modifier parent is (ts_method, ts_class_property) && (contains(["get", "set", "async", "accessor"], text) && offset < parent.key.offset || text == "static" && offset == parent.offset)
@@ -482,7 +481,7 @@ schema format_keyword_policy { before?: boolean; after?: boolean }
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_function.modifier, ts_arrow.modifier, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_super, ts_this, ts_debugger, ts_break, ts_continue, ts_return, ts_yield rule keyword-spacing:before {
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
-  let keyword_required default(keyword_policy.before, before)
+  let keyword_required if len(overrides) == 0 then before else default(get(overrides, keyword_value).before, before)
   when space_before != null && space_before.spaced != keyword_required
   when keyword_around || keyword_leading
   when !(contains(["in", "of"], text) && previous_token is ts_private_name)
@@ -497,7 +496,7 @@ in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_unary.operator, ts_
 in ts_keyword, ts_variable_declaration.kind, ts_try.kind, ts_method.modifier, ts_method.kind, ts_class_property.modifier, ts_import.kind, ts_export.kind, ts_for_of.modifier, ts_debugger, ts_break, ts_continue, ts_return rule keyword-spacing:after {
   @format_keyword_options
   # Cheapest and most selective first: most keywords are spaced as wanted.
-  let keyword_required default(keyword_policy.after, after)
+  let keyword_required if len(overrides) == 0 then after else default(get(overrides, keyword_value).after, after)
   when space_after != null && space_after.spaced != keyword_required
   when keyword_around
   when !(parent is ts_try && text == "catch" && parent.parameter != null)
