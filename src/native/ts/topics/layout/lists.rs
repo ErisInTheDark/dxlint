@@ -1,43 +1,31 @@
 //! Commas whose meaning belongs to a syntax list.
 
 use crate::expr::Value;
+use crate::fx_hash::FxHashMap;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
-use crate::native::ts::lexer::Tok;
+use crate::native::ts::lexer::{Tok, Token};
+use std::cell::OnceCell;
+use std::ops::Range;
 
 use super::lex;
 
-fn list_groups(file: &NativeFile<'_>, node: u32) -> Vec<(&'static str, Vec<u32>)> {
+fn list_groups(file: &NativeFile<'_>, node: u32) -> Vec<(F, Vec<u32>)> {
     let syntax = &file.syntax;
     let mut groups = Vec::new();
-    let main = match syntax.kind(node) {
-        Some(K::Var) => Some(("VariableDeclaration", F::Decl)),
-        Some(K::Array) => Some(("ArrayExpression", F::Element)),
-        Some(K::ArrayPattern) => Some(("ArrayPattern", F::Element)),
-        Some(K::Object) => Some(("ObjectExpression", F::Property)),
-        Some(K::ObjectPattern) => Some(("ObjectPattern", F::Property)),
-        Some(K::Function) => {
-            let declaration = syntax.parent(node).is_some_and(|p| matches!(syntax.kind(p), Some(K::Program | K::Block | K::Export | K::Namespace)));
-            Some((if declaration { if syntax.get(node, F::Body).is_none() { "TSDeclareFunction" } else { "FunctionDeclaration" } } else { "FunctionExpression" }, F::Param))
-        }
-        Some(K::Method) => Some((if syntax.get(node, F::Body).is_none() { "TSEmptyBodyFunctionExpression" } else { "FunctionExpression" }, F::Param)),
-        Some(K::Arrow) => Some(("ArrowFunctionExpression", F::Param)),
-        Some(K::FnType) => Some((if syntax.word(node, F::Kind) == Some("new") { "TSConstructorType" } else { "TSFunctionType" }, F::Param)),
-        Some(K::Call) => Some(("CallExpression", F::Arg)),
-        Some(K::New) => Some(("NewExpression", F::Arg)),
-        Some(K::ImportCall) => Some(("ImportExpression", F::Arg)),
-        Some(K::Import) => Some(("ImportDeclaration", F::Specifier)),
-        Some(K::Export) => Some(("ExportNamedDeclaration", F::Specifier)),
-        Some(K::Sequence) => Some(("SequenceExpression", F::Expr)),
-        Some(K::Enum) => Some(("TSEnumBody", F::Member)),
-        Some(K::TupleType) => Some(("TSTupleType", F::Element)),
-        Some(K::TypeLit) => Some(("TSTypeLiteral", F::Member)),
-        Some(K::MethodSig) => Some(("TSMethodSignature", F::Param)),
-        Some(K::CallSig) => Some((if syntax.word(node, F::Kind) == Some("new") { "TSConstructSignatureDeclaration" } else { "TSCallSignatureDeclaration" }, F::Param)),
-        Some(K::IndexSig) => Some(("TSIndexSignature", F::Param)),
+    let Some(kind) = syntax.kind(node) else { return groups };
+    let main = match kind {
+        K::Var => Some(F::Decl),
+        K::Array | K::ArrayPattern | K::TupleType => Some(F::Element),
+        K::Object | K::ObjectPattern => Some(F::Property),
+        K::Function | K::Method | K::Arrow | K::FnType | K::MethodSig | K::CallSig | K::IndexSig => Some(F::Param),
+        K::Call | K::New | K::ImportCall => Some(F::Arg),
+        K::Import | K::Export => Some(F::Specifier),
+        K::Sequence => Some(F::Expr),
+        K::Enum | K::TypeLit => Some(F::Member),
         _ => None,
     };
-    if let Some((owner, field)) = main {
+    if let Some(field) = main {
         let mut items: Vec<_> = syntax.all(node, field).collect();
         if syntax.is(node, K::ObjectPattern) {
             items.extend(syntax.all(node, F::Rest));
@@ -47,83 +35,130 @@ fn list_groups(file: &NativeFile<'_>, node: u32) -> Vec<(&'static str, Vec<u32>)
             items.extend(syntax.all(node, F::Namespace));
             items.sort_unstable_by_key(|&id| syntax.tree.node(id).start);
         }
-        groups.push((owner, items));
+        if !items.is_empty() { groups.push((field, items)); }
     }
     if syntax.is(node, K::Class) {
-        groups.push(("ClassDeclaration", syntax.all(node, F::Implements).collect()));
+        let items: Vec<_> = syntax.all(node, F::Implements).collect();
+        if !items.is_empty() { groups.push((F::Implements, items)); }
     } else if syntax.is(node, K::Interface) {
-        groups.push(("TSInterfaceDeclaration", syntax.all(node, F::Extends).collect()));
-        groups.push(("TSInterfaceBody", syntax.all(node, F::Member).collect()));
+        for field in [F::Extends, F::Member] {
+            let items: Vec<_> = syntax.all(node, field).collect();
+            if !items.is_empty() { groups.push((field, items)); }
+        }
     }
-    for (owner, field) in [("TSTypeParameterDeclaration", F::TypeParam), ("TSTypeParameterInstantiation", F::TypeArg)] {
-        if !syntax.is(node, K::Mapped) {
-            groups.push((owner, syntax.all(node, field).collect()));
+    if kind != K::Mapped {
+        for field in [F::TypeParam, F::TypeArg] {
+            if crate::native::ts::kinds::KINDS[kind as usize].1.contains(&field) {
+                let items: Vec<_> = syntax.all(node, field).collect();
+                if !items.is_empty() { groups.push((field, items)); }
+            }
         }
     }
     groups
 }
 
-pub(super) fn comma_line_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let syntax = &file.syntax;
-    let lexed = file.cached(lex);
-    let tokens = &lexed.0;
-    let mut sites = Vec::new();
-    for (owner, items) in list_groups(file, node) {
-        let defined: Vec<_> = items.iter().copied().filter(|&id| !syntax.is(id, K::Hole)).collect();
-        let mut commas = std::collections::BTreeSet::new();
-        let span = syntax.tree.node(node);
-        if matches!(owner, "ImportDeclaration" | "ExportNamedDeclaration") {
-            // The parser currently omits import attributes from the tree.
-            // Their values are literals, so this bounded lexical list is flat.
-            if let Some(from) = syntax.get(node, F::From) {
-                let at = tokens.partition_point(|token| token.start < syntax.tree.node(from).end);
-                if tokens.get(at).is_some_and(|token| matches!(token.tok, Tok::Ident) && matches!(&syntax.src[token.start as usize..token.end as usize], "with" | "assert")) && tokens.get(at + 1).is_some_and(|token| token.tok == Tok::P("{")) {
-                    commas.extend((at + 2..tokens.len()).take_while(|&i| tokens[i].end <= span.end && tokens[i].tok != Tok::P("}")).filter(|&i| tokens[i].tok == Tok::P(",")));
-                }
-            }
-        }
-        if let Some(&first) = defined.first() {
-            let mut at = tokens.partition_point(|token| token.start < syntax.tree.node(first).start);
-            while let Some(previous) = at.checked_sub(1).filter(|&i| tokens[i].start >= span.start && matches!(tokens[i].tok, Tok::P("," | "("))) {
-                at = previous;
-                if tokens[at].tok == Tok::P(",") { commas.insert(at); }
-            }
-            for pair in defined.windows(2) {
-                let from = syntax.tree.node(pair[0]).end;
-                let to = syntax.tree.node(pair[1]).start;
-                let begin = tokens.partition_point(|token| token.start < from);
-                commas.extend((begin..tokens.len()).take_while(|&i| tokens[i].start < to).filter(|&i| tokens[i].tok == Tok::P(",")));
-            }
-            for &item in &defined {
-                if let Some(last) = tokens.partition_point(|token| token.start < syntax.tree.node(item).end).checked_sub(1).filter(|&i| tokens[i].tok == Tok::P(",")) { commas.insert(last); }
-            }
-            let last = *defined.last().expect("nonempty items");
-            let mut at = tokens.partition_point(|token| token.start < syntax.tree.node(last).end);
-            while tokens.get(at).is_some_and(|token| token.end <= span.end && matches!(token.tok, Tok::P("," | ")"))) {
-                if tokens[at].tok == Tok::P(",") { commas.insert(at); }
-                at += 1;
-            }
-        } else if !items.is_empty() {
-            let begin = tokens.partition_point(|token| token.start < span.start);
-            commas.extend((begin..tokens.len()).take_while(|&i| tokens[i].end <= span.end).filter(|&i| tokens[i].tok == Tok::P(",")));
-        }
-        for at in commas {
-            let Some(before) = at.checked_sub(1).and_then(|i| tokens.get(i)) else { continue };
-            let Some(after) = tokens.get(at + 1) else { continue };
-            let comma = tokens[at];
-            let after_break = syntax.src[comma.end as usize..after.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']);
-            if before.tok == Tok::P("[") || before.tok == Tok::P(",") && tokens[..at].iter().rev().find(|token| token.tok != Tok::P(",")).is_some_and(|token| token.tok == Tok::P("[")) || after.tok == Tok::P(",") && after_break {
-                continue;
-            }
-            sites.push(Value::record(vec![
-                ("owner".into(), Value::from(owner)),
-                ("offset".into(), Value::from(comma.start as usize)),
-                ("before_break".into(), Value::Bool(syntax.src[before.end as usize..comma.start as usize].contains(['\n', '\r', '\u{2028}', '\u{2029}']))),
-                ("after_break".into(), Value::Bool(after_break)),
-            ]));
-        }
+struct NativeList {
+    owner: u32,
+    field: F,
+    items: Vec<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct CommaContext {
+    owner: u32,
+    field: F,
+    previous: Option<u32>,
+}
+
+struct SyntaxLists {
+    lists: Vec<NativeList>,
+    owners: FxHashMap<u32, Range<usize>>,
+    // Trailing-comma queries need list items, not the separator index.
+    commas: OnceCell<FxHashMap<u32, CommaContext>>,
+}
+
+fn syntax_lists(file: &NativeFile<'_>) -> SyntaxLists {
+    let mut lists = Vec::new();
+    let mut owners = FxHashMap::default();
+    for owner in 0..file.syntax.tree.nodes.len() as u32 {
+        let begin = lists.len();
+        lists.extend(list_groups(file, owner).into_iter().map(|(field, items)| NativeList { owner, field, items }));
+        if lists.len() != begin { owners.insert(owner, begin..lists.len()); }
     }
-    Value::list(sites)
+    SyntaxLists { lists, owners, commas: OnceCell::new() }
+}
+
+/// Separators of one parser list, not commas inside its items.
+fn separators(file: &NativeFile<'_>, list: &NativeList, tokens: &[Token]) -> Vec<usize> {
+    let syntax = &file.syntax;
+    let defined: Vec<_> = list.items.iter().copied().filter(|&id| !syntax.is(id, K::Hole)).collect();
+    let mut commas = Vec::new();
+    let span = syntax.tree.node(list.owner);
+    if let Some(&first) = defined.first() {
+        let mut at = tokens.partition_point(|token| token.start < syntax.tree.node(first).start);
+        while let Some(previous) = at.checked_sub(1).filter(|&i| tokens[i].start >= span.start && matches!(tokens[i].tok, Tok::P("," | "("))) {
+            at = previous;
+            if tokens[at].tok == Tok::P(",") { commas.push(at); }
+        }
+        for pair in defined.windows(2) {
+            let from = syntax.tree.node(pair[0]).end;
+            let to = syntax.tree.node(pair[1]).start;
+            let begin = tokens.partition_point(|token| token.start < from);
+            commas.extend((begin..tokens.len()).take_while(|&i| tokens[i].start < to).filter(|&i| tokens[i].tok == Tok::P(",")));
+        }
+        for &item in &defined {
+            if let Some(last) = tokens.partition_point(|token| token.start < syntax.tree.node(item).end).checked_sub(1).filter(|&i| tokens[i].tok == Tok::P(",")) { commas.push(last); }
+        }
+        let last = *defined.last().expect("nonempty items");
+        let mut at = tokens.partition_point(|token| token.start < syntax.tree.node(last).end);
+        while tokens.get(at).is_some_and(|token| token.end <= span.end && matches!(token.tok, Tok::P("," | ")"))) {
+            if tokens[at].tok == Tok::P(",") { commas.push(at); }
+            at += 1;
+        }
+    } else {
+        let begin = tokens.partition_point(|token| token.start < span.start);
+        commas.extend((begin..tokens.len()).take_while(|&i| tokens[i].end <= span.end).filter(|&i| tokens[i].tok == Tok::P(",")));
+    }
+    commas.sort_unstable();
+    commas.dedup();
+    commas
+}
+
+fn comma_context(file: &NativeFile<'_>, node: u32) -> Option<CommaContext> {
+    if !file.syntax.is(node, K::Comma) { return None; }
+    let lists = file.cached(syntax_lists);
+    let contexts = lists.commas.get_or_init(|| {
+        let tokens = file.cached(lex);
+        let mut contexts = FxHashMap::default();
+        for list in &lists.lists {
+            let mut at = 0;
+            let mut previous = None;
+            for comma in separators(file, list, &tokens.0) {
+                let offset = tokens.0[comma].start;
+                while let Some(&item) = list.items.get(at).filter(|&&item| file.syntax.tree.node(item).start < offset) {
+                    if !file.syntax.is(item, K::Hole) { previous = Some(item); }
+                    at += 1;
+                }
+                let context = CommaContext { owner: list.owner, field: list.field, previous };
+                let replaced = contexts.insert(offset, context);
+                debug_assert!(replaced.is_none(), "comma belongs to two native lists");
+            }
+        }
+        contexts
+    });
+    contexts.get(&file.syntax.tree.node(node).start).copied()
+}
+
+pub(super) fn list_field(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+    comma_context(file, node).map_or(Value::Null, |context| Value::from(crate::native::ts::kinds::FIELD_NAMES[context.field as usize]))
+}
+
+pub(super) fn list_owner(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
+    comma_context(file, node).map(|context| context.owner).into_iter().collect()
+}
+
+pub(super) fn list_previous(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
+    comma_context(file, node).and_then(|context| context.previous).into_iter().collect()
 }
 
 fn assignment_pattern(file: &NativeFile<'_>, mut node: u32) -> bool {
@@ -141,21 +176,23 @@ fn assignment_pattern(file: &NativeFile<'_>, mut node: u32) -> bool {
 
 pub(super) fn trailing_comma_sites(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let syntax = &file.syntax;
-    let groups = list_groups(file, node).into_iter().filter_map(|(owner, items)| {
-        let kind = match owner {
-            "ArrayExpression" | "ArrayPattern" => "arrays",
-            "ObjectExpression" | "ObjectPattern" => "objects",
-            "FunctionDeclaration" | "FunctionExpression" | "TSDeclareFunction" | "TSEmptyBodyFunctionExpression" | "ArrowFunctionExpression" | "TSFunctionType" | "TSConstructorType" | "CallExpression" | "NewExpression" => "functions",
-            "ImportExpression" => "dynamicImports",
-            "ImportDeclaration" => "imports",
-            "ExportNamedDeclaration" => "exports",
-            "TSEnumBody" => "enums",
-            "TSTupleType" => "tuples",
-            "TSTypeParameterDeclaration" => "generics",
-            "TSTypeParameterInstantiation" => "type-arguments",
+    let lists = file.cached(syntax_lists);
+    let Some(range) = lists.owners.get(&node) else { return Value::list(Vec::new()) };
+    let groups = lists.lists[range.clone()].iter().filter_map(|list| {
+        let kind = match (list.field, syntax.kind(node)) {
+            (F::TypeParam, _) => "generics",
+            (F::TypeArg, _) => "type-arguments",
+            (_, Some(K::Array | K::ArrayPattern)) => "arrays",
+            (_, Some(K::Object | K::ObjectPattern)) => "objects",
+            (_, Some(K::Function | K::Method | K::Arrow | K::FnType | K::Call | K::New)) => "functions",
+            (_, Some(K::ImportCall)) => "dynamicImports",
+            (_, Some(K::Import)) => "imports",
+            (_, Some(K::Export)) => "exports",
+            (_, Some(K::Enum)) => "enums",
+            (_, Some(K::TupleType)) => "tuples",
             _ => return None,
         };
-        Some((kind, items))
+        Some((kind, &list.items))
     });
     let lexed = file.cached(lex);
     let mut sites = Vec::new();
@@ -194,4 +231,68 @@ pub(super) fn trailing_comma_sites(file: &NativeFile<'_>, node: u32) -> Value<'s
         ]));
     }
     Value::list(sites)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn native_list_context_separates_fields_and_skips_leading_holes() {
+        let lint = native_linter(r#"
+            in ts_comma rule context {
+                when list_owner is ts_call
+                warn "{list_field}:{list_previous.text}"
+            }
+            in ts_comma rule holes {
+                when list_owner is ts_array
+                warn if list_previous == null then "absent" else list_previous.text
+            }
+        "#);
+        let reports = lint.lint(Path::new("/root/file.ts"), "f<A, B>(first, second); const a = [,,a,,b,];");
+        assert_eq!(reports.iter().filter(|r| r.rule == "context").map(|r| r.message.as_str()).collect::<Vec<_>>(),
+            ["type_argument:A", "argument:first"]);
+        assert_eq!(reports.iter().filter(|r| r.rule == "holes").map(|r| r.message.as_str()).collect::<Vec<_>>(),
+            ["absent", "absent", "a", "a", "b"]);
+    }
+
+    #[test]
+    fn comma_style_selection_distinguishes_lists_of_one_host() {
+        let lint = native_linter(r#"
+            rule comma-style { set style "last" }
+            override in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists && comma_style_field != "type_argument"
+        "#);
+        let source = "f<A\n,B>(first\n,second);";
+        let reports = lint.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(&source[reports[0].start..reports[0].end], ",");
+        assert_eq!(reports[0].start, source.rfind(',').unwrap());
+    }
+
+    #[test]
+    fn comma_style_attribute_commas_report_once_and_select_independently() {
+        let source = "import {a,\nb} from 'x' with {type: 'json',\nmode: 'strict'};";
+        let all = native_linter("rule comma-style { set style 'first' }");
+        let reports = all.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| &source[report.start..report.end] == ","));
+        let selected = native_linter("rule comma-style { set style 'first' }\ndrop group comma_style_lists ts_import_attributes");
+        let reports = selected.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].start, source.find(',').unwrap());
+    }
+
+    #[test]
+    fn trailing_comma_queries_keep_argument_and_type_argument_lists_separate() {
+        let lint = native_linter(r#"
+            in ts_call rule lists {
+                each site in trailing_comma_sites
+                warn site.kind
+            }
+        "#);
+        let reports = lint.lint(Path::new("/root/file.ts"), "f<A,B>(first,second);");
+        assert_eq!(reports.iter().map(|report| report.message.as_str()).collect::<Vec<_>>(),
+            ["functions", "type-arguments"]);
+    }
 }

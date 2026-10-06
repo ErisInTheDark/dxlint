@@ -23,4 +23,4 @@ pub mod typed;
 pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, type_relations::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS, symbols::FACTS];
 
 /// Every link between nodes.
-pub const LINK_GROUPS: &[&[Link]] = &[relations::LINKS];
+pub const LINK_GROUPS: &[&[Link]] = &[relations::LINKS, layout::LINKS];

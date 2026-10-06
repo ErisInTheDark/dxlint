@@ -76,12 +76,26 @@ in ts_block, ts_static_block, ts_switch, ts_class {
   let layout_padding_single opener.ts_open_brace.line + layout_line_breaks(layout_padding_open_prefix) == closer.ts_close_brace.line - layout_line_breaks(layout_padding_close_suffix)
 }
 
-in ts_variable_declaration, ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_method, ts_arrow, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_sequence, ts_enum, ts_tuple_type, ts_type_literal, ts_method_signature, ts_call_signature, ts_index_signature, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_tagged_template rule comma-style {
+group comma_style_lists ts_variable_declaration, ts_array, ts_array_pattern, ts_object, ts_object_pattern,
+  ts_function, ts_method, ts_arrow, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export,
+  ts_sequence, ts_enum, ts_tuple_type, ts_type_literal, ts_method_signature, ts_call_signature,
+  ts_index_signature, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_tagged_template, ts_import_attributes
+in ts_comma {
+  let comma_style_owner list_owner
+  let comma_style_field list_field
+}
+in ts_import_attribute_comma {
+  let comma_style_owner parent
+  let comma_style_field "attribute"
+}
+in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists
+in ts_comma, ts_import_attribute_comma rule comma-style {
   option style "last" | "first" = "last" "comma line position"
-  option exceptions { [key: string]: boolean } = {} "exempt list node kinds"
-  each comma_line in filter(comma_line_sites, s => get(exceptions, s.owner) != true && (s.before_break && s.after_break || (if style == "last" then s.before_break else s.after_break)))
-  report at comma_line.offset
-  warn if comma_line.before_break && comma_line.after_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
+  when comma_style_checked
+  when comma_style_owner not (ts_array, ts_array_pattern) || list_previous != null
+  when !(token_neighbours.after.text == "," && token_neighbours.after.line_break)
+  when token_neighbours.before.line_break && token_neighbours.after.line_break || (if style == "last" then token_neighbours.before.line_break else token_neighbours.after.line_break)
+  warn if token_neighbours.before.line_break && token_neighbours.after.line_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
 }
 
 @macro multiple_space_horizontal "[ \\t\\u{{b}}\\u{{c}}\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
@@ -100,7 +114,7 @@ in multiple_space_gap rule no-multi-spaces {
   when multiple_spaces_checked && re_test(text, if includeTabs then /[ \t]{2}/ else / {2}/)
     && re_test(byte_slice(source, position(offset).js_line_start, offset), @multiple_space_nonspace)
     && re_test(text_after, "^" @multiple_space_nonspace)
-    && !any(overlapping(ts_comment), comment => true)
+    && count(overlapping(ts_comment)) == 0
   fix as " "
   warn "Multiple spaces found before '{multiple_space_display}'."
 }
@@ -391,6 +405,8 @@ in ts_open_paren rule space-before-function-paren {
 }
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
+fn layout_dangle_mode(kind, style, arrays, objects, functions, imports, exports, attributes, dynamic, enums, generics, tuples) = if kind == "arrays" then default(arrays, style) else if kind == "objects" then default(objects, style) else if kind == "functions" then default(functions, style) else if kind == "imports" then default(imports, style) else if kind == "exports" then default(exports, style) else if kind == "importAttributes" then default(attributes, style) else if kind == "dynamicImports" then default(dynamic, style) else if kind == "enums" then default(enums, style) else if kind == "generics" then default(generics, style) else if kind == "tuples" then default(tuples, style) else "never"
+fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
 in ts_import_attributes let layout_attribute_last last(descendants(ts_import_attribute))
 in ts_import_attributes let layout_attribute_comma first(filter(descendants(ts_import_attribute_comma), c => c.offset >= layout_attribute_last.end_offset))
 in ts_import_attributes let layout_attribute_comma_sites if layout_attribute_last == null then [] else [{
@@ -413,17 +429,11 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   option enums trailing_comma_mode | null = null "enum policy"
   option generics trailing_comma_mode | null = null "type parameter policy"
   option tuples trailing_comma_mode | null = null "tuple policy"
-  each dangle_check in map(if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites, s => {
-    site: s,
-    mode: if s.kind == "arrays" then default(arrays, style) else if s.kind == "objects" then default(objects, style) else if s.kind == "functions" then default(functions, style) else if s.kind == "imports" then default(imports, style) else if s.kind == "exports" then default(exports, style) else if s.kind == "importAttributes" then default(importAttributes, style) else if s.kind == "dynamicImports" then default(dynamicImports, style) else if s.kind == "enums" then default(enums, style) else if s.kind == "generics" then default(generics, style) else if s.kind == "tuples" then default(tuples, style) else "never"
-  })
-  when dangle_check.mode != "ignore"
-  when if dangle_check.mode == "always" || dangle_check.mode == "always-multiline" && dangle_check.site.multiline then
-    dangle_check.site.trailing != dangle_check.site.allowed
-    else dangle_check.site.trailing && !(dangle_check.mode == "only-multiline" && dangle_check.site.multiline) && !dangle_check.site.tsx_single
-  report at dangle_check.site.offset
-  fix as slice(text, 0, dangle_check.site.offset - offset) (if dangle_check.site.trailing then "" else ",") slice(text, dangle_check.site.offset - offset + (if dangle_check.site.trailing then 1 else 0))
-  warn if dangle_check.site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
+  each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites
+  when layout_dangle_wrong(dangle_site, layout_dangle_mode(dangle_site.kind, style, arrays, objects, functions, imports, exports, importAttributes, dynamicImports, enums, generics, tuples))
+  report at dangle_site.offset
+  fix as slice(text, 0, dangle_site.offset - offset) (if dangle_site.trailing then "" else ",") slice(text, dangle_site.offset - offset + (if dangle_site.trailing then 1 else 0))
+  warn if dangle_site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
 }
 
 in ts_parenthesized let layout_property_name default(expression.layout_property_name, expression)

@@ -1,6 +1,6 @@
 //! @stylistic spacing, punctuation and line breaks: lexical neighbours.
 
-use crate::expr::facts::Fact;
+use crate::expr::facts::{Fact, Link};
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::lexer::Token;
@@ -19,9 +19,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(punctuation::statement_semicolon, n),
     },
     Fact {
-        name: "comma_line_sites",
-        doc: "native list owners: comma records {owner,offset,before_break,after_break}; parser item boundaries exclude nested commas and initial array holes",
-        get: |f, n| f.with_file(lists::comma_line_sites, n),
+        name: "list_field",
+        doc: "native comma: field of its containing syntax list (argument, parameter, type_argument, type_parameter, element, property, member, specifier, declaration, expression, extends, implements); null outside parser lists",
+        get: |f, n| f.with_file(lists::list_field, n),
     },
     Fact {
         name: "property_quote_sites",
@@ -37,6 +37,21 @@ pub const FACTS: &[Fact] = &[
         name: "trailing_comma_sites",
         doc: "native list owners: {kind,offset,trailing,multiline,allowed,tsx_single}; offset is comma or insertion point, multiline compares last item/comma with closing token",
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
+    },
+];
+
+pub const LINKS: &[Link] = &[
+    Link {
+        name: "list_owner",
+        doc: "native comma: node owning its syntax list; null outside parser lists",
+        many: false,
+        get: |f, n| f.nodes_of(lists::list_owner, n),
+    },
+    Link {
+        name: "list_previous",
+        doc: "native comma: preceding occupied item of the same syntax list, skipping array holes; null before the first occupied item",
+        many: false,
+        get: |f, n| f.nodes_of(lists::list_previous, n),
     },
 ];
 
