@@ -593,10 +593,10 @@ in ts_identifier, ts_private_name {
   let restriction_name_length if parent is (ts_declarator, ts_parameter) then is (ts_declarator.name, ts_parameter.name) else if parent is ts_assignment_pattern then is ts_assignment_pattern.left else if restriction_name_pattern then (if is ts_node.key then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then is ts_property.key else if parent is ts_import_specifier then is ts_import_specifier.local && default(parent.imported.static_name, parent.imported) != restriction_identifier_name else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then is ts_try.parameter else if parent is ts_member then restriction_name_assignment else false
 }
 in ts_identifier, ts_private_name rule id-denylist {
-  option options string[] = [] "restricted identifiers"
+  option names string[] = [] "restricted identifiers"
   when (!restriction_name_external || is ts_property.key && !restriction_name_pattern) && !restriction_name_attributes && !restriction_name_renamed && !restriction_name_alias
   when parent not (ts_call, ts_new, ts_meta_property) && !(is ts_member.property && !restriction_name_assignment)
-  when contains(options, restriction_identifier_name)
+  when contains(names, restriction_identifier_name)
   warn "Identifier '{text}' is restricted."
 }
 in ts_identifier, ts_private_name rule id-length {

@@ -414,16 +414,16 @@ in ts_assignment let scoping_alias_context
     name: left, this: right.scoping_captures_this, valid: scoping_assigns_this, value: right != null, assigned: right != null
   } else null
 in ts_declarator, ts_assignment rule consistent-this {
-  option options string[] = ["that"] "names used to capture this"
+  option names string[] = ["that"] "names used to capture this"
   let alias scoping_alias_context
-  when alias != null && contains(if len(options) == 0 then ["that"] else options, alias.name)
+  when alias != null && contains(if len(names) == 0 then ["that"] else names, alias.name)
   when alias.value && !alias.valid || !alias.assigned
   warn "Designated alias '{alias.name}' is not assigned to 'this'."
 }
 in ts_declarator, ts_assignment rule consistent-this:unexpected {
-  option options string[] = ["that"] "names used to capture this"
+  option names string[] = ["that"] "names used to capture this"
   let alias scoping_alias_context
-  when alias != null && alias.this && !contains(if len(options) == 0 then ["that"] else options, alias.name)
+  when alias != null && alias.this && !contains(if len(names) == 0 then ["that"] else names, alias.name)
   warn "Unexpected alias '{alias.name}' for 'this'."
 }
 

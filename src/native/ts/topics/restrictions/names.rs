@@ -15,7 +15,7 @@ mod tests {
 
     #[test]
     fn import_attributes_do_not_own_identifier_names() {
-        let l = native_linter("rule id-denylist { set options ['with', 'type', 'value'] }");
+        let l = native_linter("rule id-denylist { set names ['with', 'type', 'value'] }");
         assert!(l.lint(Path::new("/root/file.ts"), "import('x', {with: {type: 'json'}})").is_empty());
         assert_eq!(l.lint(Path::new("/root/file.ts"), "import('x', {with: {[type]: value}})").len(), 2);
     }
