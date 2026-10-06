@@ -378,6 +378,8 @@ in ts_assignment let restriction_assignment_branch contains(["&&=", "||=", "??="
 in ts_member, ts_index, ts_call let restriction_optional_branch optional != null
 in ts_case let restriction_case_branch test != null
 in ts_block let restriction_local_statements count(body)
+in ts_function_like, ts_static_block let max_nested_callbacks_counted restriction_call_argument
+in ts_class let max_classes_counted true
 in ts_node {
   let restriction_metric_boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
   let restriction_flow_branch is restriction_flow_control || restriction_parameter_branch == true || restriction_catch_branch == true || restriction_assignment_branch == true || restriction_optional_branch == true
@@ -393,34 +395,27 @@ in ts_node {
   let restriction_call_argument if parent is ts_parenthesized then parent.restriction_call_argument else is ts_call.argument
   let restriction_constructor_argument if parent is ts_parenthesized then parent.restriction_constructor_argument else is (ts_call.argument, ts_new.argument)
   let restriction_iife if parent is ts_parenthesized then parent.restriction_iife else is ts_call.callee
-  let restriction_callback is (ts_function_like, ts_static_block) && restriction_call_argument
-  let restriction_constructor_callback is (ts_function_like, ts_static_block) && restriction_constructor_argument
-  let restriction_callbacks default(parent.restriction_callbacks, 0) + (if restriction_callback then 1 else 0)
-  let restriction_constructor_callbacks default(parent.restriction_constructor_callbacks, 0) + (if restriction_constructor_callback then 1 else 0)
-  let restriction_classes (if is ts_class then 1 else 0) + sum(children.restriction_classes)
-  let restriction_class_declarations (if is ts_class && parent is (ts_program, ts_block, ts_export) then 1 else 0) + sum(children.restriction_class_declarations)
+  let restriction_callbacks default(parent.restriction_callbacks, 0) + (if max_nested_callbacks_counted == true then 1 else 0)
+  let restriction_classes (if max_classes_counted == true then 1 else 0) + sum(children.restriction_classes)
 }
 group restriction_parameter_function ts_function, ts_arrow, ts_method, ts_function_type
 in ts_parameter {
   let restriction_this_parameter name == "this"
   let restriction_void_this_parameter name == "this" && type == "void"
+  let max_params_counted !restriction_void_this_parameter || node != first([] parent.parameter.node)
 }
 in restriction_parameter_function rule max-params {
   option max int(0..) = 3 "maximum parameters"
-  option countVoidThis boolean = false "count a void this parameter"
-  option countThis "never" | "except-void" | "always" = "except-void" "whether to count this parameters"
-  let this_parameter first([] parameter.restriction_this_parameter) == true
-  let void_this_parameter first([] parameter.restriction_void_this_parameter) == true
-  let amount count(parameter) - (if this_parameter && (countThis == "never" || countThis == "except-void" && !countVoidThis && void_this_parameter) then 1 else 0)
+  let amount count(filter([] parameter.node, p => default(p.max_params_counted, true)))
   when amount > max
   report at if is ts_function_type then default(first(filter([] token.node, t => t.text == "=>")).offset, offset) else default(function_head, offset)
   warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {max}."
 }
+in ts_function_like let max_statements_checked true
 in ts_function_like rule max-statements {
   option max int(0..) = 10 "maximum statements"
-  option ignoreTopLevelFunctions boolean = false "ignore a sole top-level function"
   when restriction_subtree_statements > max
-  when !(ignoreTopLevelFunctions && restriction_function_depth == 0 && ts_program.restriction_top_functions == 1)
+  when max_statements_checked
   report at function_head
   warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {max}."
 }
@@ -449,17 +444,14 @@ in restriction_depth_control rule max-depth {
 }
 in ts_function, ts_arrow rule max-nested-callbacks {
   option max int(0..) = 10 "maximum callback nesting"
-  option checkConstructorCallCallbacks boolean = false "count callbacks passed to constructors"
-  let amount if checkConstructorCallCallbacks then restriction_constructor_callbacks else restriction_callbacks
-  let callback if checkConstructorCallCallbacks then restriction_constructor_callback else restriction_callback
-  when callback && amount > max
+  let amount restriction_callbacks
+  when max_nested_callbacks_counted && amount > max
   report at function_head
   warn "Too many nested callbacks ({amount}). Maximum allowed is {max}."
 }
 in ts_program rule max-classes-per-file {
   option max int(1..) = 1 "maximum classes"
-  option ignoreExpressions boolean = false "count only class declarations"
-  let amount if ignoreExpressions then restriction_class_declarations else restriction_classes
+  let amount restriction_classes
   when amount > max
   report at default(first([] body.offset), 0)
   warn "File has too many classes ({amount}). Maximum allowed is {max}."
@@ -482,13 +474,13 @@ in ts_program rule max-lines {
   report at default(first(slice(lines, max)).offset, offset)
   warn "File has too many lines ({amount}). Maximum allowed is {max}."
 }
+in ts_function_like let max_lines_per_function_checked !restriction_iife
 in ts_function_like rule max-lines-per-function {
   option max int(0..) = 50 "maximum function lines"
   option skipComments boolean = false "exclude comment-only lines"
   option skipBlankLines boolean = false "exclude blank lines"
-  option IIFEs boolean = false "also check immediately invoked functions"
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
-  when IIFEs || !restriction_iife
+  when max_lines_per_function_checked
   when len(lines) > max
   report at function_head
   warn "{@restriction_function_name} has too many lines ({len(lines)}). Maximum allowed is {max}."
