@@ -275,6 +275,44 @@ fn zlint_files_have_hover_definitions_references_and_completion() {
 }
 
 #[test]
+fn rule_lines_complete_each_variants_default_option() {
+    let dir = project("lsp-default-options");
+    let config = dir.join(".zlint");
+    let variants = "define {\n\
+        in bad rule dangle:arrays warn \"x\" { default option mode enum(never, always-multiline) = never }\n\
+        in bad rule dangle:objects warn \"x\" { default option mode enum(never, only-multiline) = never }\n\
+        in bad rule plain warn \"x\" { option mode enum(a, b) = a }\n\
+        }\n";
+    let base = format!("{CONFIG}{variants}");
+    std::fs::write(&config, &base).expect("config");
+    let mut c = Client::start(&dir);
+    c.notify("textDocument/didOpen", json!({ "textDocument": { "uri": uri(&config), "languageId": "zlint", "version": 1, "text": base } }));
+    // Completes at the end of `typed`'s line `row`, typed after the rules.
+    let mut version = 1;
+    let mut labels_at = |typed: &str, row: usize| -> Vec<String> {        version += 1;
+        let text = format!("{base}{typed}\n");
+        c.notify("textDocument/didChange", json!({ "textDocument": { "uri": uri(&config), "version": version }, "contentChanges": [{ "text": text }] }));
+        let cursor = typed.lines().nth(row).unwrap_or_default();
+        let at = json!({ "textDocument": { "uri": uri(&config) }, "position": { "line": base.lines().count() + row, "character": cursor.len() } });
+        let items = c.request("textDocument/completion", at);
+        items["items"].as_array().into_iter().flatten().filter_map(|i| i["label"].as_str().map(String::from)).collect()
+    };
+    // After the name: severities, plus `set` only for rules with a default option.
+    let after_name = labels_at("rule dangle:arrays ", 0);
+    assert!(after_name.iter().any(|l| l == "error") && after_name.iter().any(|l| l == "set"), "{after_name:?}");
+    let plain = labels_at("rule plain ", 0);
+    assert!(plain.iter().any(|l| l == "error") && !plain.iter().any(|l| l == "set"), "{plain:?}");
+    // After `set`: the words of that variant's own default option, also by
+    // name inside the variant's block.
+    assert_eq!(labels_at("rule dangle:arrays error set ", 0), ["never", "always-multiline"]);
+    assert_eq!(labels_at("rule dangle:objects set ", 0), ["never", "only-multiline"]);
+    // Half-typed `set` lines break their rule's build; it still completes.
+    assert_eq!(labels_at("rule dangle:objects {\n  set mode \n}", 1), ["never", "only-multiline"]);
+    assert_eq!(labels_at("rule dangle:objects {\n  set \n}", 1), ["mode"]);
+    c.shutdown();
+}
+
+#[test]
 fn editing_an_export_relints_its_importers() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lsp-cross-file");
     let _ = std::fs::remove_dir_all(&dir);

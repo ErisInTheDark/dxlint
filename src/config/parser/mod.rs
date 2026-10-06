@@ -47,6 +47,14 @@ fn target_of((parent, field): &(Parent, Option<Name>)) -> Target {
     }
 }
 
+/// What a configuring `rule name ...` line sets: `set option value` lines in
+/// its block, and the line's own `set value` (the default option).
+#[derive(Default)]
+struct Settings {
+    options: Vec<(Name, Expr)>,
+    value: Option<Expr>,
+}
+
 pub struct Parser<'a> {
     ts: Stream,
     sources: &'a mut SourceMap,
@@ -1008,8 +1016,9 @@ impl<'a> Parser<'a> {
     fn configure(&mut self, kw: Token) {
         let Some(name) = self.glued_name("a rule name or glob", true) else { return };
         let mut patch = RuleDef::new(name, Vec::new());
-        let mut options = Vec::new();
-        self.rule_tail(&mut patch, Some(&mut options));
+        let mut settings = Settings::default();
+        self.rule_tail(&mut patch, Some(&mut settings));
+        let Settings { options, value } = settings;
         if !patch.options.is_empty() {
             self.errors.push(
                 ConfigError::new(patch.options[0].name.span, "`option` declares options in a definition")
@@ -1019,7 +1028,7 @@ impl<'a> Parser<'a> {
         // Built-in rulesets name rules of every language; only the imported
         // ones exist.
         let soft = self.sources.get(kw.span.file).name.starts_with("rules/");
-        self.config.configs.push(RuleConfig { patch, options, soft });
+        self.config.configs.push(RuleConfig { patch, options, value, soft });
     }
 
     /// `define { ... }`: rules inside are defined but stay off until a
@@ -1064,16 +1073,33 @@ impl<'a> Parser<'a> {
         self.errors.push(ConfigError::new(kw.span, "`set` only sets options inside `rule name { ... }`").note(hint));
     }
 
-    /// Everything after a rule's name: `[severity [message]] [fix as expr]
-    /// [{ clauses }]`. Marks the rule broken when any of it fails to parse.
-    /// `options` takes `set name value` lines (configuring, not defining).
-    fn rule_tail(&mut self, def: &mut RuleDef, options: Option<&mut Vec<(Name, Expr)>>) {
+    /// Everything after a rule's name: `[severity [message]] [set value]
+    /// [fix as expr] [{ clauses }]`, severity and `set` in either order. Marks
+    /// the rule broken when any of it fails to parse. `config` takes `set
+    /// name value` lines and the line's `set value` (configuring, not
+    /// defining).
+    fn rule_tail(&mut self, def: &mut RuleDef, mut config: Option<&mut Settings>) {
         let before = self.errors.len();
-        self.skip(false, true);
-        if let Some(severity) = self.peek_severity() {
+        loop {
+            self.skip(false, true);
+            if def.severity.is_none() {
+                if let Some(severity) = self.peek_severity() {
+                    self.ts.next_raw();
+                    def.severity = Some(severity);
+                    self.message_after_severity(def);
+                    continue;
+                }
+            }
+            let Some(set) = self.ts.peek_raw(0).filter(|t| t.is_ident("set")).cloned() else { break };
             self.ts.next_raw();
-            def.severity = Some(severity);
-            self.message_after_severity(def);
+            match config.as_deref_mut().map(|c| &mut c.value) {
+                Some(slot @ None) => *slot = self.operand(),
+                Some(Some(_)) => self.errors.push(ConfigError::new(set.span, "the rule line already sets its default option")),
+                None => self.errors.push(
+                    ConfigError::new(set.span, "`set` on the rule line configures an existing rule: `rule name set <value>`")
+                        .note("a definition declares the option it sets with `default option name <schema> = <default>`"),
+                ),
+            }
         }
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
@@ -1084,7 +1110,7 @@ impl<'a> Parser<'a> {
             self.skip(false, true);
             if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
                 self.ts.next_raw();
-                self.rule_body(def, options);
+                self.rule_body(def, config.map(|c| &mut c.options));
             } else {
                 self.end_of_item();
             }
@@ -1316,7 +1342,7 @@ impl<'a> Parser<'a> {
         self.skip(false, true);
         let ends = match self.ts.peek_raw(0) {
             None => true,
-            Some(t) => matches!(t.kind, Tk::Newline | Tk::LBrace | Tk::RBrace) || t.is_ident("fix"),
+            Some(t) => matches!(t.kind, Tk::Newline | Tk::LBrace | Tk::RBrace) || t.is_ident("fix") || t.is_ident("set"),
         };
         if !ends {
             def.message = self.expr();
@@ -1355,6 +1381,26 @@ impl<'a> Parser<'a> {
                 (Tk::Ident, "option") => {
                     self.bump();
                     if let Some(opt) = self.option_line() {
+                        def.options.push(opt);
+                    }
+                }
+                // `default option name ...`: what `rule name set <value>` sets.
+                (Tk::Ident, "default") if self.ts.peek_raw(1).is_some_and(|n| n.is_ident("option")) => {
+                    self.bump();
+                    self.bump();
+                    if let Some(mut opt) = self.option_line() {
+                        if def.options.iter().any(|o| o.primary) {
+                            self.errors.push(ConfigError::new(opt.name.span, format!("rule `{}` already has a default option", def.name.text)));
+                        }
+                        // `rule x off` must stay a severity.
+                        let named = |name: &str| self.config.schemas.iter().find(|s| s.name.text == name).map(|s| &s.schema);
+                        if let Some(word) = Severity::NAMES.iter().find(|w| opt.schema.takes_word(w, &named)) {
+                            self.errors.push(
+                                ConfigError::new(opt.name.span, format!("a default option cannot take `{word}`: it is a severity on the rule line"))
+                                    .note("make it a normal option, set with `rule name { set option value }`"),
+                            );
+                        }
+                        opt.primary = true;
                         def.options.push(opt);
                     }
                 }

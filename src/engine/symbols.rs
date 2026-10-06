@@ -397,6 +397,33 @@ impl Symbols {
         }
     }
 
+    /// An option of `rule`: `rule.name`, and the default option also under
+    /// the rule's own name (what `rule name set ` completes). The first
+    /// registration wins: compiled rules carry configured values.
+    fn option(&mut self, rule: &str, o: OptionView, schemas: &crate::config::schema::Schemas) {
+        let key = format!("{rule}.{}", o.name);
+        if self.by_key.contains_key(&(Kind::Option, key.clone())) {
+            return;
+        }
+        let setting = if o.primary { format!("`rule {rule} set value`") } else { format!("`rule {rule} {{ set {} value }}`", o.name) };
+        let doc = format!(
+            "of rule `{rule}`: {}\n\n```zlint\n{}option {} {}\n```\n\nvalue {}, default {}\n\n{setting} changes it",
+            o.description.unwrap_or("no description"),
+            if o.primary { "default " } else { "" },
+            o.name,
+            o.schema,
+            crate::expr::show(o.value),
+            crate::expr::show(o.default),
+        );
+        let summary = o.description.map_or_else(|| o.schema.to_string(), String::from);
+        let choices: Vec<String> = o.schema.choices(schemas).iter().map(|v| enum_or_literal(o.schema, v)).collect();
+        let names = if o.primary { vec![key, rule.to_string()] } else { vec![key] };
+        for name in names {
+            let id = self.add(Kind::Option, &name, summary.clone(), doc.clone());
+            self.symbols[id].fields = choices.clone();
+        }
+    }
+
     fn rules(&mut self, config: &Config, rules: &[Rule]) {
         let schemas: crate::config::schema::Schemas = config.schemas.iter().map(|s| (s.name.text.clone(), s.clone())).collect();
         for r in rules {
@@ -418,25 +445,18 @@ impl Symbols {
                 if let Some(d) = &o.description {
                     let _ = write!(doc, ", {d}");
                 }
-                let key = format!("{}.{}", r.name, o.name);
-                let odoc = format!(
-                    "of rule `{}`: {}\n\n```zlint\noption {} {}\n```\n\nvalue {}, default {}\n\n`rule {} {{ set {} value }}` changes it",
-                    r.name,
-                    o.description.as_deref().unwrap_or("no description"),
-                    o.name,
-                    o.schema,
-                    crate::expr::show(&o.value),
-                    crate::expr::show(&o.default),
-                    r.name,
-                    o.name
-                );
-                let id = self.add(Kind::Option, &key, o.description.clone().unwrap_or_else(|| o.schema.to_string()), odoc);
-                self.symbols[id].fields = o.schema.choices(&schemas).iter().map(|v| v.literal()).collect();
+                self.option(&r.name, OptionView { name: &o.name, schema: &o.schema, value: &o.value, default: &o.default, description: o.description.as_deref(), primary: o.primary }, &schemas);
             }
             self.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
             self.def(Kind::Rule, &r.name, r.span);
         }
         for def in &config.rules {
+            // Rules that did not compile (a mistyped `set` line breaks its
+            // rule) still complete and document their options, at defaults.
+            for o in &def.options {
+                let view = OptionView { name: &o.name.text, schema: &o.schema, value: &o.default, default: &o.default, description: o.description.as_deref(), primary: o.primary };
+                self.option(&def.name.text, view, &schemas);
+            }
             for o in &def.options {
                 self.def(Kind::Option, &format!("{}.{}", def.name.text, o.name.text), o.name.span);
             }
@@ -578,5 +598,24 @@ impl Symbols {
                 }
             }
         }
+    }
+}
+
+/// How a value of `schema` is written: enum members bare (`never`),
+/// anything else as a literal (`"never"`, `3`).
+/// An option as symbols show it: compiled (configured value) or as defined.
+struct OptionView<'a> {
+    name: &'a str,
+    schema: &'a crate::config::schema::Schema,
+    value: &'a crate::expr::Value<'static>,
+    default: &'a crate::expr::Value<'static>,
+    description: Option<&'a str>,
+    primary: bool,
+}
+
+fn enum_or_literal(schema: &crate::config::schema::Schema, v: &crate::expr::Value) -> String {
+    match v {
+        crate::expr::Value::Str(s) if schema.takes_word(s, &|_| None) => s.to_string(),
+        other => other.literal(),
     }
 }

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use super::symbols::Symbols;
 use super::{InertRule, Linter, OptionSlot, Rule, Target};
-use crate::config::ast::{Config, Dropped, Expr, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
+use crate::config::ast::{Config, Dropped, Expr, ExprKind, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
 use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
@@ -276,9 +276,25 @@ fn option_value(
     schemas: &Schemas,
     errors: &mut Vec<ConfigError>,
 ) -> Option<Value<'static>> {
-    let compiled = Scope::constants(grammar).compile(value, errors)?;
-    match Ctx::eval_static(&compiled, &[]) {
-        Ok(v) => match schema.check(&v.into_owned(), schemas) {
+    // A bare word where enum members go is one, checked like a string:
+    // `set mode never`.
+    let lookup = |name: &str| schemas.get(name).map(|d| &d.schema);
+    let word = match &value.kind {
+        ExprKind::Var(path) => match path.as_slice() {
+            [word] if schema.has_enum(&lookup) => Some(Value::from(word.text.clone())),
+            _ => None,
+        },
+        _ => None,
+    };
+    let evaluated = match word {
+        Some(word) => Ok(word),
+        None => {
+            let compiled = Scope::constants(grammar).compile(value, errors)?;
+            Ctx::eval_static(&compiled, &[]).map(|v| v.into_owned())
+        }
+    };
+    match evaluated {
+        Ok(v) => match schema.check(&v, schemas) {
             Ok(v) => Some(v),
             Err(misfit) => {
                 errors.push(
@@ -370,8 +386,8 @@ rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }
 /// index, option index).
 fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigError>) -> Vec<(String, usize, usize)> {
     let mut values = Vec::new();
-    let configs = std::mem::take(&mut config.configs);
-    for (ci, c) in configs.iter().enumerate() {
+    let mut configs = std::mem::take(&mut config.configs);
+    for (ci, c) in configs.iter_mut().enumerate() {
         let pattern = &c.patch.name;
         let mut matching: Vec<usize> = (0..config.rules.len()).filter(|&i| wildcard(&pattern.text, &config.rules[i].name.text)).collect();
         // A family name also configures its variants (`comma-spacing:before`,
@@ -395,6 +411,24 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             }
             errors.push(err);
             continue;
+        }
+        // `rule name set <value>`: each matching rule's default option.
+        if let Some(value) = c.value.take() {
+            let mut names: Vec<String> = Vec::new();
+            for &i in &matching {
+                match config.rules[i].options.iter().find(|o| o.primary) {
+                    Some(o) if !names.contains(&o.name.text) => names.push(o.name.text.clone()),
+                    Some(_) => {}
+                    None if c.soft => {}
+                    None => errors.push(
+                        ConfigError::new(value.span, format!("`{}` has no default option to set", config.rules[i].name.text))
+                            .note("set a named option instead: `rule name { set option value }`"),
+                    ),
+                }
+            }
+            for name in names {
+                c.options.push((Name { text: name, span: value.span }, value.clone()));
+            }
         }
         let patch = &c.patch;
         for (oi, (name, _)) in c.options.iter().enumerate() {
@@ -613,6 +647,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
                 schema: opt.schema.clone(),
                 default: v.clone(),
                 value: v,
+                primary: opt.primary,
             }),
             Err(misfit) => errors.push(ConfigError::new(opt.default_span, format!("the default of option `{}` does not fit its type: {misfit}", opt.name.text))),
         }
@@ -958,6 +993,40 @@ mod demand_tests {
             in ts_comma rule preceded info "{preceded(node)}"
         "#);
         assert_eq!(messages(&linter, "/root/file.ts", "f(a, b);"), ["true"]);
+    }
+
+    #[test]
+    fn rule_lines_set_the_default_option_with_bare_enum_words() {
+        let rule = "define {\nin ts_call rule probe info \"{mode}\" {\n  default option mode enum(always, never, always-multiline) = never \"policy\"\n}\n}\n";
+        let summary = |config: &str| {
+            let linter = native(&format!("{rule}{config}"));
+            linter.lint(Path::new("/root/file.ts"), "f();").into_iter().map(|d| (d.severity, d.message)).collect::<Vec<_>>()
+        };
+        use crate::config::ast::Severity::{Error, Info};
+        for (config, expected) in [
+            ("rule probe", (Info, "never")),
+            ("rule probe set always", (Info, "always")),
+            ("rule probe error set always-multiline", (Error, "always-multiline")),
+            ("rule probe set always error", (Error, "always")),
+            ("rule probe error \"custom\" set always", (Error, "custom")),
+            ("rule probe { set mode always }", (Info, "always")),
+            ("rule probe { set mode \"always\" }", (Info, "always")),
+        ] {
+            assert_eq!(summary(config), [(expected.0, expected.1.to_string())], "{config}");
+        }
+        for (config, problem) in [
+            ("rule probe set sometimes", "must be enum(always, never, always-multiline)"),
+            ("rule probe set always set never", "already sets its default option"),
+        ] {
+            let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{rule}{config}\n"), &Disk), PathBuf::from("/root"));
+            assert!(built.errors.iter().any(|e| e.message.contains(problem)), "{config}: {:#?}", built.errors);
+        }
+        let without = "define {\nin ts_call rule plain warn \"x\" { option mode enum(a, b) = a }\n}\nrule plain set b\n";
+        let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{without}"), &Disk), PathBuf::from("/root"));
+        assert!(built.errors.iter().any(|e| e.message.contains("has no default option")), "{:#?}", built.errors);
+        let severity_word = "define {\nin ts_call rule bad warn \"x\" { default option mode enum(off, on) = on }\n}\n";
+        let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{severity_word}"), &Disk), PathBuf::from("/root"));
+        assert!(built.errors.iter().any(|e| e.message.contains("cannot take `off`")), "{:#?}", built.errors);
     }
 
     #[test]

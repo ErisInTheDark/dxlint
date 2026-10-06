@@ -23,6 +23,9 @@ pub enum Schema {
     JsRegex,
     /// Exactly this value.
     Lit(Value<'static>),
+    /// `enum(always, never)`: one of these words, written bare (`set mode
+    /// never`) or as a string.
+    Enum(Vec<String>),
     /// A number (or a string's or list's length) within bounds.
     Range(Box<Schema>, Option<f64>, Option<f64>),
     List(Box<Schema>),
@@ -107,6 +110,7 @@ impl Schema {
                 Err(e) => Err(misfit(path, format!("is not a valid regex: {e}"))),
             },
             (Schema::Lit(lit), v) if lit == v => Ok(v.clone()),
+            (Schema::Enum(words), Value::Str(s)) if words.iter().any(|w| **w == **s) => Ok(value.clone()),
             (Schema::Range(inner, min, max), v) => {
                 let v = inner.fit(v, named, path, doc, depth)?;
                 let size = match &v {
@@ -220,10 +224,31 @@ impl Schema {
         }
     }
 
+    /// Whether a bare `word` is one of its enum members: such words are
+    /// values, not names (`set mode never`).
+    pub fn takes_word<'s>(&'s self, word: &str, lookup: &dyn Fn(&str) -> Option<&'s Schema>) -> bool {
+        self.enum_matches(lookup, &|w| w == word)
+    }
+
+    /// Whether it has enum members at all, so a bare word is meant as one.
+    pub fn has_enum<'s>(&'s self, lookup: &dyn Fn(&str) -> Option<&'s Schema>) -> bool {
+        self.enum_matches(lookup, &|_| true)
+    }
+
+    fn enum_matches<'s>(&'s self, lookup: &dyn Fn(&str) -> Option<&'s Schema>, member: &dyn Fn(&str) -> bool) -> bool {
+        match self {
+            Schema::Enum(words) => words.iter().any(|w| member(w)),
+            Schema::Union(options) => options.iter().any(|o| o.enum_matches(lookup, member)),
+            Schema::Named(n) => lookup(&n.text).is_some_and(|s| s.enum_matches(lookup, member)),
+            _ => false,
+        }
+    }
+
     /// The literal values it takes, for completion (`"always" | "never"`).
     pub fn choices(&self, named: &Schemas) -> Vec<Value<'static>> {
         match self {
             Schema::Lit(v) => vec![v.clone()],
+            Schema::Enum(words) => words.iter().map(|w| Value::from(w.clone())).collect(),
             Schema::Bool => vec![Value::Bool(true), Value::Bool(false)],
             Schema::Union(options) => options.iter().flat_map(|o| o.choices(named)).collect(),
             Schema::Named(n) => named.get(&n.text).map(|d| d.schema.choices(named)).unwrap_or_default(),
@@ -269,6 +294,7 @@ impl fmt::Display for Schema {
             Schema::Regex => f.write_str("regex"),
             Schema::JsRegex => f.write_str("js_regex"),
             Schema::Lit(v) => f.write_str(&v.literal()),
+            Schema::Enum(words) => write!(f, "enum({})", words.join(", ")),
             Schema::Range(inner, min, max) => {
                 let range = format!("{}..{}", min.map(bound).unwrap_or_default(), max.map(bound).unwrap_or_default());
                 match &**inner {

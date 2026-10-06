@@ -5,7 +5,8 @@
 //! schema := term ('|' term)*
 //! term   := atom ('[' range? ']')*            T[], T[1..]
 //! atom   := (int | number | string) ('(' range ')')?
-//!         | boolean | any | null | regex | literal | name
+//!         | boolean | any | null | regex | js_regex | literal | name
+//!         | 'enum(' word (',' word)* ')'           bare-word members
 //!         | '(' schema ')' | '{' member* '}'
 //! range  := num? '..' num?
 //! member := key '?'? ':' schema ('=' literal)? doc?
@@ -80,9 +81,20 @@ impl Parser<'_> {
         }
         self.ts.next_raw();
         let default = self.operand()?;
-        let value = literal(&default).map_err(|e| self.errors.push(e)).ok()?;
+        let value = match self.enum_word(&default, &schema) {
+            Some(word) => Value::from(word),
+            None => literal(&default).map_err(|e| self.errors.push(e)).ok()?,
+        };
         let description = self.doc();
-        Some(OptionDef { name, schema, default: value, default_span: default.span, description })
+        Some(OptionDef { name, schema, default: value, default_span: default.span, description, primary: false })
+    }
+
+    /// A bare word the schema takes as an enum member (`= never`), as text.
+    pub(super) fn enum_word(&self, e: &Expr, schema: &Schema) -> Option<String> {
+        let ExprKind::Var(path) = &e.kind else { return None };
+        let [word] = path.as_slice() else { return None };
+        let named = |name: &str| self.config.schemas.iter().find(|s| s.name.text == name).map(|s| &s.schema);
+        schema.takes_word(&word.text, &named).then(|| word.text.clone())
     }
 
     /// An optional `"doc"` string next on the line.
@@ -216,6 +228,11 @@ impl Parser<'_> {
                 self.ts.next_raw();
                 self.record_schema()
             }
+            Tk::Ident if &*t.text == "enum" && self.ts.peek_raw(1).is_some_and(|p| p.kind == Tk::LParen && t.touches(p)) => {
+                self.ts.next_raw();
+                self.ts.next_raw();
+                self.enum_words()
+            }
             Tk::Ident => {
                 self.ts.next_raw();
                 let s = match &*t.text {
@@ -255,11 +272,40 @@ impl Parser<'_> {
             }
             _ => {
                 self.errors.push(ConfigError::new(t.span, format!("expected a type, found {}", t.describe())).note(
-                    "types: string, number, int, boolean, any, null, regex, js_regex, a literal (\"x\", 3, true), T[], { key: T }, a | b, int(0..), or a `schema` name",
+                    "types: string, number, int, boolean, any, null, regex, js_regex, enum(a, b), a literal (\"x\", 3, true), T[], { key: T }, a | b, int(0..), or a `schema` name",
                 ));
                 None
             }
         }
+    }
+
+    /// `always, never, always-multiline)` after `enum(`: bare words.
+    fn enum_words(&mut self) -> Option<Schema> {
+        let mut words: Vec<String> = Vec::new();
+        loop {
+            self.skip(true, true);
+            let Some(t) = self.ts.next_raw() else {
+                self.error_here("unclosed `enum(`");
+                return None;
+            };
+            match t.kind {
+                Tk::RParen if !words.is_empty() => break,
+                Tk::Comma if !words.is_empty() => continue,
+                Tk::Ident if !words.contains(&t.text.to_string()) => words.push(t.text.to_string()),
+                Tk::Ident => {
+                    self.errors.push(ConfigError::new(t.span, format!("`{}` appears twice in this enum", t.text)));
+                    return None;
+                }
+                _ => {
+                    self.errors.push(
+                        ConfigError::new(t.span, format!("expected a word in `enum(...)`, found {}", t.describe()))
+                            .note("enum members are bare words: `enum(always, never, always-multiline)`"),
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(Schema::Enum(words))
     }
 
     /// `{ key: T = default "doc"; ... }` after its `{`.

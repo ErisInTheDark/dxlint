@@ -239,7 +239,8 @@ impl Parser<'_> {
         self.skip(self.expr_depth > 0, false);
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
-            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "by" | "from" | "class"),
+            // `set` ends a rule line's message: `rule x error "..." set never`.
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "by" | "from" | "class" | "set"),
             _ => false,
         })
     }

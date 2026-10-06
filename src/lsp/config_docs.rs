@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use super::convert;
 use super::uri;
+use zoomie_lint::config::ast::Severity;
 use zoomie_lint::config::source::{FileId, SourceFile, Span};
 use zoomie_lint::config::std_lib;
 use zoomie_lint::engine::symbols::{Kind, Symbol, Symbols};
@@ -113,6 +114,22 @@ impl ConfigFile<'_> {
         } else if trimmed.starts_with("rule ") && !trimmed[5..].contains(char::is_whitespace) {
             // `rule ` without `in`: turns a defined rule on.
             self.of_kind(Kind::Rule).map(|(i, s)| item(i, s)).collect()
+        } else if let Some(rest) = trimmed.strip_prefix("rule ").filter(|r| !r.contains('{') && before.ends_with(char::is_whitespace)) {
+            // After `rule name `: a severity or `set`; after `set `, the
+            // values of the rule's default option.
+            let name = rest.split_whitespace().next().unwrap_or("");
+            if rest.split_whitespace().last() == Some("set") {
+                match self.symbols.get(Kind::Option, name) {
+                    Some(id) => self.symbols.symbols[id].fields.iter().map(|v| json!({ "label": v, "kind": 12, "detail": format!("default option of {name}") })).collect(),
+                    None => Vec::new(),
+                }
+            } else {
+                let mut items: Vec<Value> = Severity::NAMES.iter().map(|s| json!({ "label": s, "kind": 14, "detail": "severity" })).collect();
+                if self.symbols.get(Kind::Option, name).is_some() {
+                    items.push(json!({ "label": "set", "kind": 14, "detail": "set the default option" }));
+                }
+                items
+            }
         } else if let Some(rest) = trimmed.strip_prefix("set ") {
             // `set ` inside `rule name { ... }`: that rule's options; after
             // `set option `, the literal values its type takes.

@@ -240,6 +240,8 @@ pub struct OptionDef {
     pub default: Value<'static>,
     pub default_span: Span,
     pub description: Option<String>,
+    /// `default option ...`: the one a `rule name set <value>` line sets.
+    pub primary: bool,
 }
 
 /// `in target rule name [severity [message]] [fix as expr] [{ clauses }]`
@@ -377,6 +379,9 @@ pub struct RuleConfig {
     pub patch: RuleDef,
     /// `set name value` lines, in order.
     pub options: Vec<(Name, Expr)>,
+    /// `rule name set <value>`: a value for each matching rule's default
+    /// option.
+    pub value: Option<Expr>,
     /// Matching nothing is not a mistake: built-in rulesets name rules of
     /// languages that may not be imported, and a glob may have lost its
     /// rules to a later `drop`.

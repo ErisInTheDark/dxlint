@@ -39,6 +39,8 @@ pub struct OptionSlot {
     pub schema: crate::config::schema::Schema,
     pub default: Value<'static>,
     pub value: Value<'static>,
+    /// `default option`: what `rule name set <value>` sets.
+    pub primary: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
