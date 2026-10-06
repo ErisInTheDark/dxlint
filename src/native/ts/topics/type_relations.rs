@@ -155,10 +155,33 @@ mod tests {
     #[test]
     fn assertion_options_control_const_checks_and_written_type_exclusions() {
         let source = "const literal = 3 as const; declare const numberValue: number; const typed = numberValue as number;";
-        let linter = native_linter("rule no-unnecessary-type-assertion { set checkLiteralConstAssertions true\nset typesToIgnore [\"number\"] }");
+        let linter = native_linter("rule no-unnecessary-type-assertion { set typesToIgnore [\"number\"] }\noverride in ts_as, ts_type_assertion let no_unnecessary_type_assertion_checked true");
         let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
         let start = source.find("3 as const").unwrap();
         assert_eq!(diagnostics.iter().map(|diagnostic| (diagnostic.start, diagnostic.end)).collect::<Vec<_>>(), [(start, start + "3 as const".len())]);
+    }
+
+    #[test]
+    fn assertion_selection_preserves_required_casts_and_written_type_exclusions() {
+        let source = "const literal = 3 as const; let kept = 3 as const; let needed = 3 as 3; declare const n: number; n as number; <number>n; n!; const template = `${n}` as const; n as string;";
+        for (options, selection, expected) in [
+            ("", "", vec!["n as number", "<number>n", "n!"]),
+            ("", "override in ts_as, ts_type_assertion, ts_non_null let no_unnecessary_type_assertion_checked true", vec!["3 as const", "n as number", "<number>n", "n!"]),
+            ("", "override in ts_as, ts_type_assertion, ts_non_null let no_unnecessary_type_assertion_checked false", vec![]),
+            ("", "override in ts_as let no_unnecessary_type_assertion_checked false", vec!["<number>n", "n!"]),
+            ("", "override in ts_type_assertion let no_unnecessary_type_assertion_checked false", vec!["n as number", "n!"]),
+            ("", "override in ts_non_null let no_unnecessary_type_assertion_checked false", vec!["n as number", "<number>n"]),
+            ("{ set typesToIgnore ['number'] }", "", vec!["n!"]),
+            ("{ set typesToIgnore ['number'] }", "override in ts_as, ts_type_assertion, ts_non_null let no_unnecessary_type_assertion_checked true", vec!["3 as const", "n!"]),
+        ] {
+            let linter = native_linter(&format!("rule no-unnecessary-type-assertion {options}\n{selection}"));
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+            let positions: Vec<_> = expected.iter().map(|text| {
+                let start = source.find(text).expect("expected assertion in source");
+                (start, start + text.len())
+            }).collect();
+            assert_eq!(diagnostics.iter().map(|diagnostic| (diagnostic.start, diagnostic.end)).collect::<Vec<_>>(), positions, "{options} {selection}: {diagnostics:#?}");
+        }
     }
 
     #[test]
@@ -202,7 +225,7 @@ mod tests {
 
     #[test]
     fn assertion_policy_preserves_template_const_inference() {
-        let linter = native_linter("rule no-unnecessary-type-assertion { set checkLiteralConstAssertions true }");
+        let linter = native_linter("rule no-unnecessary-type-assertion\noverride in ts_as, ts_type_assertion let no_unnecessary_type_assertion_checked true");
         let source = "declare const text: 'foo'; const exact = `${text}-tail` as const; declare const name: string; const broad = `${name}` as string;";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
         let start = source.find("`${name}` as string").unwrap();
