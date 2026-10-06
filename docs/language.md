@@ -598,11 +598,11 @@ in ts_call rule no-eval-call {
 
 `restricted_syntax` is an empty, open group: add syntax to prohibit it. Contextual exclusions and custom messages belong in ordinary rules, not selector options.
 
-`no-extra-parens` checks expressions in the open `no_extra_parens_checked` group (default: `ts_node`). Its same-named attribute on `structure_parens` defaults to true; override it to select reported parentheses by their inner expression or owner. `no_extra_parens_spread_allowed` starts empty and exempts its members only as spread operands:
+`no-extra-parens` checks expressions in the open `no_extra_parens_inner` group (default: `ts_node`). The `no_extra_parens_checked` attribute on `structure_parens` defaults to true; override it to select reported parentheses by their inner expression or owner. `no_extra_parens_spread_allowed` starts empty and exempts its members only as spread operands:
 
 ```zlint
-drop group no_extra_parens_checked ts_node
-group no_extra_parens_checked ts_function, ts_arrow, structure_assertion
+drop group no_extra_parens_inner ts_node
+group no_extra_parens_inner ts_function, ts_arrow, structure_assertion
 group no_extra_parens_spread_allowed ts_conditional
 override in structure_parens let no_extra_parens_checked
   !matches_selector(structure_parens_outer.parent.node, "CallExpression[callee.name=legacy]")

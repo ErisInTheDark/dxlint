@@ -26,7 +26,7 @@ group structure_binary ts_binary, ts_logical
 group structure_member ts_member, ts_index
 group structure_conditional_owner ts_function, ts_arrow, ts_program, ts_return, ts_if, ts_while, ts_do_while, ts_conditional, ts_for
 group structure_return_owner ts_return, ts_arrow, ts_function, ts_program
-group no_extra_parens_checked ts_node
+group no_extra_parens_inner ts_node
 group no_extra_parens_spread_allowed
 
 in structure_parens let no_extra_parens_checked true
@@ -131,7 +131,7 @@ in structure_parens rule no-extra-parens {
   option allowParensAfterCommentPattern string = "" "allow parentheses after matching comments"
   let inner structure_parens_inner
   when inner != null && inner not structure_parens
-  when no_extra_parens_checked && inner is no_extra_parens_checked
+  when no_extra_parens_checked && inner is no_extra_parens_inner
   let outer structure_parens_outer
   let owner outer.parent.node
   when owner != null && outer not ts_node.type_argument
