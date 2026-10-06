@@ -41,10 +41,10 @@ fn enum_object_literals_report_the_property_not_the_containing_declaration() {
 #[test]
 fn enum_class_members_require_every_heritage_contract_or_their_own_annotation() {
     let lint = native_linter("import .ts/enums\nrule no-unsafe-enum-assignment");
-    let source = "enum Fruit { Apple } interface Basket { fruit: Fruit } interface Numeric { fruit: number } class Bad implements Basket { fruit = 1; } class Mixed implements Basket, Numeric { fruit = 1; } class Own implements Numeric { fruit: Fruit = 1; }";
+    let source = "enum Fruit { Apple } interface Basket { fruit: Fruit } interface Numeric { fruit: number } class Bad implements Basket { fruit = 1; } class Mixed implements Basket, Numeric { fruit = 1; } class Own implements Numeric { fruit: Fruit = 1; } class Base<T> { fruit!: T; } class Derived extends Base<Fruit> { fruit = 1; }";
     let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
     let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-    assert_eq!(spans, ["fruit = 1;", "fruit: Fruit = 1;"], "{diagnostics:#?}");
+    assert_eq!(spans, ["fruit = 1;", "fruit: Fruit = 1;", "fruit = 1;"], "{diagnostics:#?}");
 }
 
 #[test]
@@ -54,4 +54,31 @@ fn enum_heritage_literal_report_does_not_duplicate_its_nested_property() {
     let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
     let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
     assert_eq!(spans, ["box: { fruit: Fruit } = { fruit: 1 };"], "{diagnostics:#?}");
+}
+
+#[test]
+fn enum_array_literals_report_each_contextual_element_without_container_duplicates() {
+    let lint = native_linter("import .ts/enums\nrule no-unsafe-enum-assignment");
+    let source = "enum Fruit { Apple } const values: [Fruit, { fruit: Fruit }] = [1, { fruit: 1 }]; const safe: Fruit[] = [Fruit.Apple];";
+    let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+    let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+    assert_eq!(spans, ["1", "fruit: 1"], "{diagnostics:#?}");
+}
+
+#[test]
+fn enum_jsx_values_use_generic_component_props() {
+    let lint = native_linter("import .ts/enums\nrule no-unsafe-enum-assignment");
+    let source = "enum Fruit { Apple } declare function Basket<T extends Fruit>(props: { fruit: T }): unknown; const bad = <Basket fruit={1} />; const safe = <Basket fruit={Fruit.Apple} />; enum Vegetable { Root = 'root' } declare function Plant(props: { vegetable: Vegetable }): unknown; const literal = <Plant vegetable=\"root\" />;";
+    let diagnostics = lint.lint(Path::new("/root/a.tsx"), source);
+    let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+    assert_eq!(spans, ["1"], "{diagnostics:#?}");
+}
+
+#[test]
+fn enum_defaults_and_spreads_keep_the_reporting_owner() {
+    let lint = native_linter("import .ts/enums\nrule no-unsafe-enum-assignment");
+    let source = "enum Fruit { Apple } class Basket { constructor(private fruit: Fruit = 1) {} } const { fruit = 1 }: { fruit?: Fruit } = {}; declare const numbers: number[]; const fruits: Fruit[] = [Fruit.Apple, ...numbers]; function make<T extends { fruit: Fruit }>() { const value: T = { ...{ fruit: 1 } } as const; }";
+    let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+    let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+    assert_eq!(spans, ["fruit: Fruit = 1", "fruit = 1", "...numbers", "value: T = { ...{ fruit: 1 } } as const"], "{diagnostics:#?}");
 }

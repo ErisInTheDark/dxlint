@@ -11,6 +11,8 @@ use super::modules::{DeclRef, ModuleAt};
 use super::summary::{sig, type_syn, DeclKind, Sig, TParam, TypeSyn};
 use super::types::{Callable, Checker, Env, ResolvedPredicate, Ty};
 
+mod contextual;
+
 fn prim_flag(p: &str) -> &'static str {
     match p {
         "string" => "string",
@@ -326,52 +328,6 @@ impl<'t> NativeFile<'t> {
         }
         let index = s.all(func, F::Param).position(|p| p == param).unwrap_or(0);
         self.ck().contextual_parameter(&self.contextual_type_of(func), index)
-    }
-
-    /// The type expected by a declaration, assignment or callback argument.
-    /// Callback lookup excludes function arguments to avoid inference recursion.
-    pub fn contextual_type_of(&self, func: u32) -> Ty {
-        let s = &self.syntax;
-        let mut func = func;
-        while let Some(parent) = s.parent(func) {
-            let inherits = match s.kind(parent) {
-                Some(K::Paren) => true,
-                Some(K::Logical) => matches!(s.field(func), Some(F::Left | F::Right)),
-                Some(K::Conditional) => matches!(s.field(func), Some(F::Consequent | F::Alternate)),
-                Some(K::Sequence) => s.all(parent, F::Expr).last() == Some(func),
-                _ => false,
-            };
-            if !inherits { break }
-            func = parent;
-        }
-        let Some(owner) = s.parent(func) else { return Ty::Unknown };
-        if s.is(owner, K::Prop) && s.field(func) == Some(F::Value) {
-            if let (Some(object), Some(name)) = (s.parent(owner), super::statics::property_name(s, owner)) {
-                return self.ck().member(&self.contextual_type_of(object), &name);
-            }
-        }
-        if s.field(func) == Some(F::Init) && matches!(s.kind(owner), Some(K::Declarator | K::ClassProp)) {
-            return s.get(owner, F::Type).map_or(Ty::Unknown, |annotation| self.annotation(annotation));
-        }
-        if s.is(owner, K::Assign) && s.field(func) == Some(F::Right) {
-            return s.get(owner, F::Left).map_or(Ty::Unknown, |left| self.type_of(left));
-        }
-        if s.field(func) != Some(F::Arg) || !matches!(s.kind(owner), Some(K::Call | K::New)) { return Ty::Unknown }
-        let call = owner;
-        let args: Vec<u32> = s.all(call, F::Arg).collect();
-        let Some(arg_index) = args.iter().position(|&a| a == func) else { return Ty::Unknown };
-        let construct = s.is(call, K::New);
-        let Some(callee) = s.get(call, F::Callee) else { return Ty::Unknown };
-        let callee_ty = self.type_of(callee);
-        // Callbacks pick no overload (and typing one here would recurse).
-        let arg_types: Vec<Ty> = args.iter().map(|&a| if a == func || matches!(s.kind(a), Some(K::Arrow | K::Function)) { Ty::Unknown } else { self.type_of(a) }).collect();
-        let Some((sig, env)) = self.ck().signature_for(&callee_ty, &arg_types, construct) else { return Ty::Unknown };
-        let Some(p) = sig.params.get(arg_index).or_else(|| sig.params.last().filter(|p| p.rest)) else { return Ty::Unknown };
-        let mut env = (*env).clone();
-        for tp in &sig.type_params {
-            env.tparams.push((tp.name.clone(), Ty::Param(tp.name.clone())));
-        }
-        p.ty.as_ref().map_or(Ty::Unknown, |ty| self.ck().eval(ty, &env))
     }
 
     fn args(&self, call: u32) -> Vec<Ty> {
@@ -757,11 +713,15 @@ impl<'t> NativeFile<'t> {
                 Some("==" | "!=" | "===" | "!==" | "<" | ">" | "<=" | ">=" | "instanceof" | "in") => Ty::Prim("boolean"),
                 Some("+") => {
                     let (a, b) = (inner(F::Left).widen(), inner(F::Right).widen());
-                    match (&a, &b) {
-                        (Ty::Prim("number"), Ty::Prim("number")) => Ty::Prim("number"),
-                        (Ty::Prim("bigint"), Ty::Prim("bigint")) => Ty::Prim("bigint"),
-                        (Ty::Prim("string"), _) | (_, Ty::Prim("string")) => Ty::Prim("string"),
-                        _ => Ty::Unknown,
+                    let belongs = |ty: &Ty, kind| !matches!(ty, Ty::Any | Ty::Never) && ck.assignable(ty, &Ty::Prim(kind)) == Some(true);
+                    if belongs(&a, "string") || belongs(&b, "string") {
+                        Ty::Prim("string")
+                    } else if belongs(&a, "number") && belongs(&b, "number") {
+                        Ty::Prim("number")
+                    } else if belongs(&a, "bigint") && belongs(&b, "bigint") {
+                        Ty::Prim("bigint")
+                    } else {
+                        Ty::Unknown
                     }
                 }
                 Some(op) => if op != ">>>" && matches!(inner(F::Left).widen(), Ty::Prim("bigint")) && matches!(inner(F::Right).widen(), Ty::Prim("bigint")) { Ty::Prim("bigint") } else { Ty::Prim("number") },
@@ -815,14 +775,20 @@ impl<'t> NativeFile<'t> {
         }
     }
 
-    /// `{ a: 1, b }`: its properties. Spreads and computed keys make it
-    /// unknown.
+    /// Object properties compose in source order; uncertain spreads stay unknown.
     fn object_literal(&self, id: u32) -> Ty {
         let s = &self.syntax;
         let mut props: Vec<(Box<str>, Ty)> = Vec::new();
         for p in s.all(id, F::Property).collect::<Vec<_>>() {
             if s.is(p, K::Spread) {
-                return if s.get(p, F::Arg).is_some_and(|arg| matches!(self.type_of(arg), Ty::Any)) { Ty::Any } else { Ty::Unknown };
+                let source = s.get(p, F::Arg).map_or(Ty::Unknown, |arg| self.type_of(arg));
+                if matches!(source, Ty::Any) { return Ty::Any }
+                let Some(spread) = self.object_spread_properties(&source) else { return Ty::Unknown };
+                for (name, ty) in spread {
+                    props.retain(|(key, _)| *key != name);
+                    props.push((name, ty));
+                }
+                continue;
             }
             let Some(key) = s.get(p, F::Key) else { return Ty::Unknown };
             let Some(name) = super::statics::property_name(s, p) else { return Ty::Unknown };
@@ -836,9 +802,22 @@ impl<'t> NativeFile<'t> {
                 },
                 _ => Ty::Unknown,
             };
+            props.retain(|(key, _)| *key != name);
             props.push((name, t));
         }
         Ty::Struct(props.into())
+    }
+
+    fn object_spread_properties(&self, source: &Ty) -> Option<Vec<(Box<str>, Ty)>> {
+        if let Ty::Struct(properties) = source { return Some(properties.to_vec()) }
+        if !matches!(source, Ty::Named(..) | Ty::Obj(..)) || !self.ck().index_signature_keys(source).is_empty() { return None }
+        let mut names = Vec::new();
+        self.ck().member_names(source, &mut names);
+        Some(names.into_iter().filter_map(|name| {
+            let resolution = self.ck().member_resolution(source, &name);
+            resolution.declarations.iter().any(|declaration| declaration.member.kind == super::summary::MemberKind::Prop)
+                .then_some((name, resolution.ty))
+        }).collect())
     }
 
     /// The operation's own type, before an earlier optional segment skips it.
@@ -949,6 +928,37 @@ fn may_be_nullish(ty: &Ty) -> bool {
 mod tests {
     use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
+
+    #[test]
+    fn finite_object_spreads_keep_property_order_and_uncertainty() {
+        for (source, expected) in [
+            ("const source = { value: 'before' }; const result = /*@*/({ ...source, value: 2 }).value;", "number"),
+            ("const source = { value: 'after' }; const result = /*@*/({ value: 2, ...source }).value;", "string"),
+            ("declare const source: Missing; const result = /*@*/({ ...source, value: 2 });", "unknown"),
+            ("declare const source: { [key: string]: number }; const result = /*@*/({ ...source, value: 2 });", "unknown"),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let ty = file.type_of(nodes[0]);
+                match expected {
+                    "number" => assert!(matches!(ty, super::Ty::Prim("number") | super::Ty::Lit(_, "number")), "{source}: {ty:?}"),
+                    "string" => assert!(matches!(ty, super::Ty::Prim("string") | super::Ty::Lit(_, "string")), "{source}: {ty:?}"),
+                    _ => assert!(matches!(ty, super::Ty::Unknown), "{source}: {ty:?}"),
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn addition_uses_the_operand_runtime_domains() {
+        for (source, expected) in [
+            ("enum E { First, Second } const result = /*@*/E.First + E.Second;", "number"),
+            ("enum E { First = 'a', Second = 'b' } const result = /*@*/E.First + E.Second;", "string"),
+        ] {
+            with_native_file(source, |file, nodes| {
+                assert!(matches!(file.type_of(nodes[0]), super::Ty::Prim(kind) if kind == expected), "{source}");
+            });
+        }
+    }
 
     #[test]
     fn bigint_literal_types_keep_signed_truthiness() {

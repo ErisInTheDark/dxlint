@@ -6,6 +6,7 @@ fn enum_root_bad(pair) =
     && !any(pair.receiver, target => any(target.enums, identity => contains(first(entry).enums, identity)))
     && !any(zip(pair.receiver, last(entry)), allowance => len(first(allowance).enums) == 0 && last(allowance) == true))
 fn enum_relation_bad(pair) = enum_root_bad(pair) || any(pair.children, child => enum_relation_bad(child))
+fn enum_context_bad(context) = context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression)
 fn enum_names_text(contexts) = join(map(sort(unique(reduce(contexts, [], (names, context) => names context.enum_names))), name => "'" name "'"), ", ")
 fn enum_safe_operand(expression) = enum_safe_bitwise(expression) || !enum_root_bad(expression.relation)
 fn enum_safe_bitwise(expression) =
@@ -23,9 +24,9 @@ in enum_transfer let enum_value
   else default(value.node, key.node)
 in enum_transfer let enum_contexts type_flow(node, enum_value)
 in enum_transfer let enum_heritage filter(enum_contexts, context => context.origin == "heritage")
-in enum_transfer let enum_heritage_bad is ts_class_property && len(enum_heritage) > 0 && all(enum_heritage, context => context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression))
+in enum_transfer let enum_heritage_bad is ts_class_property && len(enum_heritage) > 0 && all(enum_heritage, context => enum_context_bad(context))
 in enum_transfer let enum_selected_contexts if enum_heritage_bad then enum_heritage else filter(enum_contexts, context => context.origin != "heritage")
-in enum_transfer let enum_reports enum_value != null && (enum_mutation || enum_heritage_bad || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then enum_value.type_has_enum else any(enum_selected_contexts, context => context.complete && enum_relation_bad(context.relation) && !enum_safe_bitwise(context.expression)))
+in enum_transfer let enum_reports enum_value != null && (enum_mutation || enum_heritage_bad || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then enum_value.type_has_enum else any(enum_selected_contexts, context => enum_context_bad(context)))
 in ts_node let enum_checked
   if is ts_property then parent.enum_checked == true
   else if is (ts_object, ts_array, ts_parenthesized, ts_as, ts_type_assertion, ts_non_null, ts_satisfies, ts_spread, ts_conditional, ts_logical)
@@ -34,8 +35,29 @@ in ts_node let enum_checked
 in enum_transfer rule no-unsafe-enum-assignment {
   when enum_reports && !(is ts_property && enum_checked)
   let contexts enum_selected_contexts
+  report at if node is ts_parameter then { start: node.name.node.offset, end: end_offset }
+    else if node is ts_assignment_pattern && node.left.node == null then { start: parent.key.node.offset, end: end_offset }
+    else node
   warn if enum_mutation then "This mutation can produce a value outside of the expected enum {enum_names_text(contexts)}."
     else if is (ts_as, ts_type_assertion) then "The value asserted here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
     else "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
+in ts_array.element rule no-unsafe-enum-assignment:element {
+  when !parent.enum_checked && unparenthesised_node(node) not (ts_object, ts_array)
+  let contexts type_flow(node, node)
+  when any(contexts, context => enum_context_bad(context))
+  warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
+in ts_object.property rule no-unsafe-enum-assignment:spread {
+  when node is ts_spread && !parent.enum_checked
+  let contexts type_flow(node, node)
+  when any(contexts, context => enum_context_bad(context))
+  warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
+in ts_jsx_expression.expression rule no-unsafe-enum-assignment:jsx {
+  when unparenthesised_node(node) not (ts_object, ts_array)
+  let contexts type_flow(node, node)
+  when any(contexts, context => enum_context_bad(context))
+  warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
 }

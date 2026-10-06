@@ -10,6 +10,13 @@ use super::{Checker, Tuple, Ty, MAX_DEPTH};
 const MAX_STRUCTURAL: u32 = 2;
 /// Larger property bags are not compared structurally.
 const MAX_PROPS: usize = 24;
+/// Intersections can branch exponentially even while nesting stays shallow.
+const MAX_RELATION_WORK: usize = 1024;
+
+#[cfg(test)]
+thread_local! {
+    static RELATION_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 impl Ty {
     /// Any flowing into a known non-any generic position of the same type.
@@ -33,15 +40,32 @@ impl Ty {
 }
 
 impl Checker<'_> {
+    pub fn with_relation_work<T>(&self, f: impl FnOnce() -> T) -> T {
+        if self.relation_work.get().is_some() { return f() }
+        self.relation_work.set(Some(MAX_RELATION_WORK));
+        let result = f();
+        self.relation_work.set(None);
+        result
+    }
+
     /// Can a value of type `a` be assigned where `b` is expected?
     pub fn assignable(&self, a: &Ty, b: &Ty) -> Option<bool> {
+        #[cfg(test)]
+        RELATION_WORK.with(|work| work.set(work.get() + 1));
+        if a.same_identity(b) { return Some(true) }
         let d = self.depth.get();
         if d >= MAX_DEPTH {
             return None;
         }
+        let remaining = self.relation_work.get();
+        let root = remaining.is_none();
+        let remaining = remaining.unwrap_or(MAX_RELATION_WORK);
+        if remaining == 0 { return None }
+        self.relation_work.set(Some(remaining - 1));
         self.depth.set(d + 1);
         let r = self.relate(a, b);
         self.depth.set(d);
+        if root { self.relation_work.set(None); }
         r
     }
 
@@ -375,4 +399,56 @@ fn any(answers: impl Iterator<Item = Option<bool>>) -> Option<bool> {
         }
     }
     known.then_some(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn a_relation_scope_bounds_multiple_comparisons_together() {
+        with_native_file("const x = /*@*/1;", |file, _| {
+            let checker = &file.typing().checker;
+            let source = Ty::Struct(Vec::new().into());
+            let mut target = Ty::Unknown;
+            for _ in 0..12 { target = Ty::Inter(vec![target.clone(), target]); }
+            RELATION_WORK.with(|work| work.set(0));
+            checker.with_relation_work(|| {
+                for _ in 0..4 { assert_eq!(checker.assignable(&source, &target), None); }
+            });
+            assert!(RELATION_WORK.with(|work| work.get()) < 2048);
+            assert_eq!(checker.assignable(&Ty::Prim("number"), &Ty::Prim("string")), Some(false));
+        });
+    }
+
+    #[test]
+    fn uncertain_intersections_have_a_total_work_bound() {
+        with_native_file("const x = /*@*/1;", |file, _| {
+            let source = Ty::Struct(Vec::new().into());
+            let mut target = Ty::Unknown;
+            for _ in 0..12 {
+                target = Ty::Inter(vec![target.clone(), target]);
+            }
+            RELATION_WORK.with(|work| work.set(0));
+            assert_eq!(file.typing().checker.assignable(&source, &target), None);
+            assert!(RELATION_WORK.with(|work| work.get()) < 2048);
+            assert_eq!(file.typing().checker.assignable(&Ty::Prim("number"), &Ty::Prim("string")), Some(false));
+        });
+    }
+
+    #[test]
+    fn repeated_identical_intersections_do_not_redistribute() {
+        with_native_file("const x = /*@*/1;", |file, _| {
+            let mut ty = Ty::Prim("number");
+            for _ in 0..8 {
+                ty = Ty::Inter(vec![ty.clone(), Ty::Prim("object")]);
+            }
+            RELATION_WORK.with(|work| work.set(0));
+            assert_eq!(file.typing().checker.assignable(&ty, &ty), Some(true));
+            assert!(RELATION_WORK.with(|work| work.get()) <= 2);
+            assert_eq!(file.typing().checker.assignable(&Ty::Unknown, &Ty::Unknown), None);
+            assert_eq!(file.typing().checker.assignable(&Ty::Prim("string"), &Ty::Prim("number")), Some(false));
+        });
+    }
 }

@@ -162,6 +162,7 @@ fn same(a: &Ty, b: &Ty, depth: usize) -> bool {
             if matches!(a, Ty::Union(_)) { same(part, b) } else { same(a, part) }
         }),
         (Ty::Obj(a, ae), Ty::Obj(b, be)) => Arc::ptr_eq(a, b) && same_env(ae, be, depth + 1),
+        (Ty::Struct(a), Ty::Struct(b)) => Arc::ptr_eq(a, b),
         (Ty::Fn(a), Ty::Fn(b)) => Arc::ptr_eq(a, b),
         (Ty::Class(a), Ty::Class(b)) | (Ty::Ns(a), Ty::Ns(b)) => a == b,
         (Ty::IntrinsicUnknown, Ty::IntrinsicUnknown) | (Ty::Any, Ty::Any) | (Ty::Never, Ty::Never) | (Ty::Void, Ty::Void) | (Ty::Undefined, Ty::Undefined) | (Ty::Null, Ty::Null) => true,

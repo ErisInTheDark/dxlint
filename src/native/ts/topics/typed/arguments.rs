@@ -2,32 +2,7 @@
 
 use super::*;
 use crate::native::ts::kinds::{Field as F, Kind as K};
-
-struct Parameters {
-    types: Vec<Ty>,
-    rest: bool,
-    at: usize,
-}
-
-impl Parameters {
-    fn next(&mut self) -> Option<Ty> {
-        let at = self.at;
-        self.at += 1;
-        let rest_at = self.types.len().saturating_sub(1);
-        if self.rest && at >= rest_at {
-            match self.types.last()? {
-                Ty::Array(element) => Some((*element.element).clone()),
-                Ty::Tuple(elements) => {
-                    let ty = elements.at(at - rest_at);
-                    (!ty.is_opaque()).then_some(ty)
-                }
-                _ => None,
-            }
-        } else {
-            self.types.get(at).cloned()
-        }
-    }
-}
+use crate::native::ts::types::Parameters;
 
 fn finding(file: &NativeFile<'_>, node: u32, mode: &str, sender: &Ty, receiver: Option<&Ty>, error: bool) -> Value<'static> {
     let ck = &file.typing().checker;
@@ -53,7 +28,7 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let targs = s.all(node, F::TypeArg).map(|arg| file.type_of(arg)).collect();
     let ck = &file.typing().checker;
     let Some((types, rest)) = ck.argument_parameters(&callee, &types, targs, s.is(node, K::New)) else { return Value::Null };
-    let mut parameters = Parameters { types, rest, at: usize::from(tagged) };
+    let mut parameters = Parameters::new(types, rest, usize::from(tagged));
     let mut out = Vec::new();
     for arg in args {
         if s.is(arg, K::Spread) {

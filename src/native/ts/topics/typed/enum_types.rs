@@ -4,6 +4,14 @@ use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::types::{Checker, Ty};
+use std::cell::RefCell;
+
+#[derive(Default)]
+struct NameGraphs {
+    graphs: RefCell<Vec<(Ty, Vec<String>, usize)>>,
+    #[cfg(test)]
+    expansions: std::cell::Cell<usize>,
+}
 
 struct Query {
     remaining: usize,
@@ -24,10 +32,18 @@ pub(super) fn flow(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let Some(source) = args.get(1).and_then(node_id) else { return Value::Null };
     let checker = &file.typing().checker;
     let mut query = Query::new();
-    Value::list(contexts(file, site, source).into_iter().map(|(origin, receiver)| {
-        let expression = typed_expression(file, source, &receiver, 0, &mut query);
-        let mut names = Vec::new();
-        enum_names(checker, &receiver, &mut Vec::new(), &mut names, &mut query);
+    let transfers = file.argument_types(source, false).map(|pairs| ("argument", pairs))
+        .or_else(|| file.return_types(source).map(|pairs| ("return", pairs)))
+        .or_else(|| file.spread_types(source).map(|pairs| ("contextual", pairs)));
+    let contexts = if let Some((origin, pairs)) = transfers {
+        pairs.into_iter().map(|(sender, receiver)| (origin, sender, receiver)).collect()
+    } else {
+        let sender = file.constrained_type_of(source);
+        contexts(file, site, source).into_iter().map(|(origin, receiver)| (origin, sender.clone(), receiver)).collect::<Vec<_>>()
+    };
+    Value::list(contexts.into_iter().map(|(origin, sender, receiver)| {
+        let expression = checker.with_relation_work(|| typed_expression(file, source, &receiver, Some(&sender), 0, &mut query));
+        let names = receiver_names(file, &receiver, &mut query);
         Value::record(vec![
             ("origin".into(), Value::from(origin)),
             ("relation".into(), expression.key("relation")),
@@ -38,7 +54,7 @@ pub(super) fn flow(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     }).collect())
 }
 
-fn typed_expression(file: &NativeFile<'_>, source: u32, receiver: &Ty, depth: usize, query: &mut Query) -> Value<'static> {
+fn typed_expression(file: &NativeFile<'_>, source: u32, receiver: &Ty, sender: Option<&Ty>, depth: usize, query: &mut Query) -> Value<'static> {
     if !query.visit() { return Value::Null }
     let syntax = &file.syntax;
     let source = syntax.unparen(source);
@@ -59,13 +75,13 @@ fn typed_expression(file: &NativeFile<'_>, source: u32, receiver: &Ty, depth: us
             _ => &[],
         };
         fields.iter().filter_map(|&field| syntax.get(source, field)).map(|operand| {
-            typed_expression(file, operand, receiver, depth + 1, query)
+            typed_expression(file, operand, receiver, None, depth + 1, query)
         }).collect()
     };
     Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("operator".into(), syntax.word(source, F::Op).map_or(Value::Null, |operator| Value::from(operator.to_string()))),
-        ("relation".into(), relation(checker, &file.constrained_type_of(source), receiver, &mut Vec::new(), query)),
+        ("relation".into(), relation(checker, sender.unwrap_or(&file.constrained_type_of(source)), receiver, &mut Vec::new(), query)),
         ("operands".into(), Value::list(operands)),
     ])
 }
@@ -80,12 +96,15 @@ fn contexts(file: &NativeFile<'_>, site: u32, source: u32) -> Vec<(&'static str,
         Some(K::Declarator | K::Param | K::ClassProp | K::As | K::TypeAssertion) =>
             syntax.get(site, F::Type).map(|annotation| ("declared", file.constrained_type_of(annotation))),
         Some(K::Assign | K::AssignPattern) =>
-            syntax.get(site, F::Left).map(|left| ("declared", file.constrained_type_of(left))),
+            syntax.get(site, F::Left).map(|left| {
+                let target = file.constrained_type_of(left);
+                ("declared", if target.is_opaque() { file.contextual_constraint_of(source) } else { target })
+            }),
         Some(K::Update) =>
             syntax.get(site, F::Arg).map(|target| ("declared", file.constrained_type_of(target))),
         _ => None,
     };
-    let mut contexts = vec![explicit.unwrap_or_else(|| ("contextual", file.contextual_type_of(source)))];
+    let mut contexts = vec![explicit.unwrap_or_else(|| ("contextual", file.contextual_constraint_of(source)))];
     if syntax.is(site, K::ClassProp) {
         if let Some(name) = super::super::super::statics::property_name(syntax, site) {
             let mut class = syntax.parent(site);
@@ -95,7 +114,11 @@ fn contexts(file: &NativeFile<'_>, site: u32, source: u32) -> Vec<(&'static str,
             if let Some(class) = class {
                 let checker = &file.typing().checker;
                 for heritage in syntax.all(class, F::Extends).chain(syntax.all(class, F::Implements)) {
-                    contexts.push(("heritage", checker.member(&file.constrained_type_of(heritage), &name)));
+                    let target = file.constrained_type_of(heritage);
+                    let target = if matches!(target, Ty::Class(_)) {
+                        checker.construct(&target, &[], syntax.all(class, F::TypeArg).map(|argument| file.constrained_type_of(argument)).collect())
+                    } else { target };
+                    contexts.push(("heritage", checker.member(&target, &name)));
                 }
             }
         }
@@ -166,8 +189,9 @@ fn relation(checker: &Checker<'_>, sender: &Ty, receiver: &Ty, path: &mut Vec<(T
     }
     let repeated = path.iter().any(|(left, right)| left.same_identity(sender) && right.same_identity(receiver));
     let complete = !repeated;
+    let identical = !sender.is_opaque() && sender.same_identity(receiver);
     let mut children = Vec::new();
-    if complete {
+    if complete && !identical {
         path.push((sender.clone(), receiver.clone()));
         let source_args = arguments(sender);
         let target_args = arguments(receiver);
@@ -207,6 +231,7 @@ fn relation(checker: &Checker<'_>, sender: &Ty, receiver: &Ty, path: &mut Vec<(T
         ("receiver".into(), Value::list(parts(receiver).iter().map(|ty| arm(checker, ty)).collect())),
         ("assignable".into(), Value::list(assignable)),
         ("children".into(), Value::list(children)),
+        ("identity".into(), Value::Bool(identical)),
         ("complete".into(), Value::Bool(complete && query.remaining > 0)),
     ])
 }
@@ -246,6 +271,30 @@ fn enum_names(checker: &Checker<'_>, ty: &Ty, path: &mut Vec<Ty>, out: &mut Vec<
     path.pop();
 }
 
+fn receiver_names(file: &NativeFile<'_>, ty: &Ty, query: &mut Query) -> Vec<String> {
+    let checker = &file.typing().checker;
+    if !can_have_properties(checker, ty) || !ty.same_identity(ty) {
+        let mut names = Vec::new();
+        enum_names(checker, ty, &mut Vec::new(), &mut names, query);
+        return names;
+    }
+    let graphs = file.cached(|_| NameGraphs::default());
+    if let Some((_, names, cost)) = graphs.graphs.borrow().iter().find(|(cached, _, _)| cached.same_identity(ty)) {
+        query.remaining = query.remaining.saturating_sub(*cost);
+        return names.clone();
+    }
+    #[cfg(test)]
+    graphs.expansions.update(|count| count + 1);
+    let mut names = Vec::new();
+    let mut graph = Query::new();
+    let budget = graph.remaining;
+    enum_names(checker, ty, &mut Vec::new(), &mut names, &mut graph);
+    let cost = budget - graph.remaining;
+    query.remaining = query.remaining.saturating_sub(cost);
+    graphs.graphs.borrow_mut().push((ty.clone(), names.clone(), cost));
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +302,37 @@ mod tests {
 
     fn relation_count(value: &Value<'_>) -> usize {
         1 + value.key("children").items().iter().map(relation_count).sum::<usize>()
+    }
+
+    #[test]
+    fn receiver_name_reuse_preserves_query_completeness() {
+        with_native_file("enum Fruit { Apple } const x = /*@*/Fruit.Apple;", |file, nodes| {
+            let ty = Ty::Struct(vec![("value".into(), file.type_of(nodes[0]))].into());
+            let mut direct = Query::new();
+            let mut expected = Vec::new();
+            enum_names(&file.typing().checker, &ty, &mut Vec::new(), &mut expected, &mut direct);
+            for _ in 0..2 {
+                let mut query = Query::new();
+                assert_eq!(receiver_names(file, &ty, &mut query), expected);
+                assert_eq!(query.remaining, direct.remaining);
+            }
+            assert_eq!(file.cached(|_| NameGraphs::default()).expansions.get(), 1);
+            let mut partial = Query { remaining: 1 };
+            receiver_names(file, &ty, &mut partial);
+            assert_eq!(partial.remaining, 0);
+        });
+    }
+
+    #[test]
+    fn identical_property_bags_share_one_complete_relation() {
+        with_native_file("enum Fruit { Apple } const x = /*@*/Fruit.Apple;", |file, nodes| {
+            let checker = &file.typing().checker;
+            let ty = Ty::Struct((0..128).map(|index| (format!("p{index}").into(), file.type_of(nodes[0]))).collect());
+            let mut query = Query::new();
+            let graph = relation(checker, &ty, &ty, &mut Vec::new(), &mut query);
+            assert_eq!(relation_count(&graph), 1);
+            assert_eq!(graph.key("complete"), Value::Bool(true));
+        });
     }
 
     #[test]

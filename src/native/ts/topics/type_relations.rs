@@ -210,6 +210,34 @@ mod tests {
     }
 
     #[test]
+    fn assertion_context_preserves_open_parameters_and_satisfies_widening() {
+        let linter = native_linter("rule no-unnecessary-type-assertion");
+        for source in [
+            "function cast<T extends string>(value: string): T { return value as T; }",
+            "declare function foo<T extends unknown>(bar: T): T; const baz: unknown = {}; foo(baz!);",
+            "interface Wide { name?: string } interface Narrow { name: string } declare const narrow: Narrow; const value = narrow as Wide satisfies Wide;",
+            "interface Wide { name?: string } interface Narrow { name: string } declare const narrow: Narrow; const value = { value: narrow as Wide } satisfies Record<string, Wide>;",
+            "declare function fn<T extends boolean>(options: { a: T extends true ? never : unknown } & { b: T }): void; fn({ a: true, b: true as any });",
+        ] {
+            assert!(linter.lint(Path::new("/root/a.ts"), source).is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn nested_assertions_report_only_the_redundant_outer_cast() {
+        let linter = native_linter("rule no-unnecessary-type-assertion");
+        for (source, outer) in [
+            ("const x = 5 as any as 5;", "5 as any as 5"),
+            ("declare function fn(value: number): void; fn(42 as unknown as number);", "42 as unknown as number"),
+            ("interface Props { a: number } const fn = (): Props => ({ a: 1 }) as unknown as Props;", "({ a: 1 }) as unknown as Props"),
+        ] {
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+            let start = source.find(outer).unwrap();
+            assert_eq!(diagnostics.iter().map(|diagnostic| (diagnostic.start, diagnostic.end)).collect::<Vec<_>>(), [(start, start + outer.len())], "{source}");
+        }
+    }
+
+    #[test]
     fn assertion_policy_preserves_nested_property_mutability() {
         let linter = native_linter("rule no-unnecessary-type-assertion");
         let source = "interface Mutable { nested: { value: number } } interface ReadonlyNested { nested: { readonly value: number } } declare const mutable: Mutable; const changed = mutable as ReadonlyNested;";

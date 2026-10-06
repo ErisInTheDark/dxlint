@@ -2,7 +2,7 @@
 
 define {
 
-macro assertion_options {
+@macro assertion_options {
   option checkLiteralConstAssertions boolean = false "Check literal const assertions"
   option typesToIgnore string[] = [] "Ignore these written assertion types"
 }
@@ -18,11 +18,12 @@ fn assertion_context_known(n, r) = r.context.contains_any == false || r.context.
 fn assertion_context(n, r) = r.context != null && assertion_context_known(n, r) && r.operand.contains_any == false && assertion_generics_preserved(r.operand, r.context) && r.operand_context.assignable == true && r.operand_context.type_arguments_equal == true && !(r.annotation.union && (r.operand.null || r.operand.undefined))
 fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && first(slice(n.declaration.parent.token_texts, 1, 2)) != "!" || n.declaration.parent.parent.kind == "var" && any(walk(n.declaration.parent.parent.parent, current => current.parent), current => current is ts_block && (n.offset < current.offset || n.end_offset > current.end_offset))))
 fn assertion_non_null_context(r) = r.context != null && r.actual_constrained.identity == true && (!r.operand.unknown || r.context.unknown) && (!r.operand.null || r.context.null) && (!r.operand.undefined || r.context.undefined) && (!r.operand.void || r.context.void)
-fn assertion_context_safe(n) = !(assertion_outer(n).parent is (ts_assignment, ts_logical) && assertion_outer(n).parent.operator != "||") && !(assertion_outer(n).parent is ts_property && assertion_outer(n).parent.parent.type_relations.context.union)
+fn assertion_receiver(n) = last(walk(n, current => if current.parent is (ts_parenthesized, ts_property, ts_object, ts_array, ts_conditional, ts_logical, ts_sequence) then current.parent else null)).parent
+fn assertion_context_safe(n) = !(assertion_receiver(n) is (ts_as, ts_type_assertion, ts_satisfies)) && !(assertion_outer(n).parent is (ts_assignment, ts_logical) && assertion_outer(n).parent.operator != "||") && !(assertion_outer(n).parent is ts_property && assertion_outer(n).parent.parent.type_relations.context.union)
 fn assertion_fresh_literal(n, r, written) = unparenthesised_node(n.expression.node) is ts_object && r.annotation.property_literals == true || (r.annotation.literal || written == "const") && unparenthesised_node(n.expression.node) is ts_template && count([] unparenthesised_node(n.expression.node).expression.node) > 0
 
 in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
-  assertion_options
+  @assertion_options
   when !contains(typesToIgnore, type.text) && (type.text != "const" || checkLiteralConstAssertions)
   let relation type_relations
   let unchanged (assertion_same(relation) || !relation.annotation.any && (relation.original_annotation.identity == true || relation.original.property_bag && assertion_type_same(relation.widened_original, relation.annotation, relation.widened_original_annotation))) && (!relation.annotation.literal || assertion_literal_preserved(node)) && !assertion_fresh_literal(node, relation, type.text)
@@ -32,7 +33,7 @@ in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
 }
 
 in ts_non_null rule no-unnecessary-type-assertion:non-null {
-  assertion_options
+  @assertion_options
   let outer assertion_outer(node)
   let relation type_relations
   let assignment outer.parent is ts_assignment && outer.parent.operator == "="

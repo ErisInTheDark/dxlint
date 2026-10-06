@@ -7,6 +7,7 @@
 //! `relate` (assignability) and `print` extend the same `Checker`.
 
 mod calls;
+mod arguments;
 mod domains;
 mod members;
 mod indexed;
@@ -25,6 +26,7 @@ use super::summary::{DeclKind, Member, Sig, Summary, TParam, TupleElement, TypeS
 
 pub use domains::{LiteralValue, ValueDomains};
 pub use calls::ResolvedPredicate;
+pub use arguments::Parameters;
 pub use members::Resolution;
 
 /// All declarations merged under one name (`interface Promise` is spread
@@ -258,6 +260,8 @@ pub struct Checker<'p> {
     depth: Cell<u32>,
     /// Nested structural comparisons in progress (see `relate`).
     structural_depth: Cell<u32>,
+    /// Remaining work for the active assignability query; None between roots.
+    relation_work: Cell<Option<usize>>,
     values: RefCell<HashMap<DeclRef, Ty>>,
 }
 
@@ -266,7 +270,7 @@ const MAX_DEPTH: u32 = 64;
 impl<'p> Checker<'p> {
     pub fn new(project: &'p Project, file: FileId, summary: Summary) -> Self {
         let globals = project.globals(file);
-        Checker { project, file, summary, globals, depth: Cell::new(0), structural_depth: Cell::new(0), values: RefCell::new(HashMap::new()) }
+        Checker { project, file, summary, globals, depth: Cell::new(0), structural_depth: Cell::new(0), relation_work: Cell::new(None), values: RefCell::new(HashMap::new()) }
     }
 
     /// Runs `f` one level deeper, or gives up past the depth limit.
