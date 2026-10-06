@@ -84,14 +84,15 @@ impl Tree {
     }
 
     fn from_nodes(mut nodes: Vec<Node>, holes: Vec<(u32, u32, u32)>, root: u32, too_deep: bool) -> Tree {
-        let starts: Vec<u32> = nodes.iter().map(|n| n.start).collect();
-        let ends: Vec<u32> = nodes.iter().map(|n| n.end).collect();
+        let spans: Vec<_> = nodes.iter().map(|n| (n.start, n.end)).collect();
         let mut overlapping = Vec::new();
         for (id, node) in nodes.iter_mut().enumerate() {
-            node.children.sort_by_key(|e| starts[e.node as usize]);
+            if !node.children.windows(2).all(|pair| spans[pair[0].node as usize].0 <= spans[pair[1].node as usize].0) {
+                node.children.sort_by_key(|e| spans[e.node as usize].0);
+            }
             let mut reach = 0;
             for e in &node.children {
-                let (s, e) = (starts[e.node as usize], ends[e.node as usize]);
+                let (s, e) = spans[e.node as usize];
                 if s < reach && s < e {
                     overlapping.push(id as u32);
                     break;
@@ -102,24 +103,24 @@ impl Tree {
         let n = nodes.len();
         let mut parent = vec![NONE; n];
         let mut label = vec![NO_LABEL; n];
-        let mut reached = vec![false; n];
         let mut order = Vec::new();
         let mut stack = vec![root];
-        reached[root as usize] = true;
+        // Parent slots mark reachability; reserve the root until the walk ends.
+        parent[root as usize] = root;
         // Memoised nodes can be shared by several would-be parents; the
         // first one reached in document order owns them.
         while let Some(id) = stack.pop() {
             order.push(id);
             for edge in nodes[id as usize].children.iter().rev() {
                 let c = edge.node as usize;
-                if !reached[c] {
-                    reached[c] = true;
+                if parent[c] == NONE {
                     parent[c] = id;
                     label[c] = edge.label;
                     stack.push(edge.node);
                 }
             }
         }
+        parent[root as usize] = NONE;
         Tree { nodes, parent, label, order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
     }
 
@@ -237,9 +238,35 @@ impl Tree {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::grammar::Edge;
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn shared_nodes_keep_first_parent_labels_and_stable_document_order() {
+        let edge = |node, label| Edge { node, label };
+        let node = |start, end, children| Node { matcher: TEXT, start, end, children };
+        let nodes = vec![
+            node(2, 3, Vec::new()),
+            node(0, 3, vec![edge(0, 20)]),
+            node(4, 7, vec![edge(0, 21)]),
+            node(0, 0, Vec::new()),
+            node(8, 9, Vec::new()),
+            Node { matcher: ROOT, start: 0, end: 10, children: vec![edge(2, 12), edge(3, 11), edge(1, 10)] },
+        ];
+        let tree = Tree::from_native(nodes, 5);
+        assert_eq!(tree.order, [5, 3, 1, 0, 2]);
+        assert_eq!(tree.parent(0), Some(1));
+        assert_eq!(tree.label(0), Some(20));
+        assert_eq!(tree.parent(5), None);
+        assert_eq!(tree.label(5), None);
+        assert_eq!(tree.parent(4), None);
+        assert_eq!(tree.label(4), None);
+        assert_eq!(tree.fields(5, 10), [1]);
+        assert_eq!(tree.fields(1, 20), [0]);
+    }
 
     #[test]
     fn positions_find_the_child_holding_them_where_children_overlap() {

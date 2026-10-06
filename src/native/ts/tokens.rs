@@ -112,7 +112,9 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
         }
         children.clear();
         children.extend(node.children.iter().map(|e| &nodes[e.node as usize]));
-        children.sort_by_key(|c| c.start);
+        if !children.windows(2).all(|pair| pair[0].start <= pair[1].start) {
+            children.sort_by_key(|c| c.start);
+        }
         let mut next_child = children.iter().peekable();
         while let Some(token) = tokens.get(at).filter(|t| t.end <= node.end) {
             while next_child.next_if(|c| c.end <= token.start).is_some() {}
