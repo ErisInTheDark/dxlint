@@ -42,19 +42,35 @@ pub struct Lexer<'s> {
 
 // Longest first within each starting byte.
 const PUNCT: &[&str] = &[
-    "...", "?.", "??=", "??", "?", "===", "==", "=>", "=", "!==", "!=", "!", "**=", "**", "*=", "*", "&&=", "&&", "&=", "&",
+    "...", ".", "?.", "??=", "??", "?", "===", "==", "=>", "=", "!==", "!=", "!", "**=", "**", "*=", "*", "&&=", "&&", "&=", "&",
     "||=", "||", "|=", "|", "<<=", "<<", "<=", "<", ">", "++", "+=", "+", "--", "-=", "-", "%=", "%", "^=", "^", "/=", "/",
-    "{", "}", "(", ")", "[", "]", ";", ",", ":", "~", "@", ".", "#",
+    "{", "}", "(", ")", "[", "]", ";", ",", ":", "~", "@", "#",
 ];
 
-/// The longest punctuator starting `rest`. Checks the first byte before
-/// comparing, and compares inline: a `starts_with` per candidate called
-/// `memcmp` for every token.
+/// For each first byte, the range of [`PUNCT`] starting with it (entries
+/// sharing a first byte are adjacent there).
+const PUNCT_BY_BYTE: [(u8, u8); 256] = {
+    let mut table = [(0u8, 0u8); 256];
+    let mut i = 0;
+    while i < PUNCT.len() {
+        let b = PUNCT[i].as_bytes()[0] as usize;
+        if table[b].1 == 0 {
+            table[b].0 = i as u8;
+        }
+        table[b].1 = i as u8 + 1;
+        i += 1;
+    }
+    table
+};
+
+/// The longest punctuator starting `rest`, comparing only the candidates
+/// with its first byte, inline (a `starts_with` per candidate called
+/// `memcmp` for every token).
 fn punctuator(rest: &[u8]) -> Option<&'static str> {
-    let first = *rest.first()?;
-    PUNCT.iter().copied().find(|p| {
+    let (from, to) = PUNCT_BY_BYTE[*rest.first()? as usize];
+    PUNCT[from as usize..to as usize].iter().copied().find(|p| {
         let p = p.as_bytes();
-        p[0] == first && rest.len() >= p.len() && p.iter().zip(rest).all(|(a, b)| a == b)
+        rest.len() >= p.len() && p.iter().zip(rest).all(|(a, b)| a == b)
     })
 }
 
