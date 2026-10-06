@@ -272,25 +272,33 @@ in ts_punctuator rule jsx-tag-spacing:before-self-closing {
   let jsx_tag_before_self true
   @jsx_tag_spacing_body
 }
-schema jsx_bracket_location "after-props" | "props-aligned" | "tag-aligned" | "line-aligned"
-in ts_close_angle, ts_punctuator rule jsx-closing-bracket-location {
-  option mode jsx_bracket_location = "tag-aligned" "closing bracket alignment"
-  option nonEmpty jsx_bracket_location | boolean | null = null "alignment for paired opening tags"
-  option selfClosing jsx_bracket_location | boolean | null = null "alignment for self-closing tags"
+group jsx_paired_brackets ts_close_angle
+group jsx_self_closing_brackets ts_punctuator
+in ts_jsx_element let jsx_closing_bracket_location_enabled true
+@macro jsx_closing_bracket_body {
+  default option mode enum(after-props, props-aligned, tag-aligned, line-aligned) = tag-aligned "closing bracket alignment"
   let last_prop parent.jsx_tag_last_prop
   let last_line position(last_prop.end_offset).js_line
   let here position(offset)
   let opening position(parent.offset)
-  let selected if last_prop == null then "after-tag" else if last_line == opening.js_line then "after-props" else default(if parent.jsx_syntax.self_closing then selfClosing else nonEmpty, mode)
+  let selected if last_prop == null then "after-tag" else if last_line == opening.js_line then "after-props" else mode
   let aligned_column if selected == "props-aligned" then position(last_prop.offset).js_column else if selected == "tag-aligned" then opening.js_column else if selected == "line-aligned" then jsx_indent(parent.jsx_line_prefix) + 1 else null
   let aligned if selected == "after-tag" then parent.jsx_tag_name_line == here.js_line else if selected == "after-props" then last_line == here.js_line else aligned_column == here.js_column && (selected != "tag-aligned" || starts_with(parent.jsx_line_prefix, "\t") == starts_with(jsx_line_prefix, "\t"))
   let fallback !aligned && (contains(space_before.text, "/*") || contains(space_before.text, "//")) && contains(["after-tag", "after-props"], selected)
   let placement if fallback then "line-aligned" else selected
   let expected_column if fallback then jsx_indent(parent.jsx_line_prefix) + 1 else aligned_column
-  when parent is ts_jsx_element && (jsx_tag_self_slash || is ts_close_angle && !parent.jsx_syntax.self_closing && end_offset == parent.jsx_syntax.opening.end)
-  when type_of(selected) == "str" && !(if fallback then expected_column == here.js_column else aligned)
+  when parent.jsx_closing_bracket_location_enabled
+  when !(if fallback then expected_column == here.js_column else aligned)
   report at {start: offset, end: parent.end_offset}
   warn "The closing bracket must be {if placement == 'after-tag' then 'placed after the opening tag' else if placement == 'after-props' then 'placed after the last prop' else if placement == 'props-aligned' then 'aligned with the last prop' else if placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if expected_column != null then ' (expected column ' expected_column (if last_prop != null && last_line == here.js_line then ' on the next line)' else ')') else ''}"
+}
+in jsx_paired_brackets rule jsx-closing-bracket-location:paired {
+  when parent is ts_jsx_element && !parent.jsx_syntax.self_closing && end_offset == parent.jsx_syntax.opening.end
+  @jsx_closing_bracket_body
+}
+in jsx_self_closing_brackets rule jsx-closing-bracket-location:self-closing {
+  when parent is ts_jsx_element && jsx_tag_self_slash
+  @jsx_closing_bracket_body
 }
 in ts_open_angle rule jsx-closing-tag-location {
   option mode "tag-aligned" | "line-aligned" = "tag-aligned" "closing-tag alignment"
