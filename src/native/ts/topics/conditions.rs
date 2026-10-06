@@ -125,7 +125,7 @@ fn callable_returns(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::tests::{native_linter, with_native_file};
+    use crate::engine::tests::{lint_project, native_linter, with_native_file};
     use std::path::Path;
 
     #[test]
@@ -248,11 +248,52 @@ mod tests {
 
     #[test]
     fn condition_policy_checks_tests_chains_callbacks_and_loop_options_without_fixes() {
-        let linter = native_linter("rule no-unnecessary-condition { set allowConstantLoopConditions true\nset allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
+        let linter = native_linter("rule no-unnecessary-condition { set allowConstantLoopConditions 'always'\nset allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
         let source = "declare const object: { item: {} }; if (object) {} if (!object) {} object?.item; [1].filter(() => true); while (true) {}";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
         assert_eq!(diagnostics.len(), 4);
         assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+    }
+
+    #[test]
+    fn condition_predicate_selection_keeps_truthiness_and_type_guards_independent() {
+        let source = "declare function assertTruthy(value: unknown): asserts value; declare function guard(value: unknown): value is string; declare function other(value: unknown): value is string; declare const text: string; declare const unknown: unknown; assertTruthy(true); assertTruthy(unknown); guard(text); other(text); guard(0);";
+        for (selection, expected) in [
+            ("", vec![]),
+            ("override in ts_call let no_unnecessary_condition_truthiness_assertion_checked true", vec!["true"]),
+            ("override in ts_call let no_unnecessary_condition_predicate_checked true", vec!["text", "text"]),
+            ("override in ts_call let no_unnecessary_condition_truthiness_assertion_checked true\noverride in ts_call let no_unnecessary_condition_predicate_checked true", vec!["true", "text", "text"]),
+            ("override in ts_call let no_unnecessary_condition_truthiness_assertion_checked false\noverride in ts_call let no_unnecessary_condition_predicate_checked false", vec![]),
+            ("override in ts_call let no_unnecessary_condition_predicate_checked callee.text == 'guard'", vec!["text"]),
+        ] {
+            let linter = native_linter(&format!("rule no-unnecessary-condition {{ set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }}\n{selection}"));
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+            assert_eq!(diagnostics.iter().map(|diagnostic| &source[diagnostic.start..diagnostic.end]).collect::<Vec<_>>(), expected, "{selection}: {diagnostics:#?}");
+        }
+    }
+
+    #[test]
+    fn condition_loop_modes_distinguish_static_true_from_allowed_literal_syntax() {
+        let source = "declare const yes: true; declare const no: false; while ((true)) {} while (false) {} while (1) {} while (0) {} while (yes) {} while (no) {} while (2) {} for (; true;) {} do {} while (false);";
+        for (mode, expected) in [("never", 9), ("always", 6), ("only-allowed-literals", 3)] {
+            let linter = native_linter(&format!("rule no-unnecessary-condition {{ set allowConstantLoopConditions '{mode}'\nset allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }}"));
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+            assert_eq!(diagnostics.len(), expected, "{mode}: {diagnostics:#?}");
+        }
+    }
+
+    #[test]
+    fn strict_null_override_changes_only_the_bootstrap_warning() {
+        for (strict, allow, expected) in [(false, false, 2), (false, true, 1), (true, false, 1), (true, true, 1)] {
+            let config = format!(r#"{{"compilerOptions":{{"strictNullChecks":{strict}}}}}"#);
+            let messages = lint_project(
+                "condition-strict-null-override",
+                &[("tsconfig.json", &config), ("main.ts", "if (true) {}")],
+                "main.ts",
+                &format!("rule no-unnecessary-condition {{ set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing {allow} }}"),
+            );
+            assert_eq!(messages.len(), expected, "strict={strict}, allow={allow}: {messages:#?}");
+        }
     }
 
     #[test]
