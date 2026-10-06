@@ -307,14 +307,14 @@ in ts_conditional rule no-nested-ternary {
 in ts_continue rule no-continue warn "Unexpected use of continue statement."
 in ts_parenthesized, ts_unary let restriction_statement_position if parent is ts_parenthesized then parent.restriction_statement_position else parent is ts_expression_statement
 in ts_parenthesized, ts_sequence, ts_update let restriction_for_update if parent is (ts_parenthesized, ts_sequence) then parent.restriction_for_update else is ts_for.update
+in ts_unary let no_void_checked true
 in ts_unary rule no-void {
-  option allowAsStatement boolean = false "allow void as an expression statement"
-  when operator == "void" && !(allowAsStatement && restriction_statement_position)
+  when operator == "void" && no_void_checked
   warn "Expected 'undefined' and instead saw 'void'."
 }
+in ts_update let no_plusplus_checked true
 in ts_update rule no-plusplus {
-  option allowForLoopAfterthoughts boolean = false "allow updates in for loop afterthoughts"
-  when !(allowForLoopAfterthoughts && restriction_for_update)
+  when no_plusplus_checked
   warn "Unary operator '{operator}' used."
 }
 in ts_binary, ts_assignment rule no-bitwise {
@@ -354,24 +354,19 @@ in ts_labeled let restriction_target body.node
 in ts_labeled let restriction_label_entry {name: label, target: restriction_target}
 in ts_statement, ts_case let restriction_label_targets default(parent.restriction_label_targets, []) (if is ts_labeled then [restriction_label_entry] else [])
 in ts_break, ts_continue let restriction_target (find_last(restriction_label_targets, target => target.name == label)).target
+in ts_labeled, ts_break, ts_continue let no_labels_checked true
 in ts_labeled rule no-labels {
-  option allowLoop boolean = false "allow labels on loops"
-  option allowSwitch boolean = false "allow labels on switches"
-  when !(allowLoop && restriction_target is ts_loop || allowSwitch && restriction_target is ts_switch)
+  when no_labels_checked
   warn "Unexpected labeled statement."
 }
 in ts_break rule no-labels:break {
-  option allowLoop boolean = false "allow labels on loops"
-  option allowSwitch boolean = false "allow labels on switches"
   when label != null
-  when !(allowLoop && restriction_target is ts_loop || allowSwitch && restriction_target is ts_switch)
+  when no_labels_checked
   warn "Unexpected label in break statement."
 }
 in ts_continue rule no-labels:continue {
-  option allowLoop boolean = false "allow labels on loops"
-  option allowSwitch boolean = false "allow labels on switches"
   when label != null
-  when !(allowLoop && restriction_target is ts_loop || allowSwitch && restriction_target is ts_switch)
+  when no_labels_checked
   warn "Unexpected label in continue statement."
 }
 
