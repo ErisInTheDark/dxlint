@@ -32,12 +32,13 @@ define {
   # Comments: children of the code layer whose text they sit in (between
   # its other children, so never inside a string, regex or template text).
   in ts_code {
-    match ts_line_comment /\/\/[^\n\r\u{2028}\u{2029}]*/
-    match ts_block_comment /\/\*/ until /\*\//
+    match ts_line_comment like core_line_comment @core_line_comment_pattern
+    match ts_block_comment like core_block_comment @core_block_comment_pattern
   }
   # Each line, its line break included (the last may have none): over the
   # file, across whatever nodes it runs through.
-  in .js layer lines match ts_line /[^\n\r\u{2028}\u{2029}]*(?:\r\n|[\n\r\u{2028}\u{2029}])|[^\n\r\u{2028}\u{2029}]+/
+  in .js layer lines match ts_line like core_line @core_line_pattern
+  override in core_trailing_spaces let core_raw_space any(overlapping(ts_template), template => any(template.quasi.node, quasi => offset >= quasi.offset && end_offset <= quasi.end_offset))
 }
 group ts_comment ts_line_comment, ts_block_comment
 

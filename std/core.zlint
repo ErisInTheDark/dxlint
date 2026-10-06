@@ -22,7 +22,9 @@ match identifier /\b[A-Za-z_]\w*/
 match number /\b\d[\d_]*(?:\.\d+)?/
 
 # The line break this file uses, for fixes that add lines.
-macro newline (if contains(source, "\r\n") then "\r\n" else "\n")
+@macro newline (if contains(source, "\r\n") then "\r\n" else "\n")
 
 # Language-neutral hygiene rules, defined (off) for every language.
 import .whitespace
+import .core/lines
+import .core/lists

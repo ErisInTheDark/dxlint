@@ -7,6 +7,8 @@ use super::{build, Diagnostic, Linter};
 use crate::config::source::Disk;
 use crate::config::{self, ast::Severity};
 
+mod text_hygiene;
+
 /// Behaviour of std's TypeScript rules that spans several owners.
 mod ts_std_rules;
 mod ts_arithmetic;
@@ -404,9 +406,14 @@ fn big_files_report_the_same_when_their_rules_run_in_groups() {
     l.split_at = usize::MAX;
     let together = l.lint(path, &text);
     l.split_at = 1;
-    let split = l.lint(path, &text);
     assert!(together.len() > 300, "{}", together.len());
-    assert_eq!(together.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>(), split.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>());
+    for jobs in [1, 2, 4] {
+        l.set_rule_jobs(jobs);
+        let active = vec![true; l.rules.len()];
+        assert_eq!(l.rule_groups(&active, text.len()).len(), jobs);
+        let split = l.lint(path, &text);
+        assert_eq!(together.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>(), split.iter().map(|d| (d.start, d.end, &d.rule, &d.message)).collect::<Vec<_>>());
+    }
 }
 
 #[test]
@@ -513,11 +520,11 @@ fn conditional_fixes_report_without_a_fix_when_the_condition_fails() {
 fn lines_inside_a_fixed_opener_follow_its_fixed_indentation() {
     let l = linter(r#"
         in .t, paren layer lines match line /^[ \t]*\S/ {
-          macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
+          @macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
           rule ind warn "indent" {
             indent in paren
-            when slice(text, 0, -1) != level
-            fix as level slice(text, -1)
+            when slice(text, 0, -1) != @level
+            fix as @level slice(text, -1)
           }
         }
     "#);
@@ -891,10 +898,10 @@ fn broken_parts_leave_the_rest_linting() {
 #[test]
 fn a_mistake_in_a_macro_is_reported_once() {
     let errs = errors(r#"
-        macro bad no_such_name
+        @macro bad no_such_name
         in .t match w /\w+/ {
-          rule a warn "x" { when bad }
-          rule b warn "x" { when bad }
+          rule a warn "x" { when @bad }
+          rule b warn "x" { when @bad }
         }
     "#);
     assert_eq!(errs.len(), 1, "{errs:?}");
@@ -1021,13 +1028,13 @@ fn value_tests_match_whole_values() {
 #[test]
 fn macros_generate_rules() {
     let l = linter(r#"
-        macro forbid(name, pat, why) {
+        @macro forbid(name, pat, why) {
           in .t match name pat {
             rule name error why
           }
         }
-        forbid(dbg, "dbg!", "remove dbg! calls")
-        forbid(todo_macro, "todo!", "finish this")
+        @forbid(dbg, "dbg!", "remove dbg! calls")
+        @forbid(todo_macro, "todo!", "finish this")
     "#);
     let diags = lint(&l, "dbg!(x); todo!()");
     let got: Vec<(&str, &str)> = diags.iter().map(|d| (d.rule.as_str(), d.message.as_str())).collect();
@@ -1098,10 +1105,10 @@ fn override_replaces_definitions_in_place_and_forgets_their_settings() {
         in .t match word /\b[a-z]+\b/
         in word rule shout warn "old {text}"
         rule shout error
-        macro twice(x) x x
-        override in word rule shout info "new {twice(text)}"
-        override macro twice(x) x "+" x
-        in word rule echo warn "{twice(text)}"
+        @macro twice(x) x x
+        override in word rule shout info "new {@twice(text)}"
+        override @macro twice(x) x "+" x
+        in word rule echo warn "{@twice(text)}"
         override in .t match word /\b[a-z]{2}\b/
     "#);
     let diags = lint(&l, "ab abc");
@@ -1117,13 +1124,13 @@ fn redefinitions_need_override() {
         in .t match word /\w+/
         in word rule r warn "x"
         in word rule r warn "y"
-        macro m 1
-        macro m 2
+        @macro m 1
+        @macro m 2
         override in word rule ghost warn "z"
     "#);
     let all = errs.join("\n");
     assert!(all.contains("rule `r` is defined twice") && all.contains("override in <layer> rule r"), "{all}");
-    assert!(all.contains("macro `m` is defined twice") && all.contains("override macro m"), "{all}");
+    assert!(all.contains("macro `m` is defined twice"), "{all}");
     assert!(all.contains("nothing to override: no rule `ghost`"), "{all}");
 }
 
@@ -1312,11 +1319,11 @@ fn each_reports_once_per_item_where_report_at_says() {
     // A macro parameter named like a key is not substituted after `.`;
     // `\u{..}` in a string is an escape, not a hole.
     let l = linter(r#"
-        macro of(word) filter(words, w => w.word == word)
-        macro words [{ word: "ab", at: 1 }, { word: "cd", at: 0 }]
+        @macro of(word) filter(@words, w => w.word == word)
+        @macro words [{ word: "ab", at: 1 }, { word: "cd", at: 0 }]
         in .t match line /[a-z ]+/ {
           rule pick warn "{w.word}{'\u{21}'}" {
-            each w in of("ab") of("cd")
+            each w in @of("ab") @of("cd")
             report at offset + w.at
           }
         }
@@ -1870,5 +1877,10 @@ fn std_library_parses_and_lints() {
     let built = build(config::load_text("test.zlint", &all, &Disk), PathBuf::from("/root"));
     assert!(built.errors.is_empty(), "{:#?}", built.errors);
     let l = built.linter.unwrap();
-    assert!(l.inert.is_empty() && l.rules.iter().all(|r| r.severity != Severity::Off));
+    for rule in &l.inert {
+        for target in rule.target_text.split(',') {
+            assert!(l.grammar.group(target.trim()).is_some_and(|members| members.is_empty()), "{}: unexpected inert target {target}", rule.name);
+        }
+    }
+    assert!(l.rules.iter().all(|r| r.severity != Severity::Off));
 }

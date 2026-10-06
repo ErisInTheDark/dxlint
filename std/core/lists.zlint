@@ -1,0 +1,37 @@
+# List policy, shared by native and pattern syntax adapters.
+define {
+group core_list
+  in core_list rule list-style {
+    option empty "ignore" | "always" | "never" = "ignore" "empty bracket spacing"
+    option singleLine { spacing?: "always" | "never"; maxItems?: number } = { spacing: "never" } "single-line lists"
+    option multiLine { minItems?: number } = { minItems: 0 } "multiline lists"
+    option overrides { [key: string]: "off" | { empty?: "ignore" | "always" | "never"; singleLine?: { spacing?: "always" | "never"; maxItems?: number }; multiLine?: { minItems?: number } } } = { "{}": { singleLine: { spacing: "always" } } } "bracket and node type overrides"
+    let sites map(core_list_layout, info => {
+      info: info, byNode: get(overrides, info.kind), byBracket: get(overrides, info.brackets),
+    })
+    let policies map(sites, entry => {
+      info: entry.info,
+      off: entry.byNode == "off" || entry.byNode == null && entry.byBracket == "off",
+      empty: default(entry.byNode.empty, default(entry.byBracket.empty, empty)),
+      spacing: default(entry.byNode.singleLine.spacing, default(entry.byBracket.singleLine.spacing,
+        if entry.info.brackets == "{{}}" && entry.byBracket != "off" then "always" else default(singleLine.spacing, "never"))),
+      maxItems: default(entry.byNode.singleLine.maxItems, default(entry.byBracket.singleLine.maxItems, default(singleLine.maxItems, 1000000000))),
+      minItems: default(entry.byNode.multiLine.minItems, default(entry.byBracket.multiLine.minItems, default(multiLine.minItems, 0))),
+    })
+    let findings map(policies, entry => {
+      info: entry.info,
+      off: entry.off || entry.info.count == 0 && entry.empty == "ignore",
+      spacing: entry.info.single && entry.info.count <= entry.maxItems,
+      shouldSpace: if entry.info.count == 0 then entry.empty == "always" else entry.spacing == "always",
+      emptyWrap: entry.info.count == 0,
+      ignoreEmptyWrap: !entry.info.empty_comments && entry.minItems == 0,
+      shouldWrap: if entry.info.count == 0 then entry.info.empty_comments else if entry.info.node_single then entry.info.count > entry.maxItems else entry.info.count >= entry.minItems && entry.info.first_broken,
+    })
+    each entry in findings
+    when !entry.off
+    when if entry.spacing then entry.info.mode == "spacing" && entry.shouldSpace != entry.info.spaced
+      else (if entry.emptyWrap then entry.info.mode == "empty_wrapping" && !entry.ignoreEmptyWrap else entry.info.mode == "wrapping") && entry.shouldWrap != entry.info.broken
+    report at entry.info.offset
+    warn (if entry.spacing then (if entry.shouldSpace then "Should have space between '" else "Should not have space(s) between '") else (if entry.shouldWrap then "Should have line break between '" else "Should not have line break(s) between '")) entry.info.prev "' and '" entry.info.next "'"
+  }
+}

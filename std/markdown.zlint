@@ -7,5 +7,5 @@ lang markdown "*.md" "*.markdown" {
   match md_fence /^[ \t]*```/ until /^[ \t]*```/
   match md_tilde_fence /^[ \t]*~~~/ until /^[ \t]*~~~/
   match md_code /`/ until /`|$/
-  match md_comment /<!--/ until /-->/
+  match md_comment like core_html_comment @core_html_comment_pattern
 }

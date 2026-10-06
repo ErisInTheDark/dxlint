@@ -153,7 +153,7 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
         }).collect();
         Value::record(vec![("name".into(), Value::from(name.clone())), ("declarations".into(), Value::list(declarations))])
     }).collect() } else { Vec::new() };
-    let entries: Vec<(std::borrow::Cow<'static, str>, Value<'static>)> = vec![
+    let entries: Vec<(crate::expr::value::Key, Value<'static>)> = vec![
         ("kind".into(), Value::from(ty.kind())),
         ("parts".into(), Value::list(parts)),
         ("names".into(), Value::list(names)),

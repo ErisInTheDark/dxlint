@@ -335,13 +335,6 @@ in ts_line rule no-mixed-spaces-and-tabs {
   warn "Mixed spaces and tabs."
 }
 
-in ts_line match structure_line_break /\r\n|[\n\u{2028}\u{2029}]/
-in structure_line_break rule linebreak-style {
-  option mode "unix" | "windows" = "unix"
-  when mode == "unix" && text != "\n" || mode == "windows" && text != "\r\n"
-  warn if mode == "unix" then "Expected linebreaks to be 'LF' but found 'CRLF'." else "Expected linebreaks to be 'CRLF' but found 'LF'."
-}
-
 in ts_program rule unicode-bom {
   option mode "always" | "never" = "never"
   when mode == "always" && !bom || mode == "never" && bom
@@ -378,7 +371,7 @@ in ts_binary rule eqeqeq {
   warn "Expected '{expected}' and instead saw '{operator}'."
 }
 
-macro padding_selector_matches(info, selector) (if type_of(selector) == "str" then contains(info.tags, selector) else contains(info.selectors, re_replace(selector.selector, /["']/, "")) && (default(selector.lineMode, "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
+fn padding_selector_matches(info, selector) = (if type_of(selector) == "str" then contains(info.tags, selector) else contains(info.selectors, re_replace(selector.selector, /["']/, "")) && (default(selector.lineMode, "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
 
 group structure_padding_owner ts_program, ts_block, ts_static_block, ts_case, ts_switch, ts_interface, ts_type_literal
 group structure_padding_block ts_block, ts_switch
@@ -501,7 +494,7 @@ in structure_padding_owner rule padding-line-between-statements {
   warn if info.policy == "always" then "Expected blank line before this statement." else "Unexpected blank line before this statement."
 }
 
-macro operand_cached_indent(records, row, fallback) default(last(filter(records, prior => prior.right_line == row)).expected, fallback)
+fn operand_cached_indent(records, row, fallback) = default(last(filter(records, prior => prior.right_line == row)).expected, fallback)
 
 in ts_program rule indent-binary-ops {
   option mode number | "tab" = 2 "indent width or tabs"
@@ -534,40 +527,11 @@ in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, t
   warn if space_before.line_break && space_after.line_break then "Bad line breaking before and after '{text}'." else if policy == "before" then "'{text}' should be placed at the beginning of the line." else if policy == "after" then "'{text}' should be placed at the end of the line." else "There should be no line break before or after '{text}'."
 }
 
-in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_call, ts_new, ts_if, ts_import, ts_export, ts_enum, ts_function_type, ts_interface, ts_type_literal, ts_tuple_type, ts_type_reference, ts_method, ts_class rule list-style {
-  option empty "ignore" | "always" | "never" = "ignore" "empty bracket spacing"
-  option singleLine { spacing?: "always" | "never"; maxItems?: number } = { spacing: "never" } "single-line lists"
-  option multiLine { minItems?: number } = { minItems: 0 } "multiline lists"
-  option overrides { [key: string]: "off" | { empty?: "ignore" | "always" | "never"; singleLine?: { spacing?: "always" | "never"; maxItems?: number }; multiLine?: { minItems?: number } } } = { "{}": { singleLine: { spacing: "always" } } } "bracket and node type overrides"
-  let sites map(list_layout, info => {
-    info: info,
-    byNode: get(overrides, info.kind),
-    byBracket: get(overrides, info.brackets),
-  })
-  let policies map(sites, entry => {
-    info: entry.info,
-    off: entry.byNode == "off" || entry.byNode == null && entry.byBracket == "off",
-    empty: default(entry.byNode.empty, default(entry.byBracket.empty, empty)),
-    spacing: default(entry.byNode.singleLine.spacing, default(entry.byBracket.singleLine.spacing, default(singleLine.spacing, "never"))),
-    maxItems: default(entry.byNode.singleLine.maxItems, default(entry.byBracket.singleLine.maxItems, default(singleLine.maxItems, 1000000000))),
-    minItems: default(entry.byNode.multiLine.minItems, default(entry.byBracket.multiLine.minItems, default(multiLine.minItems, 0))),
-  })
-  let findings map(policies, entry => {
-    info: entry.info,
-    off: entry.off || entry.info.count == 0 && entry.empty == "ignore",
-    spacing: entry.info.single && entry.info.count <= entry.maxItems,
-    shouldSpace: if entry.info.count == 0 then entry.empty == "always" else entry.spacing == "always",
-    emptyWrap: entry.info.count == 0,
-    ignoreEmptyWrap: !entry.info.empty_comments && entry.minItems == 0,
-    shouldWrap: if entry.info.count == 0 then entry.info.empty_comments else if entry.info.node_single then entry.info.count > entry.maxItems else entry.info.count >= entry.minItems && entry.info.first_broken,
-  })
-  each entry in findings
-  when !entry.off
-  when if entry.spacing then entry.info.mode == "spacing" && entry.shouldSpace != entry.info.spaced
-    else (if entry.emptyWrap then entry.info.mode == "empty_wrapping" && !entry.ignoreEmptyWrap else entry.info.mode == "wrapping") && entry.shouldWrap != entry.info.broken
-  report at entry.info.offset
-  warn (if entry.spacing then (if entry.shouldSpace then "Should have space between '" else "Should not have space(s) between '") else (if entry.shouldWrap then "Should have line break between '" else "Should not have line break(s) between '")) entry.info.prev "' and '" entry.info.next "'"
-}
+group core_ts_list ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow,
+  ts_call, ts_new, ts_if, ts_import, ts_export, ts_enum, ts_function_type, ts_interface,
+  ts_type_literal, ts_tuple_type, ts_type_reference, ts_method, ts_class
+group core_list core_ts_list
+in core_ts_list let core_list_layout list_layout
 
 group structure_statement ts_break, ts_class, ts_continue, ts_debugger, ts_do_while, ts_expression_statement,
   ts_for_in, ts_for_of, ts_for, ts_function, ts_if, ts_import, ts_labeled, ts_return, ts_switch,

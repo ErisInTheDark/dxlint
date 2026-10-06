@@ -1,0 +1,17 @@
+# .css: textual CSS structure; pattern layers, not a full validator.
+
+import .core
+
+lang css "*.css" {
+  match braces
+  match brackets
+  match parentheses
+}
+
+group css_code .css, braces, brackets, parentheses
+in css_code {
+  match css_comment like core_block_comment @core_block_comment_pattern
+  match css_string /"/ until /"/
+  match css_single_string /'/ until /'/
+}
+in css_string, css_single_string match css_escape /\\(?:\r\n|[\s\S])/

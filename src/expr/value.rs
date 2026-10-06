@@ -73,6 +73,24 @@ impl std::ops::Deref for Text<'_> {
     }
 }
 
+impl AsRef<str> for Text<'_> {
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl<'s> From<&'s str> for Text<'s> {
+    fn from(text: &'s str) -> Self {
+        Text::Borrowed(text)
+    }
+}
+
+impl From<String> for Text<'_> {
+    fn from(text: String) -> Self {
+        Text::Shared(text.into())
+    }
+}
+
 impl Text<'_> {
     fn into_static(self) -> Text<'static> {
         match self {
@@ -88,6 +106,12 @@ impl PartialEq for Text<'_> {
     }
 }
 
+impl PartialEq<str> for Text<'_> {
+    fn eq(&self, other: &str) -> bool {
+        self.as_ref() == other
+    }
+}
+
 impl fmt::Display for Text<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self)
@@ -100,8 +124,8 @@ impl fmt::Debug for Text<'_> {
     }
 }
 
-/// A record key: usually a literal name, which costs no allocation.
-pub type Key = Cow<'static, str>;
+/// Literal keys borrow; compiled names share their allocation across evaluations.
+pub type Key = Text<'static>;
 
 impl<'s> Value<'s> {
     pub fn list(items: Vec<Value<'s>>) -> Self {

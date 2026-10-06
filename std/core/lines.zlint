@@ -1,0 +1,47 @@
+# Shared line structure and hygiene; syntax owners supply comment/raw adapters.
+@macro core_line_pattern /[^\n\r\u{2028}\u{2029}]*(?:\r\n|[\n\r\u{2028}\u{2029}])|[^\n\r\u{2028}\u{2029}]+/
+@macro core_line_comment_pattern /\/\/[^\n\r\u{2028}\u{2029}]*/
+@macro core_block_comment_pattern /\/\*/ until /\*\//
+@macro core_html_comment_pattern /<!--/ until /-->/
+
+define {
+  match core_line @core_line_pattern
+  match core_line_comment @core_line_comment_pattern
+  match core_block_comment @core_block_comment_pattern
+  match core_html_comment @core_html_comment_pattern
+  group core_comment core_line_comment, core_block_comment, core_html_comment
+  in .* layer lines match core_line
+
+  in .* layer lines match core_file_tail /[^\n]\z/
+  in core_file_tail rule eol-last warn "Newline required at end of file but not found." {
+    option mode "always" | "never" = "always" "whether files end in a newline"
+    when mode == "always"
+    report at end_offset
+    fix as text "\n"
+  }
+  in .* layer lines match core_final_newlines /(?:\r?\n)+\z/
+  in core_final_newlines rule eol-last:never warn "Newline not allowed at end of file." {
+    option mode "always" | "never" = "always" "whether files end in a newline"
+    when mode == "never"
+    report at end_offset - (if ends_with(text, "\r\n") then 2 else 1)
+    fix as ""
+  }
+
+  in core_line match core_trailing_spaces /[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]+(?=[\r\n\u{2028}\u{2029}]|\z)/
+  in core_trailing_spaces let core_raw_space false
+  in core_trailing_spaces rule no-trailing-spaces warn "Trailing spaces not allowed." {
+    option skipBlankLines boolean = false "ignore whitespace-only lines"
+    option ignoreComments boolean = false "ignore comment lines"
+    when !(skipBlankLines && re_test(parent.text, /^[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]*(?:\r\n|[\r\n\u{2028}\u{2029}])?\z/))
+    when !(ignoreComments && (starts_with(parent.text, "#!") || any(overlapping(core_comment), comment => comment is core_line_comment || position(comment.end_offset).js_line > position(offset).js_line)))
+    when !core_raw_space
+    fix as ""
+  }
+
+  in core_line match core_line_break /\r\n|[\n\u{2028}\u{2029}]/
+  in core_line_break rule linebreak-style {
+    option mode "unix" | "windows" = "unix"
+    when mode == "unix" && text != "\n" || mode == "windows" && text != "\r\n"
+    warn if mode == "unix" then "Expected linebreaks to be 'LF' but found 'CRLF'." else "Expected linebreaks to be 'CRLF' but found 'LF'."
+  }
+}
