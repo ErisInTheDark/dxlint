@@ -47,6 +47,17 @@ const PUNCT: &[&str] = &[
     "{", "}", "(", ")", "[", "]", ";", ",", ":", "~", "@", ".", "#",
 ];
 
+/// The longest punctuator starting `rest`. Checks the first byte before
+/// comparing, and compares inline: a `starts_with` per candidate called
+/// `memcmp` for every token.
+fn punctuator(rest: &[u8]) -> Option<&'static str> {
+    let first = *rest.first()?;
+    PUNCT.iter().copied().find(|p| {
+        let p = p.as_bytes();
+        p[0] == first && rest.len() >= p.len() && p.iter().zip(rest).all(|(a, b)| a == b)
+    })
+}
+
 fn ident_start(b: u8) -> bool {
     b.is_ascii_alphabetic() || b == b'_' || b == b'$' || b >= 0x80 || b == b'\\'
 }
@@ -157,10 +168,10 @@ impl<'s> Lexer<'s> {
                 Tok::PrivateName
             } else {
                 let rest = &self.src[start..];
-                match PUNCT.iter().find(|p| rest.starts_with(**p)) {
+                match punctuator(rest.as_bytes()) {
                     Some(p) => {
                         // `?.5` is `?` then `.5`.
-                        if *p == "?." && b.get(start + 2).is_some_and(u8::is_ascii_digit) {
+                        if p == "?." && b.get(start + 2).is_some_and(u8::is_ascii_digit) {
                             self.pos += 1;
                             Tok::P("?")
                         } else {

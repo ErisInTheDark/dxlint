@@ -7,6 +7,7 @@
 //! - [`expr`] evaluates formatter expressions
 //! - [`engine`] runs formatters over trees and applies fixes
 
+pub mod alloc;
 pub mod config;
 pub mod engine;
 pub mod expr;
