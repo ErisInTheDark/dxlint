@@ -221,7 +221,7 @@ group format_object_curly ts_object, ts_object_pattern, ts_import, ts_export, ts
 in ts_object let format_object_kind "ObjectExpression"
 in ts_object_pattern let format_object_kind "ObjectPattern"
 in ts_import let format_object_kind "ImportDeclaration"
-in ts_export let format_object_kind if kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration"
+in ts_export let format_object_kind if operator == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration"
 in ts_mapped_type let format_object_kind "TSMappedType"
 in ts_type_literal let format_object_kind "TSTypeLiteral"
 in ts_interface let format_object_kind "TSInterfaceBody"

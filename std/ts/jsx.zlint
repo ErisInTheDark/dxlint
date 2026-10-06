@@ -215,20 +215,20 @@ in ts_close_brace rule jsx-curly-spacing:before {
   @jsx_curly_spacing_body
 }
 @macro jsx_curly_newline_body {
-  option mode "consistent" | "never" = "consistent" "default brace newline policy"
-  option singleline "consistent" | "require" | "forbid" | null = null "single-line expression policy"
-  option multiline "consistent" | "require" | "forbid" | null = null "multiline expression policy"
-  let policy default(if parent.jsx_brace_single then singleline else multiline, if mode == "never" then "forbid" else "consistent")
-  let needs if policy == "require" then true else if policy == "forbid" then false else parent.jsx_brace_left_break
-  when parent is ts_jsx_expression && parent.jsx_brace_container
+  default option mode enum(consistent, require, forbid) = consistent "brace newline policy"
+  let needs if mode == "require" then true else if mode == "forbid" then false else parent.jsx_brace_left_break
   when jsx_break(jsx_brace_gap) != needs
   report at {start: offset, end: parent.end_offset}
   warn "{if needs then 'Expected' else 'Unexpected'} newline {jsx_brace_direction} '{text}'."
 }
-in ts_open_brace rule jsx-curly-newline:after {
+group jsx_curly_newline_singleline ts_open_brace, ts_close_brace
+group jsx_curly_newline_multiline ts_open_brace, ts_close_brace
+in jsx_curly_newline_singleline rule jsx-curly-newline:singleline {
+  when parent is ts_jsx_expression && parent.jsx_brace_container && parent.jsx_brace_single
   @jsx_curly_newline_body
 }
-in ts_close_brace rule jsx-curly-newline:before {
+in jsx_curly_newline_multiline rule jsx-curly-newline:multiline {
+  when parent is ts_jsx_expression && parent.jsx_brace_container && !parent.jsx_brace_single
   @jsx_curly_newline_body
 }
 in ts_jsx_attribute let jsx_tag_last_token_start if value is ts_string then value.offset else end_offset
@@ -394,14 +394,21 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-first-prop-new-line {
   report at {start: offset, end: parent.end_offset}
   warn if should_wrap then "Property should be placed on a new line" else "Property should be placed on the same line as the component declaration"
 }
-in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-max-props-per-line {
-  option maximum number(1..) | {single?: int(1..); multi?: int(1..)} = 1 "maximum props per line"
-  option when "always" | "multiline" = "always" "which tags to check"
-  let single_limit if type_of(maximum) == "num" then (if when == "multiline" then null else maximum) else maximum.single
-  let multi_limit if type_of(maximum) == "num" then maximum else maximum.multi
-  when jsx_prop_group_index == (if parent.jsx_opening_single && jsx_prop_headline then single_limit else multi_limit)
+@macro jsx_max_props_body {
+  default option max number(1..) = 1 "maximum props per line"
+  when jsx_prop_group_index == max
   report at {start: offset, end: parent.end_offset}
   warn "Prop `{jsx_prop_name}` must be placed on a new line"
+}
+group jsx_max_props_singleline ts_jsx_attribute, ts_jsx_spread_attribute
+group jsx_max_props_multiline ts_jsx_attribute, ts_jsx_spread_attribute
+in jsx_max_props_singleline rule jsx-max-props-per-line:singleline {
+  when parent.jsx_opening_single && jsx_prop_headline
+  @jsx_max_props_body
+}
+in jsx_max_props_multiline rule jsx-max-props-per-line:multiline {
+  when !(parent.jsx_opening_single && jsx_prop_headline)
+  @jsx_max_props_body
 }
 in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-props-style {
   option singleLine {maxItems: int(0..) | null = null} = {} "single-line prop limit"
