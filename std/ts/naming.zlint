@@ -3,16 +3,6 @@
 define {
 
 group naming_name_node ts_identifier, ts_private_name, ts_string, ts_number
-group naming_variable ts_identifier
-group naming_function ts_identifier
-group naming_parameter ts_identifier
-group naming_parameter_property ts_identifier
-group naming_import ts_identifier
-group naming_class ts_identifier
-group naming_interface ts_identifier
-group naming_type_alias ts_identifier
-group naming_enum ts_identifier
-group naming_type_parameter ts_identifier
 group naming_enum_member naming_name_node
 group naming_class_method naming_name_node
 group naming_object_method naming_name_node
@@ -97,7 +87,7 @@ fn naming_prefix_failure(quotes, settings, step) = (
 )
 fn naming_suffix_failure(quotes, settings, step) = (
   if step.error then {kind: "suffix", settings: settings}
-  else if settings.customRegex != null && re_test(step.name, settings.customRegex) != default(settings.customMatch, true) then {kind: "custom", settings: settings}
+  else if type_of(settings.customRegex) == "str" && re_test(step.name, settings.customRegex) != default(settings.customMatch, true) then {kind: "custom", settings: settings}
   else if len(settings.formats) > 0 && (quotes || !any(settings.formats, format => naming_format(step.name, format))) then {kind: "format", settings: settings, processed: step.name}
   else null
 )
@@ -117,7 +107,7 @@ fn naming_underscore_message(policy, side) = if policy == "forbid" then "must no
     option trailingUnderscore enum(allow, allowDouble, allowSingleOrDouble, forbid, require, requireDouble) | null = underscore-policy
     option prefix string[] = []
     option suffix string[] = []
-    option customRegex string | null = null
+    option customRegex regex | null = null
     option customMatch boolean = true
     when naming_context == context
     when naming_convention_checked
@@ -131,16 +121,16 @@ fn naming_underscore_message(policy, side) = if policy == "forbid" then "must no
   }
 }
 
-@naming_rule(naming-convention:variable, "variable", naming_variable, ["camelCase", "UPPER_CASE"], allow, "Variable")
-@naming_rule(naming-convention:function, "function", naming_function, ["camelCase"], allow, "Function")
-@naming_rule(naming-convention:parameter, "parameter", naming_parameter, ["camelCase"], allow, "Parameter")
-@naming_rule(naming-convention:parameter-property, "parameter-property", naming_parameter_property, ["camelCase"], allow, "Parameter Property")
-@naming_rule(naming-convention:import, "import", naming_import, ["camelCase", "PascalCase"], null, "Import")
-@naming_rule(naming-convention:class, "class", naming_class, ["PascalCase"], null, "Class")
-@naming_rule(naming-convention:interface, "interface", naming_interface, ["PascalCase"], null, "Interface")
-@naming_rule(naming-convention:type-alias, "type-alias", naming_type_alias, ["PascalCase"], null, "Type Alias")
-@naming_rule(naming-convention:enum, "enum", naming_enum, ["PascalCase"], null, "Enum")
-@naming_rule(naming-convention:type-parameter, "type-parameter", naming_type_parameter, ["PascalCase"], null, "Type Parameter")
+@naming_rule(naming-convention:variable, "variable", ts_identifier, ["camelCase", "UPPER_CASE"], allow, "Variable")
+@naming_rule(naming-convention:function, "function", ts_identifier, ["camelCase"], allow, "Function")
+@naming_rule(naming-convention:parameter, "parameter", ts_identifier, ["camelCase"], allow, "Parameter")
+@naming_rule(naming-convention:parameter-property, "parameter-property", ts_identifier, ["camelCase"], allow, "Parameter Property")
+@naming_rule(naming-convention:import, "import", ts_identifier, ["camelCase", "PascalCase"], null, "Import")
+@naming_rule(naming-convention:class, "class", ts_identifier, ["PascalCase"], null, "Class")
+@naming_rule(naming-convention:interface, "interface", ts_identifier, ["PascalCase"], null, "Interface")
+@naming_rule(naming-convention:type-alias, "type-alias", ts_identifier, ["PascalCase"], null, "Type Alias")
+@naming_rule(naming-convention:enum, "enum", ts_identifier, ["PascalCase"], null, "Enum")
+@naming_rule(naming-convention:type-parameter, "type-parameter", ts_identifier, ["PascalCase"], null, "Type Parameter")
 @naming_rule(naming-convention:enum-member, "enum-member", naming_enum_member, ["camelCase"], allow, "Enum Member")
 @naming_rule(naming-convention:class-method, "class-method", naming_class_method, ["camelCase"], allow, "Class Method")
 @naming_rule(naming-convention:object-method, "object-method", naming_object_method, ["camelCase"], allow, "Object Literal Method")

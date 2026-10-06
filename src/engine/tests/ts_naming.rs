@@ -1,6 +1,6 @@
 //! Naming policy selection and shared value-only checks.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::native_linter;
 
@@ -47,12 +47,44 @@ fn naming_context_modes_and_checked_hook_are_independent() {
 }
 
 #[test]
-fn an_empty_naming_context_group_is_inert() {
+fn checked_hook_selects_binding_contexts_without_disabling_members() {
     let l = native_linter(r#"
-        drop group naming_variable ts_identifier
-        rule naming-convention:variable { set formats ["UPPER_CASE"] }
+        rule naming-convention
+        override in ts_identifier let naming_convention_checked naming_context != "variable"
     "#);
-    assert!(l.lint(Path::new("/root/a.ts"), "const badName = 1;").is_empty());
+    let source = "const bad_name = 1; function BadFunction() {} const object = { bad_property: 1 };";
+    let diagnostics = l.lint(Path::new("/root/a.ts"), source);
+    let mut names: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["BadFunction", "bad_property"], "{diagnostics:#?}");
+}
+
+#[test]
+fn custom_naming_regexes_validate_before_linting() {
+    let source = r#"import .ts
+        rule naming-convention:variable { set customRegex "(" }
+    "#;
+    let built = crate::engine::build(
+        crate::config::load_text("test.zlint", source, &crate::config::source::Disk),
+        PathBuf::from("/root"),
+    );
+    assert!(built.errors.iter().any(|error| error.message.contains("regex")), "{:#?}", built.errors);
+}
+
+#[test]
+fn an_empty_custom_naming_regex_is_distinct_from_no_pattern() {
+    let source = "const ordinaryName = 1;";
+    for (pattern, matching, expected) in [("null", false, 0), (r#""""#, true, 0), (r#""""#, false, 1)] {
+        let l = native_linter(&format!(r#"
+            rule naming-convention:variable {{
+                set formats []
+                set customRegex {pattern}
+                set customMatch {matching}
+            }}
+        "#));
+        let diagnostics = l.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), expected, "{pattern}/{matching}: {diagnostics:#?}");
+    }
 }
 
 #[test]
@@ -175,7 +207,7 @@ fn custom_typed_naming_policy_requires_homogeneous_non_nullish_parts() {
         fn boolean_domain(d) = d.kind == "boolean" || d.kind == "union"
             && count(filter(d.parts, p => !contains(["null", "undefined"], p.kind))) > 0
             && all(filter(d.parts, p => !contains(["null", "undefined"], p.kind)), p => boolean_domain(p))
-        in naming_variable rule boolean-names {
+        in ts_identifier rule boolean-names {
             when naming_context == "variable" && boolean_domain(type_domains)
             let failure naming_failure(naming_name, false, { formats: ["UPPER_CASE"], prefix: ["IS_"] })
             when failure != null
