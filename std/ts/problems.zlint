@@ -70,19 +70,19 @@ in ts_binary rule use-isnan {
   when operator ~ /(?:[<>]|[!=]=)=?/ && (left.is_nan == true || right.is_nan == true)
   warn "Use the isNaN function to compare with NaN."
 }
-in ts_switch rule use-isnan:switch {
-  option enforceForSwitchCase boolean = true "also `switch (NaN)` and `case NaN:`"
-  when enforceForSwitchCase && discriminant.is_nan == true
+group use_isnan_switches ts_switch
+group use_isnan_cases ts_case
+group use_isnan_searches
+in use_isnan_switches rule use-isnan:switch {
+  when discriminant.is_nan == true
   warn "'switch(NaN)' can never match a case clause. Use Number.isNaN instead of the switch."
 }
-in ts_case rule use-isnan:case {
-  option enforceForSwitchCase boolean = true "also `switch (NaN)` and `case NaN:`"
-  when enforceForSwitchCase && test.is_nan == true
+in use_isnan_cases rule use-isnan:case {
+  when test.is_nan == true
   warn "'case NaN' can never match. Use Number.isNaN before the switch."
 }
-in ts_call rule use-isnan:index-of {
-  option enforceForIndexOf boolean = false "also `indexOf(NaN)` and `lastIndexOf(NaN)`"
-  when enforceForIndexOf && (callee.static_name == "indexOf" || callee.static_name == "lastIndexOf") && count(argument) <= 2 && first([] argument.is_nan) == true
+in use_isnan_searches rule use-isnan:index-of {
+  when (callee.static_name == "indexOf" || callee.static_name == "lastIndexOf") && count(argument) <= 2 && first([] argument.is_nan) == true
   warn "Array prototype method '{callee.static_name}' cannot find NaN."
 }
 
@@ -108,9 +108,9 @@ in ts_identifier let is_global_undefined text == "undefined" && global == "reado
 in ts_parenthesized let is_global_undefined expression.is_global_undefined == true
 
 # `a = a`, also inside destructuring and members (`a.b = a.b`).
+in ts_assignment let self_assignment_findings self_assignments
 in ts_assignment rule no-self-assign {
-  option props boolean = true "also members (`a.b = a.b`)"
-  each self in filter(self_assignments, x => props || !x.member)
+  each self in self_assignment_findings
   report at self.offset
   warn "'{self.name}' is assigned to itself."
 }
@@ -121,18 +121,17 @@ in ts_if.test, ts_conditional.test rule no-constant-condition {
   warn "Unexpected constant condition."
 }
 # Loops that `yield` (generators) may loop forever on purpose.
+in ts_while, ts_do_while, ts_for let constant_loop_condition_checked !(is ts_while && re_test(test, /^[(\s]*true[)\s]*$/))
 in ts_while.test, ts_do_while.test, ts_for.test rule no-constant-condition:loop {
-  option checkLoops "all" | "allExceptWhileTrue" | "none" | true | false = "allExceptWhileTrue"
-  when constant_truthiness && checkLoops != "none" && checkLoops != false && !parent.contains_yield
-  when !(checkLoops == "allExceptWhileTrue" && parent is ts_while && re_test(text, /^[(\s]*true[)\s]*$/))
+  when constant_truthiness && parent.constant_loop_condition_checked && !parent.contains_yield
   warn "Unexpected constant condition."
 }
 
 # Comparisons and short circuits whose result cannot change.
+in ts_binary, ts_logical let constant_relation_checked false
 in ts_binary, ts_logical rule no-constant-binary-expression {
-  option checkRelationalComparisons boolean = false "also `<` and friends between two literals"
   let c constant_comparison
-  when c != null || checkRelationalComparisons && constant_relation
+  when c != null || constant_relation_checked && constant_relation
   report at if c != null then c.offset else offset
   warn if c == null then "Unexpected constant relational comparison. Both sides of the `{operator}` are literal values."
     else if c.kind == "constantShortCircuit" then "Unexpected constant {c.detail} on the left-hand side of a `{operator}` expression."
@@ -158,12 +157,10 @@ in ts_case rule no-duplicate-case {
   warn "Duplicate case label."
 }
 
-# As a parameter only with `allowObjectPatternsAsParameters` (also
-# defaulting to `{}`).
+in ts_object_pattern let empty_object_pattern_checked true
 in ts_object_pattern rule no-empty-pattern:object {
-  option allowObjectPatternsAsParameters boolean = false "allow `function f({}) {}` and `({} = {}) => {}`"
   when count(property) == 0 && rest == null
-  when !(allowObjectPatternsAsParameters && (parent is ts_parameter && parent.init == null || parent is ts_parameter && re_test(parent.init, /^\{\s*\}$/)))
+  when empty_object_pattern_checked
   warn "Unexpected empty object pattern."
 }
 in ts_array_pattern rule no-empty-pattern:array {
@@ -360,10 +357,10 @@ in ts_member.property, ts_index.index rule no-prototype-builtins {
 in ts_member, ts_index, ts_parenthesized let called_member is ts_call.callee || parent is ts_parenthesized && parent.called_member == true
 
 # `!a in b`: the `!` applies to `a` alone.
+in ts_binary let unsafe_negation_checked contains(["in", "instanceof"], operator)
 in ts_binary.left rule no-unsafe-negation {
-  option enforceForOrderingRelations boolean = false "also `!a < b` and the other ordering operators"
   when is ts_unary && re_test(text, /^!/)
-  when parent.operator == "in" || parent.operator == "instanceof" || enforceForOrderingRelations && contains(["<", ">", "<=", ">="], parent.operator)
+  when parent.unsafe_negation_checked
   warn "Unexpected negating the left operand of '{parent.operator}' operator."
 }
 
@@ -519,9 +516,9 @@ in ts_non_null let in_optional_chain expression.in_optional_chain == true
 in ts_parenthesized let wraps_optional_chain expression.in_optional_chain == true || expression.wraps_optional_chain == true
 # Each optional chain whose `undefined` the node would trip on, at the chain.
 group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_with, ts_unary
+in optional_chain_user let optional_chain_findings filter(optional_chain_risks, finding => !finding.arithmetic)
 in optional_chain_user rule no-unsafe-optional-chaining {
-  option disallowArithmeticOperators boolean = false "also arithmetic (`a?.b + 1` is `NaN`)"
-  each r in filter(optional_chain_risks, x => disallowArithmeticOperators || !x.arithmetic)
+  each r in optional_chain_findings
   report at r.offset
   warn if r.arithmetic then "Unsafe arithmetic operation on optional chaining. It can result in NaN." else "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
 }
@@ -568,9 +565,9 @@ in regex_site rule no-useless-backreference {
 
 # Each sequence where it is written (or at the pattern when it is
 # computed). With computed flags, nothing is known.
+in regex_site let misleading_character_class_findings @findings_of("misleading")
 in regex_site rule no-misleading-character-class {
-  option allowEscape boolean = false "allow combined characters written as escapes"
-  each f in @findings_of(if allowEscape then "misleading_escaped" else "misleading")
+  each f in misleading_character_class_findings
   when type_of(regex_pattern.flags) == "str" || is ts_regex
   report at f.offset
   warn misleading_message(f.kind)
@@ -597,18 +594,10 @@ in ts_call, ts_new rule no-invalid-regexp {
 # starting the file is not one.
 group problem_template ts_template, ts_template_type
 in ts_program layer text match problem_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
+in problem_irregular_ws let irregular_whitespace_checked count(overlapping(ts_string)) == 0
 in problem_irregular_ws rule no-irregular-whitespace {
-  option skipStrings boolean = true "allow it in strings"
-  option skipComments boolean = false "allow it in comments"
-  option skipRegExps boolean = false "allow it in regexes"
-  option skipTemplates boolean = false "allow it in templates"
-  option skipJSXText boolean = false "allow it in JSX text"
   when !(offset == 0 && text == "\u{FEFF}")
-  when !skipStrings || count(overlapping(ts_string)) == 0
-  when !skipComments || count(overlapping(ts_comment)) == 0
-  when !skipRegExps || count(overlapping(ts_regex)) == 0
-  when !skipTemplates || !any(overlapping(problem_template), template => any(template.quasi.node, quasi => quasi.offset <= offset && end_offset <= quasi.end_offset))
-  when !skipJSXText || count(overlapping(ts_jsx_text)) == 0
+  when irregular_whitespace_checked
   warn "Irregular whitespace not allowed."
 }
 

@@ -291,7 +291,7 @@ fn empty_interfaces_use_members_and_supertypes_not_body_text() {
 #[test]
 fn irregular_whitespace_exemptions_follow_syntax_ownership() {
     let linter = native_linter(
-        "rule no-irregular-whitespace {\n set skipJSXText true\n set skipStrings false\n}",
+        "override in problem_irregular_ws let irregular_whitespace_checked count(overlapping(ts_jsx_text)) == 0\nrule no-irregular-whitespace",
     );
     for (source, expected) in [
         ("const value = <div>\u{00a0}</div>;", 0),
@@ -301,6 +301,138 @@ fn irregular_whitespace_exemptions_follow_syntax_ownership() {
     ] {
         let diagnostics = linter.lint(Path::new("/root/file.tsx"), source);
         assert_eq!(diagnostics.len(), expected, "{source}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn problem_selection_self_assignments_keeps_individual_destructured_targets() {
+    let source = "[value, object.value] = [value, object.value];";
+    let value = source.find("= [value").expect("value assignment") + 3;
+    let member = source.rfind("object.value").expect("member assignment");
+    for (policy, expected) in [
+        ("", vec![value, member]),
+        ("override in ts_assignment let self_assignment_findings filter(self_assignments, finding => !finding.member)", vec![value]),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule no-self-assign"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, expected, "{policy}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn problem_selection_optional_chaining_separates_arithmetic_and_throwing_uses() {
+    let source = "(object?.method)(); object?.value + 1;";
+    let method = source.find("object?.method").expect("method chain");
+    let value = source.find("object?.value").expect("value chain");
+    for (policy, expected) in [
+        ("", vec![method]),
+        ("override in optional_chain_user let optional_chain_findings optional_chain_risks", vec![method, value]),
+        ("override in optional_chain_user let optional_chain_findings filter(optional_chain_risks, finding => finding.arithmetic)", vec![value]),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule no-unsafe-optional-chaining"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, expected, "{policy}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn problem_selection_template_quasis_do_not_hide_embedded_code() {
+    let linter = native_linter("override in problem_irregular_ws let irregular_whitespace_checked !any(overlapping(problem_template), template => any(template.quasi.node, quasi => quasi.offset <= offset && end_offset <= quasi.end_offset))\nrule no-irregular-whitespace");
+    for source in [
+        "const value = `raw\u{00a0}${a\u{00a0}+b}`;",
+        "const value = `raw${`nested\u{00a0}${a\u{00a0}+b}`}`;",
+    ] {
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, [source.find("a\u{00a0}+b").expect("embedded expression") + 1], "{source:?}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn problem_selection_loop_policy_keeps_yield_and_nonloop_checks_independent() {
+    let loops = "while (true) {} while (1) {} do {} while (true); for (; true;) {} function* g() { while (1) { yield 1; } }";
+    for (policy, expected) in [
+        ("", 3),
+        ("override in ts_while, ts_do_while, ts_for let constant_loop_condition_checked true", 4),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule no-constant-condition"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), loops);
+        assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
+    }
+    let linter = native_linter("override in ts_while, ts_do_while, ts_for let constant_loop_condition_checked false\nrule no-constant-condition");
+    let diagnostics = linter.lint(Path::new("/root/file.js"), "if (true) {} while (1) {}");
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].start, 4, "{diagnostics:#?}");
+}
+
+#[test]
+fn problem_selection_nan_searches_are_opt_in_without_hiding_switch_reports() {
+    let source = "switch (NaN) { case NaN: break; } items.indexOf(NaN);";
+    for (policy, expected) in [
+        ("", 2),
+        ("group use_isnan_searches ts_call", 3),
+        ("drop group use_isnan_switches ts_switch\ndrop group use_isnan_cases ts_case\ngroup use_isnan_searches ts_call", 1),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule use-isnan"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn problem_selection_relations_do_not_disable_constant_comparisons() {
+    let source = "1 < 2; [] === []; value === undefined;";
+    for (policy, expected) in [
+        ("", 1),
+        ("override in ts_binary, ts_logical let constant_relation_checked true", 2),
+        ("override in ts_binary, ts_logical let constant_relation_checked false", 1),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule no-constant-binary-expression"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.start == source.find("[] === []").expect("object comparison")));
+    }
+}
+
+#[test]
+fn problem_selection_empty_patterns_distinguishes_parameter_defaults() {
+    let source = "function f({}, {} = {}, {} = value) {} const {} = value; const [] = value;";
+    let policy = "override in ts_object_pattern let empty_object_pattern_checked !(parent is ts_parameter && (parent.init == null || re_test(parent.init, /^\\{\\s*\\}$/)))";
+    for (selection, expected) in [("", 5), (policy, 3)] {
+        let linter = native_linter(&format!("{selection}\nrule no-empty-pattern"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        assert_eq!(diagnostics.len(), expected, "{selection}: {diagnostics:#?}");
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.start == source.find("[]").expect("array pattern")));
+    }
+}
+
+#[test]
+fn problem_selection_unsafe_negation_checks_the_binary_owner() {
+    let source = "!value in object; !value instanceof Type; !value < other; !value === other;";
+    for (policy, expected) in [
+        ("", 2),
+        ("override in ts_binary let unsafe_negation_checked contains([\"in\", \"instanceof\", \"<\", \">\", \"<=\", \">=\"], operator)", 3),
+        ("override in ts_binary let unsafe_negation_checked operator == \"instanceof\"", 1),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule no-unsafe-negation"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn problem_selection_character_classes_retains_unescaped_findings() {
+    let source = "/[a\\u0301]/u; /[a\u{0301}]/u;";
+    for (policy, expected) in [
+        ("", 2),
+        ("override in regex_site let misleading_character_class_findings filter(default(regex_findings, []), finding => finding.check == \"misleading_escaped\")", 1),
+    ] {
+        let linter = native_linter(&format!("{policy}\nrule no-misleading-character-class"));
+        let diagnostics = linter.lint(Path::new("/root/file.js"), source);
+        assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.start >= source.find("; ").expect("pattern separator") + 2));
     }
 }
 

@@ -287,7 +287,7 @@ const CORE: &[Fact] = &[
     },
     Fact {
         name: "constant_relation",
-        doc: "native layers: on a binary expression: `<`, `<=`, `>`, `>=` between two literals (no-constant-binary-expression's `checkRelationalComparisons`)",
+        doc: "native layers: on a binary expression: `<`, `<=`, `>`, `>=` between two literals",
         get: |f, n| Value::Bool(f.constant_comparison(n, true).is_some_and(|(kind, ..)| kind == "constantRelationalComparison")),
     },
     Fact {

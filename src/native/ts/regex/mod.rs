@@ -13,7 +13,7 @@ use parse::{parse, Ast, Kind};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Finding {
     /// `empty_class`, `control`, `spaces`, `backref`, `misleading`, or
-    /// `misleading_escaped` (what `allowEscape` still reports).
+    /// `misleading_escaped` (combined sequences with escaped characters excluded).
     pub check: &'static str,
     /// The message id or detail (`forward`, `zwj`, `3` spaces).
     pub kind: String,
@@ -202,8 +202,7 @@ fn backrefs(ast: &Ast, out: &mut Vec<Finding>) {
     }
 }
 
-/// eslint's no-misleading-character-class, once without and once with
-/// `allowEscape`.
+/// Combined character sequences, with or without escaped characters.
 fn misleading(ast: &Ast, raw: &dyn Fn(usize, usize) -> String, allow_escape: bool, out: &mut Vec<Finding>) {
     let check = if allow_escape { "misleading_escaped" } else { "misleading" };
     let mut found: Vec<(&'static str, usize, usize)> = Vec::new();
