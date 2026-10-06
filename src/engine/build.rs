@@ -1,7 +1,6 @@
 //! Compiles a parsed configuration into a [`Linter`].
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::symbols::Symbols;
@@ -229,7 +228,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         h.finish()
     };
     let mut by_matcher = vec![Vec::new(); grammar.matchers.len()];
-    let mut by_field: HashMap<(u32, u16), Vec<usize>> = HashMap::new();
+    let mut by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>> = Default::default();
     let mut by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>> = Default::default();
     let mut by_lang = Vec::new();
     for (i, f) in rules.iter().enumerate() {

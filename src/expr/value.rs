@@ -242,11 +242,11 @@ impl<'s> Value<'s> {
     }
 
     /// Like [`Value::items`], borrowing a list's items.
-    pub fn item_slice(&self) -> Cow<'_, [Value<'s>]> {
+    pub fn item_slice(&self) -> &[Value<'s>] {
         match self {
-            Value::List(l) => Cow::Borrowed(l),
-            Value::Null => Cow::Borrowed(&[]),
-            other => Cow::Owned(vec![other.clone()]),
+            Value::List(l) => l,
+            Value::Null => &[],
+            other => std::slice::from_ref(other),
         }
     }
 

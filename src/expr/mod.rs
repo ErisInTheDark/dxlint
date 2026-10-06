@@ -270,6 +270,8 @@ pub struct AttrMemo<'a> {
     /// Nothing memoised above can read them: attributes and `let`s are
     /// written outside every lambda.
     params: RefCell<Vec<Value<'a>>>,
+    /// Start of the active call's parameters within the reusable stack.
+    param_base: std::cell::Cell<usize>,
     /// Config `fn` calls in progress (recursion is bounded).
     calls: std::cell::Cell<u32>,
     /// Where JavaScript lines start (also after U+2028 and U+2029), for
@@ -288,6 +290,19 @@ pub struct AttrMemo<'a> {
     /// Facts of `here`'s node, by read slot, with the visit that computed them.
     here_facts: RefCell<Vec<(u32, Value<'a>)>>,
     visit: std::cell::Cell<u32>,
+}
+
+struct ParamFrame<'m, 'a> {
+    memo: &'m AttrMemo<'a>,
+    start: usize,
+    previous_base: usize,
+}
+
+impl Drop for ParamFrame<'_, '_> {
+    fn drop(&mut self) {
+        self.memo.params.borrow_mut().truncate(self.start);
+        self.memo.param_base.set(self.previous_base);
+    }
 }
 
 impl AttrMemo<'_> {
@@ -1404,18 +1419,22 @@ impl<'a> Ctx<'a> {
 
     /// `f` without the parameters bound around it: attributes and `let`s
     /// are compiled outside every lambda and `each`, so their own lambdas
-    /// count from the bottom of the stack.
+    /// count from their own empty frame.
     fn unbound<T>(&self, f: impl FnOnce() -> T) -> T {
-        let saved = std::mem::take(&mut *self.memo.params.borrow_mut());
-        let out = f();
-        *self.memo.params.borrow_mut() = saved;
-        out
+        self.with_params(&mut [], f)
+    }
+
+    fn with_params<T>(&self, args: &mut [Value<'a>], f: impl FnOnce() -> T) -> T {
+        let start = self.memo.params.borrow().len();
+        let _frame = ParamFrame { memo: self.memo, start, previous_base: self.memo.param_base.replace(start) };
+        self.memo.params.borrow_mut().extend(args.iter_mut().map(|v| std::mem::replace(v, Value::Null)));
+        f()
     }
 
     /// The value of attribute `attr` on `node` (null where no layer of the
     /// node defines it).
     fn attr(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
-        if self.memo.params.borrow().is_empty() {
+        if self.memo.params.borrow().len() == self.memo.param_base.get() {
             self.attr_unbound(node, attr)
         } else {
             self.unbound(|| self.attr_unbound(node, attr))
@@ -2053,17 +2072,15 @@ impl<'a> Ctx<'a> {
             CExpr::UserCall(i, args) => {
                 let f = &self.grammar.functions[*i as usize];
                 let Some(body) = f.body.get() else { return Ok(Value::Null) };
-                let args = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
-                if self.memo.calls.get() >= MAX_CALL_DEPTH {
-                    return Err(format!("`{}` calls itself too deeply", f.name));
-                }
-                // The body sees its arguments as its only parameters.
-                let saved = std::mem::replace(&mut *self.memo.params.borrow_mut(), args);
-                self.memo.calls.set(self.memo.calls.get() + 1);
-                let v = self.eval(body);
-                self.memo.calls.set(self.memo.calls.get() - 1);
-                *self.memo.params.borrow_mut() = saved;
-                v?
+                eval_args(args, |a| self.eval(a), |args| {
+                    if self.memo.calls.get() >= MAX_CALL_DEPTH {
+                        return Err(format!("`{}` calls itself too deeply", f.name));
+                    }
+                    self.memo.calls.set(self.memo.calls.get() + 1);
+                    let v = self.with_params(args, || self.eval(body));
+                    self.memo.calls.set(self.memo.calls.get() - 1);
+                    v
+                })?
             }
             CExpr::FactCall(i, args) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
@@ -2290,18 +2307,7 @@ impl<'a> Ctx<'a> {
             }
             CExpr::Opt(i) => self.options[*i].clone(),
             CExpr::Call(f, args) => {
-                // Most calls take few arguments: keep them off the heap.
-                let result = if args.len() <= 4 {
-                    let mut buf = [Value::Null, Value::Null, Value::Null, Value::Null];
-                    for (slot, a) in buf.iter_mut().zip(args) {
-                        *slot = self.eval(a)?;
-                    }
-                    (f.call)(&buf[..args.len()])
-                } else {
-                    let args = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
-                    (f.call)(&args)
-                };
-                result.map_err(|e| format!("{}: {e}", f.name))?
+                eval_args(args, |a| self.eval(a), |args| (f.call)(args).map_err(|e| format!("{}: {e}", f.name)))?
             }
             CExpr::Not(inner) => Value::Bool(!self.eval(inner)?.truthy()),
             CExpr::Neg(inner) => Value::Num(-self.eval(inner)?.num()?),
@@ -2382,22 +2388,23 @@ impl<'a> Ctx<'a> {
             CExpr::Record(entries) => {
                 Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), self.eval(v)?))).collect::<Result<_, String>>()?)
             }
-            CExpr::Param(depth) => self.memo.params.borrow().get(*depth as usize).cloned().unwrap_or(Value::Null),
+            CExpr::Param(depth) => self.memo.params.borrow().get(self.memo.param_base.get() + *depth as usize).cloned().unwrap_or(Value::Null),
             CExpr::Key(base, key) => self.eval(base)?.key(key),
             CExpr::Each(each, list, body) => {
-                let items = self.eval(list)?.items();
+                let items = self.eval(list)?;
                 let run = |item: &Value<'a>| -> Result<Value<'a>, String> {
                     self.memo.params.borrow_mut().push(item.clone());
                     let v = self.eval(body);
                     self.memo.params.borrow_mut().pop();
                     v
                 };
-                each_over(*each, items, run)?
+                each_over(*each, items.item_slice(), run)?
             }
             CExpr::Reduce(list, initial, body) => {
                 let mut state = self.eval(initial)?;
-                for item in self.eval(list)?.items() {
-                    self.memo.params.borrow_mut().extend([state, item]);
+                let items = self.eval(list)?;
+                for item in items.item_slice() {
+                    self.memo.params.borrow_mut().extend([state, item.clone()]);
                     let next = self.eval(body);
                     {
                         let mut params = self.memo.params.borrow_mut();
@@ -2460,8 +2467,7 @@ impl<'a> Ctx<'a> {
             CExpr::Member(base, key, _) => eval(base)?.key(key),
             CExpr::Path(base, keys, _) => keys.iter().fold(eval(base)?, |v, k| v.key(k)),
             CExpr::Call(f, args) => {
-                let args = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
-                (f.call)(&args)?
+                eval_args(args, eval, |args| (f.call)(args))?
             }
             CExpr::Not(inner) => Value::Bool(!eval(inner)?.truthy()),
             CExpr::Neg(inner) => Value::Num(-eval(inner)?.num()?),
@@ -2488,37 +2494,54 @@ impl<'a> Ctx<'a> {
     }
 }
 
+fn eval_args<'a, T>(
+    args: &[CExpr],
+    mut eval: impl FnMut(&CExpr) -> Result<Value<'a>, String>,
+    call: impl FnOnce(&mut [Value<'a>]) -> Result<T, String>,
+) -> Result<T, String> {
+    if args.len() <= 4 {
+        let mut buf = [Value::Null, Value::Null, Value::Null, Value::Null];
+        for (slot, arg) in buf.iter_mut().zip(args) {
+            *slot = eval(arg)?;
+        }
+        call(&mut buf[..args.len()])
+    } else {
+        let mut values = args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
+        call(&mut values)
+    }
+}
+
 /// Runs a lambda (`run`) over `items` for `map` and friends.
-fn each_over<'s>(each: Each, items: Vec<Value<'s>>, mut run: impl FnMut(&Value<'s>) -> Result<Value<'s>, String>) -> Result<Value<'s>, String> {
+fn each_over<'s>(each: Each, items: &[Value<'s>], mut run: impl FnMut(&Value<'s>) -> Result<Value<'s>, String>) -> Result<Value<'s>, String> {
     Ok(match each {
         Each::Map => Value::List(items.iter().map(&mut run).collect::<Result<_, _>>()?),
         Each::Filter => {
             let mut out = Vec::new();
             for item in items {
-                if run(&item)?.truthy() {
-                    out.push(item);
+                if run(item)?.truthy() {
+                    out.push(item.clone());
                 }
             }
             Value::list(out)
         }
         Each::Find => {
             for item in items {
-                if run(&item)?.truthy() {
-                    return Ok(item);
+                if run(item)?.truthy() {
+                    return Ok(item.clone());
                 }
             }
             Value::Null
         }
         Each::FindLast => {
-            for item in items.into_iter().rev() {
-                if run(&item)?.truthy() {
-                    return Ok(item);
+            for item in items.iter().rev() {
+                if run(item)?.truthy() {
+                    return Ok(item.clone());
                 }
             }
             Value::Null
         }
         Each::All => {
-            for item in &items {
+            for item in items {
                 if !run(item)?.truthy() {
                     return Ok(Value::Bool(false));
                 }
@@ -2526,7 +2549,7 @@ fn each_over<'s>(each: Each, items: Vec<Value<'s>>, mut run: impl FnMut(&Value<'
             Value::Bool(true)
         }
         Each::Any => {
-            for item in &items {
+            for item in items {
                 if run(item)?.truthy() {
                     return Ok(Value::Bool(true));
                 }
@@ -2546,7 +2569,7 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
         BinOp::Gt => Value::Bool(a.compare(&b).is_gt()),
         BinOp::Ge => Value::Bool(a.compare(&b).is_ge()),
         BinOp::Join => match (&a, &b) {
-            (Value::List(_), _) | (_, Value::List(_)) => Value::List(a.items().into_iter().chain(b.items()).collect()),
+            (Value::List(_), _) | (_, Value::List(_)) => Value::List(a.item_slice().iter().chain(b.item_slice()).cloned().collect()),
             _ => Value::from(a.text().into_owned() + &b.text()),
         },
         BinOp::Add => Value::Num(a.num()? + b.num()?),
@@ -2569,6 +2592,91 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
             Value::Num(a.num()? % d)
         }
     })
+}
+
+#[cfg(test)]
+mod evaluation_tests {
+    use crate::engine::tests::{lint, linter};
+
+    #[test]
+    fn nested_calls_keep_caller_arguments_and_attribute_lambdas_separate() {
+        let l = linter(r#"
+            fn identity(x) = x
+            fn total(a, b, c, d, e) = a + b + c + d + e
+            fn pair(x) = map([x, x + 1], n => identity(n))
+            in .t match word /[a-z]+/ {
+                let doubled map([2, 3], n => n * 2)
+                rule bindings {
+                    @each outer in [10, 20]
+                    when map([1, 2], inner => total(outer, identity(inner), count(doubled), first(pair(inner)), last(pair(inner))))
+                      != [outer + 6, outer + 9]
+                    warn "bindings changed"
+                }
+            }
+        "#);
+        assert!(lint(&l, "a b").is_empty());
+    }
+
+    #[test]
+    fn list_coercion_order_and_short_circuiting_are_preserved() {
+        let l = linter(r#"
+            fn risky(n) = if n == 0 then 1 % 0 else n
+            in .t match word /[a-z]+/ {
+                rule lists {
+                when map(3, n => n + 1) != [4]
+                  || map(null, n => risky(0)) != []
+                  || filter([3, 1, 2], n => n > 1) != [3, 2]
+                  || find([1, 0], n => risky(n) == 1) != 1
+                  || find_last([0, 2], n => risky(n) == 2) != 2
+                  || !any([1, 0], n => risky(n) == 1)
+                  || all([1, 0], n => if n == 1 then false else risky(n) == 0)
+                  || !all(null, n => risky(0)) || any(null, n => risky(0))
+                  || null [1] != [1] || [1] 2 != [1, 2]
+                warn "list semantics changed"
+                }
+            }
+        "#);
+        assert!(lint(&l, "a").is_empty());
+    }
+
+    #[test]
+    fn reduce_retains_outer_bindings_and_returns_owned_results() {
+        let l = linter(r#"
+            fn identity(value) = value
+            in .t match word /[a-z]+/ {
+                rule folds {
+                @each outer in [10, 20]
+                when reduce([1, 2], [], (state, n) => state map([n], inner => identity(inner + outer))) != [outer + 1, outer + 2]
+                  || reduce(null, [outer], (state, n) => state [n]) != [outer]
+                  || reduce(3, outer, (state, n) => state + n) != outer + 3
+                warn "fold bindings changed"
+                }
+            }
+        "#);
+        assert!(lint(&l, "a b").is_empty());
+    }
+
+    #[test]
+    fn failed_calls_and_lambdas_restore_bindings_before_the_next_rule() {
+        let l = linter(r#"
+            fn fail(value) = reduce([value], 0, (state, n) => n % 0)
+            fn identity(value) = value
+            in .t match word /[a-z]+/ {
+                rule failing {
+                    @each item in [7]
+                    warn "{fail(item)}"
+                }
+                rule following {
+                    @each item in [11, 12]
+                    warn "{identity(item)}"
+                }
+            }
+        "#);
+        let reports = lint(&l, "a b");
+        assert_eq!(reports.iter().filter(|d| d.rule == "failing").count(), 2);
+        assert!(reports.iter().filter(|d| d.rule == "failing").all(|d| d.severity == crate::config::ast::Severity::Error));
+        assert_eq!(reports.iter().filter(|d| d.rule == "following").map(|d| d.message.as_str()).collect::<Vec<_>>(), ["11", "12", "11", "12"]);
+    }
 }
 
 #[cfg(test)]

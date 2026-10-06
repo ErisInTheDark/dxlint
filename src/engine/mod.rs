@@ -150,7 +150,7 @@ pub struct Linter {
     /// Set by [`Linter::enable_profile`].
     pub profile: Option<Profile>,
     by_matcher: Vec<Vec<usize>>,
-    by_field: HashMap<(u32, u16), Vec<usize>>,
+    by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>>,
     /// Owner matcher -> links and their rule indexes.
     by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>>,
     /// Whole-file rules and the language they want (`None`: any).
@@ -509,12 +509,12 @@ impl Linter {
             }
         }
         let items = match ctx.eval(list) {
-            Ok(v) => v.items(),
+            Ok(v) => v,
             Err(e) => return failed(e),
         };
         let mut out = Vec::new();
-        for item in items {
-            ctx.push_param(item);
+        for item in items.item_slice() {
+            ctx.push_param(item.clone());
             out.extend(self.apply(f, ctx));
             ctx.pop_param();
         }
