@@ -230,6 +230,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     };
     let mut by_matcher = vec![Vec::new(); grammar.matchers.len()];
     let mut by_field: HashMap<(u32, u16), Vec<usize>> = HashMap::new();
+    let mut by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>> = Default::default();
     let mut by_lang = Vec::new();
     for (i, f) in rules.iter().enumerate() {
         for &target in &f.targets {
@@ -243,6 +244,17 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
                     }
                 }
                 Target::Field(m, l) => by_field.entry((m, l)).or_default().push(i),
+                Target::Link(m, link) => {
+                    for x in 0..grammar.matchers.len() {
+                        if !grammar.is_a(x as u32, m) { continue; }
+                        let links = by_link.entry(x as u32).or_default();
+                        match links.iter_mut().find(|(l, _)| *l == link) {
+                            Some((_, rules)) if !rules.contains(&i) => rules.push(i),
+                            Some(_) => {}
+                            None => links.push((link, vec![i])),
+                        }
+                    }
+                }
                 Target::Lang(lang) => by_lang.push((i, lang)),
             }
         }
@@ -261,6 +273,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         ignores,
         by_matcher,
         by_field,
+        by_link,
         by_lang,
         attrs,
         forwards,
@@ -490,7 +503,7 @@ fn target_fields(g: &Grammar, target: Target) -> Vec<(String, u16)> {
                 None => capture_inner_labels(pat, label_name),
             }
         }
-        Target::Lang(_) => Vec::new(),
+        Target::Link(_, _) | Target::Lang(_) => Vec::new(),
     };
     names.into_iter().filter_map(|n| g.labels.get(&n).map(|id| (n, id))).collect()
 }
@@ -782,7 +795,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     let (layer_reads, helper_tokens, own_tokens) = ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
     let needs_tokens = |m| is_token_layer(g, m) || g.native_hosts[m as usize].iter().any(|&host| is_token_layer(g, host));
     let on_tokens = layer_reads.iter().any(|&m| needs_tokens(m)) || targets.iter().any(|target| match target {
-        Target::Matcher(m) | Target::Field(m, _) => needs_tokens(*m),
+        Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => needs_tokens(*m),
         Target::Lang(_) => false,
     });
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
@@ -911,12 +924,15 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
                 return None;
             };
             let labels = g.matchers[m as usize].labels();
-            match g.labels.get(&field.text).filter(|_| labels.contains(&field.text)) {
-                Some(l) => (vec![Target::Field(m, l)], format!("{}.{}", layer.text, field.text)),
-                None => {
+            let label = g.labels.get(&field.text).filter(|_| labels.contains(&field.text));
+            match (label, crate::expr::facts::link(&field.text)) {
+                (Some(label), _) => (vec![Target::Field(m, label)], format!("{}.{}", layer.text, field.text)),
+                (None, Some(link)) => (vec![Target::Link(m, link)], format!("{}.{}", layer.text, field.text)),
+                (None, None) => {
+                    let names = labels.iter().map(String::as_str).chain(crate::expr::facts::LINKS.iter().map(|link| link.name));
                     errors.push(
-                        ConfigError::new(field.span, format!("matcher `{}` has no field `{}`", layer.text, field.text))
-                            .suggest(&field.text, labels.iter().map(String::as_str)),
+                        ConfigError::new(field.span, format!("matcher `{}` has no field `{}` or link of that name", layer.text, field.text))
+                            .suggest(&field.text, names),
                     );
                     return None;
                 }
@@ -954,6 +970,55 @@ mod demand_tests {
     }
 
     const SHAPE: &str = "in ts_call rule shape info \"{count(children)}\"";
+
+    #[test]
+    fn linked_targets_keep_selected_context_and_run_once_per_node() {
+        let mut linter = native(r#"
+            in ts_identifier let checked text == "value" || text == "later"
+            in ts_declarator.name, ts_identifier.declaration, ts_identifier.declarations rule linked info checked {
+                option replacement string = "renamed"
+                let start offset
+                report at start
+                fix as replacement
+            }
+        "#);
+        linter.enable_profile();
+        let source = "let value = 1; value; value; missing; let later = 2; later;";
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        let starts: Vec<_> = ["value", "later"].map(|name| source.find(name).expect("declaration")).into();
+        assert_eq!(diagnostics.iter().map(|d| d.start).collect::<Vec<_>>(), starts);
+        for diagnostic in &diagnostics {
+            assert_eq!(diagnostic.message, "true");
+            assert_eq!(&source[diagnostic.start..diagnostic.end], if diagnostic.start == starts[0] { "value" } else { "later" });
+            assert_eq!(diagnostic.fix.as_deref(), Some(&[super::super::Edit {
+                start: diagnostic.start, end: diagnostic.end, text: "renamed".into(),
+            }][..]));
+        }
+        assert_eq!(super::super::Profile::get(&linter.profile.as_ref().expect("profile").rule_evals[0]), starts.len() as u64);
+        assert!(linter.lint(Path::new("/root/empty.ts"), "").is_empty());
+        assert!(linter.lint(Path::new("/root/file.t"), source).is_empty());
+
+        let fields = native("in ts_call.callee rule field info text");
+        let source = "call(value);";
+        let diagnostics = fields.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(&source[diagnostics[0].start..diagnostics[0].end], "call");
+
+        let built = build(crate::config::load_text("field.zlint",
+            "lang plain \"*.t\"\nin .plain match holder /@/ declaration:/[a-z]+/\nin holder.declaration rule field info text", &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:?}", built.errors);
+        let diagnostics = built.linter.expect("field config").lint(Path::new("/root/file.t"), "@value");
+        assert_eq!(diagnostics.len(), 1, "real fields win over registered links without a native front end");
+        assert_eq!(diagnostics[0].message, "value");
+    }
+
+    #[test]
+    fn linked_binding_declarations_include_merged_names_and_enum_identifiers() {
+        let linter = native("in ts_program.binding_declarations rule names info text");
+        let source = "var a; var a = 1; enum E { member, 'quoted' } function f(arg) { const [item] = source; } const expr = function inner(named) { return named; };";
+        let names: Vec<_> = linter.lint(Path::new("/root/file.ts"), source).into_iter().map(|d| d.message).collect();
+        assert_eq!(names, ["a", "a", "E", "member", "f", "arg", "item", "expr", "inner", "named"]);
+    }
 
     #[test]
     fn unused_helpers_do_not_change_the_active_rules_tree() {

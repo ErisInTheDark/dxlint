@@ -353,6 +353,24 @@ its specialisations), a field (`in m.field rule`), a group (every member),
 With several targets (`in a, b.field rule`), fields used in the body must
 exist on all of them.
 
+`in K.link rule` also targets nodes reached through a registered node link
+from nodes of matcher `K`. Links can return one node or many:
+
+```zlint
+in ts_program.binding_declarations rule declarations info "{text}"
+in ts_identifier.declaration rule bindings info "{text}"
+```
+
+The body runs on the reached node, not `K`: `text`, attributes, facts,
+rule locals, report ranges and fixes belong to that node. Nodes are checked
+in document order, once per rule even when several owners or links reach
+them. An unresolved link, or a file without the native front end, selects
+nothing. Links do not depend on rule options. A real grammar field takes
+precedence over a link of the same name; unlike a known field's target,
+a link infers no child fields for the body (use explicit node paths).
+`binding_declarations` includes merged declarations, named expressions and
+identifier enum members, not referencing identifiers.
+
 **Severity and message.** The severity keyword (`off`, `hint`, `info`, `warn`,
 `error`) comes first and the message follows it, on the rule's line or as a
 body line (`warn "..."`). The message can use everything an expression can

@@ -3,8 +3,15 @@
 
 use crate::expr::facts::Link;
 use crate::native::ts::facts::NativeFile;
+use crate::native::ts::kinds::{Field as F, Kind as K};
 
 pub const LINKS: &[Link] = &[
+    Link {
+        name: "binding_declarations",
+        doc: "native layers: on the program, every binding declaration identifier (merged declarations, named expressions and identifier enum members included), in source order",
+        many: true,
+        get: |f, n| f.nodes_of(binding_declarations, n),
+    },
     Link {
         name: "declaration",
         doc: "native layers: on a referencing identifier, the identifier that declares its binding (a declaring one gives itself); null when unresolved",
@@ -42,6 +49,16 @@ pub const LINKS: &[Link] = &[
         get: |f, n| f.nodes_of(writer, n),
     },
 ];
+
+fn binding_declarations(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
+    let s = &file.syntax;
+    if node != s.root() { return Vec::new(); }
+    let mut nodes: Vec<u32> = file.bindings().declarations(s).values().flatten().copied().collect();
+    nodes.extend((0..s.tree.nodes.len() as u32).filter(|&n| s.is(n, K::EnumMember))
+        .filter_map(|n| s.get(n, F::Name)).filter(|&n| s.is(n, K::Ident)));
+    nodes.sort_by_key(|&n| s.tree.node(n).start);
+    nodes
+}
 
 /// Every identifier declaring the binding `node` declares or references.
 fn declarations(file: &NativeFile<'_>, node: u32) -> Vec<u32> {

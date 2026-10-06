@@ -148,6 +148,9 @@ impl ConfigFile<'_> {
                     .fields
                     .iter()
                     .map(|f| json!({ "label": f, "kind": 5, "detail": format!("field of {layer}") }))
+                    .chain(zoomie_lint::expr::facts::LINKS.iter()
+                        .filter(|link| !self.symbols.symbols[id].fields.iter().any(|field| field == link.name))
+                        .map(|link| json!({ "label": link.name, "kind": 5, "detail": link.doc })))
                     .collect(),
                 // `field.`, `parent.`, `children.`...: what a node has.
                 None => [Kind::Attr, Kind::Fact, Kind::Builtin].iter().flat_map(|&k| self.of_kind(k)).map(|(i, s)| item(i, s)).collect(),
@@ -315,6 +318,24 @@ mod tests {
     use super::*;
     use zoomie_lint::config::{load_text, source::Disk};
     use zoomie_lint::engine::build;
+
+    #[test]
+    fn linked_nodes_complete_and_hover_as_registered_queries() {
+        let text = "import .ts\nin ts_call.callee rule field info text\nin ts_identifier rule query info declaration.offset\nin ts_program.binding_declarations rule names info text\n";
+        let built = build(load_text("links.zlint", text, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:?}", built.errors);
+        let symbols = built.symbols.expect("symbols");
+        let (file, _) = symbols.sources.files().find(|(_, source)| source.text.as_ref() == text).expect("source");
+        let config = ConfigFile { symbols: &symbols, file };
+        let completions = config.complete(&json!({ "position": { "line": 1, "character": "in ts_call.".len() } }));
+        let items = completions["items"].as_array().expect("items");
+        assert!(items.iter().any(|item| item["label"] == "callee"), "ordinary fields remain available");
+        assert!(items.iter().any(|item| item["label"] == "references"), "registered links available alongside fields");
+        let hover = config.hover(&json!({ "position": { "line": 2, "character": "in ts_identifier rule query info decl".len() } }));
+        assert!(!hover.is_null(), "native link expression has registry documentation");
+        let hover = config.hover(&json!({ "position": { "line": 3, "character": "in ts_program.binding_".len() } }));
+        assert!(!hover.is_null(), "dotted target refers to link documentation");
+    }
 
     #[test]
     fn language_settings_complete_and_link_to_their_declarations() {

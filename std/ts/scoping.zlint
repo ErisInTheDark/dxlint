@@ -88,7 +88,7 @@ in ts_arrow rule array-callback-return:concise {
   warn "{callback.method}() expects no useless return value from {callback.name}."
 }
 
-in ts_identifier rule prefer-const {
+in ts_program.binding_declarations rule prefer-const {
   option destructuring "any" | "all" = "any"
   option ignoreReadBeforeAssign boolean = false
   let binding scoping_const_binding
@@ -364,7 +364,7 @@ in ts_declarator, ts_assignment rule consistent-this:unexpected {
   warn "Unexpected alias '{alias.name}' for 'this'."
 }
 
-in ts_identifier rule no-shadow {
+in ts_program.binding_declarations rule no-shadow {
   option allow string[] = [] "names allowed to shadow"
   option builtinGlobals boolean = false "also check configured global names"
   option hoist "all" | "functions" | "never" | "types" | "functions-and-types" = "functions"

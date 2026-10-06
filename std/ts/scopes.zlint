@@ -29,20 +29,20 @@ fn unused_binding_names(context) = if context == "array" then "elements of array
     else "'{text}' is {u.action} but {if u.only_type then 'only used as a type' else 'never used'}{if pattern != '' then '. Allowed unused ' names ' must match /' pattern '/u' else ''}."
 }
 
-in ts_identifier rule no-unused-vars:variables {
+in ts_program.binding_declarations rule no-unused-vars:variables {
   @unused_binding_options
   @unused_binding_checks("variable", false)
 }
-in ts_identifier rule no-unused-vars:parameters {
+in ts_program.binding_declarations rule no-unused-vars:parameters {
   @unused_binding_options
   default option mode enum(all, after-used) = after-used "which unused parameters to check"
   @unused_binding_checks("parameter", mode == "after-used")
 }
-in ts_identifier rule no-unused-vars:caught-errors {
+in ts_program.binding_declarations rule no-unused-vars:caught-errors {
   @unused_binding_options
   @unused_binding_checks("catch", false)
 }
-in ts_identifier rule no-unused-vars:array-elements {
+in ts_program.binding_declarations rule no-unused-vars:array-elements {
   @unused_binding_options
   @unused_binding_checks("array", false)
 }

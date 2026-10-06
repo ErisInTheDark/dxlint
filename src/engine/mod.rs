@@ -48,6 +48,8 @@ pub struct OptionSlot {
 pub enum Target {
     Matcher(u32),
     Field(u32, u16),
+    /// Nodes reached through a registered link from this matcher.
+    Link(u32, usize),
     /// `None` = every language (`in .*`).
     Lang(Option<usize>),
 }
@@ -148,6 +150,8 @@ pub struct Linter {
     pub profile: Option<Profile>,
     by_matcher: Vec<Vec<usize>>,
     by_field: HashMap<(u32, u16), Vec<usize>>,
+    /// Owner matcher -> links and their rule indexes.
+    by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>>,
     /// Whole-file rules and the language they want (`None`: any).
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
@@ -260,7 +264,7 @@ impl Linter {
             }
             for t in &f.targets {
                 match *t {
-                    Target::Matcher(m) | Target::Field(m, _) => need(m, true, &mut targets),
+                    Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => need(m, true, &mut targets),
                     Target::Lang(_) => lang_layers = true,
                 }
             }
@@ -409,8 +413,28 @@ impl Linter {
         // fixes never changes what another sees, so rules can run apart.
         let reindented: Vec<RefCell<HashMap<usize, String>>> = self.rules.iter().map(|_| RefCell::default()).collect();
         let memo = AttrMemo::default();
+        // Resolve reachability before dispatch: a reference may select a
+        // declaration earlier in the tree, and several owners can reach it.
+        let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
+        if let Some(native) = native.filter(|_| self.by_link.values().flatten().any(|(_, rules)| rules.iter().any(|&fi| run.active[fi]))) {
+            for &owner in &tree.order {
+                let Some(links) = self.by_link.get(&tree.node(owner).matcher) else { continue };
+                for (link, rules) in links {
+                    if !rules.iter().any(|&fi| run.active[fi]) { continue; }
+                    for node in (crate::expr::facts::LINKS[*link].get)(native, owner) {
+                        let selected = linked.entry(node).or_default();
+                        for &fi in rules.iter().filter(|&&fi| run.active[fi]) {
+                            if !selected.contains(&fi) { selected.push(fi); }
+                        }
+                    }
+                }
+            }
+        }
+        for rules in linked.values_mut() { rules.sort_unstable(); }
         for &id in &tree.order {
             let node = tree.node(id);
+            let field_rules = tree.label(id).zip(tree.owner(id))
+                .and_then(|(label, owner)| self.by_field.get(&(tree.node(owner).matcher, label)));
             memo.enter_node(id);
             let mut apply = |fi: usize| {
                 if run.active[fi] {
@@ -452,10 +476,17 @@ impl Linter {
                 TEXT => {}
                 m => self.by_matcher[m as usize].iter().for_each(|&fi| apply(fi)),
             }
-            if let (Some(label), Some(owner)) = (tree.label(id), tree.owner(id)) {
-                let owner_matcher = tree.node(owner).matcher;
-                if let Some(list) = self.by_field.get(&(owner_matcher, label)) {
-                    list.iter().for_each(|&fi| apply(fi));
+            if let Some(list) = field_rules {
+                list.iter().for_each(|&fi| apply(fi));
+            }
+            if let Some(list) = linked.get(&id) {
+                for &fi in list {
+                    let direct = match node.matcher {
+                        ROOT => self.by_lang.iter().any(|&(rule, lang)| rule == fi && lang.is_none_or(|lang| lang == run.lang)),
+                        TEXT => false,
+                        m => self.by_matcher[m as usize].contains(&fi),
+                    };
+                    if !direct && field_rules.is_none_or(|rules| !rules.contains(&fi)) { apply(fi); }
                 }
             }
         }
