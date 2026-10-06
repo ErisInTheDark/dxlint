@@ -35,7 +35,7 @@ pub struct Stream {
     pub calls: Vec<(Rc<str>, Span)>,
     /// Every token consumed, in order: the configuration as the parser saw
     /// it, imports and macros expanded (see [`Stream::fingerprint`]).
-    seen: std::collections::hash_map::DefaultHasher,
+    seen: crate::fx_hash::FxHasher,
     /// The last token seen ended a line (or there was none): line ends in a
     /// row count once, and leading ones not at all.
     at_line_end: bool,
@@ -100,6 +100,9 @@ impl Stream {
         if !(line_end && self.at_line_end) {
             std::mem::discriminant(&tok.kind).hash(&mut self.seen);
             if !line_end {
+                // Fx pads its final word with zeros; the length distinguishes
+                // token texts ending in NULs and keeps token boundaries intact.
+                self.seen.write_usize(tok.text.len());
                 self.seen.write(tok.text.as_bytes());
             }
             self.seen.write_u8(0xff);
@@ -214,4 +217,44 @@ impl Stream {
 
 fn join(params: &[Rc<str>]) -> String {
     params.iter().map(|p| &**p).collect::<Vec<_>>().join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::source::FileId;
+
+    fn fingerprint(tokens: &[(Tk, &str)]) -> u64 {
+        let mut stream = Stream::new();
+        stream.push_tokens(tokens.iter().enumerate().map(|(i, &(kind, text))| Token {
+            kind, text: Rc::from(text), span: Span::new(FileId(0), i, i + 1),
+        }).collect());
+        while stream.next_raw().is_some() {}
+        stream.fingerprint()
+    }
+
+    #[test]
+    fn fingerprints_distinguish_token_kinds_boundaries_and_trailing_nuls() {
+        let variants = [
+            vec![(Tk::Ident, "x")],
+            vec![(Tk::Ident, "x\0")],
+            vec![(Tk::Ident, "x\0\0")],
+            vec![(Tk::Str, "x")],
+            vec![(Tk::Ident, "a"), (Tk::Ident, "bc")],
+            vec![(Tk::Ident, "ab"), (Tk::Ident, "c")],
+        ];
+        let hashes: std::collections::HashSet<_> = variants.iter().map(|tokens| fingerprint(tokens)).collect();
+        assert_eq!(hashes.len(), variants.len());
+    }
+
+    #[test]
+    fn fingerprints_canonicalise_line_endings_without_losing_token_order() {
+        let tokens = [(Tk::Ident, "a"), (Tk::Newline, "\n"), (Tk::Ident, "b")];
+        let extra_lines = [
+            (Tk::Newline, "\n"), (Tk::Ident, "a"), (Tk::Newline, ";"),
+            (Tk::Newline, "\n"), (Tk::Newline, ";"), (Tk::Ident, "b"),
+        ];
+        assert_eq!(fingerprint(&tokens), fingerprint(&extra_lines));
+        assert_ne!(fingerprint(&tokens), fingerprint(&[(Tk::Ident, "b"), (Tk::Newline, "\n"), (Tk::Ident, "a")]));
+    }
 }

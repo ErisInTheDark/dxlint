@@ -240,6 +240,10 @@ fn prune_config(config: &mut Config, runtime: bool) {
     }
 
     for r in config.rules.iter_mut().filter(|r| !r.enabled()) {
+        if runtime {
+            r.inert = true;
+            continue;
+        }
         let mut names = HashSet::new();
         for t in &r.targets {
             if let Target::Matcher(n) | Target::Field(n, _) = t {
@@ -247,7 +251,7 @@ fn prune_config(config: &mut Config, runtime: bool) {
             }
         }
         rule_names(r, &mut names);
-        r.inert = runtime || names.iter().any(|n| gone(n) || dropped_attrs.contains(n));
+        r.inert = names.iter().any(|n| gone(n) || dropped_attrs.contains(n));
     }
 }
 

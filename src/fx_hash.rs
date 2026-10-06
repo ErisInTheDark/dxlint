@@ -1,6 +1,7 @@
 //! A fast, non-cryptographic hasher (rustc's Fx) for the per-file memo maps
 //! keyed by node ids and short names, where SipHash dominated lookup time.
-//! Not for keys an attacker chooses (zlint's keys come from its own trees).
+//! Also hashes length-delimited config tokens for result-cache fingerprints.
+//! Not for hash-table keys an attacker chooses; memo keys come from zlint's trees.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
