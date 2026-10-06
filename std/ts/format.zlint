@@ -289,7 +289,8 @@ in ts_open_brace rule object-curly-spacing:empty {
 
 # Keys and annotation colons belong to their property or member.
 group format_key_owner ts_property, ts_pattern_property, ts_property_signature, ts_index_signature, ts_class_property, ts_import_attribute
-group format_key_container ts_object, ts_object_pattern, ts_type_literal, ts_interface, ts_class, ts_import_attributes
+group key_spacing_containers ts_object, ts_object_pattern, ts_type_literal, ts_interface, ts_class, ts_import_attributes
+in key_spacing_containers let key_spacing_enabled true
 in ts_parenthesized, ts_computed_key let format_key_text default(expression.format_key_text, expression.text)
 in ts_property, ts_pattern_property, ts_property_signature, ts_class_property, ts_import_attribute let format_key_label if key is ts_computed_key then key.format_key_text else default(key.literal_value.value, key.text)
 in ts_index_signature let format_key_label byte_slice(text, 0, opener.ts_open_bracket.paired_token.end - offset)
@@ -307,7 +308,6 @@ in format_key_owner let format_key_before default(re_find(format_key_colon.space
 in format_key_owner let format_key_after default(re_find(format_key_colon.space_after.text, /^\s*/), "")
 in ts_colon, ts_import_attribute_colon let format_key_single_line parent.parent.format_key_single_line
 in ts_colon, ts_import_attribute_colon let format_key_typed parent.parent.format_key_typed
-in ts_colon, ts_import_attribute_colon let format_key_container_kind parent.parent.format_key_container_kind
 in format_key_owner let format_key_site if format_key_colon == null then null else {
   owner: node,
   colon: format_key_colon,
@@ -318,16 +318,10 @@ in format_key_owner let format_key_site if format_key_colon == null then null el
 in ts_object, ts_object_pattern let format_key_members map(property.node, p => p) map(rest.node, p => p)
 in ts_type_literal, ts_interface, ts_class let format_key_members member.node
 in ts_import_attributes let format_key_members descendants(ts_import_attribute)
-in ts_object let format_key_container_kind "ObjectExpression"
-in ts_object_pattern let format_key_container_kind "ObjectPattern"
-in ts_type_literal let format_key_container_kind "TSTypeLiteral"
-in ts_interface let format_key_container_kind "TSInterfaceBody"
-in ts_class let format_key_container_kind "ClassBody"
-in ts_import_attributes let format_key_container_kind if containing(ts_import) != null then "ImportDeclaration" else if re_test(containing(ts_export).text, /^export(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r]*[\n\r])+(?:type(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n\r]*[\n\r])+)?\*/) then "ExportAllDeclaration" else "ExportNamedDeclaration"
-in format_key_container let format_key_typed is (ts_type_literal, ts_interface, ts_class)
+in key_spacing_containers let format_key_typed is (ts_type_literal, ts_interface, ts_class)
 in ts_object, ts_object_pattern, ts_type_literal, ts_interface, ts_class let format_key_single_line position(default(opener.ts_open_brace.offset, offset)).js_line == position(end_offset).js_line
 in ts_import_attributes let format_key_single_line position(open.offset).js_line == position(close.offset).js_line
-in format_key_container let format_key_anchors map(format_key_members, m => {
+in key_spacing_containers let format_key_anchors map(format_key_members, m => {
   node: m,
   start: m.offset,
   end: m.end_offset,
@@ -335,7 +329,7 @@ in format_key_container let format_key_anchors map(format_key_members, m => {
   end_line: position(m.end_offset).js_line,
   site: m.format_key_site
 })
-in format_key_container let format_key_group_comments overlapping(ts_comment) overlapping(ts_import_attribute_comment)
+in key_spacing_containers let format_key_group_comments overlapping(ts_comment) overlapping(ts_import_attribute_comment)
 fn format_key_bridge(previous, current, comments, typed) = (
   if current == null || previous == null then false
   else if (if typed then default(current.site.owner.format_key_colon_line, current.start_line) else default(current.site.owner.format_key_value_line, current.start_line)) - previous.start_line <= 1 then true
@@ -366,7 +360,7 @@ fn format_key_group_rows(state, typed) = map(state.groups map(state.unaligned, i
   width: if typed then 0 else max([0] map(filter(g, a => a.site != null), a => a.site.owner.format_key_width)),
   column: if typed then max([0] map(filter(g, a => a.site != null), a => a.site.owner.format_key_column)) else 0
 })
-in format_key_container let format_key_groups format_key_group_rows(reduce(format_key_anchors, { previous: null, groups: [], unaligned: [] }, (state, item) => format_key_group_step(state, item, format_key_group_comments, format_key_typed)), format_key_typed)
+in key_spacing_containers let format_key_groups format_key_group_rows(reduce(format_key_anchors, { previous: null, groups: [], unaligned: [] }, (state, item) => format_key_group_step(state, item, format_key_group_comments, format_key_typed)), format_key_typed)
 schema format_key_alignment { on?: "colon" | "value"; mode?: "strict" | "minimum"; beforeColon?: boolean; afterColon?: boolean }
 schema format_key_line_policy { mode?: "strict" | "minimum"; beforeColon?: boolean; afterColon?: boolean; align?: "colon" | "value" | format_key_alignment }
 fn format_key_policy(options) = { before: if default(options.beforeColon, false) then 1 else 0, after: if default(options.afterColon, true) then 1 else 0, mode: default(options.mode, "strict") }
@@ -407,25 +401,24 @@ fn format_key_fix(site, before, wanted) = (
   option singleLine format_key_line_policy | null = null "single-line container spacing"
   option multiLine format_key_line_policy | null = null "multiline container spacing"
   option align "colon" | "value" | format_key_alignment | null = null "align multiline keys or values"
-  option ignoredNodes string[] = [] "container kinds to ignore"
   let key_base { beforeColon: beforeColon, afterColon: afterColon, mode: mode, align: align }
   let key_line if singleLine == null && multiLine == null then { before: if beforeColon then 1 else 0, after: if afterColon then 1 else 0, mode: mode } else format_key_policy(if format_key_single_line then default(singleLine, key_base) else default(multiLine, key_base))
   let key_multi format_key_policy(default(multiLine, key_base))
   # Typed nested alignment resets spacing defaults, but inherits line mode.
   let key_alignment if align == null && multiLine.align == null then null else if type_of(align) == "record" then format_key_alignment_policy(align, format_key_policy({})) else format_key_alignment_policy(if format_key_typed then default(multiLine.align, align) else default(multiLine, key_base).align, if format_key_typed && type_of(multiLine.align) == "record" then { before: 0, after: 1, mode: key_multi.mode } else key_multi)
-  when ignoredNodes == [] || !contains(ignoredNodes, format_key_container_kind)
 }
 @macro format_key_aligned_entries {
+  when key_spacing_enabled
   @format_key_options
   when key_alignment != null && !format_key_single_line
-  each key_entry in if key_alignment == null || format_key_single_line || contains(ignoredNodes, format_key_container_kind) then [] else map(format_key_rows(format_key_groups), entry => {
+  each key_entry in map(format_key_rows(format_key_groups), entry => {
     site: entry.site,
     policy: format_key_expected(entry.site, entry.group, key_line, key_alignment, format_key_typed)
   })
   when !key_entry.site.typed || position(key_entry.site.owner.offset).js_line == key_entry.site.owner.format_key_colon_line
 }
 @macro format_key_individual {
-  when parent is format_key_owner
+  when parent is format_key_owner && parent.parent is key_spacing_containers && parent.parent.key_spacing_enabled
   @format_key_options
   when key_alignment == null || format_key_single_line
   when !(parent is (ts_property_signature, ts_index_signature, ts_class_property) && position(parent.offset).js_line != position(offset).js_line)
@@ -455,14 +448,14 @@ in ts_colon, ts_import_attribute_colon rule key-spacing:after {
   fix space_after as format_key_fixed_gap(key_gap, key_line.after, format_key_typed, !format_key_typed)
   @format_key_after_report
 }
-in format_key_container rule key-spacing:aligned-before {
+in key_spacing_containers rule key-spacing:aligned-before {
   @format_key_aligned_entries
   when format_key_wrong(utf16_len(key_entry.site.before), key_entry.policy.before, key_entry.policy.before_mode, key_entry.site.typed)
   when key_entry.policy.before == 0 || !re_test(key_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
   fix as format_replace_gaps(text, offset, [format_key_fix(key_entry.site, true, key_entry.policy.before)])
   @format_key_before_report
 }
-in format_key_container rule key-spacing:aligned-after {
+in key_spacing_containers rule key-spacing:aligned-after {
   @format_key_aligned_entries
   when format_key_wrong(utf16_len(key_entry.site.after), key_entry.policy.after, key_entry.policy.after_mode, key_entry.site.typed)
   when key_entry.policy.after == 0 || !re_test(key_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
