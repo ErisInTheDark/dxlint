@@ -82,7 +82,7 @@ kinds! {
     ImportSpec = "ts_import_specifier" [Kind, Imported, Local],
     // `kind`: `type` for `import type x = require(...)`.
     ImportEquals = "ts_import_equals" [Kind, Modifier, Name, Value],
-    Export = "ts_export" [Kind, Decl, Specifier, Namespace, From, Expr],
+    Export = "ts_export" [Kind, Decl, Specifier, Namespace, From, Expr, Op],
     ExportSpec = "ts_export_specifier" [Kind, Local, Exported],
     ExportAssign = "ts_export_assignment" [Expr],
     // ---- type declarations

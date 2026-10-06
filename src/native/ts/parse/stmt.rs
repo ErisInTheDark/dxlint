@@ -758,7 +758,9 @@ impl<'s> Parser<'s> {
             let t = self.token_text();
             kids.add(Field::Kind, t);
         }
-        if self.eat("*") {
+        if self.is("*") {
+            let operator = self.token_text();
+            kids.add(Field::Op, operator);
             if self.eat_word("as") {
                 let n = if self.tok.tok == Tok::Str { self.leaf(Kind::String) } else { self.leaf(Kind::Ident) };
                 kids.add(Field::Namespace, n);
@@ -815,6 +817,33 @@ impl<'s> Parser<'s> {
 #[cfg(test)]
 mod tests {
     use crate::native::ts::{kinds::{Field, Kind}, parse};
+
+    #[test]
+    fn export_wildcards_keep_type_and_default_kinds() {
+        for (source, wildcard, kind) in [
+            ("export * from 'mod';", true, None),
+            ("export /* wildcard */ * from 'mod';", true, None),
+            ("export type * from 'mod';", true, Some("type")),
+            ("export * as ns from 'mod';", true, None),
+            ("export type * as ns from 'mod';", true, Some("type")),
+            ("export {} from 'mod';", false, None),
+            ("export type {} from 'mod';", false, Some("type")),
+            ("export { name } from 'mod';", false, None),
+            ("export default value;", false, Some("default")),
+            ("export const product = left * right;", false, None),
+            ("export as namespace ns;", false, None),
+        ] {
+            let parsed = parse(source, false).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+            let export = parsed.nodes.iter().find(|node| node.matcher == Kind::Export as u32).expect("export");
+            let word = |field| export.children.iter().find(|edge| edge.label == field as u16)
+                .map(|edge| {
+                    let node = &parsed.nodes[edge.node as usize];
+                    &source[node.start as usize..node.end as usize]
+                });
+            assert_eq!(word(Field::Op), wildcard.then_some("*"), "{source}");
+            assert_eq!(word(Field::Kind), kind, "{source}");
+        }
+    }
 
     #[test]
     fn nodes_hold_their_children() {

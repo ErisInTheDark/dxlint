@@ -422,7 +422,7 @@ fn structure_padding_node_type(n) =
   if n is ts_block then "BlockStatement" else if n is ts_empty then "EmptyStatement"
   else if n is ts_method_signature then "TSMethodSignature" else if n is ts_expression_statement then "ExpressionStatement"
   else if n is ts_return then "ReturnStatement"
-  else if n is ts_export then (if n.kind == "default" then "ExportDefaultDeclaration" else if n.kind == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration")
+  else if n is ts_export then (if n.kind == "default" then "ExportDefaultDeclaration" else if n.operator == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration")
   else default(last(n.structure_padding_keyword_tag), default(n.structure_padding_declaration_type, ""))
 in ts_block let structure_padding_plain_tag "block"
 in ts_empty let structure_padding_plain_tag "empty"
@@ -561,7 +561,7 @@ group structure_suppress_statement_entry ts_do_while, ts_for, ts_for_in, ts_for_
 @register_max_statements_counted(ts_while, true)
 @register_max_statements_counted(ts_with, true)
 @register_max_statements_counted(ts_export, true)
-in max_statements_counted let max_statements_entry_line if parent is structure_suppress_statement_entry && not ts_node.alternate || parent is ts_export && parent.kind != "*" then null else position(offset).js_line
+in max_statements_counted let max_statements_entry_line if parent is structure_suppress_statement_entry && not ts_node.alternate || parent is ts_export && parent.operator != "*" then null else position(offset).js_line
 in max_statements_counted let max_statements_exit_offset offset + byte_len(default(trim_end(trim_end(trim_end(text), ";")), text))
 in max_statements_counted let max_statements_exit_line position(max_statements_exit_offset).js_line
 
