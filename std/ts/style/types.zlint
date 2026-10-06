@@ -117,10 +117,10 @@ in ts_parameter let rest_function_parameter name is ts_rest && parent is (ts_fun
 in ts_type_operator let rest_array_wrapper operator == "readonly" && parent.rest_function_parameter == true
 in ts_type_reference let rest_array_wrapper contains(["Array", "ReadonlyArray"], name) && parent.rest_function_parameter == true
 in style_tree_node let rest_array_argument parent.rest_function_parameter == true || parent.rest_array_wrapper == true
+in ts_type_keyword let no_explicit_any_checked true
 in ts_type_keyword rule no-explicit-any {
-  option ignoreRestArgs boolean = false "Ignore any in rest parameter arrays."
-  option fixToUnknown boolean = false "Enable replacing any with unknown."
-  when text == "any" && !(ignoreRestArgs && parent.rest_array_argument == true)
+  when text == "any"
+  when no_explicit_any_checked
   warn "Unexpected any. Specify a different type."
 }
 
@@ -137,11 +137,10 @@ in ts_index rule no-dynamic-delete {
 
 in ts_namespace let namespace_is_declared contains([] modifier, "declare")
 in style_tree_node let namespace_declared namespace_is_declared == true || parent.namespace_declared == true
+in ts_namespace let no_namespace_checked !re_test(file, /\.d\.[cm]?ts$/)
 in ts_namespace rule no-namespace {
-  option allowDeclarations boolean = false "Allow namespaces within declarations."
-  option allowDefinitionFiles boolean = true "Allow namespaces in definition files."
-  when kind != "global" && name != "global" && !re_test(name, /^["']/) && parent not ts_namespace
-  when !(allowDefinitionFiles && re_test(file, /\.d\.[cm]?ts$/)) && !(allowDeclarations && namespace_declared)
+  when kind != "global" && name != "global" && !re_test(name, /^["']/)
+  when no_namespace_checked
   warn "ES2015 module syntax is preferred over namespaces."
 }
 

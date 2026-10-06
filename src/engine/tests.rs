@@ -13,6 +13,7 @@ mod text_hygiene;
 mod ts_std_rules;
 mod ts_naming;
 mod ts_type_constituents;
+mod ts_style_types;
 mod ts_arithmetic;
 mod ts_collection_methods;
 mod ts_core_rules;
