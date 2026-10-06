@@ -1,8 +1,6 @@
 //! Links between nodes that rules navigate (`declaration.line`): bindings
 //! and their uses. What a rule makes of them is written in the rule.
 
-use std::collections::HashMap;
-
 use crate::expr::facts::Link;
 use crate::native::ts::facts::NativeFile;
 
@@ -50,10 +48,7 @@ fn declarations(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
     let b = file.bindings();
     let Some(&first) = declaration(file, node).first() else { return Vec::new() };
     let first = b.merged.get(&first).copied().unwrap_or(first);
-    let mut out: Vec<u32> = std::iter::once(first).chain(b.merged.iter().filter(|&(_, &f)| f == first).map(|(&d, _)| d)).collect();
-    out.sort_by_key(|&n| file.syntax.tree.node(n).start);
-    out.dedup();
-    out
+    b.declarations(&file.syntax).get(&first).cloned().unwrap_or_default()
 }
 
 fn scope(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
@@ -77,21 +72,6 @@ fn declaration(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
     b.refs.get(&node).copied().into_iter().collect()
 }
 
-/// Declaring identifier -> its references, in source order.
-struct Uses(HashMap<u32, Vec<u32>>);
-
-fn uses(file: &NativeFile<'_>) -> Uses {
-    let s = &file.syntax;
-    let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (&reference, &decl) in &file.bindings().refs {
-        map.entry(decl).or_default().push(reference);
-    }
-    for list in map.values_mut() {
-        list.sort_by_key(|&n| s.tree.node(n).start);
-    }
-    Uses(map)
-}
-
 fn references(file: &NativeFile<'_>, node: u32) -> Vec<u32> {
-    file.cached(uses).0.get(&node).cloned().unwrap_or_default()
+    file.bindings().references_of(&file.syntax, node).to_vec()
 }

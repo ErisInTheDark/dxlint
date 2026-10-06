@@ -54,8 +54,6 @@ pub struct Var {
 
 pub struct Unused {
     pub vars: HashMap<u32, Var>,
-    /// Unused names of `/* global */` comments, with their offsets.
-    pub globals: Vec<(String, u32)>,
 }
 
 /// One reference: a real one, or the write a declaration's initializer or
@@ -78,28 +76,9 @@ pub fn analyze(file: &NativeFile) -> Unused {
     let script = file.source_type() == "script";
     let a = Analysis { s, b, ts };
 
-    let mut idents: HashMap<u32, Vec<u32>> = b.decls.keys().map(|&d| (d, vec![d])).collect();
-    for (&later, &first) in &b.merged {
-        idents.entry(first).or_default().push(later);
-    }
-    let mut refs: HashMap<u32, Vec<Ref>> = HashMap::default();
-    for (&r, &d) in &b.refs {
-        let access = b.access.get(&r).copied().unwrap_or("read");
-        refs.entry(d).or_default().push(Ref {
-            id: r,
-            read: matches!(access, "read" | "read_write" | "type"),
-            write: matches!(access, "write" | "read_write"),
-            typ: access == "type",
-        });
-    }
-    for (&d, list) in &mut idents {
-        list.sort_by_key(|&i| a.start(i));
-        let own = refs.entry(d).or_default();
-        own.extend(list.iter().filter(|&&i| a.initialized(i)).map(|&i| Ref { id: i, read: false, write: true, typ: false }));
-        own.sort_by_key(|r| a.start(r.id));
-    }
+    let idents = b.declarations(s);
     let exported_comment = if script { exported_names(file) } else { HashSet::new() };
-    let marked = if ts { a.marked_used(&idents, dts) } else { HashSet::new() };
+    let marked = if ts { a.marked_used(idents, dts) } else { HashSet::new() };
 
     // typescript-eslint's default JSX pragma: JSX uses `React`.
     let jsx = ts && (0..s.tree.nodes.len() as u32).any(|n| matches!(s.kind(n), Some(K::JsxElement | K::JsxFragment)));
@@ -112,25 +91,39 @@ pub fn analyze(file: &NativeFile) -> Unused {
             continue;
         }
         let ids = &idents[&d];
-        let decl_nodes: Vec<u32> = ids.iter().map(|&i| a.decl_node(i)).collect();
-        let type_decl = |n: &u32| matches!(s.kind(*n), Some(K::Interface | K::TypeAlias));
-        let has_value = decl_nodes.iter().any(|n| !type_decl(n));
-        let has_variable = decl_nodes.iter().any(|&n| s.is(n, K::Var));
+        let mut refs: Vec<Ref> = b.references_of(s, d).iter().map(|&r| {
+            let access = b.access.get(&r).copied().unwrap_or("read");
+            Ref {
+                id: r,
+                read: matches!(access, "read" | "read_write" | "type"),
+                write: matches!(access, "write" | "read_write"),
+                typ: access == "type",
+            }
+        }).collect();
+        let real_count = refs.len();
+        refs.extend(ids.iter().filter(|&&i| a.initialized(i)).map(|&i| Ref { id: i, read: false, write: true, typ: false }));
+        if refs.len() != real_count {
+            refs.sort_by_key(|r| a.start(r.id));
+        }
+        let decl_nodes = ids.iter().map(|&i| a.decl_node(i));
+        let type_decl = |n: u32| matches!(s.kind(n), Some(K::Interface | K::TypeAlias));
+        let has_value = decl_nodes.clone().any(|n| !type_decl(n));
+        let has_variable = decl_nodes.clone().any(|n| s.is(n, K::Var));
         // A type and a value of one name: exporting the type does not
         // export the value (typescript-eslint).
-        let ts_exported = decl_nodes.iter().any(|n| !(has_value && type_decl(n)) && s.parent(*n).is_some_and(|p| s.is(p, K::Export)));
+        let ts_exported = decl_nodes.clone().any(|n| !(has_value && type_decl(n)) && s.parent(n).is_some_and(|p| s.is(p, K::Export)));
         let pragma = jsx && s.text(d) == "React" && b.decl_scope.get(&d) == Some(&0);
         // A class's own references are its inner name's (eslint-scope's
         // class scope), not the declaration's.
         let class = ids.iter().filter_map(|&i| s.parent(i).filter(|&p| s.is(p, K::Class) && s.field(i) == Some(F::Name))).collect::<Vec<_>>();
-        let own: Vec<Ref> = refs[&d].iter().copied().filter(|r| !class.iter().any(|&c| a.inside(r.id, c))).collect();
+        let own = refs.iter().copied().filter(|r| !class.iter().any(|&c| a.inside(r.id, c)));
         let global = script && b.decl_scope.get(&d) == Some(&0);
         let marked_used = marked.contains(&d) || pragma || (global && exported_comment.contains(s.text(d)));
-        let only_type = ts && own.iter().any(|r| a.type_only(has_variable, r));
+        let only_type = ts && own.clone().any(|r| a.type_only(has_variable, &r));
         let imported_as_type = ids.iter().all(|&i| a.type_import(i));
-        let used = marked_used || (ts && ts_exported) || a.is_used(ids, has_variable, &own, imported_as_type);
+        let used = marked_used || (ts && ts_exported) || a.is_used(ids, has_variable, own.clone(), imported_as_type);
         let scope = a.variable_scope(d);
-        let last_write = own.iter().rev().find(|r| r.write && a.variable_scope(r.id) == scope).map(|r| a.start(r.id));
+        let last_write = own.clone().rev().find(|r| r.write && a.variable_scope(r.id) == scope).map(|r| a.start(r.id));
         let offset = last_write.unwrap_or(a.start(d));
         let def = match binding.kind {
             "parameter" => "parameter",
@@ -145,22 +138,21 @@ pub fn analyze(file: &NativeFile) -> Unused {
                 silent: only_type && binding.kind == "import",
                 def,
                 array_element: s.parent(d).is_some_and(|p| s.is(p, K::ArrayPattern)),
-                array_target: own.iter().any(|r| r.write && s.parent(r.id).is_some_and(|p| s.is(p, K::Array))),
+                array_target: own.clone().any(|r| r.write && s.parent(r.id).is_some_and(|p| s.is(p, K::Array))),
                 setter: def == "parameter" && a.function_of(d).is_some_and(|f| s.word(f, F::Kind) == Some("set")),
-                before_used_param: def == "parameter" && a.before_used_param(d, &refs, &marked),
-                rest_sibling: a.rest_sibling(d) || own.iter().any(|r| a.rest_sibling(r.id)),
+                before_used_param: def == "parameter" && a.before_used_param(d, &marked),
+                rest_sibling: a.rest_sibling(d) || own.clone().any(|r| a.rest_sibling(r.id)),
                 static_block: binding.kind == "class" && class.iter().any(|&c| s.all(c, F::Member).any(|m| s.is(m, K::StaticBlock))),
                 using: binding.kind == "using",
                 global,
-                assigned: own.iter().any(|r| r.write),
+                assigned: own.clone().any(|r| r.write),
                 only_type,
                 offset,
                 ignored_offset: if ts { offset } else { a.start(d) },
             },
         );
     }
-    let globals = unused_globals(file, b, script);
-    Unused { vars, globals }
+    Unused { vars }
 }
 
 /// Fact `unused_var`: on a variable's first declaring identifier.
@@ -193,8 +185,7 @@ pub fn globals_fact(file: &NativeFile, node: u32) -> Value<'static> {
     if node != file.syntax.root() {
         return Value::Null;
     }
-    let u = file.cached(analyze);
-    Value::list(u.globals.iter().map(|(name, at)| Value::record(vec![("name".into(), Value::from(name.clone())), ("offset".into(), Value::from(*at as usize))])).collect())
+    Value::list(unused_globals(file).into_iter().map(|(name, at)| Value::record(vec![("name".into(), Value::from(name)), ("offset".into(), Value::from(at as usize))])).collect())
 }
 
 /// Names of `/* exported a, b */` comments.
@@ -212,12 +203,14 @@ pub(super) fn exported_names(file: &NativeFile) -> HashSet<String> {
 
 /// `/* global */` names nothing reads (and, in a script, nothing at the
 /// top level declares).
-fn unused_globals(file: &NativeFile, b: &Bindings, script: bool) -> Vec<(String, u32)> {
+fn unused_globals(file: &NativeFile) -> Vec<(String, u32)> {
     let s = &file.syntax;
     let globals = file.globals();
     if globals.mentions.is_empty() {
         return Vec::new();
     }
+    let b = file.bindings();
+    let script = file.source_type() == "script";
     let read: HashSet<&str> = b.unresolved.iter().filter(|r| b.access.get(r).is_some_and(|&a| a != "write")).map(|&r| s.text(r)).collect();
     let top: HashSet<&str> = if script { b.decl_scope.iter().filter(|(_, &sc)| sc == 0).map(|(&d, _)| s.text(d)).collect() } else { HashSet::new() };
     globals
@@ -484,17 +477,17 @@ impl Analysis<'_, '_> {
         out
     }
 
-    fn is_used(&self, ids: &[u32], has_variable: bool, refs: &[Ref], imported_as_type: bool) -> bool {
+    fn is_used(&self, ids: &[u32], has_variable: bool, mut refs: impl Iterator<Item = Ref>, imported_as_type: bool) -> bool {
         let own = self.own_nodes(ids);
         let var_scope = self.variable_scope(ids[0]);
         let mut rhs = None;
-        refs.iter().any(|r| {
-            if !self.ts && self.for_in_return(r) {
+        refs.any(|r| {
+            if !self.ts && self.for_in_return(&r) {
                 return true;
             }
-            let for_itself = self.read_for_itself(r, rhs);
-            rhs = self.rhs(r, var_scope, rhs);
-            let type_only = self.ts && !imported_as_type && self.type_only(has_variable, r);
+            let for_itself = self.read_for_itself(&r, rhs);
+            rhs = self.rhs(&r, var_scope, rhs);
+            let type_only = self.ts && !imported_as_type && self.type_only(has_variable, &r);
             let own_ref = own.iter().any(|&o| self.inside(r.id, o));
             r.read && !for_itself && !type_only && !own_ref
         })
@@ -502,7 +495,7 @@ impl Analysis<'_, '_> {
 
     /// A plain parameter (`function f(a)`: no pattern, default or rest)
     /// with a later parameter of the same function that is referenced.
-    fn before_used_param(&self, d: u32, refs: &HashMap<u32, Vec<Ref>>, marked: &HashSet<u32>) -> bool {
+    fn before_used_param(&self, d: u32, marked: &HashSet<u32>) -> bool {
         let s = self.s;
         let Some(param) = s.parent(d).filter(|&p| s.is(p, K::Param) && s.field(d) == Some(F::Name)) else { return false };
         if s.get(param, F::Init).is_some() || s.get(param, F::Modifier).is_some() {
@@ -516,7 +509,12 @@ impl Analysis<'_, '_> {
             }
         }
         let first = |i: u32| self.b.merged.get(&i).copied().unwrap_or(i);
-        names.iter().skip_while(|&&n| n != d).skip(1).any(|&n| refs.get(&first(n)).is_some_and(|r| !r.is_empty()) || marked.contains(&first(n)))
+        names.iter().skip_while(|&&n| n != d).skip(1).any(|&n| {
+            let first = first(n);
+            !self.b.references_of(s, first).is_empty()
+                || self.b.declarations(s).get(&first).is_some_and(|ids| ids.iter().any(|&i| self.initialized(i)))
+                || marked.contains(&first)
+        })
     }
 
     /// `{ a, ...rest }`: a sibling of a rest property, in a pattern or a
@@ -702,6 +700,38 @@ mod tests {
     fn report(file: &str, rule: &str, text: &str) -> Vec<String> {
         let l = native_linter(rule);
         l.lint(Path::new(file), text).into_iter().map(|d| format!("{}@{}", d.message, d.start)).collect()
+    }
+
+    #[test]
+    fn global_queries_do_not_run_variable_usage_analysis() {
+        for text in ["const unused = 1;", "/* global external */ const unused = 1;"] {
+            crate::engine::tests::with_native_file(text, |file, _| {
+                super::globals_fact(file, file.syntax.root());
+                let initialized = std::cell::Cell::new(false);
+                file.cached(|_| {
+                    initialized.set(true);
+                    super::Unused { vars: Default::default() }
+                });
+                assert!(initialized.get(), "global queries must leave variable analysis lazy");
+            });
+        }
+    }
+
+    #[test]
+    fn later_parameter_defaults_count_as_writes_for_after_used() {
+        for (text, expected) in [
+            ("function f(first, second) {}", false),
+            ("function f(first, second = 1) {}", true),
+            ("function f(first, [second = 1]) {}", true),
+            ("function f(first, ...second) {}", false),
+            ("function f(first, second) { return second; }", true),
+        ] {
+            crate::engine::tests::with_native_file(text, |file, _| {
+                let declaration = *file.bindings().decls.keys().find(|&&d| file.syntax.text(d) == "first").expect("first parameter");
+                let result = super::analyze(file);
+                assert_eq!(result.vars[&declaration].before_used_param, expected, "{text}");
+            });
+        }
     }
 
     #[test]

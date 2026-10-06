@@ -6,6 +6,7 @@
 
 // Keyed by node ids and names, built for every file: the fast hasher.
 use crate::fx_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::cell::OnceCell;
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
@@ -67,9 +68,45 @@ pub struct Bindings {
     /// overloads, `class X` + `interface X`) -> the first, which owns the
     /// binding.
     pub merged: HashMap<u32, u32>,
+    index: OnceCell<BindingIndex>,
+}
+
+#[derive(Default)]
+struct BindingIndex {
+    declarations: HashMap<u32, Vec<u32>>,
+    references: HashMap<u32, Vec<u32>>,
 }
 
 impl Bindings {
+    fn index(&self, s: &Syntax) -> &BindingIndex {
+        self.index.get_or_init(|| {
+            let mut index = BindingIndex::default();
+            for &d in self.decls.keys() {
+                index.declarations.insert(d, vec![d]);
+            }
+            for (&later, &first) in &self.merged {
+                index.declarations.entry(first).or_default().push(later);
+            }
+            for (&reference, &decl) in &self.refs {
+                index.references.entry(decl).or_default().push(reference);
+            }
+            for nodes in index.declarations.values_mut().chain(index.references.values_mut()) {
+                nodes.sort_by_key(|&id| s.tree.node(id).start);
+            }
+            index
+        })
+    }
+
+    /// Canonical bindings and all their declaring identifiers, in source order.
+    pub fn declarations(&self, s: &Syntax) -> &HashMap<u32, Vec<u32>> {
+        &self.index(s).declarations
+    }
+
+    /// Real references of a canonical binding; initializer writes are not references.
+    pub fn references_of(&self, s: &Syntax, declaration: u32) -> &[u32] {
+        self.index(s).references.get(&declaration).map(Vec::as_slice).unwrap_or_default()
+    }
+
     /// The declaration `name` means at `at` (a value, or a type when
     /// `value` is false), searching the scopes around it outward; `None`
     /// for a global or an unknown name. For names no reference spells out:
@@ -1130,7 +1167,7 @@ impl<'t> Binder<'_, 't> {
         }
         let declaration_kinds = merged.iter().map(|(&d, first)| (d, merged_kinds.get(first).cloned().unwrap_or_default())).chain(merged_kinds.clone()).collect();
         let scopes = scopes.into_iter().map(|sc| sc.info).collect();
-        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions, scopes, decl_scope, ref_scope, merged }
+        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions, scopes, decl_scope, ref_scope, merged, index: OnceCell::new() }
     }
 }
 

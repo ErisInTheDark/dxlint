@@ -25,9 +25,6 @@ fn analyze(file: &NativeFile) -> ConstBindings {
     let s = &file.syntax;
     let b = file.bindings();
     let exported = crate::native::ts::unused::exported_names(file);
-    let mut references: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (&r, &d) in &b.refs { references.entry(d).or_default().push(r); }
-    for refs in references.values_mut() { refs.sort_by_key(|&r| s.tree.node(r).start); }
     let mut candidates = HashMap::new();
     let mut groups: HashMap<u32, Vec<u32>> = HashMap::new();
     for (&id, &scope) in &b.decl_scope {
@@ -43,15 +40,18 @@ fn analyze(file: &NativeFile) -> ConstBindings {
         if s.parent(variable).is_some_and(|p| s.is(p, K::For) && s.field(variable) == Some(F::Init)) { continue; }
         let initialized = s.get(declarator, F::Init).is_some()
             || s.parent(variable).is_some_and(|p| matches!(s.kind(p), Some(K::ForIn | K::ForOf)) && s.field(variable) == Some(F::Left));
-        let refs = references.get(&id).map(Vec::as_slice).unwrap_or(&[]);
-        let writers: Vec<_> = refs.iter().copied().filter(|r| matches!(b.access.get(r), Some(&"write" | &"read_write"))).collect();
+        let refs = b.references_of(s, id);
+        let mut writes = 0;
+        let mut unique_writer = id;
         if initialized { groups.entry(declarator).or_default().push(id); }
-        for &writer in &writers {
+        for writer in refs.iter().copied().filter(|r| matches!(b.access.get(r), Some(&"write" | &"read_write"))) {
+            writes += 1;
+            unique_writer = writer;
             if let Some(host) = writer_host(s, writer) { groups.entry(host).or_default().push(id); }
         }
-        let writer = match (initialized, writers.as_slice()) {
-            (true, []) => id,
-            (false, [writer]) => *writer,
+        let writer = match (initialized, writes) {
+            (true, 0) => id,
+            (false, 1) => unique_writer,
             _ => continue,
         };
         let before = refs.iter().any(|&r| s.tree.node(r).start < s.tree.node(writer).start && b.access.get(&r) == Some(&"read"));
