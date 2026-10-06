@@ -33,6 +33,20 @@ pub use members::Resolution;
 /// over several lib files; `class X` + `namespace X`).
 pub type Sym = Arc<[DeclRef]>;
 
+/// A property's declaration node in its owning file, not its initializer.
+#[derive(Clone, Copy, Debug)]
+pub struct PropertyOrigin {
+    pub file: FileId,
+    pub node: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct StructProperty {
+    pub name: Box<str>,
+    pub ty: Ty,
+    pub origin: Option<PropertyOrigin>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Ty {
     /// Unsupported or unresolved computation, not TypeScript's `unknown`.
@@ -56,7 +70,7 @@ pub enum Ty {
     /// An object type written as type syntax (`{ a: string }`).
     Obj(Arc<Vec<Member>>, Arc<Env>),
     /// An object literal's type: its properties.
-    Struct(Arc<[(Box<str>, Ty)]>),
+    Struct(Arc<[StructProperty]>),
     /// A class as a value (its constructor and statics).
     Class(Sym),
     /// A namespace or enum as a value.
@@ -244,7 +258,7 @@ impl Ty {
         match self {
             Ty::Lit(_, p) => Ty::Prim(p),
             Ty::Union(items) => Ty::union(items.into_iter().map(Ty::widen).collect()),
-            Ty::Struct(props) => Ty::Struct(props.iter().map(|(n, t)| (n.clone(), t.clone().widen())).collect()),
+            Ty::Struct(props) => Ty::Struct(props.iter().map(|property| StructProperty { name: property.name.clone(), ty: property.ty.clone().widen(), origin: property.origin }).collect()),
             t => t,
         }
     }

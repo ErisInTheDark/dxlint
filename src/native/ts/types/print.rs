@@ -73,7 +73,7 @@ impl Checker<'_> {
                 if properties.is_empty() { "{}".into() } else { format!("{{ {}; }}", properties.join("; ")) }
             }
             Ty::Struct(props) if props.is_empty() => "{}".into(),
-            Ty::Struct(props) => format!("{{ {}; }}", props.iter().map(|(n, t)| format!("{n}: {}", self.print(t))).collect::<Vec<_>>().join("; ")),
+            Ty::Struct(props) => format!("{{ {}; }}", props.iter().map(|property| format!("{}: {}", property.name, self.print(&property.ty))).collect::<Vec<_>>().join("; ")),
             Ty::Class(sym) => format!("typeof {}", self.qualified_name(sym)),
             Ty::Ns(sym) => format!("typeof {}", self.qualified_name(sym)),
             Ty::Module(_) => "module".into(),

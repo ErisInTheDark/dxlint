@@ -8,7 +8,7 @@ use super::super::kinds::{Field as F, Kind as K};
 use super::super::modules::{DeclRef, ExportAlias};
 use super::super::summary::{DeclKind, MemberKind};
 use super::super::types::{Checker, Ty};
-use super::typed::specifiers::named_gate;
+use super::typed::specifiers::{file_gate, named_gate};
 
 pub const FACTS: &[Fact] = &[Fact {
     name: "symbol_metadata",
@@ -189,15 +189,23 @@ fn metadata(file: &NativeFile<'_>, node: u32) -> Value<'static> {
             object => object,
         };
         for d in ck.member_resolution(&object, &name).declarations {
+            let doc = d.origin.filter(|origin| origin.file == ck.file).and_then(|origin| {
+                super::super::docs::leading_doc(s.src, s.tree.node(origin.node).start as usize)
+            });
+            let provenance = if let Some(owner) = d.owner {
+                origin(ck, owner, &name)
+            } else {
+                Value::list(d.origin.into_iter().map(|origin| file_gate(ck, origin.file, &name)).collect())
+            };
             declarations.push(Value::record(vec![
                 ("name".into(), Value::text_copy(&d.member.name)),
                 ("kind".into(), Value::from(match d.member.kind {
                     MemberKind::Method => "method", MemberKind::Prop => "property",
                     MemberKind::Call => "call", MemberKind::Construct => "construct", MemberKind::Index => "index",
                 })),
-                ("doc".into(), d.member.doc.as_deref().map_or(Value::Null, Value::text_copy)),
+                ("doc".into(), doc.as_deref().or(d.member.doc.as_deref()).map_or(Value::Null, Value::text_copy)),
                 ("signature_docs".into(), Value::list(d.member.sigs.iter().map(|sig| sig.doc.as_deref().map_or(Value::Null, Value::text_copy)).collect())),
-                ("provenance".into(), d.owner.map_or_else(|| Value::list(Vec::new()), |owner| origin(ck, owner, &name))),
+                ("provenance".into(), provenance),
             ]));
         }
     } else if let Some((from, name)) = file.import_of(lookup_node) {

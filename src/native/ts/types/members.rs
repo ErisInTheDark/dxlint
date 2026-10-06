@@ -3,15 +3,16 @@
 
 use std::sync::Arc;
 
-use super::super::modules::DeclRef;
+use super::super::modules::{DeclRef, FileId};
 use super::super::summary::{DeclKind, Member, MemberKind, Sig, TypeSyn, Visibility};
-use super::{Callable, Checker, Env, Sym, Ty, MAX_DEPTH};
+use super::{Callable, Checker, Env, PropertyOrigin, Sym, Ty, MAX_DEPTH};
 
 #[derive(Debug, Clone)]
 pub struct MemberDeclaration {
     pub owner: Option<DeclRef>,
     pub member: Member,
     pub environment: Option<Env>,
+    pub origin: Option<PropertyOrigin>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,13 +54,14 @@ impl Resolution {
         result
     }
 
-    fn property<const METADATA: bool>(name: &str, ty: Ty) -> Self {
+    fn property<const METADATA: bool>(name: &str, ty: Ty, origin: Option<PropertyOrigin>) -> Self {
         let mut result = Self::typed(ty);
         result.declared = true;
         if METADATA {
             result.declarations.push(MemberDeclaration {
                 owner: None,
                 environment: None,
+                origin,
                 member: Member {
                     doc: None,
                     name: name.into(), kind: MemberKind::Prop, visibility: Visibility::Public,
@@ -118,7 +120,11 @@ impl Checker<'_> {
     }
 
     pub fn is_lib_decl(&self, decl: DeclRef) -> bool {
-        let path = self.project.path(decl.file);
+        self.is_lib_file(decl.file)
+    }
+
+    pub fn is_lib_file(&self, file: FileId) -> bool {
+        let path = self.project.path(file);
         path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("lib.") && name.ends_with(".d.ts"))
     }
 
@@ -255,11 +261,11 @@ impl Checker<'_> {
         }
         if let Some((key, value)) = self.record_parts(t) {
             let explicit = (METADATA || value.is_opaque()) && super::utilities::required_keys(key).is_some_and(|keys| keys.iter().any(|key| key == name));
-            if explicit { return Resolution::property::<METADATA>(name, value.clone()) }
+            if explicit { return Resolution::property::<METADATA>(name, value.clone(), None) }
             let prototype = self.object_member::<METADATA, PROTOTYPE>(name, receiver);
             if prototype.declared {
                 return if super::utilities::required_keys(key).is_some_and(|keys| keys.iter().any(|key| key == name)) {
-                    Resolution::property::<METADATA>(name, value.clone())
+                    Resolution::property::<METADATA>(name, value.clone(), None)
                 } else { prototype };
             }
             return if super::utilities::accepts_key(key, name) == Some(true) {
@@ -269,13 +275,13 @@ impl Checker<'_> {
         match t {
             Ty::Any => Resolution::typed(Ty::Any),
             Ty::Array(element) if name.parse::<usize>().is_ok() => Resolution::typed((*element.element).clone()),
-            Ty::Array(_) if name == "length" => Resolution::property::<METADATA>(name, Ty::Prim("number")),
-            Ty::Tuple(tuple) if name == "length" => Resolution::property::<METADATA>(name, tuple.length()),
+            Ty::Array(_) if name == "length" => Resolution::property::<METADATA>(name, Ty::Prim("number"), None),
+            Ty::Tuple(tuple) if name == "length" => Resolution::property::<METADATA>(name, tuple.length(), None),
             Ty::Tuple(tuple) if name.parse::<usize>().is_ok() => {
                 let at = name.parse().expect("checked index");
                 let ty = tuple.at(at);
                 if at < tuple.elements.iter().position(|element| element.rest).unwrap_or(tuple.len()) {
-                    Resolution::property::<METADATA>(name, ty)
+                    Resolution::property::<METADATA>(name, ty, None)
                 } else { Resolution::typed(ty) }
             }
             Ty::Named(symbols, args) if args.len() == 1 && name.parse::<usize>().is_ok() && self.is_builtin_symbol(symbols, "ReadonlyArray") => Resolution::typed(args[0].clone()),
@@ -334,13 +340,13 @@ impl Checker<'_> {
                 let env = Env { this: Some(Box::new(receiver.clone())), ..(**env).clone() };
                 self.member_from::<METADATA>(members.iter(), name, &env, None).unwrap_or_else(|| self.object_member::<METADATA, PROTOTYPE>(name, receiver))
             }
-            Ty::Struct(props) => match props.iter().find(|(n, _)| &**n == name) {
-                Some((_, t)) => Resolution::property::<METADATA>(name, t.clone()),
+            Ty::Struct(props) => match props.iter().find(|property| &*property.name == name) {
+                Some(property) => Resolution::property::<METADATA>(name, property.ty.clone(), property.origin),
                 None => self.object_member::<METADATA, PROTOTYPE>(name, receiver),
             },
             Ty::Class(sym) => {
                 if name == "prototype" {
-                    return Resolution::property::<METADATA>(name, Ty::Named(sym.clone(), Vec::new()));
+                    return Resolution::property::<METADATA>(name, Ty::Named(sym.clone(), Vec::new()), None);
                 }
                 self.static_member::<METADATA>(sym, name).unwrap_or_else(|| self.member_inner::<METADATA>(&self.global_named("Function", vec![]), name, receiver))
             }
@@ -350,11 +356,11 @@ impl Checker<'_> {
                     return Resolution::typed(Ty::Named(enum_sym, Vec::new()));
                 }
                 let found = self.namespace_member(sym, name);
-                if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found)) }
+                if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found), None) }
             }
             Ty::Module(m) => {
                 let found = self.module_member(m.0, name);
-                if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found)) }
+                if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found), None) }
             }
             Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) => {
                 let apparent = self.apparent(t);
@@ -400,7 +406,7 @@ impl Checker<'_> {
         }
         // A class merged with a namespace.
         let ns = self.namespace_member(sym, name);
-        (!ns.is_empty()).then(|| Resolution::property::<METADATA>(name, self.value_of(&ns)))
+        (!ns.is_empty()).then(|| Resolution::property::<METADATA>(name, self.value_of(&ns), None))
     }
 
     fn instance_member<const METADATA: bool, const PROTOTYPE: bool>(&self, sym: &[DeclRef], args: &[Ty], name: &str, receiver: &Ty) -> Resolution {
@@ -415,7 +421,7 @@ impl Checker<'_> {
             env.this = Some(Box::new(receiver.clone()));
             for m in decl.members.iter().filter(|m| !m.is_static && &*m.name == name) {
                 if METADATA && matches!(m.kind, MemberKind::Method | MemberKind::Prop) {
-                    declarations.push(MemberDeclaration { owner: Some(r), member: m.clone(), environment: Some(env.clone()) });
+                    declarations.push(MemberDeclaration { owner: Some(r), member: m.clone(), environment: Some(env.clone()), origin: None });
                 }
                 match m.kind {
                     MemberKind::Method => {
@@ -466,7 +472,7 @@ impl Checker<'_> {
         let mut declarations = Vec::new();
         for m in members.filter(|m| &*m.name == name) {
             if METADATA && matches!(m.kind, MemberKind::Method | MemberKind::Prop) {
-                declarations.push(MemberDeclaration { owner, member: m.clone(), environment: Some(env.clone()) });
+                declarations.push(MemberDeclaration { owner, member: m.clone(), environment: Some(env.clone()), origin: None });
             }
             match m.kind {
                 MemberKind::Method => sigs.extend(m.sigs.iter().cloned()),
@@ -522,7 +528,7 @@ impl Checker<'_> {
             }
             Ty::Union(items) | Ty::Inter(items) => items.iter().for_each(|i| self.member_names(i, out)),
             Ty::Obj(members, _) => out.extend(members.iter().filter(|m| m.kind != MemberKind::Index).map(|m| m.name.clone())),
-            Ty::Struct(props) => out.extend(props.iter().map(|(n, _)| n.clone())),
+            Ty::Struct(props) => out.extend(props.iter().map(|property| property.name.clone())),
             Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) => {
                 let a = self.apparent(t);
                 if !matches!(a, Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_)) {

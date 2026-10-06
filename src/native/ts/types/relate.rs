@@ -282,7 +282,7 @@ impl Checker<'_> {
             });
         }
         match t {
-            Ty::Struct(props) => Some(props.iter().map(|(n, t)| (n.clone(), t.clone(), false)).collect()),
+            Ty::Struct(props) => Some(props.iter().map(|property| (property.name.clone(), property.ty.clone(), false)).collect()),
             Ty::Obj(members, env) => self.member_props(members.iter(), env),
             Ty::Inter(items) => {
                 let mut out = Vec::new();

@@ -98,3 +98,39 @@ fn deprecation_allow_matches_the_referenced_value_and_its_origin() {
         assert_eq!(actual, spans, "{allow}: {diagnostics:#?}");
     }
 }
+
+#[test]
+fn inferred_object_properties_keep_declaration_docs_through_aliases_and_spreads() {
+    let lint = native_linter("rule no-deprecated");
+    for (source, spans) in [
+        ("const a = { /** @deprecated */ old: 1, current: 2 }; a.old; a['old']; a.current;", vec!["old", "'old'"]),
+        ("let a = { /** @deprecated */ ['old']: 1 }; const alias = a; alias.old;", vec!["old"]),
+        ("const a = { inner: { /** @deprecated */ old: 1 } }; const alias = a.inner; alias.old;", vec!["old"]),
+        ("const a = { /** @deprecated */ old: 1 }; const copy = { ...a }; copy.old;", vec!["old"]),
+        ("const a = { /** @deprecated */ old: 1 }; const copy = { old: 1, ...a }; copy.old;", vec!["old"]),
+        ("const a = { /** @deprecated */ old: 1 }; const copy = { ...a, old: 1 }; copy.old;", vec![]),
+        ("const a = { /** @deprecated */ old: 1 }; const current = { old: 1 }; const copy = { ...a, ...current }; copy.old;", vec![]),
+        ("/** @deprecated */ const a = { current: 1 }; const copy = { ...a }; copy.current;", vec!["a"]),
+        ("const a = { current: 1 }; const copy = { ...a }; copy.current;", vec![]),
+    ] {
+        let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+        let actual: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(actual, spans, "{source}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn inferred_property_allow_uses_the_property_name_and_source_file() {
+    let source = "const a = { /** @deprecated */ old: 1 }; const copy = { ...a }; copy.old;";
+    for (allow, reports) in [
+        ("[]", 1),
+        ("['old']", 0),
+        ("[{ from: 'file', name: 'old' }]", 0),
+        ("[{ from: 'file', name: 'other' }]", 1),
+        ("[{ from: 'lib', name: 'old' }]", 1),
+    ] {
+        let lint = native_linter(&format!("rule no-deprecated {{ set allow {allow} }}"));
+        let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), reports, "{allow}: {diagnostics:#?}");
+    }
+}

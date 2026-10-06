@@ -2,20 +2,24 @@
 
 use super::*;
 use crate::native::ts::kinds::{Field as F, Kind as K};
-use crate::native::ts::modules::DeclRef;
+use crate::native::ts::modules::{DeclRef, FileId};
 use crate::native::ts::summary::{type_syn, DeclKind, TypeSyn};
 
 pub(crate) fn named_gate(ck: &Checker<'_>, decl: DeclRef) -> Value<'static> {
     let name = ck.summary_of(decl.file).map_or_else(String::new, |summary| summary.decls[decl.decl as usize].name.to_string());
-    let path = ck.project.path(decl.file).to_string_lossy().replace('\\', "/");
+    file_gate(ck, decl.file, &name)
+}
+
+pub(crate) fn file_gate(ck: &Checker<'_>, file: FileId, name: &str) -> Value<'static> {
+    let path = ck.project.path(file).to_string_lossy().replace('\\', "/");
     let package = path.split("/node_modules/").nth(1).map(|tail| {
         let mut parts = tail.split('/');
         let first = parts.next().unwrap_or("");
         if first.starts_with('@') { format!("{first}/{}", parts.next().unwrap_or("")) } else { first.to_string() }
     });
-    let from = if ck.is_lib_decl(decl) { "lib" } else if package.is_some() { "package" } else { "file" };
+    let from = if ck.is_lib_file(file) { "lib" } else if package.is_some() { "package" } else { "file" };
     Value::record(vec![
-        ("name".into(), Value::from(name)),
+        ("name".into(), Value::text_copy(name)),
         ("from".into(), Value::from(from)),
         ("path".into(), Value::from(path)),
         ("package".into(), package.map_or(Value::Null, Value::from)),

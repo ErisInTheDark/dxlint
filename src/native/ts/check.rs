@@ -9,7 +9,7 @@ use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
 use super::modules::{DeclRef, ModuleAt};
 use super::summary::{sig, type_syn, DeclKind, Sig, TParam, TypeSyn};
-use super::types::{Callable, Checker, Env, ResolvedPredicate, Ty};
+use super::types::{Callable, Checker, Env, PropertyOrigin, ResolvedPredicate, StructProperty, Ty};
 
 mod contextual;
 
@@ -31,7 +31,7 @@ fn prints_exactly(t: &Ty) -> bool {
         Ty::Named(_, args) => args.iter().all(prints_exactly),
         Ty::Union(items) | Ty::Inter(items) => items.iter().all(prints_exactly),
         Ty::Tuple(items) => items.iter().all(prints_exactly),
-        Ty::Struct(props) => props.iter().all(|(_, t)| prints_exactly(t)),
+        Ty::Struct(props) => props.iter().all(|property| prints_exactly(&property.ty)),
         Ty::Array(e) => prints_exactly(&e.element),
         _ => true,
     }
@@ -778,15 +778,15 @@ impl<'t> NativeFile<'t> {
     /// Object properties compose in source order; uncertain spreads stay unknown.
     fn object_literal(&self, id: u32) -> Ty {
         let s = &self.syntax;
-        let mut props: Vec<(Box<str>, Ty)> = Vec::new();
+        let mut props: Vec<StructProperty> = Vec::new();
         for p in s.all(id, F::Property).collect::<Vec<_>>() {
             if s.is(p, K::Spread) {
                 let source = s.get(p, F::Arg).map_or(Ty::Unknown, |arg| self.type_of(arg));
                 if matches!(source, Ty::Any) { return Ty::Any }
                 let Some(spread) = self.object_spread_properties(&source) else { return Ty::Unknown };
-                for (name, ty) in spread {
-                    props.retain(|(key, _)| *key != name);
-                    props.push((name, ty));
+                for property in spread {
+                    props.retain(|previous| previous.name != property.name);
+                    props.push(property);
                 }
                 continue;
             }
@@ -802,13 +802,13 @@ impl<'t> NativeFile<'t> {
                 },
                 _ => Ty::Unknown,
             };
-            props.retain(|(key, _)| *key != name);
-            props.push((name, t));
+            props.retain(|property| property.name != name);
+            props.push(StructProperty { name, ty: t, origin: Some(PropertyOrigin { file: self.ck().file, node: p }) });
         }
         Ty::Struct(props.into())
     }
 
-    fn object_spread_properties(&self, source: &Ty) -> Option<Vec<(Box<str>, Ty)>> {
+    fn object_spread_properties(&self, source: &Ty) -> Option<Vec<StructProperty>> {
         if let Ty::Struct(properties) = source { return Some(properties.to_vec()) }
         if !matches!(source, Ty::Named(..) | Ty::Obj(..)) || !self.ck().index_signature_keys(source).is_empty() { return None }
         let mut names = Vec::new();
@@ -816,7 +816,7 @@ impl<'t> NativeFile<'t> {
         Some(names.into_iter().filter_map(|name| {
             let resolution = self.ck().member_resolution(source, &name);
             resolution.declarations.iter().any(|declaration| declaration.member.kind == super::summary::MemberKind::Prop)
-                .then_some((name, resolution.ty))
+                .then_some(StructProperty { name, ty: resolution.ty, origin: None })
         }).collect())
     }
 
@@ -928,6 +928,18 @@ fn may_be_nullish(ty: &Ty) -> bool {
 mod tests {
     use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
+
+    #[test]
+    fn object_property_docs_do_not_change_printing_or_assignability() {
+        with_native_file("const tagged = /*@*/{ /** @deprecated */ value: { current: 1 } }; const ordinary = /*@*/{ value: { current: 1 } };", |file, nodes| {
+            let checker = &file.typing().checker;
+            let tagged = file.type_of(nodes[0]).widen();
+            let ordinary = file.type_of(nodes[1]).widen();
+            assert_eq!(checker.print(&tagged), checker.print(&ordinary));
+            assert_eq!(checker.assignable(&tagged, &ordinary), Some(true));
+            assert_eq!(checker.assignable(&ordinary, &tagged), Some(true));
+        });
+    }
 
     #[test]
     fn finite_object_spreads_keep_property_order_and_uncertainty() {

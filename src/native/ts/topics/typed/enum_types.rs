@@ -298,6 +298,7 @@ fn receiver_names(file: &NativeFile<'_>, ty: &Ty, query: &mut Query) -> Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::ts::types::StructProperty;
     use crate::engine::tests::with_native_file;
 
     fn relation_count(value: &Value<'_>) -> usize {
@@ -307,7 +308,7 @@ mod tests {
     #[test]
     fn receiver_name_reuse_preserves_query_completeness() {
         with_native_file("enum Fruit { Apple } const x = /*@*/Fruit.Apple;", |file, nodes| {
-            let ty = Ty::Struct(vec![("value".into(), file.type_of(nodes[0]))].into());
+            let ty = Ty::Struct(vec![StructProperty { name: "value".into(), ty: file.type_of(nodes[0]), origin: None }].into());
             let mut direct = Query::new();
             let mut expected = Vec::new();
             enum_names(&file.typing().checker, &ty, &mut Vec::new(), &mut expected, &mut direct);
@@ -327,7 +328,7 @@ mod tests {
     fn identical_property_bags_share_one_complete_relation() {
         with_native_file("enum Fruit { Apple } const x = /*@*/Fruit.Apple;", |file, nodes| {
             let checker = &file.typing().checker;
-            let ty = Ty::Struct((0..128).map(|index| (format!("p{index}").into(), file.type_of(nodes[0]))).collect());
+            let ty = Ty::Struct((0..128).map(|index| StructProperty { name: format!("p{index}").into(), ty: file.type_of(nodes[0]), origin: None }).collect());
             let mut query = Query::new();
             let graph = relation(checker, &ty, &ty, &mut Vec::new(), &mut query);
             assert_eq!(relation_count(&graph), 1);

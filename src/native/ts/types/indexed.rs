@@ -142,7 +142,7 @@ impl Checker<'_> {
                 let ty = member.ty.as_ref().map_or(Ty::Unknown, |value| self.eval(value, env));
                 let mut result = Resolution::signature::<METADATA>(ty, key);
                 if METADATA {
-                    result.declarations.push(MemberDeclaration { owner, member: member.clone(), environment: Some(env.clone()) });
+                    result.declarations.push(MemberDeclaration { owner, member: member.clone(), environment: Some(env.clone()), origin: None });
                 }
                 (priority, result)
             })
