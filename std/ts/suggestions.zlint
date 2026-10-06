@@ -309,25 +309,25 @@ in ts_string rule no-octal-escape {
   warn "Don't use octal: '{if re_test(octal_escape, /^\\0[89]$/) then '\\0' else octal_escape}'. Use '\\u....' instead."
 }
 
-in ts_import_specifier rule no-useless-rename:import {
-  option ignoreImport boolean = false "ignore unnecessarily renamed imports"
+group useless_rename_import ts_import_specifier
+in useless_rename_import rule no-useless-rename:import {
   let original_name imported.module_name_info
-  when !ignoreImport && aliases_same(original_name, local.module_name_info)
+  when aliases_same(original_name, local.module_name_info)
   warn "Import {original_name.name} unnecessarily renamed."
 }
 
-in ts_export_specifier rule no-useless-rename:export {
-  option ignoreExport boolean = false "ignore unnecessarily renamed exports"
+group useless_rename_export ts_export_specifier
+in useless_rename_export rule no-useless-rename:export {
   let original_name local.module_name_info
-  when !ignoreExport && aliases_same(original_name, exported.module_name_info)
+  when aliases_same(original_name, exported.module_name_info)
   warn "Export {original_name.name} unnecessarily renamed."
 }
 
-in ts_pattern_property, ts_property rule no-useless-rename:destructuring {
-  option ignoreDestructuring boolean = false "ignore unnecessarily renamed destructuring assignments"
+group useless_rename_destructuring ts_pattern_property, ts_property
+in useless_rename_destructuring rule no-useless-rename:destructuring {
   let original_name key.module_name_info
   when is ts_pattern_property || parent.write_site != null
-  when !ignoreDestructuring && aliases_same(original_name, default(value.module_default_info, value.module_name_info))
+  when aliases_same(original_name, default(value.module_default_info, value.module_name_info))
   warn "Destructuring assignment {original_name.name} unnecessarily renamed."
 }
 
