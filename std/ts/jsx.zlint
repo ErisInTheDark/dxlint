@@ -410,13 +410,25 @@ in jsx_max_props_multiline rule jsx-max-props-per-line:multiline {
   when !(parent.jsx_opening_single && jsx_prop_headline)
   @jsx_max_props_body
 }
-in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-props-style {
-  option singleLine {maxItems: int(0..) | null = null} = {} "single-line prop limit"
-  option multiLine {minItems: int(0..) = 0; maxItemsPerLine: int(1..) = 1} = {} "multiline prop limits"
-  let need_wrap if parent.jsx_opening_single then singleLine.maxItems != null && parent.jsx_property_count > singleLine.maxItems else parent.jsx_property_count >= multiLine.minItems && !parent.jsx_first_prop_headline
-  when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > multiLine.maxItemsPerLine && (jsx_prop_run - 1) % multiLine.maxItemsPerLine == 0) else !jsx_prop_same
+@macro jsx_props_style_body {
+  option max_per_line int(1..) = 1 "maximum props per line when wrapping"
+  when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > max_per_line && (jsx_prop_run - 1) % max_per_line == 0) else !jsx_prop_same
   report at {start: offset, end: parent.end_offset}
   warn if need_wrap then "Prop `{jsx_prop_name}` must be placed on a new line" else "Prop `{jsx_prop_name}` should not be placed on a new line"
+}
+group jsx_props_style_singleline ts_jsx_attribute, ts_jsx_spread_attribute
+group jsx_props_style_multiline ts_jsx_attribute, ts_jsx_spread_attribute
+in jsx_props_style_singleline rule jsx-props-style:singleline {
+  default option max int(0..) | null = null "single-line prop limit before wrapping"
+  when parent.jsx_opening_single
+  let need_wrap max != null && parent.jsx_property_count > max
+  @jsx_props_style_body
+}
+in jsx_props_style_multiline rule jsx-props-style:multiline {
+  default option min int(0..) = 0 "minimum props before multiline wrapping"
+  when !parent.jsx_opening_single
+  let need_wrap parent.jsx_property_count >= min && !parent.jsx_first_prop_headline
+  @jsx_props_style_body
 }
 
 }
