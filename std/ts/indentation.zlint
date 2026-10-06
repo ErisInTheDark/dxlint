@@ -71,7 +71,7 @@ fn indent_template_code_anchor(owner, at, mode, tab_width, closing) =
   if indent_template_relative(indent_template_parts(owner, at)) then indent_template_anchor(owner, at, mode, tab_width)
   else indent_template_literal(indent_template_parts(owner, at), mode, tab_width, closing)
 fn indent_list_mode(item, call, declaration, expression, array, object, imports, variable) =
-  if item is (ts_call.argument, ts_new.argument, ts_import_call.argument) then default(call.arguments, 1)
+  if item is (ts_call.argument, ts_new.argument, ts_import_call.argument) then call
   else if item is (ts_function.parameter, ts_arrow.parameter, ts_method.parameter) then default(indent_function_mode(item.parent, declaration, expression).parameters, 1)
   else if item is (ts_array.element, ts_array_pattern.element, ts_tuple_type.element) then array
   else if item is (ts_object.property, ts_object_pattern.property) then object
@@ -169,8 +169,8 @@ in ts_line rule indent {
   option member_expression int(0..) | "off" = 1
   option function_declaration indent_function_options = {}
   option function_expression indent_function_options = {}
-  option static_block { body?: int(0..) } = {}
-  option call_expression { arguments?: indent_list_offset } = {}
+  option static_block int(0..) = 1
+  option call_expression indent_list_offset = 1
   option array_expression indent_list_offset = 1
   option object_expression indent_list_offset = 1
   option import_declaration indent_list_offset = 1
@@ -192,16 +192,16 @@ in ts_line rule indent {
   indent ts_template.quasi from if index == 0 then offset else indent_template_code_anchor(parent.node, index - 1, mode, tab_length, true) by 0
   indent in ts_index from indent_index_open
   indent ts_index.token from if text == "]" then parent.indent_index_open else default(parent.optional.offset, parent.offset) by if text == "]" then 0 else indent_numeric(member_expression)
-  indent in indent_calls from indent_call_anchor by indent_numeric(default(call_expression.arguments, 1))
+  indent in indent_calls from indent_call_anchor by indent_numeric(call_expression)
   indent indent_calls.token from if is (ts_open_paren, ts_close_paren) then parent.indent_call_anchor else offset by 0
   indent in ts_function.body, ts_arrow.body, ts_method.body from indent_function_anchor(parent.indent_body_root) by if parent.indent_outer_iife then indent_numeric(outerIIFEBody) else default(indent_function_mode(parent, function_declaration, function_expression).body, 1)
-  indent in ts_static_block.body by default(static_block.body, 1)
+  indent in ts_static_block.body by static_block
   indent ts_function.parameter, ts_arrow.parameter, ts_method.parameter by indent_numeric(default(indent_function_mode(parent, function_declaration, function_expression).parameters, 1))
   indent ts_function.return_type from parent.indent_return_anchor by default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
   indent ts_function.token from if is ts_close_paren then indent_function_anchor(parent.indent_body_root) else if offset == parent.indent_return_colon then parent.indent_return_anchor else offset by if is ts_close_paren then 0 else default(indent_function_mode(parent, function_declaration, function_expression).returnType, 1)
   indent ts_arrow.token, ts_method.token from if is ts_close_paren then indent_function_anchor(parent.indent_body_root) else offset by 0
   indent ts_arrow.return_type, ts_parameter.type
-  indent ts_call.argument, ts_new.argument, ts_import_call.argument from parent.indent_call_anchor by indent_numeric(default(call_expression.arguments, 1))
+  indent ts_call.argument, ts_new.argument, ts_import_call.argument from parent.indent_call_anchor by indent_numeric(call_expression)
   indent ts_switch.case by switch_case
   indent ts_case.body by if is ts_block && count([] parent.body.node) == 1 then 0 else 1
   indent ts_variable_declaration.declaration class declarators by indent_declaration_level(parent, indent_variable_mode(variable_declarator, parent.kind.text), mode)

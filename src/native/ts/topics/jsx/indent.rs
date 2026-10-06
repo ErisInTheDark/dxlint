@@ -10,7 +10,7 @@ mod tests {
         let text = "const x = flag\n  ? <Box\n      a\n      b\n    />\n  : <Box\n      c\n      d\n    />;\nconst y = <Box\n  e\n  f\n/>;";
         let l = native_linter("rule jsx-indent-props { set mode 2 }");
         assert!(l.lint(Path::new("/root/file.tsx"), text).is_empty());
-        let ignored = native_linter("rule jsx-indent-props {\nset mode 2\nset ignoreTernaryOperator true\n}");
+        let ignored = native_linter("override in ts_jsx_attribute, ts_jsx_spread_attribute let jsx_prop_indent_extra false\nrule jsx-indent-props { set mode 2 }");
         assert_eq!(ignored.lint(Path::new("/root/file.tsx"), text).len(), 4);
     }
 

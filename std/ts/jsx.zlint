@@ -19,16 +19,13 @@ in ts_jsx_attribute, ts_jsx_spread_attribute {
 }
 in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-indent-props {
   option mode int | "tab" | "first" = 4 "prop indent size or alignment"
-  option indentMode int | "tab" | "first" | null = null "prop indent size or alignment"
-  option ignoreTernaryOperator boolean = false "ignore ternary continuation indentation"
-  let selected default(indentMode, mode)
-  let size if selected == "tab" then 1 else selected
-  let base_indent if selected == "tab" then jsx_indent_tabs(parent.jsx_line_prefix) else jsx_indent_spaces(parent.jsx_line_prefix)
-  let actual if selected == "tab" then jsx_indent_tabs(jsx_line_prefix) else jsx_indent_spaces(jsx_line_prefix)
-  let expected if selected == "first" then parent.jsx_prop_indent_first_column else base_indent + size * (if jsx_prop_indent_extra && !ignoreTernaryOperator then 2 else 1)
+  let size if mode == "tab" then 1 else mode
+  let base_indent if mode == "tab" then jsx_indent_tabs(parent.jsx_line_prefix) else jsx_indent_spaces(parent.jsx_line_prefix)
+  let actual if mode == "tab" then jsx_indent_tabs(jsx_line_prefix) else jsx_indent_spaces(jsx_line_prefix)
+  let expected if mode == "first" then parent.jsx_prop_indent_first_column else base_indent + size * (if jsx_prop_indent_extra then 2 else 1)
   when parent is ts_jsx_element && jsx_trim_space(jsx_line_prefix) == "" && actual != expected
   report at {start: offset, end: parent.end_offset}
-  warn "Expected indentation of {expected} {if selected == 'tab' then 'tab' else 'space'} {if expected == 1 then 'character' else 'characters'} but found {actual}."
+  warn "Expected indentation of {expected} {if mode == 'tab' then 'tab' else 'space'} {if expected == 1 then 'character' else 'characters'} but found {actual}."
 }
 in ts_node {
   let jsx_child_leading is ts_jsx_text && re_test(text, "^" jsx_space_regex() "*\n")
@@ -53,6 +50,7 @@ in ts_jsx_text {
   let jsx_child_preceding_multiline previous.jsx_child_multiline == true
 }
 in ts_jsx_element, ts_jsx_fragment {
+  let jsx_one_expression_per_line_enabled true
   let jsx_child_rows map(filter([] body.node, item => item.jsx_child_row), item => {index: item.index, first: item.jsx_child_first_line, last: item.jsx_child_last_line})
   let jsx_child_one_group count(jsx_child_rows) > 0 && all(jsx_child_rows, row => row.first == first(jsx_child_rows).first && row.last == first(jsx_child_rows).first)
   let jsx_child_first first([] body.node)
@@ -64,7 +62,7 @@ in ts_jsx_element, ts_jsx_fragment {
 }
 fn jsx_child_group_contains(row, line) = row.first == line || row.last == line
 in ts_node rule jsx-one-expression-per-line {
-  option allow "none" | "literal" | "single-child" | "single-line" | "non-jsx" = "none" "allowed same-line children"
+  option mode "always" | "single-child" | "single-line" = "always" "same-line child layout"
   let opening_line position(parent.jsx_syntax.opening.end).js_line
   let closing_line position(default(parent.jsx_syntax.closing.start, parent.jsx_syntax.opening.end)).js_line
   let first_line jsx_child_first_line
@@ -73,8 +71,9 @@ in ts_node rule jsx-one-expression-per-line {
   let last_wrong jsx_child_previous_row != null && jsx_child_group_contains(jsx_child_previous_row, last_line) || last_line == opening_line || last_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, last_line))
   let single_group_wrong index == first(parent.jsx_child_rows).index && first_line == opening_line || index == last(parent.jsx_child_rows).index && last_line == closing_line
   when is (ts_jsx_element.body, ts_jsx_fragment.body) && jsx_child_row
-  when !(allow == "non-jsx" && !parent.jsx_child_has_jsx || allow == "single-child" && parent.jsx_child_single || allow == "literal" && parent.jsx_child_single && parent.jsx_child_literal || allow == "single-line" && parent.jsx_child_single_line_allowed)
-  when if allow == "single-line" && parent.jsx_child_one_group then single_group_wrong else first_wrong || last_wrong
+  when parent.jsx_one_expression_per_line_enabled
+  when !(mode == "single-child" && parent.jsx_child_single || mode == "single-line" && parent.jsx_child_single_line_allowed)
+  when if mode == "single-line" && parent.jsx_child_one_group then single_group_wrong else first_wrong || last_wrong
   report at {start: offset, end: parent.end_offset}
   warn "`{jsx_child_descriptor}` must be placed on a new line"
 }
@@ -276,14 +275,13 @@ in ts_punctuator rule jsx-tag-spacing:before-self-closing {
 schema jsx_bracket_location "after-props" | "props-aligned" | "tag-aligned" | "line-aligned"
 in ts_close_angle, ts_punctuator rule jsx-closing-bracket-location {
   option mode jsx_bracket_location = "tag-aligned" "closing bracket alignment"
-  option location jsx_bracket_location | null = null "alignment for both tag kinds"
   option nonEmpty jsx_bracket_location | boolean | null = null "alignment for paired opening tags"
   option selfClosing jsx_bracket_location | boolean | null = null "alignment for self-closing tags"
   let last_prop parent.jsx_tag_last_prop
   let last_line position(last_prop.end_offset).js_line
   let here position(offset)
   let opening position(parent.offset)
-  let selected if last_prop == null then "after-tag" else if last_line == opening.js_line then "after-props" else default(if parent.jsx_syntax.self_closing then selfClosing else nonEmpty, default(location, mode))
+  let selected if last_prop == null then "after-tag" else if last_line == opening.js_line then "after-props" else default(if parent.jsx_syntax.self_closing then selfClosing else nonEmpty, mode)
   let aligned_column if selected == "props-aligned" then position(last_prop.offset).js_column else if selected == "tag-aligned" then opening.js_column else if selected == "line-aligned" then jsx_indent(parent.jsx_line_prefix) + 1 else null
   let aligned if selected == "after-tag" then parent.jsx_tag_name_line == here.js_line else if selected == "after-props" then last_line == here.js_line else aligned_column == here.js_column && (selected != "tag-aligned" || starts_with(parent.jsx_line_prefix, "\t") == starts_with(jsx_line_prefix, "\t"))
   let fallback !aligned && (contains(space_before.text, "/*") || contains(space_before.text, "//")) && contains(["after-tag", "after-props"], selected)
@@ -310,13 +308,13 @@ fn jsx_caps(name) = re_test(name, /^[\p{Uppercase}0-9](?:[\p{Uppercase}0-9_]*[\p
 in ts_jsx_element {
   let jsx_name_spelling jsx_strip_space(name)
   let jsx_intrinsic_name re_test(jsx_name_spelling, /^[a-z]/)
+  let jsx_self_closing_enabled jsx_intrinsic_name || !contains(jsx_name_spelling, ":")
 }
-in ts_jsx_element rule jsx-self-closing-comp {
-  option component boolean = true "check components"
-  option html boolean = true "check intrinsic elements"
+group jsx_self_closing_elements ts_jsx_element
+in jsx_self_closing_elements rule jsx-self-closing-comp {
   let content jsx_items(body)
   let empty len(content) == 0 || len(content) == 1 && first(jsx_items(body.node)) is ts_jsx_text && contains(first(content), "\n") && jsx_strip_space(first(content)) == "" && !re_test(first(content), /\u{a0}/)
-  when closing != null && empty && (component && !jsx_intrinsic_name && !contains(jsx_name_spelling, ":") || html && jsx_intrinsic_name)
+  when closing != null && empty && jsx_self_closing_enabled
   warn "Empty components are self-closing"
 }
 in ts_jsx_element rule jsx-pascal-case {
