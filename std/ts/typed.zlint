@@ -331,18 +331,18 @@ in ts_union, ts_intersection {
   }
 }
 
-in ts_union, ts_intersection rule no-duplicate-type-constituents {
-  option ignoreIntersections boolean = false "Ignore intersection types."
-  option ignoreUnions boolean = false "Ignore union types."
-  when !(ignoreIntersections && is ts_intersection) && !(ignoreUnions && is ts_union)
+group duplicate_type_constituent ts_union, ts_intersection
+in duplicate_type_constituent let duplicate_type_constituents_checked true
+in duplicate_type_constituent rule no-duplicate-type-constituents {
+  when duplicate_type_constituents_checked
   each duplicate_constituent in default(duplicate_type_constituents, [])
   when duplicate_constituent.previous != null
   report at duplicate_constituent.offset
   warn "{duplicate_constituent.kind} type constituent is duplicated with {duplicate_constituent.previous}."
 }
-in ts_union rule no-duplicate-type-constituents:optional {
-  option ignoreUnions boolean = false "Ignore union types."
-  when !ignoreUnions
+in duplicate_type_constituent rule no-duplicate-type-constituents:optional {
+  when is ts_union
+  when duplicate_type_constituents_checked
   each duplicate_constituent in default(duplicate_type_constituents, [])
   when duplicate_constituent.previous == null
   report at duplicate_constituent.offset
@@ -452,7 +452,6 @@ in ts_logical rule prefer-optional-chain {
   option checkBoolean boolean = true "Check boolean values"
   option checkBigInt boolean = true "Check bigint values"
   option requireNullish boolean = false "Require a nullable checked operand"
-  option allowPotentiallyUnsafeFixesThatModifyTheReturnTypeIKnowWhatImDoing boolean = false "Fix safety does not affect diagnostics"
   let enclosing last(walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null))
   when operator != "??" && !(enclosing.parent is ts_logical && enclosing.parent.operator == operator)
   let opts {any: checkAny, unknown: checkUnknown, string: checkString, number: checkNumber, boolean: checkBoolean, bigint: checkBigInt, requireNullish: requireNullish, boundary: node}
@@ -600,7 +599,6 @@ in ts_function, ts_arrow, ts_method rule return-await {
 }
 
 in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {
-  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
   when useless_default != null
   report at useless_default.offset
   warn if useless_default.kind == "optional" then "Using `= undefined` to make a parameter optional adds unnecessary runtime logic." else if useless_default.kind == "undefined" then "Default value is useless because it is undefined. Optional {useless_default.owner}s are already undefined by default." else "Default value is useless because the {useless_default.owner} is not optional."
@@ -666,7 +664,6 @@ in ts_index.index rule no-unsafe-member-access:key {
 }
 
 in ts_logical, ts_assignment, ts_conditional, ts_if rule prefer-nullish-coalescing {
-  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
   option ignoreBooleanCoercion boolean = false "Ignore Boolean conversion"
   option ignoreConditionalTests boolean = true "Ignore conditional tests"
   option ignoreIfStatements boolean = false "Ignore if statements"
