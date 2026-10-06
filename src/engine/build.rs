@@ -485,6 +485,8 @@ fn attributes(
 ) -> (Vec<Attr>, Vec<ReadDependencies>) {
     let mut dependencies: Vec<_> = names.iter().map(|_| ReadDependencies::default()).collect();
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
+    // Per attribute: layers whose definition came through a group.
+    let mut group_defined: Vec<Vec<u32>> = names.iter().map(|_| Vec::new()).collect();
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
             errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));
@@ -493,20 +495,35 @@ fn attributes(
         let id = names.iter().position(|n| *n == def.name.text).expect("collected");
         for target in &def.targets {
             let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, errors) else { continue };
+            // Through a group: a default its members' own definitions refine.
+            let through_group = !(resolved.len() == 1 && matches!(resolved[0], Target::Matcher(m) if g.matcher(&target.text) == Some(m)));
             for t in resolved {
                 let Target::Matcher(m) = t else {
                     errors.push(ConfigError::new(target.span, "attributes belong to layers, not languages"));
                     continue;
                 };
-                if attrs[id].defs.iter().any(|(d, _)| *d == m) {
-                    errors.push(
-                        ConfigError::new(
-                            def.name.span,
-                            format!("attribute `{}` is defined twice for `{}`", def.name.text, g.matchers[m as usize].name),
-                        )
-                        .note(format!("`override in {} let {} ...` replaces it", g.matchers[m as usize].name, def.name.text)),
-                    );
-                    continue;
+                match attrs[id].defs.iter().position(|(d, _)| *d == m) {
+                    // The member's own definition is already there.
+                    Some(_) if through_group && !group_defined[id].contains(&m) => continue,
+                    // A group's: the member's own replaces it.
+                    Some(i) if !through_group && group_defined[id].contains(&m) => {
+                        attrs[id].defs.remove(i);
+                        group_defined[id].retain(|&x| x != m);
+                    }
+                    Some(_) => {
+                        errors.push(
+                            ConfigError::new(
+                                def.name.span,
+                                format!("attribute `{}` is defined twice for `{}`", def.name.text, g.matchers[m as usize].name),
+                            )
+                            .note(format!("`override in {} let {} ...` replaces it", g.matchers[m as usize].name, def.name.text)),
+                        );
+                        continue;
+                    }
+                    None => {}
+                }
+                if through_group {
+                    group_defined[id].push(m);
                 }
                 let layer_reads = RefCell::default();
                 let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g) };
@@ -520,6 +537,15 @@ fn attributes(
                 dependencies[id].extend(ReadDependencies::collect(g, names, attribute_uses, layer_reads.into_inner(), children || is_token_layer(g, m) && siblings));
             }
         }
+    }
+    // A node reads the first definition whose layer it is: the most specific
+    // first (a member before its group, a layer before its base), so
+    // `in ts_node let x ...` gives a default that `in ts_binary let x ...`
+    // refines. Otherwise definition order.
+    for attr in &mut attrs {
+        let targets: Vec<u32> = attr.defs.iter().map(|(m, _)| *m).collect();
+        let broader = |m: u32| targets.iter().filter(|&&t| t != m && g.is_a(m, t)).count();
+        attr.defs.sort_by_key(|(m, _)| std::cmp::Reverse(broader(*m)));
     }
     (attrs, dependencies)
 }
@@ -932,6 +958,19 @@ mod demand_tests {
             in ts_comma rule preceded info "{preceded(node)}"
         "#);
         assert_eq!(messages(&linter, "/root/file.ts", "f(a, b);"), ["true"]);
+    }
+
+    #[test]
+    fn narrower_attribute_definitions_refine_broader_ones() {
+        for narrower in ["override in ts_binary let demo \"binary\"", "in ts_binary let demo \"binary\""] {
+            let linter = native(&format!("group operations ts_binary, ts_call\nin operations let demo \"group\"\n{narrower}\nin ts_binary, ts_call rule probe info \"{{demo}}\""));
+            let mut found = messages(&linter, "/root/file.ts", "f(a + b);");
+            found.sort();
+            assert_eq!(found, ["binary", "group"], "{narrower}");
+        }
+        let source = "lang js \"*.ts\"\nnative ts\nin ts_call let demo 1\noverride in ts_binary let missing 2\n";
+        let built = build(crate::config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.iter().any(|e| e.message.contains("no attribute `missing`")), "{:#?}", built.errors);
     }
 
     #[test]

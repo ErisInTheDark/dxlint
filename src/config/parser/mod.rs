@@ -414,12 +414,12 @@ impl<'a> Parser<'a> {
         if targets.is_empty() {
             return;
         }
-        if overriding.is_some() && self.remove_attr_targets(&name.text, &targets) == 0 {
-            let on: Vec<&str> = targets.iter().map(|t| t.text.as_str()).collect();
-            self.errors.push(ConfigError::new(
-                name.span,
-                format!("nothing to override: `{}` is not defined on `{}`", name.text, on.join("`, `")),
-            ));
+        // Overriding on a narrower layer than the definition (`in ts_node let x`,
+        // then `override in ts_binary let x`) adds the narrower definition,
+        // which wins on those nodes.
+        let defined = self.config.attrs.iter().any(|d| d.name.text == name.text);
+        if overriding.is_some() && self.remove_attr_targets(&name.text, &targets) == 0 && !defined {
+            self.errors.push(ConfigError::new(name.span, format!("nothing to override: no attribute `{}`", name.text)));
         }
         self.config.attrs.push(AttrDef { name, targets, expr, library: self.defining > 0 });
     }
