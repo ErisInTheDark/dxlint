@@ -102,7 +102,7 @@ in ts_member, ts_index let called_method_name static_name
 in ts_parenthesized forward member_receiver_tokens, invoked_receiver, direct_method_name, called_method_name from expression
 fn unchanged_call_receiver(receiver, tokens, null_receiver) = receiver != null && (if receiver.member then receiver.tokens == tokens else null_receiver == true)
 
-macro suggestion_curly_policy {
+@macro suggestion_curly_policy {
   option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
   option style ("consistent" | null) = null "consistent braces throughout if chains"
   let curly_info curly_body
@@ -113,21 +113,21 @@ macro suggestion_curly_policy {
   when curly_expected != -1 && (curly_expected == 1 && !curly_info.block || curly_expected == 0 && curly_info.block)
   warn "{if curly_expected == 1 then 'Expected' else 'Unnecessary'} {{ after '{curly_info.name}'{if curly_info.condition then ' condition' else ''}."
 }
-in ts_if.consequent rule curly:if { suggestion_curly_policy }
-in ts_if.alternate rule curly:else { suggestion_curly_policy }
-in ts_for.body, ts_while.body rule curly:loop { suggestion_curly_policy }
-in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body { suggestion_curly_policy }
+in ts_if.consequent rule curly:if { @suggestion_curly_policy }
+in ts_if.alternate rule curly:else { @suggestion_curly_policy }
+in ts_for.body, ts_while.body rule curly:loop { @suggestion_curly_policy }
+in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body { @suggestion_curly_policy }
 
 # The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
-macro suggestion_eval_policy {
+@macro suggestion_eval_policy {
   option allowIndirect boolean = false "allow indirect eval references and calls"
   let eval_info eval_usage
   when eval_info != null && (!allowIndirect || eval_info.direct && !eval_info.optional)
   report at eval_info.offset
   warn "`eval` can be harmful."
 }
-in ts_identifier rule no-eval { suggestion_eval_policy }
-in ts_member, ts_index rule no-eval:member { suggestion_eval_policy }
+in ts_identifier rule no-eval { @suggestion_eval_policy }
+in ts_member, ts_index rule no-eval:member { @suggestion_eval_policy }
 
 # `.bind(x)` on a function that never uses `this` (or on an arrow).
 in ts_call rule no-extra-bind {
@@ -646,10 +646,9 @@ in ts_labeled rule no-label-var {
   warn "Found identifier with same name as label."
 }
 
-in ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of rule no-unreachable-loop {
-  option ignore ("WhileStatement" | "DoWhileStatement" | "ForStatement" | "ForInStatement" | "ForOfStatement")[] = [] "ignore selected loop kinds"
-  let loop_type if is ts_while then "WhileStatement" else if is ts_do_while then "DoWhileStatement" else if is ts_for then "ForStatement" else if is ts_for_in then "ForInStatement" else "ForOfStatement"
-  when !contains(ignore, loop_type) && single_iteration_loop
+group unreachable_loop ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of
+in unreachable_loop rule no-unreachable-loop {
+  when single_iteration_loop
   warn "Invalid loop. Its body allows only one iteration."
 }
 

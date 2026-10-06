@@ -27,15 +27,15 @@ schema restriction_import_options restriction_import_path | {
   paths: restriction_import_path[] = []
   patterns: restriction_import_pattern[] = []
 }
-macro restriction_import_paths default(first(options).paths, options)
-macro restriction_import_patterns (if type_of(first(first(options).patterns)) == "str" then [{group: first(options).patterns}] else default(first(options).patterns, []))
-macro restriction_import_list(xs) (if len(xs) < 2 then join(map(xs, x => "'" x "'"), "") else if len(xs) == 2 then join(map(xs, x => "'" x "'"), " and ") else join(map(slice(xs, 0, len(xs) - 1), x => "'" x "'"), ", ") ", and '" last(xs) "'")
-macro restriction_import_plural(xs) (if len(xs) == 1 then "is" else "are")
-macro restriction_import_custom(entry) (if entry.message != null && entry.message != "" then " " entry.message else "")
-macro restriction_import_glob(path, glob, sensitive) (!starts_with(glob, "#") && re_test(path, (if sensitive then "" else "(?i)") (if contains(trim_start(glob, "!"), "/") then "^" else "(?:^|/)") replace(replace(replace(re_escape(replace(replace(trim_start(glob, "!/"), "\\#", "#"), "\\!", "!")), "\\*\\*/", "(?:.*/)?"), "\\*", "[^/]*"), "\\?", "[^/]") "(?:/|$)"))
-macro restriction_import_group(path, entry) find_last(default(entry.group, []), import_glob_pattern => restriction_import_glob(path, import_glob_pattern, entry.caseSensitive))
-macro restriction_import_group_blocked(path, entry) ((restriction_import_group(path, entry)) != null && !starts_with(restriction_import_group(path, entry), "!"))
-macro restriction_import_pattern_matches(entry) (if entry.regex != null then js_re_test(info.source, entry.regex, if entry.caseSensitive then "u" else "iu") else restriction_import_group_blocked(info.source, entry) || any(info.parents, p => restriction_import_group_blocked(p, entry)))
+@macro restriction_import_paths default(first(options).paths, options)
+@macro restriction_import_patterns (if type_of(first(first(options).patterns)) == "str" then [{group: first(options).patterns}] else default(first(options).patterns, []))
+@macro restriction_import_list(xs) (if len(xs) < 2 then join(map(xs, x => "'" x "'"), "") else if len(xs) == 2 then join(map(xs, x => "'" x "'"), " and ") else join(map(slice(xs, 0, len(xs) - 1), x => "'" x "'"), ", ") ", and '" last(xs) "'")
+@macro restriction_import_plural(xs) (if len(xs) == 1 then "is" else "are")
+@macro restriction_import_custom(entry) (if entry.message != null && entry.message != "" then " " entry.message else "")
+@macro restriction_import_glob(path, glob, sensitive) (!starts_with(glob, "#") && re_test(path, (if sensitive then "" else "(?i)") (if contains(trim_start(glob, "!"), "/") then "^" else "(?:^|/)") replace(replace(replace(re_escape(replace(replace(trim_start(glob, "!/"), "\\#", "#"), "\\!", "!")), "\\*\\*/", "(?:.*/)?"), "\\*", "[^/]*"), "\\?", "[^/]") "(?:/|$)"))
+@macro restriction_import_group(path, entry) find_last(default(entry.group, []), import_glob_pattern => @restriction_import_glob(path, import_glob_pattern, entry.caseSensitive))
+@macro restriction_import_group_blocked(path, entry) ((@restriction_import_group(path, entry)) != null && !starts_with(@restriction_import_group(path, entry), "!"))
+@macro restriction_import_pattern_matches(entry) (if entry.regex != null then js_re_test(info.source, entry.regex, if entry.caseSensitive then "u" else "iu") else @restriction_import_group_blocked(info.source, entry) || any(info.parents, p => @restriction_import_group_blocked(p, entry)))
 fn restriction_import_parent(path) = join(slice(split(path, "/"), 0, len(split(path, "/")) - 1), "/")
 fn restriction_import_parents(path) = if contains(path, "/") && restriction_import_parent(path) != "" then [restriction_import_parent(path)] restriction_import_parents(restriction_import_parent(path)) else []
 fn restriction_import_source(value) = if type_of(value) == "str" then trim(value) else null
@@ -98,35 +98,35 @@ in ts_identifier {
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
   option options restriction_import_options[] = [] "restricted paths and pattern groups"
   @restriction_import_info
-  @each entry in restriction_import_paths
+  @each entry in @restriction_import_paths
   when info != null && (if type_of(entry) == "str" then entry else entry.name) == info.source && entry.importNames == null && entry.allowImportNames == null && !(entry.allowTypeImports && info.all_type)
-  warn "'{info.source}' import is restricted from being used." restriction_import_custom(entry)
+  warn "'{info.source}' import is restricted from being used." @restriction_import_custom(entry)
 }
 in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:names {
   option options restriction_import_options[] = [] "restricted paths and pattern groups"
   @restriction_import_info
   when info.item && info != null
-  @each entry in restriction_import_paths
+  @each entry in @restriction_import_paths
   when entry.name == info.source && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name))
   report at info.offset
-  warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " restriction_import_list(entry.allowImportNames) " from '{info.source}' " restriction_import_plural(entry.allowImportNames) " allowed." else restriction_import_list(entry.importNames) " from '{info.source}' " restriction_import_plural(entry.importNames) " restricted.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " restriction_import_list(entry.allowImportNames) " " restriction_import_plural(entry.allowImportNames) " allowed." else ".")) restriction_import_custom(entry)
+  warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else ".")) @restriction_import_custom(entry)
 }
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
   option options restriction_import_options[] = [] "restricted paths and pattern groups"
   @restriction_import_info
   when info != null
-  @each entry in restriction_import_patterns
-  when restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && info.all_type) && entry.importNames == null && entry.allowImportNames == null && entry.importNamePattern == null && entry.allowImportNamePattern == null
-  warn "'{info.source}' import is restricted from being used by a pattern." restriction_import_custom(entry)
+  @each entry in @restriction_import_patterns
+  when @restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && info.all_type) && entry.importNames == null && entry.allowImportNames == null && entry.importNamePattern == null && entry.allowImportNamePattern == null
+  warn "'{info.source}' import is restricted from being used by a pattern." @restriction_import_custom(entry)
 }
 in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:pattern-names {
   option options restriction_import_options[] = [] "restricted paths and pattern groups"
   @restriction_import_info
   when info.item && info != null
-  @each entry in restriction_import_patterns
-  when restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.importNamePattern != null && (info.name == "*" || js_re_test(info.name, entry.importNamePattern, "u")) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name) || entry.allowImportNamePattern != null && (info.name == "*" || !js_re_test(info.name, entry.allowImportNamePattern, "u")))
+  @each entry in @restriction_import_patterns
+  when @restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.importNamePattern != null && (info.name == "*" || js_re_test(info.name, entry.importNamePattern, "u")) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name) || entry.allowImportNamePattern != null && (info.name == "*" || !js_re_test(info.name, entry.allowImportNamePattern, "u")))
   report at info.offset
-  warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " restriction_import_list(entry.allowImportNames) " from '{info.source}' " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else restriction_import_list(entry.importNames) " from '{info.source}' " restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " restriction_import_list(entry.allowImportNames) " " restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) restriction_import_custom(entry)
+  warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) @restriction_import_custom(entry)
 }
 
 in ts_identifier let restriction_numeric_identifier true
@@ -375,7 +375,7 @@ in ts_continue rule no-labels:continue {
   warn "Unexpected label in continue statement."
 }
 
-macro restriction_function_name (upper(slice(default(function_name, "function"), 0, 1)) slice(default(function_name, "function"), 1))
+@macro restriction_function_name (upper(slice(default(function_name, "function"), 0, 1)) slice(default(function_name, "function"), 1))
 group restriction_flow_control ts_conditional, ts_logical, ts_for, ts_for_in, ts_for_of, ts_if, ts_while, ts_do_while, ts_assignment_pattern
 in ts_parameter let restriction_parameter_branch init != null
 in ts_try let restriction_catch_branch handler != null
@@ -421,7 +421,7 @@ in restriction_parameter_function rule max-params {
   let limit default(maximum, max)
   when amount > limit
   report at if is ts_function_type then default(first(filter([] token.node, t => t.text == "=>")).offset, offset) else default(function_head, offset)
-  warn "{restriction_function_name} has too many parameters ({amount}). Maximum allowed is {limit}."
+  warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {limit}."
 }
 in ts_function_like rule max-statements {
   option max int(0..) = 10 "maximum statements"
@@ -431,7 +431,7 @@ in ts_function_like rule max-statements {
   when restriction_subtree_statements > limit
   when !(ignoreTopLevelFunctions && restriction_function_depth == 0 && ts_program.restriction_top_functions == 1)
   report at function_head
-  warn "{restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {limit}."
+  warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {limit}."
 }
 in ts_function_like rule complexity {
   option max int(0..) = 20 "maximum cyclomatic complexity"
@@ -441,7 +441,7 @@ in ts_function_like rule complexity {
   let limit default(maximum, max)
   when amount > limit
   report at function_head
-  warn "{restriction_function_name} has a complexity of {amount}. Maximum allowed is {limit}."
+  warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {limit}."
 }
 in ts_static_block, ts_class_property.init rule complexity:implicit {
   option max int(0..) = 20 "maximum cyclomatic complexity"
@@ -508,10 +508,10 @@ in ts_function_like rule max-lines-per-function {
   when IIFEs || !restriction_iife
   when len(lines) > max
   report at function_head
-  warn "{restriction_function_name} has too many lines ({len(lines)}). Maximum allowed is {max}."
+  warn "{@restriction_function_name} has too many lines ({len(lines)}). Maximum allowed is {max}."
 }
 
-macro restriction_directive(x) re_test(x, /^\s*(?:eslint(?:[- ]|$)|globals?\s|exported\s)/)
+@macro restriction_directive(x) re_test(x, /^\s*(?:eslint(?:[- ]|$)|globals?\s|exported\s)/)
 in ts_program {
   let restriction_comment_catalog descendants(ts_comment)
   let restriction_comment_line_catalog overlapping(ts_line)
@@ -533,7 +533,7 @@ in ts_comment {
 }
 in ts_comment rule no-inline-comments {
   option ignorePattern regex = "" "comments to ignore"
-  when (restriction_comment_preamble || restriction_comment_postamble) && !restriction_comment_empty_jsx && !restriction_directive(restriction_comment_body) && !(ignorePattern != "" && re_test(restriction_comment_body, ignorePattern))
+  when (restriction_comment_preamble || restriction_comment_postamble) && !restriction_comment_empty_jsx && !@restriction_directive(restriction_comment_body) && !(ignorePattern != "" && re_test(restriction_comment_body, ignorePattern))
   report at {start: offset, end: ts_program.end_offset}
   warn "Unexpected comment inline with code."
 }
@@ -545,7 +545,7 @@ in ts_comment rule no-warning-comments {
   let compact re_replace(trim(body), /\s+/, " ")
   let short trim(default(re_find(compact, /^.{0,40}(?:\s|$)/), ""))
   let display short (if len(compact) > len(short) then "..." else "")
-  when !(restriction_directive(body) && re_test(body, /\bno-warning-comments\b/))
+  when !(@restriction_directive(body) && re_test(body, /\bno-warning-comments\b/))
   @each term in terms
   when re_test(body, "(?i)" (if location == "start" then "^[\\s" re_escape(join(decoration, "")) "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else ""))
   warn "Unexpected '{term}' comment: '{display}'."
