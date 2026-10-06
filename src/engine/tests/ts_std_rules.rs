@@ -368,3 +368,117 @@ fn empty_switch_report_starts_at_its_body_not_a_comment_brace() {
         assert_eq!(diagnostics[0].end, source.len(), "{source}: {diagnostics:#?}");
     }
 }
+
+#[test]
+fn member_ordering_defaults_keep_fields_before_methods_and_static_before_instance() {
+    let linter = native_linter("rule member-ordering");
+    for source in [
+        "class Example { method() {} field = 1; }",
+        "interface Example { method(): void; field: number; }",
+        "class Example { instance = 1; static field = 2; }",
+    ] {
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:#?}");
+        assert_eq!(diagnostics[0].start, source.find(if source.contains("static") { "static field" } else { "field" }).expect("out-of-order field"));
+    }
+    assert!(linter.lint(Path::new("/root/file.ts"),
+        "class Example { static first = 1; second = 2; constructor() {} method() {} }").is_empty());
+}
+
+#[test]
+fn member_ordering_rank_policy_preserves_gaps_and_checks_the_final_member() {
+    let linter = native_linter(r#"
+        rule member-ordering:class-declaration
+        override in ts_class_property let member_ordering_rank
+            if static_name == "unchecked" then null else if static_name == "late" then 0 else 1
+    "#);
+    let source = "class Example { first = 1; unchecked = 2; second = 3; late = 4; }";
+    let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].start, source.find("late").expect("final member"));
+    assert!(linter.lint(Path::new("/root/file.ts"),
+        "class Example { late = 1; first = 2; unchecked = 3; second = 4; }").is_empty());
+}
+
+#[test]
+fn member_ordering_modes_belong_to_the_enclosing_context() {
+    let linter = native_linter(r#"
+        rule member-ordering:class-declaration set alphabetically
+        rule member-ordering:class-expression set as-written
+        rule member-ordering:interface set natural
+        rule member-ordering:type-literal set as-written
+        override in ts_class_property, ts_property_signature let member_ordering_rank 0
+    "#);
+    let source = r#"
+        class Example { z = 1; a = 2; }
+        const expression = class { z = 1; a = 2; };
+        interface ExampleType { value10: number; value2: number; }
+        type Literal = { z: number; a: number; };
+    "#;
+    let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].start, source.find("a = 2").expect("class member"));
+    assert_eq!(diagnostics[1].start, source.find("value2").expect("interface member"));
+}
+
+#[test]
+fn member_ordering_equal_ranks_and_unchecked_optionality_are_inert() {
+    let linter = native_linter(r#"
+        rule member-ordering:interface { set optionality optional-first }
+        override in ts_property_signature let member_ordering_rank
+            if static_name == "unchecked" then null else 0
+    "#);
+    assert!(linter.lint(Path::new("/root/file.ts"),
+        "interface Example { optional?: number; unchecked: number; required: number; }").is_empty());
+    for source in [
+        "interface Example { required: number; unchecked?: number; optional?: number; }",
+        "interface Example { optional?: number; required: number; unchecked?: number; last?: number; }",
+    ] {
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+        assert_eq!(diagnostics[0].start, source.find("required").expect("required member"));
+    }
+    let required_first = native_linter(r#"
+        rule member-ordering:interface { set optionality required-first }
+        override in ts_property_signature let member_ordering_rank 0
+    "#);
+    assert!(required_first.lint(Path::new("/root/file.ts"),
+        "interface Example { required: number; optional?: number; }").is_empty());
+    let source = "interface Example { optional?: number; required: number; }";
+    let diagnostics = required_first.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].start, source.find("optional?").expect("optional member"));
+}
+
+#[test]
+fn member_ordering_explains_the_nearest_higher_group_with_its_policy_label() {
+    let linter = native_linter(r#"
+        rule member-ordering:class-declaration
+        override in ts_class_property let member_ordering_rank
+            if static_name == "early" then 0 else if static_name == "middle" then 2 else 4
+        override in ts_class_property let member_ordering_label static_name
+    "#);
+    let source = "class Example { middle = 1; last = 2; early = 3; }";
+    let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert!(diagnostics[0].message.contains("middle"), "{diagnostics:#?}");
+    assert!(!diagnostics[0].message.contains("last"), "{diagnostics:#?}");
+    let diagnostics = linter.lint(Path::new("/root/file.ts"),
+        "class Example { last = 1; middle = 2; early = 3; }");
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(diagnostics.iter().all(|diagnostic| diagnostic.message.contains("last")), "{diagnostics:#?}");
+}
+
+#[test]
+fn member_ordering_does_not_suggest_crossing_an_initialiser_dependency() {
+    let linter = native_linter(r#"
+        rule member-ordering:class-declaration set alphabetically
+        override in ts_class_property let member_ordering_rank 0
+    "#);
+    assert!(linter.lint(Path::new("/root/file.ts"),
+        "class Example { z = 1; a = this.z; }").is_empty());
+    let source = "class Example { z = 1; a = 2; }";
+    let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].start, source.find("a = 2").expect("independent member"));
+}
