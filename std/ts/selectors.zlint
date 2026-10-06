@@ -1,24 +1,10 @@
-# .ts/selectors: configurable syntax policy over the shared ESTree view.
+# .ts/selectors: open syntax policy; contextual exclusions use ordinary rules.
 define {
 
-schema restricted_syntax_option string | {
-  selector: string
-  message?: string
-}
+group restricted_syntax
 
-fn restricted_syntax_selector(spec) = if type_of(spec) == "str" then spec else spec.selector
-fn restricted_syntax_entries(spec) =
-  map(selector_spans(restricted_syntax_selector(spec)), hit => {
-    start: hit.start,
-    end: hit.end,
-    message: default(spec.message, "Using '" restricted_syntax_selector(spec) "' is not allowed.")
-  })
-
-in ts_program rule no-restricted-syntax {
-  option options restricted_syntax_option[] = [] "selectors, optionally with custom messages"
-  each hit in reduce(options, [], (hits, spec) => hits restricted_syntax_entries(spec))
-  report at hit
-  warn hit.message
+in restricted_syntax rule no-restricted-syntax {
+  warn "This syntax is not allowed."
 }
 
 }

@@ -45,7 +45,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `group name A, B` | add layers to a named group, usable wherever a layer list is |
 | `indent [in] A, B.field [by n]` | rule clause: the indentation structure that rule measures, see [Layers](#layers) |
 | `in A rule name ...` | define a rule checking `A`'s nodes (and turn it on), see [Rules](#rules) |
-| `rule name [severity] [{ ... }]` | turn an existing rule on, off, or configure it, see [Turning rules on](#turning-rules-on-and-configuring-them) |
+| `rule name [severity ["message"]] [set value] [{ ... }]` | turn an existing rule on, off, or configure it, see [Turning rules on](#turning-rules-on-and-configuring-them) |
 | `define { items }` | items inside define; their rules stay off until turned on |
 | `in A let name expr` | an attribute computed for `A`'s nodes, see [Attributes](#attributes) |
 | `in A forward x, y from field` | `A`'s nodes pass attributes `x` and `y` up from a field, see [Attributes](#attributes) |
@@ -53,7 +53,7 @@ in rs_function.name rule fn-snake-case warn "function names are snake_case" fix 
 | `override <definition>`, `drop ...` | replace or remove what an import defined, see [Changing imported definitions](#changing-imported-definitions-override-drop) |
 | `ignore "glob" "glob"` | never lint matching files |
 | `import .ts`, `import rules:recommended`, `import some/path` | a built-in language, a built-in ruleset, or another `.zlint` file, see [Imports](#imports-and-macros) |
-| `macro name tokens`, `macro name(args) { lines }` | define a macro |
+| `@macro name tokens`, `@macro name(args) { lines }` | define a macro; call it with `@name` |
 
 `#` starts a comment, and `#` lines right above a definition are its
 documentation (shown on hover). Items end at the end of the line, or at a
@@ -588,9 +588,24 @@ Regex attributes and `js_re_test` share a bounded JavaScript subset with `i`, `m
 Regex sources are limited to 64 KiB and 128 nested groups; assertion patterns allow 64 assertions. Assertion/multiline execution allows 50,000 states per compiled program and 10 million state visits per match, shared with its assertion checks. Exhaustion produces a rule error, never a silent non-match.
 
 ```zlint
-rule no-restricted-syntax {
-  set options ["WithStatement", {selector: "CallExpression[callee.name=eval]", message: "Avoid eval."}]
+group restricted_syntax ts_with
+rule no-restricted-syntax
+in ts_call rule no-eval-call {
+  when callee.text == "eval"
+  warn "Avoid eval."
 }
+```
+
+`restricted_syntax` is an empty, open group: add syntax to prohibit it. Contextual exclusions and custom messages belong in ordinary rules, not selector options.
+
+`no-extra-parens` checks expressions in the open `no_extra_parens_checked` group (default: `ts_node`). Its same-named attribute on `structure_parens` defaults to true; override it to select reported parentheses by their inner expression or owner. `no_extra_parens_spread_allowed` starts empty and exempts its members only as spread operands:
+
+```zlint
+drop group no_extra_parens_checked ts_node
+group no_extra_parens_checked ts_function, ts_arrow, structure_assertion
+group no_extra_parens_spread_allowed ts_conditional
+override in structure_parens let no_extra_parens_checked
+  !matches_selector(structure_parens_outer.parent.node, "CallExpression[callee.name=legacy]")
 ```
 
 `slice` counts characters; offsets (`offset`, `end_offset`, native spans)
@@ -828,8 +843,15 @@ be turned off again.
 ```zlint
 import .ts
 
+define {
+  in ts_array rule demo:arrays {
+    default option mode enum(never, always-multiline) = never
+  }
+}
+
 rule no-cond-assign                  # on, at its default severity
 rule eqeqeq error                    # on, as an error
+rule demo:arrays error set always-multiline
 rule semi:always info "no ;"         # a severity and a new message
 rule style-* off                     # `*` globs over rule names
 rule brace-style:* {                 # options are set in a block
@@ -849,6 +871,7 @@ rule padding-line-between-statements {
   and `rule name off` turns it off.
 - In the block, `set option value` sets an option; `when`, `let`, `files`
   and `ignore` add to the rule; `fix as` and `report` replace its own.
+- Inline `set value` sets the rule's default option; severity and `set` may appear in either order. A family name sets each variant's default option. Without a declared default option, inline `set` is an error; block `set name value` still works for any option.
 - These lines may come before or after the definition; they apply in order.
   A name nothing defines is an error with a suggestion, and says which
   language import defines it (`rule rs-indent` → "comes with `import .rs`").
@@ -865,11 +888,15 @@ rule padding-line-between-statements {
 - `zlint rules` lists every defined rule, the off ones with the severity
   they turn on at.
 
+Default options are also the intended shape for per-context families such as comma-dangle variants.
+
 ## Option types
 
 Every option declares its type, in TypeScript-like syntax, and a default:
 `option name <type> = <default> "description"`. Named types (`schema`) are
 shared between rules.
+
+`enum(never, always)` declares string values written as bare names, including hyphenated rule-name characters. Defaults and `set` values need no quotes: `option mode enum(never, always) = never`. A rule may mark at most one option as default: `default option mode enum(never, always) = never "mode"`. Its enum cannot contain severity words (`off`, `hint`, `info`, `warn`, `error`).
 
 ```zlint
 schema statement_kind "*" | "block-like" | "return" "a statement kind"
@@ -895,6 +922,7 @@ in ts_program rule padding-line-between-statements {
 | `regex` | a string that is a valid regex in the Rust `re_test` dialect |
 | `js_regex` | a string that is a valid JavaScript regex in Unicode (`u`) mode, checked when config loads |
 | `"x"`, `3`, `true` | exactly that value |
+| `enum(a, b-c)` | one of the bare names, stored as a string |
 | `a \| b` | either; a union may continue on a line starting with `\|` |
 | `T[]`, `T[1..]`, `T[..3]` | a list of `T`, with an optional length range |
 | `int(0..)`, `number(0..1)`, `string(1..)` | a number in a range, or a string of a length |
@@ -920,7 +948,7 @@ included), and everything below sees the result.
 import ../rules/ts-problems
 
 override in ts_call rule no-eval error "eval is banned here" { when callee == "eval" }
-override macro newline "\n"
+override @macro newline "\n"
 drop rule no-console                     # the name is free again
 drop rule semi:*                         # rule names take globs
 drop in ts_call let operators            # one layer's definition
@@ -933,7 +961,7 @@ drop ignore "static/**"
 ```
 
 - **`override`** goes in front of a definition (`rule`, `match`, `let`,
-  `macro` or `group`) and replaces the existing one, which must exist.
+  `@macro` or `group`) and replaces the existing one, which must exist.
   A plain second definition is an error that points at the first and
   suggests `override`. An overridden rule keeps its place, and `rule` lines
   above the override are dropped with the old rule. `override match x
@@ -976,10 +1004,11 @@ and `final-newline`.
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
 | `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
 | `.ts/assertions` | type-aware assertion and non-null policy, imported by `.ts` |
+| `.ts/naming` | name-format policy (`naming-convention` variants), open context groups and shared `naming_failure` helper; imported by `.ts/scoping` |
 | `.ts/deprecation` | declaration documentation policy (`no-deprecated`), imported by `.ts`; diagnostic-only |
 | `.ts/type-specifiers` | shared type/value origin matching helpers (`matches_type_specifier`, `type_is_allowed`) |
 | `.ts/methods` | type-aware method policy (`prefer-find`), imported by `.ts/typed`; filter result zero-index/bracket/at access, computed constant methods, sequences and both conditional branches; diagnostic-only |
-| `.ts/selectors` | configurable ESTree syntax policy (`no-restricted-syntax`), imported by `.ts` |
+| `.ts/selectors` | open `restricted_syntax` group and prohibition rule (`no-restricted-syntax`), imported by `.ts` |
 | `.rs` | also the `rs-*` layout rules |
 | `.md` | code fences, inline code, HTML comments |
 
@@ -1031,8 +1060,7 @@ Arguments are glued to the name (`@forbid(`); `@macro nl (...)`, with a
 space, is a one-line macro whose body starts with `(`. An expansion behaves
 like a parenthesised group wherever it lands, so `@macro digits /\d/+` then
 `@digits?` means `(/\d/+)?`. Macros cannot recurse, and redefining one needs
-`override @macro`. (Plain `macro` and calls without `@` still work while
-configs move over.)
+`override @macro`. Plain `macro` definitions are errors; bare names never expand.
 
 ## Suppressing diagnostics
 
@@ -1057,7 +1085,7 @@ well as the files they lint:
 - **go to definition** (std modules open as read-only copies), **find all
   references** across imports and macro bodies, **completion** by context
   (layers after `in`, fields after `layer.`, every defined rule after `rule `,
-  the rule's options after `set ` in its block, languages and rulesets after
+  severities and `set` after a rule name, enum words after `set `, the rule's options after block `set `, languages and rulesets after
   `import `) and an **outline**
 - config errors in place, with links to related spots ("first defined
   here", "still used here")

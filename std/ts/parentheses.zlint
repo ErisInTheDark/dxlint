@@ -26,6 +26,10 @@ group structure_binary ts_binary, ts_logical
 group structure_member ts_member, ts_index
 group structure_conditional_owner ts_function, ts_arrow, ts_program, ts_return, ts_if, ts_while, ts_do_while, ts_conditional, ts_for
 group structure_return_owner ts_return, ts_arrow, ts_function, ts_program
+group no_extra_parens_checked ts_node
+group no_extra_parens_spread_allowed
+
+in structure_parens let no_extra_parens_checked true
 
 in ts_parenthesized let structure_parens_inner expression.node
 in ts_parenthesized_type let structure_parens_inner type.node
@@ -115,7 +119,6 @@ fn structure_parens_required(source, p, inner, outer) =
   else if outer is (ts_node.type, ts_node.return_type) then 0 else null
 
 in structure_parens rule no-extra-parens {
-  option mode "all" | "functions" = "all"
   option conditionalAssign boolean = true "enforce assignments in conditions"
   option ternaryOperandBinaryExpressions boolean = true "enforce binary ternary operands"
   option nestedBinaryExpressions boolean = true "enforce nested binary operands"
@@ -126,11 +129,9 @@ in structure_parens rule no-extra-parens {
   option enforceForNewInMemberExpressions boolean = true "enforce new expressions in member access"
   option enforceForFunctionPrototypeMethods boolean = true "enforce function prototype receivers"
   option allowParensAfterCommentPattern string = "" "allow parentheses after matching comments"
-  option ignoreJSX "none" | "all" | "multi-line" | "single-line" = "none"
-  option ignoredNodes string[] = [] "ignored selector contexts"
-  option allowNodesInSpreadElement { ConditionalExpression?: boolean; LogicalExpression?: boolean; AssignmentExpression?: boolean; AwaitExpression?: boolean } = {} "allowed spread operands"
   let inner structure_parens_inner
   when inner != null && inner not structure_parens
+  when no_extra_parens_checked && inner is no_extra_parens_checked
   let outer structure_parens_outer
   let owner outer.parent.node
   when owner != null && outer not ts_node.type_argument
@@ -150,7 +151,6 @@ in structure_parens rule no-extra-parens {
   let comment find_last(overlapping(ts_comment, default((outer.space_before).start, 0), outer.offset + 1), c => c.end_offset <= outer.offset && trim(byte_slice(source, c.end_offset, outer.offset)) == "")
   let typed_inner any(overlapping(ts_block_comment, outer.offset, inner.offset), c => c.offset > outer.offset && c.end_offset <= inner.offset && contains(c.structure_comment_body, "@type"))
   when !(comment is ts_block_comment && contains(comment.structure_comment_body, "@type") && (structure_parens_count == 1 || typed_inner))
-  when mode == "all" || inner is (ts_function, ts_arrow, structure_assertion)
   when conditionalAssign || !(inner is ts_assignment && owner.structure_parens_conditional_owner is (ts_if, ts_while, ts_do_while, ts_conditional, ts_for))
   when ternaryOperandBinaryExpressions || !(inner is structure_binary && owner is ts_conditional)
   when nestedBinaryExpressions || !(inner is structure_binary && owner is structure_binary || structure_parens_count == 1 && inner is (ts_union, ts_intersection) && owner is (ts_union, ts_intersection))
@@ -160,13 +160,7 @@ in structure_parens rule no-extra-parens {
   when enforceForSequenceExpressions || inner not ts_sequence
   when enforceForNewInMemberExpressions || !(inner is ts_new && owner is structure_member)
   when enforceForFunctionPrototypeMethods || !(inner.structure_parens_prototype || inner is ts_function && owner.parent.structure_parens_prototype == true)
-  let multiline re_test(inner.text, /[\n\r\u{2028}\u{2029}]/)
-  when inner not (ts_jsx_element, ts_jsx_fragment) || ignoreJSX == "none" || ignoreJSX == "multi-line" && !multiline || ignoreJSX == "single-line" && multiline
-  when owner not ts_spread || (!allowNodesInSpreadElement.ConditionalExpression || inner not ts_conditional)
-    && (!allowNodesInSpreadElement.LogicalExpression || inner not ts_logical)
-    && (!allowNodesInSpreadElement.AssignmentExpression || inner not ts_assignment)
-    && (!allowNodesInSpreadElement.AwaitExpression || inner not ts_await)
-  when !any(ignoredNodes, selector => matches_selector(owner, selector))
+  when owner not ts_spread || inner not no_extra_parens_spread_allowed
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
   report at offset
   warn "Unnecessary parentheses around expression."

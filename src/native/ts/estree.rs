@@ -690,8 +690,8 @@ mod tests {
     }
 
     #[test]
-    fn restricted_syntax_reports_each_selector_and_virtual_span() {
-        let linter = native_linter("rule no-restricted-syntax { set options [\"MethodDefinition, FunctionExpression\", {selector: \"Identifier[name=method]\", message: \"blocked\"}] }");
+    fn selector_reports_keep_distinct_virtual_spans() {
+        let linter = native_linter("in ts_program rule methods {\nreport at first(selector_spans(\"MethodDefinition, FunctionExpression\"))\nwarn \"method\"\n}\nin ts_program rule functions {\nreport at last(selector_spans(\"MethodDefinition, FunctionExpression\"))\nwarn \"function\"\n}\nin ts_program rule names {\nreport at first(selector_spans(\"Identifier[name=method]\"))\nwarn \"blocked\"\n}");
         let source = "class C { method() {} }";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
         let mut ranges: Vec<_> = diagnostics.iter().map(|d| (d.start, d.end)).collect();
