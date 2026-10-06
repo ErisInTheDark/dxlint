@@ -412,66 +412,54 @@ in ts_parameter {
 }
 in restriction_parameter_function rule max-params {
   option max int(0..) = 3 "maximum parameters"
-  option maximum int(0..) | null = null "legacy maximum parameters"
   option countVoidThis boolean = false "count a void this parameter"
   option countThis "never" | "except-void" | "always" = "except-void" "whether to count this parameters"
   let this_parameter first([] parameter.restriction_this_parameter) == true
   let void_this_parameter first([] parameter.restriction_void_this_parameter) == true
   let amount count(parameter) - (if this_parameter && (countThis == "never" || countThis == "except-void" && !countVoidThis && void_this_parameter) then 1 else 0)
-  let limit default(maximum, max)
-  when amount > limit
+  when amount > max
   report at if is ts_function_type then default(first(filter([] token.node, t => t.text == "=>")).offset, offset) else default(function_head, offset)
-  warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {limit}."
+  warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like rule max-statements {
   option max int(0..) = 10 "maximum statements"
-  option maximum int(0..) | null = null "legacy maximum statements"
   option ignoreTopLevelFunctions boolean = false "ignore a sole top-level function"
-  let limit default(maximum, max)
-  when restriction_subtree_statements > limit
+  when restriction_subtree_statements > max
   when !(ignoreTopLevelFunctions && restriction_function_depth == 0 && ts_program.restriction_top_functions == 1)
   report at function_head
-  warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {limit}."
+  warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {max}."
 }
 in ts_function_like rule complexity {
   option max int(0..) = 20 "maximum cyclomatic complexity"
-  option maximum int(0..) | null = null "legacy maximum complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
-  let limit default(maximum, max)
-  when amount > limit
+  when amount > max
   report at function_head
-  warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {limit}."
+  warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {max}."
 }
 in ts_static_block, ts_class_property.init rule complexity:implicit {
   option max int(0..) = 20 "maximum cyclomatic complexity"
-  option maximum int(0..) | null = null "legacy maximum complexity"
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount if is (ts_function, ts_arrow) then 1 else 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
-  let limit default(maximum, max)
-  when amount > limit
-  warn "{if is ts_static_block then 'Class static block' else 'Class field initializer'} has a complexity of {amount}. Maximum allowed is {limit}."
+  when amount > max
+  warn "{if is ts_static_block then 'Class static block' else 'Class field initializer'} has a complexity of {amount}. Maximum allowed is {max}."
 }
 group restriction_depth_control ts_if, ts_switch, ts_try, ts_do_while, ts_while, ts_with, ts_for, ts_for_in, ts_for_of
 in ts_statement, ts_arrow, ts_method, ts_static_block, ts_case let restriction_nesting if is (ts_function_like, ts_static_block) then 0 else default(parent.restriction_nesting, 0) + (if is restriction_depth_control && !(is ts_if && is ts_if.alternate) then 1 else 0)
 in restriction_depth_control rule max-depth {
   option max int(0..) = 4 "maximum control-flow nesting"
-  option maximum int(0..) | null = null "legacy maximum nesting"
-  let limit default(maximum, max)
   when !(is ts_if && is ts_if.alternate)
-  when restriction_nesting > limit
-  warn "Blocks are nested too deeply ({restriction_nesting}). Maximum allowed is {limit}."
+  when restriction_nesting > max
+  warn "Blocks are nested too deeply ({restriction_nesting}). Maximum allowed is {max}."
 }
 in ts_function, ts_arrow rule max-nested-callbacks {
   option max int(0..) = 10 "maximum callback nesting"
-  option maximum int(0..) | null = null "legacy maximum callback nesting"
   option checkConstructorCallCallbacks boolean = false "count callbacks passed to constructors"
   let amount if checkConstructorCallCallbacks then restriction_constructor_callbacks else restriction_callbacks
   let callback if checkConstructorCallCallbacks then restriction_constructor_callback else restriction_callback
-  let limit default(maximum, max)
-  when callback && amount > limit
+  when callback && amount > max
   report at function_head
-  warn "Too many nested callbacks ({amount}). Maximum allowed is {limit}."
+  warn "Too many nested callbacks ({amount}). Maximum allowed is {max}."
 }
 in ts_program rule max-classes-per-file {
   option max int(1..) = 1 "maximum classes"
