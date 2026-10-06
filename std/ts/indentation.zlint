@@ -110,7 +110,7 @@ in indent_lists let indent_list_open if is ts_import_attributes then open.node e
 in ts_variable_declaration let indent_first_item first([] declaration.node)
 in ts_variable_declaration let indent_multiline_declaration position(last([] declaration.node).offset).js_line > position(offset).js_line
 in ts_node let indent_list_first if is (ts_call.argument, ts_new.argument, ts_import_call.argument, ts_function.parameter, ts_arrow.parameter, ts_method.parameter, ts_array.element, ts_array_pattern.element, ts_tuple_type.element, ts_object.property, ts_object_pattern.property, ts_import.specifier, ts_variable_declaration.declaration) then parent.indent_first_item else null
-in ts_node let indent_list_previous if indent_list_first != null && index > 0 && parent is indent_lists then first(slice(parent.indent_items, index - 1, index)) else null
+in ts_node let indent_list_previous if indent_list_first != null && node.index > 0 && parent is indent_lists then first(slice(parent.indent_items, node.index - 1, node.index)) else null
 in ts_import_attribute let indent_list_first parent.indent_first_item
 in ts_import_attribute let indent_list_previous last(filter(parent.indent_items, item => item.offset < offset))
 in ts_import_attribute let indent_attribute_anchor last(walk(node, item => if indent_list_anchor(item) != item.offset then item.indent_list_previous else null))
@@ -157,7 +157,11 @@ in ts_comment let indent_comment_switch containing(ts_switch)
 in ts_comment let indent_comment_list containing(indent_lists)
 in ts_switch let indent_switch_open first(filter([] token.node, item => item is ts_open_brace))
 
+in ts_node let indent_reset false
+in ts_token let indent_reset false
+
 in ts_line rule indent {
+  indent reset indent_reset
   option mode int(0..) | "tab" = 4 "spaces per level, or tab"
   option tab_length number(1..) = 4 "spaces per raw-template tab in tab mode"
   option switch_case int(0..) = 1

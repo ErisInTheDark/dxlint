@@ -70,3 +70,65 @@ fn lines_starting_inside_a_token_follow_their_anchor_up() {
     let found = levels("indent in ts_call from 0\nindent in ts_block", src);
     assert_eq!(found[2..], ["1:8", "0:8"]);
 }
+
+#[test]
+fn reset_uses_the_winning_container_and_keeps_nested_blocks_checked() {
+    let src = "class Foo {\nfoo() {\nbar();\n}\n}\n";
+    let rules = "indent reset is ts_class\nindent in ts_class\nindent in ts_method.body";
+    assert_eq!(levels(rules, src), ["0:0", "0:0", "1:0", "0:0", "0:0"]);
+}
+
+#[test]
+fn reset_preserves_node_form_indentation_including_alignment_reads() {
+    let src = "[\n    foo(),\n    bar\n]\n";
+    let rules = "indent reset is ts_call\nindent in ts_array\nindent ts_array.element from offset by 0";
+    assert_eq!(levels(rules, src), ["0:0", "0:4", "1:0", "0:0"]);
+}
+
+#[test]
+fn reset_applies_to_mid_line_virtual_anchors_before_class_levels() {
+    let src = "    void (x = foo(\n      a\n    ));\n";
+    let rules = "indent reset is ts_assignment\nindent in ts_call\nindent ts_assignment from \"\" class assignments by 3";
+    assert_eq!(levels(rules, src), ["0:0", "1:4", "0:4"]);
+}
+
+#[test]
+fn false_reset_preserves_normal_candidate_priority() {
+    let src = "foo({\n  a\n})\n";
+    let rules = "indent reset false\nindent in ts_object\nindent in ts_call class calls";
+    assert_eq!(levels(rules, src), ["0:0", "2:0", "1:0"]);
+}
+
+#[test]
+fn indentation_expression_errors_reach_the_rule() {
+    let failures: Vec<_> = [
+        "indent in ts_call from []",
+        "indent in ts_call by []",
+        "indent in ts_call\nindent ts_assignment.right from []",
+        "indent in ts_call\nindent ts_assignment.right from \"\" class assignments by []",
+    ].into_iter().filter(|rules| {
+        let l = native_linter(&format!("in ts_line rule ind info \"{{indent_level}}:{{indent_anchor}}\" {{ {rules} }}"));
+        let got = l.lint(Path::new("/root/a.ts"), "x = foo(\n  a\n);\n");
+        !got.iter().any(|d| d.severity == crate::config::ast::Severity::Error)
+    }).collect();
+    assert!(failures.is_empty(), "errors swallowed by: {failures:?}");
+}
+
+#[test]
+fn reset_predicate_errors_reach_the_rule() {
+    for rules in [
+        "indent reset js_re_test('', '[')\nindent in ts_call",
+        "indent reset if is ts_assignment then js_re_test('', '[') else false\nindent in ts_call\nindent ts_assignment from \"\" class assignments",
+    ] {
+        let l = native_linter(&format!("in ts_line rule ind info \"{{indent_level}}:{{indent_anchor}}\" {{ {rules} }}"));
+        let got = l.lint(Path::new("/root/a.ts"), "void (x = foo(\n  a\n));\n");
+        assert!(got.iter().any(|d| d.severity == crate::config::ast::Severity::Error), "{rules}: {got:?}");
+    }
+}
+
+#[test]
+fn std_list_indentation_uses_ordinals_for_indexed_arguments() {
+    let l = native_linter("rule indent");
+    let got = l.lint(Path::new("/root/a.ts"), "foo(\n    object[key],\n    other[another]\n);\n");
+    assert!(got.is_empty(), "{got:?}");
+}

@@ -268,6 +268,8 @@ pub struct RuleDef {
     pub locals: Vec<(Name, Expr)>,
     /// `indent [in] X by n` lines.
     pub indents: Vec<IndentDecl>,
+    /// `indent reset expr`: preserve a winning candidate's physical indent.
+    pub indent_reset: Option<Expr>,
     /// Where diagnostics point (`report node | change | end`); the whole
     /// node when not given.
     pub report: Option<Report>,
@@ -323,6 +325,7 @@ impl RuleDef {
             fix_target: FixTarget::Node,
             locals: Vec::new(),
             indents: Vec::new(),
+            indent_reset: None,
             report: None,
             report_at: None,
             each: None,

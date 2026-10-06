@@ -72,6 +72,7 @@ pub struct Rule {
     fix_target: FixTarget,
     /// `indent [in] X by n` lines.
     indents: Vec<crate::expr::IndentRule>,
+    indent_reset: Option<CExpr>,
     /// Layers it reads by name (`opener.x`, `descendants(x)`): their nodes
     /// must be built.
     layer_reads: Vec<u32>,
@@ -413,6 +414,7 @@ impl Linter {
                         locals: Some((fi as u32, &self.rules[fi].locals, &self.rules[fi].target_layers)),
                         native,
                         indents: &self.rules[fi].indents,
+                        indent_reset: self.rules[fi].indent_reset.as_ref(),
                         profile: self.profile.as_ref(),
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());

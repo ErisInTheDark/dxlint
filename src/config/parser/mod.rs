@@ -1436,6 +1436,18 @@ impl<'a> Parser<'a> {
                     let dedent = word == "dedent";
                     self.bump();
                     self.skip(false, true);
+                    if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("reset")) {
+                        self.ts.next_raw();
+                        let reset = self.expr();
+                        if dedent {
+                            self.error_here("use `indent reset`, not `dedent reset`".to_string());
+                        } else if def.indent_reset.is_some() {
+                            self.error_here("a rule can declare `indent reset` only once".to_string());
+                        } else {
+                            def.indent_reset = reset;
+                        }
+                        continue;
+                    }
                     let inside = self.ts.peek_raw(0).is_some_and(|t| t.is_ident("in"));
                     if inside {
                         self.ts.next_raw();

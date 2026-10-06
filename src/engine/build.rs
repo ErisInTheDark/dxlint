@@ -681,6 +681,15 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         })
         .collect();
 
+    let reset_scope = Scope {
+        options: scope.options.clone(),
+        attrs,
+        uses: Some(uses),
+        layer_reads: Some(&layer_reads),
+        ..Scope::new(g)
+    };
+    let indent_reset = def.indent_reset.as_ref().and_then(|e| reset_scope.compile(e, errors));
+
     let globs = |list: &[(String, crate::config::source::Span)], errors: &mut Vec<ConfigError>| {
         PathGlobs::new(list.iter().map(|(g, _)| g.as_str())).unwrap_or_else(|(glob, e)| {
             let span = list.iter().find(|(g, _)| *g == glob).map(|(_, s)| *s);
@@ -735,6 +744,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         fix_when,
         fix_target: def.fix_target,
         indents,
+        indent_reset,
         report: def.report.unwrap_or_default(),
         report_at,
         each,

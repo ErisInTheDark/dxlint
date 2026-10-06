@@ -218,6 +218,21 @@ with `indent` lines; other rules never see it.
   1`: cases one level past `switch`).
 - `from <offset>` on either form measures from the line of that byte offset (or node), read on X: `indent in ts_function.body from parent.offset`. A text measures from that text itself (`from ""`: column 0); null keeps the default.
 - `class name`: levels opened on one line collapse to one within a class (all unnamed lines share one); lines in different classes add up. An anchor in the middle of a line sits where the indent lines opened earlier on that line put it: `indent in ts_variable_declaration class declarators` indents a `var foo = {` object two levels past `var`.
+- `indent reset <expr>`: one predicate per rule. A matching node starting at a line's first token keeps that line's physical indentation with zero levels, before enclosing candidates are considered. Otherwise, the predicate reads the winning indentation candidate's node after ordinary priority and anchor applicability. Virtual anchors also keep their own line's physical indentation when reset. An unmarked winning inner candidate still applies normally; reset never searches beyond it for a marked ancestor. The predicate may use attributes and options, but not rule locals or implicit target fields; indentation queries are disabled while it runs.
+
+An overridable attribute makes reset a config extension point:
+
+```zlint
+in ts_node let indent_reset false
+in ts_line rule indentation {
+  indent reset indent_reset
+  indent in ts_block
+  # The rule can now read indent_anchor and indent_level as usual.
+}
+override in ts_node let indent_reset matches_selector(node, "ClassBody")
+```
+
+Errors in reset, `from` or `by` expressions fail the rule instead of silently using a default anchor or level.
 
 `dedent X` and `dedent in X` count the levels back from the anchor instead
 (`indent_level` goes negative). `X` is a layer, a group or `layer.field`;

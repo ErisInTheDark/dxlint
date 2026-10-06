@@ -1304,6 +1304,7 @@ pub struct Ctx<'a> {
     pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
     /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
     pub indents: &'a [IndentRule],
+    pub indent_reset: Option<&'a CExpr>,
     /// `--profile`: where fact time is added up.
     pub profile: Option<&'a crate::engine::Profile>,
 }
@@ -1331,7 +1332,8 @@ pub struct IndentRule {
 /// (the anchor's virtual indentation).
 struct IndentHit {
     node: u32,
-    rule: usize,
+    /// No declaration index when reset replaces its levels.
+    rule: Option<usize>,
     base: AnchorBase,
     extra: f64,
     inside: Option<(usize, usize)>,
@@ -1504,9 +1506,9 @@ impl<'a> Ctx<'a> {
     /// its owner's line; `indent in X` when X's inside (its `*`, or its text
     /// after its first line) opened on an earlier line and holds this one.
     /// On one node a field-qualified line beats a plain one, then the last.
-    fn indent_hit(&self) -> Option<IndentHit> {
-        if self.indents.is_empty() {
-            return None;
+    fn indent_hit(&self) -> Result<Option<IndentHit>, String> {
+        if self.indents.is_empty() && self.indent_reset.is_none() {
+            return Ok(None);
         }
         let start = self.tree.node(self.node).start as usize;
         let line = self.lines.line_of(start);
@@ -1540,6 +1542,9 @@ impl<'a> Ctx<'a> {
             // beats the node form (the node's own start line decides that
             // one), then a field-qualified line, then the later one.
             let (s, e) = (n.start as usize, n.end as usize);
+            if s == first && self.indent_reset_at(id)? {
+                return Ok(Some(IndentHit { node: id, rule: None, base: AnchorBase::Line(line), extra: 0.0, inside: None }));
+            }
             let inside = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
             let inside_applies = self.lines.line_of(inside.0) < line && line_start <= inside.1;
             let owner_line = owner
@@ -1557,20 +1562,35 @@ impl<'a> Ctx<'a> {
             candidates.sort_unstable_by(|a, b| b.cmp(a));
             for (in_form, _, i) in candidates {
                 let inside = in_form.then_some(inside);
-                match self.indent_anchor_at(id, i, in_form) {
-                    AnchorAt::Text(text) => return Some(IndentHit { node: id, rule: i, base: AnchorBase::Text(text), extra: 0.0, inside }),
-                    // An anchor on this line or below does not apply: the
-                    // next line in line does.
-                    AnchorAt::Offset(at) if self.lines.line_of(at) < line => {
-                        let (base, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0);
-                        return Some(IndentHit { node: id, rule: i, base, extra, inside });
+                let from = self.indent_anchor_at(id, i, in_form)?;
+                if matches!(&from, AnchorAt::Offset(at) if self.lines.line_of(*at) >= line) {
+                    continue;
+                }
+                if self.indent_reset_at(id)? {
+                    return Ok(Some(IndentHit { node: id, rule: None, base: AnchorBase::Line(line), extra: 0.0, inside }));
+                }
+                match from {
+                    AnchorAt::Text(text) => return Ok(Some(IndentHit { node: id, rule: Some(i), base: AnchorBase::Text(text), extra: 0.0, inside })),
+                    AnchorAt::Offset(at) => {
+                        let (base, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0)?;
+                        return Ok(Some(IndentHit { node: id, rule: Some(i), base, extra, inside }));
                     }
-                    AnchorAt::Offset(_) => {}
                 }
             }
             p = self.tree.parent(id);
         }
-        None
+        let first_node = self.tree.innermost_with_text(self.grammar, first as u32, self.node);
+        if !self.tree.is_root(first_node) && self.indent_reset_at(first_node)? {
+            return Ok(Some(IndentHit { node: first_node, rule: None, base: AnchorBase::Line(line), extra: 0.0, inside: None }));
+        }
+        Ok(None)
+    }
+
+    fn indent_reset_at(&self, node: u32) -> Result<bool, String> {
+        match self.indent_reset {
+            Some(reset) => Ok(Ctx { node, indents: &[], indent_reset: None, locals: None, ..*self }.eval(reset)?.truthy()),
+            None => Ok(false),
+        }
     }
 
     /// Where indent line `i` on node `id` measures from: its `from` (an
@@ -1578,17 +1598,20 @@ impl<'a> Ctx<'a> {
     /// start (`in` form) or its owner's (node form). `from` is read on the
     /// node with no indent lines in scope, so it cannot ask for indentation
     /// itself; null means the default.
-    fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> AnchorAt {
-        let from = self.indents[i].from.as_ref().and_then(|from| match (Ctx { node: id, indents: &[], ..*self }).eval(from).ok()? {
-            Value::Node(n, _) => Some(AnchorAt::Offset(self.tree.node(n).start as usize)),
-            Value::Null => None,
-            Value::Str(text) => Some(AnchorAt::Text(text.to_string())),
-            v => v.num().ok().map(|n| AnchorAt::Offset((n.max(0.0) as usize).min(self.source.len()))),
-        });
-        from.unwrap_or_else(|| {
+    fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> Result<AnchorAt, String> {
+        let from = match self.indents[i].from.as_ref() {
+            Some(from) => match (Ctx { node: id, indents: &[], indent_reset: None, ..*self }).eval(from)? {
+                Value::Node(n, _) => Some(AnchorAt::Offset(self.tree.node(n).start as usize)),
+                Value::Null => None,
+                Value::Str(text) => Some(AnchorAt::Text(text.to_string())),
+                v => Some(AnchorAt::Offset((v.num()?.max(0.0) as usize).min(self.source.len()))),
+            },
+            None => None,
+        };
+        Ok(from.unwrap_or_else(|| {
             let owner = if in_form { None } else { self.tree.label(id).and_then(|_| self.tree.owner(id)).or_else(|| self.tree.parent(id)) };
             AnchorAt::Offset(self.tree.node(owner.unwrap_or(id)).start as usize)
-        })
+        }))
     }
 
     /// What an anchor at byte `at` stands for, and the levels on top of it.
@@ -1599,11 +1622,11 @@ impl<'a> Ctx<'a> {
     /// starting with the indented line's own). Anything else stands for its
     /// line, whose first token answers for what is above, unless the line
     /// starts inside a token: it continues the line above, as one line.
-    fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> (AnchorBase, f64) {
+    fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> Result<(AnchorBase, f64), String> {
         let line = self.lines.line_of(at);
         let line_start = self.lines.line_start(line);
         if depth >= MAX_VIRTUAL_DEPTH || line_start + self.indent_at(line_start).len() >= at {
-            return (AnchorBase::Line(line), 0.0);
+            return Ok((AnchorBase::Line(line), 0.0));
         }
         let mut p = Some(self.tree.innermost_with_text(self.grammar, at as u32, u32::MAX)).filter(|&n| !self.tree.is_root(n));
         while let Some(id) = p.filter(|&n| !self.tree.is_root(n)) {
@@ -1628,16 +1651,20 @@ impl<'a> Ctx<'a> {
                 .collect();
             candidates.sort_unstable_by(|a, b| b.cmp(a));
             for (in_form, _, i) in candidates {
-                let from = self.indent_anchor_at(id, i, in_form);
-                match from {
-                    AnchorAt::Offset(from) if from >= at => continue,
-                    // A line starting inside a token (template text, a string,
-                    // a block comment) has no code indentation to stand for:
-                    // it continues the line above, so follow the anchor up.
-                    AnchorAt::Offset(from) if self.lines.line_of(from) < line && !self.native.is_some_and(|facts| facts.inside_token(line_start)) => {
-                        return (AnchorBase::Line(line), 0.0);
-                    }
-                    _ => {}
+                let from = self.indent_anchor_at(id, i, in_form)?;
+                if matches!(&from, AnchorAt::Offset(from) if *from >= at) {
+                    continue;
+                }
+                if self.indent_reset_at(id)? {
+                    return Ok((AnchorBase::Line(line), 0.0));
+                }
+                // A line starting inside a token (template text, a string,
+                // a block comment) has no code indentation to stand for:
+                // it continues the line above, so follow the anchor up.
+                if matches!(&from, AnchorAt::Offset(from) if self.lines.line_of(*from) < line)
+                    && !self.native.is_some_and(|facts| facts.inside_token(line_start))
+                {
+                    return Ok((AnchorBase::Line(line), 0.0));
                 }
                 let rule = &self.indents[i];
                 let counts = !seen.contains(&rule.class);
@@ -1646,21 +1673,21 @@ impl<'a> Ctx<'a> {
                 }
                 let levels = match (&rule.by, counts) {
                     (_, false) => 0.0,
-                    (Some(by), true) => Ctx { node: id, ..*self }.eval(by).ok().and_then(|v| v.num().ok()).unwrap_or(1.0),
+                    (Some(by), true) => Ctx { node: id, ..*self }.eval(by)?.num()?,
                     (None, true) => 1.0,
                 };
                 let levels = if rule.dedent { -levels } else { levels };
-                return match from {
+                return Ok(match from {
                     AnchorAt::Text(text) => (AnchorBase::Text(text), levels),
                     AnchorAt::Offset(from) => {
-                        let (base, extra) = self.virtual_anchor(from, seen, depth + 1);
+                        let (base, extra) = self.virtual_anchor(from, seen, depth + 1)?;
                         (base, extra + levels)
                     }
-                };
+                });
             }
             p = self.tree.parent(id);
         }
-        (AnchorBase::Line(line), 0.0)
+        Ok((AnchorBase::Line(line), 0.0))
     }
 
     /// This line starts with the end of the `in` form's inside (its closer),
@@ -1708,43 +1735,40 @@ impl<'a> Ctx<'a> {
             .max_by_key(|&c| self.tree.node(c).end)
     }
 
-    fn builtin(&self, i: usize) -> Value<'a> {
+    fn builtin(&self, i: usize) -> Result<Value<'a>, String> {
         let start = self.tree.node(self.node).start as usize;
-        match BUILTIN_VARS[i].0 {
+        Ok(match BUILTIN_VARS[i].0 {
             "text" => Value::from(self.node_text(self.node)),
             "indent" => Value::from(self.indent_at(start)),
             "parent_indent" => match self.parent_layer() {
                 Some(id) if !self.tree.is_root(id) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
                 _ => Value::from(""),
             },
-            "indented" => Value::Bool(self.indent_hit().is_some()),
-            "indent_level" => match self.indent_hit() {
+            "indented" => Value::Bool(self.indent_hit()?.is_some()),
+            "indent_level" => match self.indent_hit()? {
                 Some(hit) if self.indent_closes(&hit) => Value::Num(hit.extra),
-                Some(hit) => {
-                    let rule = &self.indents[hit.rule];
+                Some(IndentHit { rule: Some(i), node, extra, .. }) => {
+                    let rule = &self.indents[i];
                     let levels = match &rule.by {
-                        Some(by) => Ctx { node: hit.node, ..*self }.eval(by).ok().and_then(|v| v.num().ok()),
-                        None => Some(1.0),
+                        Some(by) => Ctx { node, ..*self }.eval(by)?.num()?,
+                        None => 1.0,
                     };
-                    match levels {
-                        Some(n) => Value::Num(hit.extra + if rule.dedent { -n } else { n }),
-                        None => Value::Null,
-                    }
+                    Value::Num(extra + if rule.dedent { -levels } else { levels })
                 }
-                None => Value::Num(0.0),
+                _ => Value::Num(0.0),
             },
-            "indent_anchor" => match self.indent_hit() {
+            "indent_anchor" => match self.indent_hit()? {
                 Some(IndentHit { base: AnchorBase::Line(line), .. }) => self.line_indent(line),
                 Some(IndentHit { base: AnchorBase::Text(text), .. }) => Value::from(text),
                 None => Value::from(""),
             },
-            "indent_anchor_line" => match self.indent_hit() {
+            "indent_anchor_line" => match self.indent_hit()? {
                 Some(IndentHit { base: AnchorBase::Line(line), .. }) => self.whole_line(line),
                 Some(IndentHit { base: AnchorBase::Text(text), .. }) => Value::from(text),
                 None => Value::from(""),
             },
-            "indent_closes" => Value::Bool(self.indent_hit().is_some_and(|hit| self.indent_closes(&hit))),
-            "indent_hangs" => Value::Bool(self.indent_hit().is_some_and(|hit| {
+            "indent_closes" => Value::Bool(self.indent_hit()?.is_some_and(|hit| self.indent_closes(&hit))),
+            "indent_hangs" => Value::Bool(self.indent_hit()?.is_some_and(|hit| {
                 hit.inside.is_some_and(|(inside, _)| {
                     let line_end = self.lines.line_end(self.source, self.lines.line_of(inside));
                     !self.source[inside..line_end.max(inside)].trim().is_empty()
@@ -1827,7 +1851,7 @@ impl<'a> Ctx<'a> {
             "source" => Value::from(self.source),
             "node" => Value::Node(self.node, value::Text::Borrowed(self.node_text(self.node))),
             other => unreachable!("builtin {other}"),
-        }
+        })
     }
 
     pub fn eval(&self, e: &CExpr) -> Result<Value<'a>, String> {
@@ -1850,7 +1874,7 @@ impl<'a> Ctx<'a> {
                     Some(label) => self.field(a, *label),
                 },
             },
-            CExpr::Builtin(i) => self.builtin(*i),
+            CExpr::Builtin(i) => self.builtin(*i)?,
             CExpr::Dbg(inner, label) => {
                 let v = self.eval(inner)?;
                 let start = self.tree.node(self.node).start as usize;
