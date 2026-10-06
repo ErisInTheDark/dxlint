@@ -667,6 +667,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         }
     }
     let layer_reads: RefCell<Vec<u32>> = RefCell::default();
+    let item_read = std::cell::Cell::new(false);
     let mut scope = Scope { fields, options: option_names, attrs, rule: Some(&def.name.text), uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g) };
     let uses_before = uses.borrow().len();
     // Each `let` sees the ones before it.
@@ -689,13 +690,19 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
             scope.compile(list, errors)
         }
     });
+    // `when`s not reading the item are checked once, before the list is built.
     if let Some((name, _)) = &def.each {
+        scope.param_read = Some((scope.params.len() as u16, &item_read));
         scope.params.push(name.text.clone());
     }
-    let compile_all = |exprs: &[crate::config::ast::Expr], errors: &mut Vec<ConfigError>| -> Vec<CExpr> {
-        exprs.iter().filter_map(|e| scope.compile(e, errors)).collect()
-    };
-    let when = compile_all(&def.when, errors);
+    let (mut node_when, mut when) = (Vec::new(), Vec::new());
+    for e in &def.when {
+        item_read.set(false);
+        if let Some(c) = scope.compile(e, errors) {
+            if def.each.is_none() || item_read.get() { when.push(c) } else { node_when.push(c) }
+        }
+    }
+    scope.param_read = None;
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
     let fix = def.fix.as_ref().and_then(|s| scope.compile(s, errors));
     let fix_when = def.fix_when.as_ref().and_then(|s| scope.compile(s, errors));
@@ -799,6 +806,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         options,
         files,
         ignore,
+        node_when,
         when,
         locals,
         message,
@@ -1028,6 +1036,16 @@ mod demand_tests {
         let severity_word = "define {\nin ts_call rule bad warn \"x\" { default option mode enum(off, on) = on }\n}\n";
         let built = build(crate::config::load_text("test.zlint", &format!("lang js \"*.ts\"\nnative ts\n{severity_word}"), &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("cannot take `off`")), "{:#?}", built.errors);
+    }
+
+    #[test]
+    fn whens_not_reading_the_each_item_skip_building_the_list() {
+        // The list fails to evaluate: only nodes passing the item-free
+        // `when` ever build it.
+        let rule = |guard: &str| format!("in ts_call rule probe warn \"{{x}}\" {{\n  each x in 1 - \"a\"\n  when {guard}\n  when x != null\n}}\nrule probe\n");
+        let messages = |guard: &str| native(&rule(guard)).lint(Path::new("/root/file.ts"), "f();").into_iter().map(|d| d.message).collect::<Vec<_>>();
+        assert_eq!(messages("false"), Vec::<String>::new());
+        assert!(messages("true").iter().any(|m| m.contains("failed here")), "{:?}", messages("true"));
     }
 
     #[test]

@@ -348,6 +348,9 @@ pub struct Scope<'a> {
     /// Where layers read by name are collected (`opener.x`, `closer.x`,
     /// `descendants(x)`): token and trivia nodes exist only when needed.
     pub layer_reads: Option<&'a RefCell<Vec<u32>>>,
+    /// Set when the parameter at this depth is read: which `when`s depend on
+    /// a rule's `each` item.
+    pub param_read: Option<(u16, &'a std::cell::Cell<bool>)>,
 }
 
 /// How the compiler read a name: what hover, go to definition and
@@ -408,6 +411,7 @@ impl<'a> Scope<'a> {
             defining: None,
             uses: None,
             layer_reads: None,
+            param_read: None,
         }
     }
 
@@ -929,6 +933,9 @@ impl Scope<'_> {
         // `.key` reads into them.
         let rule = || self.rule.unwrap_or_default().to_string();
         let value = if let Some(i) = self.params.iter().rposition(|p| *p == first.text) {
+            if let Some((_, read)) = self.param_read.filter(|(watched, _)| *watched as usize == i) {
+                read.set(true);
+            }
             Some(CExpr::Param(i as u16))
         } else if path.len() > 1 && !self.options_only {
             if let Some(i) = self.locals.iter().position(|l| *l == first.text) {

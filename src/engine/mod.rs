@@ -63,6 +63,9 @@ pub struct Rule {
     pub options: Vec<OptionSlot>,
     files: PathGlobs,
     ignore: PathGlobs,
+    /// With `each`: the `when`s not reading the item, checked once per node
+    /// before the list is built.
+    node_when: Vec<CExpr>,
     when: Vec<CExpr>,
     /// `let` values, by slot.
     locals: Vec<CExpr>,
@@ -454,13 +457,21 @@ impl Linter {
     /// The rule's diagnostics on one node: one, or one per `each` item.
     fn apply_each(&self, f: &Rule, ctx: &Ctx) -> Vec<Diagnostic> {
         let Some(list) = &f.each else { return self.apply(f, ctx).into_iter().collect() };
+        let failed = |e: String| {
+            let node = ctx.tree.node(ctx.node);
+            let message = format!("rule `{}` failed here: {e}", f.name);
+            vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, start: node.start as usize, end: node.end as usize, fix: None }]
+        };
+        for w in &f.node_when {
+            match ctx.eval(w) {
+                Ok(v) if v.truthy() => {}
+                Ok(_) => return Vec::new(),
+                Err(e) => return failed(e),
+            }
+        }
         let items = match ctx.eval(list) {
             Ok(v) => v.items(),
-            Err(e) => {
-                let node = ctx.tree.node(ctx.node);
-                let message = format!("rule `{}` failed here: {e}", f.name);
-                return vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, start: node.start as usize, end: node.end as usize, fix: None }];
-            }
+            Err(e) => return failed(e),
         };
         let mut out = Vec::new();
         for item in items {
