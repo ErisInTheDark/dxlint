@@ -350,8 +350,10 @@ existing rule on or configures it instead (see
 **Targets.** A rule checks every node of its context's layers: a matcher (and
 its specialisations), a field (`in m.field rule`), a group (every member),
 `.lang` (whole files of a language) or `.*` (whole files of every language).
-With several targets (`in a, b.field rule`), fields used in the body must
-exist on all of them.
+With several targets (`in a, b.field rule`), bare fields used in the body must
+exist on all of them. Dotted paths through a known field (`name.offset`,
+`name.unparen_offset`) instead read that field on the current node; a missing
+field yields `null`.
 
 `in K.link rule` also targets nodes reached through a registered node link
 from nodes of matcher `K`. Links can return one node or many:

@@ -527,7 +527,9 @@ impl Project {
 
     fn globals_of(&self, config: &Config) -> Arc<Globals> {
         let lib_dir = find_up(&config.dir, &["node_modules", "typescript", "lib"]);
-        let key = format!("{:?}|{:?}|{:?}", config.lib, config.types, lib_dir);
+        // The project's own globals come from the config's directory and
+        // references, so configs sharing libraries still differ by scope.
+        let key = format!("{:?}|{:?}|{:?}|{:?}|{:?}", config.lib, config.types, lib_dir, config.dir, config.references);
         let cell = {
             let mut map = self.globals.lock().expect("globals lock");
             map.entry(key).or_default().clone()

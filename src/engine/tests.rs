@@ -631,6 +631,28 @@ pub(crate) fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules
 }
 
 #[test]
+fn each_tsconfig_sees_its_own_project_globals_whichever_asks_first() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join("globals-per-config");
+    let _ = std::fs::remove_dir_all(&dir);
+    for (path, text) in [
+        ("ui/tsconfig.json", "{}"),
+        ("ui/screen.ts", "export class Screen {}\ndeclare global { let screen: Screen; }\n"),
+        ("game/tsconfig.json", "{}"),
+        ("game/game.ts", "export const game = 1;\n"),
+    ] {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    // Both configs share their libraries; the game one asks first.
+    let project = crate::native::ts::modules::Project::default();
+    let game = project.file_id(&dir.join("game").join("game.ts"));
+    let ui = project.file_id(&dir.join("ui").join("main.ts"));
+    assert!(!project.globals(game).names.contains_key("screen"));
+    assert!(project.globals(ui).names.contains_key("screen"));
+}
+
+#[test]
 fn strict_implies_its_family_unless_an_option_says_otherwise() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join("strict-option");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1450,6 +1472,33 @@ fn paths_reach_ancestors_parents_fields_and_nodes() {
     let spans: Vec<(usize, usize, String)> =
         l.lint(Path::new("/root/a.ts"), "async function h() { for await (const x of y) {} }").into_iter().map(|d| (d.start, d.end, d.message)).collect();
     assert_eq!(spans, [(21, 24, "g".to_string()), (43, 44, "await:true".to_string())]);
+}
+
+#[test]
+fn mixed_targets_read_paths_on_present_fields() {
+    let source = "let value: number = 1; function f(parameter: number = 1) {}";
+    let parameter = source.find("parameter").unwrap();
+    for target in ["ts_declarator, ts_class_property, ts_parameter", "mixed"] {
+        for path in ["name.unparen_offset", "name.offset", "name.child_start", "name.parent.offset"] {
+            let config = r#"
+                group mixed ts_declarator, ts_class_property, ts_parameter
+                in ts_identifier let child_start offset
+                in TARGET rule present info "present" {
+                    when node is ts_parameter
+                    report at PATH
+                }
+                in TARGET rule absent info "absent" {
+                    when node is ts_class_property && name.offset == null
+                }
+            "#.replace("TARGET", target).replace("PATH", path);
+            let l = native_linter(&config);
+            let starts: Vec<usize> = l.lint(Path::new("/root/a.ts"), source).into_iter().map(|d| d.start).collect();
+            assert_eq!(starts, [parameter], "{target}: {path}");
+            let property = "class C { property: number = 1; }";
+            let starts: Vec<usize> = l.lint(Path::new("/root/a.ts"), property).into_iter().map(|d| d.start).collect();
+            assert_eq!(starts, [property.find("property").unwrap()], "{target}: absent field");
+        }
+    }
 }
 
 #[test]

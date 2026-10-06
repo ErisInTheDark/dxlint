@@ -1215,8 +1215,8 @@ impl Scope<'_> {
                 }
                 // `node.parent`, `declaration.x`: read on that value.
                 if self.grammar.matcher(&layer.text).is_none() && own_field.is_none() {
-                    if let Some(value) = self.node_part(layer) {
-                        return Some(self.member(value, field));
+                    if let Some(value) = self.fallback_path(layer, std::slice::from_ref(field), errors) {
+                        return Some(value);
                     }
                 }
                 let Some(m) = self.grammar.matcher(&layer.text) else {
@@ -1268,13 +1268,23 @@ impl Scope<'_> {
                     return Some(CExpr::Relative(rel, Box::new(inner)));
                 }
                 // `node.callee.x`, `declaration.parent.x`: read on that value.
-                if let Some(value) = self.node_part(first) {
-                    return Some(self.member_path(value, rest));
+                if let Some(value) = self.fallback_path(first, rest, errors) {
+                    return Some(value);
                 }
                 errors.push(ConfigError::new(first.span, format!("unknown name `{}`", first.text)));
                 None
             }
             [] => None,
+        }
+    }
+
+    fn fallback_path(&self, first: &crate::config::ast::Name, rest: &[crate::config::ast::Name], errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        match self.node_part(first)? {
+            CExpr::Field(label) => {
+                self.note(first.span, Resolved::Field(first.text.clone()));
+                Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?)))
+            }
+            value => Some(self.member_path(value, rest)),
         }
     }
 
