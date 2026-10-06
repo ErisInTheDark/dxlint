@@ -63,7 +63,7 @@ pub struct Rule {
     pub severity: Severity,
     /// The severity `rule name` (without one) turns it on at.
     pub default_severity: Severity,
-    pub options: Vec<OptionSlot>,
+    options: Vec<OptionSlot>,
     files: PathGlobs,
     ignore: PathGlobs,
     /// With `each`: the `when`s not reading the item, checked once per node
@@ -101,8 +101,30 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// The final configuration used to specialise this rule's expressions.
+    pub fn options(&self) -> &[OptionSlot] {
+        &self.options
+    }
+
     fn option_values(&self) -> Vec<Value<'static>> {
         self.options.iter().map(|o| o.value.clone()).collect()
+    }
+
+    fn specialise_options(&mut self) {
+        let options = self.option_values();
+        let fold = |expr: &mut CExpr| crate::expr::fold::specialise(expr, &options);
+        self.locals.iter_mut().chain(&mut self.node_when).chain(&mut self.when).for_each(fold);
+        for expr in [
+            &mut self.message, &mut self.fix, &mut self.fix_when, &mut self.fix_at,
+            &mut self.report_at, &mut self.each, &mut self.indent_reset,
+        ].into_iter().flatten() {
+            fold(expr);
+        }
+        for indent in &mut self.indents {
+            for expr in [&mut indent.by, &mut indent.from].into_iter().flatten() {
+                fold(expr);
+            }
+        }
     }
 
     /// The message with current option values filled in; holes that need a

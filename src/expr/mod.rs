@@ -4,6 +4,7 @@
 pub mod case;
 pub mod facts;
 pub mod functions;
+pub(crate) mod fold;
 #[cfg(test)]
 mod indent_tests;
 pub(crate) mod re;
@@ -2318,17 +2319,7 @@ impl<'a> Ctx<'a> {
                     self.eval(b)?
                 }
             }
-            CExpr::Binary(op, a, b) => {
-                let a = self.eval(a)?;
-                // Short-circuit before evaluating the right side.
-                match op {
-                    BinOp::And if !a.truthy() => return Ok(Value::Bool(false)),
-                    BinOp::Or if a.truthy() => return Ok(Value::Bool(true)),
-                    _ => {}
-                }
-                let b = self.eval(b)?;
-                binary(*op, a, b)?
-            }
+            CExpr::Binary(op, a, b) => eval_binary(*op, a, b, |expr| self.eval(expr))?,
             CExpr::Test(value, prog) => Value::Bool(full_match(self.grammar, self.lang, prog, &self.eval(value)?.text())),
             CExpr::TestDfa(value, dfa) => Value::Bool(dfa.is_match(self.eval(value)?.text().as_bytes())),
             CExpr::Is(value, tests) => {
@@ -2478,7 +2469,7 @@ impl<'a> Ctx<'a> {
                     eval(b)?
                 }
             }
-            CExpr::Binary(op, a, b) => binary(*op, eval(a)?, eval(b)?)?,
+            CExpr::Binary(op, a, b) => eval_binary(*op, a, b, eval)?,
             _ => return Err("needs a node to evaluate".into()),
         })
     }
@@ -2492,6 +2483,21 @@ impl<'a> Ctx<'a> {
             other => Ctx::eval_static(other, options).map(|v| v.text().into_owned()).unwrap_or_else(|_| "<dynamic>".into()),
         }
     }
+}
+
+fn eval_binary<'a>(
+    op: BinOp,
+    left: &CExpr,
+    right: &CExpr,
+    eval: impl Fn(&CExpr) -> Result<Value<'a>, String>,
+) -> Result<Value<'a>, String> {
+    let left = eval(left)?;
+    match op {
+        BinOp::And if !left.truthy() => return Ok(Value::Bool(false)),
+        BinOp::Or if left.truthy() => return Ok(Value::Bool(true)),
+        _ => {}
+    }
+    binary(op, left, eval(right)?)
 }
 
 fn eval_args<'a, T>(
@@ -2596,7 +2602,26 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
 
 #[cfg(test)]
 mod evaluation_tests {
+    use super::{CExpr, Ctx, Value};
+    use crate::config::ast::BinOp;
     use crate::engine::tests::{lint, linter};
+
+    #[test]
+    fn static_booleans_match_runtime_truth_tables_and_skip_dead_errors() {
+        let boolean = |value| Box::new(CExpr::Const(Value::Bool(value)));
+        for a in [false, true] {
+            for b in [false, true] {
+                for (op, expected) in [(BinOp::And, a && b), (BinOp::Or, a || b)] {
+                    let result = Ctx::eval_static(&CExpr::Binary(op, boolean(a), boolean(b)), &[]).unwrap();
+                    assert_eq!(result, Value::Bool(expected));
+                }
+            }
+        }
+        for (op, first) in [(BinOp::And, false), (BinOp::Or, true)] {
+            let failure = CExpr::Binary(BinOp::Rem, Box::new(CExpr::Const(Value::Num(1.0))), Box::new(CExpr::Const(Value::Num(0.0))));
+            assert_eq!(Ctx::eval_static(&CExpr::Binary(op, boolean(first), Box::new(failure)), &[]).unwrap(), Value::Bool(first));
+        }
+    }
 
     #[test]
     fn nested_calls_keep_caller_arguments_and_attribute_lambdas_separate() {
