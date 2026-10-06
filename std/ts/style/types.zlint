@@ -114,9 +114,11 @@ in ts_type_keyword rule no-invalid-void-type {
 }
 
 in ts_parameter let rest_function_parameter name is ts_rest && parent is (ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type)
-in ts_type_operator let rest_array_wrapper operator == "readonly" && parent.rest_function_parameter == true
-in ts_type_reference let rest_array_wrapper contains(["Array", "ReadonlyArray"], name) && parent.rest_function_parameter == true
-in style_tree_node let rest_array_argument parent.rest_function_parameter == true || parent.rest_array_wrapper == true
+fn rest_parameter_annotation(n) =
+  n is ts_parameter.type && n.parent.rest_function_parameter == true
+  || n is ts_type_operator.type && n.parent.operator == "readonly" && n.parent is ts_parameter.type && n.parent.parent.rest_function_parameter == true
+in ts_array_type let rest_array_argument rest_parameter_annotation(node)
+in ts_type_reference let rest_array_argument contains(["Array", "ReadonlyArray"], name) && rest_parameter_annotation(node)
 in ts_type_keyword let no_explicit_any_checked true
 in ts_type_keyword rule no-explicit-any {
   when text == "any"

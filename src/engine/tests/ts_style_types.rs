@@ -4,11 +4,11 @@ use super::native_linter;
 
 #[test]
 fn explicit_any_hook_selects_rest_array_context_without_hiding_other_annotations() {
-    let source = "type Ordinary = any; function arrays(...args: any[]) {} type Callback = (...args: ReadonlyArray<any>) => void; function immutable(...args: readonly any[]) {} function bare(...args: any) {} function nested(...args: any[][]) {} function tuple(...args: [any]) {} let value: Array<any>; let marker: number;";
+    let source = "type Ordinary = any; function arrays(...args: any[]) {} type Callback = (...args: ReadonlyArray<any>) => void; function immutable(...args: readonly any[]) {} function bare(...args: any) {} function nested(...args: any[][]) {} function tuple(...args: [any]) {} let value: Array<any>; let marker: number; function unrelated(...args: Foo<any>) {} function genericNested(...args: Array<Array<any>>) {}";
     for (predicate, expected) in [
-        ("true", 8),
-        ("parent.rest_array_argument != true", 5),
-        ("parent not ts_type_alias", 7),
+        ("true", 10),
+        ("parent.rest_array_argument != true", 7),
+        ("parent not ts_type_alias", 9),
         ("false", 0),
     ] {
         let linter = native_linter(&format!("override in ts_type_keyword let no_explicit_any_checked {predicate}\nrule no-explicit-any"));
