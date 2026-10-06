@@ -73,11 +73,12 @@ pub struct Rule {
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
-    /// What the node (or the space next to it) should look like (`fix as expr`).
+    /// What the selected fix region should look like (`fix ... as expr`).
     fix: Option<CExpr>,
     /// `fix if cond as ...`: without it holding, report without the fix.
     fix_when: Option<CExpr>,
     fix_target: FixTarget,
+    fix_at: Option<CExpr>,
     /// `indent [in] X by n` lines.
     indents: Vec<crate::expr::IndentRule>,
     indent_reset: Option<CExpr>,
@@ -542,7 +543,13 @@ impl Linter {
             Some(expr) => match ctx.eval(expr) {
                 Ok(v) => {
                     let want = v.text();
-                    let (from, to) = fix_region(ctx.source, start, end, f.fix_target);
+                    let (from, to) = match &f.fix_at {
+                        Some(at) => match ctx.eval(at).and_then(|value| explicit_fix_region(ctx, value)) {
+                            Ok(span) => span,
+                            Err(e) => return Some(failed(e)),
+                        },
+                        None => fix_region(ctx.source, start, end, f.fix_target),
+                    };
                     if want == ctx.source[from..to] {
                         return None;
                     }
@@ -642,6 +649,35 @@ fn fix_region(source: &str, start: usize, end: usize, target: FixTarget) -> (usi
     }
 }
 
+fn explicit_fix_region(ctx: &Ctx<'_>, value: Value<'_>) -> Result<(usize, usize), String> {
+    let boundary = |value: Value<'_>| {
+        let Value::Num(number) = value else { return Err("fix span offsets must be numbers".to_owned()) };
+        if !number.is_finite() || number < 0.0 || number.fract() != 0.0 || number > ctx.source.len() as f64 {
+            return Err("fix span offsets must be finite integers within the file".to_owned());
+        }
+        let offset = number as usize;
+        if !ctx.source.is_char_boundary(offset) {
+            return Err("fix span offsets must be UTF-8 boundaries".to_owned());
+        }
+        Ok(offset)
+    };
+    let (start, end) = match value {
+        Value::Node(id, _) => {
+            let node = ctx.tree.node(id);
+            (boundary(Value::Num(node.start as f64))?, boundary(Value::Num(node.end as f64))?)
+        }
+        Value::Record(_) => (boundary(value.key("start"))?, boundary(value.key("end"))?),
+        value => {
+            let at = boundary(value)?;
+            (at, at)
+        }
+    };
+    if start > end {
+        return Err("fix span start must not follow its end".to_owned());
+    }
+    Ok((start, end))
+}
+
 /// Remembers a fix that only rewrites a line's leading whitespace, as that
 /// line's indentation once fixed.
 fn record_reindent(reindented: &mut HashMap<usize, String>, source: &str, lines: &LineIndex, edit: &Edit) {
@@ -658,4 +694,71 @@ fn record_reindent(reindented: &mut HashMap<usize, String>, source: &str, lines:
     }
     let fixed = format!("{}{}{}", &source[line_start..edit.start], edit.text, &source[edit.end..ws_end]);
     reindented.insert(line, fixed);
+}
+
+#[cfg(test)]
+mod fix_span_tests {
+    use super::*;
+    use super::tests::{linter, native_linter};
+
+    #[test]
+    fn configured_fixes_replace_the_previous_condition() {
+        for (original, patch, fixable) in [
+            ("if true as \"A\"", "if false as \"B\"", false),
+            ("if false as \"A\"", "as \"B\"", true),
+        ] {
+            let lint = linter(&format!("in .t match item /X/ {{ rule r warn \"change\" fix {original} }}\nrule r {{ fix {patch} }}"));
+            let reports = lint.lint(Path::new("/root/a.t"), "X");
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].fix.is_some(), fixable);
+            assert_eq!(apply_fixes("X", &reports).0, if fixable { "B" } else { "X" });
+        }
+    }
+
+    #[test]
+    fn explicit_fixes_edit_the_requested_bytes_not_the_reporting_node() {
+        let source = "\u{e9} X";
+        for (span, replacement, expected) in [
+            ("0", "!", "!\u{e9} X"),
+            ("{start:0,end:2}", "O", "O X"),
+            ("parent", "Y", "Y"),
+        ] {
+            let lint = linter(&format!("in .t match item /X/ {{ rule r warn \"change\" fix at {span} as \"{replacement}\" }}"));
+            let reports = lint.lint(Path::new("/root/a.t"), source);
+            assert_eq!(reports.len(), 1);
+            assert_eq!((reports[0].start, reports[0].end), (3, 4));
+            assert_eq!(apply_fixes(source, &reports), (expected.to_owned(), 1));
+        }
+    }
+
+    #[test]
+    fn invalid_explicit_fix_spans_report_errors_without_edits() {
+        for span in ["1", "-1", "0.5", "99", "\"0\"", "null", "{start:2,end:1}", "{start:0,end:1}", "{start:0}", "{end:2}"] {
+            let lint = linter(&format!("in .t match item /X/ {{ rule r warn \"change\" fix at {span} as \"!\" }}"));
+            let reports = lint.lint(Path::new("/root/a.t"), "\u{e9} X");
+            assert_eq!(reports.len(), 1, "{span}");
+            assert_eq!(reports[0].severity, Severity::Error, "{span}");
+            assert!(reports[0].fix.is_none(), "{span}");
+        }
+    }
+
+    #[test]
+    fn explicit_fixes_preserve_noop_and_conditional_fix_behaviour() {
+        let source = "\u{e9} X";
+        let lint = linter("in .t match item /X/ { rule r warn \"change\" fix at {start:0,end:2} as \"\\u{e9}\" }");
+        assert!(lint.lint(Path::new("/root/a.t"), source).is_empty());
+        let lint = linter("in .t match item /X/ { rule r warn \"change\" fix at 0 if false as \"!\" }");
+        let reports = lint.lint(Path::new("/root/a.t"), source);
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].fix.is_none());
+        assert_eq!(apply_fixes(source, &reports), (source.to_owned(), 0));
+    }
+
+    #[test]
+    fn fix_span_only_layer_reads_keep_token_layers_reachable() {
+        let lint = native_linter("in ts_call rule r warn \"change\" fix at last(descendants(ts_comma)) as \";\"");
+        let reports = lint.lint(Path::new("/root/a.ts"), "f(a,b);");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(apply_fixes("f(a,b);", &reports), ("f(a;b);".to_owned(), 1));
+    }
 }

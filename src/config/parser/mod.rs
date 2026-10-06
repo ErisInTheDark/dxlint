@@ -1106,7 +1106,7 @@ impl<'a> Parser<'a> {
         self.skip(false, true);
         if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("fix")) {
             self.ts.next_raw();
-            (def.fix_target, def.fix_when, def.fix) = self.fix_as();
+            (def.fix_target, def.fix_at, def.fix_when, def.fix) = self.fix_as();
         }
         if self.errors.len() == before {
             self.skip(false, true);
@@ -1295,9 +1295,8 @@ impl<'a> Parser<'a> {
         self.end_of_item();
     }
 
-    /// After `fix`: `as expr`, `space_before as expr` or `space_after as expr`.
-    /// `fix [space_before|space_after] [if cond] as expr`.
-    fn fix_as(&mut self) -> (FixTarget, Option<Expr>, Option<Expr>) {
+    /// `fix [space_before|space_after|at expr] [if cond] as expr`.
+    fn fix_as(&mut self) -> (FixTarget, Option<Expr>, Option<Expr>, Option<Expr>) {
         self.skip(false, true);
         let target = match self.ts.peek_raw(0) {
             Some(t) if t.is_ident("space_before") => FixTarget::SpaceBefore,
@@ -1308,6 +1307,14 @@ impl<'a> Parser<'a> {
             self.ts.next_raw();
             self.skip(false, true);
         }
+        let at = if target == FixTarget::Node && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("at")) {
+            self.ts.next_raw();
+            let at = self.expr();
+            self.skip(false, true);
+            at
+        } else {
+            None
+        };
         let when = if self.ts.peek_raw(0).is_some_and(|t| t.is_ident("if")) {
             self.ts.next_raw();
             let cond = self.expr();
@@ -1319,15 +1326,15 @@ impl<'a> Parser<'a> {
         match self.ts.peek_raw(0).cloned() {
             Some(t) if t.is_ident("as") => {
                 self.ts.next_raw();
-                (target, when, self.expr())
+                (target, at, when, self.expr())
             }
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
                 self.errors.push(
                     ConfigError::new(span, "expected `as` after `fix`: `fix as <what the text should be>`")
-                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite the whitespace next to the node; `fix if <cond> as ...` fixes only when cond holds"),
+                        .note("`fix space_before as \" \"` / `fix space_after as \"\"` rewrite adjacent whitespace; `fix at <span> as ...` rewrites explicit bytes; `fix if <cond> as ...` fixes only when cond holds"),
                 );
-                (target, when, None)
+                (target, at, when, None)
             }
         }
     }
@@ -1423,7 +1430,7 @@ impl<'a> Parser<'a> {
                                 .note("a rule has at most one fix: the expression saying what the text should be"),
                         );
                     } else {
-                        (def.fix_target, def.fix_when, def.fix) = self.fix_as();
+                        (def.fix_target, def.fix_at, def.fix_when, def.fix) = self.fix_as();
                     }
                 }
                 (Tk::Ident, "when") => {

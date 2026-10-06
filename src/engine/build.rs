@@ -472,6 +472,8 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             if let Some(f) = &patch.fix {
                 def.fix = Some(f.clone());
                 def.fix_target = patch.fix_target;
+                def.fix_at = patch.fix_at.clone();
+                def.fix_when = patch.fix_when.clone();
             }
             if patch.report.is_some() {
                 def.report = patch.report;
@@ -721,6 +723,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));
     let fix = def.fix.as_ref().and_then(|s| scope.compile(s, errors));
     let fix_when = def.fix_when.as_ref().and_then(|s| scope.compile(s, errors));
+    let fix_at = def.fix_at.as_ref().and_then(|s| scope.compile(s, errors));
     let report_at = def.report_at.as_ref().and_then(|s| scope.compile(s, errors));
     // `indent X by n`: `n` reads X (its fields when X names only layers) and
     // the rule's options; X's layers must be built.
@@ -827,6 +830,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         message,
         fix,
         fix_when,
+        fix_at,
         fix_target: def.fix_target,
         indents,
         indent_reset,

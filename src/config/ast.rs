@@ -268,7 +268,7 @@ pub struct RuleDef {
     pub files: Vec<(String, Span)>,
     pub ignore: Vec<(String, Span)>,
     pub when: Vec<Expr>,
-    /// `fix as expr`: what the node should look like. Different text =>
+    /// `fix ... as expr`: what the selected region should look like. Different text =>
     /// diagnostic + fix.
     pub fix: Option<Expr>,
     /// `fix if cond as expr`: only then is the fix attached; otherwise the
@@ -276,6 +276,8 @@ pub struct RuleDef {
     pub fix_when: Option<Expr>,
     /// What `fix` rewrites: the node, or the whitespace next to it.
     pub fix_target: FixTarget,
+    /// `fix at expr as expr`: an explicit UTF-8 byte span instead of the target.
+    pub fix_at: Option<Expr>,
     /// `let name expr` clauses: values computed once per node, usable in
     /// the rule's other clauses (and later `let`s).
     pub locals: Vec<(Name, Expr)>,
@@ -336,6 +338,7 @@ impl RuleDef {
             fix: None,
             fix_when: None,
             fix_target: FixTarget::Node,
+            fix_at: None,
             locals: Vec::new(),
             indents: Vec::new(),
             indent_reset: None,

@@ -391,6 +391,15 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 (`""`), add text. A rule without a fix reports every node that passes its
 `when` conditions.
 
+`fix at span as expr` rewrites explicit UTF-8 bytes: a number inserts at that offset, a `{start, end}` record replaces that half-open range, and a node replaces its span. Offsets must be finite integers within the file, on UTF-8 character boundaries, with `start <= end`; invalid spans report a rule error without a fix. `fix at span if condition as expr` attaches a fix only when the condition holds. Unchanged text still suppresses the diagnostic; the diagnostic's location remains controlled by `report`, not the fix span.
+
+```zlint
+fix at {start:comma.offset, end:comma.end_offset} as ""
+fix at end_offset as ";"
+```
+
+`--format jsonl` retains `fixable` and adds `fix.edits` on fixable diagnostics. Each edit is `{start, end, text}`, using zero-based, half-open UTF-8 byte offsets into the reported file text (not character or UTF-16 offsets). All edits of one diagnostic form one atomic fix; replacements apply to the same original text, not sequentially shifted offsets. Unfixable diagnostics omit `fix`.
+
 **Body clauses.**
 
 | clause | meaning |
@@ -399,6 +408,7 @@ equal, nothing happens. Fixes can be anything: reorder, rename, delete
 | `when expr` | only nodes where `expr` is truthy; several `when`s must all hold, in order |
 | `let name expr` | a value computed once per node and usable by later clauses, the message and the fix |
 | `fix as expr` | what the node should be |
+| `fix at span [if condition] as expr` | replace explicit UTF-8 bytes; a numeric span inserts text |
 | `option name <type> = <default> "description"` | a configurable value of that type, see [Option types](#option-types) |
 | `files "glob" ...` | only these files |
 | `ignore "glob" ...` | not these files |
