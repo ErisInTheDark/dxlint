@@ -34,7 +34,7 @@ in ts_method rule explicit-member-accessibility:method {
   let check default(if class_constructor then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods, accessibility)
   let shape style_member
   when parent is ts_class && !re_test(key, /^#/) && !contains(ignoredMethodNames, shape.name)
-  when check == "explicit" && !has_accessibility(modifiers) || check == "no-public" && contains([] modifier, "public")
+  when check == "explicit" && !has_accessibility(@modifiers) || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on {if kind == 'get' then 'get property accessor' else if kind == 'set' then 'set property accessor' else 'method definition'} {shape.name}."
 }
@@ -45,7 +45,7 @@ in ts_parameter rule explicit-member-accessibility:parameter {
   let check default(overrides.parameterProperties, accessibility)
   let shape style_member
   when contains([] modifier, "readonly") && parent is ts_method
-  when check == "explicit" && !has_accessibility(modifiers) || check == "no-public" && contains([] modifier, "public")
+  when check == "explicit" && !has_accessibility(@modifiers) || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on parameter property {shape.name}."
 }
@@ -82,7 +82,7 @@ in ts_class_property.key rule class-literal-property-style:getters {
   warn "Literals should be exposed using getters."
 }
 
-in ts_parameter let is_parameter_property re_test(modifiers, /\b(?:public|private|protected|readonly)\b/)
+in ts_parameter let is_parameter_property re_test(@modifiers, /\b(?:public|private|protected|readonly)\b/)
 in ts_method, ts_class_property let is_static contains([] modifier, "static")
 in ts_method let constructor_parameter_properties any([] parameter.is_parameter_property, p => p == true)
 in ts_method let class_constructor_only class_constructor && !constructor_parameter_properties
@@ -116,8 +116,8 @@ in ts_block let constructor_super_call if count(body) == 1 then first([] body.co
 fn constructor_spreads_arguments(arg) = arg is ts_spread && arg.argument is ts_identifier && arg.argument == "arguments"
 in ts_method rule no-useless-constructor {
   # A public constructor of a derived class may widen a protected one.
-  when class_constructor && body != null && count(decorator) == 0 && !re_test(modifiers, /\b(?:private|protected)\b/)
-  when !(ts_class.extends != null && re_test(modifiers, /\bpublic\b/))
+  when class_constructor && body != null && count(decorator) == 0 && !re_test(@modifiers, /\b(?:private|protected)\b/)
+  when !(ts_class.extends != null && re_test(@modifiers, /\bpublic\b/))
   when !any([] parameter.constructor_parameter_exempt)
   let super_call body.constructor_super_call
   when if ts_class.extends == null then count(body.body) == 0 else super_call != null && count(parameter) == count([] parameter.constructor_forwarding_key)

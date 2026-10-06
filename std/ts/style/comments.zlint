@@ -32,18 +32,18 @@ in jsdoc_blank_run rule check-alignment:blank {
   warn "Expected JSDoc block to be aligned."
 }
 # `/**` then anything but another `*` (`/*****` banners are not JSDoc).
-macro is_jsdoc re_test(parent_text, /^\/\*\*[^*]/)
+@macro is_jsdoc re_test(parent_text, /^\/\*\*[^*]/)
 in jsdoc_line rule check-alignment {
-  when is_jsdoc && text != parent_indent " *"
+  when @is_jsdoc && text != parent_indent " *"
   warn "Expected JSDoc block to be aligned."
 }
 in jsdoc_close_indent rule check-alignment:close {
-  when is_jsdoc && text != parent_indent " "
+  when @is_jsdoc && text != parent_indent " "
   warn "Expected JSDoc block to be aligned."
 }
 in ts_block_comment match jsdoc_typed_tag /^[ \t]*\*[ \t]*@(?:param|arg|argument|returns?|property|prop|throws|yields)[ \t]+\{/
 in jsdoc_typed_tag rule no-types {
-  when is_jsdoc
+  when @is_jsdoc
   warn "Types are not permitted on @{re_replace(text, /^.*@(\w+).*$/, '$1')}."
 }
 

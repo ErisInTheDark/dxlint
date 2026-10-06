@@ -11,8 +11,8 @@ define {
 
 group style_tree_node ts_node
 
-macro modifiers (join([] modifier, " "))
-macro has_accessibility(m) re_test(m, /\b(?:public|private|protected)\b/)
+@macro modifiers (join([] modifier, " "))
+fn has_accessibility(m) = re_test(m, /\b(?:public|private|protected)\b/)
 
 }
 

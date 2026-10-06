@@ -47,7 +47,7 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
   void_arrow: is ts_arrow && body.returned_void == true
 }
 
-macro explicit_return_rule(rule-id, return_context) {
+@macro explicit_return_rule(rule-id, return_context) {
   in return_context rule rule-id {
     option allowConciseArrowFunctionExpressionsStartingWithVoid boolean = false "Allow concise arrows starting with void."
     option allowDirectConstAssertionInArrowFunctions boolean = true "Allow concise arrows returning const assertions."
@@ -65,9 +65,9 @@ macro explicit_return_rule(rule-id, return_context) {
     warn "Missing return type on function."
   }
 }
-explicit_return_rule(explicit-function-return-type, ts_function)
-explicit_return_rule(explicit-function-return-type:method, ts_method)
-explicit_return_rule(explicit-function-return-type:arrow, ts_arrow)
+@explicit_return_rule(explicit-function-return-type, ts_function)
+@explicit_return_rule(explicit-function-return-type:method, ts_method)
+@explicit_return_rule(explicit-function-return-type:arrow, ts_arrow)
 
 # explicit-module-boundary-types: what other modules see needs types.
 group style_boundary_export ts_export, ts_export_assignment
@@ -114,7 +114,7 @@ in ts_parameter let boundary_argument {
   name: name.unified_parameter_name,
   pattern: if name is ts_rest then "Rest" else if name is ts_array_pattern then "Array pattern" else "Object pattern"
 }
-macro boundary_rule(rule-id, boundary_context, parameter_check) {
+@macro boundary_rule(rule-id, boundary_context, parameter_check) {
   in boundary_context rule rule-id {
     option allowArgumentsExplicitlyTypedAsAny boolean = false "Allow explicit any parameter types."
     option allowDirectConstAssertionInArrowFunctions boolean = true "Allow concise arrows returning const assertions."
@@ -133,9 +133,9 @@ macro boundary_rule(rule-id, boundary_context, parameter_check) {
     warn if parameter_check then (if boundary_argument.name != null then "Argument '" boundary_argument.name "'" else boundary_argument.pattern " argument") " should be typed" (if boundary_argument.any then " with a non-any type" else "") "." else "Missing return type on function."
   }
 }
-boundary_rule(explicit-module-boundary-types, ts_function, false)
-boundary_rule(explicit-module-boundary-types:method, ts_method, false)
-boundary_rule(explicit-module-boundary-types:arrow, ts_arrow, false)
-boundary_rule(explicit-module-boundary-types:argument, ts_parameter, true)
+@boundary_rule(explicit-module-boundary-types, ts_function, false)
+@boundary_rule(explicit-module-boundary-types:method, ts_method, false)
+@boundary_rule(explicit-module-boundary-types:arrow, ts_arrow, false)
+@boundary_rule(explicit-module-boundary-types:argument, ts_parameter, true)
 
 }

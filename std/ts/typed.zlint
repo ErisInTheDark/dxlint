@@ -10,10 +10,10 @@ import .ts/type-specifiers
 
 define {
 
-macro thenable contains(default(type_members, []), "then")
-macro flags (default(type_flags, []))
-macro has_only_flags(fs, allowed) (count(fs) > 0 && count(unique(fs allowed)) == count(unique(allowed)))
-macro matches_type_names(groups, names) all(groups, group => any(group, name => contains(names, name)))
+@macro thenable contains(default(type_members, []), "then")
+@macro flags (default(type_flags, []))
+fn has_only_flags(fs, wanted) = count(fs) > 0 && count(unique(fs wanted)) == count(unique(wanted))
+fn matches_type_names(groups, names) = all(groups, group => any(group, name => contains(names, name)))
 
 in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
   when generated_empty_object
@@ -373,7 +373,7 @@ in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversi
 in ts_member let chain_handles_rejection object.handles_rejection
 in ts_call let handles_rejection callee ~ /[\s\S]*\.catch/ && count(argument) >= 1 || callee ~ /[\s\S]*\.then/ && count(argument) >= 2 || callee ~ /[\s\S]*\.finally/ && callee.chain_handles_rejection == true
 in ts_expression_statement.expression rule no-floating-promises {
-  when not (ts_assignment, ts_await) && !handles_rejection && thenable
+  when not (ts_assignment, ts_await) && !handles_rejection && @thenable
   warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
 }
 
@@ -481,7 +481,7 @@ in ts_for_in rule no-for-in-array {
 # checksVoidReturn off (wayward): conditions and spreads only.
 in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test rule no-misused-promises {
   # Always a promise: `Promise | undefined` is a fair thing to test.
-  when contains(flags, "promise") && has_only_flags(flags, ["promise", "object", "union"])
+  when contains(@flags, "promise") && has_only_flags(@flags, ["promise", "object", "union"])
   warn "Expected non-Promise value in a boolean conditional."
 }
 
@@ -521,8 +521,8 @@ in ts_template, ts_template_type rule no-unnecessary-template-expression {
 
 # Receivers: what the object of `x.method(...)` is.
 in ts_member let receiver_flags object.type_flags
-macro receiver_is(kind) (contains(default(callee.receiver_flags, []), kind) && !contains(default(callee.receiver_flags, []), "unknown"))
-in ts_call let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) == 1 && (receiver_is("array") || receiver_is("string"))
+@macro receiver_is(kind) (contains(default(callee.receiver_flags, []), kind) && !contains(default(callee.receiver_flags, []), "unknown"))
+in ts_call let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) == 1 && (@receiver_is("array") || @receiver_is("string"))
 
 in ts_binary rule prefer-includes {
   when left.is_index_of == true && (re_test(operator, /^!==?$/) && right == "-1" || re_test(operator, /^===?$/) && right == "-1" || operator == ">" && right == "-1" || operator == ">=" && right == "0" || operator == "<" && right == "0")
@@ -531,7 +531,7 @@ in ts_binary rule prefer-includes {
 
 # startsWith / endsWith written the long way, on strings.
 in ts_call {
-  let starts_ends_kind if receiver_is("string") && re_test(callee, /\.\s*indexOf$/) then "start_index" else if receiver_is("string") && re_test(callee, /\.\s*charAt$/) && first([] argument) == "0" then "start" else if receiver_is("string") && re_test(callee, /\.\s*(slice|substring)$/) && first([] argument) == "0" then "start" else if receiver_is("string") && re_test(callee, /\.\s*lastIndexOf$/) then "end_index" else if receiver_is("string") && re_test(callee, /\.\s*slice$/) && re_test(first([] argument), /^-/) && count(argument) == 1 then "end" else null
+  let starts_ends_kind if @receiver_is("string") && re_test(callee, /\.\s*indexOf$/) then "start_index" else if @receiver_is("string") && re_test(callee, /\.\s*charAt$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*(slice|substring)$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*lastIndexOf$/) then "end_index" else if @receiver_is("string") && re_test(callee, /\.\s*slice$/) && re_test(first([] argument), /^-/) && count(argument) == 1 then "end" else null
   let regex_starts_test re_test(callee, /^\/\^[\w\s-]+\/\.\s*test$/) && count(argument) == 1 && contains(default(argument.type_flags, []), "string")
   let regex_ends_test re_test(callee, /^\/[\w\s-]+\$\/\.\s*test$/) && count(argument) == 1 && contains(default(argument.type_flags, []), "string")
 }
@@ -547,7 +547,7 @@ in ts_call rule prefer-string-starts-ends-with:regex {
 }
 
 # Private members never written after construction.
-macro is_private(m) re_test(m, /\bprivate\b/)
+fn is_private(m) = re_test(m, /\bprivate\b/)
 in ts_class_property rule prefer-readonly {
   when (is_private(join([] modifier, " ")) || re_test(key, /^#/)) && !contains([] modifier, "readonly") && !contains([] modifier, "static") && member_writes == 0
   # Computed keys and decorated members can be written where zlint cannot see.

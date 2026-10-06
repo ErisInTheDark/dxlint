@@ -5,7 +5,7 @@ import .ts/helpers
 
 define {
 
-macro normalize_space(x) re_replace(x, /\s+/, " ")
+@macro normalize_space(x) re_replace(x, /\s+/, " ")
 group ts_literal ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex
 
 # ---- for-direction -------------------------------------------------------------
@@ -19,11 +19,11 @@ in ts_for rule for-direction {
 in ts_debugger rule no-debugger warn "Unexpected 'debugger' statement."
 
 # A global (not shadowed, not switched off) of this name.
-macro is_global(name) (text == name && (global == "readonly" || global == "writable"))
+@macro is_global(name) (text == name && (global == "readonly" || global == "writable"))
 
 # `new Promise(async () => ...)`, also inside parentheses.
 in ts_new let promise_constructor callee.is_real_promise == true
-in ts_identifier let is_real_promise is_global("Promise")
+in ts_identifier let is_real_promise @is_global("Promise")
 in ts_parenthesized let promise_executor_slot parent is ts_new && index == 0 && parent.promise_constructor || parent is ts_parenthesized && parent.promise_executor_slot == true
 in ts_arrow, ts_function rule no-async-promise-executor {
   when contains(modifier, "async")
@@ -93,12 +93,12 @@ in ts_binary {
   let left_is_typeof left.is_typeof == true
   let right_is_typeof right.is_typeof == true
 }
-macro valid_typeof_names ["symbol", "undefined", "object", "boolean", "number", "string", "function", "bigint"]
+@macro valid_typeof_names ["symbol", "undefined", "object", "boolean", "number", "string", "function", "bigint"]
 in ts_binary.left, ts_binary.right rule valid-typeof {
   option requireStringLiterals boolean = false "compare only with string literals"
   let compared_with_typeof parent.operator ~ /[=!]==?/ && (if is ts_node.left then parent.right_is_typeof else parent.left_is_typeof)
   when compared_with_typeof
-  when literal_value != null && (literal_value.type != "string" || !contains(valid_typeof_names, literal_value.value))
+  when literal_value != null && (literal_value.type != "string" || !contains(@valid_typeof_names, literal_value.value))
     || is_global_undefined
     || requireStringLiterals && literal_value == null && is_typeof != true
   report at unparen_offset
@@ -177,25 +177,25 @@ in ts_static_block.body rule no-empty-static-block {
 }
 
 # ---- writes to what cannot (or should not) change ------------------------
-macro is_write (access == "write" || access == "read_write")
+@macro is_write (access == "write" || access == "read_write")
 in ts_identifier rule no-ex-assign {
-  when reference_kind == "catch" && is_write
+  when reference_kind == "catch" && @is_write
   warn "Do not assign to the exception parameter."
 }
 in ts_identifier rule no-const-assign {
-  when (reference_kind == "const" || reference_kind == "using") && is_write
+  when (reference_kind == "const" || reference_kind == "using") && @is_write
   warn "'{text}' is constant."
 }
 in ts_identifier rule no-class-assign {
-  when (reference_kind == "class" || reference_kind == "class_name") && is_write
+  when (reference_kind == "class" || reference_kind == "class_name") && @is_write
   warn "'{text}' is a class."
 }
 in ts_identifier rule no-func-assign {
-  when (reference_kind == "function" || reference_kind == "function_name") && is_write
+  when (reference_kind == "function" || reference_kind == "function_name") && @is_write
   warn "'{text}' is a function."
 }
 in ts_identifier rule no-import-assign {
-  when reference_kind == "import" && is_write
+  when reference_kind == "import" && @is_write
   report at write_site
   warn "'{text}' is read-only."
 }
@@ -221,32 +221,32 @@ in ts_call rule no-import-assign:call {
 # (in the same object, or the same static-ness of a class) is a duplicate.
 in ts_method let accessor_kind if kind == "get" || kind == "set" then kind else "init"
 in ts_property, ts_class_property let accessor_kind "init"
-macro duplicate_of(e) (e != null && e.name == static_name && (accessor_kind == "init" || e.kind == "init" || e.kind == accessor_kind))
+@macro duplicate_of(e) (e != null && e.name == static_name && (accessor_kind == "init" || e.kind == "init" || e.kind == accessor_kind))
 # (`""` is a name: `type_of` tells it from null.)
-macro has_static_name (type_of(static_name) == "str")
+@macro has_static_name (type_of(static_name) == "str")
 # `__proto__: x` sets the prototype rather than defining a key.
 in ts_property let proto_setter static_name == "__proto__" && value != null && !starts_with(key, "[")
 in ts_method let proto_setter false
-in ts_property, ts_method let key_entry if !has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
+in ts_property, ts_method let key_entry if !@has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
 in ts_object let keyed [] property.key_entry
-in ts_property, ts_method let duplicate_key parent is ts_object && parent.write_site == null && key_entry != null && any(slice(parent.keyed, 0, index), e => duplicate_of(e))
+in ts_property, ts_method let duplicate_key parent is ts_object && parent.write_site == null && key_entry != null && any(slice(parent.keyed, 0, index), e => @duplicate_of(e))
 # At the name: inside the brackets of a computed key.
-macro at_key_name (offset + len(re_find(text, /^\[\s*/)))
+@macro at_key_name (offset + len(re_find(text, /^\[\s*/)))
 in ts_property.key, ts_method.key rule no-dupe-keys {
   when parent.duplicate_key
-  report at at_key_name
+  report at @at_key_name
   warn "Duplicate key '{parent.static_name}'."
 }
 
 # Overload signatures (no body) are not members of their own. (`is_static`
 # comes from .ts/style.)
-in ts_method let member_entry if !has_static_name || body == null || static_name == "constructor" && !is_static && !starts_with(key, "[") then null else { name: static_name, kind: accessor_kind, static: is_static }
-in ts_class_property let member_entry if !has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
+in ts_method let member_entry if !@has_static_name || body == null || static_name == "constructor" && !is_static && !starts_with(key, "[") then null else { name: static_name, kind: accessor_kind, static: is_static }
+in ts_class_property let member_entry if !@has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
 in ts_class let member_entries [] member.member_entry
-in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && any(slice(parent.member_entries, 0, index), e => duplicate_of(e) && e.static == is_static)
+in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && any(slice(parent.member_entries, 0, index), e => @duplicate_of(e) && e.static == is_static)
 in ts_method.key, ts_class_property.key rule no-dupe-class-members {
   when parent.duplicate_member
-  report at at_key_name
+  report at @at_key_name
   warn "Duplicate name '{parent.static_name}'."
 }
 
@@ -318,16 +318,16 @@ in ts_non_null rule no-extra-non-null-assertion {
   warn "Forbidden extra non-null assertion."
 }
 # `x?.y!` (at the end of the chain), `(x?.y)!`.
-macro non_null_chain_message "Optional chain expressions can return undefined by design - using a non-null assertion is unsafe and wrong."
+@macro non_null_chain_message "Optional chain expressions can return undefined by design - using a non-null assertion is unsafe and wrong."
 in ts_non_null rule no-non-null-asserted-optional-chain {
   when expression.in_optional_chain == true
   when not (ts_member.object, ts_index.object, ts_call.callee)
-  warn non_null_chain_message
+  warn @non_null_chain_message
 }
 in ts_non_null.expression rule no-non-null-asserted-optional-chain:paren {
   when is ts_parenthesized && wraps_optional_chain == true
   report at unparen_offset
-  warn non_null_chain_message
+  warn @non_null_chain_message
 }
 
 # ---- accessors -------------------------------------------------------------------
@@ -377,7 +377,7 @@ in ts_declarator rule no-unassigned-vars {
 # Writes to the built-in globals.
 in ts_identifier rule no-global-assign {
   option exceptions string[] = [] "read-only globals that may be modified"
-  when global == "readonly" && is_write && !contains(exceptions, text)
+  when global == "readonly" && @is_write && !contains(exceptions, text)
   warn "Read-only global '{text}' should not be modified."
 }
 
@@ -451,17 +451,17 @@ in ts_switch {
 }
 # The last comment before this case, or before the closing brace of a case
 # whose only statement is a block.
-macro last_comment(t) re_find(t, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/)
-macro block_case /^\s*(?:case\b[\s\S]*?|default\s*):\s*\{([\s\S]*)\}\s*$/
-macro previous_case_comment default(last_comment(if re_test(default(previous_sibling, ""), block_case) then re_replace(previous_sibling, block_case, "$1") else ""), last_comment(default(gap_before, "")))
+@macro last_comment(t) re_find(t, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/)
+@macro block_case /^\s*(?:case\b[\s\S]*?|default\s*):\s*\{([\s\S]*)\}\s*$/
+@macro previous_case_comment default(@last_comment(if re_test(default(previous_sibling, ""), @block_case) then re_replace(previous_sibling, @block_case, "$1") else ""), @last_comment(default(gap_before, "")))
 in ts_case rule no-fallthrough {
   option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
   let previous_path last(slice(parent.case_paths, 0, index))
   let previous_has_body last(slice(parent.case_bodies, 0, index))
-  let comment_body trim(re_replace(default(previous_case_comment, ""), /^\/[*\/]|\*\/$/, ""))
-  let allowing previous_case_comment != null && re_test(comment_body, default(commentPattern, "(?i)falls?\\s?through")) && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
+  let comment_body trim(re_replace(default(@previous_case_comment, ""), /^\/[*\/]|\*\/$/, ""))
+  let allowing @previous_case_comment != null && re_test(comment_body, default(commentPattern, "(?i)falls?\\s?through")) && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
   when index > 0 && previous_path == "falls_through" && (previous_has_body || !allowEmptyCase && re_count(default(gap_before, ""), /\n/) >= 2)
   when !allowing
   warn "Expected a 'break' statement before '{if test == null then 'default' else 'case'}'."
@@ -470,7 +470,7 @@ in ts_case rule no-fallthrough:unused-comment {
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   let gap default(gap_before, "")
-  let comment last_comment(gap)
+  let comment @last_comment(gap)
   let comment_body trim(re_replace(default(comment, ""), /^\/[*\/]|\*\/$/, ""))
   when reportUnusedFallthroughComment && index > 0 && comment != null
   when last(slice(parent.case_paths, 0, index)) == "leaves"
@@ -500,10 +500,10 @@ in ts_member, ts_index rule no-this-before-super:super {
 
 # In TypeScript files, typescript-eslint's version (TS `private` members
 # too, its message); elsewhere eslint's (`#` members).
-macro ts_file re_test(file, /\.[cm]?tsx?$/)
+@macro ts_file re_test(file, /\.[cm]?tsx?$/)
 in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no-unused-private-class-members {
-  when unused_member == "hash" || unused_member == "private" && ts_file
-  warn if ts_file then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
+  when unused_member == "hash" || unused_member == "private" && @ts_file
+  warn if @ts_file then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
 }
 
 # Disallow variable assignments when the value is not used
@@ -544,25 +544,25 @@ in ts_identifier rule no-unused-imports {
 # Literals and calls of the global `RegExp` (`regex_findings`): literals
 # report themselves, calls the call, except where eslint points inside.
 group regex_site ts_regex, ts_call, ts_new
-macro findings_of(check) filter(default(regex_findings, []), f => f.check == check)
-macro backreference_reason(kind) (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
-macro misleading_message(kind) (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
+@macro findings_of(check) filter(default(regex_findings, []), f => f.check == check)
+@macro backreference_reason(kind) (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
+@macro misleading_message(kind) (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
 in ts_regex rule no-empty-character-class {
-  each f in findings_of("empty_class")
+  each f in @findings_of("empty_class")
   warn "Empty class."
 }
 
 # On literals, and on plain string patterns of `RegExp(...)` (at the string).
 in regex_site rule no-control-regex {
-  each f in findings_of("control")
+  each f in @findings_of("control")
   when is ts_regex || regex_pattern.written == "string"
   report at regex_pattern.offset
   warn "Unexpected control character(s) in regular expression: {first(f.data)}."
 }
 
 in regex_site rule no-useless-backreference {
-  each f in findings_of("backref")
+  each f in @findings_of("backref")
   warn "Backreference '{first(f.data)}' will be ignored. It references group '{first(slice(f.data, 1))}'{last(f.data)} {backreference_reason(f.kind)}."
 }
 
@@ -570,15 +570,15 @@ in regex_site rule no-useless-backreference {
 # computed). With computed flags, nothing is known.
 in regex_site rule no-misleading-character-class {
   option allowEscape boolean = false "allow combined characters written as escapes"
-  each f in findings_of(if allowEscape then "misleading_escaped" else "misleading")
+  each f in @findings_of(if allowEscape then "misleading_escaped" else "misleading")
   when type_of(regex_pattern.flags) == "str" || is ts_regex
   report at f.offset
-  warn misleading_message(f.kind)
+  warn @misleading_message(f.kind)
 }
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.
 in regex_site rule no-regex-spaces {
-  each f in findings_of("spaces")
+  each f in @findings_of("spaces")
   when is ts_regex || regex_pattern.written == "string" && type_of(regex_flags) == "str"
   warn "Spaces are hard to count. Use {{{f.kind}}}."
 }

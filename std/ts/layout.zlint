@@ -47,18 +47,18 @@ in ts_method let layout_generator_kind if parent is ts_object then "shorthand" e
   let resolved_mode if type_of(star_override) == "str" then star_override else mode
 }
 fn layout_star_space(overridden, mode, configured, before_side) = if type_of(overridden) == "str" then mode == "both" || mode == (if before_side then "before" else "after") else default(get(overridden, if before_side then "before" else "after"), default(configured, mode == "both" || mode == (if before_side then "before" else "after")))
-macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
-macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
-fn layout_padding_attached_start(gap) = default(re_find(gap, "^(?:" layout_horizontal_space "*" layout_comment_pattern ")*"), "")
-fn layout_padding_attached_end(gap) = default(re_find(gap, "(?:" layout_comment_pattern layout_horizontal_space "*)*$"), "")
-fn layout_padding_last_attached(prefix) = re_replace(prefix, "^(?:" layout_horizontal_space "*(" layout_comment_pattern "))*$", "$1")
-fn layout_padding_last_comment(gap) = re_replace(gap, "^(?:\\s*(" layout_comment_pattern "))*\\s*$", "$1")
+@macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
+@macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
+fn layout_padding_attached_start(gap) = default(re_find(gap, "^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"), "")
+fn layout_padding_attached_end(gap) = default(re_find(gap, "(?:" @layout_comment_pattern @layout_horizontal_space "*)*$"), "")
+fn layout_padding_last_attached(prefix) = re_replace(prefix, "^(?:" @layout_horizontal_space "*(" @layout_comment_pattern "))*$", "$1")
+fn layout_padding_last_comment(gap) = re_replace(gap, "^(?:\\s*(" @layout_comment_pattern "))*\\s*$", "$1")
 fn layout_padding_top_space(gap) = layout_comma_space(slice(gap, len(layout_padding_attached_start(gap))), false)
 fn layout_padding_tail_space(gap) = default(re_find(gap, if starts_with(layout_padding_last_comment(gap), "//") then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/), "")
 fn layout_padding_bottom_space(gap) = layout_padding_tail_space(slice(gap, 0, len(gap) - len(layout_padding_attached_end(gap))))
 fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
 fn layout_padding_mode(style, blocks, switches, classes, owner) = if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
-macro layout_padding_options {
+@macro layout_padding_options {
   option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
   option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
   option switches "always" | "never" | "start" | "end" | null = null "switch padding"
@@ -265,7 +265,7 @@ in ts_colon rule type-annotation-spacing:between {
 }
 
 in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
-  layout_padding_options
+  @layout_padding_options
   when opener.ts_open_brace.offset != null
   when layout_padding_content
   let padding_mode layout_padding_mode(style, blocks, switches, classes, node)
@@ -279,7 +279,7 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
 }
 
 in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
-  layout_padding_options
+  @layout_padding_options
   when closer.ts_close_brace.offset != null
   when layout_padding_content
   let padding_mode layout_padding_mode(style, blocks, switches, classes, node)
