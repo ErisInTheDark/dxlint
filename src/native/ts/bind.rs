@@ -180,9 +180,10 @@ struct Binder<'s, 't> {
     decl_scope: HashMap<u32, usize>,
     /// Inside a conditional type's `extends`: where `infer X` declares.
     infer_scope: Option<usize>,
+    ecma_version: u16,
 }
 
-pub fn bind(s: &Syntax, root_function: bool) -> Bindings {
+pub fn bind(s: &Syntax, root_function: bool, ecma_version: u16) -> Bindings {
     let mut b = Binder {
         s,
         scopes: Vec::new(),
@@ -199,6 +200,7 @@ pub fn bind(s: &Syntax, root_function: bool) -> Bindings {
         merged_kinds: HashMap::default(),
         decl_scope: HashMap::default(),
         infer_scope: None,
+        ecma_version,
     };
     let global = b.scope(None, true, s.root());
     let module = if root_function { b.scope(Some(global), true, s.root()) } else { global };
@@ -704,7 +706,8 @@ impl<'t> Binder<'_, 't> {
                 if decl {
                     if let Some(n) = name {
                         self.as_("function", id);
-                        self.declare(scope, n, VALUE);
+                        let target = if self.ecma_version < 2015 { self.function_scope(scope) } else { scope };
+                        self.declare(target, n, VALUE);
                     }
                 }
                 let inner = self.scope(Some(scope), true, id);
@@ -1159,5 +1162,37 @@ mod tests {
         let lint = |text: &str| l.lint(Path::new("/root/a.js"), text).len();
         assert_eq!(lint("var f = function () { class A { [this.x]() {} } }.bind(b);"), 0);
         assert_eq!(lint("var f = function () { class A { [k] = this.x } }.bind(b);"), 1);
+    }
+
+    #[test]
+    fn legacy_block_functions_resolve_in_the_enclosing_function_scope() {
+        for (edition, undefined, early) in [(3, 0, 1), (5, 0, 1), (2015, 1, 0)] {
+            let linter = native_linter(&format!(
+                "language .js {{ set sourceType \"script\"\nset ecmaVersion {edition}\n}}\nrule no-undef\nrule no-use-before-define"));
+            let diagnostics = linter.lint(Path::new("/root/a.js"), "'use strict'; a(); { function a() {} }");
+            let count = |rule| diagnostics.iter().filter(|diagnostic| diagnostic.rule == rule).count();
+            assert_eq!(count("no-undef"), undefined, "{edition}: {diagnostics:#?}");
+            assert_eq!(count("no-use-before-define"), early, "{edition}: {diagnostics:#?}");
+        }
+    }
+
+    #[test]
+    fn legacy_block_function_bindings_merge_locally_without_escaping_functions() {
+        let linter = native_linter(r#"language .js { set sourceType "script"
+set ecmaVersion 5
+set globalReturn true
+}
+rule no-undef
+rule no-use-before-define
+rule no-redeclare
+rule no-implicit-globals
+"#);
+        let source = "function outer() { a(); { function a() {} } { function a() {} } a(); } a();";
+        let diagnostics = linter.lint(Path::new("/root/a.js"), source);
+        let count = |rule| diagnostics.iter().filter(|diagnostic| diagnostic.rule == rule).count();
+        assert_eq!(count("no-undef"), 1, "{diagnostics:#?}");
+        assert_eq!(count("no-use-before-define"), 1, "{diagnostics:#?}");
+        assert_eq!(count("no-redeclare"), 1, "{diagnostics:#?}");
+        assert_eq!(count("no-implicit-globals"), 0, "{diagnostics:#?}");
     }
 }

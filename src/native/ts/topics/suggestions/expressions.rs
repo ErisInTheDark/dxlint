@@ -78,7 +78,9 @@ pub fn eval_usage(file: &NativeFile, node: u32) -> Value<'static> {
             loop {
                 let Some(n) = current else { break false };
                 match s.kind(n) {
-                    Some(K::Program) => break file.source_type() != "module",
+                    Some(K::Program) => break file.source_type() != "module"
+                        && !(file.source_type() == "script" && file.root_function_scope()
+                            && crate::native::ts::directives::strict_code(file, n)),
                     Some(K::Function) => break !crate::native::ts::directives::strict_code(file, n) && super::functions::default_this(file, n),
                     Some(K::Method) if s.field(child) != Some(F::Key) => break false,
                     Some(K::ClassProp) if s.field(child) == Some(F::Init) => break false,

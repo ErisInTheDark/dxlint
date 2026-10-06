@@ -210,6 +210,34 @@ language .js { files "scripts/private/**"
     }
 
     #[test]
+    fn eval_this_distinguishes_plain_scripts_from_strict_script_wrappers() {
+        for (wrapped, strict, expected) in [(false, true, 2), (true, false, 2), (true, true, 0)] {
+            let settings = format!("language .js {{ set sourceType \"script\"\nset globalReturn {wrapped}\n}}");
+            let linter = with_rules(&settings, "rule no-eval");
+            let source = format!("{}this.eval('one'); (() => this.eval('two'))();",
+                if strict { "'use strict'; " } else { "" });
+            assert_eq!(linter.lint(Path::new("/root/a.js"), &source).len(), expected, "{wrapped} {strict}");
+        }
+        let module = with_rules(r#"language .js { set sourceType "module" }"#, "rule no-eval");
+        assert!(module.lint(Path::new("/root/a.js"), "this.eval('one');").is_empty());
+    }
+
+    #[test]
+    fn inner_function_allowance_requires_modern_strict_block_scoping() {
+        for (edition, strict, policy, expected) in [
+            (5, true, "allow", 2), (2015, true, "allow", 1),
+            (2015, false, "allow", 2), (2015, true, "disallow", 2),
+        ] {
+            let settings = format!("language .js {{ set sourceType \"script\"\nset ecmaVersion {edition}\n}}");
+            let rules = format!("rule no-inner-declarations {{ set mode \"both\"\nset blockScopedFunctions \"{policy}\"\n}}");
+            let linter = with_rules(&settings, &rules);
+            let source = format!("{}if (test) {{ function nested() {{}} var local; }}",
+                if strict { "'use strict'; " } else { "" });
+            assert_eq!(linter.lint(Path::new("/root/a.js"), &source).len(), expected, "{edition} {strict} {policy}");
+        }
+    }
+
+    #[test]
     fn rule_workers_receive_the_same_file_environment() {
         let mut linter = with_rules(r#"language .js {
           set sourceType "commonjs"

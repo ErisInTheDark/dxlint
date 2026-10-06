@@ -628,7 +628,7 @@ impl<'t> NativeFile<'t> {
     }
 
     pub fn bindings(&self) -> &Bindings {
-        self.bindings.get_or_init(|| bind(&self.syntax, self.root_function_scope()))
+        self.bindings.get_or_init(|| bind(&self.syntax, self.root_function_scope(), self.environment.ecma_version))
     }
 
     pub(super) fn root_function_scope(&self) -> bool {

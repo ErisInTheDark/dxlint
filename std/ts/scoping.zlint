@@ -308,7 +308,7 @@ in ts_function rule no-inner-declarations {
   option blockScopedFunctions "allow" | "disallow" = "allow"
   when parent is (ts_program, ts_block, ts_export, ts_if, ts_labeled, ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of, ts_case)
   when !parent.scoping_body_root && parent not ts_export
-  when !(blockScopedFunctions == "allow" && parent.scoping_strict_code)
+  when !(blockScopedFunctions == "allow" && ecma_version >= 2015 && parent.scoping_strict_code)
   warn "Move function declaration to {default(parent.scoping_declaration_body, 'program')} root."
 }
 in ts_variable_declaration rule no-inner-declarations:variable {
