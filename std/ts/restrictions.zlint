@@ -200,6 +200,7 @@ in ts_export {
   let restriction_declaration_local default(namespace, default(first([] specifier.restriction_declaration_local), ""))
 }
 in ts_import, ts_export let restriction_declaration_entry if from == null then null else {
+  node: node,
   offset: offset, end: end_offset, module: default(from.static_name, ""),
   export: restriction_declaration_export, type_only: kind == "type",
   category: restriction_declaration_category, syntax: restriction_declaration_syntax,
@@ -207,20 +208,17 @@ in ts_import, ts_export let restriction_declaration_entry if from == null then n
 }
 # Declaration spans contain their literal keyword; skip only impossible subtrees.
 in ts_node let restriction_declarations if !contains(text, "import") && !contains(text, "export") then [] else [] restriction_declaration_entry reduce([] children.restriction_declarations, [], (entries, child) => entries child)
-schema restriction_import_syntax "none" | "all" | "multiple" | "single"
+in ts_import let sort_imports_rank if restriction_declaration_syntax == "none" then 0 else if restriction_declaration_syntax == "all" then 1 else if restriction_declaration_syntax == "multiple" then 2 else 3
 @macro restriction_sort_import_options {
   option ignoreCase boolean = false "ignore letter case"
-  option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
   option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
 }
 in ts_import rule sort-imports:declarations {
   @restriction_sort_import_options
   let preceding reduce(filter(ts_program.restriction_declarations, entry => !entry.export && entry.offset < offset), null, (nearest, entry) => if nearest == null || entry.offset > nearest.offset then entry else nearest)
-  let current_index len(first(split(join(memberSyntaxSortOrder, ","), restriction_declaration_syntax)))
-  let previous_index len(first(split(join(memberSyntaxSortOrder, ","), preceding.syntax)))
   let separated preceding != null && re_count(byte_slice(source, preceding.end, offset), /\n/) > 1
   when restriction_declaration_entry != null && preceding != null && !(allowSeparatedGroups && separated)
-  when restriction_declaration_syntax != preceding.syntax && current_index < previous_index || restriction_declaration_syntax == preceding.syntax && compare_text(restriction_declaration_local, preceding.local, false, ignoreCase) < 0
+  when restriction_declaration_syntax != preceding.syntax && sort_imports_rank < preceding.node.sort_imports_rank || restriction_declaration_syntax == preceding.syntax && compare_text(restriction_declaration_local, preceding.local, false, ignoreCase) < 0
   warn if restriction_declaration_syntax != preceding.syntax then "Expected '{restriction_declaration_syntax}' syntax before '{preceding.syntax}' syntax." else "Imports should be sorted alphabetically."
 }
 in ts_import_specifier rule sort-imports:members {
