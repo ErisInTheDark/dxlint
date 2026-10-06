@@ -7,7 +7,7 @@ mod tests {
 
     #[test]
     fn signed_types_and_parenthesised_type_indices_keep_their_context() {
-        let l = native_linter("rule no-magic-numbers {\nset ignore [-2]\nset ignoreTypeIndexes true\n}");
+        let l = native_linter("rule no-magic-numbers { set ignore [-2] }\noverride in ts_number, ts_bigint let no_magic_numbers_checked !(restriction_numeric_full.context.object || restriction_numeric_full.context.radix || restriction_numeric_full.context.jsx || restriction_numeric_full.context.type_index)");
         assert!(l.lint(Path::new("/root/file.ts"), "type A = -2; type B = A[((1 & -3) | 4)];").is_empty());
         assert_eq!(l.lint(Path::new("/root/file.ts"), "type A = 2;").len(), 1);
     }

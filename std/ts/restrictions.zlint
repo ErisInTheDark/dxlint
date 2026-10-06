@@ -168,24 +168,17 @@ in ts_number, ts_bigint {
   let restriction_numeric_ts_offset if restriction_numeric_sign == "+" then offset else restriction_numeric_offset
   let restriction_numeric_raw restriction_numeric_sign text
   let restriction_numeric_ts_raw if restriction_numeric_sign == "+" then text else restriction_numeric_raw
+  let restriction_numeric_array_index restriction_numeric_full.context.array_index && js_compare(literal_value, 0) >= 0 && js_compare(literal_value, 4294967295) < 0 && (is ts_bigint || restriction_numeric_value == round(restriction_numeric_value)) && (restriction_numeric_sign != "-" || num(literal_value.value) == 0)
+  let no_magic_numbers_checked !(restriction_numeric_full.context.object || restriction_numeric_full.context.radix || restriction_numeric_full.context.jsx)
 }
 in ts_number, ts_bigint rule no-magic-numbers {
-  option detectObjects boolean = false "check object property numbers"
   option enforceConst boolean = false "require const for named number declarations"
   option ignore (number | string)[] = [] "numbers and bigint strings to allow"
-  option ignoreArrayIndexes boolean = false "allow valid array indices"
-  option ignoreDefaultValues boolean = false "allow default values"
-  option ignoreClassFieldInitialValues boolean = false "allow class field initialisers"
-  option ignoreEnums boolean = false "allow enum members"
-  option ignoreNumericLiteralTypes boolean = false "allow numeric type aliases"
-  option ignoreReadonlyClassProperties boolean = false "allow readonly class properties"
-  option ignoreTypeIndexes boolean = false "allow numeric type indices"
   let info restriction_numeric_full.context
   let typescript_specific re_test(file, /\.[cm]?tsx?$/) && (info.enum || info.literal_type || info.type_index || info.readonly)
-  let array_index info.array_index && js_compare(literal_value, 0) >= 0 && js_compare(literal_value, 4294967295) < 0 && (is ts_bigint || restriction_numeric_value == round(restriction_numeric_value)) && (restriction_numeric_sign != "-" || num(literal_value.value) == 0)
+  when no_magic_numbers_checked
   when !any(ignore, v => type_of(v) == type_of(restriction_numeric_value) && v == restriction_numeric_value)
-  when !(ignoreArrayIndexes && array_index || ignoreDefaultValues && info.default || ignoreClassFieldInitialValues && info.class_field || ignoreEnums && info.enum || ignoreNumericLiteralTypes && info.literal_type || ignoreReadonlyClassProperties && info.readonly || ignoreTypeIndexes && info.type_index || info.radix || info.jsx)
-  when if info.declaration then enforceConst && !info.constant else detectObjects || !info.object
+  when !info.declaration || enforceConst && !info.constant
   report at {start: if typescript_specific then restriction_numeric_ts_offset else restriction_numeric_offset, end: end_offset}
   warn if info.declaration then "Number constants declarations must use 'const'." else "No magic number: {if typescript_specific then restriction_numeric_ts_raw else restriction_numeric_raw}."
 }
@@ -218,17 +211,15 @@ schema restriction_import_syntax "none" | "all" | "multiple" | "single"
 @macro restriction_sort_import_options {
   option ignoreCase boolean = false "ignore letter case"
   option memberSyntaxSortOrder restriction_import_syntax[4..4] = ["none", "all", "multiple", "single"] "import syntax ordering"
-  option ignoreDeclarationSort boolean = false "ignore declaration order"
-  option ignoreMemberSort boolean = false "ignore named-member order"
   option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
 }
-in ts_import rule sort-imports {
+in ts_import rule sort-imports:declarations {
   @restriction_sort_import_options
   let preceding reduce(filter(ts_program.restriction_declarations, entry => !entry.export && entry.offset < offset), null, (nearest, entry) => if nearest == null || entry.offset > nearest.offset then entry else nearest)
   let current_index len(first(split(join(memberSyntaxSortOrder, ","), restriction_declaration_syntax)))
   let previous_index len(first(split(join(memberSyntaxSortOrder, ","), preceding.syntax)))
   let separated preceding != null && re_count(byte_slice(source, preceding.end, offset), /\n/) > 1
-  when !ignoreDeclarationSort && restriction_declaration_entry != null && preceding != null && !(allowSeparatedGroups && separated)
+  when restriction_declaration_entry != null && preceding != null && !(allowSeparatedGroups && separated)
   when restriction_declaration_syntax != preceding.syntax && current_index < previous_index || restriction_declaration_syntax == preceding.syntax && compare_text(restriction_declaration_local, preceding.local, false, ignoreCase) < 0
   warn if restriction_declaration_syntax != preceding.syntax then "Expected '{restriction_declaration_syntax}' syntax before '{preceding.syntax}' syntax." else "Imports should be sorted alphabetically."
 }
@@ -236,7 +227,7 @@ in ts_import_specifier rule sort-imports:members {
   @restriction_sort_import_options
   let unsorted previous != null && compare_text(previous.restriction_declaration_local, restriction_declaration_local, false, ignoreCase) > 0
   let encountered previous.encountered == true || unsorted
-  when !ignoreMemberSort && parent is ts_import && parent.restriction_declaration_entry != null && unsorted && previous.encountered != true
+  when parent is ts_import && parent.restriction_declaration_entry != null && unsorted && previous.encountered != true
   report at {start: offset, end: parent.end_offset}
   warn "Member '{restriction_declaration_local}' of the import declaration should be sorted alphabetically."
 }
@@ -317,18 +308,15 @@ in ts_update rule no-plusplus {
   when no_plusplus_checked
   warn "Unary operator '{operator}' used."
 }
-in ts_binary, ts_assignment rule no-bitwise {
-  option allow ("^" | "|" | "&" | "<<" | ">>" | ">>>" | "^=" | "|=" | "&=" | "<<=" | ">>=" | ">>>=" | "~")[] = [] "bitwise operators to allow"
-  option int32Hint boolean = false "allow bitwise or with zero"
-  let value right.literal_value
+in ts_binary, ts_assignment let restriction_bitwise_zero_or operator == "|" && right.literal_value.value == "0"
+in ts_binary, ts_assignment, ts_unary let no_bitwise_checked true
+in ts_binary, ts_assignment rule no-bitwise:binary {
   when contains(["^", "|", "&", "<<", ">>", ">>>", "^=", "|=", "&=", "<<=", ">>=", ">>>=", "~"], operator)
-  when !contains(allow, operator) && !(int32Hint && operator == "|" && value.value == "0")
+  when no_bitwise_checked
   warn "Unexpected use of '{operator}'."
 }
 in ts_unary rule no-bitwise:unary {
-  option allow ("^" | "|" | "&" | "<<" | ">>" | ">>>" | "^=" | "|=" | "&=" | "<<=" | ">>=" | ">>>=" | "~")[] = [] "bitwise operators to allow"
-  option int32Hint boolean = false "allow bitwise or with zero"
-  when operator == "~" && !contains(allow, operator)
+  when operator == "~" && no_bitwise_checked
   warn "Unexpected use of '{operator}'."
 }
 in ts_identifier rule no-undefined {
