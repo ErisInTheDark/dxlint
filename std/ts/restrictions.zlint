@@ -5,14 +5,14 @@
 
 define {
 
-schema restriction_import_path string | {
+schema restriction_import_path {
   name: string
   message?: string
   importNames?: string[]
   allowImportNames?: string[]
   allowTypeImports: boolean = false
 }
-schema restriction_import_pattern string | {
+schema restriction_import_pattern {
   group?: string[]
   regex?: js_regex
   message?: string
@@ -23,12 +23,10 @@ schema restriction_import_pattern string | {
   allowImportNamePattern?: js_regex
   allowTypeImports: boolean = false
 }
-schema restriction_import_options restriction_import_path | {
-  paths: restriction_import_path[] = []
-  patterns: restriction_import_pattern[] = []
+@macro restriction_import_options {
+  option paths restriction_import_path[] = [] "restricted import paths"
+  option patterns restriction_import_pattern[] = [] "restricted import pattern groups"
 }
-@macro restriction_import_paths default(first(options).paths, options)
-@macro restriction_import_patterns (if type_of(first(first(options).patterns)) == "str" then [{group: first(options).patterns}] else default(first(options).patterns, []))
 @macro restriction_import_list(xs) (if len(xs) < 2 then join(map(xs, x => "'" x "'"), "") else if len(xs) == 2 then join(map(xs, x => "'" x "'"), " and ") else join(map(slice(xs, 0, len(xs) - 1), x => "'" x "'"), ", ") ", and '" last(xs) "'")
 @macro restriction_import_plural(xs) (if len(xs) == 1 then "is" else "are")
 @macro restriction_import_custom(entry) (if entry.message != null && entry.message != "" then " " entry.message else "")
@@ -96,34 +94,34 @@ in ts_identifier {
   } else null
 }
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
-  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  @restriction_import_options
   @restriction_import_info
-  @each entry in @restriction_import_paths
-  when info != null && (if type_of(entry) == "str" then entry else entry.name) == info.source && entry.importNames == null && entry.allowImportNames == null && !(entry.allowTypeImports && info.all_type)
+  @each entry in paths
+  when info != null && entry.name == info.source && entry.importNames == null && entry.allowImportNames == null && !(entry.allowTypeImports && info.all_type)
   warn "'{info.source}' import is restricted from being used." @restriction_import_custom(entry)
 }
 in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:names {
-  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  @restriction_import_options
   @restriction_import_info
   when info.item && info != null
-  @each entry in @restriction_import_paths
+  @each entry in paths
   when entry.name == info.source && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name))
   report at info.offset
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else ".")) @restriction_import_custom(entry)
 }
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
-  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  @restriction_import_options
   @restriction_import_info
   when info != null
-  @each entry in @restriction_import_patterns
+  @each entry in patterns
   when @restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && info.all_type) && entry.importNames == null && entry.allowImportNames == null && entry.importNamePattern == null && entry.allowImportNamePattern == null
   warn "'{info.source}' import is restricted from being used by a pattern." @restriction_import_custom(entry)
 }
 in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:pattern-names {
-  option options restriction_import_options[] = [] "restricted paths and pattern groups"
+  @restriction_import_options
   @restriction_import_info
   when info.item && info != null
-  @each entry in @restriction_import_patterns
+  @each entry in patterns
   when @restriction_import_pattern_matches(entry) && !(entry.allowTypeImports && (info.type || info.all_type)) && (entry.importNames != null && (info.name == "*" || contains(entry.importNames, info.name)) || entry.importNamePattern != null && (info.name == "*" || js_re_test(info.name, entry.importNamePattern, "u")) || entry.allowImportNames != null && !contains(entry.allowImportNames, info.name) || entry.allowImportNamePattern != null && (info.name == "*" || !js_re_test(info.name, entry.allowImportNamePattern, "u")))
   report at info.offset
   warn (if info.name == "*" then "* import is invalid because " (if entry.allowImportNames != null then "only " @restriction_import_list(entry.allowImportNames) " from '{info.source}' " @restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then "only imports that match the pattern '/{entry.allowImportNamePattern}/u' from '{info.source}' are allowed." else if entry.importNamePattern != null && entry.importNames == null then "import name matching '/{entry.importNamePattern}/u' pattern from '{info.source}' is restricted from being used." else @restriction_import_list(entry.importNames) " from '{info.source}' " @restriction_import_plural(entry.importNames) " restricted from being used by a pattern.") else "'{info.name}' import from '{info.source}' is restricted" (if entry.allowImportNames != null then " because only " @restriction_import_list(entry.allowImportNames) " " @restriction_import_plural(entry.allowImportNames) " allowed." else if entry.allowImportNamePattern != null then " because only imports that match the pattern '/{entry.allowImportNamePattern}/u' are allowed from '{info.source}'." else " from being used by a pattern.")) @restriction_import_custom(entry)
@@ -594,17 +592,15 @@ in ts_identifier, ts_private_name rule id-match {
   when !re_test(restriction_identifier_name, mode)
   warn "Identifier '{text}' does not match the pattern '{mode}'."
 }
-schema restriction_global string | {name: string; message?: string}
-schema restriction_globals {
-  globals: restriction_global[]
-  checkGlobalObject: boolean = false
-  globalObjects: string[] = []
+schema restriction_global {name: string; message?: string}
+@macro restriction_global_options {
+  option globals restriction_global[] = [] "restricted globals"
+  option checkGlobalObject boolean = false "check global-object properties"
+  option globalObjects string[] = [] "additional global-object names"
 }
 in ts_identifier rule no-restricted-globals {
-  option options (restriction_global | restriction_globals)[] = [] "restricted globals and global-object settings"
-  let config first(options)
-  let globals default(config.globals, options)
-  let matched find_last(globals, g => (if type_of(g) == "str" then g else g.name) == text)
+  @restriction_global_options
+  let matched find_last(globals, g => g.name == text)
   when resolved == "global" && access != "type" && matched != null
   when parent not (ts_type_reference, ts_qualified_name, ts_type_query)
   warn "Unexpected use of '{text}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
@@ -615,12 +611,11 @@ in ts_member, ts_index let restriction_global_root if static_name == object.rest
 in ts_member let restriction_global_property_offset property.offset
 in ts_index let restriction_global_property_offset index.offset
 in ts_member, ts_index rule no-restricted-globals:member {
-  option options (restriction_global | restriction_globals)[] = [] "restricted globals and global-object settings"
-  let config first(options)
+  @restriction_global_options
   let root object.restriction_global_root
   let name static_name
-  let matched find_last(config.globals, g => (if type_of(g) == "str" then g else g.name) == name)
-  when config.checkGlobalObject && root != null && type_of(name) == "str" && contains(["globalThis", "self", "window"] default(config.globalObjects, []), root) && matched != null
+  let matched find_last(globals, g => g.name == name)
+  when checkGlobalObject && root != null && type_of(name) == "str" && contains(["globalThis", "self", "window"] globalObjects, root) && matched != null
   report at restriction_global_property_offset
   warn "Unexpected use of '{name}'." (if matched.message != null && matched.message != "" then " " matched.message else "")
 }

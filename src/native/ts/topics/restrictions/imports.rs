@@ -7,10 +7,10 @@ mod tests {
 
     #[test]
     fn import_patterns_respect_negation_and_excluded_parents() {
-        let l = native_linter("rule no-restricted-imports:patterns { set options [{patterns: ['foo/*', '!foo/bar']}] }");
+        let l = native_linter("rule no-restricted-imports:patterns { set patterns [{group: ['foo/*', '!foo/bar']}] }");
         assert!(l.lint(Path::new("/root/file.ts"), "import x from 'foo/bar';").is_empty());
         assert_eq!(l.lint(Path::new("/root/file.ts"), "import x from 'foo/baz';").len(), 1);
-        let l = native_linter("rule no-restricted-imports:patterns { set options [{patterns: ['foo', '!foo/bar']}] }");
+        let l = native_linter("rule no-restricted-imports:patterns { set patterns [{group: ['foo', '!foo/bar']}] }");
         assert_eq!(l.lint(Path::new("/root/file.ts"), "import x from 'foo/bar';").len(), 1);
     }
 
