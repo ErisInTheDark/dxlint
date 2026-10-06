@@ -1,6 +1,6 @@
 //! Generic syntax, tokens and gaps; policy lives in .zlint.
 
-use crate::expr::{facts::Fact, Value};
+use crate::expr::{facts::{Fact, FactFields}, Value};
 use crate::native::ts::{facts::NativeFile, kinds, tokens};
 
 pub const FACTS: &[Fact] = &[
@@ -26,10 +26,21 @@ pub const FACTS: &[Fact] = &[
     },
 ];
 
+pub const FACT_FIELDS: &[FactFields] = &[
+    FactFields {
+        name: "space_before",
+        fields: tokens::GAP_FIELDS,
+        get: |f, n, field| f.with_field(|file, n, field| gap_projection(file, n, true, field), n, field),
+    },
+    FactFields {
+        name: "space_after",
+        fields: tokens::GAP_FIELDS,
+        get: |f, n, field| f.with_field(|file, n, field| gap_projection(file, n, false, field), n, field),
+    },
+];
+
 /// The index of the code token right before (or after) `node`.
-fn neighbour_index(file: &NativeFile<'_>, node: u32, before: bool) -> Option<usize> {
-    let tokens = &file.cached(tokens::lex).0;
-    let span = file.syntax.tree.node(node);
+fn neighbour_index(tokens: &[super::super::lexer::Token], span: &crate::grammar::Node, before: bool) -> Option<usize> {
     if before {
         tokens.partition_point(|t| t.end <= span.start).checked_sub(1)
     } else {
@@ -39,18 +50,64 @@ fn neighbour_index(file: &NativeFile<'_>, node: u32, before: bool) -> Option<usi
 }
 
 fn gap_around(file: &NativeFile<'_>, node: u32, before: bool) -> Value<'static> {
+    let Some((from, to)) = gap_bounds(file, node, before) else { return Value::Null };
+    tokens::gap_value(file.syntax.src, from, to)
+}
+
+fn gap_bounds(file: &NativeFile<'_>, node: u32, before: bool) -> Option<(usize, usize)> {
     let tokens = &file.cached(tokens::lex).0;
     let span = file.syntax.tree.node(node);
-    let Some(i) = neighbour_index(file, node, before) else { return Value::Null };
+    let i = neighbour_index(tokens, span, before)?;
     let (from, to) = if before { (tokens[i].end, span.start) } else { (span.end, tokens[i].start) };
-    tokens::gap_value(file.syntax.src, from as usize, to as usize)
+    Some((from as usize, to as usize))
+}
+
+fn gap_projection(file: &NativeFile<'_>, node: u32, before: bool, field: Option<usize>) -> Value<'static> {
+    let bounds = gap_bounds(file, node, before);
+    let Some(field) = field else { return Value::Bool(bounds.is_some()) };
+    let Some((from, to)) = bounds else { return Value::Null };
+    tokens::gap_field(file.syntax.src, from, to, tokens::GAP_FIELDS[field])
 }
 
 fn neighbour(file: &NativeFile<'_>, node: u32, before: bool) -> Value<'static> {
-    let Some(i) = neighbour_index(file, node, before) else { return Value::Null };
-    let token = file.cached(tokens::lex).0[i];
+    let tokens = file.cached(tokens::lex);
+    let Some(i) = neighbour_index(&tokens.0, file.syntax.tree.node(node), before) else { return Value::Null };
+    let token = tokens.0[i];
     match tokens::token_layer(file, &token) {
         Some(kind) => Value::from(kinds::KINDS[kind as usize].0),
         None => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn gap_projections_agree_with_complete_records() {
+        for source in [
+            "",
+            "if(x){}",
+            "if \t(x)\r\n{}\r\n",
+            "if/* x */(x) {}\n",
+            "if/* x\r\n\r\n */ \r\n\r\n(x){}",
+            "if// x\u{2028}(x)\u{2029}{}",
+            "if\u{a0}(x)\u{feff}{}",
+            "const x = `raw ${value} end`; /[/]/.test(x);",
+        ] {
+            with_native_file(source, |file, _| {
+                for node in 0..file.syntax.tree.nodes.len() as u32 {
+                    for projection in FACT_FIELDS {
+                        let fact = FACTS.iter().find(|fact| fact.name == projection.name).expect("registered gap fact");
+                        let whole = (fact.get)(file, node);
+                        assert_eq!((projection.get)(file, node, None), Value::Bool(!matches!(whole, Value::Null)), "{source:?}");
+                        for (field, key) in projection.fields.iter().enumerate() {
+                            assert_eq!((projection.get)(file, node, Some(field)), whole.key(key), "{source:?}: {key}");
+                        }
+                    }
+                }
+            });
+        }
     }
 }

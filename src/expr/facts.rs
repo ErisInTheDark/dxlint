@@ -21,6 +21,37 @@ pub struct Fact {
     pub get: fn(&dyn Facts, u32) -> Value<'static>,
 }
 
+/// Optional projections of a record-or-null fact. `None` asks whether the
+/// fact is present; field reads must agree with the eager record.
+pub struct FactFields {
+    pub name: &'static str,
+    pub fields: &'static [&'static str],
+    pub get: fn(&dyn Facts, u32, Option<usize>) -> Value<'static>,
+}
+
+pub struct FieldRead {
+    pub fact: usize,
+    pub key: Option<&'static str>,
+    pub field: Option<usize>,
+    pub get: fn(&dyn Facts, u32, Option<usize>) -> Value<'static>,
+}
+
+/// Compile-time field identities; values live only in the expression memo.
+pub static FIELD_READS: LazyLock<Vec<FieldRead>> = LazyLock::new(|| {
+    crate::native::ts::FACT_FIELD_GROUPS.iter().flat_map(|group| group.iter()).flat_map(|projection| {
+        let fact = fact(projection.name).expect("projection belongs to a registered fact");
+        std::iter::once(FieldRead { fact, key: None, field: None, get: projection.get }).chain(
+            projection.fields.iter().enumerate().map(move |(field, &key)| FieldRead {
+                fact, key: Some(key), field: Some(field), get: projection.get,
+            }),
+        )
+    }).collect()
+});
+
+pub fn field_read(fact: usize, key: Option<&str>) -> Option<usize> {
+    FIELD_READS.iter().position(|read| read.fact == fact && read.key == key)
+}
+
 thread_local! {
     static ARGS: std::cell::RefCell<Vec<Value<'static>>> = const { std::cell::RefCell::new(Vec::new()) };
 }

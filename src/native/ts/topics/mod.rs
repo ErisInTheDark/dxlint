@@ -3,7 +3,7 @@
 //! [`crate::native::ts::facts::Facts::with_file`]) and keeps whole-file
 //! results with [`crate::native::ts::facts::NativeFile::cached`].
 
-use crate::expr::facts::{Fact, Link};
+use crate::expr::facts::{Fact, FactFields, Link};
 
 pub mod conditions;
 pub mod jsx;
@@ -21,6 +21,9 @@ pub mod typed;
 
 /// Every family's facts (after the core list in `expr::facts`).
 pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, type_relations::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS, symbols::FACTS];
+
+/// Optional field projections, kept with the fact's topic owner.
+pub const FACT_FIELD_GROUPS: &[&[FactFields]] = &[syntax::FACT_FIELDS];
 
 /// Every link between nodes.
 pub const LINK_GROUPS: &[&[Link]] = &[relations::LINKS, layout::LINKS];

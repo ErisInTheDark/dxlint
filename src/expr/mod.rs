@@ -76,6 +76,8 @@ pub enum CExpr {
     /// A native fact ([`facts::FACTS`]) of the node, of a field (a list
     /// when it repeats), or of the parent layer.
     Fact(usize, FactOf),
+    /// A registered record field (or exact null/presence test).
+    FactField(usize, FactOf),
     Opt(usize),
     Call(&'static Function, Vec<CExpr>),
     Not(Box<CExpr>),
@@ -238,6 +240,15 @@ pub enum FactOf {
     Parent,
 }
 
+fn project_fact(base: &CExpr, key: Option<&str>) -> Option<CExpr> {
+    Some(match base {
+        CExpr::Fact(fact, of) => CExpr::FactField(facts::field_read(*fact, key)?, *of),
+        CExpr::OnParent(inner) => CExpr::OnParent(Box::new(project_fact(inner, key)?)),
+        CExpr::Relative(relative @ (Relative::Previous | Relative::Next), inner) => CExpr::Relative(*relative, Box::new(project_fact(inner, key)?)),
+        _ => return None,
+    })
+}
+
 /// A `let` attribute: its expression on each layer that defines it.
 pub struct Attr {
     pub name: String,
@@ -252,8 +263,8 @@ pub struct AttrMemo<'a> {
     values: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
     busy: RefCell<Vec<(u32, u16)>>,
     locals: RefCell<FxHashMap<(u32, u32, u16), Value<'a>>>,
-    /// Native facts read without arguments, per (node, fact): a rule reading
-    /// `space_before.spaced` and `space_before.line_break` builds the gap once.
+    /// Native fact reads without arguments, per (node, read slot). Whole
+    /// records and registered projections share this owner.
     facts: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
     /// Values of the lambda parameters being evaluated, outermost first.
     /// Nothing memoised above can read them: attributes and `let`s are
@@ -274,7 +285,7 @@ pub struct AttrMemo<'a> {
     here: std::cell::Cell<Option<(u32, u32)>>,
     /// The applied rule's `let`s on `here`, by slot.
     here_locals: RefCell<Vec<Option<Value<'a>>>>,
-    /// Facts of `here`'s node, by fact, with the visit that computed them.
+    /// Facts of `here`'s node, by read slot, with the visit that computed them.
     here_facts: RefCell<Vec<(u32, Value<'a>)>>,
     visit: std::cell::Cell<u32>,
 }
@@ -480,12 +491,20 @@ impl<'a> Scope<'a> {
 
     /// `base.key`: a record's key, or `key` read on a node.
     fn member(&self, base: CExpr, key: &crate::config::ast::Name) -> CExpr {
+        if let Some(projected) = project_fact(&base, Some(&key.text)) {
+            return projected;
+        }
         CExpr::Member(Box::new(base), key.text.clone().into(), self.node_part(key).map(Box::new))
     }
 
     /// `base.a.b...`: on records the keys; on node values the whole rest
     /// read there (`n.callee.object.layer`).
     fn member_path(&self, base: CExpr, keys: &[crate::config::ast::Name]) -> CExpr {
+        if let Some((first, rest)) = keys.split_first() {
+            if let Some(projected) = project_fact(&base, Some(&first.text)) {
+                return self.member_path(projected, rest);
+            }
+        }
         // `n.token`: a node's own tokens, which must then be built.
         for key in keys.iter().filter(|key| key.text == "token" && self.grammar.labels.get("token").is_some()) {
             self.note(key.span, Resolved::Field(key.text.clone()));
@@ -807,7 +826,18 @@ impl Scope<'_> {
             ExprKind::Binary(op, a, b) => {
                 let a = self.compile(a, errors);
                 let b = self.compile(b, errors);
-                CExpr::Binary(*op, Box::new(a?), Box::new(b?))
+                let (a, b) = (a?, b?);
+                if matches!(op, BinOp::Eq | BinOp::Ne) {
+                    let subject = match (&a, &b) {
+                        (CExpr::Const(Value::Null), subject) | (subject, CExpr::Const(Value::Null)) => Some(subject),
+                        _ => None,
+                    };
+                    if let Some(present) = subject.and_then(|subject| project_fact(subject, None)) {
+                        let absent = CExpr::Not(Box::new(present));
+                        return Some(if *op == BinOp::Eq { absent } else { CExpr::Not(Box::new(absent)) });
+                    }
+                }
+                CExpr::Binary(*op, Box::new(a), Box::new(b))
             }
             ExprKind::If(c, a, b) => {
                 let c = self.compile(c, errors);
@@ -1861,6 +1891,76 @@ impl<'a> Ctx<'a> {
         })
     }
 
+    fn cached_fact(&self, node: u32, slot: usize) -> Option<Value<'a>> {
+        if self.memo.here.get().is_some_and(|(here, _)| here == node) {
+            return self.memo.here_facts.borrow().get(slot)
+                .filter(|(visit, _)| *visit == self.memo.visit.get()).map(|(_, value)| value.clone());
+        }
+        self.memo.facts.borrow().get(&(node, u16::try_from(slot).expect("fact read slot fits u16"))).cloned()
+    }
+
+    fn memo_fact(&self, node: u32, slot: usize, compute: impl FnOnce() -> Value<'a>) -> Value<'a> {
+        if let Some(value) = self.cached_fact(node, slot) {
+            return value;
+        }
+        let value = compute();
+        if self.memo.here.get().is_some_and(|(here, _)| here == node) {
+            let mut slots = self.memo.here_facts.borrow_mut();
+            if slots.len() <= slot {
+                slots.resize((facts::FACTS.len() + facts::FIELD_READS.len()).max(slot + 1), (0, Value::Null));
+            }
+            slots[slot] = (self.memo.visit.get(), value.clone());
+        } else {
+            self.memo.facts.borrow_mut().insert((node, u16::try_from(slot).expect("fact read slot fits u16")), value.clone());
+        }
+        value
+    }
+
+    fn fact_value(&self, fact: usize, projection: Option<usize>, of: FactOf) -> Value<'a> {
+        let read = projection.map(|index| &facts::FIELD_READS[index]);
+        let project = |value: Value<'a>| match read {
+            Some(read) => read.key.map_or_else(|| Value::Bool(!matches!(value, Value::Null)), |key| value.key(key)),
+            None => value,
+        };
+        let Some(native) = self.native else { return project(Value::Null) };
+        let get = |node| {
+            if read.is_some() {
+                if let Some(value) = self.cached_fact(node, fact) {
+                    return project(value);
+                }
+            }
+            let slot = projection.map_or(fact, |index| facts::FACTS.len() + index);
+            self.memo_fact(node, slot, || {
+                let started = self.profile.map(|_| std::time::Instant::now());
+                let value = match read {
+                    Some(read) => (read.get)(native, node, read.field),
+                    None => (facts::FACTS[fact].get)(native, node),
+                };
+                if let (Some(profile), Some(started)) = (self.profile, started) {
+                    crate::engine::Profile::add_time(&profile.fact_nanos[fact], started.elapsed());
+                    crate::engine::Profile::add(&profile.fact_calls[fact], 1);
+                }
+                value
+            })
+        };
+        match of {
+            FactOf::Node => get(self.node),
+            FactOf::Parent => self.parent_layer().map_or_else(|| project(Value::Null), get),
+            FactOf::Field(label) => {
+                let nodes = self.tree.fields(self.node, label);
+                if projection.is_some() && nodes.len() != 1 {
+                    return project(self.fact_value(fact, None, of));
+                }
+                let mut values: Vec<_> = nodes.into_iter().map(get).collect();
+                match values.len() {
+                    0 => Value::Null,
+                    1 => values.pop().expect("one"),
+                    _ => Value::list(values),
+                }
+            }
+        }
+    }
+
     pub fn eval(&self, e: &CExpr) -> Result<Value<'a>, String> {
         Ok(match e {
             CExpr::Const(v) => v.clone(),
@@ -1894,52 +1994,10 @@ impl<'a> Ctx<'a> {
                 v
             }
             CExpr::Fact(i, of) => {
-                let Some(native) = self.native else { return Ok(Value::Null) };
-                let compute = |native: &dyn crate::native::ts::facts::Facts, id: u32| -> Value<'a> {
-                    let started = self.profile.map(|_| std::time::Instant::now());
-                    let v: Value<'a> = (facts::FACTS[*i].get)(native, id);
-                    if let (Some(p), Some(s)) = (self.profile, started) {
-                        crate::engine::Profile::add_time(&p.fact_nanos[*i], s.elapsed());
-                        crate::engine::Profile::add(&p.fact_calls[*i], 1);
-                    }
-                    v
-                };
-                let get = |native: &dyn crate::native::ts::facts::Facts, id: u32| -> Value<'a> {
-                    if self.memo.here.get().is_some_and(|(node, _)| node == id) {
-                        let visit = self.memo.visit.get();
-                        if let Some((at, v)) = self.memo.here_facts.borrow().get(*i) {
-                            if *at == visit {
-                                return v.clone();
-                            }
-                        }
-                        let v = compute(native, id);
-                        let mut slots = self.memo.here_facts.borrow_mut();
-                        if slots.len() <= *i {
-                            slots.resize(facts::FACTS.len().max(*i + 1), (0, Value::Null));
-                        }
-                        slots[*i] = (visit, v.clone());
-                        return v;
-                    }
-                    let key = (id, *i as u16);
-                    if let Some(v) = self.memo.facts.borrow().get(&key) {
-                        return v.clone();
-                    }
-                    let v = compute(native, id);
-                    self.memo.facts.borrow_mut().insert(key, v.clone());
-                    v
-                };
-                match of {
-                    FactOf::Node => get(native, self.node),
-                    FactOf::Parent => self.parent_layer().map_or(Value::Null, |p| get(native, p)),
-                    FactOf::Field(label) => {
-                        let mut values: Vec<Value> = self.tree.fields(self.node, *label).into_iter().map(|id| get(native, id)).collect();
-                        match values.len() {
-                            0 => Value::Null,
-                            1 => values.pop().expect("one"),
-                            _ => Value::list(values),
-                        }
-                    }
-                }
+                self.fact_value(*i, None, *of)
+            }
+            CExpr::FactField(read, of) => {
+                self.fact_value(facts::FIELD_READS[*read].fact, Some(*read), *of)
             }
             CExpr::Link(i) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
@@ -2511,4 +2569,93 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
             Value::Num(a.num()? % d)
         }
     })
+}
+
+#[cfg(test)]
+mod fact_projection_tests {
+    use std::path::Path;
+    use crate::engine::tests::{linter, lint, native_linter};
+
+    #[test]
+    fn projected_reads_preserve_eager_keys_and_presence_across_node_routes() {
+        let fields = ["text", "start", "end", "spaced", "line_break", "blank_lines", "blank_gaps", "comments", "missing"];
+        let mut conditions = Vec::new();
+        for route in ["", "parent.", "previous.", "next."] {
+            for fact in ["space_before", "space_after"] {
+                let subject = format!("{route}{fact}");
+                let projected = std::iter::once(format!("{subject} != null"))
+                    .chain(std::iter::once(format!("null == {subject}")))
+                    .chain(fields.iter().map(|field| format!("{subject}.{field}"))).collect::<Vec<_>>();
+                let eager = std::iter::once(format!("eager({subject}) != null"))
+                    .chain(std::iter::once(format!("null == eager({subject})")))
+                    .chain(fields.iter().map(|field| format!("eager({subject}).{field}"))).collect::<Vec<_>>();
+                conditions.push(format!("[{}] != [{}]", projected.join(", "), eager.join(", ")));
+            }
+        }
+        let linter = native_linter(&format!(r#"
+            fn eager(value) = value
+            in ts_keyword rule projections {{
+                when {}
+                warn "projection differs"
+            }}
+            in ts_call rule repeated_fields {{
+                when (argument.space_before).spaced != eager(argument.space_before).spaced
+                  || (argument.space_after != null) != (eager(argument.space_after) != null)
+                warn "field projection differs"
+            }}
+        "#, conditions.join(" || ")));
+        for source in [
+            "if(x){}",
+            "if /* x */ \r\n\r\n(x)\u{2028}{}\u{2029}",
+            "function f(x) { return x; } f(1); f(1, 2); f();",
+            "const view = `raw ${value} end`; let x = /[/]/;",
+        ] {
+            let reports = linter.lint(Path::new("/root/a.ts"), source);
+            assert!(reports.is_empty(), "{source:?}: {reports:#?}");
+        }
+    }
+
+    #[test]
+    fn projected_facts_are_absent_without_a_native_front_end() {
+        let linter = linter(r#"
+            in paren rule projections {
+                when space_before != null || null != space_after
+                  || !(space_before == null) || !(null == space_after)
+                  || space_before.spaced != null
+                warn "non-native projection differs"
+            }
+        "#);
+        assert!(lint(&linter, "(x)").is_empty());
+    }
+
+    #[test]
+    fn projected_gap_reads_preserve_fix_bytes_and_idempotence() {
+        let linters: Vec<_> = ["space_after", "eager(space_after)"].into_iter().map(|gap| {
+            native_linter(&format!(r#"
+                fn eager(value) = value
+                in ts_keyword rule normalise {{
+                    when text == "if" && {gap} != null && !{gap}.comments && !{gap}.line_break && {gap}.text != " "
+                    fix space_after as " "
+                    warn "normalise gap"
+                }}
+            "#))
+        }).collect();
+        let path = Path::new("/root/a.ts");
+        for (source, expected) in [
+            ("if(x){}", "if (x){}"),
+            ("if  (x){}", "if (x){}"),
+            ("if\u{a0}(x){}", "if (x){}"),
+            ("if/* comment */(x){}", "if/* comment */(x){}"),
+            ("if\r\n(x){}", "if\r\n(x){}"),
+            ("if\u{2028}(x){}", "if\u{2028}(x){}"),
+        ] {
+            let projected = linters[0].fix(path, source);
+            let eager = linters[1].fix(path, source);
+            assert_eq!(projected.text, expected, "{source:?}");
+            assert_eq!(projected.text, eager.text, "{source:?}");
+            assert_eq!(projected.applied, eager.applied, "{source:?}");
+            assert!(projected.remaining.is_empty(), "{source:?}: {:#?}", projected.remaining);
+            assert_eq!(linters[0].fix(path, &projected.text).applied, 0, "{source:?}");
+        }
+    }
 }

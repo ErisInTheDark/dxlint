@@ -24,6 +24,8 @@ use super::syntax::Syntax;
 pub trait Facts {
     /// `f` on the file itself (topic modules' facts).
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static>;
+    /// A projected record field, or presence (`None`), at its topic owner.
+    fn with_field(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32, Option<usize>) -> Value<'static>, node: u32, field: Option<usize>) -> Value<'static>;
     /// `f` on the file itself, for links (nodes a node leads to).
     fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
     fn matches_selector(&self, node: u32, selector: &crate::selector::Selector) -> Result<bool, String>;
@@ -152,6 +154,10 @@ impl Facts for NativeFile<'_> {
 
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static> {
         f(self, node)
+    }
+
+    fn with_field(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32, Option<usize>) -> Value<'static>, node: u32, field: Option<usize>) -> Value<'static> {
+        f(self, node, field)
     }
 
     fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32> {

@@ -300,8 +300,26 @@ pub(crate) fn paired(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     partner.map_or(Value::Null, |i| token_record(file, &lexed.0[i]))
 }
 
-/// A gap between tokens: its text, whether whitespace (outside comments)
-/// separates them, line breaks, blank lines and comments.
+/// Fields shared by the eager gap record and its projections.
+pub(crate) const GAP_FIELDS: &[&str] = &["text", "start", "end", "spaced", "line_break", "blank_lines", "blank_gaps", "comments"];
+
+pub(crate) fn gap_field(src: &str, from: usize, to: usize, key: &str) -> Value<'static> {
+    let to = to.max(from);
+    let text = &src[from..to];
+    match key {
+        "text" => Value::text_copy(text),
+        "start" => Value::from(from),
+        "end" => Value::from(to),
+        "spaced" => Value::Bool(gap_has_space(text)),
+        "line_break" => Value::Bool(breaks_line(text)),
+        "comments" => Value::Bool(!text.trim().is_empty()),
+        "blank_lines" => Value::from(gap_blank_lines(text)),
+        "blank_gaps" => Value::from(gap_whitespace(text).1),
+        _ => Value::Null,
+    }
+}
+
+/// A gap between tokens, including whitespace outside comments.
 pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
     let text = &src[from..to.max(from)];
     // Most gaps are "" or a few spaces: no lines, no comments to walk.
@@ -317,9 +335,27 @@ pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
             ("comments".into(), Value::Bool(!text.trim().is_empty())),
         ]);
     }
+    let blank_lines = gap_blank_lines(text);
+    let (spaced, blank_gaps) = gap_whitespace(text);
+    Value::record([
+        ("text".into(), Value::text_copy(text)),
+        ("start".into(), Value::from(from)),
+        ("end".into(), Value::from(to.max(from))),
+        ("spaced".into(), Value::Bool(spaced)),
+        ("line_break".into(), Value::Bool(breaks_line(text))),
+        ("blank_lines".into(), Value::from(blank_lines)),
+        ("blank_gaps".into(), Value::from(blank_gaps)),
+        ("comments".into(), Value::Bool(!text.trim().is_empty())),
+    ])
+}
+
+fn gap_blank_lines(text: &str) -> usize {
     let unified = text.replace("\r\n", "\n");
     let lines: Vec<&str> = unified.split(['\n', '\r', '\u{2028}', '\u{2029}']).collect();
-    let blank_lines = lines.iter().skip(1).take(lines.len().saturating_sub(2)).filter(|l| l.trim().is_empty()).count();
+    lines.iter().skip(1).take(lines.len().saturating_sub(2)).filter(|line| line.trim().is_empty()).count()
+}
+
+fn gap_whitespace(text: &str) -> (bool, usize) {
     let (mut spaced, mut blank_gaps) = (false, 0usize);
     for gap in uncommented_gaps(text) {
         let (mut breaks, mut previous) = (0usize, '\0');
@@ -332,16 +368,7 @@ pub(crate) fn gap_value(src: &str, from: usize, to: usize) -> Value<'static> {
         }
         blank_gaps += breaks.saturating_sub(1);
     }
-    Value::record([
-        ("text".into(), Value::text_copy(text)),
-        ("start".into(), Value::from(from)),
-        ("end".into(), Value::from(to.max(from))),
-        ("spaced".into(), Value::Bool(spaced)),
-        ("line_break".into(), Value::Bool(breaks_line(text))),
-        ("blank_lines".into(), Value::from(blank_lines)),
-        ("blank_gaps".into(), Value::from(blank_gaps)),
-        ("comments".into(), Value::Bool(!text.trim().is_empty())),
-    ])
+    (spaced, blank_gaps)
 }
 
 /// The token layer a punctuator or keyword gets (none for literals).
@@ -596,36 +623,49 @@ mod lexical_tests {
 
     #[test]
     fn selected_tokens_preserve_their_spans_and_owners() {
-        let src = "function run<T>(left, right) { const values = [left, ...right]; if (left) return values; }";
-        let parsed = super::super::parse(src, false).expect("valid syntax");
-        let original_len = parsed.nodes.len();
-        let projection = |parsed: &Parsed| {
-            let mut tokens = Vec::new();
-            for (owner, node) in parsed.nodes[..original_len].iter().enumerate() {
-                for edge in node.children.iter().filter(|edge| edge.label == F::Token as u16) {
-                    let token = &parsed.nodes[edge.node as usize];
-                    tokens.push((owner, token.start, token.end, raw_kind(token).expect("token kind")));
+        for (src, jsx) in [
+            ("const values = [call(left, right), ...other];", false),
+            ("function run<T>(left, right) { const values = [left, ...right]; if (left) return values; }", false),
+            ("@dec export default class C<T> { method(a: T, b: T) { return /[,;]/.test(`${a},${b}`); } }", false),
+            ("const view = <Box a=\"\\\" b={call(left, right)}>raw,; {child}</Box>;", true),
+        ] {
+            let parsed = super::super::parse(src, jsx).expect("valid syntax");
+            let original_len = parsed.nodes.len();
+            let projection = |parsed: &Parsed| {
+                let mut tokens = Vec::new();
+                for (owner, node) in parsed.nodes[..original_len].iter().enumerate() {
+                    for edge in node.children.iter().filter(|edge| edge.label == F::Token as u16) {
+                        let token = &parsed.nodes[edge.node as usize];
+                        tokens.push((owner, token.start, token.end, raw_kind(token).expect("token kind")));
+                    }
                 }
+                tokens.sort_by_key(|token| (token.0, token.1));
+                tokens
+            };
+            let mut all = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
+            attach_selected(src, &mut all, &ALL_TOKENS);
+            let all_tokens = projection(&all);
+            if src.starts_with("const values") {
+                let mut commas: Vec<_> = all_tokens.iter().filter(|token| token.3 == K::Comma).collect();
+                commas.sort_by_key(|token| token.1);
+                let owners: Vec<_> = commas.into_iter()
+                    .map(|token| raw_kind(&parsed.nodes[token.0]).expect("syntax owner")).collect();
+                assert_eq!(owners, [K::Call, K::Array]);
             }
-            tokens.sort_by_key(|token| (token.0, token.1));
-            tokens
-        };
-        let mut all = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
-        attach_selected(src, &mut all, &ALL_TOKENS);
-        let all_tokens = projection(&all);
-        let mut wanted = [false; ALL_KINDS.len()];
-        for kind in [K::Comma, K::OpenBrace, K::Ellipsis] {
-            wanted[kind as usize] = true;
+            let mut wanted = [false; ALL_KINDS.len()];
+            for kind in [K::Comma, K::OpenBrace, K::Ellipsis] {
+                wanted[kind as usize] = true;
+            }
+            let expected: Vec<_> = all_tokens.into_iter().filter(|token| wanted[token.3 as usize]).collect();
+            assert!(!expected.is_empty());
+            let mut selected = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
+            attach_selected(src, &mut selected, &wanted);
+            assert_eq!(projection(&selected), expected);
+            let mut none = parsed;
+            attach_selected(src, &mut none, &[false; ALL_KINDS.len()]);
+            assert_eq!(none.nodes.len(), original_len);
+            assert!(projection(&none).is_empty());
         }
-        let expected: Vec<_> = all_tokens.into_iter().filter(|token| wanted[token.3 as usize]).collect();
-        assert!(!expected.is_empty());
-        let mut selected = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
-        attach_selected(src, &mut selected, &wanted);
-        assert_eq!(projection(&selected), expected);
-        let mut none = parsed;
-        attach_selected(src, &mut none, &[false; ALL_KINDS.len()]);
-        assert_eq!(none.nodes.len(), original_len);
-        assert!(projection(&none).is_empty());
     }
 
     #[test]
