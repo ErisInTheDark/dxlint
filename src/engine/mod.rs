@@ -301,8 +301,7 @@ impl Linter {
         let wants_tokens = token_kinds.iter().any(|&k| k);
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
-        let options: Vec<Vec<Value<'static>>> = self.rules.iter().map(Rule::option_values).collect();
-        let run = Run { lang, text, lines: &lines, file: &file, active: &active, options: &options };
+        let run = Run { lang, text, lines: &lines, file: &file, active: &active };
         let mut out = Vec::new();
 
         let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
@@ -470,7 +469,7 @@ impl Linter {
                         source: run.text,
                         lines: run.lines,
                         file: run.file,
-                        options: &run.options[fi],
+                        options: &[],
                         reindented: &reindented[fi],
                         attrs: &self.attrs,
                         forwards: &self.forwards,
@@ -648,7 +647,39 @@ struct Run<'a> {
     lines: &'a LineIndex,
     file: &'a str,
     active: &'a [bool],
-    options: &'a [Vec<Value<'static>>],
+}
+
+#[cfg(test)]
+mod option_run_tests {
+    use super::*;
+    use crate::engine::tests::linter;
+
+    #[test]
+    fn compiled_options_bind_each_reports_messages_and_conditional_edits_across_files() {
+        let l = linter(r#"
+            in .t match word /[a-z]+/ {
+                rule configured {
+                    option chosen string = "a"
+                    option enabled boolean = false
+                    @each item in [chosen]
+                    when enabled && text == item
+                    report at offset
+                    fix at {start: offset, end: end_offset} if enabled as item chosen
+                    warn "{item}/{trim(chosen)}"
+                }
+            }
+            rule configured {
+                set chosen "b"
+                set enabled true
+            }
+        "#);
+        for (path, source, expected) in [("/root/a.t", "a b", "a bb"), ("/root/b.t", "b a b", "bb a bb")] {
+            let reports = l.lint(Path::new(path), source);
+            assert_eq!(reports.len(), source.split_whitespace().filter(|word| *word == "b").count());
+            assert!(reports.iter().all(|d| d.message == "b/b" && d.fix.is_some() && &source[d.start..d.end] == "b"));
+            assert_eq!(apply_fixes(source, &reports).0, expected);
+        }
+    }
 }
 
 fn engine_warning(at: usize, message: String) -> Diagnostic {

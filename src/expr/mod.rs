@@ -866,8 +866,10 @@ impl Scope<'_> {
                 // `parent`, `previous`, `n`); anything else is a value.
                 // Not a node there (a fact's kind tag): the value itself.
                 let plain = self.compile(value, errors)?;
+                // This builtin already returns a node or null, not its text.
+                let parent_node = matches!(&plain, CExpr::Builtin(i) if BUILTIN_VARS[*i].0 == "parent");
                 let value = match &value.kind {
-                    ExprKind::Var(path) if path.last().is_some_and(|n| n.text != "node") => {
+                    ExprKind::Var(path) if !parent_node && path.last().is_some_and(|n| n.text != "node") => {
                         let mut with_node = path.clone();
                         with_node.push(crate::config::ast::Name { text: "node".into(), span: value.span });
                         let mut quiet = Vec::new();
@@ -2605,6 +2607,74 @@ mod evaluation_tests {
     use super::{CExpr, Ctx, Value};
     use crate::config::ast::BinOp;
     use crate::engine::tests::{lint, linter};
+    use crate::engine::tests::native_linter;
+    use std::path::Path;
+
+    #[test]
+    fn parent_tests_keep_null_roots_and_node_kinds_fields_layers_languages() {
+        let pattern = |subject: &str| linter(&format!(r#"
+            fn runtime(value) = value
+            match word /[a-z]+/
+            in .t, paren match word
+            in .t match box /</ body:paren />/
+            in .t, paren layer marks match marked /[A-Z]+/
+            group containers paren, box
+            in .t, word, marked rule subjects {{
+                warn "{{{subject} is containers}}/{{{subject} is box.body}}/{{{subject} is layer marks}}/{{{subject} is .t}}"
+            }}
+        "#));
+        let native = |subject: &str| native_linter(&format!(r#"
+            fn runtime(value) = value
+            group containers ts_call, ts_if, ts_block
+            in ts_program, ts_identifier, ts_call rule subjects {{
+                warn "{{{subject} is containers}}/{{{subject} is ts_call.argument}}/{{{subject} is .js}}"
+            }}
+        "#));
+        for (direct, dynamic, path, source) in [
+            (pattern("parent"), pattern("runtime(parent)"), "/root/a.t", "a (b) <(c)> U (V)"),
+            (native("parent"), native("runtime(parent)"), "/root/a.ts", "f(a.b); if (c) { g(d.e); }"),
+        ] {
+            let reports = direct.lint(Path::new(path), source);
+            assert!(reports.iter().any(|d| d.start == 0 && d.end == source.len() && d.message.ends_with("/true")), "{path}: {reports:#?}");
+            assert!(reports.iter().any(|d| d.message.starts_with("true/")), "{path}: {reports:#?}");
+            assert!(reports.iter().any(|d| d.message.contains("/true/")), "{path}: {reports:#?}");
+            assert_eq!(serde_json::to_value(&reports).unwrap(), serde_json::to_value(dynamic.lint(Path::new(path), source)).unwrap());
+        }
+    }
+
+    #[test]
+    fn shadowed_parent_values_keep_tagged_record_and_string_tests() {
+        for binding in ["option parent string = \"word\"", "let parent {kind: \"word\"}", "let parent {node: node, kind: \"paren\"}"] {
+            let l = linter(&format!(r#"
+                fn accepts(parent) = parent is word
+                in .t match word /[a-z]+/ {{
+                    rule shadows {{
+                        {binding}
+                        when !(parent is word) || !accepts("word") || !accepts({{kind: "word"}})
+                          || !accepts({{node: node, kind: "paren"}})
+                        warn "shadowed parent changed"
+                    }}
+                }}
+            "#));
+            assert!(lint(&l, "a b").is_empty());
+        }
+    }
+
+    #[test]
+    fn parent_tests_inspect_the_parent_despite_a_node_local() {
+        let l = linter(r#"
+            match word /[a-z]+/
+            in .t, paren match word
+            in paren, word rule selected {
+                let node if starts_with(text, "(") then first(descendants(word)) else null
+                when parent is paren && !(parent is word)
+                warn "actual parent selected"
+            }
+        "#);
+        let source = "a (b c)";
+        let reports = lint(&l, source);
+        assert_eq!(reports.iter().map(|d| &source[d.start..d.end]).collect::<Vec<_>>(), ["b", "c"]);
+    }
 
     #[test]
     fn static_booleans_match_runtime_truth_tables_and_skip_dead_errors() {
