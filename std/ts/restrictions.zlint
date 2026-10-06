@@ -511,30 +511,20 @@ in ts_comment rule no-warning-comments {
   when re_test(body, "(?i)" (if location == "start" then "^[\\s" re_escape(join(decoration, "")) "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else ""))
   warn "Unexpected '{term}' comment: '{display}'."
 }
-schema restriction_comment_case {
-  ignorePattern: regex = ""
-  ignoreInlineComments: boolean = false
-  ignoreConsecutiveComments: boolean = false
-}
-in ts_comment rule capitalized-comments {
+in ts_comment let capitalized_comments_checked true
+@macro restriction_capitalized_comment_body {
   option mode "always" | "never" = "always" "required initial letter case"
   option ignorePattern regex = "" "starting comment text to ignore"
-  option ignoreInlineComments boolean = false "ignore comments surrounded by code"
-  option ignoreConsecutiveComments boolean = false "ignore comments following comments"
-  option line restriction_comment_case | null = null "line-comment overrides"
-  option block restriction_comment_case | null = null "block-comment overrides"
-  let line_options default(line, {ignorePattern: ignorePattern, ignoreInlineComments: ignoreInlineComments, ignoreConsecutiveComments: ignoreConsecutiveComments})
-  let block_options default(block, {ignorePattern: ignorePattern, ignoreInlineComments: ignoreInlineComments, ignoreConsecutiveComments: ignoreConsecutiveComments})
-  let options if is ts_block_comment then block_options else line_options
+  when capitalized_comments_checked
   when (if mode == "always" then restriction_comment_lowercase else restriction_comment_uppercase)
     && !re_test(restriction_comment_body, /^\s*(?:eslint|jshint\s+|jslint\s+|istanbul\s+|globals?\s+|exported\s+|jscs)/)
     && !re_test(restriction_comment_clean, /^\s*[^:/?#\s]+:\/\/[^?#]/)
-    && !(options.ignoreInlineComments && restriction_comment_preamble && restriction_comment_postamble)
-    && !(options.ignoreConsecutiveComments && restriction_comment_consecutive)
-    && !(options.ignorePattern != "" && re_test(restriction_comment_clean, "^\\s*(?:" options.ignorePattern ")"))
+    && !(ignorePattern != "" && re_test(restriction_comment_clean, "^\\s*(?:" ignorePattern ")"))
   report at {start: offset, end: ts_program.end_offset}
   warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
 }
+in ts_line_comment rule capitalized-comments:line { @restriction_capitalized_comment_body }
+in ts_block_comment rule capitalized-comments:block { @restriction_capitalized_comment_body }
 
 in ts_object {
   let restriction_import_options parent is ts_import_call
