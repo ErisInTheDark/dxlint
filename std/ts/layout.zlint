@@ -29,25 +29,28 @@ in ts_block let layout_block_module parent is ts_namespace
 in ts_block let layout_brace_excluded parent is (ts_program, ts_block, ts_case)
 in ts_block let layout_brace_keyword parent is (ts_if, ts_try)
 in ts_block, ts_static_block, ts_switch, ts_class let layout_brace_single opener.ts_open_brace.line == closer.ts_close_brace.line
-in ts_function let layout_generator_kind if name != null then "named" else "anonymous"
-in ts_method let layout_generator_kind if parent is ts_object then "shorthand" else "method"
+group generator_named_functions ts_function
+group generator_anonymous_functions ts_function
+group generator_methods ts_method
+group generator_shorthand_methods ts_method
+in ts_function let generator_star_named name != null
+in ts_method let generator_star_shorthand parent is ts_object
 @macro layout_yield_star_options {
   option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
   option before boolean | null = null "override space before star"
   option after boolean | null = null "override space after star"
 }
 @macro layout_generator_star_options {
-  option mode "before" | "after" | "both" | "neither" = "before" "spacing around generator star"
-  option before boolean | null = null "override space before star"
-  option after boolean | null = null "override space after star"
-  option named star_mode | null = null "named function override"
-  option anonymous star_mode | null = null "anonymous function override"
-  option method star_mode | null = null "method override"
-  option shorthand star_mode | null = null "object method override"
-  let star_override if parent.layout_generator_kind == "named" then named else if parent.layout_generator_kind == "anonymous" then anonymous else if parent.layout_generator_kind == "shorthand" then default(shorthand, method) else method
-  let resolved_mode if type_of(star_override) == "str" then star_override else mode
+  option before boolean = true "space before generator star"
+  option after boolean = false "space after generator star"
+  when text == "*"
+  let star_before_space layout_comma_space(space_before.text, true)
+  let star_after_space layout_comma_space(space_after.text, false)
+  each star_before in [true, false]
+  when if star_before then previous_token != null && (parent not ts_method || offset != token_neighbours.parent_start) else next_token != null
+  when ((if star_before then star_before_space else star_after_space) != "") != (if star_before then before else after)
+  warn if star_before then (if star_before_space != "" then "Unexpected space before *." else "Missing space before *.") else if star_after_space != "" then "Unexpected space after *." else "Missing space after *."
 }
-fn layout_star_space(overridden, mode, configured, before_side) = if type_of(overridden) == "str" then mode == "both" || mode == (if before_side then "before" else "after") else default(get(overridden, if before_side then "before" else "after"), default(configured, mode == "both" || mode == (if before_side then "before" else "after")))
 @macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
 @macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
 fn layout_padding_attached_start(gap) = default(re_find(gap, "^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"), "")
@@ -506,8 +509,6 @@ in ts_close_bracket rule computed-property-spacing:before {
   warn if style == "always" then "A space is required before ']'." else "There should be no space before ']'."
 }
 
-schema star_mode "before" | "after" | "both" | "neither" | { before?: boolean; after?: boolean }
-
 in ts_yield.operator rule yield-star-spacing:before {
   @layout_yield_star_options
   when text == "*" && previous_token != null
@@ -522,21 +523,21 @@ in ts_yield.operator rule yield-star-spacing:after {
   warn if space_after.spaced then "Unexpected space after *." else "Missing space after *."
 }
 
-in ts_function.modifier, ts_method.modifier rule generator-star-spacing:before {
+in ts_function.modifier rule generator-star-spacing:named {
+  when parent is generator_named_functions && parent.generator_star_named
   @layout_generator_star_options
-  when text == "*" && previous_token != null
-  when parent not ts_method || offset != token_neighbours.parent_start
-  let star_space layout_comma_space(space_before.text, true)
-  when (star_space != "") != layout_star_space(star_override, resolved_mode, before, true)
-  warn if star_space != "" then "Unexpected space before *." else "Missing space before *."
 }
-
-in ts_function.modifier, ts_method.modifier rule generator-star-spacing:after {
+in ts_function.modifier rule generator-star-spacing:anonymous {
+  when parent is generator_anonymous_functions && !parent.generator_star_named
   @layout_generator_star_options
-  when text == "*" && next_token != null
-  let star_space layout_comma_space(space_after.text, false)
-  when (star_space != "") != layout_star_space(star_override, resolved_mode, after, false)
-  warn if star_space != "" then "Unexpected space after *." else "Missing space after *."
+}
+in ts_method.modifier rule generator-star-spacing:method {
+  when parent is generator_methods && !parent.generator_star_shorthand
+  @layout_generator_star_options
+}
+in ts_method.modifier rule generator-star-spacing:shorthand {
+  when parent is generator_shorthand_methods && parent.generator_star_shorthand
+  @layout_generator_star_options
 }
 
 group layout_generic_owner ts_function, ts_arrow, ts_class, ts_interface, ts_type_alias, ts_method,
