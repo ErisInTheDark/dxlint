@@ -9,6 +9,13 @@
 import .core
 
 lang js "*.js" "*.mjs" "*.cjs" "*.jsx" "*.ts" "*.tsx" "*.mts" "*.cts"
+language .js {
+  option globals { [key: string]: "readonly" | "writable" | "off" } = {} "Configured globals; source comments take precedence."
+  option ecmaVersion 3 | 5 | int(6..17) | int(2015..2026) | "latest" | null = null "ECMAScript edition; null keeps the latest built-ins."
+  option sourceType "script" | "module" | "commonjs" | null = null "Root source environment; null infers it from syntax and filename."
+  option impliedStrict boolean | null = null "Strict code without an explicit directive."
+  option globalReturn boolean | null = null "Wrap script declarations in a function scope, without CommonJS globals."
+}
 
 native ts
 

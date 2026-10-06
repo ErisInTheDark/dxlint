@@ -20,7 +20,7 @@ pub enum Kind {
     Attr,
     Macro,
     Lang,
-    /// A rule's option, named `rule.option`.
+    /// A rule or language option, named `owner.option`.
     Option,
     /// A rule's `let`, named `rule.name`.
     Local,
@@ -96,6 +96,7 @@ const KEYWORDS: &[(&str, &str)] = &[
     ("ignore", "`ignore \"glob\" ...`: never lint these files"),
     ("native", "`native ts`: the TypeScript parser's node kinds as `ts_*` layers"),
     ("lang", "`lang name \"*.ext\" ...`: a language, whose root layer is `.name`"),
+    ("language", "`language .name { option name type = default; set name value; files \"glob\"; ignore \"glob\" }`: declared options and ordered file-scoped source settings"),
     ("indent", "rule clause: `indent in a by n` indents what is inside `a` (n levels, default 1) past `a`'s line; `indent a.field by n` indents those nodes themselves when they start their own line; `from x` measures from x's line; an anchor in the middle of a line sits where the indent lines opened earlier on that line put it: levels opened on one line collapse to one, unless their indent lines are in different `class name`es; the rule's `indented`, `indent_level` and `indent_anchor` read these"),
     ("like", "`match name like base pattern`: a specialisation of `base`"),
     ("until", "inside a pattern: lazily skip (letting children eat whole chunks) until the rest matches"),
@@ -144,7 +145,7 @@ impl Symbols {
         let mut s = Symbols { symbols: Vec::new(), uses: Vec::new(), by_key: HashMap::new(), sources };
         s.registry();
         s.layers(config, grammar);
-        s.rules(config, rules);
+        s.rules_and_options(config, rules);
         for r in inert {
             let doc = format!("checks `{}`, **off** (`rule {}` turns it on at {})", r.target_text, r.name, r.default_severity.as_str());
             s.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
@@ -397,17 +398,18 @@ impl Symbols {
         }
     }
 
-    /// An option of `rule`: `rule.name`, and the default option also under
+    /// An option of an owner: `owner.name`, and a default rule option also under
     /// the rule's own name (what `rule name set ` completes). The first
     /// registration wins: compiled rules carry configured values.
-    fn option(&mut self, rule: &str, o: OptionView, schemas: &crate::config::schema::Schemas) {
-        let key = format!("{rule}.{}", o.name);
+    fn option(&mut self, owner: &str, kind: Kind, o: OptionView, schemas: &crate::config::schema::Schemas) {
+        let key = format!("{owner}.{}", o.name);
         if self.by_key.contains_key(&(Kind::Option, key.clone())) {
             return;
         }
-        let setting = if o.primary { format!("`rule {rule} set value`") } else { format!("`rule {rule} {{ set {} value }}`", o.name) };
+        let owner_kind = kind.word();
+        let setting = if o.primary { format!("`rule {owner} set value`") } else { format!("`{owner_kind} {owner} {{ set {} value }}`", o.name) };
         let doc = format!(
-            "of rule `{rule}`: {}\n\n```zlint\n{}option {} {}\n```\n\nvalue {}, default {}\n\n{setting} changes it",
+            "of {owner_kind} `{owner}`: {}\n\n```zlint\n{}option {} {}\n```\n\nvalue {}, default {}\n\n{setting} changes it",
             o.description.unwrap_or("no description"),
             if o.primary { "default " } else { "" },
             o.name,
@@ -417,14 +419,14 @@ impl Symbols {
         );
         let summary = o.description.map_or_else(|| o.schema.to_string(), String::from);
         let choices: Vec<String> = o.schema.choices(schemas).iter().map(|v| enum_or_literal(o.schema, schemas, v)).collect();
-        let names = if o.primary { vec![key, rule.to_string()] } else { vec![key] };
+        let names = if o.primary { vec![key, owner.to_string()] } else { vec![key] };
         for name in names {
             let id = self.add(Kind::Option, &name, summary.clone(), doc.clone());
             self.symbols[id].fields = choices.clone();
         }
     }
 
-    fn rules(&mut self, config: &Config, rules: &[Rule]) {
+    fn rules_and_options(&mut self, config: &Config, rules: &[Rule]) {
         let schemas: crate::config::schema::Schemas = config.schemas.iter().map(|s| (s.name.text.clone(), s.clone())).collect();
         for r in rules {
             let state = if r.severity == crate::config::ast::Severity::Off {
@@ -445,7 +447,7 @@ impl Symbols {
                 if let Some(d) = &o.description {
                     let _ = write!(doc, ", {d}");
                 }
-                self.option(&r.name, OptionView { name: &o.name, schema: &o.schema, value: &o.value, default: &o.default, description: o.description.as_deref(), primary: o.primary }, &schemas);
+                self.option(&r.name, Kind::Rule, OptionView { name: &o.name, schema: &o.schema, value: &o.value, default: &o.default, description: o.description.as_deref(), primary: o.primary }, &schemas);
             }
             self.add(Kind::Rule, &r.name, r.target_text.clone(), doc);
             self.def(Kind::Rule, &r.name, r.span);
@@ -455,7 +457,7 @@ impl Symbols {
             // rule) still complete and document their options, at defaults.
             for o in &def.options {
                 let view = OptionView { name: &o.name.text, schema: &o.schema, value: &o.default, default: &o.default, description: o.description.as_deref(), primary: o.primary };
-                self.option(&def.name.text, view, &schemas);
+                self.option(&def.name.text, Kind::Rule, view, &schemas);
             }
             for o in &def.options {
                 self.def(Kind::Option, &format!("{}.{}", def.name.text, o.name.text), o.name.span);
@@ -485,6 +487,22 @@ impl Symbols {
                 for (option, _) in &c.options {
                     self.use_of(option.span, Kind::Option, &format!("{}.{}", name.text, option.text));
                 }
+            }
+        }
+        for block in &config.language_options {
+            let owner = format!(".{}", block.language.text);
+            for option in &block.options {
+                let view = OptionView { name: &option.name.text, schema: &option.schema, value: &option.default,
+                    default: &option.default, description: option.description.as_deref(), primary: false };
+                self.option(&owner, Kind::Lang, view, &schemas);
+                self.def(Kind::Option, &format!("{owner}.{}", option.name.text), option.name.span);
+            }
+        }
+        for block in &config.language_options {
+            let owner = format!(".{}", block.language.text);
+            self.use_of(block.language.span, Kind::Lang, &block.language.text);
+            for (option, _) in &block.settings {
+                self.use_of(option.span, Kind::Option, &format!("{owner}.{}", option.text));
             }
         }
     }

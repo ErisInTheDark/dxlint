@@ -57,7 +57,7 @@ pub fn extended_native(file: &NativeFile, node: u32) -> Value<'static> {
     let Some(prototype) = prototype.map(|n| s.unparen(n)).filter(|&n| statics::property_name(s, n).as_deref() == Some("prototype")) else { return Value::Null };
     let Some(object) = s.get(prototype, F::Object).map(|n| s.unparen(n)).filter(|&n| s.is(n, K::Ident)) else { return Value::Null };
     let name = s.text(object);
-    if !super::super::super::globals::is_builtin(name) || !name.starts_with(char::is_uppercase)
+    if !file.globals().is_builtin(name) || !name.starts_with(char::is_uppercase)
         || file.resolved(object) != Some("global") || file.global_setting(object) == Some("off") { return Value::Null }
     Value::from(name.to_owned())
 }
@@ -79,7 +79,7 @@ pub fn eval_usage(file: &NativeFile, node: u32) -> Value<'static> {
                 let Some(n) = current else { break false };
                 match s.kind(n) {
                     Some(K::Program) => break file.source_type() != "module",
-                    Some(K::Function) => break !super::statements::strict(file, n) && super::functions::default_this(file, n),
+                    Some(K::Function) => break !crate::native::ts::directives::strict_code(file, n) && super::functions::default_this(file, n),
                     Some(K::Method) if s.field(child) != Some(F::Key) => break false,
                     Some(K::ClassProp) if s.field(child) == Some(F::Init) => break false,
                     Some(K::StaticBlock) => break false,

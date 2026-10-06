@@ -182,7 +182,7 @@ struct Binder<'s, 't> {
     infer_scope: Option<usize>,
 }
 
-pub fn bind(s: &Syntax) -> Bindings {
+pub fn bind(s: &Syntax, root_function: bool) -> Bindings {
     let mut b = Binder {
         s,
         scopes: Vec::new(),
@@ -200,7 +200,8 @@ pub fn bind(s: &Syntax) -> Bindings {
         decl_scope: HashMap::default(),
         infer_scope: None,
     };
-    let module = b.scope(None, true, s.root());
+    let global = b.scope(None, true, s.root());
+    let module = if root_function { b.scope(Some(global), true, s.root()) } else { global };
     for st in s.all(s.root(), F::Body).collect::<Vec<_>>() {
         b.walk(st, module, Mode::Value);
     }

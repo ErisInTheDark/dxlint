@@ -131,6 +131,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
+    let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &schemas, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
     let mut inert = Vec::new();
@@ -252,6 +253,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         split_at: 128 * 1024,
         rule_jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),
         grammar,
+        language_options,
         rules,
         inert,
         sources: sources.clone(),
@@ -268,7 +270,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     Built { linter: Some(linter), errors, sources, symbols }
 }
 
-fn option_value(
+pub(super) fn option_value(
     rule: &str,
     name: &Name,
     value: &Expr,

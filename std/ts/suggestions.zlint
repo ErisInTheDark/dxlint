@@ -627,11 +627,38 @@ in ts_regex, ts_call, ts_new rule require-unicode-regexp {
   warn if requireFlag == "v" then "Use the 'v' flag." else "Use the 'u' flag."
 }
 
+fn strict_enclosing_function_directive(n) =
+  any(walk(n.parent.node, current => current.parent.node), current => current is (ts_function, ts_arrow, ts_method) && count(current.directive_scope.directives) > 0)
+fn strict_directive_message(n, scope, mode, directive) =
+  if n not ts_program && !scope.simple_parameters then
+    if directive == first(scope.directives) then "'use strict' directive inside a function with non-simple parameter list throws a syntax error since ES2016." else "Multiple 'use strict' directives."
+  else if mode == "never" then "Strict mode is not permitted."
+  else if mode == "module" then "'use strict' is unnecessary inside of modules."
+  else if mode == "implied" then "'use strict' is unnecessary when implied strict mode is enabled."
+  else if n is ts_program then
+    if mode == "function" then "Use the function form of 'use strict'." else if directive == first(scope.directives) then null else "Multiple 'use strict' directives."
+  else if mode == "global" then "Use the global form of 'use strict'."
+  else if directive != first(scope.directives) then "Multiple 'use strict' directives."
+  else if strict_enclosing_function_directive(n) then "Unnecessary 'use strict' directive."
+  else if scope.class_body then "'use strict' is unnecessary inside of classes."
+  else null
+fn strict_missing(n, scope, mode) =
+  if count(scope.directives) != 0 then []
+  else if n is ts_program && mode == "global" && count(n.body.node) > 0 then [{ offset: first(n.body.node).offset, message: "Use the global form of 'use strict'." }]
+  else if n not ts_program && mode == "function" && !scope.parent_function && !scope.class_body then [{
+    offset: n.offset,
+    message: if scope.simple_parameters then "Use the function form of 'use strict'." else "Wrap " default(n.function_name, "function") " in a function with 'use strict' directive."
+  }]
+  else []
 in ts_program, ts_function, ts_arrow, ts_method rule strict {
   option mode ("safe" | "never" | "global" | "function") = "safe" "strict directive policy"
-  let strict_policy strict_directive_policy
-  let strict_mode if source_type == "module" then "module" else if mode == "safe" then if source_type == "commonjs" then "global" else "function" else mode
-  each strict_finding in if strict_mode == "module" then strict_policy.module else if strict_mode == "global" then strict_policy.global else if strict_mode == "function" then strict_policy.function else strict_policy.never
+  let strict_scope directive_scope
+  let strict_mode if source_type == "module" then "module" else if source_environment.implied_strict then "implied" else if mode == "safe" then if source_environment.root_function then "global" else "function" else mode
+  let strict_findings reduce(strict_scope.directives, strict_missing(node, strict_scope, strict_mode), (findings, directive) => findings [{
+    offset: directive.offset,
+    message: strict_directive_message(node, strict_scope, strict_mode, directive)
+  }])
+  each strict_finding in filter(strict_findings, finding => finding.message != null)
   report at strict_finding.offset
   warn strict_finding.message
 }

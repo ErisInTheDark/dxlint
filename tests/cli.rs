@@ -198,6 +198,27 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
 }
 
 #[test]
+fn language_only_changes_invalidate_cached_diagnostics() {
+    let rules = |setting| format!("import .ts\nlanguage .js {{ set globals {{ app: \"{setting}\" }} }}\nrule no-global-assign error\n");
+    let dir = project("cli-language-cache", &[(".zlint", &rules("readonly")), ("a.js", "app = 1;\n")]);
+    let run = || {
+        let out = zlint(&dir, &["--jobs", "1", "--format", "jsonl", "a.js"]);
+        assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+        stdout(&out).lines().map(|line| serde_json::from_str::<serde_json::Value>(line).expect("diagnostic")).collect::<Vec<_>>()
+    };
+    let cold = run();
+    assert_eq!(cold.len(), 1);
+    assert_eq!(run(), cold);
+    assert!(dir.join(".zlintcache").is_file());
+    std::fs::write(dir.join(".zlint"), rules("writable")).expect("write config");
+    let out = zlint(&dir, &["--jobs", "1", "--format", "jsonl", "a.js"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout(&out).is_empty());
+    std::fs::write(dir.join(".zlint"), rules("readonly")).expect("write config");
+    assert_eq!(run(), cold);
+}
+
+#[test]
 fn describe_explains_names_and_config_goes_anywhere() {
     let dir = project("cli-describe", &[("rules.zlint", RULES), ("a.t", "x\n")]);
     // `-c` before or after the subcommand.

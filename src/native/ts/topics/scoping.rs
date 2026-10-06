@@ -13,8 +13,18 @@ mod returns;
 
 use crate::expr::facts::Fact;
 use crate::expr::Value;
+use crate::native::ts::directives;
 
 pub const FACTS: &[Fact] = &[
+    Fact { name: "ecma_version", doc: "selected ECMAScript edition: 3, 5 or a release year", get: |f, n| f.with_file(|file, _| Value::from(file.environment.ecma_version as usize), n) },
+    Fact { name: "source_environment", doc: "source environment inputs: implied strictness and a root function wrapper", get: |f, n| f.with_file(|file, _| Value::record(vec![
+        ("implied_strict".into(), Value::Bool(file.environment.implied_strict)),
+        ("root_function".into(), Value::Bool(file.root_function_scope())),
+    ]), n) },
+    Fact { name: "global_origin", doc: "global origin of a name's spelling: configuration, comment, commonjs, builtin or null", get: |f, n| f.with_file(|file, node|
+        file.globals().origin(file.syntax.text(node)).map_or(Value::Null, Value::from), n) },
+    Fact { name: "directive_statement", doc: "expression statement belongs to a string directive prologue", get: |f, n| f.with_file(directives::statement, n) },
+    Fact { name: "directive_scope", doc: "on a program or function: exact use-strict directives, inherited strictness, enclosing functions/classes and parameter simplicity", get: |f, n| f.with_file(directives::scope, n) },
     Fact { name: "scoping_const_binding", doc: "on a let declaration: unique-writer position, early reads and destructuring group eligibility", get: |f, n| f.with_file(constness::binding, n) },
     Fact { name: "scoping_naming_candidate", doc: "on a declaration or member key: naming selector and semantic modifiers", get: |f, n| f.with_file(conventions::candidate, n) },
     Fact { name: "scoping_naming_types", doc: "on a naming candidate: primitive, callable and array types after removing nullish parts", get: |f, n| f.with_file(conventions::types, n) },
@@ -30,7 +40,7 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "scoping_shadow", doc: "on a declaration: outer declaration and shadowing exceptions", get: |f, n| f.with_file(bindings::shadow, n) },
     Fact { name: "scoping_redeclaration", doc: "on a declaration: repeated syntax, safe typescript merge and built-in collision", get: |f, n| f.with_file(bindings::redeclaration, n) },
     Fact { name: "scoping_outside_bindings", doc: "on a var reference: block declarations outside whose context it is used", get: |f, n| f.with_file(bindings::outside_bindings, n) },
-    Fact { name: "scoping_strict_code", doc: "native code is in a module, class or use-strict scope", get: |f, n| f.with_file(|file, n| Value::Bool(bindings::strict_code(file, n)), n) },
+    Fact { name: "scoping_strict_code", doc: "native code has module, class, implied or directive strictness", get: |f, n| f.with_file(|file, n| Value::Bool(directives::strict_code(file, n)), n) },
     Fact { name: "scoping_consistent_returns", doc: "on a function: its ordered return kinds, fallthrough and report positions", get: |f, n| f.with_file(returns::consistent_returns, n) },
     Fact { name: "scoping_global_redeclarations", doc: "on the program: explicit-global mentions colliding with declarations or other comments", get: |f, n| f.with_file(globals::redeclarations, n) },
     Fact { name: "scoping_camelcase", doc: "on a name: local, original, property, import and configured-global roles", get: |f, n| f.with_file(names::camelcase, n) },

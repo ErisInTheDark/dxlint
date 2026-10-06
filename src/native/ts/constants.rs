@@ -4,7 +4,6 @@
 //! and end the reasoning.
 
 use super::facts::NativeFile;
-use super::globals::is_builtin;
 use super::kinds::{Field as F, Kind as K};
 
 /// What no-constant-binary-expression reports about a `==`-like comparison
@@ -223,7 +222,7 @@ impl NativeFile<'_> {
         match s.kind(node) {
             Some(K::Object | K::Array | K::Arrow | K::Function | K::Class | K::Regex) => true,
             Some(K::New) => match s.get(node, F::Callee).map(|c| self.bare(c)) {
-                Some(c) if s.is(c, K::Ident) => is_builtin(s.text(c)) && self.global_named(c, s.text(c)),
+                Some(c) if s.is(c, K::Ident) => self.globals().is_builtin(s.text(c)) && self.global_named(c, s.text(c)),
                 _ => false,
             },
             Some(K::Sequence) => s.all(node, F::Expr).last().is_some_and(|e| self.is_always_new(e)),

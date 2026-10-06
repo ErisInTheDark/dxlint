@@ -15,7 +15,7 @@ pub(super) fn context(file: &NativeFile, node: u32) -> Value<'static> {
             Some(K::Method) if matches!(s.field(child), Some(F::Body | F::Param)) => { valid = true; break; }
             Some(K::ClassProp) if s.field(child) == Some(F::Init) => { valid = true; break; }
             Some(K::Function) => {
-                valid = !super::bindings::strict_code(file, parent)
+                valid = !crate::native::ts::directives::strict_code(file, parent)
                     || s.all(parent, F::Param).any(|p| s.get(p, F::Name).is_some_and(|n| s.text(n) == "this"))
                     || documented_receiver(file, parent)
                     || assigned_receiver(file, parent, false);
@@ -23,7 +23,7 @@ pub(super) fn context(file: &NativeFile, node: u32) -> Value<'static> {
                 break;
             }
             Some(K::Program) => {
-                valid = file.source_type() == "script" || file.source_type() == "commonjs" && !super::bindings::strict_code(file, parent);
+                valid = file.source_type() == "script" || file.source_type() == "commonjs" && !crate::native::ts::directives::strict_code(file, parent);
                 break;
             }
             _ => {}

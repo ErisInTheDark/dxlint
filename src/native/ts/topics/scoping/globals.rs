@@ -14,9 +14,9 @@ pub(super) fn redeclarations(file: &NativeFile, _: u32) -> Value<'static> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for comment in file.comments().iter().filter(|c| c.block) {
-        let globals = crate::native::ts::globals::Globals::new(s.src, std::slice::from_ref(comment));
+        let globals = crate::native::ts::globals::Globals::new(s.src, std::slice::from_ref(comment), &file.environment, file.source_type());
         for (name, offset) in globals.mentions {
-            let builtin = crate::native::ts::globals::is_builtin(&name)
+            let builtin = file.globals().is_implicit(&name)
                 && matches!(file.globals().setting(&name), Some("readonly" | "writable"));
             let syntax = file.source_type() == "script" && file.bindings().decl_scope.iter().any(|(&id, &scope)| scope == 0 && s.text(id) == name);
             let duplicate = !seen.insert(name.clone());

@@ -48,23 +48,6 @@ pub fn label_binding(file: &NativeFile, node: u32) -> Value<'static> {
     Value::Bool(collision)
 }
 
-pub(super) fn strict(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    if file.source_type() == "module" { return true }
-    let mut current = Some(node);
-    while let Some(n) = current {
-        if s.is(n, K::Class) { return true }
-        let scope = if s.is(n, K::Program) { Some(n) }
-            else if matches!(s.kind(n), Some(K::Function | K::Method | K::Arrow)) { s.get(n, F::Body).filter(|&b| s.is(b, K::Block)) }
-            else { None };
-        if scope.is_some_and(|body| s.all(body, F::Body)
-            .map_while(|b| s.is(b, K::ExprStmt).then(|| s.get(b, F::Expr)).flatten().filter(|&e| s.is(e, K::String)))
-            .any(|e| matches!(s.text(e), "'use strict'" | "\"use strict\""))) { return true }
-        current = s.parent(n);
-    }
-    false
-}
-
 fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     let s = &file.syntax;
     let Some(mut tail) = s.all(block, F::Body).next() else { return false };

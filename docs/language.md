@@ -890,6 +890,29 @@ rule padding-line-between-statements {
 
 Default options are also the intended shape for per-context families such as comma-dangle variants.
 
+## Language settings
+
+Language settings describe the source environment, not a rule's policy. `import .ts` declares the JavaScript/TypeScript environment on `.js`:
+
+```zlint
+import .ts
+language .js {
+  files "scripts/**"
+  ignore "scripts/generated/**"
+  set globals { app: "readonly", cache: "writable", removed: "off" }
+  set ecmaVersion 5
+  set sourceType "commonjs"
+  set impliedStrict false
+  set globalReturn true
+}
+```
+
+- `files` and `ignore` select `set` clauses using config-relative globs, as rule filters do. Without `files`, settings apply to every file of that language. Option schemas/defaults belong to the language, independent of filters. Later matching blocks override scalar settings; global maps merge by name, including explicit `"off"`. Real source global comments override configured names without becoming configuration.
+- `ecmaVersion` accepts `3`, `5`, editions `6` through `17`, years `2015` through `2026`, `"latest"` or `null`. Unset/`null` means latest. The edition selects built-in globals and directive semantics; it does not reject every newer syntax feature.
+- `sourceType` accepts `"script"`, `"module"`, `"commonjs"` or `null`. Unset/`null` preserves filename/import inference. Modules are strict; CommonJS adds a root function scope and CommonJS globals.
+- `impliedStrict` and `globalReturn` accept booleans or `null` (false). `impliedStrict` supplies strictness without fabricating a directive. `globalReturn` adds a script root function scope, not CommonJS globals; modules do not acquire that wrapper.
+- A language declares supported settings with `language .name { option name <type> = <default> }`. Unknown settings and values outside the declared type are errors. Changing language settings invalidates cached lint results.
+
 ## Option types
 
 Every option declares its type, in TypeScript-like syntax, and a default:

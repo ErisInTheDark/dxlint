@@ -90,9 +90,6 @@ in ts_call rule no-var-requires {
   warn "Require statement not part of import statement."
 }
 
-in ts_block let directive_body parent is (ts_function, ts_arrow, ts_method, ts_namespace)
-in ts_expression_statement let directive_prefix expression is ts_string && (previous == null || previous.directive_prefix == true)
-in ts_expression_statement let directive_statement (parent is ts_program || parent.directive_body == true) && directive_prefix
 in ts_array, ts_arrow, ts_binary, ts_class, ts_function, ts_identifier, ts_member, ts_index, ts_meta_property, ts_object, ts_sequence, ts_template, ts_this, ts_number, ts_string, ts_boolean, ts_bigint, ts_null, ts_regex let statement_effect false
 in ts_unary let statement_effect contains(["delete", "void"], operator)
 in ts_logical let statement_effect { kind: "logical", right: right.statement_effect }
@@ -107,7 +104,7 @@ in ts_expression_statement rule no-unused-expressions {
   option allowTaggedTemplates boolean = false "Allow tagged templates."
   option enforceForJSX boolean = false "Report unused JSX expressions."
   option ignoreDirectives boolean = false "Ignore directive prologues."
-  when !directive_statement && !expression_allowed(expression.statement_effect, allowShortCircuit, allowTernary, allowTaggedTemplates, enforceForJSX)
+  when !(directive_statement && (ecma_version >= 5 || ignoreDirectives)) && !expression_allowed(expression.statement_effect, allowShortCircuit, allowTernary, allowTaggedTemplates, enforceForJSX)
   warn "Expected an assignment or function call and instead saw an expression."
 }
 

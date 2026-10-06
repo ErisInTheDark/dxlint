@@ -497,6 +497,7 @@ pub struct NativeFile<'t> {
     pub syntax: Syntax<'t>,
     pub path: &'t Path,
     pub project: &'t Project,
+    pub(super) environment: super::environment::Environment,
     bindings: OnceCell<Bindings>,
     comments: OnceCell<Vec<Comment>>,
     globals: OnceCell<Globals>,
@@ -516,6 +517,7 @@ impl<'t> NativeFile<'t> {
             syntax,
             path,
             project,
+            environment: Default::default(),
             bindings: OnceCell::new(),
             comments: OnceCell::new(),
             globals: OnceCell::new(),
@@ -526,6 +528,11 @@ impl<'t> NativeFile<'t> {
             typing: OnceCell::new(),
             import_docs: RefCell::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn with_environment(mut self, environment: super::environment::Environment) -> Self {
+        self.environment = environment;
+        self
     }
 
     /// Reuse the complete stream already scanned for token attachment.
@@ -552,6 +559,9 @@ impl<'t> NativeFile<'t> {
     /// `.mjs`/`.mts`; other files are modules when they import or export
     /// (as TypeScript decides), else scripts.
     pub fn source_type(&self) -> &'static str {
+        if let Some(source_type) = self.environment.source_type {
+            return source_type;
+        }
         let s = &self.syntax;
         match self.path.extension().and_then(|e| e.to_str()) {
             Some("cjs" | "cts") => "commonjs",
@@ -566,7 +576,7 @@ impl<'t> NativeFile<'t> {
     }
 
     pub fn globals(&self) -> &Globals {
-        self.globals.get_or_init(|| Globals::new(self.syntax.src, self.comments()))
+        self.globals.get_or_init(|| Globals::new(self.syntax.src, self.comments(), &self.environment, self.source_type()))
     }
 
     /// Reachability, and no-unreachable's runs (first statement -> end).
@@ -618,7 +628,11 @@ impl<'t> NativeFile<'t> {
     }
 
     pub fn bindings(&self) -> &Bindings {
-        self.bindings.get_or_init(|| bind(&self.syntax))
+        self.bindings.get_or_init(|| bind(&self.syntax, self.root_function_scope()))
+    }
+
+    pub(super) fn root_function_scope(&self) -> bool {
+        self.source_type() == "commonjs" || self.source_type() == "script" && self.environment.global_return
     }
 
     /// Use counts of the binding `node` declares (`None` when it declares

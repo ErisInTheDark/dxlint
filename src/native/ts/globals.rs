@@ -1,31 +1,40 @@
-//! Global variables as eslint configures them: the ECMAScript built-ins
-//! (eslint's `conf/globals.js`, latest edition, all read-only) and the
-//! file's `/* global name, other: writable, Promise: off */` comments.
+//! Edition built-ins, configured globals and authentic source declarations.
 
 use std::collections::HashMap;
 
 use super::comments::Comment;
+use super::environment::Environment;
+use crate::expr::Value;
 
-/// eslint's ES2026 globals.
-const BUILTINS: &[&str] = &[
-    "AggregateError", "Array", "ArrayBuffer", "AsyncDisposableStack", "Atomics", "BigInt", "BigInt64Array", "BigUint64Array",
-    "Boolean", "constructor", "DataView", "Date", "decodeURI", "decodeURIComponent", "DisposableStack", "encodeURI",
-    "encodeURIComponent", "Error", "escape", "eval", "EvalError", "FinalizationRegistry", "Float16Array", "Float32Array",
-    "Float64Array", "Function", "globalThis", "hasOwnProperty", "Infinity", "Int16Array", "Int32Array", "Int8Array", "Intl",
-    "isFinite", "isNaN", "isPrototypeOf", "Iterator", "JSON", "Map", "Math", "NaN", "Number", "Object", "parseFloat", "parseInt",
-    "Promise", "propertyIsEnumerable", "Proxy", "RangeError", "ReferenceError", "Reflect", "RegExp", "Set", "SharedArrayBuffer",
-    "String", "SuppressedError", "Symbol", "SyntaxError", "Temporal", "toLocaleString", "toString", "TypeError", "Uint16Array",
-    "Uint32Array", "Uint8Array", "Uint8ClampedArray", "undefined", "unescape", "URIError", "valueOf", "WeakMap", "WeakRef",
-    "WeakSet",
+// eslint v10.12.0, conf/globals.js: additions by edition.
+const BUILTINS: &[(u16, &[&str])] = &[
+    (3, &[
+        "Array", "Boolean", "constructor", "Date", "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+        "Error", "escape", "eval", "EvalError", "Function", "hasOwnProperty", "Infinity", "isFinite", "isNaN",
+        "isPrototypeOf", "Math", "NaN", "Number", "Object", "parseFloat", "parseInt", "propertyIsEnumerable", "RangeError",
+        "ReferenceError", "RegExp", "String", "SyntaxError", "toLocaleString", "toString", "TypeError", "undefined",
+        "unescape", "URIError", "valueOf",
+    ]),
+    (5, &["JSON"]),
+    (2015, &[
+        "ArrayBuffer", "DataView", "Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "Intl", "Map",
+        "Promise", "Proxy", "Reflect", "Set", "Symbol", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray",
+        "WeakMap", "WeakSet",
+    ]),
+    (2017, &["Atomics", "SharedArrayBuffer"]),
+    (2020, &["BigInt", "BigInt64Array", "BigUint64Array", "globalThis"]),
+    (2021, &["AggregateError", "FinalizationRegistry", "WeakRef"]),
+    (2025, &["Float16Array", "Iterator"]),
+    (2026, &["AsyncDisposableStack", "DisposableStack", "SuppressedError", "Temporal"]),
 ];
 
-/// One of the ECMAScript built-in globals.
-pub fn is_builtin(name: &str) -> bool {
-    BUILTINS.contains(&name)
-}
+const COMMONJS: &[(&str, &str)] = &[("exports", "writable"), ("global", "readonly"), ("module", "readonly"), ("require", "readonly")];
 
 /// How a global is configured: `readonly`, `writable` or `off`.
 pub struct Globals {
+    ecma_version: u16,
+    commonjs: bool,
+    configured: HashMap<String, &'static str>,
     /// From `/* global */` comments (the last setting of a name wins).
     declared: HashMap<String, &'static str>,
     /// Comment-declared names with the offset of their first mention, in
@@ -34,7 +43,17 @@ pub struct Globals {
 }
 
 impl Globals {
-    pub fn new(src: &str, comments: &[Comment]) -> Self {
+    pub fn new(src: &str, comments: &[Comment], environment: &Environment, source_type: &str) -> Self {
+        let mut configured = HashMap::new();
+        for value in &environment.globals {
+            let Value::Record(entries) = value else { continue };
+            for (name, value) in entries.iter() {
+                let setting = match value.text().as_ref() {
+                    "readonly" => "readonly", "writable" => "writable", "off" => "off", _ => continue,
+                };
+                configured.insert(name.to_string(), setting);
+            }
+        }
         let mut declared = HashMap::new();
         let mut mentions: Vec<(String, u32)> = Vec::new();
         for c in comments.iter().filter(|c| c.block) {
@@ -71,7 +90,7 @@ impl Globals {
                 }
             }
         }
-        Globals { declared, mentions }
+        Globals { declared, mentions, configured, ecma_version: environment.ecma_version, commonjs: source_type == "commonjs" }
     }
 
     /// The setting of global `name`, or `None` when nothing declares it.
@@ -79,7 +98,37 @@ impl Globals {
         if let Some(&s) = self.declared.get(name) {
             return Some(s);
         }
-        BUILTINS.contains(&name).then_some("readonly")
+        self.implicit_setting(name)
+    }
+
+    fn implicit_setting(&self, name: &str) -> Option<&'static str> {
+        if let Some(&setting) = self.configured.get(name) {
+            return Some(setting);
+        }
+        if self.commonjs {
+            if let Some((_, setting)) = COMMONJS.iter().find(|(global, _)| *global == name) {
+                return Some(setting);
+            }
+        }
+        BUILTINS.iter().find(|(_, names)| names.contains(&name))
+            .map(|(edition, _)| if *edition <= self.ecma_version { "readonly" } else { "off" })
+    }
+
+    pub fn is_builtin(&self, name: &str) -> bool {
+        BUILTINS.iter().any(|(edition, names)| *edition <= self.ecma_version && names.contains(&name))
+    }
+
+    /// A global supplied by the environment rather than source declarations.
+    pub fn is_implicit(&self, name: &str) -> bool {
+        matches!(self.implicit_setting(name), Some("readonly" | "writable"))
+    }
+
+    pub fn origin(&self, name: &str) -> Option<&'static str> {
+        if self.declared.contains_key(name) { Some("comment") }
+        else if self.configured.contains_key(name) { Some("configuration") }
+        else if self.commonjs && COMMONJS.iter().any(|(global, _)| *global == name) { Some("commonjs") }
+        else if self.is_builtin(name) { Some("builtin") }
+        else { None }
     }
 
     /// Whether a `/* global */` comment names it (rather than the
@@ -114,7 +163,7 @@ mod tests {
         };
         let first = comment(0);
         let comments = vec![first, comment(first.end as usize)];
-        let g = Globals::new(src, &comments);
+        let g = Globals::new(src, &comments, &Environment::default(), "script");
         assert_eq!(g.setting("a"), Some("readonly"));
         assert_eq!(g.setting("b"), Some("writable"));
         assert_eq!(g.setting("c"), Some("writable"));

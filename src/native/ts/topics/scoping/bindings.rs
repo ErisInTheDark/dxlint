@@ -77,31 +77,6 @@ pub(super) fn outside_bindings(file: &NativeFile, id: u32) -> Value<'static> {
     }).collect())
 }
 
-pub(super) fn strict_code(file: &NativeFile, node: u32) -> bool {
-    if file.source_type() == "module" {
-        return true;
-    }
-    let s = &file.syntax;
-    let mut cursor = Some(node);
-    while let Some(n) = cursor {
-        if matches!(s.kind(n), Some(K::Class | K::StaticBlock)) {
-            return true;
-        }
-        if matches!(s.kind(n), Some(K::Program | K::Function | K::Arrow | K::Method)) {
-            let block = if s.is(n, K::Program) { n } else { s.get(n, F::Body).unwrap_or(n) };
-            for statement in s.all(block, F::Body) {
-                if !s.is(statement, K::ExprStmt) { break; }
-                let Some(expression) = s.get(statement, F::Expr).filter(|&n| s.is(n, K::String)) else { break };
-                if matches!(s.text(expression), "'use strict'" | "\"use strict\"") {
-                    return true;
-                }
-            }
-        }
-        cursor = s.parent(n);
-    }
-    false
-}
-
 #[derive(Default)]
 struct Redeclarations(HashMap<u32, (bool, bool, bool, bool)>);
 
@@ -157,7 +132,7 @@ fn redeclarations(file: &NativeFile) -> Redeclarations {
         };
         let merge_all = kinds.iter().all(|&k| k == "interface") || kinds.iter().all(|&k| k == "namespace");
         let builtin = scope == 0 && file.source_type() == "script"
-            && crate::native::ts::globals::is_builtin(name)
+            && file.globals().is_implicit(name)
             && matches!(file.globals().setting(name), Some("readonly" | "writable"));
         let comment = ts && scope == 0 && file.source_type() == "script" && file.globals().in_comment(name) && !builtin;
         let mut runtime_seen = false;

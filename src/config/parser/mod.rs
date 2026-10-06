@@ -2,6 +2,7 @@
 //! expansions are just more tokens arriving in place.
 
 mod expr;
+mod language;
 mod pattern;
 mod schema;
 
@@ -24,7 +25,7 @@ use crate::pattern::Pat;
 const RESERVED: &[&str] = &[
     "import", "macro", "lang", "group", "match", "in", "layer", "rule", "indent", "dedent", "like", "set", "ignore", "option", "when",
     "fix", "as", "files", "report", "until", "or", "if", "then", "else", "true", "false", "null", "off", "hint", "info",
-    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each",
+    "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each", "language",
 ];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
@@ -285,6 +286,7 @@ impl<'a> Parser<'a> {
             }
             (Tk::Ident, "fn") => self.fn_def(),
             (Tk::Ident, "lang") => self.lang(),
+            (Tk::Ident, "language") => self.language_options(),
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
@@ -314,7 +316,7 @@ impl<'a> Parser<'a> {
             _ => {
                 self.errors.push(
                     ConfigError::new(t.span, format!("expected an item, found {}", t.describe())).note(
-                        "items are: lang, group, match, in ..., rule, indent, let, fn, macro, schema, import, ignore, native, define, drop, override",
+                        "items are: lang, language, group, match, in ..., rule, indent, let, fn, macro, schema, import, ignore, native, define, drop, override",
                     ),
                 );
                 self.bump();

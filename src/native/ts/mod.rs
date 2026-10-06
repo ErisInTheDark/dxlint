@@ -9,6 +9,8 @@ mod constants;
 pub mod dead_stores;
 mod docs;
 mod equality;
+pub(crate) mod environment;
+mod directives;
 mod estree;
 pub mod facts;
 mod flow;

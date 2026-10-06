@@ -131,9 +131,9 @@ impl ConfigFile<'_> {
                 items
             }
         } else if let Some(rest) = trimmed.strip_prefix("set ") {
-            // `set ` inside `rule name { ... }`: that rule's options; after
+            // `set ` inside a rule or language block: that owner's options; after
             // `set option `, the literal values its type takes.
-            match (enclosing_rule(&text[..line_start]), rest.split_once(char::is_whitespace)) {
+            match (enclosing_options(&text[..line_start]), rest.split_once(char::is_whitespace)) {
                 (Some(rule), None) => self.of_kind(Kind::Option).filter_map(|(i, s)| s.name.strip_prefix(&format!("{rule}.")).map(|o| item_named(i, s, o))).collect(),
                 (Some(rule), Some((option, value))) if !value.contains(char::is_whitespace) => match self.symbols.get(Kind::Option, &format!("{rule}.{option}")) {
                     Some(id) => self.symbols.symbols[id].fields.iter().map(|v| json!({ "label": v, "kind": 12, "detail": format!("value of {option}") })).collect(),
@@ -194,15 +194,14 @@ fn dotted(before: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-/// The rule a `rule name ... {` block still open at the end of `text`
-/// configures (not a definition: those have an `in`).
-fn enclosing_rule(text: &str) -> Option<&str> {
+/// The owner of a rule or language configuration block still open at `text`.
+fn enclosing_options(text: &str) -> Option<&str> {
     let mut depth = 0i32;
     for line in text.lines().rev() {
         depth += line.matches('}').count() as i32 - line.matches('{').count() as i32;
         if depth < 0 {
             let mut words = line.split_whitespace();
-            return (words.next() == Some("rule")).then(|| words.next()).flatten();
+            return matches!(words.next(), Some("rule" | "language")).then(|| words.next()).flatten();
         }
     }
     None
@@ -309,4 +308,27 @@ fn std_copy(name: &str, text: &str) -> Option<PathBuf> {
 pub fn std_module(path: &Path) -> Option<String> {
     let rel = path.strip_prefix(std_dir()).ok()?.with_extension("");
     Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zoomie_lint::config::{load_text, source::Disk};
+    use zoomie_lint::engine::build;
+
+    #[test]
+    fn language_settings_complete_and_link_to_their_declarations() {
+        let text = "import .ts\nlanguage .js {\n  set sourceType \"commonjs\"\n  set globals { app: \"readonly\" }\n}\n";
+        let built = build(load_text("environment.zlint", text, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:?}", built.errors);
+        let symbols = built.symbols.expect("symbols");
+        let (file, _) = symbols.sources.files().find(|(_, source)| source.text.as_ref() == text).expect("source");
+        let config = ConfigFile { symbols: &symbols, file };
+        let names = config.complete(&json!({ "position": { "line": 2, "character": 6 } }));
+        assert!(names["items"].as_array().expect("items").iter().any(|item| item["label"] == "sourceType"));
+        let values = config.complete(&json!({ "position": { "line": 2, "character": "  set sourceType ".len() } }));
+        assert!(!values["items"].as_array().expect("values").is_empty());
+        let definition = config.definition(&json!({ "position": { "line": 2, "character": 8 } }));
+        assert!(!definition.as_array().expect("definitions").is_empty());
+    }
 }

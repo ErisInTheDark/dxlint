@@ -5,6 +5,7 @@ pub mod cache;
 pub mod diagnostic;
 mod fix;
 mod inspect;
+mod language_options;
 mod profile;
 mod prune;
 mod suppress;
@@ -134,6 +135,7 @@ pub struct InertRule {
 
 pub struct Linter {
     pub grammar: Grammar,
+    language_options: language_options::LanguageOptions,
     pub rules: Vec<Rule>,
     pub inert: Vec<InertRule>,
     pub sources: std::sync::Arc<SourceMap>,
@@ -309,7 +311,9 @@ impl Linter {
                     }
                     let groups = self.rule_groups(&active, text.len());
                     if groups.len() <= 1 {
-                        let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project).with_tokens(parsed.tokens);
+                        let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project)
+                            .with_environment(crate::native::ts::environment::Environment::from_values(self.language_options.values(lang, &rel)))
+                            .with_tokens(parsed.tokens);
                         self.check_tree(&tree, &run, Some(&facts), &mut out);
                     } else {
                         // A big file sets the floor of a whole run: its rules
@@ -317,6 +321,7 @@ impl Linter {
                         // facts (the parsed tree and token stream are shared).
                         std::thread::scope(|s| {
                             let tree = &tree;
+                            let rel = &rel;
                             let handles: Vec<_> = groups
                                 .iter()
                                 .map(|mask| {
@@ -325,7 +330,9 @@ impl Linter {
                                     // Reads are tracked per thread: pass them on.
                                     s.spawn(move || {
                                         reads::track(|| {
-                                            let facts = NativeFile::new(Syntax::new(tree, text, front), path, &self.project).with_tokens(tokens);
+                                            let facts = NativeFile::new(Syntax::new(tree, text, front), path, &self.project)
+                                                .with_environment(crate::native::ts::environment::Environment::from_values(self.language_options.values(lang, rel)))
+                                                .with_tokens(tokens);
                                             let mut part = Vec::new();
                                             self.check_tree(tree, &run, Some(&facts), &mut part);
                                             part

@@ -10,7 +10,6 @@ mod functions;
 mod statements;
 mod regex;
 mod errors;
-mod strict;
 mod references;
 
 pub const FACTS: &[Fact] = &[
@@ -22,7 +21,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "useless_escapes", doc: "native layers: unnecessary string, untagged template and regex identity escapes with source offsets and option-filterable characters", get: |f, n| f.with_file(regex::useless_escapes, n) },
     Fact { name: "unnamed_regex_captures", doc: "native layers: unnamed capturing group source spellings in valid literal or statically known RegExp patterns", get: |f, n| f.with_file(regex::unnamed_captures, n) },
     Fact { name: "regex_literal_preference", doc: "native layers: static-string or redundant literal RegExp construction diagnostic and wrapping policy", get: |f, n| f.with_file(regex::literal_preference, n) },
-    Fact { name: "strict_directive_policy", doc: "native layers: explicit strict directive findings for global, function, never and module policies", get: |f, n| f.with_file(strict::policy, n) },
     Fact { name: "restricted_binding", doc: "native layers: declaration shadows a restricted global name, including merged declarations and unsafe undefined bindings", get: |f, n| f.with_file(functions::restricted_binding, n) },
     Fact { name: "nonoctal_decimal_escapes", doc: "native layers: unescaped decimal escape spellings and source offsets in a string literal", get: |f, n| f.with_file(expressions::decimal_escapes, n) },
     Fact { name: "caught_error_preservation", doc: "native layers: thrown constructor, nearest catch parameter status and cause diagnostics by options argument position", get: |f, n| f.with_file(errors::caught_error, n) },

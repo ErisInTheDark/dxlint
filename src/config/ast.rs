@@ -14,6 +14,7 @@ pub struct Name {
 #[derive(Default, Debug)]
 pub struct Config {
     pub langs: Vec<LangDef>,
+    pub language_options: Vec<LanguageOptions>,
     pub matchers: Vec<MatcherDef>,
     pub rules: Vec<RuleDef>,
     /// `rule name ...` without a context, in source order.
@@ -138,6 +139,16 @@ pub struct GroupDef {
 pub struct LangDef {
     pub name: Name,
     pub globs: Vec<(String, Span)>,
+}
+
+#[derive(Debug)]
+pub struct LanguageOptions {
+    pub language: Name,
+    pub options: Vec<OptionDef>,
+    pub settings: Vec<(Name, Expr)>,
+    pub files: Vec<(String, Span)>,
+    pub ignore: Vec<(String, Span)>,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug)]
