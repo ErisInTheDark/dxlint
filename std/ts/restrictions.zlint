@@ -585,14 +585,22 @@ in ts_identifier, ts_private_name rule id-length {
   when amount < min || max != null && amount > max
   warn if amount < min then "Identifier name '{text}' is too short (< {min})." else "Identifier name '{text}' is too long (> {max})."
 }
+in ts_identifier, ts_private_name {
+  let restriction_name_match_context if is ts_private_name then (if parent is ts_class_property then "field" else "always")
+    else if parent is ts_member then (if is ts_member.object || restriction_name_assignment then "property" else null)
+    else if restriction_name_pattern then (if restriction_name_alias then null else "destructuring")
+    else if is ts_property.key then "property"
+    else if parent is ts_assignment_pattern then (if is ts_assignment_pattern.left then "default_property" else null)
+    else if parent is ts_import_specifier then (if is ts_import_specifier.local || is ts_import_specifier.imported && parent.local == null then "import" else null)
+    else if parent is ts_import then (if is (ts_import.default_import, ts_import.namespace) then "import" else null)
+    else if parent is ts_class_property then "field"
+    else if parent is (ts_call, ts_new, ts_meta_property) then null
+    else if parent is (ts_function, ts_declarator) then "declaration" else "reference"
+  let id_match_checked contains(["always", "destructuring", "import", "declaration", "reference"], restriction_name_match_context)
+}
 in ts_identifier, ts_private_name rule id-match {
   option mode regex = "^.+$" "required identifier pattern"
-  option properties boolean = false "check properties"
-  option classFields boolean = false "check class fields"
-  option onlyDeclarations boolean = false "check only declarations"
-  option ignoreDestructuring boolean = false "ignore existing destructured names"
-  let check if is ts_private_name then parent not ts_class_property || classFields else if parent is ts_member then properties && (is ts_member.object || restriction_name_assignment) else if restriction_name_pattern then !restriction_name_alias && !(ignoreDestructuring && (is ts_node.key || restriction_name_same)) else if is ts_property.key then properties else if parent is ts_assignment_pattern then is ts_assignment_pattern.left && properties && !ignoreDestructuring else if parent is ts_import_specifier then is ts_import_specifier.local || is ts_import_specifier.imported && parent.local == null else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is ts_class_property then classFields else if parent is (ts_call, ts_new, ts_meta_property) then false else !onlyDeclarations || parent is (ts_function, ts_declarator)
-  when !restriction_name_external && !restriction_name_attributes && check
+  when !restriction_name_external && !restriction_name_attributes && id_match_checked
   when !re_test(restriction_identifier_name, mode)
   warn "Identifier '{text}' does not match the pattern '{mode}'."
 }
