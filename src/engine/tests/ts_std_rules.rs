@@ -373,9 +373,9 @@ fn problem_selection_nan_searches_are_opt_in_without_hiding_switch_reports() {
     for (policy, expected) in [
         ("", 2),
         ("group use_isnan_searches ts_call", 3),
-        ("drop group use_isnan_switches ts_switch\ndrop group use_isnan_cases ts_case\ngroup use_isnan_searches ts_call", 1),
+        ("rule use-isnan:switch off\nrule use-isnan:case off\ngroup use_isnan_searches ts_call", 1),
     ] {
-        let linter = native_linter(&format!("{policy}\nrule use-isnan"));
+        let linter = native_linter(&format!("rule use-isnan\n{policy}"));
         let diagnostics = linter.lint(Path::new("/root/file.js"), source);
         assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
     }
@@ -433,6 +433,58 @@ fn problem_selection_character_classes_retains_unescaped_findings() {
         let diagnostics = linter.lint(Path::new("/root/file.js"), source);
         assert_eq!(diagnostics.len(), expected, "{policy}: {diagnostics:#?}");
         assert!(diagnostics.iter().any(|diagnostic| diagnostic.start >= source.find("; ").expect("pattern separator") + 2));
+    }
+}
+
+#[test]
+fn directive_policy_variants_keep_defaults_and_independent_modes() {
+    let source = "// @ts-nocheck\n// @ts-check\n// @ts-ignore\n// @ts-expect-error why\nconst value = 1;\n// @ts-nocheck";
+    let first = source.find("// @ts-nocheck").expect("leading nocheck");
+    let check = source.find("// @ts-check").expect("check directive");
+    let ignore = source.find("// @ts-ignore").expect("ignore directive");
+    for (policy, expected) in [
+        ("", vec![first, ignore]),
+        ("rule ban-ts-comment:ignore { set mode \"allow\" }\nrule ban-ts-comment:check { set mode \"deny\" }", vec![first, check]),
+        ("rule ban-ts-comment:ignore set allow\nrule ban-ts-comment:check set deny", vec![first, check]),
+    ] {
+        let linter = native_linter(&format!("rule ban-ts-comment\n{policy}"));
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, expected, "{policy}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn directive_policy_description_settings_apply_to_the_selected_variant() {
+    let source = "// @ts-expect-error: Valid\n// @ts-expect-error: wrong\n// @ts-expect-error x\n// @ts-ignore\nconst value = 1;";
+    let wrong = source.find("// @ts-expect-error: wrong").expect("wrong description");
+    let short = source.find("// @ts-expect-error x").expect("short description");
+    let ignore = source.find("// @ts-ignore").expect("ignore directive");
+    for (policy, expected) in [
+        ("", vec![short, ignore]),
+        ("rule ban-ts-comment:expect-error { set descriptionPattern /^: [A-Z][a-z]+$/ }\nrule ban-ts-comment:ignore { set mode \"require-description\"\nset minimumDescriptionLength 0 }", vec![wrong, short]),
+    ] {
+        let linter = native_linter(&format!("rule ban-ts-comment\n{policy}"));
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, expected, "{policy}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn directive_policy_keeps_comment_forms_and_late_nocheck_inert() {
+    let source = "// @ts-check reason\nconst value = 1;\n// @ts-nocheck reason\n/* @ts-ignore reason */\n/* @ts-ignore\n trailing */\n/*\n * @ts-expect-error reason */";
+    let check = source.find("// @ts-check").expect("check directive");
+    let ignore = source.find("/* @ts-ignore reason").expect("single-line block directive");
+    let expect = source.find("/*\n * @ts-expect-error").expect("last-line block directive");
+    for (policy, expected) in [
+        ("", vec![ignore]),
+        ("rule ban-ts-comment:check { set mode \"deny\" }\nrule ban-ts-comment:expect-error { set mode \"deny\" }", vec![check, ignore, expect]),
+    ] {
+        let linter = native_linter(&format!("rule ban-ts-comment\n{policy}"));
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        let offsets: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        assert_eq!(offsets, expected, "{policy}: {diagnostics:#?}");
     }
 }
 

@@ -70,14 +70,12 @@ in ts_binary rule use-isnan {
   when operator ~ /(?:[<>]|[!=]=)=?/ && (left.is_nan == true || right.is_nan == true)
   warn "Use the isNaN function to compare with NaN."
 }
-group use_isnan_switches ts_switch
-group use_isnan_cases ts_case
 group use_isnan_searches
-in use_isnan_switches rule use-isnan:switch {
+in ts_switch rule use-isnan:switch {
   when discriminant.is_nan == true
   warn "'switch(NaN)' can never match a case clause. Use Number.isNaN instead of the switch."
 }
-in use_isnan_cases rule use-isnan:case {
+in ts_case rule use-isnan:case {
   when test.is_nan == true
   warn "'case NaN' can never match. Use Number.isNaN before the switch."
 }
@@ -267,33 +265,36 @@ in ts_class.name, ts_interface.name rule no-unsafe-declaration-merging {
 }
 
 # ---- @ts- directives (ban-ts-comment) -----------------------------------------------
-schema ts_directive_setting boolean | "allow-with-description" | { descriptionFormat: string }
 # The directive and its description, as TypeScript reads them: `// @ts-x`
 # (`///` too for check/nocheck) or the last line of a block comment.
 in ts_comment let ts_comment_body if is ts_line_comment then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, "")
 in ts_comment let ts_pragma is ts_line_comment && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/)
 in ts_comment let ts_suppress if is ts_line_comment then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/)
-in ts_comment rule ban-ts-comment {
-  option ts_expect_error ts_directive_setting = "allow-with-description"
-  option ts_ignore ts_directive_setting = true
-  option ts_nocheck ts_directive_setting = true
-  option ts_check ts_directive_setting = false
+in ts_comment let ts_directive if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(check|nocheck)[\s\S]*$/, "$1") else if ts_suppress then re_replace(ts_comment_body, /^[\/*\s]*@ts-(expect-error|ignore)[\s\S]*$/, "$1") else null
+in ts_comment let ts_directive_description if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(?:check|nocheck)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1") else re_replace(ts_comment_body, /^[\/*\s]*@ts-(?:expect-error|ignore)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1")
+# `@ts-nocheck` only counts before the first statement.
+in ts_comment let ts_directive_effective ts_directive != "nocheck" || (first(overlapping(ts_program))).first_token.start == null || offset < (first(overlapping(ts_program))).first_token.start
+fn ts_directive_message(directive, description, mode, minimum, pattern) = (
+  if mode == "allow" then null
+  else if mode == "deny" && directive == "ignore" then "Use \"@ts-expect-error\" instead of \"@ts-ignore\", as \"@ts-ignore\" will do nothing if the following line is error-free."
+  else if mode == "deny" then "Do not use \"@ts-{directive}\" because it alters compilation errors."
+  else if graphemes(trim(description)) < minimum then "Include a description after the \"@ts-{directive}\" directive to explain why the @ts-{directive} is necessary. The description must be {minimum} characters or longer."
+  else if pattern != null && !re_test(description, pattern) then "The description for the \"@ts-{directive}\" directive must match the {pattern} format."
+  else null
+)
+@macro ban_ts_directive(name, mode_default) {
+  default option mode enum(allow, deny, require-description) = mode_default
+  option descriptionPattern regex | null = null
   option minimumDescriptionLength int(0..) = 3
-  let directive if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(check|nocheck)[\s\S]*$/, "$1") else if ts_suppress then re_replace(ts_comment_body, /^[\/*\s]*@ts-(expect-error|ignore)[\s\S]*$/, "$1") else null
-  let description if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(?:check|nocheck)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1") else re_replace(ts_comment_body, /^[\/*\s]*@ts-(?:expect-error|ignore)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1")
-  let setting if directive == "expect-error" then ts_expect_error else if directive == "ignore" then ts_ignore else if directive == "nocheck" then ts_nocheck else ts_check
-  let format if type_of(setting) == "record" then setting.descriptionFormat else null
-  let short graphemes(trim(description)) < minimumDescriptionLength
-  when directive != null
-  # `@ts-nocheck` only counts before the first statement.
-  let first_code (first(overlapping(ts_program))).first_token.start
-  when directive != "nocheck" || first_code == null || offset < first_code
-  when setting == true || (setting == "allow-with-description" || format != null) && (short || format != null && !re_test(description, format))
-  warn if setting == true && directive == "ignore" then "Use \"@ts-expect-error\" instead of \"@ts-ignore\", as \"@ts-ignore\" will do nothing if the following line is error-free."
-    else if setting == true then "Do not use \"@ts-{directive}\" because it alters compilation errors."
-    else if short then "Include a description after the \"@ts-{directive}\" directive to explain why the @ts-{directive} is necessary. The description must be {minimumDescriptionLength} characters or longer."
-    else "The description for the \"@ts-{directive}\" directive must match the {format} format."
+  when ts_directive == name && ts_directive_effective
+  let message ts_directive_message(ts_directive, ts_directive_description, mode, minimumDescriptionLength, descriptionPattern)
+  when message != null
+  warn message
 }
+in ts_comment rule ban-ts-comment:expect-error { @ban_ts_directive("expect-error", require-description) }
+in ts_comment rule ban-ts-comment:ignore { @ban_ts_directive("ignore", deny) }
+in ts_comment rule ban-ts-comment:nocheck { @ban_ts_directive("nocheck", deny) }
+in ts_comment rule ban-ts-comment:check { @ban_ts_directive("check", allow) }
 
 # `Function` as a type (not a local type of that name), also `implements
 # Function`.
