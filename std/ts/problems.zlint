@@ -545,8 +545,8 @@ in ts_identifier rule no-unused-imports {
 # report themselves, calls the call, except where eslint points inside.
 group regex_site ts_regex, ts_call, ts_new
 @macro findings_of(check) filter(default(regex_findings, []), f => f.check == check)
-@macro backreference_reason(kind) (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
-@macro misleading_message(kind) (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
+fn backreference_reason(kind) = (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
+fn misleading_message(kind) = (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
 in ts_regex rule no-empty-character-class {
   each f in @findings_of("empty_class")
@@ -573,7 +573,7 @@ in regex_site rule no-misleading-character-class {
   each f in @findings_of(if allowEscape then "misleading_escaped" else "misleading")
   when type_of(regex_pattern.flags) == "str" || is ts_regex
   report at f.offset
-  warn @misleading_message(f.kind)
+  warn misleading_message(f.kind)
 }
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.

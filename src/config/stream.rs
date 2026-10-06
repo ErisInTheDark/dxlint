@@ -108,8 +108,9 @@ impl Stream {
         Some(tok)
     }
 
+    /// `@name` for a defined macro: bare names never expand.
     pub fn is_macro(&self, name: &str) -> bool {
-        self.macros.contains_key(name.strip_prefix('@').unwrap_or(name))
+        name.strip_prefix('@').is_some_and(|name| self.macros.contains_key(name))
     }
 
     fn macro_depth(&self) -> usize {
@@ -119,10 +120,10 @@ impl Stream {
     /// If the next token invokes a macro, replaces it (and its arguments)
     /// with the expansion and returns true.
     pub fn expand(&mut self, errors: &mut Vec<ConfigError>) -> bool {
-        // `@name` calls a macro; a bare `name` still does for now.
-        let name: Rc<str> = match self.peek_raw(0) {
-            Some(tok) if tok.kind == Tk::Ident => Rc::from(tok.text.strip_prefix('@').unwrap_or(&tok.text)),
-            _ => return false,
+        // `@name` calls a macro; a bare `name` is always just a name.
+        let name: Rc<str> = match self.peek_raw(0).and_then(|tok| (tok.kind == Tk::Ident).then(|| tok.text.strip_prefix('@')).flatten()) {
+            Some(name) => Rc::from(name),
+            None => return false,
         };
         let Some(def) = self.macros.get(&name).cloned() else { return false };
         let call = self.next_raw().expect("peeked");

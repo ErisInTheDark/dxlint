@@ -277,7 +277,12 @@ impl<'a> Parser<'a> {
         let before = self.errors.len();
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
-            (Tk::Ident, "macro" | "@macro") => self.macro_def(),
+            (Tk::Ident, "@macro") => self.macro_def(),
+            (Tk::Ident, "macro") => {
+                // Still defines it, so its calls do not cascade.
+                self.errors.push(ConfigError::new(t.span, "macros are defined with `@macro`").note("`@macro name { ... }`, called as `@name`"));
+                self.macro_def();
+            }
             (Tk::Ident, "fn") => self.fn_def(),
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "group") => self.group(),
@@ -659,11 +664,6 @@ impl<'a> Parser<'a> {
         let Some(name) = self.ident("a macro name") else { return };
         if RESERVED.contains(&name.text.as_str()) {
             self.errors.push(ConfigError::new(name.span, format!("`{}` is a keyword and cannot name a macro", name.text)));
-            return;
-        }
-        // Macros replace every token of their name, everywhere after them.
-        if crate::expr::facts::fact(&name.text).is_some() {
-            self.errors.push(ConfigError::new(name.span, format!("`{}` is a fact; a macro of that name would hide it in every rule", name.text)));
             return;
         }
         let mut params: Vec<Rc<str>> = Vec::new();
@@ -1714,12 +1714,12 @@ mod tests {
     #[test]
     fn macros_generate_items() {
         let c = ok(r#"
-            macro forbid(name, pat, why) {
+            @macro forbid(name, pat, why) {
               in .rust match name pat {
                 rule name error why
               }
             }
-            forbid(dbg, "dbg!" /\(/, "no dbg")
+            @forbid(dbg, "dbg!" /\(/, "no dbg")
         "#);
         assert_eq!(c.matchers[0].name.text, "dbg");
         assert_eq!(c.rules[0].name.text, "dbg");
@@ -1730,13 +1730,13 @@ mod tests {
     #[test]
     fn macros_expand_to_rule_clauses_and_messages() {
         let c = ok(r#"
-            macro nl (if true then "a" else "b")
-            macro strict {
+            @macro nl (if true then "a" else "b")
+            @macro strict {
               when true
-              fix as nl "!" nl
+              fix as @nl "!" @nl
             }
-            in x rule f warn nl {
-              strict
+            in x rule f warn @nl {
+              @strict
             }
         "#);
         assert_eq!(c.rules[0].when.len(), 1);
@@ -1778,7 +1778,7 @@ mod tests {
 
     #[test]
     fn dashed_names_work_anywhere_and_binary_operators_need_spaces() {
-        let c = ok("macro m(rule-id) {\n  in x rule rule-id warn \"a\" { when -1 < len(text) - 2 * 3 && !false }\n}\nm(no-dbg)\n");
+        let c = ok("@macro m(rule-id) {\n  in x rule rule-id warn \"a\" { when -1 < len(text) - 2 * 3 && !false }\n}\n@m(no-dbg)\n");
         assert_eq!(c.rules[0].name.text, "no-dbg");
         let (_, errors, _) = parse_str("in x rule a {\n  when 1+2 > 0\n  when 1 -2 == -1\n  when 1 <=2\n  when text~ /x/\n}\n");
         let all: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
@@ -1792,14 +1792,18 @@ mod tests {
     }
 
     #[test]
-    fn macros_cannot_hide_facts() {
-        let (_, errors, _) = parse_str("macro reference_kind \"x\"\n");
-        assert_eq!(errors.len(), 1, "{errors:#?}");
+    fn only_at_names_expand_so_macros_hide_nothing() {
+        // `text` stays the fact; `@text` is the macro.
+        let c = ok("@macro text \"x\"\nin x rule a warn @text { when text == \"y\" }\n");
+        assert!(matches!(c.rules[0].message.as_ref().map(|e| &e.kind), Some(ExprKind::Str(_))), "{:?}", c.rules[0].message);
+        assert!(matches!(&c.rules[0].when[0].kind, ExprKind::Binary(_, l, _) if matches!(l.kind, ExprKind::Var(_))), "{:?}", c.rules[0].when);
+        let (_, errors, _) = parse_str("macro m \"x\"\n");
+        assert_eq!(errors.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["macros are defined with `@macro`"]);
     }
 
     #[test]
     fn macro_expansions_act_as_groups() {
-        let c = ok("macro digits /\\d/+\nmatch x \"a\" digits?\n");
+        let c = ok("@macro digits /\\d/+\nmatch x \"a\" @digits?\n");
         let Some((Pat::Seq(items), _)) = &c.matchers[0].pattern else { panic!("{:?}", c.matchers[0].pattern) };
         assert!(
             matches!(&items[1], Pat::Repeat { min: 0, max: Some(1), inner, .. } if matches!(**inner, Pat::Repeat { min: 1, .. })),

@@ -416,7 +416,7 @@ impl Symbols {
             crate::expr::show(o.default),
         );
         let summary = o.description.map_or_else(|| o.schema.to_string(), String::from);
-        let choices: Vec<String> = o.schema.choices(schemas).iter().map(|v| enum_or_literal(o.schema, v)).collect();
+        let choices: Vec<String> = o.schema.choices(schemas).iter().map(|v| enum_or_literal(o.schema, schemas, v)).collect();
         let names = if o.primary { vec![key, rule.to_string()] } else { vec![key] };
         for name in names {
             let id = self.add(Kind::Option, &name, summary.clone(), doc.clone());
@@ -601,8 +601,6 @@ impl Symbols {
     }
 }
 
-/// How a value of `schema` is written: enum members bare (`never`),
-/// anything else as a literal (`"never"`, `3`).
 /// An option as symbols show it: compiled (configured value) or as defined.
 struct OptionView<'a> {
     name: &'a str,
@@ -613,9 +611,11 @@ struct OptionView<'a> {
     primary: bool,
 }
 
-fn enum_or_literal(schema: &crate::config::schema::Schema, v: &crate::expr::Value) -> String {
+/// How a value of `schema` is written: enum members bare (`never`), also
+/// through named schemas, anything else as a literal (`"never"`, `3`).
+fn enum_or_literal(schema: &crate::config::schema::Schema, schemas: &crate::config::schema::Schemas, v: &crate::expr::Value) -> String {
     match v {
-        crate::expr::Value::Str(s) if schema.takes_word(s, &|_| None) => s.to_string(),
+        crate::expr::Value::Str(s) if schema.takes_word(s, &|name| schemas.get(name).map(|d| &d.schema)) => s.to_string(),
         other => other.literal(),
     }
 }

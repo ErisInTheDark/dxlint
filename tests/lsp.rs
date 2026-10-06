@@ -278,8 +278,9 @@ fn zlint_files_have_hover_definitions_references_and_completion() {
 fn rule_lines_complete_each_variants_default_option() {
     let dir = project("lsp-default-options");
     let config = dir.join(".zlint");
-    let variants = "define {\n\
-        in bad rule dangle:arrays warn \"x\" { default option mode enum(never, always-multiline) = never }\n\
+    let variants = "schema dangle_mode enum(never, always-multiline)\n\
+        define {\n\
+        in bad rule dangle:arrays warn \"x\" { default option mode dangle_mode = never }\n\
         in bad rule dangle:objects warn \"x\" { default option mode enum(never, only-multiline) = never }\n\
         in bad rule plain warn \"x\" { option mode enum(a, b) = a }\n\
         }\n";

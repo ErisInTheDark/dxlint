@@ -158,7 +158,8 @@ impl ConfigFile<'_> {
             [Kind::Attr, Kind::Builtin, Kind::Fact, Kind::Function, Kind::Relative, Kind::Macro, Kind::Layer, Kind::Keyword]
                 .iter()
                 .flat_map(|&k| self.of_kind(k))
-                .map(|(i, s)| item(i, s))
+                // Macros only expand as `@name`.
+                .map(|(i, s)| if s.kind == Kind::Macro { item_named(i, s, &format!("@{}", s.name)) } else { item(i, s) })
                 .collect()
         };
         json!({ "isIncomplete": false, "items": items })

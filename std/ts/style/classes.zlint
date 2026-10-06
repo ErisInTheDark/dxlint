@@ -23,7 +23,7 @@ in ts_class_property rule explicit-member-accessibility:property {
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
   let check default(overrides.properties, accessibility)
   let shape style_member
-  when !re_test(key, /^#/) && (check == "explicit" && !has_accessibility(modifiers) || check == "no-public" && contains([] modifier, "public"))
+  when !re_test(key, /^#/) && (check == "explicit" && !has_accessibility(@modifiers) || check == "no-public" && contains([] modifier, "public"))
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on class property {shape.name}."
 }
