@@ -491,6 +491,10 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             def.locals.extend(patch.locals.iter().cloned());
             def.files.extend(patch.files.iter().cloned());
             def.ignore.extend(patch.ignore.iter().cloned());
+            def.indents.extend(patch.indents.iter().cloned());
+            if patch.indent_reset.is_some() {
+                def.indent_reset = patch.indent_reset.clone();
+            }
             def.broken |= patch.broken;
         }
     }
@@ -981,6 +985,29 @@ mod demand_tests {
     }
 
     const SHAPE: &str = "in ts_call rule shape info \"{count(children)}\"";
+
+    #[test]
+    fn rule_configuration_merges_indentation_for_every_family_member() {
+        let mut failures = Vec::new();
+        for (reset, patch, expected) in [
+            ("false", "", 3.0),
+            ("true", "", 0.0),
+            ("true", "indent reset false", 3.0),
+            ("false", "indent reset is ts_call", 0.0),
+        ] {
+            let rule = |name| format!("in ts_identifier rule depth:{name} info \"{{indent_level}}\" {{\nindent in ts_call\nindent reset {reset}\n}}\n");
+            let linter = native(&format!("{}{}\nrule depth {{\nindent in ts_call by 3\n{patch}\n}}", rule("first"), rule("second")));
+            let source = "call(\n      argument\n);";
+            let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+            let levels: Vec<_> = diagnostics.iter()
+                .filter(|diagnostic| &source[diagnostic.start..diagnostic.end] == "argument")
+                .map(|diagnostic| diagnostic.message.parse::<f64>().expect("indentation level")).collect();
+            if levels != [expected, expected] {
+                failures.push((reset, patch, levels, diagnostics));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 
     #[test]
     fn linked_targets_keep_selected_context_and_run_once_per_node() {
