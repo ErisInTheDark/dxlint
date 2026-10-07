@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use super::reads::{self, Dep, Reads, MISSING};
+use super::reads::{self, Cached, Dep, Reads, MISSING};
 use super::summary::{summarise, Export, FileSummary, Module, Scope, Summary};
 use super::view::Raw;
 use crate::config::source::normalize_path;
@@ -96,26 +96,6 @@ pub struct Globals {
 struct Files {
     by_path: HashMap<PathBuf, FileId>,
     paths: Vec<PathBuf>,
-}
-
-/// A shared answer and the reads it was computed from, which every user
-/// of the answer records as its own.
-#[derive(Clone)]
-struct Cached<T> {
-    value: T,
-    reads: Arc<Reads>,
-}
-
-impl<T: Clone> Cached<T> {
-    fn compute(f: impl FnOnce() -> T) -> Self {
-        let (value, reads) = reads::track(f);
-        Cached { value, reads: Arc::new(reads) }
-    }
-
-    fn get(&self) -> T {
-        reads::note_group(&self.reads);
-        self.value.clone()
-    }
 }
 
 /// A file's summary, with the content hash it was built from and its

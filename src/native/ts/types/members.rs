@@ -396,7 +396,10 @@ impl Checker<'_> {
             let s = self.summary_of(r.file)?;
             let decl = &s.decls[r.decl as usize];
             let env = self.decl_env(r);
-            if let Some(t) = self.member_from::<METADATA>(decl.members.iter().filter(|m| m.is_static), name, &env, Some(r)) {
+            if let Some(t) = self.member_from::<METADATA>(s.members_named(r.decl, name).inspect(|_| {
+                #[cfg(test)]
+                super::super::summary::MEMBER_INSPECTIONS.with(|work| work.set(work.get() + 1));
+            }).filter(|m| m.is_static), name, &env, Some(r)) {
                 return Some(t);
             }
             // Statics are inherited too.
@@ -423,10 +426,15 @@ impl Checker<'_> {
         for &r in sym {
             let Some(s) = self.summary_of(r.file) else { continue };
             let decl = &s.decls[r.decl as usize];
+            let mut members = s.members_named(r.decl, name).inspect(|_| {
+                #[cfg(test)]
+                super::super::summary::MEMBER_INSPECTIONS.with(|work| work.set(work.get() + 1));
+            }).filter(|m| !m.is_static).peekable();
+            if members.peek().is_none() { continue }
             let mut env = self.decl_env(r);
             env.tparams = self.bind_tparams(&decl.type_params, args.to_vec(), &env);
             env.this = Some(Box::new(receiver.clone()));
-            for m in decl.members.iter().filter(|m| !m.is_static && &*m.name == name) {
+            for m in members {
                 if METADATA && matches!(m.kind, MemberKind::Method | MemberKind::Prop) {
                     declarations.push(MemberDeclaration { owner: Some(r), member: m.clone(), environment: Some(env.clone()), origin: None });
                 }

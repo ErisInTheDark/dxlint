@@ -78,6 +78,25 @@ pub struct Reads {
     pub groups: Vec<Arc<Reads>>,
 }
 
+/// An answer and its dependencies; every consumer records those reads.
+#[derive(Clone)]
+pub(crate) struct Cached<T> {
+    pub(crate) value: T,
+    pub(crate) reads: Arc<Reads>,
+}
+
+impl<T: Clone> Cached<T> {
+    pub(crate) fn compute(f: impl FnOnce() -> T) -> Self {
+        let (value, reads) = track(f);
+        Cached { value, reads: Arc::new(reads) }
+    }
+
+    pub(crate) fn get(&self) -> T {
+        note_group(&self.reads);
+        self.value.clone()
+    }
+}
+
 impl Reads {
     pub fn is_empty(&self) -> bool {
         self.deps.is_empty() && self.groups.is_empty()

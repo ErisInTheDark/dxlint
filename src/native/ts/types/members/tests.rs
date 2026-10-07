@@ -1,5 +1,5 @@
 use crate::engine::tests::with_native_file;
-use crate::native::ts::summary::Visibility;
+use crate::native::ts::summary::{Visibility, MEMBER_INSPECTIONS};
 use super::{Checker, Env, Ty, TypeSyn, MEMBER_WORK};
 use crate::native::ts::{modules::{DeclRef, Globals, Project}, view::Raw};
 use std::{path::Path, sync::Arc};
@@ -47,6 +47,37 @@ fn with_library(src: &str, run: impl FnOnce(&Checker<'_>)) {
     let mut checker = Checker::new(&project, file, summary);
     checker.globals = Arc::new(Globals { names, ..Globals::default() });
     run(&checker);
+}
+
+#[test]
+fn named_member_queries_do_not_rescan_large_declarations() {
+    let count = 64;
+    let properties = (0..count).map(|i| format!("p{i}: number; static p{i}: string;")).collect::<String>();
+    let source = format!("class Base {{ inherited: number; static inherited: boolean; }} class Target extends Base {{ {properties} }}");
+    let mut work = Vec::new();
+    for static_side in [false, true] {
+        with_library(&source, |checker| {
+            let ty = checker.eval(&TypeSyn::Ref(vec!["Target".into()].into(), Vec::new()), &Env::file(checker.file));
+            let ty = if static_side {
+                let Ty::Named(symbol, _) = ty else { panic!("class instance") };
+                Ty::Class(symbol)
+            } else { ty };
+            MEMBER_INSPECTIONS.with(|work| work.set(0));
+            for i in 0..count {
+                let own = checker.member_resolution(&ty, &format!("p{i}"));
+                assert!(own.declared);
+                assert!(own.ty.same_identity(&Ty::Prim(if static_side { "string" } else { "number" })));
+                let inherited = checker.member_resolution(&ty, "inherited");
+                assert!(inherited.declared);
+                assert!(inherited.ty.same_identity(&Ty::Prim(if static_side { "boolean" } else { "number" })));
+                assert!(!checker.member_resolution(&ty, "missing").declared);
+            }
+            work.push((static_side, MEMBER_INSPECTIONS.with(|work| work.get())));
+        });
+    }
+    for (static_side, work) in work {
+        assert!(work <= 16 * count, "static={static_side}: inspected {work} members for {count} queries");
+    }
 }
 
 #[test]

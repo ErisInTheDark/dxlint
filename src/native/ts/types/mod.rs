@@ -16,18 +16,26 @@ mod print;
 mod relate;
 mod utilities;
 mod identity;
+#[cfg(test)]
+mod tests;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::modules::{DeclRef, FileId, Globals, ModRef, ModuleAt, Project};
+use super::reads::Cached;
 use super::summary::{DeclKind, Member, Sig, Summary, TParam, TupleElement, TypeSyn};
 
 pub use domains::{LiteralValue, ValueDomains};
 pub use calls::ResolvedPredicate;
 pub use arguments::Parameters;
 pub use members::Resolution;
+
+#[cfg(test)]
+thread_local! {
+    static BINDING_WORK: Cell<usize> = const { Cell::new(0) };
+}
 
 /// All declarations merged under one name (`interface Promise` is spread
 /// over several lib files; `class X` + `namespace X`).
@@ -173,6 +181,27 @@ impl Env {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct BindingKey {
+    file: FileId,
+    module: Option<usize>,
+    namespaces: Vec<u32>,
+    path: Vec<Box<str>>,
+    depth: u32,
+}
+
+impl BindingKey {
+    fn new(path: &[Box<str>], env: &Env, depth: u32) -> Self {
+        Self {
+            file: env.file,
+            module: match env.module { ModuleAt::Top => None, ModuleAt::Ambient(i) => Some(i) },
+            namespaces: env.namespaces.clone(),
+            path: path.to_vec(),
+            depth,
+        }
+    }
+}
+
 impl Ty {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -310,6 +339,7 @@ pub struct Checker<'p> {
     /// Remaining work for the active assignability query; None between roots.
     relation_work: Cell<Option<usize>>,
     values: RefCell<HashMap<DeclRef, Ty>>,
+    bindings: RefCell<HashMap<BindingKey, Cached<Vec<DeclRef>>>>,
 }
 
 const MAX_DEPTH: u32 = 64;
@@ -317,7 +347,7 @@ const MAX_DEPTH: u32 = 64;
 impl<'p> Checker<'p> {
     pub fn new(project: &'p Project, file: FileId, summary: Summary) -> Self {
         let globals = project.globals(file);
-        Checker { project, file, summary, globals, depth: Cell::new(0), structural_depth: Cell::new(0), relation_work: Cell::new(None), values: RefCell::new(HashMap::new()) }
+        Checker { project, file, summary, globals, depth: Cell::new(0), structural_depth: Cell::new(0), relation_work: Cell::new(None), values: RefCell::new(HashMap::new()), bindings: RefCell::new(HashMap::new()) }
     }
 
     /// Runs `f` one level deeper, or gives up past the depth limit.
@@ -574,6 +604,19 @@ impl<'p> Checker<'p> {
 
     /// The type declarations a type name (`A.B`) refers to.
     pub fn type_decls(&self, path: &[Box<str>], env: &Env) -> Vec<DeclRef> {
+        // Only lexical bindings are cached: generic arguments, `this`, aliases
+        // and relation budgets still participate in each type evaluation.
+        let key = BindingKey::new(path, env, self.depth.get());
+        if let Some(answer) = self.bindings.borrow().get(&key) { return answer.get() }
+        let answer = Cached::compute(|| self.resolve_type_decls(path, env));
+        let declarations = answer.get();
+        self.bindings.borrow_mut().insert(key, answer);
+        declarations
+    }
+
+    fn resolve_type_decls(&self, path: &[Box<str>], env: &Env) -> Vec<DeclRef> {
+        #[cfg(test)]
+        BINDING_WORK.with(|work| work.set(work.get() + 1));
         let Some((first, rest)) = path.split_first() else { return Vec::new() };
         let mut sym = self.follow(self.lookup(env, first));
         for seg in rest {

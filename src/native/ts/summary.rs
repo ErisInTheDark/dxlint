@@ -15,6 +15,11 @@ use super::docs::leading_doc;
 use super::kinds::{Field as F, Kind as K};
 use super::view::View;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MEMBER_INSPECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A type as written, before names are resolved.
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum TypeSyn {
@@ -267,6 +272,7 @@ impl Hash for Module {
 #[derive(Debug, Default)]
 pub struct FileSummary {
     pub decls: Vec<Decl>,
+    members_by_name: std::sync::OnceLock<Vec<HashMap<Box<str>, Vec<usize>>>>,
     /// Top-level names (imports included).
     pub top: Scope,
     pub module: Module,
@@ -283,6 +289,19 @@ pub struct FileSummary {
 }
 
 impl FileSummary {
+    pub fn members_named(&self, decl: u32, name: &str) -> impl Iterator<Item = &Member> {
+        let index = self.members_by_name.get_or_init(|| self.decls.iter().map(|decl| {
+            let mut names: HashMap<Box<str>, Vec<usize>> = HashMap::new();
+            for (index, member) in decl.members.iter().enumerate() {
+                #[cfg(test)]
+                MEMBER_INSPECTIONS.with(|work| work.set(work.get() + 1));
+                names.entry(member.name.clone()).or_default().push(index);
+            }
+            names
+        }).collect());
+        index[decl as usize].get(name).into_iter().flatten().map(move |&index| &self.decls[decl as usize].members[index])
+    }
+
     /// Identifies what other files can learn from this summary: equal
     /// fingerprints mean equal answers for them (positions aside).
     pub fn fingerprint(&self) -> u64 {
