@@ -99,9 +99,21 @@ pub fn worth_compiling(e: &CExpr) -> bool {
     }
 }
 
+/// Compiled code for a batch of expressions.
+pub struct Compilation {
+    pub code: Code,
+    /// By input position; `None` where that expression failed to compile
+    /// (the interpreter runs it).
+    pub compiled: Vec<Option<Compiled>>,
+    /// Why expressions failed, by input position: compiler bugs, never
+    /// expected for valid rules.
+    pub errors: Vec<(usize, String)>,
+}
+
 /// Compiles `exprs` together, or `None` where the host has no backend (the
-/// interpreter then runs them).
-pub fn compile(exprs: &[(&CExpr, Want)]) -> Option<(Code, Vec<Compiled>)> {
+/// interpreter then runs them all). One expression failing leaves the rest
+/// compiled.
+pub fn compile(exprs: &[(&CExpr, Want)]) -> Option<Compilation> {
     let mut builder = JITBuilder::new(default_libcall_names()).ok()?;
     for &h in Helper::ALL {
         let spec = h.spec();
@@ -129,9 +141,17 @@ pub fn compile(exprs: &[(&CExpr, Want)]) -> Option<(Code, Vec<Compiled>)> {
 
     let mut context = module.make_context();
     let mut functions = FunctionBuilderContext::new();
-    let mut defined: Vec<FuncId> = Vec::with_capacity(exprs.len());
+    let mut defined: Vec<Option<FuncId>> = Vec::with_capacity(exprs.len());
+    let mut errors = Vec::new();
     for (i, &(e, want)) in exprs.iter().enumerate() {
-        let id = module.declare_function(&format!("expr{i}"), Linkage::Local, &entry).ok()?;
+        let id = match module.declare_function(&format!("expr{i}"), Linkage::Local, &entry) {
+            Ok(id) => id,
+            Err(error) => {
+                errors.push((i, format!("declare: {error}")));
+                defined.push(None);
+                continue;
+            }
+        };
         // Loops push their items for the interpreter only when interpreted
         // code inside them reads one.
         for push_params in [false, true] {
@@ -150,17 +170,30 @@ pub fn compile(exprs: &[(&CExpr, Want)]) -> Option<(Code, Vec<Compiled>)> {
             }
             module.clear_context(&mut context);
         }
-        module.define_function(id, &mut context).ok()?;
+        // Checked before defining: a function that fails verification is
+        // never handed to the module, so the others still finalize.
+        if let Err(error) = cranelift_codegen::verify_function(&context.func, module.isa()) {
+            errors.push((i, format!("verify: {error}")));
+            module.clear_context(&mut context);
+            defined.push(None);
+            continue;
+        }
+        match module.define_function(id, &mut context) {
+            Ok(()) => defined.push(Some(id)),
+            Err(error) => {
+                errors.push((i, format!("define: {error:?}")));
+                defined.push(None);
+            }
+        }
         module.clear_context(&mut context);
-        defined.push(id);
     }
     module.finalize_definitions().ok()?;
     let compiled = defined
         .into_iter()
         .map(|id| {
             // SAFETY: `id` was defined above with the `Entry` signature.
-            Compiled(unsafe { std::mem::transmute::<*const u8, Entry>(module.get_finalized_function(id)) })
+            id.map(|id| Compiled(unsafe { std::mem::transmute::<*const u8, Entry>(module.get_finalized_function(id)) }))
         })
         .collect();
-    Some((Code(Some(module)), compiled))
+    Some(Compilation { code: Code(Some(module)), compiled, errors })
 }

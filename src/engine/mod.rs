@@ -231,10 +231,20 @@ impl Linter {
         if exprs.is_empty() {
             return;
         }
-        let Some((code, compiled)) = crate::jit::compile(&exprs) else { return };
-        let mut compiled = compiled.into_iter();
+        let Some(compilation) = crate::jit::compile(&exprs) else { return };
+        // A failure is a compiler bug: that expression stays interpreted,
+        // but it must never go unnoticed where correctness is being checked.
+        for (i, error) in &compilation.errors {
+            let message = format!("zlint: rule condition not compiled ({error}): {:?}", exprs[*i].0);
+            assert!(mode != ConditionMode::Verified, "{message}");
+            if cfg!(debug_assertions) {
+                eprintln!("{message}");
+            }
+        }
+        let code = compilation.code;
+        let mut compiled = compilation.compiled.into_iter();
         for rule in self.rules.iter_mut().filter(|rule| rule.severity != Severity::Off) {
-            let mut code_for = |exprs: &[CExpr]| exprs.iter().map(|e| crate::jit::worth_compiling(e).then(|| compiled.next()).flatten()).collect();
+            let mut code_for = |exprs: &[CExpr]| exprs.iter().map(|e| crate::jit::worth_compiling(e).then(|| compiled.next().flatten()).flatten()).collect();
             rule.node_when_code = code_for(&rule.node_when);
             rule.when_code = code_for(&rule.when);
         }
@@ -718,6 +728,20 @@ struct Run<'a> {
     lines: &'a LineIndex,
     file: &'a str,
     active: &'a [bool],
+}
+
+#[cfg(test)]
+mod condition_compile_tests {
+    use super::ConditionMode;
+    use crate::engine::tests::native_linter;
+
+    /// Every standard rule's conditions compile: a compiler bug in one would
+    /// otherwise only show as that condition running interpreted.
+    #[test]
+    fn every_standard_rule_condition_compiles() {
+        let mut linter = native_linter("rule *");
+        linter.compile_conditions(ConditionMode::Verified);
+    }
 }
 
 #[cfg(test)]

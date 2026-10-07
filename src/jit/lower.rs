@@ -694,6 +694,10 @@ impl<'f, 'm> Lower<'f, 'm> {
         let exit = self.b.create_block();
         self.b.append_block_param(exit, types::I8);
         let start = if backwards { len } else { self.index(0) };
+        // Defined before the loop: the body may branch, so only this block
+        // dominates every exit that passes them.
+        let yes = self.b.ins().iconst(types::I8, 1);
+        let no = self.b.ins().iconst(types::I8, 0);
         self.b.ins().jump(header, &[BlockArg::Value(start)]);
 
         self.b.switch_to_block(header);
@@ -723,8 +727,6 @@ impl<'f, 'm> Lower<'f, 'm> {
             let at = self.live.iter().rposition(|l| *l == Live::Param).expect("a pushed parameter");
             self.live.remove(at);
         }
-        let yes = self.b.ins().iconst(types::I8, 1);
-        let no = self.b.ins().iconst(types::I8, 0);
         match each {
             Each::Map => {
                 let owned = self.b.ins().iconst(types::I8, 1);
