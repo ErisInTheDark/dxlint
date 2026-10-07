@@ -16,6 +16,15 @@ use crate::fx_hash::FxHashMap as HashMap;
 pub(crate) struct Lexed(pub(crate) std::sync::Arc<[Token]>);
 pub(crate) struct LexedComments(pub(crate) Vec<Token>);
 
+impl Lexed {
+    /// Fully contained tokens, excluding trivia and tokens crossing either edge.
+    pub(crate) fn range(&self, start: u32, end: u32) -> &[Token] {
+        let from = self.0.partition_point(|token| token.start < start);
+        let to = self.0.partition_point(|token| token.end <= end);
+        &self.0[from..to.max(from)]
+    }
+}
+
 /// Requested token kinds, indexed by the native kind registry.
 pub type TokenMask = [bool; ALL_KINDS.len()];
 #[cfg(test)]
@@ -547,6 +556,22 @@ impl NativeFile<'_> {
 mod lexical_tests {
     use super::*;
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn token_ranges_exclude_partial_literals_and_empty_intervals() {
+        with_native_file(r#"const a = [/x/, "text"];"#, |file, _| {
+            let code = file.cached(lex);
+            for kind in [Tok::Regex, Tok::Str] {
+                let token = code.0.iter().find(|token| token.tok == kind).unwrap();
+                assert_eq!(code.range(token.start, token.end).len(), 1);
+                assert!(code.range(token.start + 1, token.end).is_empty());
+                assert!(code.range(token.start, token.end - 1).is_empty());
+                assert!(code.range(token.start, token.start).is_empty());
+                let surrounding = code.range(token.start.saturating_sub(1), token.end + 1);
+                assert!(surrounding.iter().any(|included| included.start == token.start && included.end == token.end));
+            }
+        });
+    }
 
     #[test]
     fn token_equality_preserves_literal_contents_but_ignores_code_trivia() {

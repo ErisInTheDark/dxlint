@@ -1,54 +1,78 @@
 //! Syntax-owned list boundaries; expression interiors remain parser-owned.
 
 use crate::expr::Value;
-use crate::native::ts::{facts::NativeFile, kinds::{Field as F, Kind as K}, lexer::{Lexer, Tok}};
+use crate::native::ts::{comments::Comment, facts::NativeFile, kinds::{Field as F, Kind as K}, lexer::Token, tokens::{lex, Lexed}};
 
-#[derive(Clone)]
-struct Edge {
+#[derive(Clone, Copy)]
+struct Edge<'a> {
     start: usize,
     end: usize,
-    text: String,
+    text: &'a str,
 }
 
-fn tokens(file: &NativeFile, start: usize, end: usize, comments: bool) -> Vec<Edge> {
-    let src = file.syntax.src;
-    let mut lexer = Lexer::new(&src[start..end]);
-    let mut out = Vec::new();
-    loop {
-        let token = lexer.next_token();
-        if token.tok == Tok::Eof { break }
-        let from = start + token.start as usize;
-        let to = start + token.end as usize;
-        out.push(Edge { start: from, end: to, text: src[from..to].to_owned() });
+struct Edges<'a> {
+    source: &'a str,
+    tokens: &'a Lexed,
+    comments: &'a [Comment],
+}
+
+impl<'a> Edges<'a> {
+    fn code(&self, start: usize, end: usize) -> &[Token] {
+        self.tokens.range(start as u32, end as u32)
     }
-    if comments {
-        out.extend(file.comments().iter().filter(|comment| start <= comment.start as usize && comment.end as usize <= end).map(|comment| Edge {
-            start: comment.start as usize, end: comment.end as usize, text: comment.body(src).to_owned(),
-        }));
-        out.sort_unstable_by_key(|token| token.start);
+
+    fn comments(&self, start: usize, end: usize) -> &[Comment] {
+        let from = self.comments.partition_point(|comment| (comment.start as usize) < start);
+        let to = self.comments.partition_point(|comment| comment.end as usize <= end);
+        &self.comments[from..to.max(from)]
     }
-    out
+
+    fn token(&self, token: &Token) -> Edge<'a> {
+        Edge { start: token.start as usize, end: token.end as usize, text: &self.source[token.start as usize..token.end as usize] }
+    }
+
+    fn comment(&self, comment: &Comment) -> Edge<'a> {
+        Edge { start: comment.start as usize, end: comment.end as usize, text: comment.body(self.source) }
+    }
+
+    fn first(&self, start: usize, end: usize, comments: bool) -> Option<Edge<'a>> {
+        let code = self.code(start, end).first().map(|token| self.token(token));
+        let comment = comments.then(|| self.comments(start, end).first().map(|comment| self.comment(comment))).flatten();
+        match (code, comment) {
+            (Some(code), Some(comment)) => Some(if code.start < comment.start { code } else { comment }),
+            (code, comment) => code.or(comment),
+        }
+    }
+
+    fn last(&self, start: usize, end: usize, comments: bool) -> Option<Edge<'a>> {
+        let code = self.code(start, end).last().map(|token| self.token(token));
+        let comment = comments.then(|| self.comments(start, end).last().map(|comment| self.comment(comment))).flatten();
+        match (code, comment) {
+            (Some(code), Some(comment)) => Some(if code.start > comment.start { code } else { comment }),
+            (code, comment) => code.or(comment),
+        }
+    }
+
+    fn pair(&self, before: &Edge, after: &Edge) -> Value<'static> {
+        let mut at = before.end;
+        let mut spaced = false;
+        for comment in self.comments(before.end, after.start) {
+            spaced |= self.source[at..comment.start as usize].chars().any(char::is_whitespace);
+            at = comment.end as usize;
+        }
+        spaced |= self.source[at..after.start].chars().any(char::is_whitespace);
+        Value::record(vec![
+            ("offset".into(), Value::from(before.end)),
+            ("prev".into(), Value::text_copy(before.text)),
+            ("next".into(), Value::text_copy(after.text)),
+            ("spaced".into(), Value::Bool(spaced)),
+            ("broken".into(), Value::Bool(broken(&self.source[before.end..after.start]))),
+        ])
+    }
 }
 
 fn broken(text: &str) -> bool {
     text.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
-}
-
-fn pair(file: &NativeFile, before: &Edge, after: &Edge) -> Value<'static> {
-    let mut at = before.end;
-    let mut spaced = false;
-    for comment in file.comments().iter().filter(|comment| before.end <= comment.start as usize && comment.end as usize <= after.start) {
-        spaced |= file.syntax.src[at..comment.start as usize].chars().any(char::is_whitespace);
-        at = comment.end as usize;
-    }
-    spaced |= file.syntax.src[at..after.start].chars().any(char::is_whitespace);
-    Value::record(vec![
-        ("offset".into(), Value::from(before.end)),
-        ("prev".into(), Value::from(before.text.clone())),
-        ("next".into(), Value::from(after.text.clone())),
-        ("spaced".into(), Value::Bool(spaced)),
-        ("broken".into(), Value::Bool(broken(&file.syntax.src[before.end..after.start]))),
-    ])
 }
 
 pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
@@ -82,6 +106,9 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
         let items: Vec<_> = s.all(node, field).collect();
         if !items.is_empty() { groups.push((kind, "<>", items)); }
     }
+    if groups.is_empty() { return Value::list(Vec::new()) }
+    let tokens = file.cached(lex);
+    let edges = Edges { source: s.src, tokens: &tokens, comments: file.comments() };
     let mut out = Vec::new();
     let bounds = s.tree.node(node);
     for (kind, brackets, mut items) in groups {
@@ -91,54 +118,52 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
         let first = items.first().map(|&item| s.tree.node(s.unparen(item)).start as usize);
         let last = items.last().map(|&item| s.tree.node(item).end as usize);
         let prefix_end = first.unwrap_or_else(|| s.get(node, F::Body).map_or(bounds.end as usize, |body| s.tree.node(body).start as usize));
-        let prefix = tokens(file, bounds.start as usize, prefix_end, false);
+        let prefix = edges.code(bounds.start as usize, prefix_end);
         let left = if brackets == "()" && matches!(s.kind(node), Some(K::Call | K::New)) {
             let after = s.all(node, F::TypeArg).last().or_else(|| s.get(node, F::Callee))
                 .map_or(bounds.start, |before| s.tree.node(before).end) as usize;
-            prefix.iter().find(|token| token.start >= after && token.text == open).cloned()
+            prefix.iter().find(|token| token.start as usize >= after && edges.token(token).text == open).map(|token| edges.token(token))
         } else if first.is_some() {
-            prefix.last().filter(|token| token.text == open).cloned()
+            prefix.last().map(|token| edges.token(token)).filter(|token| token.text == open)
         } else {
-            prefix.windows(2).find(|pair| pair[0].text == open && pair[1].text == close).map(|pair| pair[0].clone())
+            prefix.windows(2).find(|pair| edges.token(&pair[0]).text == open && edges.token(&pair[1]).text == close).map(|pair| edges.token(&pair[0]))
         };
         let Some(left) = left else { continue };
-        let after_last = tokens(file, last.unwrap_or(left.end), bounds.end as usize, false);
-        let Some(right) = after_last.iter().find(|token| token.text != ",").filter(|token| token.text == close).cloned() else { continue };
+        let after_last = edges.code(last.unwrap_or(left.end), bounds.end as usize);
+        let Some(right) = after_last.iter().map(|token| edges.token(token)).find(|token| token.text != ",").filter(|token| token.text == close) else { continue };
         let first_non_hole = items.iter().find(|&&item| !s.is(item, K::Hole)).copied();
         let first_item_start = first_non_hole.map_or(right.start, |item| s.tree.node(s.unparen(item)).start as usize);
-        let inner_comments = tokens(file, left.end, first_item_start, true);
-        let first_item = first_non_hole.and_then(|item| tokens(file, s.tree.node(s.unparen(item)).start as usize, s.tree.node(item).end as usize, false).first().cloned());
-        let first_edge = inner_comments.first().cloned().or_else(|| first_item.clone()).unwrap_or_else(|| right.clone());
-        let tail_comments = tokens(file, last.unwrap_or(left.end), right.start, true);
-        let last_edge = tail_comments.last().cloned().or_else(|| {
-            items.last().and_then(|&item| tokens(file, s.tree.node(item).start as usize, s.tree.node(item).end as usize, false).last().cloned())
-        }).unwrap_or_else(|| left.clone());
-        let mut spacing = vec![pair(file, &left, &first_edge)];
-        if first_edge.start != right.start { spacing.push(pair(file, &last_edge, &right)); }
+        let first_item = first_non_hole.and_then(|item| edges.first(s.tree.node(s.unparen(item)).start as usize, s.tree.node(item).end as usize, false));
+        let first_edge = edges.first(left.end, first_item_start, true).or(first_item).unwrap_or(right);
+        let last_edge = edges.last(last.unwrap_or(left.end), right.start, true).or_else(|| {
+            items.last().and_then(|&item| edges.last(s.tree.node(item).start as usize, s.tree.node(item).end as usize, false))
+        }).unwrap_or(left);
+        let mut spacing = vec![edges.pair(&left, &first_edge)];
+        if first_edge.start != right.start { spacing.push(edges.pair(&last_edge, &right)); }
         let mut wrapping = Vec::new();
-        let after_open = tokens(file, left.end, first_item_start, false).first().cloned().or_else(|| {
-            items.first().and_then(|&item| tokens(file, s.tree.node(s.unparen(item)).start as usize, s.tree.node(item).end as usize, false).first().cloned())
-        }).unwrap_or_else(|| right.clone());
-        wrapping.push(pair(file, &left, &after_open));
+        let after_open = edges.first(left.end, first_item_start, false).or_else(|| {
+            items.first().and_then(|&item| edges.first(s.tree.node(s.unparen(item)).start as usize, s.tree.node(item).end as usize, false))
+        }).unwrap_or(right);
+        wrapping.push(edges.pair(&left, &after_open));
         let mut previous = left.end;
-        let mut previous_edge = left.clone();
+        let mut previous_edge = left;
         for (index, &item) in items.iter().enumerate() {
             let inner = s.unparen(item);
             let item_node = s.tree.node(inner);
-            let Some(first_token) = tokens(file, item_node.start as usize, item_node.end as usize, false).first().cloned() else { previous = s.tree.node(item).end as usize; continue };
+            let Some(first_token) = edges.first(item_node.start as usize, item_node.end as usize, false) else { previous = s.tree.node(item).end as usize; continue };
             if index != 0 || after_open.start != first_token.start {
-                let before = tokens(file, previous, first_token.start, false).into_iter().rev().find(|token| token.text != "(").unwrap_or_else(|| previous_edge.clone());
-                wrapping.push(pair(file, &before, &first_token));
+                let before = edges.code(previous, first_token.start).iter().rev().map(|token| edges.token(token)).find(|token| token.text != "(").unwrap_or(previous_edge);
+                wrapping.push(edges.pair(&before, &first_token));
             }
             previous = s.tree.node(item).end as usize;
-            if let Some(edge) = tokens(file, s.tree.node(item).start as usize, previous, false).last() { previous_edge = edge.clone(); }
+            if let Some(edge) = edges.last(s.tree.node(item).start as usize, previous, false) { previous_edge = edge; }
         }
-        let last_plain = after_last.iter().take_while(|token| token.start < right.start).last().cloned().or_else(|| {
-            items.last().and_then(|&item| tokens(file, s.tree.node(item).start as usize, s.tree.node(item).end as usize, false).last().cloned())
-        }).unwrap_or_else(|| left.clone());
-        wrapping.push(pair(file, &last_plain, &right));
-        let empty_wrapping = if first_edge.start == right.start { vec![pair(file, &left, &right)] }
-            else { vec![pair(file, &left, &first_edge), pair(file, &last_edge, &right)] };
+        let last_plain = edges.last(last.unwrap_or(left.end), right.start, false).or_else(|| {
+            items.last().and_then(|&item| edges.last(s.tree.node(item).start as usize, s.tree.node(item).end as usize, false))
+        }).unwrap_or(left);
+        wrapping.push(edges.pair(&last_plain, &right));
+        let empty_wrapping = if first_edge.start == right.start { vec![edges.pair(&left, &right)] }
+            else { vec![edges.pair(&left, &first_edge), edges.pair(&last_edge, &right)] };
         let common = vec![
             ("kind".into(), Value::from(kind)),
             ("brackets".into(), Value::from(brackets)),
@@ -163,8 +188,70 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
 
 #[cfg(test)]
 mod tests {
+    use super::sites;
+    use crate::engine::tests::with_native_file;
     use std::path::Path;
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn parser_aware_regex_boundaries_keep_the_literal_whole() {
+        let source = r"const a = [/\]/];";
+        with_native_file(source, |file, _| {
+            let node = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, super::K::Array)).unwrap();
+            let regex = file.syntax.get(node, super::F::Element).unwrap();
+            let super::Value::List(rows) = sites(file, node) else { panic!("list rows") };
+            let opening = rows.iter().find(|row| row.key("mode") == super::Value::from("spacing") && row.key("prev") == super::Value::from("[")).unwrap();
+            let closing = rows.iter().find(|row| row.key("mode") == super::Value::from("spacing") && row.key("next") == super::Value::from("]")).unwrap();
+            let literal = super::Value::text_copy(file.syntax.text(regex));
+            assert_eq!(opening.key("next"), literal);
+            assert_eq!(closing.key("prev"), literal);
+            assert_eq!(closing.key("offset"), super::Value::from(file.syntax.tree.node(regex).end as usize));
+        });
+    }
+
+    #[test]
+    fn parser_aware_template_boundaries_keep_the_closing_quasi() {
+        with_native_file("const a = [`head${f(x)}tail`];", |file, _| {
+            let node = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, super::K::Array)).unwrap();
+            let template = file.syntax.get(node, super::F::Element).unwrap();
+            let tail = file.syntax.all(template, super::F::Quasi).last().unwrap();
+            let super::Value::List(rows) = sites(file, node) else { panic!("list rows") };
+            let closing = rows.iter().find(|row| row.key("mode") == super::Value::from("spacing") && row.key("next") == super::Value::from("]")).unwrap();
+            assert_eq!(closing.key("prev"), super::Value::text_copy(file.syntax.text(tail)));
+            assert_eq!(closing.key("offset"), super::Value::from(file.syntax.tree.node(tail).end as usize));
+        });
+    }
+
+    #[test]
+    fn parser_aware_jsx_boundaries_do_not_treat_attribute_backslashes_as_escapes() {
+        let lint = native_linter("in ts_array rule edge {\neach site in list_layout\nwhen site.mode == \"spacing\" && site.next == \"]\"\nreport at site.offset\nwarn site.prev\n}");
+        for source in [r#"const a = [<X attr="\">text</X>];"#, r#"const a = [<X attr="\">text</X>,];"#] {
+            let reports = lint.lint(Path::new("/root/a.tsx"), source);
+            assert_eq!(reports.len(), 1, "{reports:?}");
+            assert_eq!(reports[0].message, if source.contains(",]") { "," } else { ">" });
+            assert_eq!(reports[0].start, source.rfind(']').unwrap());
+        }
+    }
+
+    #[test]
+    fn comment_edges_exclude_internal_whitespace_and_keep_line_breaks() {
+        for (source, spaced, broken) in [
+            ("const a = [/* inner */x/* tail */];", false, false),
+            ("const a = [ /* inner */x/* tail */ ];", true, false),
+            ("const a = [\r\n/* inner */x/* tail */\r\n];", true, true),
+            ("const a = [\u{2028}/* inner */x/* tail */\u{2029}];", true, true),
+        ] {
+            with_native_file(source, |file, _| {
+                let node = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, super::K::Array)).unwrap();
+                let super::Value::List(rows) = sites(file, node) else { panic!("list rows") };
+                let rows: Vec<_> = rows.iter().filter(|row| row.key("mode") == super::Value::from("spacing")).collect();
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0].key("next"), super::Value::from(" inner "));
+                assert_eq!(rows[1].key("prev"), super::Value::from(" tail "));
+                assert!(rows.iter().all(|row| row.key("spaced") == super::Value::Bool(spaced) && row.key("broken") == super::Value::Bool(broken)));
+            });
+        }
+    }
 
     #[test]
     fn wrapping_limit_rejects_inline_boundaries_not_wrapped_ones() {
