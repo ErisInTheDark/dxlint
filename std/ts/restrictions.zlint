@@ -555,9 +555,9 @@ in ts_identifier, ts_private_name {
 }
 in ts_identifier, ts_private_name rule id-denylist {
   option names string[] = [] "restricted identifiers"
+  when len(names) > 0 && contains(names, restriction_identifier_name)
   when (!restriction_name_external || is ts_property.key && !restriction_name_pattern) && !restriction_name_attributes && !restriction_name_renamed && !restriction_name_alias
   when parent not (ts_call, ts_new, ts_meta_property) && !(is ts_member.property && !restriction_name_assignment)
-  when contains(names, restriction_identifier_name)
   warn "Identifier '{text}' is restricted."
 }
 in ts_identifier, ts_private_name let id_length_checked true
