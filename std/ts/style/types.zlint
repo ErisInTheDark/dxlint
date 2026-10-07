@@ -190,18 +190,18 @@ in ts_enum_member.name rule prefer-literal-enum-member {
   warn "Explicit enum value must only be a literal value (string or number){if allowBitwiseExpressions then ' or a bitwise expression' else ''}."
 }
 
+in ts_declarator let no_this_alias_checked name is ts_identifier
+in ts_assignment let no_this_alias_checked left is ts_identifier
 in ts_declarator.name rule no-this-alias {
-  option allowDestructuring boolean = true "Allow destructuring this."
   option allowedNames string[] = [] "Names allowed to alias this."
   when parent.init == "this"
-  when !(allowDestructuring && not ts_identifier) && !contains(allowedNames, text)
+  when parent.no_this_alias_checked && !contains(allowedNames, text)
   warn if is ts_identifier then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
 }
 in ts_assignment.left rule no-this-alias:assignment {
-  option allowDestructuring boolean = true "Allow destructuring this."
   option allowedNames string[] = [] "Names allowed to alias this."
   when parent.right == "this"
-  when !(allowDestructuring && not ts_identifier) && !contains(allowedNames, text)
+  when parent.no_this_alias_checked && !contains(allowedNames, text)
   warn if is ts_identifier then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
 }
 

@@ -3,6 +3,24 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn this_alias_hook_selects_declarations_and_assignments_without_changing_name_exemptions() {
+    let source = "const self = this; const {a} = this; const [b] = this; target = this; ({c} = this); [d] = this; const nested = foo(this); const literal = 'this'; const paren = (this);";
+    for (config, heads) in [
+        ("", vec!["self", "target"]),
+        ("override in ts_declarator, ts_assignment let no_this_alias_checked true\n", vec!["self", "{a}", "[b]", "target", "{c}", "[d]"]),
+        ("override in ts_declarator, ts_assignment let no_this_alias_checked false\n", vec![]),
+        ("override in ts_declarator let no_this_alias_checked name != 'self'\noverride in ts_assignment let no_this_alias_checked false\n", vec!["{a}", "[b]"]),
+        ("override in ts_declarator, ts_assignment let no_this_alias_checked true\nrule no-this-alias { set allowedNames ['self', 'target'] }\n", vec!["{a}", "[b]", "{c}", "[d]"]),
+    ] {
+        let diagnostics = native_linter(&format!("{config}rule no-this-alias")).lint(Path::new("file.ts"), source);
+        let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        let expected: Vec<_> = heads.into_iter().map(|head| source.find(head).expect("alias target in source")).collect();
+        assert_eq!(starts, expected, "{config}: {diagnostics:?}");
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+    }
+}
+
+#[test]
 fn array_notation_modes_are_independent_for_mutable_and_readonly_types() {
     let source = "type MA = number[]; type MB = Array<number>; type MC = (A | B)[]; type MD = Array<A | B>; type RA = readonly number[]; type RB = ReadonlyArray<number>; type RC = readonly (A | B)[]; type RD = ReadonlyArray<A | B>;";
     let modes = [
