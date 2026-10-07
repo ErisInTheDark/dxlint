@@ -1,10 +1,11 @@
 //! Rule expressions specialised against their final, immutable options.
 
-use super::{CExpr, Ctx, Value};
+use super::{CExpr, Value};
 use crate::config::ast::BinOp;
+use crate::grammar::UserFn;
 
-pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>]) {
-    let fold = |child: &mut CExpr| specialise(child, options);
+pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>], functions: &[UserFn]) {
+    let fold = |child: &mut CExpr| specialise(child, options, functions);
     match expr {
         CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
         | CExpr::FactCall(_, items) | CExpr::UserCall(_, items) => {
@@ -59,6 +60,7 @@ pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>]) {
     let constant = |expr: &CExpr| matches!(expr, CExpr::Const(_));
     let eligible = match expr {
         CExpr::Opt(_) => true,
+        CExpr::UserCall(_, _) => true,
         CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items) => items.iter().all(constant),
         CExpr::Record(entries) => entries.iter().all(|(_, value)| constant(value)),
         CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner)
@@ -74,7 +76,7 @@ pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>]) {
         _ => false,
     };
     if eligible {
-        if let Ok(value) = Ctx::eval_static(expr, options) {
+        if let Ok(value) = super::static_eval::StaticEval::new(options, functions).eval(expr) {
             *expr = CExpr::Const(value);
         }
     }
@@ -89,9 +91,9 @@ mod tests {
     #[test]
     fn final_options_and_local_records_keep_diagnostics_and_fix_bytes() {
         let make = |dynamic: bool| {
-            let value = |name: &str| if dynamic { format!("runtime({name})") } else { name.into() };
+            let value = |name: &str| if dynamic { format!("runtime({name}, node)") } else { name.into() };
             linter(&format!(r#"
-                fn runtime(value) = value
+                fn runtime(value, owner) = if owner == null then value else value
                 in .t match word /[a-z]+/ {{
                     rule options {{
                         option replacement string = "z"
@@ -170,5 +172,82 @@ mod tests {
             assert_eq!(reports.iter().filter(|d| d.rule == "lazy" && d.message == "safe").count(), failures.len());
             assert!(!reports.iter().any(|d| d.rule == "dormant"));
         }
+    }
+
+    #[test]
+    fn user_functions_keep_eager_arguments_and_isolated_parameter_frames() {
+        let l = linter(r#"
+            fn inner(value) = upper(value)
+            fn outer(value) = inner(value) value
+            fn choose(flag, value) = if flag then "fixed" else value
+            fn recurse(value) = recurse(value)
+            in .t match word /[a-z]+/
+            in word let cycle cycle
+            in word {
+                rule constants {
+                    option value string = "x"
+                    when outer(value) == "Aa"
+                    fix as inner(value)
+                    warn choose(true, node)
+                }
+                rule dynamic {
+                    warn choose(false, node)
+                }
+                rule eager {
+                    warn choose(true, 1 % 0)
+                }
+                rule recursive {
+                    warn recurse("x")
+                }
+                rule cyclic_argument {
+                    warn choose(true, cycle)
+                }
+                rule dormant {
+                    warn choose(true, 1 % 0)
+                }
+            }
+            rule constants { set value "a" }
+            rule dormant off
+        "#);
+        for source in ["a", "b c"] {
+            let reports = lint(&l, source);
+            let count = source.split_whitespace().count();
+            assert_eq!(reports.iter().filter(|d| d.rule == "constants" && d.message == "fixed"
+                && d.fix.as_ref().is_some_and(|f| f.iter().all(|e| e.text == "A"))).count(), count);
+            assert_eq!(reports.iter().filter(|d| d.rule == "dynamic"
+                && source.split_whitespace().any(|word| word == d.message)).count(), count);
+            for rule in ["eager", "recursive", "cyclic_argument"] {
+                assert_eq!(reports.iter().filter(|d| d.rule == rule
+                    && d.severity == crate::config::ast::Severity::Error).count(), count);
+            }
+            assert!(!reports.iter().any(|d| d.rule == "dormant"));
+        }
+    }
+
+    #[test]
+    fn shared_function_dag_can_defer_work_until_a_node_is_visited() {
+        let mut config = String::from("fn f0() = 1\n");
+        for i in 1..=40 {
+            config.push_str(&format!("fn f{i}() = f{}() + f{}()\n", i - 1, i - 1));
+        }
+        let empty = linter(&format!("{config}in .t match word /[a-z]+/ {{ rule deep {{ warn f40() }} }}"));
+        assert!(lint(&empty, "").is_empty());
+        let active = linter(&format!("{config}in .t match word /[a-z]+/ {{ rule bounded {{ when f12() == 4096\nwarn \"ok\" }} }}"));
+        let reports = lint(&active, "a");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].severity, crate::config::ast::Severity::Warn);
+    }
+
+    #[test]
+    fn constant_function_chain_keeps_runtime_depth_failure() {
+        let mut config = String::from("fn f0(value) = value\n");
+        let last = super::super::MAX_CALL_DEPTH + 1;
+        for i in 1..=last {
+            config.push_str(&format!("fn f{i}(value) = f{}(value)\n", i - 1));
+        }
+        config.push_str(&format!("in .t match word /[a-z]+/ {{ rule deep {{ warn f{last}(\"x\") }} }}"));
+        let reports = lint(&linter(&config), "a");
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].severity, crate::config::ast::Severity::Error);
     }
 }

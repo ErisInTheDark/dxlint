@@ -114,9 +114,9 @@ impl Rule {
         self.options.iter().map(|o| o.value.clone()).collect()
     }
 
-    fn specialise_options(&mut self) {
+    fn specialise_options(&mut self, functions: &[crate::grammar::UserFn]) {
         let options = self.option_values();
-        let fold = |expr: &mut CExpr| crate::expr::fold::specialise(expr, &options);
+        let fold = |expr: &mut CExpr| crate::expr::fold::specialise(expr, &options, functions);
         self.locals.iter_mut().chain(&mut self.node_when).chain(&mut self.when).for_each(fold);
         for expr in [
             &mut self.message, &mut self.fix, &mut self.fix_when, &mut self.fix_at,
@@ -124,7 +124,7 @@ impl Rule {
         ].into_iter().flatten() {
             fold(expr);
         }
-        self.indents.specialise(&options);
+        self.indents.specialise(&options, functions);
     }
 
     /// The message with current option values filled in; holes that need a

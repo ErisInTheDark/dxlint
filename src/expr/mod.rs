@@ -9,6 +9,7 @@ pub(crate) mod fold;
 pub mod indent;
 pub(crate) mod re;
 mod spans;
+mod static_eval;
 pub mod value;
 
 use std::cell::RefCell;
@@ -2072,38 +2073,7 @@ impl<'a> Ctx<'a> {
     /// Evaluates without a node: constants, options and functions only
     /// (option values, descriptions shown by `zlint rules`).
     pub fn eval_static(e: &CExpr, options: &[Value<'static>]) -> Result<Value<'static>, String> {
-        let eval = |e: &CExpr| Ctx::eval_static(e, options);
-        Ok(match e {
-            CExpr::Const(v) => v.clone(),
-            CExpr::Opt(i) => options[*i].clone(),
-            CExpr::Hole(inner, _) => eval(inner)?,
-            CExpr::Template(parts) => {
-                let mut s = String::new();
-                for p in parts {
-                    s.push_str(&eval(p)?.text());
-                }
-                Value::from(s)
-            }
-            CExpr::List(items) => Value::List(items.iter().map(eval).collect::<Result<_, _>>()?),
-            CExpr::Record(entries) => Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), eval(v)?))).collect::<Result<_, String>>()?),
-            CExpr::Key(base, key) => eval(base)?.key(key),
-            CExpr::Member(base, key, _) => eval(base)?.key(key),
-            CExpr::Path(base, keys, _) => keys.iter().fold(eval(base)?, |v, k| v.key(k)),
-            CExpr::Call(f, args) => {
-                eval_args(args, eval, |args| (f.call)(args))?
-            }
-            CExpr::Not(inner) => Value::Bool(!eval(inner)?.truthy()),
-            CExpr::Neg(inner) => Value::Num(-eval(inner)?.num()?),
-            CExpr::If(c, a, b) => {
-                if eval(c)?.truthy() {
-                    eval(a)?
-                } else {
-                    eval(b)?
-                }
-            }
-            CExpr::Binary(op, a, b) => eval_binary(*op, a, b, eval)?,
-            _ => return Err("needs a node to evaluate".into()),
-        })
+        static_eval::StaticEval::new(options, &[]).eval(e)
     }
 
     /// Text of a template without a node: holes that need one stay as

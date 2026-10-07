@@ -59,10 +59,10 @@ impl IndentPlan {
         plan
     }
 
-    pub(crate) fn specialise(&mut self, options: &[Value<'static>]) {
+    pub(crate) fn specialise(&mut self, options: &[Value<'static>], functions: &[crate::grammar::UserFn]) {
         for rule in &mut self.rules {
             for expr in [&mut rule.by, &mut rule.from].into_iter().flatten() {
-                super::fold::specialise(expr, options);
+                super::fold::specialise(expr, options, functions);
             }
         }
     }

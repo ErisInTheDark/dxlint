@@ -219,7 +219,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let sources = std::sync::Arc::new(sources);
     let symbols = tooling.then(|| std::sync::Arc::new(Symbols::build(&config, &grammar, &rules, &inert, uses.into_inner(), sources.clone())));
     for rule in &mut rules {
-        rule.specialise_options();
+        rule.specialise_options(&grammar.functions);
     }
     // The rules as parsed, and where paths are relative to: what cached
     // results are only valid for.
