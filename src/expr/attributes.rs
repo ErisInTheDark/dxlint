@@ -2,6 +2,7 @@
 
 use super::{CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
+use std::collections::hash_map::Entry as MapEntry;
 
 /// A `let` attribute: its expression on each layer that defines it.
 pub struct Attr {
@@ -25,6 +26,11 @@ enum Route {
     Missing,
     Defined(u32),
     Forward(u16),
+}
+
+pub(super) enum Entry<'a> {
+    Busy,
+    Ready(Value<'a>),
 }
 
 impl Attributes {
@@ -102,20 +108,26 @@ impl<'a> Ctx<'a> {
             }
             Route::Defined(index) => index as usize,
         };
-        if let Some(v) = self.memo.values.borrow().get(&(node, attr)) {
-            return Ok(v.clone());
-        }
         let def = &self.attrs.attrs[attr as usize];
-        if self.memo.busy.borrow().contains(&(node, attr)) {
-            return Err(format!("attribute `{}` depends on itself", def.name));
+        let key = (node, attr);
+        match self.memo.attributes.borrow_mut().entry(key) {
+            MapEntry::Occupied(entry) => match entry.get() {
+                Entry::Ready(value) => return Ok(value.clone()),
+                Entry::Busy => return Err(format!("attribute `{}` depends on itself", def.name)),
+            },
+            MapEntry::Vacant(entry) => { entry.insert(Entry::Busy); }
         }
-        self.memo.busy.borrow_mut().push((node, attr));
         let ctx = Ctx { node, options: &[], ..*self };
-        let value = ctx.eval(&def.defs[index]);
-        self.memo.busy.borrow_mut().pop();
-        let value = value?;
-        self.memo.values.borrow_mut().insert((node, attr), value.clone());
-        Ok(value)
+        match ctx.eval(&def.defs[index]) {
+            Ok(value) => {
+                self.memo.attributes.borrow_mut().insert(key, Entry::Ready(value.clone()));
+                Ok(value)
+            }
+            Err(error) => {
+                self.memo.attributes.borrow_mut().remove(&key);
+                Err(error)
+            }
+        }
     }
 }
 
@@ -258,6 +270,34 @@ mod tests {
             }
             assert!(diagnostics.iter().find(|d| d.rule == "cycle").unwrap().message.contains("depends on itself"));
             assert_eq!(diagnostics.iter().find(|d| d.rule == "good").unwrap().message, size);
+        }
+    }
+
+    #[test]
+    fn cross_node_cycles_unwind_every_pending_attribute_before_retry() {
+        use std::path::Path;
+        use crate::config::ast::Severity;
+        use crate::engine::tests::native_linter;
+
+        let lint = native_linter(r#"
+            in ts_binary let cycle left.cycle
+            in ts_identifier let cycle parent.cycle
+            in ts_binary let broken left.broken
+            in ts_identifier let broken byte_slice(text, [])
+            in ts_binary rule first info "{broken}"
+            in ts_binary rule retry info "{broken}"
+            in ts_binary rule cyclic info "{cycle}"
+            in ts_identifier rule nested_cycle info "{cycle}"
+            in ts_identifier rule good info "{len(text)}"
+        "#);
+        for source in ["a + long;", "other + b;"] {
+            let diagnostics = lint.lint(Path::new("file.ts"), source);
+            let failures: Vec<_> = diagnostics.iter().filter(|d| d.severity == Severity::Error).collect();
+            assert_eq!(failures.len(), 5, "{diagnostics:?}");
+            for rule in ["first", "retry"] {
+                assert!(!failures.iter().find(|d| d.rule == rule).unwrap().message.contains("depends on itself"));
+            }
+            assert_eq!(diagnostics.iter().filter(|d| d.rule == "good").count(), 2);
         }
     }
 }

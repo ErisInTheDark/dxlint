@@ -258,8 +258,7 @@ fn project_fact(base: &CExpr, key: Option<&str>) -> Option<CExpr> {
 /// values are kept here too, per (node, rule, slot).
 #[derive(Default)]
 pub struct AttrMemo<'a> {
-    values: RefCell<FxHashMap<(u32, u16), Value<'a>>>,
-    busy: RefCell<Vec<(u32, u16)>>,
+    attributes: RefCell<FxHashMap<(u32, u16), attributes::Entry<'a>>>,
     locals: RefCell<FxHashMap<(u32, u32, u16), Value<'a>>>,
     /// Native fact reads without arguments, per (node, read slot). Whole
     /// records and registered projections share this owner.
