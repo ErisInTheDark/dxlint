@@ -122,8 +122,12 @@ pub struct Project {
     /// Member names of named types (declarations and printed arguments):
     /// the same few types are asked about from many files.
     members: RwLock<HashMap<MembersKey, Cached<MemberNames>>>,
-    resolutions: RwLock<HashMap<(FileId, Box<str>), Cached<Option<ModRef>>>>,
+    /// Module specifiers resolved from an importing file, misses included.
+    resolutions: RwLock<HashMap<ResolutionKey, Cached<Option<ModRef>>>>,
 }
+
+/// `(importing file, specifier as written)`.
+type ResolutionKey = (FileId, Box<str>);
 
 pub type MemberNames = Arc<[Box<str>]>;
 type GlobalsCell = OnceLock<Cached<Arc<Globals>>>;
