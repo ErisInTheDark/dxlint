@@ -372,6 +372,14 @@ in ts_binary rule eqeqeq {
 }
 
 fn padding_selector_matches(info, selector) = (if type_of(selector) == "str" then contains(info.tags, selector) else contains(info.selectors, re_replace(selector.selector, /["']/, "")) && (default(selector.lineMode, "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
+fn padding_category_side_matches(info, selectors) = any(selectors, selector => padding_selector_matches(info, selector))
+fn padding_side_matches(item, selectors) =
+  if type_of(selectors) == "str" then
+    selectors == "*" || contains(item.structure_padding_categories.tags, selectors)
+  else if type_of(selectors) == "list" then
+    any(selectors, selector => type_of(selector) == "str" && selector == "*")
+    || len(selectors) != 0 && padding_category_side_matches(item.structure_padding_categories, selectors)
+  else padding_selector_matches(item.structure_padding_categories, selectors)
 
 group structure_padding_owner ts_program, ts_block, ts_static_block, ts_case, ts_switch, ts_interface, ts_type_literal
 group structure_padding_block ts_block, ts_switch
@@ -476,14 +484,14 @@ in structure_padding_owner rule padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
   when any(options, policy => policy.blankLine != "any")
   let pairs map(zip(structure_padding_items, slice(structure_padding_items, 1)), pair => {
-    prior: (first(pair)).structure_padding_categories,
-    following: (last(pair)).structure_padding_categories,
+    prior: first(pair),
+    following: last(pair),
     end: structure_padding_gap_end(first(pair), last(pair), source),
     start: (last(pair)).offset
   })
   let policies filter(map(pairs, pair => {
     end: pair.end, start: pair.start,
-    policy: default(last(filter(options, config => any(map(config.prev, selector => padding_selector_matches(pair.prior, selector))) && any(map(config.next, selector => padding_selector_matches(pair.following, selector))))).blankLine, "any")
+    policy: default(find_last(options, config => padding_side_matches(pair.prior, config.prev) && padding_side_matches(pair.following, config.next)).blankLine, "any")
   }), pair => pair.end <= pair.start && pair.policy != "any")
   let findings map(policies, pair => {
     offset: pair.start, policy: pair.policy,

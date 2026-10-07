@@ -537,11 +537,52 @@ rule padding-line-between-statements {{ set options {options} }}
     }
     let lint = native_linter(r#"
 override in ts_node let structure_padding_categories byte_slice("x", [])
-rule padding-line-between-statements { set options [{ blankLine: "always", prev: "*", next: "*" }] }
+rule padding-line-between-statements { set options [{ blankLine: "always", prev: "expression", next: "*" }] }
 "#);
     let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
     assert!(!diagnostics.is_empty());
     assert!(diagnostics.iter().all(|diagnostic| diagnostic.severity == crate::config::ast::Severity::Error));
+}
+
+#[test]
+fn padding_wildcards_and_late_overrides_skip_unused_categories() {
+    let source = "first(); second();";
+    for (options, warnings) in [
+        (r#"[{ blankLine: "always", prev: "*", next: "*" }]"#, 1),
+        (r#"[{ blankLine: "always", prev: [], next: "*" }]"#, 0),
+        (r#"[{ blankLine: "always", prev: ["expression", "*"], next: ["*", "expression"] }]"#, 1),
+        (r#"[{ blankLine: "always", prev: "expression", next: "expression" }, { blankLine: "always", prev: "*", next: "*" }]"#, 1),
+        (r#"[{ blankLine: "always", prev: "*", next: "*" }, { blankLine: "any", prev: "*", next: "*" }]"#, 0),
+        (r#"[{ blankLine: "any", prev: "*", next: "*" }, { blankLine: "always", prev: "*", next: "*" }]"#, 1),
+    ] {
+        let lint = native_linter(&format!(r#"
+override in ts_node let structure_padding_categories byte_slice("x", [])
+rule padding-line-between-statements {{ set options {options} }}
+"#));
+        let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), warnings, "{options}: {diagnostics:#?}");
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.severity == crate::config::ast::Severity::Warn), "{options}: {diagnostics:#?}");
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.start == source.find("second").expect("second statement exists")));
+    }
+}
+
+#[test]
+fn padding_side_matching_preserves_named_and_record_selectors() {
+    let source = "first(); second();";
+    for (prev, warnings) in [
+        (r#"["return", "expression"]"#, 1),
+        (r#"{ selector: "ExpressionStatement", lineMode: "singleline" }"#, 1),
+        (r#"{ selector: "ExpressionStatement", lineMode: "multiline" }"#, 0),
+        (r#"{ selector: "*" }"#, 0),
+    ] {
+        let lint = native_linter(&format!(r#"
+rule padding-line-between-statements {{ set options [{{ blankLine: "always", prev: {prev}, next: "*" }}] }}
+"#));
+        let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), warnings, "{prev}: {diagnostics:#?}");
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.severity == crate::config::ast::Severity::Warn));
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.start == source.find("second").expect("second statement exists")));
+    }
 }
 
 #[test]
