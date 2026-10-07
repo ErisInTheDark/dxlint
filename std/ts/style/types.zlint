@@ -251,10 +251,11 @@ in ts_as, ts_type_assertion rule consistent-type-assertions:literal {
 
 fn property_modifiers(xs) = join(filter(["public", "protected", "private", "readonly"], m => contains(xs, m)), " ")
 in ts_parameter, ts_class_property let parameter_modifiers property_modifiers([] modifier)
+in ts_parameter, ts_class_property let parameter_properties_checked true
 in ts_parameter rule parameter-properties {
-  option allow string[] = [] "Parameter property modifiers to allow."
   option prefer ("class-property" | "parameter-property") = "class-property" "Preferred property declaration."
-  when prefer == "class-property" && parameter_modifiers != "" && !contains(allow, parameter_modifiers)
+  when parameter_properties_checked
+  when prefer == "class-property" && parameter_modifiers != ""
   warn "Property {name} should be declared as a class property."
 }
 in ts_member let plain_this_property object is ts_this && property is ts_identifier
@@ -267,9 +268,9 @@ in ts_class let property_conversion_constructors [] member.property_conversion_c
 fn conversion_parameter(parameters, name) = find(parameters, p => p.name == name)
 fn property_conversion_matches(constructors, name, annotation) = any(constructors, c => conversion_parameter(c.parameters, name) != null && conversion_parameter(c.parameters, name).annotation == annotation && contains(c.assignments, name))
 in ts_class_property rule parameter-properties:class {
-  option allow string[] = [] "Parameter property modifiers to allow."
   option prefer ("class-property" | "parameter-property") = "class-property" "Preferred property declaration."
-  when prefer == "parameter-property" && key is ts_identifier && init == null && !contains(allow, parameter_modifiers)
+  when parameter_properties_checked
+  when prefer == "parameter-property" && key is ts_identifier && init == null
   when property_conversion_matches(parent.property_conversion_constructors, key, type)
   warn "Property {key} should be declared as a parameter property."
 }

@@ -3,6 +3,31 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn parameter_property_hook_selects_both_conversion_directions_without_broadening_eligibility() {
+    for (prefer, source) in [
+        ("class-property", "class C { constructor(public a: number, readonly b: number, private readonly c: number, ordinary: number, ...rest: any[]) {} }"),
+        ("parameter-property", "class C { public a: number; readonly b: number; private readonly c: number; wrong: string; initialised: number = 1; late: number; defaulted: number; constructor(a: number, b: number, c: number, wrong: number, initialised: number, late: number, defaulted: number = 1) { this.a = a; this.b = b; this.c = c; this.wrong = wrong; this.initialised = initialised; this.defaulted = defaulted; marker(); this.late = late; } }"),
+    ] {
+        for (predicate, heads) in [
+            (None, vec!["public a:", "readonly b:", "private readonly c:"]),
+            (Some("true"), vec!["public a:", "readonly b:", "private readonly c:"]),
+            (Some("!contains(['readonly', 'private readonly'], parameter_modifiers)"), vec!["public a:"]),
+            (Some("parameter_modifiers == 'private readonly'"), vec!["private readonly c:"]),
+            (Some("false"), vec![]),
+        ] {
+            let hook = predicate.map_or_else(String::new, |predicate| format!("override in ts_parameter, ts_class_property let parameter_properties_checked {predicate}\n"));
+            let diagnostics = native_linter(&format!("{hook}rule parameter-properties {{ set prefer '{prefer}' }}")).lint(Path::new("file.ts"), source);
+            let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+            let expected: Vec<_> = heads.into_iter().map(|head| source.find(head).expect("convertible property in source")).collect();
+            assert_eq!(starts, expected, "{prefer}/{predicate:?}: {diagnostics:?}");
+            assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+        }
+        let diagnostics = native_linter(&format!("override in ts_parameter, ts_class_property let parameter_properties_checked node is ts_parameter\nrule parameter-properties {{ set prefer '{prefer}' }}")).lint(Path::new("file.ts"), source);
+        assert_eq!(diagnostics.len(), if prefer == "class-property" { 3 } else { 0 });
+    }
+}
+
+#[test]
 fn this_alias_hook_selects_declarations_and_assignments_without_changing_name_exemptions() {
     let source = "const self = this; const {a} = this; const [b] = this; target = this; ({c} = this); [d] = this; const nested = foo(this); const literal = 'this'; const paren = (this);";
     for (config, heads) in [
