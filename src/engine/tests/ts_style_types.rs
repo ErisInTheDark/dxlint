@@ -3,6 +3,57 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn literal_assertion_modes_are_independent_under_both_preferred_notations() {
+    let modes = [("allow", false, false), ("allow-as-parameter", true, false), ("never", true, true)];
+    for (style, object, array) in [("as", "{} as T", "[] as T[]"), ("angle-bracket", "<T>{}", "<T[]>[]")] {
+        let source = format!("const object = {object}; const array = {array}; take({object}, {array});");
+        for (object_mode, object_direct, object_argument) in modes {
+            for (array_mode, array_direct, array_argument) in modes {
+                let linter = native_linter(&format!("rule consistent-type-assertions {{ set assertionStyle '{style}' }}\nrule consistent-type-assertions:object set '{object_mode}'\nrule consistent-type-assertions:array set '{array_mode}'"));
+                let diagnostics = linter.lint(Path::new("file.ts"), &source);
+                let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+                let expected: Vec<_> = [(object_direct, source.find(object)), (array_direct, source.find(array)), (object_argument, source.rfind(object)), (array_argument, source.rfind(array))]
+                    .into_iter().filter(|(reported, _)| *reported).map(|(_, offset)| offset.expect("literal assertion in source")).collect();
+                assert_eq!(starts, expected, "{style}/{object_mode}/{array_mode}: {diagnostics:?}");
+                assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+            }
+        }
+    }
+}
+
+#[test]
+fn literal_assertion_argument_contexts_and_intrinsic_exclusions_remain_intact() {
+    let config = "rule consistent-type-assertions\nrule consistent-type-assertions:object set 'allow-as-parameter'";
+    for (source, file, expected) in [
+        ("const value = ({} as T);", "file.ts", 1),
+        ("take(({} as T));", "file.ts", 0),
+        ("new C(({} as T));", "file.ts", 0),
+        ("throw ({} as T);", "file.ts", 0),
+        ("function f(value = ({} as T)) {}", "file.ts", 0),
+        ("[value = {} as T] = source;", "file.ts", 1),
+        ("const [value = {} as T] = source;", "file.ts", 0),
+        ("tag`${{} as T}`;", "file.ts", 0),
+        ("const text = `${{} as T}`;", "file.ts", 1),
+        ("<C value={{} as T} />;", "file.tsx", 0),
+    ] {
+        let diagnostics = native_linter(config).lint(Path::new(file), source);
+        assert_eq!(diagnostics.len(), expected, "{source}: {diagnostics:?}");
+    }
+    let source = "const a = {} as any; const b = [] as unknown; const c = {} as const; const d = value as T;";
+    assert!(native_linter("rule consistent-type-assertions\nrule consistent-type-assertions:object set 'never'\nrule consistent-type-assertions:array set 'never'").lint(Path::new("file.ts"), source).is_empty());
+    let source = "const a = {} as T; const b = [] as T[]; const c = <T>{}; const d = <T[]>[]; const e = {} as const; const f = <const>[];";
+    for style in ["as", "angle-bracket", "never"] {
+        let diagnostics = native_linter(&format!("rule consistent-type-assertions {{ set assertionStyle '{style}' }}\nrule consistent-type-assertions:object set 'never'\nrule consistent-type-assertions:array set 'never'")).lint(Path::new("file.ts"), source);
+        let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        let mut unique = starts.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(starts.len(), unique.len(), "{style}: {diagnostics:?}");
+        assert_eq!(diagnostics.len(), if style == "never" { 4 } else { 5 }, "{style}: {diagnostics:?}");
+    }
+}
+
+#[test]
 fn empty_object_contexts_hooks_and_name_patterns_preserve_intrinsic_exemptions() {
     let source = "interface EmptyInterface {} interface SingleInterface extends Base {} interface KeepInterface {} interface Multiple extends Base, Other {} interface Nonempty { value: string } type EmptyAlias = {}; type KeepAlias = {}; type Intersection = {} & Marker; let inline: {};";
     let targets = [
