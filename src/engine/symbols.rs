@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::Rule;
 use crate::config::ast::{Config, Parent, Target, Use};
 use crate::config::source::{FileId, SourceMap, Span};
-use crate::expr::{facts, functions, Resolved, BUILTIN_VARS, SPECIAL_FORMS};
+use crate::expr::{facts, functions, Builtin, Resolved, SPECIAL_FORMS};
 use crate::grammar::Grammar;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -302,8 +302,9 @@ impl Symbols {
     }
 
     fn registry(&mut self) {
-        for (name, doc) in BUILTIN_VARS {
-            self.add(Kind::Builtin, name, doc.to_string(), format!("{doc}."));
+        for b in Builtin::ALL {
+            let doc = b.doc();
+            self.add(Kind::Builtin, b.name(), doc.to_string(), format!("{doc}."));
         }
         for f in facts::FACTS.iter() {
             self.add(Kind::Fact, f.name, f.doc.to_string(), format!("{}.", f.doc));

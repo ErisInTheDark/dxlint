@@ -5,55 +5,7 @@ use crate::config::ast::BinOp;
 use crate::grammar::UserFn;
 
 pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>], functions: &[UserFn]) {
-    let fold = |child: &mut CExpr| specialise(child, options, functions);
-    match expr {
-        CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
-        | CExpr::FactCall(_, items) | CExpr::UserCall(_, items) => {
-            items.iter_mut().for_each(fold);
-        }
-        CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner)
-        | CExpr::Test(inner, _) | CExpr::TestDfa(inner, _) | CExpr::Dbg(inner, _)
-        | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Key(inner, _)
-        | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
-        | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
-        | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => fold(inner),
-        CExpr::Binary(_, a, b) | CExpr::Each(_, a, b) | CExpr::Walk(a, b)
-        | CExpr::Coalesce(a, b) => {
-            fold(a);
-            fold(b);
-        }
-        CExpr::If(a, b, c) | CExpr::Reduce(a, b, c) => {
-            fold(a);
-            fold(b);
-            fold(c);
-        }
-        CExpr::Record(entries) => {
-            for (_, value) in entries { fold(value); }
-        }
-        CExpr::Member(base, _, part) => {
-            fold(base);
-            if let Some(part) = part { fold(part); }
-        }
-        CExpr::Path(base, _, parts) => {
-            fold(base);
-            parts.iter_mut().flatten().for_each(fold);
-        }
-        CExpr::Overlapping(_, range) => {
-            if let Some(range) = range {
-                fold(&mut range.0);
-                fold(&mut range.1);
-            }
-        }
-        CExpr::Selector(_, base, span) => {
-            if let Some(base) = base { fold(base); }
-            fold(span);
-        }
-        CExpr::Const(_) | CExpr::Opt(_) | CExpr::Field(_) | CExpr::Ancestor(_, _)
-        | CExpr::Builtin(_) | CExpr::Fact(_, _) | CExpr::FactField(_, _) | CExpr::Attr(_)
-        | CExpr::FieldAttr(_, _) | CExpr::ParentField(_) | CExpr::ParentAttr(_)
-        | CExpr::Local(_) | CExpr::Param(_) | CExpr::Link(_)
-        | CExpr::Descendants(_) | CExpr::Containing(_) => {}
-    }
+    expr.for_each_child_mut(&mut |child| specialise(child, options, functions));
 
     // Only evaluate known value-only forms. A failed operation remains a
     // runtime expression, including in unvisited branches and dormant rules.

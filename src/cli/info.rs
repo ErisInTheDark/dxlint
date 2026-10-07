@@ -9,7 +9,7 @@ use crate::engine::symbols::Symbols;
 use crate::engine::Linter;
 use crate::expr::show;
 use crate::expr::functions::FUNCTIONS;
-use crate::expr::BUILTIN_VARS;
+use crate::expr::Builtin;
 use crate::grammar::Tree;
 
 const BOLD: Style = Style::new().bold();
@@ -312,7 +312,8 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter) {
 
 pub fn functions(output: &mut Output<'_>) -> u8 {
     output.out(format_args!("{BOLD}variables{BOLD:#}"));
-    for (name, doc) in BUILTIN_VARS {
+    for b in Builtin::ALL {
+        let (name, doc) = (b.name(), b.doc());
         output.out(format_args!("  {CYAN}{name}{CYAN:#} {DIM}- {doc}{DIM:#}"));
     }
     for f in crate::expr::facts::FACTS.iter() {

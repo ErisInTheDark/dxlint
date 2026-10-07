@@ -72,8 +72,8 @@ pub struct Rule {
     when: Vec<CExpr>,
     /// Native code for `node_when` and `when`, item by item (`None`:
     /// interpreted); empty until the linter compiles them.
-    node_when_code: Vec<Option<crate::jit::Condition>>,
-    when_code: Vec<Option<crate::jit::Condition>>,
+    node_when_code: Vec<Option<crate::jit::Compiled>>,
+    when_code: Vec<Option<crate::jit::Compiled>>,
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
@@ -219,13 +219,19 @@ impl Linter {
         if mode == ConditionMode::Interpreted {
             return;
         }
-        let mut exprs: Vec<&CExpr> = Vec::new();
-        for rule in &self.rules {
-            exprs.extend(rule.node_when.iter().chain(&rule.when).filter(|e| crate::jit::worth_compiling(e)));
+        // Rules turned off never run: compiling them would only slow loading.
+        let on = |rule: &&Rule| rule.severity != Severity::Off;
+        let exprs: Vec<(&CExpr, crate::jit::Want)> = self.rules.iter().filter(on)
+            .flat_map(|rule| rule.node_when.iter().chain(&rule.when))
+            .filter(|e| crate::jit::worth_compiling(e))
+            .map(|e| (e, crate::jit::Want::Truth))
+            .collect();
+        if exprs.is_empty() {
+            return;
         }
         let Some((code, compiled)) = crate::jit::compile(&exprs) else { return };
         let mut compiled = compiled.into_iter();
-        for rule in &mut self.rules {
+        for rule in self.rules.iter_mut().filter(|rule| rule.severity != Severity::Off) {
             let mut code_for = |exprs: &[CExpr]| exprs.iter().map(|e| crate::jit::worth_compiling(e).then(|| compiled.next()).flatten()).collect();
             rule.node_when_code = code_for(&rule.node_when);
             rule.when_code = code_for(&rule.when);
@@ -235,7 +241,7 @@ impl Linter {
     }
 
     /// Whether a rule's `i`th condition (of `exprs`, compiled as `code`) holds.
-    fn condition_holds(&self, ctx: &Ctx, exprs: &[CExpr], code: &[Option<crate::jit::Condition>], i: usize) -> Result<bool, String> {
+    fn condition_holds(&self, ctx: &Ctx, exprs: &[CExpr], code: &[Option<crate::jit::Compiled>], i: usize) -> Result<bool, String> {
         let interpreted = || ctx.eval(&exprs[i]).map(|v| v.truthy());
         match code.get(i).copied().flatten() {
             None => interpreted(),

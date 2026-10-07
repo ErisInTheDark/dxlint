@@ -2,6 +2,7 @@
 //! resolved to fields, options and builtins), evaluated per node.
 
 mod attributes;
+mod builtins;
 pub mod case;
 pub mod facts;
 pub mod functions;
@@ -25,47 +26,14 @@ use crate::pattern::dfa::{is_decidable, Dfa};
 use functions::Function;
 pub use value::Value;
 pub use attributes::{Attr, Attributes};
+pub use builtins::Builtin;
 pub use indent::{IndentPlan, IndentRule};
-use indent::{AnchorBase, IndentHit};
+use indent::IndentHit;
 use spans::LayerSpans;
-
-/// Variables every rule can use.
-pub const BUILTIN_VARS: &[(&str, &str)] = &[
-    ("text", "the node's text"),
-    ("indent", "leading whitespace of the line the node starts on"),
-    ("parent_indent", "leading whitespace of the line the node's layer starts on (empty for the file)"),
-    ("parent_line", "the whole line the node's layer starts on (empty for the file)"),
-    ("indented", "one of the rule's `indent` lines applies to the node's line (the innermost node it names, walking out from the line's first character)"),
-    ("indent_level", "levels that `indent` line gives the line past its anchor (its `by`, default 1; negative for `dedent`; 0 on an `in` form's closing line or when not indented)"),
-    ("indent_anchor", "leading whitespace of the line that `indent` line measures from: `indent in X` X's line, `indent X` X's owner's line (empty when not indented); lines above read as their indentation fixes leave them"),
-    ("indent_anchor_line", "that whole anchor line (empty when not indented)"),
-    ("indent_closes", "the line starts with the end of an `indent in X` inside (its closer), so it sits at the anchor"),
-    ("indent_hangs", "that `indent in X` inside starts on its opener line (`f(a,⏎ b)`)"),
-    ("line", "1-based line of the node's start"),
-    ("column", "1-based column of the node's start"),
-    ("offset", "byte offset of the node's start in the file (for `report at`)"),
-    ("end_offset", "byte offset of the node's end"),
-    ("file", "the file's path, relative to the project root"),
-    ("before", "text on the node's first line before the node"),
-    ("after", "text on the node's last line after the node"),
-    ("previous_line", "the whole line before the node's first line (null on the first line)"),
-    ("next_line", "the whole line after the node's last line (null on the last line)"),
-    ("parent", "the node this one sits in, within its layer (the file for top nodes; null for the file); test it with `parent is a`"),
-    ("parent_text", "text of the layer the node sits in"),
-    ("parent_before", "text of the layer the node sits in, up to the node"),
-    ("text_before", "all of the file before the node"),
-    ("text_after", "all of the file after the node"),
-    ("previous_sibling", "text of the previous node of the same layer in the same parent (null if none)"),
-    ("previous_gap", "text between that previous sibling and this node (null if none)"),
-    ("source", "the whole file's text"),
-    ("index", "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root"),
-    ("gap_before", "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child"),
-    ("node", "the node itself as a node value (reads as its text): for `walk`, `report at`, and `.x` reads later (`right.node`, `parent.node`)"),
-];
 
 /// A built-in variable or native fact of that name.
 pub fn is_builtin(name: &str) -> bool {
-    BUILTIN_VARS.iter().any(|(b, _)| *b == name) || facts::fact(name).is_some()
+    Builtin::named(name).is_some() || facts::fact(name).is_some()
 }
 
 #[derive(Debug)]
@@ -79,7 +47,7 @@ pub enum CExpr {
     Field(u16),
     /// The closest ancestor of a matcher, or one of its fields.
     Ancestor(u32, Option<u16>),
-    Builtin(usize),
+    Builtin(Builtin),
     /// A native fact ([`facts::FACTS`]) of the node, of a field (a list
     /// when it repeats), or of the parent layer.
     Fact(usize, FactOf),
@@ -116,8 +84,8 @@ pub enum CExpr {
     /// `value.key` on a record.
     Key(Box<CExpr>, Box<str>),
     /// `map(list, x => body)` and friends; the body reads the item as the
-    /// innermost `Param`.
-    Each(Each, Box<CExpr>, Box<CExpr>),
+    /// innermost `Param`, at this depth.
+    Each(Each, u16, Box<CExpr>, Box<CExpr>),
     /// `fact(args)` on the node: the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>),
@@ -170,6 +138,69 @@ pub enum CExpr {
     /// `reduce(list, initial, (state, item) => next)`; the body reads the
     /// state and the item as the two innermost `Param`s.
     Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
+}
+
+/// `for_each_child` and its `mut` twin: one list of which forms hold which
+/// subexpressions.
+macro_rules! child_visitor {
+    ($name:ident $(, $m:ident)?) => {
+        /// Calls `f` on each direct subexpression, in evaluation order.
+        pub(crate) fn $name(& $($m)? self, f: &mut impl FnMut(& $($m)? CExpr)) {
+            match self {
+                CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
+                | CExpr::FactCall(_, items) | CExpr::UserCall(_, items) => {
+                    for item in items { f(item) }
+                }
+                CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner)
+                | CExpr::Test(inner, _) | CExpr::TestDfa(inner, _) | CExpr::Dbg(inner, _)
+                | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Key(inner, _)
+                | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
+                | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
+                | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => f(inner),
+                CExpr::Binary(_, a, b) | CExpr::Each(_, _, a, b) | CExpr::Walk(a, b) | CExpr::Coalesce(a, b) => {
+                    f(a);
+                    f(b);
+                }
+                CExpr::If(a, b, c) | CExpr::Reduce(a, b, c) => {
+                    f(a);
+                    f(b);
+                    f(c);
+                }
+                CExpr::Record(entries) => {
+                    for (_, value) in entries { f(value) }
+                }
+                CExpr::Member(base, _, part) => {
+                    f(base);
+                    if let Some(part) = part { f(part) }
+                }
+                CExpr::Path(base, _, parts) => {
+                    f(base);
+                    for part in parts { if let Some(part) = part { f(part) } }
+                }
+                CExpr::Overlapping(_, range) => {
+                    if let Some(range) = range {
+                        let (from, to) = & $($m)? **range;
+                        f(from);
+                        f(to);
+                    }
+                }
+                CExpr::Selector(_, base, span) => {
+                    if let Some(base) = base { f(base) }
+                    f(span);
+                }
+                CExpr::Const(_) | CExpr::Opt(_) | CExpr::Field(_) | CExpr::Ancestor(_, _)
+                | CExpr::Builtin(_) | CExpr::Fact(_, _) | CExpr::FactField(_, _) | CExpr::Attr(_)
+                | CExpr::FieldAttr(_, _) | CExpr::ParentField(_) | CExpr::ParentAttr(_)
+                | CExpr::Local(_) | CExpr::Param(_) | CExpr::Link(_)
+                | CExpr::Descendants(_) | CExpr::Containing(_) => {}
+            }
+        }
+    };
+}
+
+impl CExpr {
+    child_visitor!(for_each_child);
+    child_visitor!(for_each_child_mut, mut);
 }
 
 /// One alternative of an `is` test.
@@ -490,9 +521,9 @@ impl<'a> Scope<'a> {
             self.note(part.span, Resolved::Fact(facts::FACTS[i].name));
             return Some(CExpr::Fact(i, FactOf::Node));
         }
-        if let Some(i) = BUILTIN_VARS.iter().position(|(b, _)| *b == part.text) {
-            self.note(part.span, Resolved::Builtin(BUILTIN_VARS[i].0));
-            return Some(CExpr::Builtin(i));
+        if let Some(b) = Builtin::named(&part.text) {
+            self.note(part.span, Resolved::Builtin(b.name()));
+            return Some(CExpr::Builtin(b));
         }
         if let Some(label) = self.grammar.labels.get(&part.text) {
             return Some(CExpr::Field(label));
@@ -719,10 +750,11 @@ impl Scope<'_> {
                     return None;
                 };
                 let list = self.compile(&args[0], errors)?;
+                let depth = self.params.len() as u16;
                 let mut inner = self.clone();
                 inner.params.push(param.text.clone());
                 let body = inner.compile(body, errors)?;
-                CExpr::Each(each, Box::new(list), Box::new(body))
+                CExpr::Each(each, depth, Box::new(list), Box::new(body))
             }
             ExprKind::Call(name, _) if Each::named(&name.text).is_some_and(|(_, e)| e != Each::Any) => {
                 errors.push(
@@ -862,7 +894,7 @@ impl Scope<'_> {
                 // Not a node there (a fact's kind tag): the value itself.
                 let plain = self.compile(value, errors)?;
                 // This builtin already returns a node or null, not its text.
-                let parent_node = matches!(&plain, CExpr::Builtin(i) if BUILTIN_VARS[*i].0 == "parent");
+                let parent_node = matches!(&plain, CExpr::Builtin(Builtin::Parent));
                 let value = match &value.kind {
                     ExprKind::Var(path) if !parent_node && path.last().is_some_and(|n| n.text != "node") => {
                         let mut with_node = path.clone();
@@ -1068,9 +1100,9 @@ impl Scope<'_> {
                     self.note(name.span, Resolved::Attr(name.text.clone()));
                     return Some(CExpr::Attr(i as u16));
                 }
-                if let Some(i) = BUILTIN_VARS.iter().position(|(b, _)| *b == name.text) {
-                    self.note(name.span, Resolved::Builtin(BUILTIN_VARS[i].0));
-                    return Some(CExpr::Builtin(i));
+                if let Some(b) = Builtin::named(&name.text) {
+                    self.note(name.span, Resolved::Builtin(b.name()));
+                    return Some(CExpr::Builtin(b));
                 }
                 if let Some(i) = facts::fact(&name.text) {
                     self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
@@ -1086,8 +1118,7 @@ impl Scope<'_> {
                 }
                 if let Some(rel) = Relative::named(&name.text) {
                     self.note(name.span, Resolved::Relative(Relative::NAMES.iter().find(|(_, r)| *r == rel).expect("named").0));
-                    let text = BUILTIN_VARS.iter().position(|(b, _)| *b == "text").expect("text is a builtin");
-                    return Some(CExpr::Relative(rel, Box::new(CExpr::Builtin(text))));
+                    return Some(CExpr::Relative(rel, Box::new(CExpr::Builtin(Builtin::Text))));
                 }
                 if let Some(d) = Dropped::find(&self.grammar.dropped, &name.text) {
                     errors.push(d.still_used(name.span));
@@ -1098,7 +1129,7 @@ impl Scope<'_> {
                     .iter()
                     .map(String::as_str)
                     .chain(self.fields.iter().map(|(f, _)| f.as_str()))
-                    .chain(BUILTIN_VARS.iter().map(|(b, _)| *b))
+                    .chain(Builtin::ALL.iter().map(|b| b.name()))
                     .chain(facts::FACTS.iter().map(|f| f.name));
                 let mut err = ConfigError::new(name.span, format!("unknown name `{}`", name.text));
                 if let Some(best) = closest(&name.text, candidates) {
@@ -1169,10 +1200,10 @@ impl Scope<'_> {
                 }
                 // `field.layer`, `field.offset`: a builtin read on the field's
                 // node(s).
-                let builtin = BUILTIN_VARS.iter().position(|(b, _)| *b == field.text);
+                let builtin = Builtin::named(&field.text);
                 if let (Some((_, label)), Some(b), None, None, false) = (own_field, builtin, attr, fact, ancestor_field) {
                     self.note(layer.span, Resolved::Field(layer.text.clone()));
-                    self.note(field.span, Resolved::Builtin(BUILTIN_VARS[b].0));
+                    self.note(field.span, Resolved::Builtin(b.name()));
                     return Some(CExpr::OnField(*label, Box::new(CExpr::Builtin(b))));
                 }
                 // `field.link`, `field.its_field`: anything else read there.
@@ -1438,125 +1469,6 @@ impl<'a> Ctx<'a> {
             .max_by_key(|&c| self.tree.node(c).end)
     }
 
-    fn builtin(&self, i: usize) -> Result<Value<'a>, String> {
-        let start = self.tree.node(self.node).start as usize;
-        Ok(match BUILTIN_VARS[i].0 {
-            "text" => Value::from(self.node_text(self.node)),
-            "indent" => Value::from(self.indent_at(start)),
-            "parent_indent" => match self.parent_layer() {
-                Some(id) if !self.tree.is_root(id) => self.line_indent(self.lines.line_of(self.tree.node(id).start as usize)),
-                _ => Value::from(""),
-            },
-            "indented" => Value::Bool(self.indent_hit()?.is_some()),
-            "indent_level" => match self.indent_hit()? {
-                Some(hit) if self.indent_closes(&hit) => Value::Num(hit.extra),
-                Some(IndentHit { rule: Some(i), node, extra, .. }) => {
-                    let rule = &self.indents[i];
-                    let levels = match &rule.by {
-                        Some(by) => Ctx { node, ..*self }.eval(by)?.num()?,
-                        None => 1.0,
-                    };
-                    Value::Num(extra + if rule.dedent { -levels } else { levels })
-                }
-                _ => Value::Num(0.0),
-            },
-            "indent_anchor" => match self.indent_hit()? {
-                Some(IndentHit { base: AnchorBase::Line(line), .. }) => self.line_indent(line),
-                Some(IndentHit { base: AnchorBase::Text(text), .. }) => Value::from(text),
-                None => Value::from(""),
-            },
-            "indent_anchor_line" => match self.indent_hit()? {
-                Some(IndentHit { base: AnchorBase::Line(line), .. }) => self.whole_line(line),
-                Some(IndentHit { base: AnchorBase::Text(text), .. }) => Value::from(text),
-                None => Value::from(""),
-            },
-            "indent_closes" => Value::Bool(self.indent_hit()?.is_some_and(|hit| self.indent_closes(&hit))),
-            "indent_hangs" => Value::Bool(self.indent_hit()?.is_some_and(|hit| {
-                hit.inside.is_some_and(|(inside, _)| {
-                    let line_end = self.lines.line_end(self.source, self.lines.line_of(inside));
-                    !self.source[inside..line_end.max(inside)].trim().is_empty()
-                })
-            })),
-            "parent_line" => match self.parent_layer() {
-                Some(id) if !self.tree.is_root(id) => self.whole_line(self.lines.line_of(self.tree.node(id).start as usize)),
-                _ => Value::from(""),
-            },
-            "index" => match (self.tree.parent(self.node), self.tree.label(self.node)) {
-                (Some(p), label) => Value::from(
-                    self.tree.node(p).children.iter().take_while(|e| e.node != self.node).filter(|e| Some(e.label) == label).count(),
-                ),
-                (None, _) => Value::Null,
-            },
-            "gap_before" => {
-                let prev = self.tree.parent(self.node).and_then(|p| {
-                    self.tree.node(p).children.iter().map(|e| e.node).filter(|&c| self.tree.node(c).end as usize <= start && c != self.node).max_by_key(|&c| self.tree.node(c).end)
-                });
-                match prev {
-                    Some(c) => Value::from(&self.source[self.tree.node(c).end as usize..start]),
-                    None => Value::Null,
-                }
-            }
-            "line" => Value::from(self.lines.line_of(start) + 1),
-            "column" => Value::from(self.lines.line_col(self.source, start).1 + 1),
-            "offset" => Value::from(start),
-            "end_offset" => Value::from(self.tree.node(self.node).end as usize),
-            "file" => Value::from(self.file),
-            "before" => {
-                let line_start = self.lines.line_start(self.lines.line_of(start));
-                Value::from(&self.source[line_start..start])
-            }
-            "after" => {
-                let end = self.tree.node(self.node).end as usize;
-                // A node ending in (or inside) a line break has nothing
-                // after it on its line.
-                let line_end = self.lines.line_end(self.source, self.lines.line_of(end));
-                if end > start && self.source.as_bytes()[end - 1] == b'\n' || end > line_end {
-                    Value::from("")
-                } else {
-                    Value::from(&self.source[end..line_end])
-                }
-            }
-            "previous_line" => match self.lines.line_of(start) {
-                0 => Value::Null,
-                line => self.whole_line(line - 1),
-            },
-            "next_line" => {
-                let end = self.tree.node(self.node).end as usize;
-                let last = self.lines.line_of(end.saturating_sub(1).max(start));
-                if last + 1 < self.lines.line_count() {
-                    Value::from(self.lines.line_text(self.source, last + 1))
-                } else {
-                    Value::Null
-                }
-            }
-            "parent" => match self.parent_layer() {
-                Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
-                None => Value::Null,
-            },
-            "text_before" => Value::from(&self.source[..start]),
-            "text_after" => Value::from(&self.source[self.tree.node(self.node).end as usize..]),
-            "previous_sibling" => match self.prev_sibling() {
-                Some(id) => Value::from(self.node_text(id)),
-                None => Value::Null,
-            },
-            "previous_gap" => match self.prev_sibling() {
-                Some(id) => Value::from(&self.source[self.tree.node(id).end as usize..start]),
-                None => Value::Null,
-            },
-            "parent_text" => match self.parent_layer() {
-                Some(id) => Value::from(self.node_text(id)),
-                None => Value::Null,
-            },
-            "parent_before" => match self.parent_layer() {
-                Some(id) => Value::from(&self.source[self.tree.node(id).start as usize..start]),
-                None => Value::Null,
-            },
-            "source" => Value::from(self.source),
-            "node" => Value::Node(self.node, value::Text::Borrowed(self.node_text(self.node))),
-            other => unreachable!("builtin {other}"),
-        })
-    }
-
     fn cached_fact(&self, node: u32, slot: usize) -> Option<Value<'a>> {
         if self.memo.here.get().is_some_and(|(here, _)| here == node) {
             return self.memo.here_facts.borrow().get(slot)
@@ -1637,7 +1549,7 @@ impl<'a> Ctx<'a> {
             CExpr::Const(v) => Ok(v.clone()),
             CExpr::Hole(inner, _) => self.eval(inner),
             CExpr::Field(label) => Ok(self.field(self.node, *label)),
-            CExpr::Builtin(i) => self.builtin(*i),
+            CExpr::Builtin(b) => self.builtin(*b),
             CExpr::Attr(a) => self.attr(self.node, *a),
             CExpr::Opt(i) => Ok(self.options[*i].clone()),
             CExpr::Not(inner) => Ok(Value::Bool(!self.eval(inner)?.truthy())),
@@ -1671,13 +1583,23 @@ impl<'a> Ctx<'a> {
         Ctx { node, ..*self }.eval(e)
     }
 
-    fn param(&self, depth: u16) -> Value<'a> {
+    pub(crate) fn param(&self, depth: u16) -> Value<'a> {
         self.memo.params.borrow().get(self.memo.param_base.get() + depth as usize).cloned().unwrap_or(Value::Null)
+    }
+
+    /// Binds the next lambda parameter for interpreted code (compiled loops
+    /// whose bodies call into the interpreter); [`Ctx::pop_param`] unbinds it.
+    pub(crate) fn push_param(&self, v: Value<'a>) {
+        self.memo.params.borrow_mut().push(v);
+    }
+
+    pub(crate) fn pop_param(&self) {
+        self.memo.params.borrow_mut().pop();
     }
 
     /// A rule's `let`, memoised per node.
     #[inline(never)]
-    fn local(&self, i: u16) -> Result<Value<'a>, String> {
+    pub(crate) fn local(&self, i: u16) -> Result<Value<'a>, String> {
         let Some((rule, exprs, targets)) = self.locals else { return Err("a rule's `let` outside the rule".into()) };
         // Read on another node (`previous.rank`): only where the rule
         // could run, so the `let`'s fields exist there.
@@ -1711,19 +1633,53 @@ impl<'a> Ctx<'a> {
     #[inline(never)]
     fn is(&self, value: &CExpr, tests: &[IsTest]) -> Result<Value<'a>, String> {
         let v = self.eval(value)?;
-        let node = match &v {
+        Ok(Value::Bool(self.is_value(&v, tests)))
+    }
+
+    /// `base.key` ([`CExpr::Member`]) with `base` evaluated: a record's key,
+    /// or `part` read on a node (on each node of a list).
+    pub(crate) fn member(&self, base: &Value<'a>, key: &value::Key, part: Option<&CExpr>) -> Result<Value<'a>, String> {
+        let on = |v: &Value<'a>| -> Result<Value<'a>, String> {
+            match (v, part) {
+                (Value::Node(id, _), Some(part)) => Ctx { node: *id, ..*self }.eval(part),
+                (Value::Record(_), _) => Ok(v.key(key)),
+                _ => Ok(Value::Null),
+            }
+        };
+        match base {
+            // Nodes in a list (`references.line`): each one's.
+            Value::List(items) if items.iter().any(|i| matches!(i, Value::Node(..))) => {
+                Ok(Value::list(items.iter().map(on).collect::<Result<_, _>>()?))
+            }
+            v => on(v),
+        }
+    }
+
+    /// Whether `v`'s text passes the pattern test `e` ([`CExpr::Test`] or
+    /// [`CExpr::TestDfa`]).
+    pub(crate) fn test_value(&self, e: &CExpr, v: &Value) -> bool {
+        match e {
+            CExpr::Test(_, prog) => full_match(self.grammar, self.lang, prog, &v.text()),
+            CExpr::TestDfa(_, dfa) => dfa.is_match(v.text().as_bytes()),
+            _ => unreachable!("a pattern test"),
+        }
+    }
+
+    /// Does `v` pass one of `tests`?
+    pub(crate) fn is_value(&self, v: &Value, tests: &[IsTest]) -> bool {
+        let node = match v {
             Value::Node(id, _) => Some(*id),
             _ => None,
         };
         let is_a = |m: u32, ids: &[u32]| m != ROOT && m != TEXT && ids.iter().any(|&t| self.grammar.is_a(m, t));
         // Facts about things that are not nodes (tokens) tag them with
         // a kind: a kind text, or a record's `kind`.
-        let tagged = match &v {
+        let tagged = match v {
             Value::Str(_) => self.grammar.matcher(&v.text()),
             Value::Record(_) => self.grammar.matcher(&v.key("kind").text()),
             _ => None,
         };
-        Ok(Value::Bool(tests.iter().any(|t| match (t, node) {
+        tests.iter().any(|t| match (t, node) {
             (IsTest::Lang(l), _) => *l == self.lang,
             (IsTest::Kind(ids), None) => tagged.is_some_and(|m| is_a(m, ids)),
             (_, None) => false,
@@ -1732,7 +1688,7 @@ impl<'a> Ctx<'a> {
                 self.tree.label(id) == Some(*label) && self.tree.owner(id).is_some_and(|o| is_a(self.tree.node(o).matcher, ids))
             }
             (IsTest::Layer(l), Some(id)) => self.tree.layer_of(id) == Some(*l),
-        })))
+        })
     }
 
     /// The forms [`Ctx::eval`] does not dispatch inline.
@@ -1788,23 +1744,7 @@ impl<'a> Ctx<'a> {
                     nodes.first().map_or(Value::Null, |&id| node(id))
                 }
             }
-            CExpr::Member(base, key, part) => {
-                let base = self.eval(base)?;
-                let on = |v: &Value<'a>| -> Result<Value<'a>, String> {
-                    match (v, part) {
-                        (Value::Node(id, _), Some(part)) => Ctx { node: *id, ..*self }.eval(part),
-                        (Value::Record(_), _) => Ok(v.key(key)),
-                        _ => Ok(Value::Null),
-                    }
-                };
-                match &base {
-                    // Nodes in a list (`references.line`): each one's.
-                    Value::List(items) if items.iter().any(|i| matches!(i, Value::Node(..))) => {
-                        Value::list(items.iter().map(on).collect::<Result<_, _>>()?)
-                    }
-                    v => on(v)?,
-                }
-            }
+            CExpr::Member(base, key, part) => self.member(&self.eval(base)?, key, part.as_deref())?,
             CExpr::OwnChild(last, ids, inner) => {
                 let fits = |e: &&crate::grammar::Edge| ids.iter().any(|&t| self.grammar.is_a(self.tree.node(e.node).matcher, t));
                 let children = &self.tree.node(self.node).children;
@@ -2009,17 +1949,16 @@ impl<'a> Ctx<'a> {
                 eval_args(args, |a| self.eval(a), |args| (f.call)(args).map_err(|e| format!("{}: {e}", f.name)))?
             }
             CExpr::Neg(inner) => Value::Num(-self.eval(inner)?.num()?),
-            CExpr::Test(value, prog) => Value::Bool(full_match(self.grammar, self.lang, prog, &self.eval(value)?.text())),
-            CExpr::TestDfa(value, dfa) => Value::Bool(dfa.is_match(self.eval(value)?.text().as_bytes())),
+            CExpr::Test(value, _) | CExpr::TestDfa(value, _) => Value::Bool(self.test_value(e, &self.eval(value)?)),
             CExpr::Record(entries) => {
                 Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), self.eval(v)?))).collect::<Result<_, String>>()?)
             }
-            CExpr::Each(each, list, body) => {
+            CExpr::Each(each, _, list, body) => {
                 let items = self.eval(list)?;
                 let run = |item: &Value<'a>| -> Result<Value<'a>, String> {
-                    self.memo.params.borrow_mut().push(item.clone());
+                    self.push_param(item.clone());
                     let v = self.eval(body);
-                    self.memo.params.borrow_mut().pop();
+                    self.pop_param();
                     v
                 };
                 each_over(*each, items.item_slice(), run)?

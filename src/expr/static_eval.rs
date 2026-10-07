@@ -1,6 +1,6 @@
 //! Value-only evaluation at compile time; unknown inputs stay runtime expressions.
 
-use super::{eval_args, eval_binary, CExpr, Value, BUILTIN_VARS, MAX_CALL_DEPTH};
+use super::{eval_args, eval_binary, Builtin, CExpr, Value, MAX_CALL_DEPTH};
 use crate::grammar::UserFn;
 use std::cell::Cell;
 
@@ -75,7 +75,7 @@ impl Frame<'_, '_> {
                     // These unknown values are safe to discard if the body never reads
                     // them. Other arguments must evaluate: calls are eager even when
                     // a parameter is unused (errors, debug output and recorded reads).
-                    CExpr::Builtin(i) if BUILTIN_VARS[*i].0 == "node" => Ok(None),
+                    CExpr::Builtin(Builtin::Node) => Ok(None),
                     CExpr::Param(i) => self.params.get(*i as usize).cloned()
                         .ok_or_else(|| NEEDS_NODE.to_owned()),
                     _ => eval(arg).map(Some),
