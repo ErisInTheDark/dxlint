@@ -1,6 +1,7 @@
 //! Rule expressions: compiled once against a target layer (names
 //! resolved to fields, options and builtins), evaluated per node.
 
+mod attributes;
 pub mod case;
 pub mod facts;
 pub mod functions;
@@ -21,6 +22,7 @@ use crate::pattern::compile::{compile, Labels, Program};
 use crate::pattern::dfa::{is_decidable, Dfa};
 use functions::Function;
 pub use value::Value;
+pub use attributes::{Attr, Attributes};
 pub use indent::{IndentPlan, IndentRule};
 use indent::{AnchorBase, IndentHit};
 
@@ -249,12 +251,6 @@ fn project_fact(base: &CExpr, key: Option<&str>) -> Option<CExpr> {
         CExpr::Relative(relative @ (Relative::Previous | Relative::Next), inner) => CExpr::Relative(*relative, Box::new(project_fact(inner, key)?)),
         _ => return None,
     })
-}
-
-/// A `let` attribute: its expression on each layer that defines it.
-pub struct Attr {
-    pub name: String,
-    pub defs: Vec<(u32, CExpr)>,
 }
 
 /// Attribute values computed for one file's tree, so each node's attribute
@@ -1362,9 +1358,7 @@ pub struct Ctx<'a> {
     /// these, so lines inside a mis-indented block are measured from where
     /// the block will be, and one mistake is one report.
     pub reindented: &'a RefCell<HashMap<usize, String>>,
-    pub attrs: &'a [Attr],
-    /// `in a forward x from field`: (matcher, attribute, label).
-    pub forwards: &'a [(u32, u16, u16)],
+    pub attrs: &'a Attributes,
     pub memo: &'a AttrMemo<'a>,
     /// The rule being applied (its index), its `let` expressions and the
     /// layers it targets (empty: not only whole layers).
@@ -1396,48 +1390,6 @@ impl<'a> Ctx<'a> {
         let _frame = ParamFrame { memo: self.memo, start, previous_base: self.memo.param_base.replace(start) };
         self.memo.params.borrow_mut().extend(args.iter_mut().map(|v| std::mem::replace(v, Value::Null)));
         f()
-    }
-
-    /// The value of attribute `attr` on `node` (null where no layer of the
-    /// node defines it).
-    fn attr(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
-        if self.memo.params.borrow().len() == self.memo.param_base.get() {
-            self.attr_unbound(node, attr)
-        } else {
-            self.unbound(|| self.attr_unbound(node, attr))
-        }
-    }
-
-    fn attr_unbound(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
-        if let Some(v) = self.memo.values.borrow().get(&(node, attr)) {
-            return Ok(v.clone());
-        }
-        let m = self.tree.node(node).matcher;
-        let def = &self.attrs[attr as usize];
-        let Some((_, expr)) = def.defs.iter().find(|(d, _)| m != ROOT && m != TEXT && self.grammar.is_a(m, *d)) else {
-            // A transparent wrapper: the forwarded field's value.
-            let forward = self.forwards.iter().find(|&&(f, a, _)| a == attr && m != ROOT && m != TEXT && self.grammar.is_a(m, f));
-            let Some(&(_, _, label)) = forward else { return Ok(Value::Null) };
-            let mut values = Vec::new();
-            for id in self.tree.fields(node, label) {
-                values.push(self.attr(id, attr)?);
-            }
-            return Ok(match values.len() {
-                0 => Value::Null,
-                1 => values.pop().expect("one"),
-                _ => Value::list(values),
-            });
-        };
-        if self.memo.busy.borrow().contains(&(node, attr)) {
-            return Err(format!("attribute `{}` depends on itself", def.name));
-        }
-        self.memo.busy.borrow_mut().push((node, attr));
-        let ctx = Ctx { node, options: &[], ..*self };
-        let value = ctx.eval(expr);
-        self.memo.busy.borrow_mut().pop();
-        let value = value?;
-        self.memo.values.borrow_mut().insert((node, attr), value.clone());
-        Ok(value)
     }
 
     /// Is `a` an ancestor of `b`?

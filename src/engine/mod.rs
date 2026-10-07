@@ -24,7 +24,7 @@ pub use profile::Profile;
 
 use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{SourceMap, Span};
-use crate::expr::{Attr, AttrMemo, CExpr, Ctx, Value};
+use crate::expr::{Attributes, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
 use crate::native::ts::facts::{Facts, NativeFile};
@@ -174,9 +174,7 @@ pub struct Linter {
     /// Whole-file rules and the language they want (`None`: any).
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
-    attrs: Vec<Attr>,
-    /// `in a forward x from field`: (matcher, attribute, label).
-    forwards: Vec<(u32, u16, u16)>,
+    attrs: Attributes,
     /// Other files' exports, read on demand by native rules.
     project: crate::native::ts::modules::Project,
     /// Identifies these rules: the tokens parsed (imports and macros
@@ -468,7 +466,6 @@ impl Linter {
                         options: &[],
                         reindented: &reindented[fi],
                         attrs: &self.attrs,
-                        forwards: &self.forwards,
                         memo: &memo,
                         locals: Some((fi as u32, &self.rules[fi].locals, &self.rules[fi].target_layers)),
                         native,

@@ -10,7 +10,7 @@ use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
-use crate::expr::{Attr, CExpr, Ctx, Scope, Value};
+use crate::expr::{Attr, Attributes, CExpr, Ctx, Scope, Value};
 use crate::grammar::Grammar;
 use crate::path_globs::{wildcard, PathGlobs};
 use crate::pattern::Pat;
@@ -261,6 +261,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             }
         }
     }
+    let attrs = Attributes::new(attrs, &forwards, &grammar);
     let linter = Linter {
         reach: grammar.reach(),
         profile: None,
@@ -278,7 +279,6 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         by_link,
         by_lang,
         attrs,
-        forwards,
         project: Default::default(),
         fingerprint,
     };
