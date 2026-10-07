@@ -8,6 +8,7 @@ pub mod functions;
 pub(crate) mod fold;
 pub mod indent;
 pub(crate) mod re;
+mod spans;
 pub mod value;
 
 use std::cell::RefCell;
@@ -25,6 +26,7 @@ pub use value::Value;
 pub use attributes::{Attr, Attributes};
 pub use indent::{IndentPlan, IndentRule};
 use indent::{AnchorBase, IndentHit};
+use spans::LayerSpans;
 
 /// Variables every rule can use.
 pub const BUILTIN_VARS: &[(&str, &str)] = &[
@@ -338,13 +340,6 @@ impl NodeSel {
             Some(label) => tree.label(id) == Some(label) && tree.owner(id).is_some_and(|o| is_a(tree.node(o).matcher)),
         }
     }
-}
-
-/// Nodes of some layers sorted by start; `max_end[i]` is the furthest end
-/// among the first `i + 1`, so overlap searches stop early.
-struct LayerSpans {
-    nodes: Vec<(u32, u32, u32)>,
-    max_end: Vec<u32>,
 }
 
 /// What names mean inside one rule.
@@ -1402,32 +1397,6 @@ impl<'a> Ctx<'a> {
         false
     }
 
-    /// The file's nodes of these matchers, indexed once per file.
-    fn layer_spans(&self, sel: &NodeSel) -> std::rc::Rc<LayerSpans> {
-        if let Some(s) = self.memo.spans.borrow().get(sel) {
-            return s.clone();
-        }
-        let mut nodes = Vec::new();
-        let mut stack = vec![self.tree.root];
-        while let Some(id) = stack.pop() {
-            let n = self.tree.node(id);
-            if sel.matches(self.grammar, self.tree, id) {
-                nodes.push((n.start, n.end, id));
-            }
-            stack.extend(n.children.iter().map(|e| e.node));
-        }
-        nodes.sort_unstable();
-        let mut max_end = Vec::with_capacity(nodes.len());
-        let mut far = 0;
-        for &(s, e, _) in &nodes {
-            far = far.max(e.max(s + 1));
-            max_end.push(far);
-        }
-        let spans = std::rc::Rc::new(LayerSpans { nodes, max_end });
-        self.memo.spans.borrow_mut().insert(sel.clone(), spans.clone());
-        spans
-    }
-
     fn node_text(&self, id: u32) -> &'a str {
         let n = self.tree.node(id);
         &self.source[n.start as usize..n.end as usize]
@@ -1969,55 +1938,8 @@ impl<'a> Ctx<'a> {
                 },
                 _ => Value::Null,
             },
-            CExpr::Containing(sel) => {
-                let spans = self.layer_spans(sel);
-                let me = self.tree.node(self.node);
-                let mut i = spans.nodes.partition_point(|&(s, _, _)| s <= me.start);
-                let mut best: Option<(u32, u32, u32)> = None;
-                while i > 0 && spans.max_end[i - 1] >= me.end {
-                    i -= 1;
-                    let (s, e, id) = spans.nodes[i];
-                    // Smallest span; on a tie the deeper node (a program and
-                    // its only class can share one).
-                    let better = best.is_none_or(|(bs, be, b)| e - s < be - bs || e - s == be - bs && self.is_ancestor(b, id));
-                    if e >= me.end && id != self.node && better {
-                        best = Some((s, e, id));
-                    }
-                }
-                match best {
-                    Some((_, _, id)) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
-                    None => Value::Null,
-                }
-            }
-            CExpr::Overlapping(sel, range) => {
-                let spans = self.layer_spans(sel);
-                let (start, end) = match range {
-                    Some(r) => {
-                        // Clamped to the file: out-of-range bounds overlap nothing past it.
-                        let len = self.source.len() as f64;
-                        let at = |e: &CExpr| self.eval(e).and_then(|v| v.num()).map(|n| n.clamp(0.0, len) as u32);
-                        (at(&r.0)?, at(&r.1)?)
-                    }
-                    None => {
-                        let me = self.tree.node(self.node);
-                        (me.start, me.end)
-                    }
-                };
-                let end = end.max(start.saturating_add(1));
-                // Candidates start before our end; scan back while some
-                // earlier node can still reach our start.
-                let mut i = spans.nodes.partition_point(|&(s, _, _)| s < end);
-                let mut found = Vec::new();
-                while i > 0 && spans.max_end[i - 1] > start {
-                    i -= 1;
-                    let (s, e, id) = spans.nodes[i];
-                    if e.max(s + 1) > start && id != self.node {
-                        found.push(id);
-                    }
-                }
-                found.reverse();
-                Value::list(found.into_iter().map(|id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
-            }
+            CExpr::Containing(sel) => self.containing(sel),
+            CExpr::Overlapping(sel, range) => self.overlapping(sel, range.as_deref())?,
             CExpr::Walk(roots, next) => {
                 let mut seen = std::collections::HashSet::new();
                 let mut queue: std::collections::VecDeque<Value<'a>> = self.eval(roots)?.items().into();
