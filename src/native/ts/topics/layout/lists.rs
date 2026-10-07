@@ -284,6 +284,54 @@ mod tests {
     }
 
     #[test]
+    fn trailing_comma_policy_respects_edition_without_skipping_nested_lists() {
+        let source = "function f(a) {} f({x: 1}); import('x');";
+        for (edition, expected) in [
+            (2016, "function f(a) {} f({x: 1,}); import('x');"),
+            (2017, "function f(a,) {} f({x: 1,},); import('x');"),
+            (2024, "function f(a,) {} f({x: 1,},); import('x');"),
+            (2025, "function f(a,) {} f({x: 1,},); import('x',);"),
+        ] {
+            let lint = native_linter(&format!(
+                "language .js {{ set ecmaVersion {edition} }}\nrule comma-dangle {{ set style 'always' }}"
+            ));
+            let path = Path::new("/root/file.js");
+            let fixed = lint.fix(path, source);
+            assert_eq!(fixed.text, expected, "edition {edition}");
+            assert!(lint.lint(path, &fixed.text).is_empty(), "edition {edition}");
+        }
+    }
+
+    #[test]
+    fn trailing_comma_edition_policy_is_file_local_and_keeps_rest_exemptions() {
+        let lint = native_linter(r#"
+            language .js { files "legacy.js"
+              set ecmaVersion 2016
+            }
+            language .js { files "modern.js"
+              set ecmaVersion 2025
+            }
+            rule comma-dangle { set style "always" }
+        "#);
+        let source = "function f(...args) {} f(a);";
+        for (file, expected) in [
+            ("legacy.js", source),
+            ("modern.js", "function f(...args) {} f(a,);"),
+            ("legacy.js", source),
+        ] {
+            let path = format!("/root/{file}");
+            let fixed = lint.fix(Path::new(&path), source);
+            assert_eq!(fixed.text, expected);
+            assert!(lint.lint(Path::new(&path), &fixed.text).is_empty());
+        }
+        let tsx = Path::new("/root/file.tsx");
+        let keep = "const f = <T,>(value: T) => value;";
+        let never = native_linter("rule comma-dangle { set style 'never' }");
+        assert!(never.lint(tsx, keep).is_empty());
+        assert_eq!(never.fix(tsx, keep).text, keep);
+    }
+
+    #[test]
     fn trailing_comma_queries_keep_argument_and_type_argument_lists_separate() {
         let lint = native_linter(r#"
             in ts_call rule lists {

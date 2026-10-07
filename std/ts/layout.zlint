@@ -403,6 +403,7 @@ in ts_open_paren rule space-before-function-paren {
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
 fn layout_dangle_mode(kind, style, policies) = default(get(policies, kind), style)
+fn layout_dangle_enabled(kind, edition) = (kind != "functions" || edition >= 2017) && (kind != "dynamicImports" || edition >= 2025)
 fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
 in ts_import_attributes let layout_attribute_last last(descendants(ts_import_attribute))
 in ts_import_attributes let layout_attribute_comma first(filter(descendants(ts_import_attribute_comma), c => c.offset >= layout_attribute_last.end_offset))
@@ -428,6 +429,7 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   option tuples trailing_comma_mode | null = null "tuple policy"
   let dangle_policies {arrays:arrays, objects:objects, functions:functions, imports:imports, exports:exports, importAttributes:importAttributes, dynamicImports:dynamicImports, enums:enums, generics:generics, tuples:tuples, "type-arguments":"never"}
   each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites
+  when layout_dangle_enabled(dangle_site.kind, ecma_version)
   when layout_dangle_wrong(dangle_site, layout_dangle_mode(dangle_site.kind, style, dangle_policies))
   report at dangle_site.offset
   fix at {start:dangle_site.offset, end:dangle_site.offset + (if dangle_site.trailing then 1 else 0)} as if dangle_site.trailing then "" else ","
