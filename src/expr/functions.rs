@@ -3,6 +3,7 @@
 
 use super::case;
 use super::value::Value;
+use std::borrow::Cow;
 
 pub struct Function {
     pub name: &'static str,
@@ -27,8 +28,8 @@ pub fn names() -> impl Iterator<Item = &'static str> {
     FUNCTIONS.iter().map(|f| f.name)
 }
 
-fn text(v: &Value) -> String {
-    v.text().into_owned()
+fn text<'a>(v: &'a Value<'_>) -> Cow<'a, str> {
+    v.text()
 }
 
 fn count(v: &Value) -> Result<usize, String> {
@@ -109,7 +110,7 @@ fn pad<'s>(a: &[Value<'s>], at_start: bool) -> Result<Value<'s>, String> {
     let fill = fill.chars().next().ok_or("pad fill cannot be empty")?;
     let missing = width.saturating_sub(s.chars().count());
     let padding: String = std::iter::repeat_n(fill, missing).collect();
-    Ok(Value::from(if at_start { padding + &s } else { s + &padding }))
+    Ok(Value::from(if at_start { padding + &s } else { s.into_owned() + &padding }))
 }
 
 fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
@@ -140,14 +141,13 @@ fn slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
 /// `byte_slice(text, from, to?)`: by byte offsets (what `offset` and native
 /// spans count), not characters; negative counts from the end.
 fn byte_slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
-    // Borrowed: only the part is copied (the text is often the whole file).
     let s = a[0].text();
     let len = s.len();
     let resolve = |i: f64| if i < 0.0 { len.saturating_sub((-i) as usize) } else { (i as usize).min(len) };
     let from = resolve(a[1].num()?);
     let to = a.get(2).map(|v| v.num()).transpose()?.map_or(len, resolve).max(from);
     match s.get(from..to) {
-        Some(part) => Ok(Value::from(part.to_string())),
+        Some(part) => Ok(a[0].text_part(part)),
         None => Err(format!("byte_slice: {from}..{to} is not on character boundaries")),
     }
 }
@@ -408,7 +408,7 @@ pub static FUNCTIONS: &[Function] = &[
             if from.is_empty() {
                 return Err("replace: `from` cannot be empty".into());
             }
-            Ok(Value::from(text(&a[0]).replace(&from, &text(&a[2]))))
+            Ok(Value::from(text(&a[0]).replace(from.as_ref(), &text(&a[2]))))
         },
     },
     Function {
@@ -486,10 +486,11 @@ pub static FUNCTIONS: &[Function] = &[
         max: 2,
         call: |a| {
             let sep = text(&a[1]);
+            let s = a[0].text();
             if sep.is_empty() {
-                return Ok(Value::List(text(&a[0]).chars().map(|c| Value::from(c.to_string())).collect()));
+                return Ok(Value::List(s.char_indices().map(|(at, c)| a[0].text_part(&s[at..at + c.len_utf8()])).collect()));
             }
-            Ok(Value::List(text(&a[0]).split(&sep).map(|p| Value::from(p.to_string())).collect()))
+            Ok(Value::List(s.split(sep.as_ref()).map(|part| a[0].text_part(part)).collect()))
         },
     },
     Function {
@@ -498,7 +499,10 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "split text into lines",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::List(text(&a[0]).lines().map(|p| Value::from(p.to_string())).collect())),
+        call: |a| {
+            let s = a[0].text();
+            Ok(Value::List(s.lines().map(|part| a[0].text_part(part)).collect()))
+        },
     },
     Function {
         name: "join",
@@ -606,7 +610,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "value as text",
         min: 1,
         max: 1,
-        call: |a| Ok(Value::from(text(&a[0]))),
+        call: |a| Ok(Value::from(text(&a[0]).into_owned())),
     },
     Function {
         name: "num",
@@ -810,6 +814,27 @@ mod tests {
         assert_eq!(call("trim_end", &["ab\r\n\n".into(), "\r\n".into()]), Value::from("ab"));
         assert_eq!(call("pad_start", &["7".into(), 3.0.into(), "0".into()]), Value::from("007"));
         assert_eq!(call("slice", &["hello".into(), (-3.0).into()]), Value::from("llo"));
+    }
+
+    #[test]
+    fn text_parts_preserve_boundaries_coercion_and_output_lifetimes() {
+        for input in [Value::from("  a\u{1f600}b  "), Value::from("  a\u{1f600}b  ".to_owned()), Value::Node(7, "  a\u{1f600}b  ".into())] {
+            assert_eq!(call("byte_slice", &[input.clone(), 3.0.into(), 7.0.into()]), Value::from("\u{1f600}"));
+            assert_eq!(call("byte_slice", &[input.clone(), (-7.0).into(), (-3.0).into()]), Value::from("\u{1f600}"));
+            assert_eq!(call("byte_slice", &[input.clone(), 20.0.into(), (-20.0).into()]), Value::from(""));
+            assert!((lookup("byte_slice").unwrap().call)(&[input, 4.0.into()]).is_err());
+        }
+        assert_eq!(call("byte_slice", &[42.0.into(), 0.0.into(), 1.0.into()]), Value::from("4"));
+        for owned in [false, true] {
+            let text = |s: &'static str| if owned { Value::from(s.to_owned()) } else { Value::from(s) };
+            assert_eq!(call("split", &[text("a::b::"), "::".into()]), Value::list(vec!["a".into(), "b".into(), "".into()]));
+            assert_eq!(call("split", &[text("a\u{1f600}"), "".into()]), Value::list(vec!["a".into(), "\u{1f600}".into()]));
+            assert_eq!(call("split", &[text(""), "".into()]), Value::list(vec![]));
+            assert_eq!(call("split", &[text(""), ",".into()]), Value::list(vec!["".into()]));
+            assert_eq!(call("lines", &[text("a\r\n\nb\r")]), Value::list(vec!["a".into(), "".into(), "b\r".into()]));
+            assert_eq!(call("lines", &[text("a\n")]), Value::list(vec!["a".into()]));
+            assert_eq!(call("lines", &[text("")]), Value::list(vec![]));
+        }
     }
 
     #[test]

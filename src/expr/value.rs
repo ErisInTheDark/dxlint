@@ -91,7 +91,17 @@ impl From<String> for Text<'_> {
     }
 }
 
-impl Text<'_> {
+impl<'s> Text<'s> {
+    /// `part` must be a subslice of this text. Only source text can stay borrowed.
+    pub(super) fn subslice(&self, part: &str) -> Self {
+        let Text::Borrowed(source) = self else {
+            return part.to_string().into();
+        };
+        let start = (part.as_ptr() as usize).checked_sub(source.as_ptr() as usize).expect("text subslice precedes source");
+        let end = start.checked_add(part.len()).expect("text subslice overflow");
+        Text::Borrowed(source.get(start..end).expect("text subslice outside source"))
+    }
+
     fn into_static(self) -> Text<'static> {
         match self {
             Text::Borrowed(s) => Text::Shared(s.into()),
@@ -223,6 +233,14 @@ impl<'s> Value<'s> {
         match self.as_text() {
             Some(s) => Cow::Borrowed(s),
             None => Cow::Owned(self.to_string()),
+        }
+    }
+
+    /// A part returned by `self.text()`, retaining file-source ownership only.
+    pub(super) fn text_part(&self, part: &str) -> Self {
+        match self {
+            Value::Str(text) | Value::Node(_, text) => Value::Str(text.subslice(part)),
+            _ => Value::from(part.to_string()),
         }
     }
 
