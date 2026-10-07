@@ -3,6 +3,36 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn void_type_hook_selects_contexts_without_enabling_intrinsic_exemptions() {
+    for (source, default, checked) in [
+        ("type Value = Promise<void>;", 0, 1),
+        ("type Value<T = void> = T;", 0, 1),
+        ("function f(this: void) {}", 1, 1),
+        ("let value: void;", 1, 1),
+        ("type Value = void | string;", 1, 1),
+        ("f<void>();", 1, 1),
+        ("new C<void>();", 0, 1),
+        ("function f(): void {}", 0, 0),
+        ("type Callback = () => void;", 0, 0),
+        ("type Value = void | never | Promise<void>;", 0, 1),
+        ("function f(value: string): void; function f(value: string | void): void {}", 0, 0),
+        ("let value: number;", 0, 0),
+    ] {
+        for (predicate, expected) in [(None, default), (Some("true"), checked), (Some("false"), 0)] {
+            let hook = predicate.map_or_else(String::new, |predicate| format!("override in ts_type_keyword let no_invalid_void_type_checked {predicate}\n"));
+            let diagnostics = native_linter(&format!("{hook}rule no-invalid-void-type")).lint(Path::new("file.ts"), source);
+            assert_eq!(diagnostics.len(), expected, "{predicate:?}/{source}: {diagnostics:?}");
+            assert!(diagnostics.iter().all(|diagnostic| &source[diagnostic.start..diagnostic.end] == "void" && diagnostic.fix.is_none()));
+        }
+    }
+    let source = "type Allowed = ns.Promise<void>; type Other = Box<void>; function f(this: void) {} let value: void;";
+    let linter = native_linter("override in ts_type_keyword let no_invalid_void_type_checked void_type_context != \"this\" && !(void_type_context == \"generic\" && void_type_generic_name == \"ns.Promise\")\nrule no-invalid-void-type");
+    let diagnostics = linter.lint(Path::new("file.ts"), source);
+    let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+    assert_eq!(starts, [source.find("Box<void>").expect("generic type") + 4, source.rfind("void").expect("variable type")]);
+}
+
+#[test]
 fn literal_assertion_modes_are_independent_under_both_preferred_notations() {
     let modes = [("allow", false, false), ("allow-as-parameter", true, false), ("never", true, true)];
     for (style, object, array) in [("as", "{} as T", "[] as T[]"), ("angle-bracket", "<T>{}", "<T[]>[]")] {

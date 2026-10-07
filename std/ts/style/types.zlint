@@ -99,15 +99,15 @@ in ts_type_keyword let void_keyword text == "void"
 in ts_type_reference let has_void_argument any([] type_argument.void_keyword, v => v == true)
 in style_tree_node let void_union_member if is ts_type_keyword then contains(["void", "never"], text) else if is ts_type_reference then has_void_argument else false
 in ts_union let valid_void_union all([] type.void_union_member, t => t == true)
+in ts_type_keyword {
+  let void_type_context if is ts_node.return_type then "return" else if is ts_node.type_argument then (if parent is ts_type_reference then "generic" else if parent is ts_call then "other" else "generic-other") else if is ts_type_parameter.default then "default" else if parent is ts_parameter && parent.name == "this" then "this" else if parent is ts_union then (if parent.valid_void_union || parent.function_overload_context == true then "return" else "union") else "other"
+  let void_type_generic_name re_replace(default(parent.name, ""), /\s+/, "")
+  let no_invalid_void_type_checked !contains(["generic", "generic-other", "default"], void_type_context)
+}
 in ts_type_keyword rule no-invalid-void-type {
-  option allowAsThisParameter boolean = false "Allow void as the type of a this parameter."
-  option allowInGenericTypeArguments boolean | string[] = true "Allow void in generic arguments, or only named generic types."
-  let context if is ts_node.return_type then "return" else if is ts_node.type_argument then (if parent is ts_type_reference then "generic" else if parent is ts_call then "other" else "generic-other") else if is ts_type_parameter.default then "default" else if parent is ts_parameter && parent.name == "this" then "this" else if parent is ts_union then (if parent.valid_void_union || parent.function_overload_context == true then "return" else "union") else "other"
-  let generic_name re_replace(default(parent.name, ""), /\s+/, "")
-  let generic_allowed allowInGenericTypeArguments == true || type_of(allowInGenericTypeArguments) == "list" && contains(map(allowInGenericTypeArguments, n => re_replace(n, /\s+/, "")), generic_name)
-  when text == "void" && context != "return"
-  when !(context == "generic" && generic_allowed || context == "generic-other" && allowInGenericTypeArguments == true || context == "default" && allowInGenericTypeArguments || context == "this" && allowAsThisParameter)
-  warn if context == "generic" && type_of(allowInGenericTypeArguments) == "list" then generic_name " may not have void as a type argument." else if allowInGenericTypeArguments && allowAsThisParameter then "void is only valid as a return type or generic type argument or the type of a `this` parameter." else if allowInGenericTypeArguments && context == "union" then "void is not valid as a constituent in a union type" else if allowInGenericTypeArguments then "void is only valid as a return type or generic type argument." else if allowAsThisParameter then "void is only valid as return type or type of `this` parameter." else "void is only valid as a return type."
+  when text == "void" && void_type_context != "return"
+  when no_invalid_void_type_checked
+  warn if void_type_context == "generic" then void_type_generic_name " may not have void as a type argument." else if void_type_context == "union" then "void is not valid as a constituent in a union type" else "void is not valid in this position."
 }
 
 in ts_parameter let rest_function_parameter name is ts_rest && parent is (ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type)
