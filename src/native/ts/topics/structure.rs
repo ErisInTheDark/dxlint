@@ -33,6 +33,27 @@ mod tests {
     use crate::engine::tests::native_linter;
 
     #[test]
+    fn unsafe_fix_numeric_receivers_keep_the_member_dot_separate() {
+        let lint = native_linter("rule dot-notation");
+        let path = Path::new("/root/file.js");
+        for receiver in ["08", "5_000_00", "1", "1.5", "1e3", "0xff", "(1)", "1?."] {
+            let source = format!("{receiver}['prop'];");
+            assert!(crate::native::ts::parse(&source, false).is_ok(), "{source}");
+            let reports = lint.lint(path, &source);
+            assert_eq!(reports.len(), 1, "{source}: {reports:?}");
+            let (fixed, edits) = crate::engine::apply_fixes(&source, &reports);
+            assert_eq!(edits, 1, "{source}");
+            assert!(crate::native::ts::parse(&fixed, false).is_ok(), "{source} -> {fixed}");
+            assert!(lint.lint(path, &fixed).is_empty(), "{fixed}");
+        }
+        assert!(lint.lint(path, "x['08'];").is_empty());
+        let source = "x[/* keep */ 'prop'];";
+        let reports = lint.lint(path, source);
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].fix.is_none());
+    }
+
+    #[test]
     fn linebreak_reports_cover_only_the_native_line_terminator() {
         let lint = native_linter("rule linebreak-style");
         for separator in ["\r\n", "\u{2028}", "\u{2029}"] {

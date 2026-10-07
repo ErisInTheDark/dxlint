@@ -77,7 +77,7 @@ in ts_index rule dot-notation:computed {
   let open index.space_before.start - 1
   let fixable count(overlapping(ts_comment, open, end_offset)) == 0
   let prefix byte_slice(text, 0, open - offset)
-  let separator if optional != null then "" else if object is ts_number && re_test(object.text, /^(?:0|[1-9][0-9]*)$/) then " ." else "."
+  let separator if optional != null then "" else if object is ts_number then " ." else "."
   let trailing if space_after.text == "" && next_token is (ts_identifier, ts_keyword, ts_number, ts_boolean, ts_null) then " " else ""
   let quoted if template then "`" name "`" else if literal.type == "string" then "\"" name "\"" else name
   report at key
