@@ -523,10 +523,12 @@ impl<'s> Parser<'s> {
             return self.fail("expected an index signature parameter");
         }
         let name = self.leaf(Kind::Ident);
+        let optional = if self.is("?") { Some(self.token_text()) } else { None };
         self.expect(":")?;
         let t = self.type_()?;
         let mut p = Kids::default();
         p.add(Field::Name, name);
+        p.opt(Field::Optional, optional);
         p.add(Field::Type, t);
         let param = self.finish(Kind::Param, pstart, p);
         kids.add(Field::Param, param);
@@ -583,5 +585,33 @@ impl<'s> Parser<'s> {
         }
         self.expect(">")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_index_parameters_keep_signature_and_parameter_types() {
+        for source in [
+            "interface C { [i?: number]: string; [j: number]: boolean; [keyName]: number; }",
+            "type C = { [i?: number]: string; [j: number]: boolean; [keyName]: number; };",
+            "class C { [i?: number]: string; [j: number]: boolean; [keyName]: number; }",
+        ] {
+            let mut parser = Parser::new(source, false);
+            assert!(parser.parse_program().is_ok(), "{source}: {:?}", parser.error);
+            let signatures: Vec<_> = parser.nodes.iter().filter(|node| node.matcher == Kind::IndexSig as u32).collect();
+            assert_eq!(signatures.len(), 2, "{source}");
+            for (index, signature) in signatures.iter().enumerate() {
+                assert!(signature.children.iter().any(|edge| edge.label == Field::Type as u16));
+                let parameter = signature.children.iter().find(|edge| edge.label == Field::Param as u16).expect("index parameter");
+                let parameter = &parser.nodes[parameter.node as usize];
+                assert_eq!(parameter.matcher, Kind::Param as u32);
+                assert!(parameter.children.iter().any(|edge| edge.label == Field::Name as u16));
+                assert!(parameter.children.iter().any(|edge| edge.label == Field::Type as u16));
+                assert_eq!(parameter.children.iter().any(|edge| edge.label == Field::Optional as u16), index == 0);
+            }
+        }
     }
 }

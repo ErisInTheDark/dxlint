@@ -67,6 +67,7 @@ fn ordering_alpha_bad(name, previous_name, mode) = name != "" && previous_name !
 fn ordering_alpha_blocked(row, before, rows, optionality) = row.init && any(rows, earlier =>
   earlier.index >= before.index && earlier.index < row.index && earlier.rank == row.rank && earlier.init
   && (optionality == "none" || earlier.optional == row.optional) && contains(row.dependencies, earlier.name))
+fn ordering_alpha_previous(states, row, previous_row, reset) = if reset && previous_row.rank != row.rank then [] else states
 fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enabled) = (
   if !enabled || row.name == "" || ordering_alpha_bad(row.name, ordering_at_rank(states, partition, row.rank).name, mode)
     && ordering_alpha_blocked(row, ordering_at_rank(states, partition, row.rank), rows, optionality) then states
@@ -95,16 +96,17 @@ fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enable
     let rank_bad checked && frontier != null
     let rank_status if checked then { partition: partition, bad: rank_bad } else null
     let bad_partitions if ordering_is_container == true then unique(map(filter(children.rank_status, status => status.bad), status => status.partition)) else parent.bad_partitions
-    let alpha_enabled checked && order != "as-written" && !contains(bad_partitions, partition) && !optionality_bad
-    let alpha_states ordering_alpha_states(default(previous.alpha_states, []), row, partition, owner.ordering_members, order, optionality, alpha_enabled)
-    let before_alpha default(previous.alpha_states, [])
+    let alpha_enabled checked && order != "as-written" && !optionality_bad
+    let alpha_states ordering_alpha_states(ordering_alpha_previous(default(previous.alpha_states, []), row, previous.row, contains(bad_partitions, partition)), row, partition, owner.ordering_members, order, optionality, alpha_enabled)
+    let before_alpha ordering_alpha_previous(default(previous.alpha_states, []), row, previous.row, contains(bad_partitions, partition))
     let alpha_before ordering_at_rank(before_alpha, partition, row.rank)
     let alpha_bad alpha_enabled && ordering_alpha_bad(row.name, alpha_before.name, order)
     let alpha_blocked alpha_bad && ordering_alpha_blocked(row, alpha_before, owner.ordering_members, optionality)
     when owner.ordering_context == context && checked
-    when if optionality_bad then optionality_error else rank_bad || alpha_bad && !alpha_blocked
-    warn if optionality_bad then "Member " row.name " should be declared after all " (if preferred then "optional" else "required") " members."
-      else if rank_bad then "Member " row.name " should be declared before all " frontier.label " definitions."
+    each failure in if optionality_bad then (if optionality_error then ["optionality"] else [])
+      else (if rank_bad then ["rank"] else []) (if alpha_bad && !alpha_blocked then ["alpha"] else [])
+    warn if failure == "optionality" then "Member " row.name " should be declared after all " (if preferred then "optional" else "required") " members."
+      else if failure == "rank" then "Member " row.name " should be declared before all " frontier.label " definitions."
       else "Member " row.name " should be declared before member " alpha_before.name "."
   }
 }

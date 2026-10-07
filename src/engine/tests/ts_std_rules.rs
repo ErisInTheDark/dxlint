@@ -727,3 +727,36 @@ fn member_ordering_does_not_suggest_crossing_an_initialiser_dependency() {
     assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
     assert_eq!(diagnostics[0].start, source.find("a = 2").expect("independent member"));
 }
+
+#[test]
+fn member_ordering_checks_names_even_when_another_rank_is_displaced() {
+    for (context, source) in [
+        ("class-declaration", "class C { c: number; b: number; high() {} low: number; }"),
+        ("class-expression", "const C = class { c: number; b: number; high() {} low: number; };"),
+        ("interface", "interface C { c: number; b: number; high(): void; low: number; }"),
+        ("type-literal", "type C = { c: number; b: number; high(): void; low: number; };"),
+    ] {
+        let linter = native_linter(&format!("rule member-ordering:{context} set alphabetically"));
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        assert_eq!(diagnostics.len(), 2, "{context}: {diagnostics:#?}");
+        for name in ["b:", "low:"] {
+            let offset = source.find(name).expect("member exists");
+            assert_eq!(diagnostics.iter().filter(|diagnostic| diagnostic.start == offset
+                && diagnostic.severity == crate::config::ast::Severity::Warn).count(), 1, "{diagnostics:#?}");
+        }
+    }
+}
+
+#[test]
+fn member_ordering_reports_independent_rank_and_name_errors_without_crossing_runs() {
+    let linter = native_linter("rule member-ordering:class-declaration set alphabetically");
+    let source = "class C { high() {} c: number; b: number; }";
+    let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 3, "{diagnostics:#?}");
+    let offset = source.find("b:").expect("last member exists");
+    assert_eq!(diagnostics.iter().filter(|diagnostic| diagnostic.start == offset).count(), 2, "{diagnostics:#?}");
+    let source = "class C { z: number; high() {} a: number; }";
+    let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
+    assert_eq!(diagnostics[0].start, source.find("a:").expect("last member exists"));
+}
