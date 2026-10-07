@@ -3,6 +3,40 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn restricted_type_names_preserve_shape_and_reference_routes() {
+    for (source, names, expected) in [
+        ("let value: Banned;", "[\"Banned\"]", vec!["Banned"]),
+        ("let value: Banned;", "[\"banned\"]", vec![]),
+        ("let value: NS . Banned;", "[\" NS.Banned \"]", vec!["NS . Banned"]),
+        ("let value: Banned<A, B>;", "[\" Banned < A , B > \"]", vec!["Banned<A, B>"]),
+        ("let value: Banned<any>;", "[\"Banned\", \"Banned<any>\"]", vec!["Banned", "Banned<any>"]),
+        ("let value: number;", "[\"number\"]", vec!["number"]),
+        ("let value: [];", "[\"[]\"]", vec!["[]"]),
+        ("let value: {};", "[\"{}\"]", vec!["{}"]),
+        ("let value: { field: number };", "[\"{field:number}\"]", vec![]),
+        ("let value: [number];", "[\"[number]\"]", vec![]),
+        ("let value = Banned();", "[\"Banned\"]", vec![]),
+    ] {
+        let escaped = names.replace('{', "{{").replace('}', "}}");
+        let linter = native_linter(&format!("rule no-restricted-types set {escaped}"));
+        let diagnostics = linter.lint(Path::new("file.ts"), source);
+        let mut spans: Vec<_> = diagnostics.iter().map(|diagnostic| (diagnostic.start, diagnostic.end)).collect();
+        spans.sort_unstable();
+        let mut expected: Vec<_> = expected.iter().map(|text| {
+            let start = source.find(text).expect("restricted type in source");
+            (start, start + text.len())
+        }).collect();
+        expected.sort_unstable();
+        assert_eq!(spans, expected, "{names}/{source}: {diagnostics:?}");
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+        assert!(native_linter("rule no-restricted-types").lint(Path::new("file.ts"), source).is_empty());
+    }
+    let diagnostics = native_linter("rule no-restricted-types set ['Banned', '{{}}']\nrule no-restricted-types warn \"{restricted_name}\"")
+        .lint(Path::new("file.ts"), "let a: Banned; let b: {};");
+    assert_eq!(diagnostics.iter().map(|diagnostic| diagnostic.message.as_str()).collect::<Vec<_>>(), ["Banned", "{}"]);
+}
+
+#[test]
 fn void_type_hook_selects_contexts_without_enabling_intrinsic_exemptions() {
     for (source, default, checked) in [
         ("type Value = Promise<void>;", 0, 1),

@@ -3,27 +3,23 @@
 define {
 
 # ---- type syntax -------------------------------------------------------------------
-fn type_restriction_key(types, name) = find_last(keys(types), n => re_replace(n, /\s+/, "") == name)
-fn type_restriction_enabled(policy) = type_of(policy) != "null" && !(type_of(policy) == "bool" && policy == false)
-fn type_restriction_message(name, policy) = "Don't use `" name "` as a type." (if type_of(policy) == "str" && policy != "" then " " policy else if policy.message != null && policy.message != "" then " " policy.message else "")
+fn type_restriction_matches(names, name) = any(names, n => re_replace(n, /\s+/, "") == name)
 in ts_type_reference let restricted_type_shape count(type_argument) > 0
 in ts_type_keyword let restricted_type_shape contains(["bigint", "boolean", "never", "null", "number", "object", "string", "symbol", "undefined", "unknown", "void"], text)
 in ts_tuple_type let restricted_type_shape count(element) == 0
 in ts_type_literal let restricted_type_shape count(member) == 0
 in ts_type_reference, ts_type_keyword, ts_tuple_type, ts_type_literal rule no-restricted-types {
-  option types { [key: string]: boolean | string | { fixWith?: string; message?: string; suggest?: string[] } | null } = {} "Restricted types and custom messages."
+  default option names string[] = [] "Restricted type names."
   when restricted_type_shape
   let restricted_name re_replace(text, /\s+/, "")
-  let restriction get(types, type_restriction_key(types, restricted_name))
-  when type_restriction_enabled(restriction)
-  warn type_restriction_message(restricted_name, restriction)
+  when type_restriction_matches(names, restricted_name)
+  warn "Don't use `{restricted_name}` as a type."
 }
 in ts_type_reference.name rule no-restricted-types:name {
-  option types { [key: string]: boolean | string | { fixWith?: string; message?: string; suggest?: string[] } | null } = {} "Restricted types and custom messages."
+  default option names string[] = [] "Restricted type names."
   let restricted_name re_replace(text, /\s+/, "")
-  let restriction get(types, type_restriction_key(types, restricted_name))
-  when type_restriction_enabled(restriction)
-  warn type_restriction_message(restricted_name, restriction)
+  when type_restriction_matches(names, restricted_name)
+  warn "Don't use `{restricted_name}` as a type."
 }
 
 # Array syntax supplies one notation value; mutable and readonly policies are independent.
