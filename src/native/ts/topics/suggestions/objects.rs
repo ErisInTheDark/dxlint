@@ -47,7 +47,13 @@ fn lexical_arrow(file: &NativeFile, node: u32) -> bool {
             Some(K::Function | K::Method | K::Class) => continue,
             Some(K::This | K::Super) => return true,
             Some(K::MetaProperty) if s.text(n) == "new.target" => return true,
-            Some(K::Ident) if s.text(n) == "arguments" && file.resolved(n) == Some("global") => return true,
+            Some(K::Ident) if s.text(n) == "arguments" && (file.resolved(n) == Some("global")
+                || file.bindings().arguments_owner(s, n).is_some()
+                || file.access(n) != Some("type") && file.decl_of(n).is_some_and(|decl| {
+                    let declaration = s.tree.node(decl);
+                    let arrow = s.tree.node(node);
+                    declaration.start < arrow.start || declaration.end > arrow.end
+                })) => return true,
             _ => {}
         }
         stack.extend(s.kids(n).map(|(_, child)| child));

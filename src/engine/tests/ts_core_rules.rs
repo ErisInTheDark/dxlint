@@ -3,6 +3,50 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn rest_parameters_preference_targets_only_implicit_arguments_references() {
+    let linter = native_linter("rule prefer-rest-params");
+    for (source, expected) in [
+        ("function f() { return arguments; }", 1),
+        ("function f() { return arguments[0]; }", 1),
+        ("function f() { return arguments['length']; }", 1),
+        ("function f() { return () => arguments[0]; }", 1),
+        ("function f(arguments) { return function () { return arguments[0]; }; }", 1),
+        ("const f = function arguments() { return arguments[0]; };", 1),
+        ("const object = { f() { return arguments[0]; } };", 1),
+        ("class C { f() { return arguments[0]; } }", 1),
+        ("function f() { return arguments.length; }", 0),
+        ("function f() { return arguments?.length; }", 0),
+        ("function f(arguments) { return () => arguments[0]; }", 0),
+        ("function f() { const arguments = []; return arguments[0]; }", 0),
+        ("function f() { { const arguments = []; return arguments[0]; } }", 0),
+        ("export {}; arguments[0]; const f = () => arguments[0];", 0),
+    ] {
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), expected, "{source}: {diagnostics:#?}");
+    }
+}
+
+#[test]
+fn method_shorthand_keeps_arrows_that_capture_outer_arguments() {
+    let linter = native_linter("rule object-shorthand { set avoidExplicitReturnArrows true }");
+    for (source, expected) in [
+        ("function f() { return { read: () => { return arguments[0]; } }; }", 0),
+        ("function f() { return { read: () => { return () => arguments[0]; } }; }", 0),
+        ("function f(arguments) { return { read: () => { return arguments[0]; } }; }", 0),
+        ("function f() { const arguments = []; return { read: () => { return arguments[0]; } }; }", 0),
+        ("const object = { read: () => { return arguments[0]; } };", 0),
+        ("const object = { read: (arguments) => { return arguments[0]; } };", 1),
+        ("const object = { read: () => { const arguments = []; return arguments[0]; } };", 1),
+        ("const object = { read: () => { return function () { return arguments[0]; }; } };", 1),
+        ("type arguments = string; const object = { read: () => { let value: arguments; return 1; } };", 1),
+        ("const object = { read: () => { return 1; } };", 1),
+    ] {
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        assert_eq!(diagnostics.len(), expected, "{source}: {diagnostics:#?}");
+    }
+}
+
+#[test]
 fn chained_assignments_report_each_initializer_or_nested_right_hand_side() {
     let linter = native_linter("rule no-multi-assign");
     for (source, expected) in [

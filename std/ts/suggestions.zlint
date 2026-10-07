@@ -215,7 +215,7 @@ in ts_identifier rule no-shadow-restricted-names {
 
 # ---- preferences -----------------------------------------------------------------
 in ts_identifier rule prefer-rest-params {
-  when text == "arguments" && resolved == "global" && (ts_function != null || ts_method != null)
+  when text == "arguments" && resolved == "local" && declaration == null && (ts_function != null || ts_method != null)
   when !(parent is ts_member && index == 0)
   warn "Use the rest parameters instead of 'arguments'."
 }
