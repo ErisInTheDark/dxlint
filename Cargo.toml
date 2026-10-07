@@ -28,6 +28,16 @@ cranelift-jit = "0.136"
 cranelift-module = "0.136"
 cranelift-native = "0.136"
 
+[profile.dev]
+opt-level = 1
+debug = 1
+debug-assertions = true
+overflow-checks = true
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = 0
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
