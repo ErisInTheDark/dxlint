@@ -426,7 +426,7 @@ impl Grammar {
                         }
                         None => errors.push(
                             ConfigError::new(name.span, format!("unknown language `.{}`", name.text))
-                                .note("declare it with `lang name = \"*.ext\"`")
+                                .note("declare it with `lang name \"*.ext\"`")
                                 .suggest(&name.text, langs.iter().map(|l| l.name.as_str())),
                         ),
                     },
