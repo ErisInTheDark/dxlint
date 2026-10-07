@@ -92,17 +92,17 @@ in ts_class_property let class_static_only is_static && !contains([] modifier, "
 in ts_index_signature let class_static_only false
 in ts_static_block, ts_empty let class_static_only true
 in ts_class let class_shape if count(member) == 0 then "empty" else if all([] member.class_constructor_only, m => m == true) then "constructor" else if all([] member.class_static_only, m => type_of(m) == "null" || m == true) then "static" else null
-in ts_class rule no-extraneous-class {
-  option allowConstructorOnly boolean = false "Allow constructor-only classes."
-  option allowEmpty boolean = false "Allow empty classes."
-  option allowStaticOnly boolean = false "Allow static-only classes."
-  option allowWithDecorator boolean = false "Allow decorated classes."
-  let shape class_shape
-  when extends == null && !(allowWithDecorator && count(decorator) > 0) && shape != null
-  when !(shape == "empty" && allowEmpty || shape == "constructor" && allowConstructorOnly || shape == "static" && allowStaticOnly)
-  report at if name != null && parent is (ts_program, ts_export, ts_block, ts_namespace) then name.unparen_offset else offset
-  warn if shape == "empty" then "Unexpected empty class." else if shape == "constructor" then "Unexpected class with only a constructor." else "Unexpected class with only static properties."
+in ts_class let no_extraneous_class_checked true
+@macro extraneous_class_rule(rule-id, shape, message) {
+  in ts_class rule rule-id {
+    when extends == null && class_shape == shape && no_extraneous_class_checked
+    report at if name != null && parent is (ts_program, ts_export, ts_block, ts_namespace) then name.unparen_offset else offset
+    warn message
+  }
 }
+@extraneous_class_rule(no-extraneous-class:empty, "empty", "Unexpected empty class.")
+@extraneous_class_rule(no-extraneous-class:constructor, "constructor", "Unexpected class with only a constructor.")
+@extraneous_class_rule(no-extraneous-class:static, "static", "Unexpected class with only static properties.")
 
 # Constructors that do nothing a missing one would not.
 in ts_identifier let constructor_forwarding_key {spread: false, name: text}
