@@ -2,11 +2,19 @@
 
 use super::{Checker, Env, Ty};
 use super::super::modules::ModuleAt;
+use crate::fx_hash::FxHashMap;
 use std::sync::Arc;
+
+#[cfg(test)]
+thread_local! {
+    static IDENTITY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 impl Ty {
     pub fn same_identity(&self, other: &Ty) -> bool {
-        same(self, other, 0)
+        #[cfg(test)]
+        IDENTITY_WORK.with(|work| work.set(0));
+        Identity::default().same(self, other, 0)
     }
 }
 
@@ -138,47 +146,118 @@ impl Checker<'_> {
     }
 }
 
-fn same(a: &Ty, b: &Ty, depth: usize) -> bool {
-    if depth >= 32 { return false }
-    let same = |a: &Ty, b: &Ty| same(a, b, depth + 1);
-    let parts = |a: &[Ty], b: &[Ty]| a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b));
-    match (a, b) {
-        (Ty::Prim(a), Ty::Prim(b)) => a == b,
-        (Ty::Lit(a, ap), Ty::Lit(b, bp)) if ap == bp => {
-            match *ap {
+// Addresses identify immutable inputs only within this comparison. Depth is
+// part of the result: a shallow proof cannot bypass a deeper resolution limit.
+#[derive(Default)]
+struct Identity {
+    types: FxHashMap<(*const Ty, *const Ty, usize), bool>,
+    environments: FxHashMap<(*const Env, *const Env, usize), bool>,
+}
+
+impl Identity {
+    fn same(&mut self, a: &Ty, b: &Ty, depth: usize) -> bool {
+        #[cfg(test)]
+        IDENTITY_WORK.with(|work| work.set(work.get() + 1));
+        if depth >= 32 { return false }
+        match (a, b) {
+            (Ty::Prim(a), Ty::Prim(b)) => return a == b,
+            (Ty::Lit(a, ap), Ty::Lit(b, bp)) if ap == bp => return match *ap {
                 "string" => super::super::regex::cook(a).zip(super::super::regex::cook(b)).is_some_and(|(a, b)| a == b),
                 "number" => super::super::statics::number(a).zip(super::super::statics::number(b)).is_some_and(|(a, b)| a == b),
                 _ => a == b,
-            }
+            },
+            (Ty::Param(a), Ty::Param(b)) => return a == b,
+            (Ty::Named(a, aa), Ty::Named(b, ba)) if a != b || aa.is_empty() || ba.is_empty() =>
+                return a == b && aa.is_empty() && ba.is_empty(),
+            (Ty::Obj(a, ae), Ty::Obj(b, be)) => return Arc::ptr_eq(a, b) && self.environment(ae, be, depth + 1),
+            (Ty::Struct(a), Ty::Struct(b)) => return Arc::ptr_eq(a, b),
+            (Ty::Fn(a), Ty::Fn(b)) => return Arc::ptr_eq(a, b),
+            (Ty::Class(a), Ty::Class(b)) | (Ty::Ns(a), Ty::Ns(b)) => return a == b,
+            (Ty::IntrinsicUnknown, Ty::IntrinsicUnknown) | (Ty::Any, Ty::Any) | (Ty::Never, Ty::Never) | (Ty::Void, Ty::Void) | (Ty::Undefined, Ty::Undefined) | (Ty::Null, Ty::Null) => return true,
+            (Ty::Named(..), Ty::Named(..)) | (Ty::Array(_), Ty::Array(_)) | (Ty::Tuple(_), Ty::Tuple(_))
+                | (Ty::Inter(_), Ty::Inter(_)) | (Ty::Union(_), _) | (_, Ty::Union(_)) => {}
+            _ => return false,
         }
-        (Ty::Param(a), Ty::Param(b)) => a == b,
-        (Ty::Named(a, aa), Ty::Named(b, ba)) => a == b && parts(aa, ba),
-        (Ty::Array(a), Ty::Array(b)) => a.readonly == b.readonly && same(&a.element, &b.element),
-        (Ty::Tuple(a), Ty::Tuple(b)) => a.readonly == b.readonly && a.len() == b.len()
-            && a.elements.iter().zip(&b.elements).all(|(a, b)| a.optional == b.optional && a.rest == b.rest && same(&a.ty, &b.ty)),
-        (Ty::Union(a), Ty::Union(b)) | (Ty::Inter(a), Ty::Inter(b)) =>
-            a.iter().all(|a| b.iter().any(|b| same(a, b))) && b.iter().all(|b| a.iter().any(|a| same(a, b))),
-        (Ty::Union(parts), _) | (_, Ty::Union(parts)) => !parts.is_empty() && parts.iter().all(|part| {
-            if matches!(a, Ty::Union(_)) { same(part, b) } else { same(a, part) }
-        }),
-        (Ty::Obj(a, ae), Ty::Obj(b, be)) => Arc::ptr_eq(a, b) && same_env(ae, be, depth + 1),
-        (Ty::Struct(a), Ty::Struct(b)) => Arc::ptr_eq(a, b),
-        (Ty::Fn(a), Ty::Fn(b)) => Arc::ptr_eq(a, b),
-        (Ty::Class(a), Ty::Class(b)) | (Ty::Ns(a), Ty::Ns(b)) => a == b,
-        (Ty::IntrinsicUnknown, Ty::IntrinsicUnknown) | (Ty::Any, Ty::Any) | (Ty::Never, Ty::Never) | (Ty::Void, Ty::Void) | (Ty::Undefined, Ty::Undefined) | (Ty::Null, Ty::Null) => true,
-        _ => false,
+        let key = (a as *const Ty, b as *const Ty, depth);
+        if let Some(&result) = self.types.get(&key) { return result }
+        let result = match (a, b) {
+            (Ty::Named(_, aa), Ty::Named(_, ba)) => aa.len() == ba.len()
+                && aa.iter().zip(ba).all(|(a, b)| self.same(a, b, depth + 1)),
+            (Ty::Array(a), Ty::Array(b)) => a.readonly == b.readonly && self.same(&a.element, &b.element, depth + 1),
+            (Ty::Tuple(a), Ty::Tuple(b)) => a.readonly == b.readonly && a.len() == b.len()
+                && a.elements.iter().zip(&b.elements).all(|(a, b)| a.optional == b.optional && a.rest == b.rest && self.same(&a.ty, &b.ty, depth + 1)),
+            (Ty::Union(a), Ty::Union(b)) | (Ty::Inter(a), Ty::Inter(b)) =>
+                a.iter().all(|a| b.iter().any(|b| self.same(a, b, depth + 1))) && b.iter().all(|b| a.iter().any(|a| self.same(a, b, depth + 1))),
+            (Ty::Union(parts), _) | (_, Ty::Union(parts)) => !parts.is_empty() && parts.iter().all(|part| {
+                if matches!(a, Ty::Union(_)) { self.same(part, b, depth + 1) } else { self.same(a, part, depth + 1) }
+            }),
+            _ => unreachable!(),
+        };
+        self.types.insert(key, result);
+        result
+    }
+
+    fn environment(&mut self, a: &Env, b: &Env, depth: usize) -> bool {
+        let key = (a as *const Env, b as *const Env, depth);
+        if let Some(&result) = self.environments.get(&key) { return result }
+        let module = matches!((a.module, b.module), (ModuleAt::Top, ModuleAt::Top))
+            || matches!((a.module, b.module), (ModuleAt::Ambient(a), ModuleAt::Ambient(b)) if a == b);
+        let result = a.file == b.file && module && a.namespaces == b.namespaces
+            && a.tparams.len() == b.tparams.len()
+            && a.tparams.iter().zip(&b.tparams).all(|((an, at), (bn, bt))| an == bn && self.same(at, bt, depth))
+            && match (&a.this, &b.this) {
+                (None, None) => true,
+                (Some(a), Some(b)) => self.same(a, b, depth),
+                _ => false,
+            };
+        self.environments.insert(key, result);
+        result
     }
 }
 
-fn same_env(a: &Env, b: &Env, depth: usize) -> bool {
-    let module = matches!((a.module, b.module), (ModuleAt::Top, ModuleAt::Top))
-        || matches!((a.module, b.module), (ModuleAt::Ambient(a), ModuleAt::Ambient(b)) if a == b);
-    a.file == b.file && module && a.namespaces == b.namespaces
-        && a.tparams.len() == b.tparams.len()
-        && a.tparams.iter().zip(&b.tparams).all(|((an, at), (bn, bt))| an == bn && same(at, bt, depth))
-        && match (&a.this, &b.this) {
-            (None, None) => true,
-            (Some(a), Some(b)) => same(a, b, depth),
-            _ => false,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::ts::modules::FileId;
+
+    fn shared_graph(levels: usize, mut ty: Ty) -> Ty {
+        let body = Arc::new(Vec::new());
+        for _ in 0..levels {
+            let env = Env {
+                tparams: vec![("T".into(), Ty::Inter(vec![ty.clone(), ty.clone()]))],
+                ..Env::file(FileId(0))
+            };
+            ty = Ty::Obj(body.clone(), Arc::new(env));
         }
+        ty
+    }
+
+    #[test]
+    fn shared_type_graph_identity_has_linear_work() {
+        let levels = 8;
+        let ty = shared_graph(levels, Ty::Prim("number"));
+        let Ty::Obj(body, env) = &ty else { unreachable!() };
+        let separate_env = Ty::Obj(body.clone(), Arc::new((**env).clone()));
+        assert!(ty.same_identity(&separate_env));
+        let work = IDENTITY_WORK.with(|work| work.get());
+        assert!(work <= 32 * (levels + 1), "shared graph used {work} comparisons");
+    }
+
+    #[test]
+    fn shared_environments_do_not_prove_opaque_type_identity() {
+        let ty = shared_graph(1, Ty::Unknown);
+        assert!(!ty.same_identity(&ty.clone()));
+    }
+
+    #[test]
+    fn identity_proofs_do_not_bypass_deeper_resolution_limits() {
+        let child = shared_graph(8, Ty::Prim("number"));
+        let mut deeper = child.clone();
+        for _ in 0..20 { deeper = Ty::array(deeper); }
+        let ty = Ty::Obj(Arc::new(Vec::new()), Arc::new(Env {
+            tparams: vec![("A".into(), child), ("B".into(), deeper)],
+            ..Env::file(FileId(0))
+        }));
+        assert!(!ty.same_identity(&ty.clone()));
+    }
 }
