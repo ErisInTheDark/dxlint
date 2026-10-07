@@ -465,6 +465,19 @@ impl<'a> Scope<'a> {
         Scope { params, function: Some(name), ..Scope::constants(grammar) }
     }
 
+    /// Names an `each` item would hide in this rule's node scope.
+    pub fn item_name_collision(&self, name: &str) -> Option<&'static str> {
+        [
+            ("rule let", self.locals.iter().any(|local| local == name)),
+            ("rule option", self.options.iter().any(|option| option == name)),
+            ("field", self.fields.iter().any(|(field, _)| field == name)),
+            ("attribute", self.attrs.iter().any(|attr| attr == name)),
+            ("builtin", Builtin::named(name).is_some()),
+            ("fact", facts::fact(name).is_some()),
+            ("node link", facts::link(name).is_some()),
+        ].into_iter().find_map(|(kind, present)| present.then_some(kind))
+    }
+
     fn note(&self, span: crate::config::source::Span, what: Resolved) {
         if let Some(uses) = self.uses {
             uses.borrow_mut().push((span, what));

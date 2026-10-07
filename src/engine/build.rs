@@ -718,6 +718,10 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     });
     // `when`s not reading the item are checked once, before the list is built.
     if let Some((name, _)) = &def.each {
+        if let Some(kind) = scope.item_name_collision(&name.text) {
+            errors.push(ConfigError::new(name.span, format!("each item `{}` has the same name as an existing {kind}", name.text))
+                .note("choose another item name"));
+        }
         scope.param_read = Some((scope.params.len() as u16, &item_read));
         scope.params.push(name.text.clone());
     }
@@ -985,6 +989,39 @@ mod demand_tests {
     }
 
     const SHAPE: &str = "in ts_call rule shape info \"{count(children)}\"";
+
+    #[test]
+    fn each_items_cannot_hide_names_visible_in_the_rule() {
+        let mut failures = Vec::new();
+        for (target, prefix, item, list, reject) in [
+            ("ts_function", "", "name", "[1]", true),
+            ("ts_program", "", "declaration", "[1]", true),
+            ("ts_program", "", "global", "[1]", true),
+            ("ts_program", "", "text", "[1]", true),
+            ("ts_program", "in ts_program let item [1]\n", "item", "item", true),
+            ("ts_program", "", "item", "[1]", false),
+            ("ts_program", "", "name", "[1]", false),
+        ] {
+            let source = format!("lang js \"*.ts\"\nnative ts\n{prefix}in {target} rule probe {{\neach {item} in {list}\nwarn \"{{{item}}}\"\n}}");
+            let built = build(crate::config::load_text("each.zlint", &source, &Disk), PathBuf::from("/root"));
+            let item_start = source.find("each ").unwrap() + 5;
+            let collision = built.errors.len() == 1 && built.errors[0].span.is_some_and(|span|
+                span.start as usize == item_start && span.end as usize == item_start + item.len());
+            if collision != reject || !reject && !built.errors.is_empty() {
+                failures.push((source, reject, built.errors));
+            }
+        }
+        for setup in ["let item 1", "option item number = 1 \"item\""] {
+            let source = format!("lang js \"*.ts\"\nnative ts\nin ts_program rule probe {{\n{setup}\neach item in [1]\nwarn \"{{item}}\"\n}}");
+            let built = build(crate::config::load_text("each.zlint", &source, &Disk), PathBuf::from("/root"));
+            let item_start = source.find("each ").unwrap() + 5;
+            if built.errors.len() != 1 || !built.errors[0].span.is_some_and(|span|
+                span.start as usize == item_start && span.end as usize == item_start + 4) {
+                failures.push((source, true, built.errors));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 
     #[test]
     fn rule_configuration_merges_indentation_for_every_family_member() {

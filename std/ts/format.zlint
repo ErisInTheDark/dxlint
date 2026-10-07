@@ -411,26 +411,26 @@ fn format_key_fix(site, before, wanted) = (
   when key_spacing_enabled
   @format_key_options
   when key_alignment != null && !format_key_single_line
-  each key_entry in map(format_key_rows(format_key_groups), entry => {
+  each spacing_entry in map(format_key_rows(format_key_groups), entry => {
     site: entry.site,
     policy: format_key_expected(entry.site, entry.group, key_line, key_alignment, format_key_typed)
   })
-  when !key_entry.site.typed || position(key_entry.site.owner.offset).js_line == key_entry.site.owner.format_key_colon_line
+  when !spacing_entry.site.typed || position(spacing_entry.site.owner.offset).js_line == spacing_entry.site.owner.format_key_colon_line
 }
 @macro format_key_individual {
   when parent is format_key_owner && parent.parent is key_spacing_containers && parent.parent.key_spacing_enabled
   @format_key_options
   when key_alignment == null || format_key_single_line
   when !(parent is (ts_property_signature, ts_index_signature, ts_class_property) && position(parent.offset).js_line != position(offset).js_line)
-  let key_entry { site: parent.format_key_site, policy: key_line }
+  let spacing_entry { site: parent.format_key_site, policy: key_line }
 }
 @macro format_key_before_report {
-  report at if key_entry.site.typed then { start: key_entry.site.owner.offset, end: key_entry.site.owner.end_offset } else if utf16_len(key_entry.site.before) > key_entry.policy.before then { start: key_entry.site.colon.offset - byte_len(key_entry.site.before), end: key_entry.site.colon.offset } else { start: default(key_entry.site.owner.format_key_before_comment.offset, key_entry.site.colon.token_neighbours.before.start), end: default(key_entry.site.owner.format_key_before_comment.end_offset, key_entry.site.colon.token_neighbours.before.end) }
-  warn if utf16_len(key_entry.site.before) > key_entry.policy.before then "Extra space after {if key_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{key_entry.site.owner.format_key_label}'." else "Missing space after {if key_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{key_entry.site.owner.format_key_label}'."
+  report at if spacing_entry.site.typed then { start: spacing_entry.site.owner.offset, end: spacing_entry.site.owner.end_offset } else if utf16_len(spacing_entry.site.before) > spacing_entry.policy.before then { start: spacing_entry.site.colon.offset - byte_len(spacing_entry.site.before), end: spacing_entry.site.colon.offset } else { start: default(spacing_entry.site.owner.format_key_before_comment.offset, spacing_entry.site.colon.token_neighbours.before.start), end: default(spacing_entry.site.owner.format_key_before_comment.end_offset, spacing_entry.site.colon.token_neighbours.before.end) }
+  warn if utf16_len(spacing_entry.site.before) > spacing_entry.policy.before then "Extra space after {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'." else "Missing space after {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'."
 }
 @macro format_key_after_report {
-  report at if key_entry.site.typed then { start: key_entry.site.owner.offset, end: key_entry.site.owner.end_offset } else if utf16_len(key_entry.site.after) > key_entry.policy.after then { start: key_entry.site.colon.offset, end: key_entry.site.colon.end_offset + byte_len(key_entry.site.after) } else { start: default(key_entry.site.owner.format_key_after_comment.offset, key_entry.site.colon.token_neighbours.after.start), end: default(key_entry.site.owner.format_key_after_comment.end_offset, key_entry.site.colon.token_neighbours.after.end) }
-  warn if utf16_len(key_entry.site.after) > key_entry.policy.after then "Extra space before value for {if key_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{key_entry.site.owner.format_key_label}'." else "Missing space before value for {if key_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{key_entry.site.owner.format_key_label}'."
+  report at if spacing_entry.site.typed then { start: spacing_entry.site.owner.offset, end: spacing_entry.site.owner.end_offset } else if utf16_len(spacing_entry.site.after) > spacing_entry.policy.after then { start: spacing_entry.site.colon.offset, end: spacing_entry.site.colon.end_offset + byte_len(spacing_entry.site.after) } else { start: default(spacing_entry.site.owner.format_key_after_comment.offset, spacing_entry.site.colon.token_neighbours.after.start), end: default(spacing_entry.site.owner.format_key_after_comment.end_offset, spacing_entry.site.colon.token_neighbours.after.end) }
+  warn if utf16_len(spacing_entry.site.after) > spacing_entry.policy.after then "Extra space before value for {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'." else "Missing space before value for {if spacing_entry.site.owner.format_key_computed == true then 'computed ' else ''}key '{spacing_entry.site.owner.format_key_label}'."
 }
 in ts_colon, ts_import_attribute_colon rule key-spacing {
   @format_key_individual
@@ -450,16 +450,16 @@ in ts_colon, ts_import_attribute_colon rule key-spacing:after {
 }
 in key_spacing_containers rule key-spacing:aligned-before {
   @format_key_aligned_entries
-  when format_key_wrong(utf16_len(key_entry.site.before), key_entry.policy.before, key_entry.policy.before_mode, key_entry.site.typed)
-  when key_entry.policy.before == 0 || !re_test(key_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
-  fix as format_replace_gaps(text, offset, [format_key_fix(key_entry.site, true, key_entry.policy.before)])
+  when format_key_wrong(utf16_len(spacing_entry.site.before), spacing_entry.policy.before, spacing_entry.policy.before_mode, spacing_entry.site.typed)
+  when spacing_entry.policy.before == 0 || !re_test(spacing_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
+  fix as format_replace_gaps(text, offset, [format_key_fix(spacing_entry.site, true, spacing_entry.policy.before)])
   @format_key_before_report
 }
 in key_spacing_containers rule key-spacing:aligned-after {
   @format_key_aligned_entries
-  when format_key_wrong(utf16_len(key_entry.site.after), key_entry.policy.after, key_entry.policy.after_mode, key_entry.site.typed)
-  when key_entry.policy.after == 0 || !re_test(key_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
-  fix as format_replace_gaps(text, offset, [format_key_fix(key_entry.site, false, key_entry.policy.after)])
+  when format_key_wrong(utf16_len(spacing_entry.site.after), spacing_entry.policy.after, spacing_entry.policy.after_mode, spacing_entry.site.typed)
+  when spacing_entry.policy.after == 0 || !re_test(spacing_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
+  fix as format_replace_gaps(text, offset, [format_key_fix(spacing_entry.site, false, spacing_entry.policy.after)])
   @format_key_after_report
 }
 
