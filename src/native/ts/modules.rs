@@ -20,6 +20,11 @@ use crate::config::source::normalize_path;
 /// Re-exports followed before giving up (cycles, very deep barrels).
 const MAX_HOPS: usize = 16;
 
+#[cfg(test)]
+thread_local! {
+    static RESOLUTION_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FileId(pub u32);
 
@@ -117,6 +122,7 @@ pub struct Project {
     /// Member names of named types (declarations and printed arguments):
     /// the same few types are asked about from many files.
     members: RwLock<HashMap<MembersKey, Cached<MemberNames>>>,
+    resolutions: RwLock<HashMap<(FileId, Box<str>), Cached<Option<ModRef>>>>,
 }
 
 pub type MemberNames = Arc<[Box<str>]>;
@@ -251,6 +257,9 @@ impl Project {
         if let Ok(mut members) = self.members.write() {
             members.retain(|key, c| (key.0 == 0 || live.contains(&key.0)) && !self.is_stale(&stale, &c.reads));
         }
+        if let Ok(mut resolutions) = self.resolutions.write() {
+            resolutions.retain(|_, answer| !self.is_stale(&stale, &answer.reads));
+        }
         stale
     }
 
@@ -292,6 +301,20 @@ impl Project {
 
     /// Where `spec`, imported from `from`, leads.
     pub fn resolve(&self, from: FileId, spec: &str) -> Option<ModRef> {
+        let key = (from, spec.into());
+        if let Some(answer) = self.resolutions.read().ok().and_then(|map| map.get(&key).cloned()) {
+            return answer.get();
+        }
+        // Resolution may build globals and consult other project answers.
+        // Keep the cache unlocked while computing, including cached misses.
+        let answer = Cached::compute(|| self.resolve_uncached(from, spec));
+        if let Ok(mut map) = self.resolutions.write() { map.insert(key, answer.clone()); }
+        answer.get()
+    }
+
+    fn resolve_uncached(&self, from: FileId, spec: &str) -> Option<ModRef> {
+        #[cfg(test)]
+        RESOLUTION_WORK.with(|work| work.set(work.get() + 1));
         let from_path = self.path(from);
         let dir = from_path.parent()?;
         if spec.starts_with("./") || spec.starts_with("../") || spec == "." || spec == ".." {
@@ -810,6 +833,123 @@ fn strip_jsonc(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Inputs {
+        root: PathBuf,
+        buffers: HashSet<PathBuf>,
+    }
+
+    impl Inputs {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let root = std::env::current_dir().unwrap().join(format!("target/module-resolution-{}", NEXT.fetch_add(1, Ordering::Relaxed)));
+            Self { root, buffers: HashSet::new() }
+        }
+
+        fn set(&mut self, name: &str, text: &str) -> PathBuf {
+            let path = self.root.join(name);
+            reads::set_buffer(&path, text);
+            self.buffers.insert(path.clone());
+            path
+        }
+
+        fn remove(&mut self, path: &Path) {
+            reads::drop_buffer(path);
+            self.buffers.remove(path);
+        }
+    }
+
+    impl Drop for Inputs {
+        fn drop(&mut self) {
+            for path in &self.buffers { reads::drop_buffer(path); }
+        }
+    }
+
+    fn resolved_path(project: &Project, from: FileId, spec: &str) -> Option<PathBuf> {
+        project.resolve(from, spec).map(|module| match module {
+            ModRef::File(file) => project.path(file),
+            ModRef::Ambient(..) => panic!("file module expected"),
+        })
+    }
+
+    #[test]
+    fn repeated_resolution_shares_successes_and_misses_without_crossing_importers() {
+        let mut inputs = Inputs::new();
+        let left = inputs.set("left/item.ts", "export {}");
+        let right = inputs.set("right/item.ts", "export {}");
+        let other = inputs.set("left/other.ts", "export {}");
+        let project = Project::default();
+        let from_left = project.file_id(&inputs.root.join("left/main.ts"));
+        let from_right = project.file_id(&inputs.root.join("right/main.ts"));
+        RESOLUTION_WORK.with(|work| work.set(0));
+        for _ in 0..16 {
+            assert_eq!(resolved_path(&project, from_left, "./item"), Some(left.clone()));
+            assert_eq!(resolved_path(&project, from_right, "./item"), Some(right.clone()));
+            assert_eq!(resolved_path(&project, from_left, "./other"), Some(other.clone()));
+            assert_eq!(resolved_path(&project, from_left, "./missing"), None);
+        }
+        let work = RESOLUTION_WORK.with(|work| work.get());
+        assert!(work <= 4, "repeated imports probed resolution {work} times");
+    }
+
+    #[test]
+    fn resolution_hits_replay_reads_for_successes_and_misses() {
+        let mut inputs = Inputs::new();
+        let item = inputs.set("item.ts", "export {}");
+        let project = Project::default();
+        let from = project.file_id(&inputs.root.join("main.ts"));
+        for (spec, target, present) in [("./item", item, true), ("./missing", inputs.root.join("missing.ts"), false)] {
+            let (first, _) = reads::track(|| resolved_path(&project, from, spec));
+            let (second, recorded) = reads::track(|| resolved_path(&project, from, spec));
+            assert_eq!(first, second);
+            assert_eq!(second.is_some(), present);
+            assert!(recorded.any(&mut |dep| matches!(dep, Dep::IsFile(path, found) if path == &target && *found == present)));
+        }
+    }
+
+    #[test]
+    fn resolution_invalidation_tracks_creation_deletion_and_extension_precedence() {
+        let mut inputs = Inputs::new();
+        let fallback = inputs.set("item.tsx", "export {}");
+        let project = Project::default();
+        let from = project.file_id(&inputs.root.join("main.ts"));
+        assert_eq!(resolved_path(&project, from, "./item"), Some(fallback.clone()));
+        let preferred = inputs.set("item.ts", "export {}");
+        project.invalidate(std::slice::from_ref(&preferred));
+        assert_eq!(resolved_path(&project, from, "./item"), Some(preferred.clone()));
+        inputs.remove(&preferred);
+        project.invalidate(std::slice::from_ref(&preferred));
+        assert_eq!(resolved_path(&project, from, "./item"), Some(fallback));
+        assert_eq!(resolved_path(&project, from, "./late"), None);
+        let late = inputs.set("late.ts", "export {}");
+        project.invalidate(std::slice::from_ref(&late));
+        assert_eq!(resolved_path(&project, from, "./late"), Some(late.clone()));
+        inputs.remove(&late);
+        project.invalidate(std::slice::from_ref(&late));
+        assert_eq!(resolved_path(&project, from, "./late"), None);
+    }
+
+    #[test]
+    fn resolution_invalidation_follows_config_and_package_metadata_reads() {
+        let mut inputs = Inputs::new();
+        let config = inputs.set("tsconfig.json", r#"{"compilerOptions":{"paths":{"alias":["first"],"pkg":["pkg"]},"lib":[],"types":[]}}"#);
+        let first = inputs.set("first.ts", "export {}");
+        let second = inputs.set("second.ts", "export {}");
+        let package = inputs.set("pkg/package.json", r#"{"types":"first.d.ts"}"#);
+        let pkg_first = inputs.set("pkg/first.d.ts", "export {}");
+        let pkg_second = inputs.set("pkg/second.d.ts", "export {}");
+        let project = Project::default();
+        let from = project.file_id(&inputs.root.join("main.ts"));
+        assert_eq!(resolved_path(&project, from, "alias"), Some(first));
+        assert_eq!(resolved_path(&project, from, "pkg"), Some(pkg_first));
+        inputs.set("pkg/package.json", r#"{"types":"second.d.ts"}"#);
+        project.invalidate(&[package]);
+        assert_eq!(resolved_path(&project, from, "pkg"), Some(pkg_second.clone()));
+        inputs.set("tsconfig.json", r#"{"compilerOptions":{"paths":{"alias":["second"],"pkg":["pkg"]},"lib":[],"types":[]}}"#);
+        project.invalidate(&[config]);
+        assert_eq!(resolved_path(&project, from, "alias"), Some(second));
+        assert_eq!(resolved_path(&project, from, "pkg"), Some(pkg_second));
+    }
 
     #[test]
     fn jsonc_loses_comments_and_trailing_commas() {
