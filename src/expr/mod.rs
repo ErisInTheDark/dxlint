@@ -1379,13 +1379,9 @@ pub struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    /// Binds the next outermost parameter (a rule's `each` item).
-    pub fn push_param(&self, v: Value<'a>) {
-        self.memo.params.borrow_mut().push(v);
-    }
-
-    pub fn pop_param(&self) {
-        self.memo.params.borrow_mut().pop();
+    /// A rule's `each` slot, including its unbound placeholder during guards.
+    pub(crate) fn with_rule_item<T>(&self, item: Value<'a>, run: impl FnOnce() -> T) -> T {
+        self.with_params(&mut [item], run)
     }
 
     /// `f` without the parameters bound around it: attributes and `let`s

@@ -518,10 +518,20 @@ impl Linter {
             let message = format!("rule `{}` failed here: {e}", f.name);
             vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, start: node.start as usize, end: node.end as usize, fix: None }]
         };
-        for w in &f.node_when {
-            match ctx.eval(w) {
-                Ok(v) if v.truthy() => {}
-                Ok(_) => return Vec::new(),
+        if !f.node_when.is_empty() {
+            // Guard lambdas are compiled after the rule's item slot even
+            // though these guards do not read that item yet.
+            let ready = ctx.with_rule_item(Value::Null, || {
+                for w in &f.node_when {
+                    if !ctx.eval(w)?.truthy() {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            });
+            match ready {
+                Ok(true) => {}
+                Ok(false) => return Vec::new(),
                 Err(e) => return failed(e),
             }
         }
@@ -531,9 +541,7 @@ impl Linter {
         };
         let mut out = Vec::new();
         for item in items.item_slice() {
-            ctx.push_param(item.clone());
-            out.extend(self.apply(f, ctx));
-            ctx.pop_param();
+            out.extend(ctx.with_rule_item(item.clone(), || self.apply(f, ctx)));
         }
         out
     }
@@ -649,6 +657,51 @@ struct Run<'a> {
 mod option_run_tests {
     use super::*;
     use crate::engine::tests::linter;
+
+    #[test]
+    fn each_guard_lambdas_keep_list_and_item_parameter_slots() {
+        let lint = linter(r#"
+            in .t match word /[a-z]+/ {
+                rule r {
+                    each item in map([2, 3], number => number * 10)
+                    when any([true], allowed => allowed)
+                    when any([item], copy => copy == item)
+                    info "{item}"
+                }
+            }
+        "#);
+        for (source, expected) in [("a b", vec!["20", "30", "20", "30"]), ("c", vec!["20", "30"])] {
+            let diagnostics = lint.lint(Path::new("/root/a.t"), source);
+            assert_eq!(diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn each_guard_false_and_error_frames_do_not_leak_into_later_rules() {
+        let lint = linter(r#"
+            in .t match word /[a-z]+/ {
+                rule rejected {
+                    each item in byte_slice("x", [])
+                    when any([false], allowed => allowed)
+                    info "{item}"
+                }
+                rule failing {
+                    each item in [1]
+                    when any([true], allowed => byte_slice("x", []))
+                    info "{item}"
+                }
+                rule following {
+                    each item in map([7], number => number)
+                    when any([true], allowed => allowed)
+                    info "{item}"
+                }
+            }
+        "#);
+        let diagnostics = lint.lint(Path::new("/root/a.t"), "a b");
+        assert!(!diagnostics.iter().any(|d| d.rule == "rejected"));
+        assert_eq!(diagnostics.iter().filter(|d| d.rule == "failing" && d.severity == Severity::Error).count(), 2);
+        assert_eq!(diagnostics.iter().filter(|d| d.rule == "following").map(|d| d.message.as_str()).collect::<Vec<_>>(), ["7", "7"]);
+    }
 
     #[test]
     fn compiled_options_bind_each_reports_messages_and_conditional_edits_across_files() {
