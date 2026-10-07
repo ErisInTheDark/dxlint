@@ -201,6 +201,9 @@ impl Facts for NativeFile<'_> {
         if b.unresolved.contains(&node) {
             return Some("global");
         }
+        if b.arguments_owner(&self.syntax, node).is_some() {
+            return Some("local");
+        }
         let decl = b.refs.get(&node)?;
         Some(if b.decls.get(decl).is_some_and(|d| d.kind == "import") { "import" } else { "local" })
     }

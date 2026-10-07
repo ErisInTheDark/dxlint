@@ -258,6 +258,11 @@ impl<'t> NativeFile<'t> {
         if name == "undefined" {
             return Ty::Undefined;
         }
+        if self.bindings().arguments_owner(s, id).is_some() {
+            let globals = ck.project.globals(ck.file);
+            return globals.names.get("IArguments").filter(|decls| !decls.is_empty())
+                .map_or(Ty::Unknown, |decls| Ty::Named(decls.clone().into(), Vec::new()));
+        }
         let Some(decl) = self.decl_of(id) else {
             // A global.
             let env = Env::file(ck.file);
@@ -928,6 +933,45 @@ fn may_be_nullish(ty: &Ty) -> bool {
 mod tests {
     use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
+
+    #[test]
+    fn implicit_arguments_use_library_members_and_keep_any_index_elements() {
+        let messages = crate::engine::tests::lint_project(
+            "implicit-arguments-types",
+            &[
+                ("tsconfig.json", r#"{"compilerOptions":{"lib":["es5"],"strict":true}}"#),
+                ("node_modules/typescript/lib/lib.es5.d.ts", "interface IArguments { length: number; [index: number]: any; }"),
+                ("main.ts", "export {}; function f() { arguments.length; const arrow = () => { arguments.length; }; arguments[0].value; } const object = { method() { arguments.length; } };"),
+            ],
+            "main.ts",
+            "rule no-undef\nrule no-unsafe-member-access",
+        );
+        assert_eq!(messages.len(), 1, "only the indexed any element is unsafe: {messages:#?}");
+
+        let messages = crate::engine::tests::lint_project(
+            "implicit-arguments-length",
+            &[
+                ("tsconfig.json", r#"{"compilerOptions":{"lib":["es5"],"strict":true}}"#),
+                ("node_modules/typescript/lib/lib.es5.d.ts", "interface IArguments { length: number; [index: number]: any; }"),
+                ("main.ts", "export {}; type IArguments = { length: string }; function f() { arguments.length; } const object = { method() { arguments.length; } };"),
+            ],
+            "main.ts",
+            "in ts_expression_statement.expression rule number-proof { when !contains(type_flags, 'number')\nwarn 'not numeric' }",
+        );
+        assert!(messages.is_empty(), "{messages:#?}");
+    }
+
+    #[test]
+    fn arguments_shadow_types_are_preserved_through_arrows() {
+        for source in [
+            "function f(arguments: { length: string }) { arguments.length; const arrow = () => { arguments.length; }; }",
+            "function f() { const arguments = { length: 'value' }; arguments.length; const arrow = () => { arguments.length; }; }",
+        ] {
+            let linter = native_linter("in ts_expression_statement.expression rule string-proof { when !contains(type_flags, 'string')\nwarn 'not string' }");
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+            assert!(diagnostics.is_empty(), "{source}: {diagnostics:#?}");
+        }
+    }
 
     #[test]
     fn object_property_docs_do_not_change_printing_or_assignability() {

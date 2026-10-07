@@ -107,9 +107,35 @@ impl Bindings {
         self.index(s).references.get(&declaration).map(Vec::as_slice).unwrap_or_default()
     }
 
+    /// Implicit `arguments` has an owning scope, but no declaring identifier.
+    pub fn arguments_owner(&self, s: &Syntax, reference: u32) -> Option<u32> {
+        if s.text(reference) != "arguments" || self.refs.contains_key(&reference) || self.unresolved.contains(&reference) {
+            return None;
+        }
+        // Unresolved type names also lack a declaration; only the value
+        // namespace gets implicit arguments (`typeof arguments` does too).
+        let mut name = reference;
+        while let Some(parent) = s.parent(name).filter(|&parent| s.is(parent, K::Member)) {
+            name = parent;
+        }
+        if s.parent(name).is_some_and(|parent| s.is(parent, K::TypeRef)) {
+            return None;
+        }
+        let mut scope = Some(*self.ref_scope.get(&reference)?);
+        while let Some(index) = scope {
+            let info = &self.scopes[index];
+            if info.owns_arguments(s) {
+                return Some(info.node);
+            }
+            scope = info.parent;
+        }
+        None
+    }
+
     /// The declaration `name` means at `at` (a value, or a type when
     /// `value` is false), searching the scopes around it outward; `None`
-    /// for a global or an unknown name. For names no reference spells out:
+    /// for a global, unknown name or implicit binding with no declaration.
+    /// For names no reference spells out:
     /// `{}.hasOwnProperty` asks whether `Object` is the global one.
     pub fn visible(&self, s: &Syntax, at: u32, name: &str, value: bool) -> Option<u32> {
         let mut scope = None;
@@ -131,6 +157,9 @@ impl Bindings {
                 .min_by_key(|&d| s.tree.node(d).start);
             if found.is_some() {
                 return found;
+            }
+            if value && name == "arguments" && self.scopes[sc].owns_arguments(s) {
+                return None;
             }
             scope = self.scopes[sc].parent;
         }
@@ -186,6 +215,13 @@ pub struct ScopeInfo {
     /// What opens it: the program, a function-like, block, class, `for`,
     /// `switch`, catch clause, namespace body or type construct.
     pub node: u32,
+}
+
+impl ScopeInfo {
+    fn owns_arguments(&self, s: &Syntax) -> bool {
+        self.function && (matches!(s.kind(self.node), Some(K::Function | K::Method))
+            || self.node == s.root() && self.parent.is_some())
+    }
 }
 
 struct Scope<'t> {
@@ -247,7 +283,7 @@ pub fn bind(s: &Syntax, root_function: bool, ecma_version: u16) -> Bindings {
     b.resolve()
 }
 
-/// The function whose own `this`/`arguments` a node at `id` sees: the
+/// The function whose own `this` a node at `id` sees: the
 /// nearest non-arrow function, method or class body.
 fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
     let mut child = id;
@@ -747,13 +783,13 @@ impl<'t> Binder<'_, 't> {
                         self.declare(target, n, VALUE);
                     }
                 }
-                let inner = self.scope(Some(scope), true, id);
-                if !decl {
-                    if let Some(n) = name {
-                        self.as_("function_name", id);
-                        self.declare(inner, n, VALUE);
-                    }
-                }
+                let parent = if let Some(n) = name.filter(|_| !decl) {
+                    let names = self.scope(Some(scope), false, id);
+                    self.as_("function_name", id);
+                    self.declare(names, n, VALUE);
+                    names
+                } else { scope };
+                let inner = self.scope(Some(parent), true, id);
                 self.function_parts(id, inner);
             }
             K::Arrow | K::FnType | K::CallSig => {
@@ -1119,23 +1155,30 @@ impl<'t> Binder<'_, 't> {
             };
             let mut at = Some(scope);
             let mut found = None;
+            let mut arguments = None;
             while let Some(sc) = at {
+                let implicit = name == "arguments" && want & VALUE != 0 && scopes[sc].info.owns_arguments(s);
                 if let Some(list) = scopes[sc].names.get(name) {
                     if let Some(&(decl, _)) = list.iter().find(|(_, space)| space & want != 0) {
                         found = Some(decl);
                         break;
                     }
                 }
+                if implicit {
+                    arguments = Some(scopes[sc].info.node);
+                    break;
+                }
                 at = scopes[sc].info.parent;
+            }
+            if let Some(owner) = arguments {
+                if !matches!(use_, Use::TypeOnly | Use::TypeExport) {
+                    *functions.entry(owner).or_default() |= USES_ARGUMENTS;
+                }
+                continue;
             }
             let Some(decl) = found.map(|d| merged.get(&d).copied().unwrap_or(d)) else {
                 if !matches!(use_, Use::Type | Use::TypeOnly | Use::TypeExport) {
                     unresolved.insert(ident);
-                    if name == "arguments" {
-                        if let Some(f) = this_owner(s, ident) {
-                            *functions.entry(f).or_default() |= USES_ARGUMENTS;
-                        }
-                    }
                 }
                 continue;
             };
@@ -1176,6 +1219,71 @@ mod tests {
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn implicit_arguments_resolve_only_in_real_functions_and_wrappers() {
+        let linter = native_linter("rule no-undef");
+        for (source, expected) in [
+            ("function f() { return arguments.length; }", 0),
+            ("const f = function arguments() { return arguments.length; };", 0),
+            ("function f() { return () => () => arguments.length; }", 0),
+            ("const object = { method() { return arguments.length; } };", 0),
+            ("class C { method() { return () => arguments.length; } }", 0),
+            ("arguments.length; const arrow = () => arguments.length;", 2),
+            ("export {}; arguments.length; const arrow = () => arguments.length;", 2),
+        ] {
+            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+            assert_eq!(diagnostics.len(), expected, "{source}: {diagnostics:#?}");
+        }
+        for options in ["set sourceType 'commonjs'", "set sourceType 'script'\nset globalReturn true"] {
+            let linter = native_linter(&format!("language .js {{ {options} }}\nrule no-undef"));
+            let diagnostics = linter.lint(Path::new("/root/a.js"), "arguments.length; const arrow = () => arguments.length;");
+            assert!(diagnostics.is_empty(), "{options}: {diagnostics:#?}");
+        }
+    }
+
+    #[test]
+    fn explicit_arguments_shadowing_does_not_hide_nested_function_arguments() {
+        use crate::native::ts::facts::Facts;
+        crate::engine::tests::with_native_file(
+            "const arguments = 'outer'; function f(arguments: string) { void /*@*/arguments; const arrow = () => /*@*/arguments; function inner() { return /*@*/arguments; } { const arguments = 1; void /*@*/arguments; } }",
+            |file, nodes| {
+                let bindings = file.bindings();
+                let first = file.decl_of(nodes[0]).expect("the parameter");
+                assert_eq!(file.decl_of(nodes[1]), Some(first), "arrow inherits the parameter");
+                assert!(file.decl_of(nodes[2]).is_none(), "nested function has its own implicit binding");
+                assert_eq!(file.resolved(nodes[2]), Some("local"));
+                assert!(!bindings.unresolved.contains(&nodes[2]));
+                assert_ne!(file.decl_of(nodes[3]), Some(first), "block local shadows the parameter");
+            },
+        );
+        crate::engine::tests::with_native_file("const f = function arguments() { return /*@*/arguments; };", |file, nodes| {
+            assert!(file.decl_of(nodes[0]).is_none(), "function expression name is outside its implicit arguments binding");
+            assert_eq!(file.resolved(nodes[0]), Some("local"));
+        });
+    }
+
+    #[test]
+    fn arguments_value_and_type_namespaces_stay_distinct() {
+        use crate::native::ts::facts::Facts;
+        crate::engine::tests::with_native_file("function f() { let value: /*@*/arguments; type T = typeof /*@*/arguments; }", |file, nodes| {
+            let type_name = file.syntax.get(nodes[0], super::F::Name).unwrap_or(nodes[0]);
+            assert_eq!(file.resolved(type_name), None, "implicit arguments is not a type declaration");
+            assert_eq!(file.resolved(nodes[1]), Some("local"), "typeof reads the implicit value");
+        });
+    }
+
+    #[test]
+    fn named_function_expression_parameters_shadow_the_self_name() {
+        for name in ["arguments", "self"] {
+            let source = format!("const f = function {name}({name}: string) {{ return /*@*/{name}; }};");
+            crate::engine::tests::with_native_file(&source, |file, nodes| {
+                let declaration = file.decl_of(nodes[0]).expect("the parameter binding");
+                assert_eq!(file.binding(declaration).unwrap().kind, "parameter");
+                assert!(file.type_flags(nodes[0]).unwrap_or_default().contains(&"string"));
+            });
+        }
+    }
 
     #[test]
     fn names_resolve_at_any_node_through_enclosing_scopes() {
