@@ -52,6 +52,7 @@ in style_tree_node let unified_union_members default(unified_union_children, [{ 
 fn unified_union(members) = join(map(reduce(members, [], (unique_members, member) => if any(unique_members, previous_member => previous_member.text == member.text) then unique_members else unique_members [member]), member => if member.wrap then "(" member.text ")" else member.text), " | ")
 fn unified_doc(prefix) = if re_test(prefix, /\/\*[\s\S]*?\*\/[ \t\r\n]*(?:\/\/[^\n]*(?:\n|$)[ \t\r\n]*)*$/) then re_replace(prefix, /[\s\S]*\/\*([\s\S]*?)\*\/[ \t\r\n]*(?:\/\/[^\n]*(?:\n|$)[ \t\r\n]*)*$/, "$1") else null
 in ts_export let unified_doc unified_doc(text_before)
+in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_doc if parent is ts_export then parent.unified_doc else unified_doc(text_before)
 in style_tree_node let unified_after_line line + count(split(text, "\n")) - 1 + count(split(default(space_after.text, ""), "\n")) - 1
 in style_tree_node let unified_next_offset space_after.end
 in ts_method let unified_head { offset: key.unified_next_offset, line: key.unified_after_line }
@@ -59,7 +60,7 @@ in ts_function let unified_key if body == null then default(name, "default") els
 in ts_method let unified_key if body == null && kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: key, static: contains([] modifier, "static") } else null
 in ts_method_signature let unified_key if kind != "get" && kind != "set" && key != null then { kind: kind_name(key.node), name: key, static: false } else null
 in ts_call_signature let unified_key default(kind, "call")
-in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_signature if unified_key == null then null else { key: unified_key, offset: offset, head: default(unified_head, { offset: offset, line: line }), parameters: [] parameter.unified_parameter, types: [] type_parameter.unified_type_parameter, result: return_type.unified_bare_type, outer: [] parameter.unified_outer_type, doc: if parent is ts_export then parent.unified_doc else unified_doc(text_before) }
+in ts_function, ts_method, ts_method_signature, ts_call_signature let unified_signature if unified_key == null then null else { key: unified_key, node: node, offset: offset, head: default(unified_head, { offset: offset, line: line }), parameters: [] parameter.unified_parameter, types: [] type_parameter.unified_type_parameter, result: return_type.unified_bare_type, outer: [] parameter.unified_outer_type }
 in ts_export let unified_signature declaration.unified_signature
 in ts_program, ts_block, ts_class, ts_interface, ts_type_literal let unified_signatures [] children.unified_signature
 in ts_export let unified_signatures parent.unified_signatures
@@ -77,7 +78,7 @@ fn unified_shorter(short, long) = if last(short.parameters).rest == true || !all
 fn unified_parameter_difference(a, b) = if count(a.parameters) == count(b.parameters) then unified_equal_length(a, b, filter(a.parameters, p => !unified_sigils(p, unified_parameter_at(b, p.index)) || p.type != unified_parameter_at(b, p.index).type)) else if (first(a.parameters).name == "this") != (first(b.parameters).name == "this") then null else if count(a.parameters) < count(b.parameters) then unified_shorter(a, b) else unified_shorter(b, a)
 fn unified_comparison(a, b, outer_names) = if a.result != b.result || any(a.outer, name => contains(outer_names, name)) != any(b.outer, name => contains(outer_names, name)) || a.types != b.types || first(a.parameters).name == "this" && first(a.parameters).raw_type == "void" || first(b.parameters).name == "this" && first(b.parameters).raw_type == "void" then null else unified_parameter_difference(a, b)
 fn unified_names(a, b) = all(slice(a.parameters, 0, count(b.parameters)), p => p.rest != unified_parameter_at(b, p.index).rest || p.name == unified_parameter_at(b, p.index).name)
-fn unified_pair(a, b, outer_names, group_count) = { difference: unified_comparison(a, b, outer_names), names: unified_names(a, b), docs: a.doc == b.doc, count: group_count }
+fn unified_pair(a, b, outer_names, group_count) = { difference: unified_comparison(a, b, outer_names), a: a, b: b, count: group_count }
 group unified_signature_node ts_function, ts_method, ts_method_signature, ts_call_signature
 in unified_signature_node rule unified-signatures {
   option ignoreDifferentlyNamedParameters boolean = false "Ignore overloads with different parameter names."
@@ -86,7 +87,7 @@ in unified_signature_node rule unified-signatures {
   when signature != null && parent.unified_scope == true
   let group filter(parent.unified_signatures, candidate => candidate.key == signature.key)
   let pairs map(filter(group, candidate => candidate.offset > signature.offset), candidate => unified_pair(signature, candidate, parent.unified_outer_names, count(group)))
-  each pair in filter(pairs, p => p.difference != null && (!ignoreDifferentlyNamedParameters || p.names) && (!ignoreOverloadsWithDifferentJSDoc || p.docs))
+  each pair in filter(pairs, p => p.difference != null && (!ignoreDifferentlyNamedParameters || unified_names(p.a, p.b)) && (!ignoreOverloadsWithDifferentJSDoc || p.a.node.unified_doc == p.b.node.unified_doc))
   report at pair.difference.offset
   warn "{if pair.count == 2 then 'These overloads' else 'This overload and the one on line ' pair.difference.other_line} can be combined into one signature{pair.difference.ending}"
 }
