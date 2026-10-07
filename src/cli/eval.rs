@@ -39,7 +39,7 @@ pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, f
     let cwd = output.cwd;
     let real = match &arg.config {
         Some(p) => normalize_path(&cwd.join(p)),
-        None => match config::find(&cwd) {
+        None => match config::find(cwd) {
             Some(p) => p,
             None => {
                 render::error(output, &config::not_found_message(cwd));
