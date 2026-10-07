@@ -525,6 +525,26 @@ fn license_fixes_preserve_following_comments_and_are_idempotent() {
 }
 
 #[test]
+fn padding_without_active_policies_does_not_read_statement_categories() {
+    let source = "first(); second();";
+    for options in ["[]", "[{ blankLine: \"any\", prev: \"*\", next: \"*\" }]"] {
+        let lint = native_linter(&format!(r#"
+override in ts_node let structure_padding_categories byte_slice("x", [])
+rule padding-line-between-statements {{ set options {options} }}
+"#));
+        let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+        assert!(diagnostics.is_empty(), "{options}: {diagnostics:#?}");
+    }
+    let lint = native_linter(r#"
+override in ts_node let structure_padding_categories byte_slice("x", [])
+rule padding-line-between-statements { set options [{ blankLine: "always", prev: "*", next: "*" }] }
+"#);
+    let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
+    assert!(!diagnostics.is_empty());
+    assert!(diagnostics.iter().all(|diagnostic| diagnostic.severity == crate::config::ast::Severity::Error));
+}
+
+#[test]
 fn block_like_categories_do_not_leak_into_adjacent_empty_statements() {
     let lint = native_linter("rule padding-line-between-statements { set options [{ blankLine: \"always\", prev: \"block-like\", next: \"block-like\" }] }");
     assert!(lint.lint(Path::new("/root/a.ts"), "function test() {};").is_empty());

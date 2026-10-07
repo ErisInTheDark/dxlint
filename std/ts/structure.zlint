@@ -474,6 +474,7 @@ fn structure_padding_padded(source, end, start, comments) = any(zip([end] map(co
 
 in structure_padding_owner rule padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
+  when any(options, policy => policy.blankLine != "any")
   let pairs map(zip(structure_padding_items, slice(structure_padding_items, 1)), pair => {
     prior: (first(pair)).structure_padding_categories,
     following: (last(pair)).structure_padding_categories,
