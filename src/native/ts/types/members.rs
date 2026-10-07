@@ -332,7 +332,7 @@ impl Checker<'_> {
                     0 => Ty::Unknown,
                     1 => found.into_iter().next().expect("one"),
                     _ if found.iter().any(|t| matches!(t, Ty::Any)) => Ty::Any,
-                    _ => Ty::Inter(found),
+                    _ => Ty::intersection(found),
                 };
                 Resolution { ty, declared, from_index, declarations, signature_keys }
             }

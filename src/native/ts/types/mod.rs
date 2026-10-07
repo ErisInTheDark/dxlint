@@ -226,6 +226,27 @@ impl Ty {
         }
     }
 
+    pub(super) fn intersection(items: Vec<Ty>) -> Ty {
+        // A `this` member can return the whole intersection from every arm.
+        // Normalise at construction so subsequent member reads do not multiply it.
+        let mut pending = items;
+        pending.reverse();
+        let mut out: Vec<Ty> = Vec::new();
+        while let Some(ty) = pending.pop() {
+            if let Ty::Inter(mut parts) = ty {
+                parts.reverse();
+                pending.extend(parts);
+            } else if !out.iter().any(|seen| seen.same_identity(&ty)) {
+                out.push(ty);
+            }
+        }
+        match out.len() {
+            0 => Ty::IntrinsicUnknown,
+            1 => out.pop().expect("one"),
+            _ => Ty::Inter(out),
+        }
+    }
+
     /// Without `null` and `undefined` (`x!`).
     pub fn may_be_nullish(&self) -> bool {
         match self {
@@ -486,7 +507,7 @@ impl<'p> Checker<'p> {
                     match items.len() {
                         0 => Ty::IntrinsicUnknown,
                         1 => items.pop().expect("one"),
-                        _ => Ty::Inter(items),
+                        _ => Ty::intersection(items),
                     }
                 }
             }

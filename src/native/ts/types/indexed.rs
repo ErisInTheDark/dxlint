@@ -4,6 +4,11 @@ use super::{Checker, Env, Ty, MAX_DEPTH};
 use super::super::summary::{Member, MemberKind};
 use super::members::{MemberDeclaration, Resolution};
 
+#[cfg(test)]
+thread_local! {
+    static INDEX_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Checker<'_> {
     pub fn index_resolution(&self, object: &Ty, index: &Ty) -> Resolution {
         self.index_query::<true>(object, index)
@@ -37,6 +42,8 @@ impl Checker<'_> {
     }
 
     fn index_signature<const METADATA: bool, const KEYS: bool>(&self, object: &Ty, index: &Ty, receiver: &Ty) -> Option<Resolution> {
+        #[cfg(test)]
+        INDEX_WORK.with(|work| work.set(work.get() + 1));
         let depth = self.depth.get();
         if depth >= MAX_DEPTH {
             return Some(Resolution::typed(Ty::Unknown));
@@ -187,7 +194,7 @@ fn intersection(parts: Vec<Ty>) -> Ty {
     } else if parts.len() == 1 {
         parts.into_iter().next().expect("one")
     } else {
-        Ty::Inter(parts)
+        Ty::intersection(parts)
     }
 }
 
@@ -199,8 +206,25 @@ fn union(parts: Vec<Ty>) -> Ty {
 mod tests {
     use crate::engine::tests::native_linter;
     use crate::engine::tests::with_native_file;
-    use super::Ty;
+    use super::{Ty, INDEX_WORK};
     use std::path::Path;
+
+    #[test]
+    fn self_members_keep_index_lookup_work_bounded() {
+        let source = "interface A { next: this; first: number; [key: number]: number } interface B { next: this; second: string; [key: number]: number } declare const value: A & B; const result = /*@*/value;";
+        with_native_file(source, |file, nodes| {
+            let checker = &file.typing().checker;
+            let mut ty = file.type_of(nodes[0]);
+            for _ in 0..3 { ty = checker.member(&ty, "next"); }
+            INDEX_WORK.with(|work| work.set(0));
+            let element = checker.indexed_type(&ty, &Ty::Prim("number"));
+            let work = INDEX_WORK.with(|work| work.get());
+            assert!(work <= 128, "repeated self-member contracts inflated index work to {work}");
+            assert_eq!(checker.equivalent(&element, &Ty::Prim("number")), Some(true));
+            assert_eq!(checker.equivalent(&checker.member(&ty, "first"), &Ty::Prim("number")), Some(true));
+            assert_eq!(checker.equivalent(&checker.member(&ty, "second"), &Ty::Prim("string")), Some(true));
+        });
+    }
 
     #[test]
     fn readonly_dynamic_indexes_keep_source_values_and_key_domains() {
