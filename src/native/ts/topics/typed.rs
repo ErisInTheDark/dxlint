@@ -178,13 +178,13 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(enums::mixed, n),
     },
     Fact {
-        name: "unsafe_arguments",
-        doc: "native calls, constructions and tagged templates: unsafe argument and spread transfers",
+        name: "argument_transfers",
+        doc: "native calls, constructions and tagged templates: any transfer sites, raw types and error provenance",
         get: |f, n| f.with_file(arguments::findings, n),
     },
     Fact {
-        name: "unsafe_assignments",
-        doc: "native assignments, declarations, properties and spreads: unsafe any/generic/destructuring transfers",
+        name: "assignment_transfers",
+        doc: "native assignments, declarations, properties and spreads: any transfer sites, raw types and error provenance",
         get: |f, n| f.with_file(assignments::findings, n),
     },
     Fact {

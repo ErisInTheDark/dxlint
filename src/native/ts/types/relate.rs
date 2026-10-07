@@ -19,6 +19,21 @@ thread_local! {
 }
 
 impl Ty {
+    /// Whether any can flow through a position inspected by `unsafe_assignment_to`.
+    pub fn carries_transfer_any(&self) -> bool {
+        fn check(sender: &Ty, depth: usize) -> bool {
+            if depth >= 32 { return false }
+            match sender {
+                Ty::Any => true,
+                Ty::Named(_, args) => args.iter().any(|arg| check(arg, depth + 1)),
+                Ty::Array(array) => check(&array.element, depth + 1),
+                Ty::Tuple(tuple) => tuple.iter().any(|element| check(element, depth + 1)),
+                _ => false,
+            }
+        }
+        check(self, 0)
+    }
+
     /// Any flowing into a known non-any generic position of the same type.
     pub fn unsafe_assignment_to(&self, receiver: &Ty) -> bool {
         fn check(sender: &Ty, receiver: &Ty, depth: usize) -> bool {
@@ -405,6 +420,46 @@ fn any(answers: impl Iterator<Item = Option<bool>>) -> Option<bool> {
 mod tests {
     use super::*;
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn transfer_sender_prefilter_keeps_every_comparable_any_position() {
+        with_native_file("interface Box<T> { value: T; } declare const value: Box<any>; const copy = /*@*/value;", |file, nodes| {
+            let named = file.type_of(nodes[0]);
+            let Ty::Named(symbol, _) = named else { panic!("named generic") };
+            let mut senders = vec![
+                Ty::Any, Ty::Unknown, Ty::IntrinsicUnknown, Ty::Prim("number"),
+                Ty::Named(symbol.clone(), vec![Ty::Any]),
+                Ty::Named(symbol.clone(), vec![Ty::Unknown]),
+                Ty::Union(vec![Ty::Any, Ty::Prim("number")]),
+                Ty::Inter(vec![Ty::Any, Ty::Prim("number")]),
+            ];
+            let mut receivers = vec![Ty::Any, Ty::Unknown, Ty::IntrinsicUnknown, Ty::Prim("number"), Ty::Named(symbol, vec![Ty::Prim("number")])];
+            for readonly in [false, true] {
+                for element in [Ty::Any, Ty::Prim("number")] {
+                    senders.push(Ty::Array(super::super::Array { element: Box::new(element.clone()), readonly }));
+                    receivers.push(Ty::Array(super::super::Array { element: Box::new(element), readonly }));
+                }
+                let mut tuple: Tuple = [Ty::Any, Ty::Prim("number")].into_iter().collect();
+                tuple.readonly = readonly;
+                senders.push(Ty::Tuple(tuple));
+                let mut tuple: Tuple = [Ty::Prim("string"), Ty::Prim("number")].into_iter().collect();
+                tuple.readonly = readonly;
+                receivers.push(Ty::Tuple(tuple));
+            }
+            for sender in &senders {
+                for receiver in &receivers {
+                    assert!(!sender.unsafe_assignment_to(receiver) || sender.carries_transfer_any());
+                }
+            }
+            let mut sender = Ty::Any;
+            let mut receiver = Ty::Prim("number");
+            for _ in 0..33 {
+                assert!(!sender.unsafe_assignment_to(&receiver) || sender.carries_transfer_any());
+                sender = Ty::Array(super::super::Array { element: Box::new(sender), readonly: false });
+                receiver = Ty::Array(super::super::Array { element: Box::new(receiver), readonly: false });
+            }
+        });
+    }
 
     #[test]
     fn a_relation_scope_bounds_multiple_comparisons_together() {

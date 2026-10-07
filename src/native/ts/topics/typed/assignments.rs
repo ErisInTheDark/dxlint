@@ -9,8 +9,9 @@ fn finding(file: &NativeFile<'_>, node: u32, mode: &str, error: bool, sender: Op
     Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
         ("mode".into(), Value::from(mode.to_string())),
-        ("sender".into(), sender.map_or_else(|| Value::from(if error { "error typed" } else { "`any`" }), |ty| Value::from(format!("`{}`", ck.print(ty))))),
-        ("receiver".into(), receiver.map_or(Value::Null, |ty| Value::from(format!("`{}`", ck.print(ty))))),
+        ("error".into(), Value::Bool(error)),
+        ("sender".into(), if error { Value::Null } else { sender.map_or_else(|| Value::from("any"), |ty| Value::from(ck.print(ty))) }),
+        ("receiver".into(), receiver.map_or(Value::Null, |ty| Value::from(ck.print(ty)))),
     ])
 }
 
@@ -43,6 +44,12 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     if s.is(node, K::Prop) && s.is(sender_node, K::AssignPattern) { return Value::Null }
     let ck = &file.typing().checker;
     let sender = file.type_of(sender_node);
+    let category = super::unsafe_types::category(file, sender_node);
+    if category.is_none() && !sender.carries_transfer_any()
+        && !matches!(s.kind(receiver_node), Some(K::ArrayPattern | K::Array | K::ObjectPattern | K::Object))
+    {
+        return Value::list(Vec::new());
+    }
     let mut receiver = annotation.map_or_else(|| file.type_of(receiver_node), |annotation| file.type_of(annotation));
     let mut known_unknown = matches!(receiver, Ty::IntrinsicUnknown) || annotation.is_some() && matches!(receiver, Ty::Unknown);
     if s.is(node, K::Prop) {
@@ -59,7 +66,6 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         known_unknown = matches!(s.kind(receiver_node), Some(K::Member | K::Index))
             || file.decl_of(receiver_node).and_then(|decl| s.parent(decl)).is_some_and(|owner| s.get(owner, F::Type).is_some());
     }
-    let category = super::unsafe_types::category(file, sender_node);
     if category.is_some() && !known_unknown {
         return Value::list(vec![finding(file, report, "any", category == Some("error"), None, None)]);
     }
@@ -161,6 +167,13 @@ mod tests {
         let code = "const [[[x]]] = [spooky]; const { x: { y: z } } = { x: spooky };";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
         assert_eq!(diagnostics.len(), 3);
-        assert!(diagnostics.iter().all(|diagnostic| diagnostic.message.contains("error typed")));
+        let provenance = native_linter(r#"
+            in ts_declarator, ts_property rule provenance {
+                each transfer in default(assignment_transfers, [])
+                when transfer.error == true
+                warn "provenance"
+            }
+        "#);
+        assert_eq!(provenance.lint(Path::new("/root/a.ts"), code).len(), 3);
     }
 }

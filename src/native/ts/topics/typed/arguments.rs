@@ -4,14 +4,19 @@ use super::*;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::types::Parameters;
 
+#[cfg(test)]
+thread_local! {
+    static PARAMETER_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn finding(file: &NativeFile<'_>, node: u32, mode: &str, sender: &Ty, receiver: Option<&Ty>, error: bool) -> Value<'static> {
     let ck = &file.typing().checker;
-    let sender = if error { if mode == "array" { "error" } else { "error typed" }.to_string() } else if mode == "tuple" { format!("of type `{}`", ck.print(sender)) } else { format!("`{}`", ck.print(sender)) };
     Value::record(vec![
         ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
         ("mode".into(), Value::from(mode.to_string())),
-        ("sender".into(), Value::from(sender)),
-        ("receiver".into(), receiver.map_or(Value::Null, |ty| Value::from(format!("`{}`", ck.print(ty))))),
+        ("error".into(), Value::Bool(error)),
+        ("sender".into(), if error { Value::Null } else { Value::from(ck.print(sender)) }),
+        ("receiver".into(), receiver.map_or(Value::Null, |ty| Value::from(ck.print(ty)))),
     ])
 }
 
@@ -24,13 +29,18 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let args: Vec<_> = if tagged {
         s.get(node, F::Quasi).map_or_else(Vec::new, |quasi| s.all(quasi, F::Expr).collect())
     } else { s.all(node, F::Arg).collect() };
-    let types: Vec<_> = args.iter().map(|&arg| file.type_of(arg)).collect();
+    let actuals: Vec<_> = args.iter().map(|&arg| file.type_of(arg)).collect();
+    if !args.iter().any(|&arg| s.is(arg, K::Spread)) && !actuals.iter().any(Ty::carries_transfer_any) {
+        return Value::list(Vec::new());
+    }
     let targs = s.all(node, F::TypeArg).map(|arg| file.type_of(arg)).collect();
     let ck = &file.typing().checker;
-    let Some((types, rest)) = ck.argument_parameters(&callee, &types, targs, s.is(node, K::New)) else { return Value::Null };
+    #[cfg(test)]
+    PARAMETER_WORK.with(|work| work.set(work.get() + 1));
+    let Some((types, rest)) = ck.argument_parameters(&callee, &actuals, targs, s.is(node, K::New)) else { return Value::Null };
     let mut parameters = Parameters::new(types, rest, usize::from(tagged));
     let mut out = Vec::new();
-    for arg in args {
+    for (arg, sender) in args.into_iter().zip(actuals) {
         if s.is(arg, K::Spread) {
             let Some(value) = s.get(arg, F::Arg) else { continue };
             let ty = file.type_of(value);
@@ -51,7 +61,6 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
                 _ => {}
             }
         } else if let Some(receiver) = parameters.next() {
-            let sender = file.type_of(arg);
             if !super::transfers::empty_map(file, arg) && sender.unsafe_assignment_to(&receiver) {
                 out.push(finding(file, arg, "argument", &sender, Some(&receiver), super::unsafe_types::category(file, arg) == Some("error")));
             }
@@ -63,6 +72,24 @@ pub(super) fn findings(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn safe_calls_do_not_bind_parameter_types_for_transfer_queries() {
+        let code = "declare function f<T>(value: T): void; declare class C { constructor(value: number); } declare function tag(strings: TemplateStringsArray, value: number): void; /*@*/f(1); /*@*/new C(1); /*@*/tag`value ${1}`;";
+        crate::engine::tests::with_native_file(code, |file, nodes| {
+            super::PARAMETER_WORK.with(|work| work.set(0));
+            for &marked in nodes {
+                let start = file.syntax.tree.node(marked).start;
+                let node = file.syntax.tree.order.iter().copied().find(|&node| {
+                    file.syntax.tree.node(node).start == start
+                        && matches!(file.syntax.kind(node), Some(super::K::Call | super::K::New | super::K::TaggedTemplate))
+                }).expect("marked call");
+                assert!(!super::findings(file, node).truthy());
+            }
+            let work = super::PARAMETER_WORK.with(|work| work.get());
+            assert_eq!(work, 0, "safe transfer queries bound {work} signatures");
+        });
+    }
+
+    #[test]
     fn readonly_arrays_keep_unsafe_element_transfers() {
         let linter = crate::engine::tests::native_linter("rule no-unsafe-assignment:*\nrule no-unsafe-argument");
         let code = "declare const mutable: any[]; declare const immutable: readonly any[]; const first: readonly number[] = mutable; const second: readonly number[] = immutable; function takes(values: readonly number[]) {} takes(mutable); takes(immutable);";
@@ -72,6 +99,19 @@ mod tests {
 
     use crate::engine::tests::native_linter;
     use std::path::Path;
+
+    #[test]
+    fn array_spread_provenance_is_distinct_from_explicit_any_arguments() {
+        let linter = native_linter(r#"
+            in ts_call rule provenance {
+                each transfer in default(argument_transfers, [])
+                when transfer.error == true
+                warn "provenance"
+            }
+        "#);
+        let code = "declare function f(value: number, ...rest: number[]): void; declare const errors: Missing[]; f(1 as any); f(...errors);";
+        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
+    }
 
     #[test]
     fn rest_parameters_consume_each_tuple_member_without_losing_the_next_argument() {

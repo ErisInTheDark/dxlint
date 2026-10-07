@@ -219,69 +219,72 @@ in ts_enum rule no-mixed-enums {
   warn "Mixing number and string enums can be confusing."
 }
 
+fn unsafe_argument_sender(transfer) = if transfer.error then if transfer.mode == "array" then "error" else "error typed" else if transfer.mode == "tuple" then "of type `{transfer.sender}`" else "`{transfer.sender}`"
+fn unsafe_assignment_sender(transfer) = if transfer.error then "error typed" else "`{transfer.sender}`"
+
 in ts_call, ts_new, ts_tagged_template {
   rule no-unsafe-argument {
-    each unsafe_arg in default(unsafe_arguments, [])
+    each unsafe_arg in default(argument_transfers, [])
     when unsafe_arg.mode == "argument"
     report at unsafe_arg.offset
-    warn "Unsafe argument of type {unsafe_arg.sender} assigned to a parameter of type {unsafe_arg.receiver}."
+    warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
   }
   rule no-unsafe-argument:spread {
-    each unsafe_arg in default(unsafe_arguments, [])
+    each unsafe_arg in default(argument_transfers, [])
     when unsafe_arg.mode == "spread"
     report at unsafe_arg.offset
-    warn "Unsafe spread of an {unsafe_arg.sender} type."
+    warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
   }
   rule no-unsafe-argument:array {
-    each unsafe_arg in default(unsafe_arguments, [])
+    each unsafe_arg in default(argument_transfers, [])
     when unsafe_arg.mode == "array"
     report at unsafe_arg.offset
-    warn "Unsafe spread of an {unsafe_arg.sender} array type."
+    warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
   }
   rule no-unsafe-argument:tuple {
-    each unsafe_arg in default(unsafe_arguments, [])
+    each unsafe_arg in default(argument_transfers, [])
     when unsafe_arg.mode == "tuple"
     report at unsafe_arg.offset
-    warn "Unsafe spread of a tuple type. The argument is {unsafe_arg.sender} and is assigned to a parameter of type {unsafe_arg.receiver}."
+    warn "Unsafe spread of a tuple type. The argument is " unsafe_argument_sender(unsafe_arg) " and is assigned to a parameter of type `{unsafe_arg.receiver}`."
   }
 }
 
 in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_spread, ts_jsx_attribute {
   rule no-unsafe-assignment {
-    each unsafe_assigned in default(unsafe_assignments, [])
+    each unsafe_assigned in default(assignment_transfers, [])
     when unsafe_assigned.mode == "any"
     report at unsafe_assigned.offset
-    warn "Unsafe assignment of an {unsafe_assigned.sender} value."
+    warn "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:generic {
-    each unsafe_assigned in default(unsafe_assignments, [])
+    each unsafe_assigned in default(assignment_transfers, [])
     when unsafe_assigned.mode == "generic"
     report at unsafe_assigned.offset
-    warn "Unsafe assignment of type {unsafe_assigned.sender} to a variable of type {unsafe_assigned.receiver}."
+    warn "Unsafe assignment of type " unsafe_assignment_sender(unsafe_assigned) " to a variable of type `{unsafe_assigned.receiver}`."
   }
   rule no-unsafe-assignment:array {
-    each unsafe_assigned in default(unsafe_assignments, [])
+    each unsafe_assigned in default(assignment_transfers, [])
     when unsafe_assigned.mode == "array"
     report at unsafe_assigned.offset
-    warn "Unsafe array destructuring of an {unsafe_assigned.sender} array value."
+    warn "Unsafe array destructuring of an " unsafe_assignment_sender(unsafe_assigned) " array value."
   }
   rule no-unsafe-assignment:tuple {
-    each unsafe_assigned in default(unsafe_assignments, [])
+    each unsafe_assigned in default(assignment_transfers, [])
     when unsafe_assigned.mode == "tuple"
     report at unsafe_assigned.offset
-    warn "Unsafe array destructuring of a tuple element with an {unsafe_assigned.sender} value."
+    warn "Unsafe array destructuring of a tuple element with an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:object {
-    each unsafe_assigned in default(unsafe_assignments, [])
+    each unsafe_assigned in default(assignment_transfers, [])
     when unsafe_assigned.mode == "object"
     report at unsafe_assigned.offset
-    warn "Unsafe object destructuring of a property with an {unsafe_assigned.sender} value."
+    warn "Unsafe object destructuring of a property with an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:spread {
-    each unsafe_assigned in default(unsafe_assignments, [])
+    each unsafe_assigned in default(assignment_transfers, [])
     when unsafe_assigned.mode == "spread"
     report at unsafe_assigned.offset
-    warn "Unsafe spread of an {unsafe_assigned.sender} value in an array."
+    warn "Unsafe spread of an " unsafe_assignment_sender(unsafe_assigned) " value in an array."
   }
 }
 
