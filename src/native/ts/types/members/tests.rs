@@ -1,8 +1,41 @@
 use crate::engine::tests::with_native_file;
 use crate::native::ts::summary::Visibility;
-use super::{Checker, Env, Ty, TypeSyn};
+use super::{Checker, Env, Ty, TypeSyn, MEMBER_WORK};
 use crate::native::ts::{modules::{DeclRef, Globals, Project}, view::Raw};
 use std::{path::Path, sync::Arc};
+
+#[test]
+fn opaque_self_contracts_do_not_multiply_stored_types() {
+    let source = "interface A { next: (this & Missing) | undefined; shared: number } interface B { next: (this & Missing) | undefined; shared: number } declare const value: A & B; const result = /*@*/value;";
+    with_native_file(source, |file, nodes| {
+        let checker = &file.typing().checker;
+        let mut ty = file.type_of(nodes[0]);
+        for _ in 0..6 { ty = checker.member(&ty, "next"); }
+        let mut pending = vec![&ty];
+        let mut nodes = 0;
+        while let Some(ty) = pending.pop() {
+            nodes += 1;
+            if let Ty::Inter(parts) | Ty::Union(parts) = ty { pending.extend(parts); }
+        }
+        assert!(nodes <= 128, "opaque self contracts inflated stored types to {nodes} nodes");
+        assert!(!ty.same_identity(&ty.clone()));
+    });
+}
+
+#[test]
+fn recursive_union_members_keep_lookup_work_bounded() {
+    let source = "interface A { next: A | B; shared: number } interface B { next: A | B; shared: number } declare const value: A | B; const result = /*@*/value;";
+    with_native_file(source, |file, nodes| {
+        let checker = &file.typing().checker;
+        let mut ty = file.type_of(nodes[0]);
+        for _ in 0..8 { ty = checker.member(&ty, "next"); }
+        MEMBER_WORK.with(|work| work.set(0));
+        let value = checker.member(&ty, "shared");
+        let work = MEMBER_WORK.with(|work| work.get());
+        assert!(work <= 128, "recursive union contracts inflated member work to {work}");
+        assert_eq!(checker.equivalent(&value, &Ty::Prim("number")), Some(true));
+    });
+}
 
 fn with_library(src: &str, run: impl FnOnce(&Checker<'_>)) {
     let project = Project::default();

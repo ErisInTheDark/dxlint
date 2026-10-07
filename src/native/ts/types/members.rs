@@ -7,6 +7,11 @@ use super::super::modules::{DeclRef, FileId};
 use super::super::summary::{DeclKind, Member, MemberKind, Sig, TypeSyn, Visibility};
 use super::{Callable, Checker, Env, PropertyOrigin, Sym, Ty, MAX_DEPTH};
 
+#[cfg(test)]
+thread_local! {
+    static MEMBER_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug, Clone)]
 pub struct MemberDeclaration {
     pub owner: Option<DeclRef>,
@@ -248,6 +253,8 @@ impl Checker<'_> {
     }
 
     fn member_lookup<const METADATA: bool, const PROTOTYPE: bool>(&self, t: &Ty, name: &str, receiver: &Ty) -> Resolution {
+        #[cfg(test)]
+        MEMBER_WORK.with(|work| work.set(work.get() + 1));
         self.resolution_depth(|| self.member_core::<METADATA, PROTOTYPE>(t, name, receiver))
     }
 

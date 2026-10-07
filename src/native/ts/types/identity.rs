@@ -14,7 +14,11 @@ impl Ty {
     pub fn same_identity(&self, other: &Ty) -> bool {
         #[cfg(test)]
         IDENTITY_WORK.with(|work| work.set(0));
-        Identity::default().same(self, other, 0)
+        Comparison::<false>::default().same(self, other, 0)
+    }
+
+    pub(super) fn same_representation(&self, other: &Ty) -> bool {
+        Comparison::<true>::default().same(self, other, 0)
     }
 }
 
@@ -149,23 +153,24 @@ impl Checker<'_> {
 // Addresses identify immutable inputs only within this comparison. Depth is
 // part of the result: a shallow proof cannot bypass a deeper resolution limit.
 #[derive(Default)]
-struct Identity {
+struct Comparison<const STORED: bool> {
     types: FxHashMap<(*const Ty, *const Ty, usize), bool>,
     environments: FxHashMap<(*const Env, *const Env, usize), bool>,
 }
 
-impl Identity {
+impl<const STORED: bool> Comparison<STORED> {
     fn same(&mut self, a: &Ty, b: &Ty, depth: usize) -> bool {
         #[cfg(test)]
-        IDENTITY_WORK.with(|work| work.set(work.get() + 1));
+        if !STORED { IDENTITY_WORK.with(|work| work.set(work.get() + 1)); }
         if depth >= 32 { return false }
         match (a, b) {
+            (Ty::Unknown, Ty::Unknown) if STORED => return true,
             (Ty::Prim(a), Ty::Prim(b)) => return a == b,
-            (Ty::Lit(a, ap), Ty::Lit(b, bp)) if ap == bp => return match *ap {
+            (Ty::Lit(a, ap), Ty::Lit(b, bp)) if ap == bp => return if STORED { a == b } else { match *ap {
                 "string" => super::super::regex::cook(a).zip(super::super::regex::cook(b)).is_some_and(|(a, b)| a == b),
                 "number" => super::super::statics::number(a).zip(super::super::statics::number(b)).is_some_and(|(a, b)| a == b),
                 _ => a == b,
-            },
+            } },
             (Ty::Param(a), Ty::Param(b)) => return a == b,
             (Ty::Named(a, aa), Ty::Named(b, ba)) if a != b || aa.is_empty() || ba.is_empty() =>
                 return a == b && aa.is_empty() && ba.is_empty(),
@@ -173,6 +178,11 @@ impl Identity {
             (Ty::Struct(a), Ty::Struct(b)) => return Arc::ptr_eq(a, b),
             (Ty::Fn(a), Ty::Fn(b)) => return Arc::ptr_eq(a, b),
             (Ty::Class(a), Ty::Class(b)) | (Ty::Ns(a), Ty::Ns(b)) => return a == b,
+            (Ty::Module(a), Ty::Module(b)) if STORED => return match (a.0, b.0) {
+                (super::super::modules::ModRef::File(a), super::super::modules::ModRef::File(b)) => a == b,
+                (super::super::modules::ModRef::Ambient(af, ai), super::super::modules::ModRef::Ambient(bf, bi)) => af == bf && ai == bi,
+                _ => false,
+            },
             (Ty::IntrinsicUnknown, Ty::IntrinsicUnknown) | (Ty::Any, Ty::Any) | (Ty::Never, Ty::Never) | (Ty::Void, Ty::Void) | (Ty::Undefined, Ty::Undefined) | (Ty::Null, Ty::Null) => return true,
             (Ty::Named(..), Ty::Named(..)) | (Ty::Array(_), Ty::Array(_)) | (Ty::Tuple(_), Ty::Tuple(_))
                 | (Ty::Inter(_), Ty::Inter(_)) | (Ty::Union(_), _) | (_, Ty::Union(_)) => {}
@@ -187,8 +197,9 @@ impl Identity {
             (Ty::Tuple(a), Ty::Tuple(b)) => a.readonly == b.readonly && a.len() == b.len()
                 && a.elements.iter().zip(&b.elements).all(|(a, b)| a.optional == b.optional && a.rest == b.rest && self.same(&a.ty, &b.ty, depth + 1)),
             (Ty::Union(a), Ty::Union(b)) | (Ty::Inter(a), Ty::Inter(b)) =>
-                a.iter().all(|a| b.iter().any(|b| self.same(a, b, depth + 1))) && b.iter().all(|b| a.iter().any(|a| self.same(a, b, depth + 1))),
-            (Ty::Union(parts), _) | (_, Ty::Union(parts)) => !parts.is_empty() && parts.iter().all(|part| {
+                if STORED { a.len() == b.len() && a.iter().zip(b).all(|(a, b)| self.same(a, b, depth + 1)) }
+                else { a.iter().all(|a| b.iter().any(|b| self.same(a, b, depth + 1))) && b.iter().all(|b| a.iter().any(|a| self.same(a, b, depth + 1))) },
+            (Ty::Union(parts), _) | (_, Ty::Union(parts)) => !STORED && !parts.is_empty() && parts.iter().all(|part| {
                 if matches!(a, Ty::Union(_)) { self.same(part, b, depth + 1) } else { self.same(a, part, depth + 1) }
             }),
             _ => unreachable!(),

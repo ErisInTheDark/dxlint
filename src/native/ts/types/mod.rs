@@ -219,6 +219,7 @@ impl Ty {
             }
         }
         if unknown { return Ty::IntrinsicUnknown }
+        let mut out = Self::distinct_parts(out, false);
         match out.len() {
             0 => Ty::Never,
             1 => out.pop().expect("one"),
@@ -229,22 +230,33 @@ impl Ty {
     pub(super) fn intersection(items: Vec<Ty>) -> Ty {
         // A `this` member can return the whole intersection from every arm.
         // Normalise at construction so subsequent member reads do not multiply it.
-        let mut pending = items;
-        pending.reverse();
-        let mut out: Vec<Ty> = Vec::new();
-        while let Some(ty) = pending.pop() {
-            if let Ty::Inter(mut parts) = ty {
-                parts.reverse();
-                pending.extend(parts);
-            } else if !out.iter().any(|seen| seen.same_identity(&ty)) {
-                out.push(ty);
-            }
-        }
+        let mut out = Self::distinct_parts(items, true);
         match out.len() {
             0 => Ty::IntrinsicUnknown,
             1 => out.pop().expect("one"),
             _ => Ty::Inter(out),
         }
+    }
+
+    fn distinct_parts(items: Vec<Ty>, intersection: bool) -> Vec<Ty> {
+        let mut pending = items;
+        pending.reverse();
+        let mut out: Vec<Ty> = Vec::new();
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Ty::Inter(mut parts) if intersection => {
+                    parts.reverse();
+                    pending.extend(parts);
+                }
+                Ty::Union(mut parts) if !intersection => {
+                    parts.reverse();
+                    pending.extend(parts);
+                }
+                ty if !out.iter().any(|seen| seen.same_representation(&ty)) => out.push(ty),
+                _ => {}
+            }
+        }
+        out
     }
 
     /// Without `null` and `undefined` (`x!`).
