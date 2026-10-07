@@ -1,19 +1,16 @@
 //! `zlint rules`, `zlint tree`, `zlint functions`.
 
 use std::path::Path;
-use std::process::ExitCode;
-
-use anstream::println;
 use anstyle::{AnsiColor, Style};
 
-use super::render;
-use zoomie_lint::config::ast::Severity;
-use zoomie_lint::engine::symbols::Symbols;
-use zoomie_lint::engine::Linter;
-use zoomie_lint::expr::show;
-use zoomie_lint::expr::functions::FUNCTIONS;
-use zoomie_lint::expr::BUILTIN_VARS;
-use zoomie_lint::grammar::Tree;
+use super::{render, Output};
+use crate::config::ast::Severity;
+use crate::engine::symbols::Symbols;
+use crate::engine::Linter;
+use crate::expr::show;
+use crate::expr::functions::FUNCTIONS;
+use crate::expr::BUILTIN_VARS;
+use crate::grammar::Tree;
 
 const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
@@ -21,10 +18,10 @@ const CYAN: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::C
 
 /// `zlint rules`: every rule the config defines, the ones that are off
 /// included (with the severity `rule name` turns them on at).
-pub fn rules(linter: &Linter) -> ExitCode {
+pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
     enum Row<'a> {
-        Compiled(&'a zoomie_lint::engine::Rule),
-        Inert(&'a zoomie_lint::engine::InertRule),
+        Compiled(&'a crate::engine::Rule),
+        Inert(&'a crate::engine::InertRule),
     }
     let mut rows: Vec<(&str, Row)> = linter.rules.iter().map(|r| (r.name.as_str(), Row::Compiled(r))).collect();
     rows.extend(linter.inert.iter().map(|r| (r.name.as_str(), Row::Inert(r))));
@@ -33,7 +30,7 @@ pub fn rules(linter: &Linter) -> ExitCode {
     for (_, row) in rows {
         let f = match row {
             Row::Inert(r) => {
-                println!("{BOLD}{}{BOLD:#} {} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}", r.name, off(r.default_severity), r.target_text);
+                output.out(format_args!("{BOLD}{}{BOLD:#} {} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}", r.name, off(r.default_severity), r.target_text));
                 continue;
             }
             Row::Compiled(f) => f,
@@ -41,70 +38,70 @@ pub fn rules(linter: &Linter) -> ExitCode {
         let sev = render::severity_style(f.severity);
         let sev_text = if f.severity == Severity::Off { off(f.default_severity) } else { format!("{sev}{}{sev:#}", f.severity.as_str()) };
         let fix = if f.has_fix() { format!(" {DIM}fixable{DIM:#}") } else { String::new() };
-        println!("{BOLD}{}{BOLD:#} {sev_text} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}{fix}", f.name, f.target_text);
+        output.out(format_args!("{BOLD}{}{BOLD:#} {sev_text} {DIM}in{DIM:#} {CYAN}{}{CYAN:#}{fix}", f.name, f.target_text));
         if let Some(d) = f.message_template() {
-            println!("    {d}");
+            output.out(format_args!("    {d}"));
         }
         for o in f.options() {
             let changed = if o.value != o.default { format!(" {DIM}(default {}){DIM:#}", show(&o.default)) } else { String::new() };
             let desc = o.description.as_deref().map(|d| format!(" {DIM}- {d}{DIM:#}")).unwrap_or_default();
-            println!("    {CYAN}{}{CYAN:#}{DIM}: {}{DIM:#} = {}{changed}{desc}", o.name, o.schema, show(&o.value));
+            output.out(format_args!("    {CYAN}{}{CYAN:#}{DIM}: {}{DIM:#} = {}{changed}{desc}", o.name, o.schema, show(&o.value)));
         }
     }
-    ExitCode::SUCCESS
+    0
 }
 
 /// `zlint describe name`: everything of that name, as hover shows it, and
 /// where each is used.
-pub fn describe(symbols: &Symbols, name: &str) -> ExitCode {
+pub fn describe(output: &mut Output<'_>, symbols: &Symbols, name: &str) -> u8 {
     let found = symbols.named(name);
     if found.is_empty() {
-        render::error(&format!("nothing named `{name}` in this configuration"));
+        render::error(output, &format!("nothing named `{name}` in this configuration"));
         let names = symbols.symbols.iter().map(|s| s.name.as_str());
-        if let Some(best) = zoomie_lint::config::error::closest(name, names) {
-            eprintln!("  did you mean `{best}`?");
+        if let Some(best) = crate::config::error::closest(name, names) {
+            output.err(format_args!("  did you mean `{best}`?"));
         }
-        return ExitCode::from(1);
+        return 1;
     }
     // Paths relative to where zlint runs.
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = output.cwd;
     let prefix = format!("{}{}", cwd.display(), std::path::MAIN_SEPARATOR);
     let local = |s: String| s.replace(&prefix, "");
     for (i, id) in found.into_iter().enumerate() {
         if i > 0 {
-            println!("{DIM}----{DIM:#}");
+            output.out(format_args!("{DIM}----{DIM:#}"));
         }
-        println!("{}", local(symbols.describe(id)));
+        output.out(format_args!("{}", local(symbols.describe(id))));
         let uses: Vec<String> = symbols.uses_of(id).map(|s| local(symbols.location(s))).collect();
         if !uses.is_empty() {
-            println!("\nused at:");
+            output.out(format_args!("\nused at:"));
             for u in uses {
-                println!("  {u}");
+                output.out(format_args!("  {u}"));
             }
         }
     }
-    ExitCode::SUCCESS
+    0
 }
 
 /// A file's text and the language that owns it.
-fn read_source(linter: &Linter, file: &Path) -> Result<(String, usize), ExitCode> {
-    let path = std::env::current_dir().unwrap_or_default().join(file);
+fn read_source(output: &mut Output<'_>, linter: &Linter, file: &Path) -> Result<(String, usize), u8> {
+    let path = output.cwd.join(file);
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) => {
-            render::error(&format!("cannot read {}: {e}", file.display()));
-            return Err(ExitCode::from(2));
+            render::error(output, &format!("cannot read {}: {e}", file.display()));
+            return Err(2);
         }
     };
     let rel = linter.relative(&path);
     let Some(lang) = linter.grammar.lang_for(&rel) else {
-        render::error(&format!("no `lang` owns {}", file.display()));
-        return Err(ExitCode::from(2));
+        render::error(output, &format!("no `lang` owns {}", file.display()));
+        return Err(2);
     };
     Ok((text, lang))
 }
 
-fn node_name(g: &zoomie_lint::grammar::Grammar, tree: &Tree, lang: usize, id: u32) -> String {
+fn node_name(g: &crate::grammar::Grammar, tree: &Tree, lang: usize, id: u32) -> String {
     if tree.is_root(id) {
         format!(".{}", g.langs[lang].name)
     } else if tree.is_text(id) {
@@ -128,23 +125,23 @@ fn snippet(text: &str, start: usize, end: usize) -> String {
 /// every child matcher of the innermost one does there, so a span that went
 /// to the wrong layer (or to none) can be traced to the matcher that took
 /// it or the prefilter that skipped it.
-pub fn explain(linter: &Linter, file: &Path, at: &str) -> ExitCode {
-    let (text, lang) = match read_source(linter, file) {
+pub fn explain(output: &mut Output<'_>, linter: &Linter, file: &Path, at: &str) -> u8 {
+    let (text, lang) = match read_source(output, linter, file) {
         Ok(x) => x,
         Err(code) => return code,
     };
-    let lines = zoomie_lint::line_index::LineIndex::new(&text);
+    let lines = crate::line_index::LineIndex::new(&text);
     let parsed = at.split_once(':').and_then(|(l, c)| Some((l.trim().parse::<usize>().ok()?, c.trim().parse::<usize>().ok()?)));
     let Some((line, col)) = parsed.filter(|&(l, c)| l >= 1 && c >= 1 && l <= lines.line_count()) else {
-        render::error(&format!("`--at` wants LINE:COL inside the file, got `{at}`"));
-        return ExitCode::from(2);
+        render::error(output, &format!("`--at` wants LINE:COL inside the file, got `{at}`"));
+        return 2;
     };
     let line_start = lines.line_start(line - 1);
     let pos = text[line_start..].char_indices().nth(col - 1).map_or(text.len(), |(i, _)| line_start + i);
     let g = &linter.grammar;
     let tree = Tree::parse(g, lang, &text);
 
-    println!("{BOLD}layers at {line}:{col}{BOLD:#}");
+    output.out(format_args!("{BOLD}layers at {line}:{col}{BOLD:#}"));
     let inner = tree.innermost_at(g, pos as u32, u32::MAX).unwrap_or(tree.root);
     let mut path = vec![inner];
     while let Some(p) = tree.parent(*path.last().expect("non-empty")) {
@@ -153,7 +150,7 @@ pub fn explain(linter: &Linter, file: &Path, at: &str) -> ExitCode {
     for (depth, &id) in path.iter().rev().filter(|&&id| !tree.is_text(id)).enumerate() {
         let n = tree.node(id);
         let (l, c) = lines.line_col(&text, n.start as usize);
-        println!("{}{BOLD}{}{BOLD:#} {DIM}{}:{}{DIM:#} {}", "  ".repeat(depth), node_name(g, &tree, lang, id), l + 1, c + 1, snippet(&text, n.start as usize, n.end as usize));
+        output.out(format_args!("{}{BOLD}{}{BOLD:#} {DIM}{}:{}{DIM:#} {}", "  ".repeat(depth), node_name(g, &tree, lang, id), l + 1, c + 1, snippet(&text, n.start as usize, n.end as usize)));
     }
 
     // The layer whose scan decides what starts here: the innermost node that
@@ -171,13 +168,13 @@ pub fn explain(linter: &Linter, file: &Path, at: &str) -> ExitCode {
         .map(|c| tree.node(c).matcher);
     let parent = (!tree.is_root(container)).then(|| tree.node(container).matcher);
     let limit = tree.node(container).end as usize;
-    let (scanned, candidates) = zoomie_lint::grammar::probe(g, lang, &text, parent, pos, limit);
+    let (scanned, candidates) = crate::grammar::probe(g, lang, &text, parent, pos, limit);
     let byte = text[pos..].chars().next().map_or("end of file".into(), |c| format!("{c:?}"));
-    println!("\n{BOLD}candidates{BOLD:#} {DIM}children of{DIM:#} {} {DIM}at{DIM:#} {byte}", node_name(g, &tree, lang, container));
+    output.out(format_args!("\n{BOLD}candidates{BOLD:#} {DIM}children of{DIM:#} {} {DIM}at{DIM:#} {byte}", node_name(g, &tree, lang, container)));
     if !scanned {
-        println!("  {DIM}the scan of this layer skips this position (no child can start with it){DIM:#}");
+        output.out(format_args!("  {DIM}the scan of this layer skips this position (no child can start with it){DIM:#}"));
     }
-    use zoomie_lint::grammar::Probe;
+    use crate::grammar::Probe;
     let best = candidates.iter().filter_map(|&(c, p)| if let Probe::Match(e) = p { Some((c, e)) } else { None }).max_by_key(|&(_, e)| e);
     let ruled_out = candidates.iter().filter(|(_, p)| matches!(p, Probe::FirstByte)).count();
     for (c, outcome) in candidates {
@@ -197,26 +194,26 @@ pub fn explain(linter: &Linter, file: &Path, at: &str) -> ExitCode {
             String::new()
         };
         if !matches!(outcome, Probe::FirstByte) {
-            println!("  {CYAN}{name}{CYAN:#} {what}{mark}");
+            output.out(format_args!("  {CYAN}{name}{CYAN:#} {what}{mark}"));
         }
     }
     if ruled_out > 0 {
-        println!("  {DIM}(+{ruled_out} matchers that cannot start with this character){DIM:#}");
+        output.out(format_args!("  {DIM}(+{ruled_out} matchers that cannot start with this character){DIM:#}"));
     }
     if winner.is_none() && best.is_none() {
-        println!("  {DIM}nothing starts here: the text belongs to the layer above{DIM:#}");
+        output.out(format_args!("  {DIM}nothing starts here: the text belongs to the layer above{DIM:#}"));
     }
-    ExitCode::SUCCESS
+    0
 }
 
-pub fn tree(linter: &Linter, file: &Path, all: bool) -> ExitCode {
-    let (text, lang) = match read_source(linter, file) {
+pub fn tree(output: &mut Output<'_>, linter: &Linter, file: &Path, all: bool) -> u8 {
+    let (text, lang) = match read_source(output, linter, file) {
         Ok(x) => x,
         Err(code) => return code,
     };
     let g = &linter.grammar;
     let tree = Tree::parse(g, lang, &text);
-    let lines = zoomie_lint::line_index::LineIndex::new(&text);
+    let lines = crate::line_index::LineIndex::new(&text);
     for &id in &tree.order {
         let mut depth = 0;
         let mut p = tree.parent(id);
@@ -232,17 +229,17 @@ pub fn tree(linter: &Linter, file: &Path, all: bool) -> ExitCode {
         }
         let (line, col) = lines.line_col(&text, node.start as usize);
         let snippet = snippet(&text, node.start as usize, node.end as usize);
-        println!(
+        output.out(format_args!(
             "{}{CYAN}{label}{CYAN:#}{BOLD}{name}{BOLD:#} {DIM}{}:{}{DIM:#} {snippet}",
             "  ".repeat(depth),
             line + 1,
             col + 1
-        );
+        ));
     }
     if !all {
-        println!("{DIM}(nested brackets/escapes hidden; pass --all to see every node){DIM:#}");
+        output.out(format_args!("{DIM}(nested brackets/escapes hidden; pass --all to see every node){DIM:#}"));
     }
-    ExitCode::SUCCESS
+    0
 }
 
 fn is_noise(name: &str) -> bool {
@@ -250,19 +247,18 @@ fn is_noise(name: &str) -> bool {
 }
 
 /// `--profile`: the most expensive matchers and rules, on stderr.
-pub fn profile(linter: &Linter) {
-    use anstream::eprintln;
-    use zoomie_lint::engine::Profile;
+pub fn profile(output: &mut Output<'_>, linter: &Linter) {
+    use crate::engine::Profile;
     let Some(p) = &linter.profile else { return };
     let ms = |nanos: u64| nanos as f64 / 1e6;
-    eprintln!(
+    output.err(format_args!(
         "{BOLD}profile{BOLD:#} {DIM}(summed over threads){DIM:#}\n  parsing {:.1} ms {DIM}(native {:.1}, tokens {:.1}, pattern layers {:.1}){DIM:#}, rules {:.1} ms",
         ms(Profile::get(&p.parse_nanos)),
         ms(Profile::get(&p.native_nanos)),
         ms(Profile::get(&p.token_nanos)),
         ms(Profile::get(&p.layer_nanos)),
         ms(Profile::get(&p.rules_nanos))
-    );
+    ));
     let mut matchers: Vec<(u64, u64, &str)> = linter
         .grammar
         .matchers
@@ -272,9 +268,9 @@ pub fn profile(linter: &Linter) {
         .filter(|(steps, _, _)| *steps > 0)
         .collect();
     matchers.sort_by_key(|m| std::cmp::Reverse(m.0));
-    eprintln!("\n  {BOLD}matchers{BOLD:#} {DIM}by interpreter steps (DFA-only matchers do not show up){DIM:#}");
+    output.err(format_args!("\n  {BOLD}matchers{BOLD:#} {DIM}by interpreter steps (DFA-only matchers do not show up){DIM:#}"));
     for (steps, runs, name) in matchers.iter().take(15) {
-        eprintln!("  {steps:>14} steps {runs:>11} runs  {CYAN}{name}{CYAN:#}");
+        output.err(format_args!("  {steps:>14} steps {runs:>11} runs  {CYAN}{name}{CYAN:#}"));
     }
     let mut overlays: Vec<(u64, u64, &str)> = linter
         .grammar
@@ -285,9 +281,9 @@ pub fn profile(linter: &Linter) {
         .filter(|(nanos, _, _)| *nanos > 0)
         .collect();
     overlays.sort_by_key(|o| std::cmp::Reverse(o.0));
-    eprintln!("\n  {BOLD}layer searches{BOLD:#} {DIM}by time, part of parsing{DIM:#}");
+    output.err(format_args!("\n  {BOLD}layer searches{BOLD:#} {DIM}by time, part of parsing{DIM:#}"));
     for (nanos, nodes, name) in overlays.iter().take(10) {
-        eprintln!("  {:>11.1} ms {nodes:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
+        output.err(format_args!("  {:>11.1} ms {nodes:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos)));
     }
     let mut rules: Vec<(u64, u64, &str)> = linter
         .rules
@@ -297,38 +293,38 @@ pub fn profile(linter: &Linter) {
         .filter(|(_, evals, _)| *evals > 0)
         .collect();
     rules.sort_by_key(|r| std::cmp::Reverse(r.0));
-    eprintln!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}");
+    output.err(format_args!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}"));
     for (nanos, evals, name) in rules.iter().take(15) {
-        eprintln!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
+        output.err(format_args!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos)));
     }
-    let mut facts: Vec<(u64, u64, &str)> = zoomie_lint::expr::facts::FACTS
+    let mut facts: Vec<(u64, u64, &str)> = crate::expr::facts::FACTS
         .iter()
         .enumerate()
         .map(|(i, f)| (Profile::get(&p.fact_nanos[i]), Profile::get(&p.fact_calls[i]), f.name))
         .filter(|(_, calls, _)| *calls > 0)
         .collect();
     facts.sort_by_key(|f| std::cmp::Reverse(f.0));
-    eprintln!("\n  {BOLD}facts{BOLD:#} {DIM}by time, part of the rules' (a whole-file analysis counts on the first fact needing it){DIM:#}");
+    output.err(format_args!("\n  {BOLD}facts{BOLD:#} {DIM}by time, part of the rules' (a whole-file analysis counts on the first fact needing it){DIM:#}"));
     for (nanos, calls, name) in facts.iter().take(15) {
-        eprintln!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*nanos));
+        output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*nanos)));
     }
 }
 
-pub fn functions() -> ExitCode {
-    println!("{BOLD}variables{BOLD:#}");
+pub fn functions(output: &mut Output<'_>) -> u8 {
+    output.out(format_args!("{BOLD}variables{BOLD:#}"));
     for (name, doc) in BUILTIN_VARS {
-        println!("  {CYAN}{name}{CYAN:#} {DIM}- {doc}{DIM:#}");
+        output.out(format_args!("  {CYAN}{name}{CYAN:#} {DIM}- {doc}{DIM:#}"));
     }
-    for f in zoomie_lint::expr::facts::FACTS.iter() {
-        println!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.name, f.doc);
+    for f in crate::expr::facts::FACTS.iter() {
+        output.out(format_args!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.name, f.doc));
     }
-    println!("  {DIM}plus the node's fields by label, options by name, and `matcher` / `matcher.field` for ancestors{DIM:#}");
-    println!("\n{BOLD}functions{BOLD:#}");
-    for (signature, doc) in zoomie_lint::expr::SPECIAL_FORMS {
-        println!("  {CYAN}{signature}{CYAN:#} {DIM}- {doc}{DIM:#}");
+    output.out(format_args!("  {DIM}plus the node's fields by label, options by name, and `matcher` / `matcher.field` for ancestors{DIM:#}"));
+    output.out(format_args!("\n{BOLD}functions{BOLD:#}"));
+    for (signature, doc) in crate::expr::SPECIAL_FORMS {
+        output.out(format_args!("  {CYAN}{signature}{CYAN:#} {DIM}- {doc}{DIM:#}"));
     }
     for f in FUNCTIONS {
-        println!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.signature, f.doc);
+        output.out(format_args!("  {CYAN}{}{CYAN:#} {DIM}- {}{DIM:#}", f.signature, f.doc));
     }
-    ExitCode::SUCCESS
+    0
 }

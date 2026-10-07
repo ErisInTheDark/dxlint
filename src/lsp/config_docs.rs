@@ -7,10 +7,10 @@ use serde_json::{json, Value};
 
 use super::convert;
 use super::uri;
-use zoomie_lint::config::ast::Severity;
-use zoomie_lint::config::source::{FileId, SourceFile, Span};
-use zoomie_lint::config::std_lib;
-use zoomie_lint::engine::symbols::{Kind, Symbol, Symbols};
+use crate::config::ast::Severity;
+use crate::config::source::{FileId, SourceFile, Span};
+use crate::config::std_lib;
+use crate::engine::symbols::{Kind, Symbol, Symbols};
 
 /// One `.zlint` file of a built config.
 pub struct ConfigFile<'a> {
@@ -148,7 +148,7 @@ impl ConfigFile<'_> {
                     .fields
                     .iter()
                     .map(|f| json!({ "label": f, "kind": 5, "detail": format!("field of {layer}") }))
-                    .chain(zoomie_lint::expr::facts::LINKS.iter()
+                    .chain(crate::expr::facts::LINKS.iter()
                         .filter(|link| !self.symbols.symbols[id].fields.iter().any(|field| field == link.name))
                         .map(|link| json!({ "label": link.name, "kind": 5, "detail": link.doc })))
                     .collect(),
@@ -316,8 +316,8 @@ pub fn std_module(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zoomie_lint::config::{load_text, source::Disk};
-    use zoomie_lint::engine::build;
+    use crate::config::{load_text, source::Disk};
+    use crate::engine::build;
 
     #[test]
     fn linked_nodes_complete_and_hover_as_registered_queries() {

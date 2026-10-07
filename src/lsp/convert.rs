@@ -4,11 +4,11 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use zoomie_lint::config::ast::Severity;
-use zoomie_lint::config::error::ConfigError;
-use zoomie_lint::config::source::SourceMap;
-use zoomie_lint::engine::{Diagnostic, Edit, Linter};
-use zoomie_lint::line_index::LineIndex;
+use crate::config::ast::Severity;
+use crate::config::error::ConfigError;
+use crate::config::source::SourceMap;
+use crate::engine::{Diagnostic, Edit, Linter};
+use crate::line_index::LineIndex;
 
 pub fn range(text: &str, lines: &LineIndex, start: usize, end: usize) -> Value {
     let (sl, sc) = lines.to_utf16(text, start);
@@ -72,8 +72,8 @@ fn rule_link(linter: &Linter, rule: &str) -> Option<String> {
 }
 
 /// A config error in its file; `uri_of` names the files of related spans.
-pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(zoomie_lint::config::source::FileId) -> Option<String>) -> Value {
-    let span_range = |span: zoomie_lint::config::source::Span| {
+pub fn config_error(sources: &SourceMap, e: &ConfigError, uri_of: &dyn Fn(crate::config::source::FileId) -> Option<String>) -> Value {
+    let span_range = |span: crate::config::source::Span| {
         let f = sources.get(span.file);
         range(&f.text, &f.lines, span.start as usize, span.end as usize)
     };

@@ -5,15 +5,35 @@ mod info;
 mod lint;
 mod render;
 
+#[cfg(test)]
+mod tests;
+
+use std::ffi::OsString;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use zoomie_lint::config::source::{normalize_path, Disk, SourceProvider};
-use zoomie_lint::config;
-use zoomie_lint::engine::symbols::Symbols;
-use zoomie_lint::engine::{build, build_for_lint, Linter};
+use crate::config::source::{normalize_path, Disk, SourceProvider};
+use crate::config;
+use crate::engine::symbols::Symbols;
+use crate::engine::{build, build_for_lint, Linter};
+
+struct Output<'a> {
+    cwd: &'a Path,
+    stdout: &'a mut dyn Write,
+    stderr: &'a mut dyn Write,
+}
+
+impl Output<'_> {
+    fn out(&mut self, args: std::fmt::Arguments<'_>) {
+        writeln!(self.stdout, "{args}").expect("write stdout");
+    }
+
+    fn err(&mut self, args: std::fmt::Arguments<'_>) {
+        writeln!(self.stderr, "{args}").expect("write stderr");
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "zlint", version, about = "Extremely fast linting with rules written in .zlint", subcommand_precedence_over_arg = true)]
@@ -106,37 +126,57 @@ enum Command {
     Lsp,
 }
 
-pub fn run() -> ExitCode {
-    let cli = Cli::parse();
+/// Runs one invocation without changing the process directory or exiting.
+/// Writers receive terminal style sequences; the host chooses colour policy.
+pub fn run<I, T, R, W, E>(args: I, cwd: &Path, input: R, mut stdout: W, mut stderr: E) -> u8
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+    E: Write,
+{
+    let cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let writer: &mut dyn Write = if error.use_stderr() { &mut stderr } else { &mut stdout };
+            write!(writer, "{}", error.render().ansi()).expect("write arguments");
+            return error.exit_code() as u8;
+        }
+    };
+    if matches!(&cli.command, Some(Command::Lsp)) {
+        return crate::lsp::run(input, stdout, &mut stderr);
+    }
+    let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
     let config = &cli.config;
     match cli.command {
-        None => lint::run(cli.lint, config),
-        Some(Command::Check) => match load(config) {
+        None => lint::run(&mut output, cli.lint, config),
+        Some(Command::Check) => match load(&mut output, config) {
             Ok(Project { config_ok: true, .. }) => {
-                eprintln!("config ok");
-                ExitCode::SUCCESS
+                output.err(format_args!("config ok"));
+                0
             }
-            Ok(_) => ExitCode::from(2),
+            Ok(_) => 2,
             Err(code) => code,
         },
-        Some(Command::Rules) => match load(config) {
-            Ok(p) => info::rules(&p.linter),
+        Some(Command::Rules) => match load(&mut output, config) {
+            Ok(p) => info::rules(&mut output, &p.linter),
             Err(code) => code,
         },
-        Some(Command::Describe { name }) => match load(config) {
-            Ok(p) => info::describe(p.symbols.as_deref().expect("tooling symbols"), &name),
+        Some(Command::Describe { name }) => match load(&mut output, config) {
+            Ok(p) => info::describe(&mut output, p.symbols.as_deref().expect("tooling symbols"), &name),
             Err(code) => code,
         },
-        Some(Command::Tree { file, all, at }) => match load(config) {
+        Some(Command::Tree { file, all, at }) => match load(&mut output, config) {
             Ok(p) => match at {
-                Some(at) => info::explain(&p.linter, &file, &at),
-                None => info::tree(&p.linter, &file, all),
+                Some(at) => info::explain(&mut output, &p.linter, &file, &at),
+                None => info::tree(&mut output, &p.linter, &file, all),
             },
             Err(code) => code,
         },
-        Some(Command::Eval { target, expr, files }) => eval::run(config, &target, &expr, &files),
-        Some(Command::Functions) => info::functions(),
-        Some(Command::Lsp) => crate::lsp::run(),
+        Some(Command::Eval { target, expr, files }) => eval::run(&mut output, config, &target, &expr, &files),
+        Some(Command::Functions) => info::functions(&mut output),
+        Some(Command::Lsp) => unreachable!("LSP owns its streams"),
     }
 }
 
@@ -155,33 +195,33 @@ pub struct Project {
 /// Loads and builds the linter, printing any config errors. Uses the
 /// explicit `--config`, else the nearest `.zlint` upward. Only a
 /// missing config is fatal: a broken one lints with what still works.
-pub fn load(arg: &ConfigArg) -> Result<Project, ExitCode> {
-    load_with(arg, false)
+fn load(output: &mut Output<'_>, arg: &ConfigArg) -> Result<Project, u8> {
+    load_with(output, arg, false)
 }
 
-pub fn load_for_lint(arg: &ConfigArg) -> Result<Project, ExitCode> {
-    load_with(arg, true)
+fn load_for_lint(output: &mut Output<'_>, arg: &ConfigArg) -> Result<Project, u8> {
+    load_with(output, arg, true)
 }
 
-fn load_with(arg: &ConfigArg, runtime: bool) -> Result<Project, ExitCode> {
+fn load_with(output: &mut Output<'_>, arg: &ConfigArg, runtime: bool) -> Result<Project, u8> {
     let path = match &arg.config {
-        Some(p) => normalize_path(p),
-        None => match config::find(&std::env::current_dir().unwrap_or_default()) {
+        Some(p) => normalize_path(&output.cwd.join(p)),
+        None => match config::find(output.cwd) {
             Some(p) => p,
             None => {
-                render::error(&config::not_found_message(&std::env::current_dir().unwrap_or_default()));
-                return Err(ExitCode::from(2));
+                render::error(output, &config::not_found_message(output.cwd));
+                return Err(2);
             }
         },
     };
-    load_from_with(&path, &Disk, runtime)
+    load_from_with(output, &path, &Disk, runtime)
 }
 
-pub fn load_from(path: &Path, provider: &dyn SourceProvider) -> Result<Project, ExitCode> {
-    load_from_with(path, provider, false)
+fn load_from(output: &mut Output<'_>, path: &Path, provider: &dyn SourceProvider) -> Result<Project, u8> {
+    load_from_with(output, path, provider, false)
 }
 
-fn load_from_with(path: &Path, provider: &dyn SourceProvider, runtime: bool) -> Result<Project, ExitCode> {
+fn load_from_with(output: &mut Output<'_>, path: &Path, provider: &dyn SourceProvider, runtime: bool) -> Result<Project, u8> {
     let root = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let started = std::time::Instant::now();
     let loaded = config::load_file(path, provider);
@@ -190,10 +230,10 @@ fn load_from_with(path: &Path, provider: &dyn SourceProvider, runtime: bool) -> 
     let build_time = started.elapsed() - load_time;
     let config_ok = built.errors.is_empty();
     if !config_ok {
-        render::config_errors(&built.errors, &built.sources);
+        render::config_errors(output, &built.errors, &built.sources);
     }
     match built.linter {
         Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok, load_time, build_time }),
-        None => Err(ExitCode::from(2)),
+        None => Err(2),
     }
 }

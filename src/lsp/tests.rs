@@ -1,9 +1,9 @@
-//! Drives `zlint lsp` over stdio like an editor would.
+//! Drives the LSP entry over framed streams like an editor would.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -18,10 +18,51 @@ in bad rule no-bad warn "no BAD here" fix as "good"
 "#;
 
 struct Client {
-    child: Child,
-    stdin: ChildStdin,
+    server: JoinHandle<u8>,
+    stdin: PipeWriter,
     rx: Receiver<Value>,
     next_id: i64,
+}
+
+struct PipeReader {
+    rx: Receiver<Vec<u8>>,
+    pending: io::Cursor<Vec<u8>>,
+}
+
+impl Read for PipeReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            let n = self.pending.read(buf)?;
+            if n != 0 {
+                return Ok(n);
+            }
+            match self.rx.recv() {
+                Ok(bytes) => self.pending = io::Cursor::new(bytes),
+                Err(_) => return Ok(0),
+            }
+        }
+    }
+}
+
+struct PipeWriter(Sender<Vec<u8>>);
+
+impl Write for PipeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.send(buf.to_vec()).map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn pipe() -> (PipeWriter, PipeReader) {
+    let (tx, rx) = mpsc::channel();
+    (PipeWriter(tx), PipeReader { rx, pending: io::Cursor::new(Vec::new()) })
 }
 
 fn uri(path: &Path) -> String {
@@ -57,15 +98,9 @@ fn read_message(r: &mut impl BufRead) -> Option<Value> {
 
 impl Client {
     fn start(root: &Path) -> Client {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_zlint"))
-            .arg("lsp")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn zlint lsp");
-        let stdin = child.stdin.take().expect("stdin");
-        let stdout: ChildStdout = child.stdout.take().expect("stdout");
+        let (stdin, input) = pipe();
+        let (output, stdout) = pipe();
+        let server = std::thread::spawn(move || super::run(input, output, &mut io::sink()));
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let mut r = BufReader::new(stdout);
@@ -75,7 +110,7 @@ impl Client {
                 }
             }
         });
-        let mut c = Client { child, stdin, rx, next_id: 0 };
+        let mut c = Client { server, stdin, rx, next_id: 0 };
         let init = c.request("initialize", json!({ "rootUri": uri(root), "capabilities": { "window": { "workDoneProgress": true } } }));
         assert_eq!(init["capabilities"]["documentFormattingProvider"], true);
         c.notify("initialized", json!({}));
@@ -136,13 +171,14 @@ impl Client {
     fn shutdown(mut self) {
         self.request("shutdown", Value::Null);
         self.notify("exit", Value::Null);
-        let status = self.child.wait().expect("exit");
-        assert!(status.success());
+        drop(self.stdin);
+        let code = self.server.join().expect("exit");
+        assert_eq!(code, 0);
     }
 }
 
 fn project(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let dir = std::env::temp_dir().join("zlint-lsp-tests").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("tmp dir");
     std::fs::write(dir.join(".zlint"), CONFIG).expect("config");
@@ -315,7 +351,7 @@ fn rule_lines_complete_each_variants_default_option() {
 
 #[test]
 fn editing_an_export_relints_its_importers() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lsp-cross-file");
+    let dir = std::env::temp_dir().join("zlint-lsp-tests").join("lsp-cross-file");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("tmp dir");
     std::fs::write(dir.join(".zlint"), "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when imported_from != null }\n")
@@ -372,7 +408,7 @@ fn nested_configs_lint_their_own_files() {
 fn scan_reaches_configs_below_uncovered_and_ignored_dirs() {
     // The workspace root has no config; `proj` has one that ignores
     // `skipped`, which still holds a nested config of its own.
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lsp-skip");
+    let dir = std::env::temp_dir().join("zlint-lsp-tests").join("lsp-skip");
     let _ = std::fs::remove_dir_all(&dir);
     let deep = dir.join("proj").join("skipped").join("sub");
     std::fs::create_dir_all(&deep).expect("dirs");

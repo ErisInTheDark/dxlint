@@ -1,19 +1,17 @@
 //! `zlint [paths]`: walk, lint (and fix) in parallel, report.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Instant;
 
 use ignore::{WalkBuilder, WalkState};
 use serde::Serialize;
 
-use super::{load_for_lint, render, ConfigArg, Format, LintArgs};
-use zoomie_lint::config::ast::Severity;
-use zoomie_lint::engine::cache::{self, Cache};
-use zoomie_lint::engine::{Diagnostic, Edit, Linter};
-use zoomie_lint::line_index::LineIndex;
+use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output};
+use crate::config::ast::Severity;
+use crate::engine::cache::{self, Cache};
+use crate::engine::{Diagnostic, Edit, Linter};
+use crate::line_index::LineIndex;
 
 struct FileResult {
     path: PathBuf,
@@ -123,9 +121,17 @@ fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> 
     Msg::File(FileResult { path: path.to_path_buf(), text: fixed.text, diags: fixed.remaining, fixed: fixed.applied })
 }
 
-pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
+pub fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
+    let mut stdout = std::io::BufWriter::with_capacity(1 << 16, &mut *output.stdout);
+    let mut buffered = Output { cwd: output.cwd, stdout: &mut stdout, stderr: &mut *output.stderr };
+    let code = lint(&mut buffered, args, config);
+    let _ = buffered.stdout.flush();
+    code
+}
+
+fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
     let started = Instant::now();
-    let (mut linter, config_ok, load_time, build_time) = match load_for_lint(config) {
+    let (mut linter, config_ok, load_time, build_time) = match load_for_lint(output, config) {
         Ok(p) => (p.linter, p.config_ok, p.load_time, p.build_time),
         Err(code) => return code,
     };
@@ -134,7 +140,7 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
     }
     // Profiling measures linting, so it never reads results instead.
     let cache = (!args.no_cache && !args.profile).then(|| Cache::open(&linter));
-    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = output.cwd;
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
@@ -207,13 +213,10 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
         });
 
         let mut results: Vec<FileResult> = Vec::new();
-        // Stdout is line-buffered: one write system call per diagnostic
-        // otherwise, which dominated kernel time on large outputs.
-        let mut stdout = std::io::BufWriter::with_capacity(1 << 16, std::io::stdout().lock());
         for msg in rx {
             match msg {
                 Msg::Error(path, e) => {
-                    render::error(&format!("{}: {e}", display(&path, &cwd)));
+                    render::error(output, &format!("{}: {e}", display(&path, cwd)));
                     failed = true;
                 }
                 Msg::File(r) => {
@@ -230,11 +233,11 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
                     }
                     match format {
                         Format::Jsonl => {
-                            let name = display(&r.path, &cwd);
+                            let name = display(&r.path, cwd);
                             let lines = LineIndex::new(&r.text);
                             for d in &r.diags {
                                 let json = JsonDiag::new(&name, &r.text, &lines, d);
-                                let _ = writeln!(stdout, "{}", serde_json::to_string(&json).unwrap_or_default());
+                                let _ = writeln!(output.stdout, "{}", serde_json::to_string(&json).unwrap_or_default());
                             }
                         }
                         Format::Human if !r.diags.is_empty() => results.push(r),
@@ -243,60 +246,60 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
                 }
             }
         }
-        let _ = stdout.flush();
-        drop(stdout);
+        let _ = output.stdout.flush();
         // Human output is sorted so runs are reproducible.
         results.sort_by(|a, b| a.path.cmp(&b.path));
         for r in &results {
-            render::diagnostics(&display(&r.path, &cwd), &r.text, &r.diags);
+            render::diagnostics(output, &display(&r.path, cwd), &r.text, &r.diags);
         }
     });
 
     if format == Format::Human {
         if fixed_total > 0 {
-            println!("fixed {fixed_total} problem{}", if fixed_total == 1 { "" } else { "s" });
+            output.out(format_args!("fixed {fixed_total} problem{}", if fixed_total == 1 { "" } else { "s" }));
         }
-        render::summary(errors, warnings, other, fixable, files);
+        render::summary(output, errors, warnings, other, fixable, files);
     }
+    let _ = output.stdout.flush();
     if args.profile {
-        super::info::profile(&linter);
+        super::info::profile(output, &linter);
     }
     let cached = cache.as_ref().map_or(0, Cache::hits);
     if let Some(cache) = cache {
         // A run over the whole project forgets files that are gone.
         if let Err(e) = cache.save(args.paths.is_empty()) {
-            render::error(&format!("cannot write {}: {e}", cache::FILE_NAME));
+            render::error(output, &format!("cannot write {}: {e}", cache::FILE_NAME));
         }
     }
     if args.stats {
         let secs = started.elapsed().as_secs_f64();
-        eprintln!(
+        output.err(format_args!(
             "{files} files ({cached} from cache), {:.1} MiB in {:.1} ms ({:.0} MiB/s)",
             bytes as f64 / 1048576.0,
             secs * 1000.0,
             bytes as f64 / 1048576.0 / secs.max(1e-9)
-        );
-        eprintln!(
+        ));
+        output.err(format_args!(
             "  config {:.1} ms (reading {:.1}, building {:.1})",
             (load_time + build_time).as_secs_f64() * 1000.0,
             load_time.as_secs_f64() * 1000.0,
             build_time.as_secs_f64() * 1000.0
-        );
+        ));
     }
     // A broken config still lints with what built, but never passes.
     if !config_ok {
-        ExitCode::from(2)
+        2
     } else if failed || errors > 0 {
-        ExitCode::from(1)
+        1
     } else {
-        ExitCode::SUCCESS
+        0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zoomie_lint::engine::Edit;
+    use crate::engine::Edit;
 
     #[test]
     fn json_preserves_every_edit_of_an_atomic_fix() {

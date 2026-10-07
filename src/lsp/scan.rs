@@ -18,9 +18,9 @@ use serde_json::json;
 use super::projects::Linters;
 use super::transport::Outbox;
 use super::{convert, uri};
-use zoomie_lint::engine::cache::Cache;
-use zoomie_lint::engine::Linter;
-use zoomie_lint::native::ts::reads::Reads;
+use crate::engine::cache::Cache;
+use crate::engine::Linter;
+use crate::native::ts::reads::Reads;
 
 /// State shared between the request loop and scans.
 #[derive(Default)]
@@ -88,7 +88,7 @@ impl Shared {
     }
 
     /// Lints `path` with `text`, keeping what the lint read.
-    pub fn lint(&self, linter: &Linter, path: &Path, text: &str) -> Vec<zoomie_lint::engine::Diagnostic> {
+    pub fn lint(&self, linter: &Linter, path: &Path, text: &str) -> Vec<crate::engine::Diagnostic> {
         let (diags, reads) = linter.lint_tracked(path, text);
         self.reads.lock().expect("lock").insert(path.to_path_buf(), Arc::new(reads));
         diags

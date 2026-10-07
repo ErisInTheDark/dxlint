@@ -44,11 +44,9 @@ pub fn write(out: &mut impl Write, msg: &Value) -> io::Result<()> {
 pub struct Outbox(mpsc::Sender<Value>);
 
 impl Outbox {
-    pub fn spawn() -> (Outbox, std::thread::JoinHandle<()>) {
+    pub fn spawn<W: Write + Send + 'static>(mut out: W) -> (Outbox, std::thread::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel::<Value>();
         let handle = std::thread::spawn(move || {
-            let stdout = io::stdout();
-            let mut out = stdout.lock();
             for msg in rx {
                 if write(&mut out, &msg).is_err() {
                     break;

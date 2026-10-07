@@ -9,10 +9,10 @@ use serde_json::{json, Value};
 
 use super::transport::Outbox;
 use super::{convert, scan};
-use zoomie_lint::config::source::{normalize_path, FileId, SourceProvider};
-use zoomie_lint::config::{self, CONFIG_NAME};
-use zoomie_lint::engine::symbols::Symbols;
-use zoomie_lint::engine::{build, Linter};
+use crate::config::source::{normalize_path, FileId, SourceProvider};
+use crate::config::{self, CONFIG_NAME};
+use crate::engine::symbols::Symbols;
+use crate::engine::{build, Linter};
 
 #[derive(Default)]
 struct Project {

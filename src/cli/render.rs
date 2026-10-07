@@ -1,15 +1,13 @@
 //! Terminal output: config errors and diagnostics with source snippets.
 
-use std::io::Write;
-
-use anstream::{eprintln, println};
 use anstyle::{AnsiColor, Style};
 
-use zoomie_lint::config::ast::Severity;
-use zoomie_lint::config::error::ConfigError;
-use zoomie_lint::config::source::SourceMap;
-use zoomie_lint::engine::Diagnostic;
-use zoomie_lint::line_index::LineIndex;
+use super::Output;
+use crate::config::ast::Severity;
+use crate::config::error::ConfigError;
+use crate::config::source::SourceMap;
+use crate::engine::Diagnostic;
+use crate::line_index::LineIndex;
 
 const BOLD: Style = Style::new().bold();
 const DIM: Style = Style::new().dimmed();
@@ -27,9 +25,9 @@ pub fn severity_style(s: Severity) -> Style {
     }
 }
 
-pub fn error(msg: &str) {
+pub fn error(output: &mut Output<'_>, msg: &str) {
     let red = color(AnsiColor::Red);
-    eprintln!("{red}error{red:#}{BOLD}: {msg}{BOLD:#}");
+    output.err(format_args!("{red}error{red:#}{BOLD}: {msg}{BOLD:#}"));
 }
 
 /// A source line with a `^^^` underline under `start..end` (clamped to the line).
@@ -46,7 +44,7 @@ fn snippet(out: &mut String, text: &str, lines: &LineIndex, start: usize, end: u
     out.push_str(&format!("{DIM}{pad} |{DIM:#}\n{DIM}{num} |{DIM:#} {shown}\n{DIM}{pad} |{DIM:#} {}{style}{}{style:#}\n", " ".repeat(col), "^".repeat(width)));
 }
 
-pub fn config_errors(errors: &[ConfigError], sources: &SourceMap) {
+pub fn config_errors(output: &mut Output<'_>, errors: &[ConfigError], sources: &SourceMap) {
     let red = color(AnsiColor::Red);
     for e in errors {
         let mut out = format!("{red}error{red:#}{BOLD}: {}{BOLD:#}\n", e.message);
@@ -65,13 +63,13 @@ pub fn config_errors(errors: &[ConfigError], sources: &SourceMap) {
             out.push_str(&format!("  {DIM}-->{DIM:#} {}:{}:{} {label}\n", file.name, line + 1, col + 1));
             snippet(&mut out, &file.text, &file.lines, span.start as usize, span.end as usize, DIM);
         }
-        eprintln!("{out}");
+        output.err(format_args!("{out}"));
     }
     let n = errors.len();
-    error(&format!("config has {n} error{}", if n == 1 { "" } else { "s" }));
+    error(output, &format!("config has {n} error{}", if n == 1 { "" } else { "s" }));
 }
 
-pub fn diagnostics(name: &str, text: &str, diags: &[Diagnostic]) {
+pub fn diagnostics(output: &mut Output<'_>, name: &str, text: &str, diags: &[Diagnostic]) {
     if diags.is_empty() {
         return;
     }
@@ -92,15 +90,14 @@ pub fn diagnostics(name: &str, text: &str, diags: &[Diagnostic]) {
         snippet(&mut out, text, &lines, d.start, d.end, style);
         out.push('\n');
     }
-    let mut stdout = anstream::stdout().lock();
-    let _ = stdout.write_all(out.as_bytes());
+    let _ = output.stdout.write_all(out.as_bytes());
 }
 
-pub fn summary(errors: usize, warnings: usize, other: usize, fixable: usize, files: usize) {
+pub fn summary(output: &mut Output<'_>, errors: usize, warnings: usize, other: usize, fixable: usize, files: usize) {
     let total = errors + warnings + other;
     if total == 0 {
         let green = color(AnsiColor::Green);
-        println!("{green}ok{green:#} {DIM}{files} file{} clean{DIM:#}", if files == 1 { "" } else { "s" });
+        output.out(format_args!("{green}ok{green:#} {DIM}{files} file{} clean{DIM:#}", if files == 1 { "" } else { "s" }));
         return;
     }
     let red = color(AnsiColor::Red);
@@ -116,5 +113,5 @@ pub fn summary(errors: usize, warnings: usize, other: usize, fixable: usize, fil
         parts.push(format!("{other} other"));
     }
     let fix_hint = if fixable > 0 { format!(", {fixable} fixable with --fix") } else { String::new() };
-    println!("{} {DIM}in {files} file{}{fix_hint}{DIM:#}", parts.join(", "), if files == 1 { "" } else { "s" });
+    output.out(format_args!("{} {DIM}in {files} file{}{fix_hint}{DIM:#}", parts.join(", "), if files == 1 { "" } else { "s" }));
 }

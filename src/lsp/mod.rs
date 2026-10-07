@@ -11,9 +11,8 @@ mod transport;
 mod uri;
 
 use std::collections::{HashMap, HashSet};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 use std::sync::{mpsc, Arc};
 
 use serde_json::{json, Value};
@@ -21,12 +20,15 @@ use serde_json::{json, Value};
 use projects::Projects;
 use scan::Shared;
 use transport::Outbox;
-use zoomie_lint::config::source::{normalize_path, SourceProvider};
-use zoomie_lint::config::{self};
-use zoomie_lint::engine::Linter;
-use zoomie_lint::line_index::LineIndex;
-use zoomie_lint::native::ts::modules::Stale;
-use zoomie_lint::native::ts::reads::{self, Reads};
+use crate::config::source::{normalize_path, SourceProvider};
+use crate::config::{self};
+use crate::engine::Linter;
+use crate::line_index::LineIndex;
+use crate::native::ts::modules::Stale;
+use crate::native::ts::reads::{self, Reads};
+
+#[cfg(test)]
+mod tests;
 
 struct Doc {
     uri: String,
@@ -82,8 +84,8 @@ struct Server {
     changed: HashSet<PathBuf>,
 }
 
-pub fn run() -> ExitCode {
-    let (out, writer) = Outbox::spawn();
+pub fn run<R: Read + Send + 'static, W: Write + Send + 'static>(input: R, output: W, stderr: &mut dyn Write) -> u8 {
+    let (out, writer) = Outbox::spawn(output);
     let mut server = Server {
         out: out.clone(),
         shared: Arc::new(Shared::default()),
@@ -108,8 +110,7 @@ pub fn run() -> ExitCode {
     // once per keystroke.
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let stdin = io::stdin();
-        let mut input = stdin.lock();
+        let mut input = io::BufReader::new(input);
         loop {
             let msg = transport::read(&mut input);
             let done = !matches!(msg, Ok(Some(_)));
@@ -124,14 +125,14 @@ pub fn run() -> ExitCode {
         while let Some(msg) = next.take() {
             let msg = match msg {
                 Ok(Some(m)) => m,
-                Ok(None) => break 'serve if shutdown { ExitCode::SUCCESS } else { ExitCode::from(1) },
+                Ok(None) => break 'serve if shutdown { 0 } else { 1 },
                 Err(e) => {
-                    eprintln!("zlint lsp: {e}");
-                    break 'serve ExitCode::from(1);
+                    writeln!(stderr, "zlint lsp: {e}").expect("write stderr");
+                    break 'serve 1;
                 }
             };
             if server.handle(&msg, &mut shutdown) {
-                break 'serve if shutdown { ExitCode::SUCCESS } else { ExitCode::from(1) };
+                break 'serve if shutdown { 0 } else { 1 };
             }
             next = rx.try_recv().ok();
         }

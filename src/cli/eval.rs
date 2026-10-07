@@ -8,15 +8,12 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-
-use anstream::println;
 use anstyle::Style;
 
-use super::{load_from, render, ConfigArg};
-use zoomie_lint::config::source::{normalize_path, Disk, SourceProvider};
-use zoomie_lint::config;
-use zoomie_lint::line_index::LineIndex;
+use super::{load_from, render, ConfigArg, Output};
+use crate::config::source::{normalize_path, Disk, SourceProvider};
+use crate::config;
+use crate::line_index::LineIndex;
 
 const RULE: &str = "zlint-eval";
 const DIM: Style = Style::new().dimmed();
@@ -38,15 +35,15 @@ impl SourceProvider for WithQuestion {
     }
 }
 
-pub fn run(arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> ExitCode {
-    let cwd = std::env::current_dir().unwrap_or_default();
+pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> u8 {
+    let cwd = output.cwd;
     let real = match &arg.config {
-        Some(p) => normalize_path(p),
+        Some(p) => normalize_path(&cwd.join(p)),
         None => match config::find(&cwd) {
             Some(p) => p,
             None => {
-                render::error(&config::not_found_message(&cwd));
-                return ExitCode::from(2);
+                render::error(output, &config::not_found_message(cwd));
+                return 2;
             }
         },
     };
@@ -57,12 +54,12 @@ pub fn run(arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> Exit
         // `null` shows as `null` rather than as an empty message.
         text: format!("import \"./{stem}\"\nin {target} rule {RULE} info (if ({expr}) == null then \"null\" else str({expr}))\n"),
     };
-    let project = match load_from(&question.path, &question) {
+    let project = match load_from(output, &question.path, &question) {
         Ok(p) => p,
         Err(code) => return code,
     };
     if !project.config_ok {
-        return ExitCode::from(2);
+        return 2;
     }
     let linter = project.linter;
     let mut failed = false;
@@ -71,7 +68,7 @@ pub fn run(arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> Exit
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
-                render::error(&format!("cannot read {}: {e}", file.display()));
+                render::error(output, &format!("cannot read {}: {e}", file.display()));
                 failed = true;
                 continue;
             }
@@ -88,15 +85,15 @@ pub fn run(arg: &ConfigArg, target: &str, expr: &str, files: &[PathBuf]) -> Exit
             if d.end - d.start > shown {
                 node.push('…');
             }
-            println!("{DIM}{name}:{}:{}{DIM:#} {node} {BOLD}=>{BOLD:#} {}", line + 1, col + 1, d.message);
+            output.out(format_args!("{DIM}{name}:{}:{}{DIM:#} {node} {BOLD}=>{BOLD:#} {}", line + 1, col + 1, d.message));
         }
         if diags.is_empty() {
-            println!("{DIM}{name}: no `{target}` nodes{DIM:#}");
+            output.out(format_args!("{DIM}{name}: no `{target}` nodes{DIM:#}"));
         }
     }
     if failed {
-        ExitCode::from(1)
+        1
     } else {
-        ExitCode::SUCCESS
+        0
     }
 }

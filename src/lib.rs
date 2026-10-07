@@ -9,6 +9,7 @@
 //! - [`jit`] compiles rule conditions to native code
 
 pub mod alloc;
+pub mod cli;
 pub mod config;
 pub mod engine;
 pub mod expr;
@@ -16,6 +17,7 @@ pub mod fx_hash;
 pub mod grammar;
 pub mod jit;
 pub mod line_index;
+pub mod lsp;
 pub mod native;
 pub mod path_globs;
 pub mod pattern;

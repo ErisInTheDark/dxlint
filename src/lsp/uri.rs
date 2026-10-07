@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use zoomie_lint::config::source::normalize_path;
+use crate::config::source::normalize_path;
 
 pub fn to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;

@@ -1,11 +1,32 @@
-//! The `zlint` binary end to end: config discovery, imports, exit codes,
+//! The CLI entry end to end: config discovery, imports, exit codes,
 //! output formats and fixing files in place.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Capture {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("output capture").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct Output {
+    code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
 
 fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     for (path, text) in files {
         let full = dir.join(path);
@@ -16,7 +37,18 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 fn zlint(dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_zlint")).args(args).current_dir(dir).env("NO_COLOR", "1").output().expect("run zlint")
+    let stdout = Capture::default();
+    let stderr = Capture::default();
+    let code = super::run(
+        std::iter::once("zlint").chain(args.iter().copied()),
+        dir,
+        io::empty(),
+        anstream::StripStream::new(Box::new(stdout.clone()) as Box<dyn Write + Send>),
+        anstream::StripStream::new(Box::new(stderr.clone()) as Box<dyn Write + Send>),
+    );
+    let stdout = stdout.0.lock().expect("stdout capture").clone();
+    let stderr = stderr.0.lock().expect("stderr capture").clone();
+    Output { code: i32::from(code), stdout, stderr }
 }
 
 fn stdout(o: &Output) -> String {
@@ -46,7 +78,7 @@ in .t {
     let mut first = None;
     for cached in [false, true] {
         let out = zlint(&dir, &["--jobs", "1", "--format", "jsonl", "--stats", "a.t"]);
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
         let reports: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
         assert_eq!(reports.len(), 4);
         if cached {
@@ -76,7 +108,7 @@ in .t {
         first = Some(reports);
     }
     let fixed = zlint(&dir, &["--jobs", "1", "--fix", "a.t"]);
-    assert!(fixed.status.success(), "{}", String::from_utf8_lossy(&fixed.stderr));
+    assert_eq!(fixed.code, 0, "{}", String::from_utf8_lossy(&fixed.stderr));
     assert_eq!(std::fs::read_to_string(dir.join("a.t")).unwrap(), "\u{e9} loud  + ?");
 }
 
@@ -88,7 +120,7 @@ fn worker_limits_preserve_single_file_and_project_diagnostics() {
             let mut args = vec!["--jobs", jobs, "--no-cache", "--format", "jsonl"];
             args.extend(paths);
             let out = zlint(&dir, &args);
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
             let mut diagnostics: Vec<String> = stdout(&out).lines().map(str::to_owned).collect();
             diagnostics.sort();
             diagnostics
@@ -104,13 +136,19 @@ fn zlint_library_reads_the_built_in_library_from_disk() {
     // A library dir whose `whitespace` module defines a different rule.
     let library = project("library-override", &[("std/whitespace.zlint", "in .* layer text match bang /!/ {\n  rule bang warn \"bang\"\n}\n")]);
     let dir = project("library-user", &[(".zlint", "lang t \"*.t\"\nimport .whitespace\n"), ("a.t", "hi!\n")]);
+    const CHILD: &str = "ZLINT_CLI_LIBRARY_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        print!("{}", stdout(&zlint(&dir, &["--no-cache"])));
+        return;
+    }
     let run = |library: Option<&Path>| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_zlint"));
-        cmd.args(["--no-cache"]).current_dir(&dir).env("NO_COLOR", "1").env_remove("ZLINT_LIBRARY");
+        let mut cmd = std::process::Command::new(std::env::current_exe().expect("test executable"));
+        cmd.args(["--exact", "cli::tests::zlint_library_reads_the_built_in_library_from_disk", "--nocapture"])
+            .env(CHILD, "1").env_remove("ZLINT_LIBRARY");
         if let Some(l) = library {
             cmd.env("ZLINT_LIBRARY", l);
         }
-        stdout(&cmd.output().expect("run zlint"))
+        String::from_utf8_lossy(&cmd.output().expect("run isolated library test").stdout).into_owned()
     };
     assert!(run(Some(&library)).contains("[bang]"));
     assert!(!run(None).contains("[bang]"));
@@ -131,21 +169,21 @@ in token rule active warn "active" fix as lower(text)
 "#);
         let dir = project("cli-runtime-config", &[(".zlint", &source), ("test.t", "X")]);
         let out = zlint(&dir, &["--no-cache", "--format", "jsonl", "test.t"]);
-        assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
         let diagnostics: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).expect("json")).collect();
         assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
         assert_eq!(diagnostics[0]["fixable"], true);
 
         let check = zlint(&dir, &["check"]);
-        assert_eq!(check.status.code(), Some(2), "{}", String::from_utf8_lossy(&check.stderr));
+        assert_eq!(check.code, 2, "{}", String::from_utf8_lossy(&check.stderr));
 
         let fixed = zlint(&dir, &["--no-cache", "--fix", "test.t"]);
-        assert_eq!(fixed.status.code(), Some(0), "{}", String::from_utf8_lossy(&fixed.stderr));
+        assert_eq!(fixed.code, 0, "{}", String::from_utf8_lossy(&fixed.stderr));
         assert_eq!(std::fs::read_to_string(dir.join("test.t")).unwrap(), "x");
 
         std::fs::write(dir.join(".zlint"), format!("{source}\nrule deferred warn\n")).unwrap();
         let activated = zlint(&dir, &["--no-cache", "test.t"]);
-        assert_eq!(activated.status.code(), Some(2), "{}", String::from_utf8_lossy(&activated.stderr));
+        assert_eq!(activated.code, 2, "{}", String::from_utf8_lossy(&activated.stderr));
     }
 }
 
@@ -157,7 +195,7 @@ fn lint_validates_configured_options_even_when_the_rule_is_off() {
         );
         let dir = project("cli-runtime-off-options", &[(".zlint", &source), ("test.t", "X")]);
         let out = zlint(&dir, &["--no-cache", "test.t"]);
-        assert_eq!(out.status.code(), Some(status), "{value}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.code, status, "{value}: {}", String::from_utf8_lossy(&out.stderr));
     }
 }
 
@@ -173,7 +211,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
     );
     // Found from a subdirectory; the error makes the exit code 1.
     let out = zlint(&dir.join("src"), &["--format", "jsonl"]);
-    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.code, 1, "{}", String::from_utf8_lossy(&out.stderr));
     let lines: Vec<serde_json::Value> = stdout(&out).lines().map(|l| serde_json::from_str(l).expect("json")).collect();
     assert_eq!(lines.len(), 1, "{lines:#?}");
     assert_eq!(lines[0]["message"], "`LOUD` is shouting");
@@ -181,7 +219,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
     assert_eq!((lines[0]["line"].as_u64(), lines[0]["col"].as_u64()), (Some(1), Some(6)));
 
     let out = zlint(&dir, &["--fix"]);
-    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert_eq!(out.code, 0, "{}", stdout(&out));
     let fixed = std::fs::read_to_string(dir.join("src/a.t")).expect("read");
     assert!(fixed.starts_with("fine loud\n"), "{fixed}");
 }
@@ -253,7 +291,7 @@ fn language_only_changes_invalidate_cached_diagnostics() {
     let dir = project("cli-language-cache", &[(".zlint", &rules("readonly")), ("a.js", "app = 1;\n")]);
     let run = || {
         let out = zlint(&dir, &["--jobs", "1", "--format", "jsonl", "a.js"]);
-        assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.code, 1, "{}", String::from_utf8_lossy(&out.stderr));
         stdout(&out).lines().map(|line| serde_json::from_str::<serde_json::Value>(line).expect("diagnostic")).collect::<Vec<_>>()
     };
     let cold = run();
@@ -262,7 +300,7 @@ fn language_only_changes_invalidate_cached_diagnostics() {
     assert!(dir.join(".zlintcache").is_file());
     std::fs::write(dir.join(".zlint"), rules("writable")).expect("write config");
     let out = zlint(&dir, &["--jobs", "1", "--format", "jsonl", "a.js"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout(&out).is_empty());
     std::fs::write(dir.join(".zlint"), rules("readonly")).expect("write config");
     assert_eq!(run(), cold);
@@ -275,11 +313,11 @@ fn describe_explains_names_and_config_goes_anywhere() {
     for args in [&["-c", "rules.zlint", "describe", "no-shout"][..], &["describe", "no-shout", "-c", "rules.zlint"][..]] {
         let out = zlint(&dir, args);
         let text = stdout(&out);
-        assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
         assert!(text.contains("**rule** `no-shout`") && text.contains("checks `shout`") && text.contains("rules.zlint:4"), "{text}");
     }
     let out = zlint(&dir, &["-c", "rules.zlint", "describe", "shoutt"]);
-    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(out.code, 1);
     assert!(String::from_utf8_lossy(&out.stderr).contains("did you mean `shout`?"));
 }
 
@@ -290,7 +328,7 @@ fn config_errors_point_into_the_imported_file() {
         &[(".zlint", "import broken\n"), ("broken.zlint", "lang t \"*.t\"\nin nope rule x\n")],
     );
     let out = zlint(&dir, &["check"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.code, 2);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("unknown matcher `nope`") && err.contains("broken.zlint:2:4"), "{err}");
 }
@@ -301,7 +339,7 @@ fn a_broken_config_still_lints_with_what_works() {
     let dir = project("cli-partly-broken", &[(".zlint", config.as_str()), ("a.t", "LOUD\n")]);
     let out = zlint(&dir, &["--format", "jsonl"]);
     // The errors are printed and fail the run, but the working rule ran.
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.code, 2);
     assert!(stdout(&out).contains("`LOUD` is shouting"), "{}", stdout(&out));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("unknown matcher `nope`") && err.contains("no option `max`"), "{err}");
@@ -326,7 +364,7 @@ fn examples_find_what_their_comments_promise() {
 fn unreadable_config_is_explained() {
     let dir = project("cli-no-config", &[("a.t", "x")]);
     let out = zlint(&dir, &["--config", "nope.zlint"]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.code, 2);
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
 }
 
@@ -335,13 +373,13 @@ fn configs_are_named_dot_zlint_and_import_each_other() {
     // A config under its old name is pointed at, not silently ignored.
     let dir = project("cli-old-name", &[("zoomie.zlint", RULES), ("a.t", "LOUD\n")]);
     let out = zlint(&dir, &[]);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.code, 2);
     assert!(String::from_utf8_lossy(&out.stderr).contains("rename it"), "{}", String::from_utf8_lossy(&out.stderr));
 
     // A nested config builds on its parent's by importing it.
     let dir = project("cli-dot-zlint", &[(".zlint", RULES), ("sub/.zlint", "import ../.zlint\nrule no-shout error\n"), ("sub/a.t", "LOUD\n")]);
     let out = zlint(&dir.join("sub"), &["--format", "jsonl"]);
-    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.code, 1, "{}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout(&out).contains("\"severity\":\"error\""), "{}", stdout(&out));
 }
 
