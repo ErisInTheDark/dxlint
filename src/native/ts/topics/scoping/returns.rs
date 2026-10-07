@@ -18,8 +18,9 @@ pub(super) fn consistent_returns(file: &NativeFile, node: u32) -> Value<'static>
         }
     }
     returns.sort_by_key(|&n| s.tree.node(n).start);
+    if returns.is_empty() { return Value::Null; }
     let ts = matches!(file.path.extension().and_then(|e| e.to_str()), Some("ts" | "tsx" | "mts" | "cts"));
-    if ts && return_void(file, node) {
+    if ts && returns.iter().any(|&n| s.get(n, F::Arg).is_none()) && return_void(file, node) {
         returns.retain(|&n| s.get(n, F::Arg).is_some());
     }
     let Some(first) = returns.first().copied() else { return Value::Null };
@@ -64,16 +65,13 @@ pub(super) fn consistent_returns(file: &NativeFile, node: u32) -> Value<'static>
 }
 
 fn return_void(file: &NativeFile, node: u32) -> bool {
+    // A return statement's body is a block; only expression-bodied arrows
+    // have an inferred callable return here, so an annotation is required.
+    let Some(annotation) = file.syntax.get(node, F::ReturnType) else { return false; };
     let typing = file.typing();
     let is_async = file.syntax.has_word(node, F::Modifier, "async");
-    let is_void = |t: &Ty| contains_void(file, t, is_async);
-    if let Some(annotation) = file.syntax.get(node, F::ReturnType) {
-        let ty = typing.checker.eval(&crate::native::ts::summary::type_syn(&file.syntax, annotation), &file.env_at(node));
-        if is_void(&ty) { return true; }
-    }
-    let Ty::Fn(callable) = file.type_of(node) else { return false };
-    callable.ret.as_ref().is_some_and(is_void)
-        || callable.sigs.iter().any(|sig| sig.ret.as_ref().is_some_and(|syn| is_void(&typing.checker.eval(syn, &callable.env))))
+    let ty = typing.checker.eval(&crate::native::ts::summary::type_syn(&file.syntax, annotation), &file.env_at(node));
+    contains_void(file, &ty, is_async)
 }
 
 fn contains_void(file: &NativeFile, ty: &Ty, promise: bool) -> bool {
@@ -84,5 +82,53 @@ fn contains_void(file: &NativeFile, ty: &Ty, promise: bool) -> bool {
             args.first().is_some_and(|t| contains_void(file, t, true))
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn bare_returns_follow_resolved_return_annotations() {
+        for (annotation, asynchronous, bare_kept) in [
+            ("V", false, false),
+            ("V | number", false, false),
+            ("Promise<V>", true, false),
+            ("PromiseLike<V>", true, false),
+            ("Promise<V>", false, true),
+            ("number", false, true),
+            ("", false, true),
+        ] {
+            let source = format!(
+                "interface Promise<T> {{}} interface PromiseLike<T> {{}} type V = void; {}function f(x: boolean){} {{ if (x) return; return 1; }}",
+                if asynchronous { "async " } else { "" },
+                if annotation.is_empty() { String::new() } else { format!(": {annotation}") },
+            );
+            with_native_file(&source, |file, _| {
+                let node = (0..file.syntax.tree.nodes.len() as u32).find(|&n| file.syntax.is(n, K::Function)).unwrap();
+                let result = consistent_returns(file, node);
+                assert_eq!(result.key("specified"), Value::Bool(!bare_kept), "{annotation}");
+                assert_eq!(result.key("returns").item_slice().len(), usize::from(bare_kept), "{annotation}");
+            });
+        }
+    }
+
+    #[test]
+    fn value_returns_keep_inferred_undefined_and_nested_function_boundaries() {
+        let source = "declare const empty: undefined; function f(x: boolean) { function nested() { return 1; } if (x) return empty; return void nested(); }";
+        with_native_file(source, |file, _| {
+            let node = (0..file.syntax.tree.nodes.len() as u32).find(|&n|
+                file.syntax.is(n, K::Function) && file.syntax.get(n, F::Name).is_some_and(|name| file.syntax.text(name) == "f")
+            ).unwrap();
+            let result = consistent_returns(file, node);
+            assert_eq!(result.key("specified"), Value::Bool(true));
+            assert_eq!(result.key("undefined"), Value::Bool(true));
+            let rest = result.key("returns");
+            let [returned] = rest.item_slice() else { panic!("outer returns only") };
+            assert_eq!(returned.key("specified"), Value::Bool(true));
+            assert_eq!(returned.key("undefined"), Value::Bool(true));
+        });
     }
 }
