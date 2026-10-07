@@ -479,7 +479,7 @@ in ts_block, ts_switch rule no-empty {
   let empty_start if is ts_switch then opener.ts_open_brace.offset else offset
   when empty_start != null
   when if is ts_switch then empty_switch && !any(descendants(ts_comment), comment => comment.offset > empty_start && comment.end_offset < end_offset) else uncommented_empty_block
-  report at empty_start
+  report at { start: empty_start, end: end_offset }
   warn "Empty {if is ts_switch then 'switch' else 'block'} statement."
 }
 
@@ -553,7 +553,7 @@ in ts_arrow rule arrow-body-style {
   let body_block body is ts_block
   let body_object if body_block then body.return_value_object == true else default(body.unwrapped_node, body.node) is ts_object
   when body_block && (mode == "never" || mode == "as-needed" && body.single_return == true && !(requireReturnForObjectLiteral && body_object)) || !body_block && (mode == "always" || mode == "as-needed" && requireReturnForObjectLiteral && body_object)
-  report at body.unparen_offset
+  report at unparenthesised_node(body.node)
   warn if !body_block then "Expected block statement surrounding arrow body." else if body.statement_count == 0 then "Unexpected block statement surrounding arrow body; put a value of `undefined` immediately after the `=>`." else if body.single_return != true then "Unexpected block statement surrounding arrow body." else if body.return_value_braced == true then "Unexpected block statement surrounding arrow body; parenthesize the returned value and move it immediately after the `=>`." else "Unexpected block statement surrounding arrow body; move the returned value immediately after the `=>`."
 }
 
@@ -572,7 +572,7 @@ in ts_function, ts_arrow, ts_method rule no-empty-function {
   when !(constructor && contains(modifier, "protected") && (contains(allow, "protectedConstructors") || contains(allow, "protected-constructors")))
   when !(empty_function_decorated(node, constructor) && contains(allow, "decoratedFunctions"))
   when !(is ts_method && !constructor && contains(modifier, "override") && contains(allow, "overrideMethods"))
-  report at body.offset
+  report at body.node
   warn "Unexpected empty {default(function_name, 'function')}."
 }
 

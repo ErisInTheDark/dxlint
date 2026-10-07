@@ -52,7 +52,7 @@ fn check(file: &NativeFile<'_>, node: u32, kind: Kind, optional: bool, seen: &mu
 
 fn finding(file: &NativeFile<'_>, node: u32, kind: Kind, previous: Option<u32>) -> Value<'static> {
     Value::record(vec![
-        ("offset".into(), Value::from(file.syntax.tree.node(node).start as usize)),
+        ("node".into(), Value::Node(node, file.syntax.text(node).to_owned().into())),
         ("kind".into(), Value::from(if kind == Kind::Union { "Union" } else { "Intersection" })),
         ("previous".into(), previous.map_or(Value::Null, |n| Value::from(file.syntax.text(n).to_string()))),
     ])

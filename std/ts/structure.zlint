@@ -198,7 +198,6 @@ in ts_line rule max-len {
   let comment_applies structure_full_comment && comment_limit > 0
   let limit if comment_applies then comment_limit else code_limit
   when length > limit
-  report at offset
   warn if comment_applies then "This line has a comment length of {length}. Maximum allowed is {limit}." else "This line has a length of {length}. Maximum allowed is {limit}."
 }
 
@@ -224,7 +223,6 @@ in ts_line_comment rule line-comment-position {
   when !ignore_default || !structure_directive && !re_test(structure_comment_body, /^\s*falls?\s?through/)
   when ignore_pattern == "" || !re_test(structure_comment_body, ignore_pattern)
   when position == "above" && structure_comment_beside || position == "beside" && !structure_comment_beside
-  report at offset
   warn if position == "above" then "Expected comment to be above code." else "Expected comment to be beside code."
 }
 
@@ -251,7 +249,6 @@ in ts_block_comment rule multiline-comment-style:shape {
     else mode == "separate-lines"
       && trim(byte_slice(source, end_offset, structure_last_row.structure_line_end)) == ""
       && (checkJSDoc || !structure_block_jsdoc) && (checkExclamation || !structure_block_exclamation)
-  report at offset
   warn if mode == "bare-block" then "Expected a block comment without padding stars." else "Expected multiple line comments instead of a block comment."
 }
 
@@ -266,7 +263,7 @@ in ts_block_comment rule multiline-comment-style:open {
 in ts_block_comment rule multiline-comment-style:close {
   @structure_comment_style_options
   when mode == "starred-block" && structure_style_eligible && structure_multiline && trim(structure_block_last) != ""
-  report at end_offset - 2
+  report at { start: end_offset - 2, end: end_offset }
   warn "Expected a linebreak before '*/'."
 }
 
@@ -296,7 +293,6 @@ in ts_line_comment let structure_group_unsafe contains(structure_comment_body, "
 in ts_line_comment rule multiline-comment-style:consecutive {
   @structure_comment_style_options
   when mode != "separate-lines" && structure_style_eligible && !structure_joins_previous && structure_joins_next && !structure_group_unsafe
-  report at offset
   warn "Expected a block comment instead of consecutive line comments."
 }
 
@@ -317,7 +313,6 @@ in ts_line match structure_tab_run /\t+/
 in structure_tab_run rule no-tabs {
   option allowIndentationTabs boolean = false "allow tabs at the start of a line"
   when !allowIndentationTabs || !re_test(byte_slice(parent.text, 0, offset - parent.offset), /^[ \t]*$/)
-  report at offset
   warn "Unexpected tab character."
 }
 
@@ -663,7 +658,6 @@ in structure_comment rule name {
   let targets if boundary then default(parent.structure_boundary_targets, []) else []
   when !any(targets, target => contains(if before then allowedStart else allowedEnd, target))
   when !(contains(targets, "Block") && (if before then allowBlockStart else allowBlockEnd) && !(contains(targets, "Class") && (if before then allowClassStart else allowClassEnd) == false))
-  report at offset
   warn if before then "Expected line before comment." else "Expected line after comment."
 }
 }

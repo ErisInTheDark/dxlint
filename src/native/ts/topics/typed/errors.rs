@@ -39,7 +39,6 @@ pub(super) fn value(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     Value::record(vec![
         ("kind".into(), Value::from(kind)),
         ("rethrown".into(), Value::Bool(rethrown(file, node))),
-        ("offset".into(), Value::from(file.syntax.tree.node(file.syntax.unparen(node)).start as usize)),
     ])
 }
 
@@ -55,6 +54,15 @@ mod tests {
         let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), source);
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(&source[diagnostics[0].start..diagnostics[0].end], "bad");
+    }
+
+    #[test]
+    fn thrown_values_highlight_the_expression_without_grouping_parentheses() {
+        let linter = native_linter("rule only-throw-error");
+        let source = "const value = 1; throw ((value)); throw (value + 1);";
+        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
+        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(spans, ["value", "value + 1"]);
     }
 
     #[test]

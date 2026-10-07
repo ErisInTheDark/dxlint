@@ -21,6 +21,21 @@ fn duplicate_type_selection_covers_optional_parameters_and_both_type_shapes() {
 }
 
 #[test]
+fn duplicate_constituents_highlight_the_selected_type_not_its_container() {
+    let linter = native_linter("rule no-duplicate-type-constituents");
+    for (source, expected) in [
+        ("type U = string | (string);", vec!["string"]),
+        ("type U = string | (string | number);", vec!["string"]),
+        ("interface Box<T> { value: T; } type U = Box<string> | Box<string>;", vec!["Box<string>"]),
+        ("type U = (string | number) & (string | number);", vec!["string | number"]),
+    ] {
+        let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
+        let reported: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
+        assert_eq!(reported, expected, "{source}: {diagnostics:#?}");
+    }
+}
+
+#[test]
 fn type_allowance_selection_uses_each_rules_subject_and_origin() {
     let declarations = "class Allowed { a = 1; } class Other { b = 1; } declare const allowed: Allowed, other: Other;";
     for (rule, target, hook, groups, statements) in [

@@ -170,7 +170,7 @@ mod tests {
         let code = "interface Promise<T> {} declare const p: Promise<number>; function inferred(flag: boolean) { return flag ? p : 1; } function explicit(flag: boolean): Promise<number> | number { return flag ? p : 1; } function overloaded(): Promise<number>; function overloaded(flag: boolean): number; function overloaded(flag?: boolean) { return p; }";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].start, code.find("function inferred").unwrap());
+        assert_eq!(&code[diagnostics[0].start..diagnostics[0].end], "inferred");
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
     fn function_hook_selects_context_without_conflating_object_and_class_methods() {
         let code = "interface Promise<T> {} declare const p: Promise<number>; function declared() { return p; } const arrow = () => p; const expression = function () { return p; }; const object = { method() { return p; } }; class C { method() { return p; } }";
         for (kind, heads) in [
-            ("declaration", vec!["function declared"]),
+            ("declaration", vec!["declared()"]),
             ("arrow", vec!["=> p"]),
             ("expression", vec!["function ()", "method()"]),
             ("method", vec!["method() { return p; } }"]),
@@ -204,7 +204,7 @@ mod tests {
         let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
         assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
         assert_eq!(diagnostics[0].start, code.find("constructor()").unwrap());
-        assert_eq!(diagnostics[1].start, code.find("static constructor").unwrap());
+        assert_eq!(diagnostics[1].start, code.find("static constructor").unwrap() + "static ".len());
         assert_eq!(diagnostics[2].start, code.find("['constructor']").unwrap());
     }
 
@@ -240,8 +240,8 @@ mod tests {
         let code = "interface Like { then(ok: (v: number) => void): Like; } declare const p: Like; async function returned() { return p; } async function outer() { const inner = async () => { await 1; }; return 1; } async function bare() { return; } async function empty() {} async function iterated(xs: any) { for await (const x of xs) {} } async function disposed() { await using x = {}; }";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
         assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
-        assert_eq!(diagnostics[0].start, code.find("async function outer").unwrap());
-        assert_eq!(diagnostics[1].start, code.find("async function bare").unwrap());
+        assert_eq!(&code[diagnostics[0].start..diagnostics[0].end], "outer");
+        assert_eq!(&code[diagnostics[1].start..diagnostics[1].end], "bare");
     }
 
     #[test]

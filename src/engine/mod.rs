@@ -12,6 +12,8 @@ mod suppress;
 pub mod symbols;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod position_tests;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -654,7 +656,7 @@ impl Linter {
             (Report::End, _) => (end, end),
             _ => (start, end),
         };
-        // `report at`: an offset (the start), a `{start, end}` record or a node.
+        // Offsets locate points; only records and nodes select a span.
         let (start, end) = match &f.report_at {
             Some(at) => {
                 let boundary = |n: f64| {
@@ -679,7 +681,7 @@ impl Linter {
                     }
                     v => v.num().map(|n| {
                         let s = boundary(n);
-                        (s, end.max(s))
+                        (s, s)
                     }),
                 });
                 match span {
@@ -790,7 +792,7 @@ mod option_run_tests {
         for (path, source, expected) in [("/root/a.t", "a b", "a bb"), ("/root/b.t", "b a b", "bb a bb")] {
             let reports = l.lint(Path::new(path), source);
             assert_eq!(reports.len(), source.split_whitespace().filter(|word| *word == "b").count());
-            assert!(reports.iter().all(|d| d.message == "b/b" && d.fix.is_some() && &source[d.start..d.end] == "b"));
+            assert!(reports.iter().all(|d| d.message == "b/b" && d.fix.is_some() && d.start == d.end && source[d.start..].starts_with('b')));
             assert_eq!(apply_fixes(source, &reports).0, expected);
         }
     }

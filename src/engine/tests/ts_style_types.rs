@@ -236,7 +236,7 @@ fn array_notation_preserves_wrapper_eligibility_and_readonly_simple_classificati
 }
 
 #[test]
-fn inferrable_annotation_hook_preserves_widening_exceptions_and_parameter_positions() {
+fn inferrable_annotation_hook_preserves_widening_exceptions_and_annotation_positions() {
     let source = "let variable: number = 1; let inferred = 1; let other: number = f(); class C { public property: number = 1; readonly wide: number = 1; optional?: number = 1; constructor(public promoted: number = 1) {} } function f(parameter: number = 1) {}";
     for (predicate, heads) in [
         (None, vec!["variable:", "public property:", "promoted:", "parameter:"]),
@@ -249,8 +249,12 @@ fn inferrable_annotation_hook_preserves_widening_exceptions_and_parameter_positi
         let linter = native_linter(&format!("{config}rule no-inferrable-types"));
         let diagnostics = linter.lint(Path::new("file.ts"), source);
         let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
-        let expected: Vec<_> = heads.iter().map(|head| source.find(head).expect("declaration in source")).collect();
+        let expected: Vec<_> = heads.iter().map(|head| {
+            let after_name = source.find(head).expect("declaration in source") + head.len();
+            after_name + source[after_name..].find("number").expect("type annotation")
+        }).collect();
         assert_eq!(starts, expected, "{predicate:?}: {diagnostics:?}");
+        assert!(diagnostics.iter().all(|diagnostic| &source[diagnostic.start..diagnostic.end] == "number"));
     }
 }
 
@@ -265,7 +269,9 @@ fn inferrable_annotation_group_drops_only_selected_declaration_kinds() {
         let linter = native_linter(&format!("drop group inferrable_annotation {kind}\nrule no-inferrable-types"));
         let diagnostics = linter.lint(Path::new("file.ts"), source);
         assert_eq!(diagnostics.len(), 2, "{kind}: {diagnostics:?}");
-        assert!(!diagnostics.iter().any(|diagnostic| diagnostic.start == source.find(omitted).expect("omitted declaration in source")));
+        let after_name = source.find(omitted).expect("omitted declaration in source") + omitted.len();
+        let omitted_type = after_name + source[after_name..].find("number").expect("omitted type annotation");
+        assert!(!diagnostics.iter().any(|diagnostic| diagnostic.start == omitted_type));
     }
 }
 

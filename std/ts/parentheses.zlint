@@ -162,7 +162,6 @@ in structure_parens rule no-extra-parens {
   when enforceForFunctionPrototypeMethods || !(inner.structure_parens_prototype || inner is ts_function && owner.parent.structure_parens_prototype == true)
   when owner not ts_spread || inner not no_extra_parens_spread_allowed
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
-  report at offset
   warn "Unnecessary parentheses around expression."
 }
 

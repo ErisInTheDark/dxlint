@@ -75,15 +75,15 @@ fn chained_assignment_exemption_keeps_only_direct_declaration_initializers() {
 }
 
 #[test]
-fn parameter_limits_locate_each_function_type_at_its_own_arrow() {
+fn parameter_limits_locate_each_function_type_at_its_signature_start() {
     let linter = native_linter("rule max-params { set max 1 }");
-    for source in [
-        "type F = (a: number, b: number) => number;",
-        "type F = <T>(a: T, b: T) => T;",
-        "type F = (cb: (a: number, b: number) => number, b: number) => number;",
-        "type F = (a: number, b: number) => (c: number, d: number) => number;",
+    for (source, signatures) in [
+        ("type F = (a: number, b: number) => number;", vec!["(a:"]),
+        ("type F = <T>(a: T, b: T) => T;", vec!["<T>"]),
+        ("type F = (cb: (a: number, b: number) => number, b: number) => number;", vec!["(cb:", "(a:"]),
+        ("type F = (a: number, b: number) => (c: number, d: number) => number;", vec!["(a:", "(c:"]),
     ] {
-        let expected: Vec<_> = source.match_indices("=>").map(|(offset, _)| offset).collect();
+        let expected: Vec<_> = signatures.iter().map(|signature| source.find(signature).expect("signature in fixture")).collect();
         let mut actual: Vec<_> = linter.lint(Path::new("/root/a.ts"), source).iter().map(|d| d.start).collect();
         actual.sort_unstable();
         assert_eq!(actual, expected, "{source}");
@@ -91,7 +91,7 @@ fn parameter_limits_locate_each_function_type_at_its_own_arrow() {
     let source = "function f(a, b) {}";
     let reports = linter.lint(Path::new("/root/a.js"), source);
     assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].start, 0);
+    assert_eq!(&source[reports[0].start..reports[0].end], "f");
 }
 
 #[test]

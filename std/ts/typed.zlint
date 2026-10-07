@@ -22,7 +22,7 @@ in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
 
 in ts_function, ts_arrow, ts_method rule require-await {
   when missing_await != null
-  report at missing_await.offset
+  report at function_warning_site(node)
   warn missing_await.name " has no 'await' expression."
 }
 
@@ -51,7 +51,7 @@ in promise_function_async_function rule promise-function-async {
   let names ("Promise" allowedPromiseNames)
   let disallowed_unknown (!allowAny && any(function_return_info.returns, result => result.unknown))
   when disallowed_unknown || all(function_return_info.returns, result => if function_return_info.explicit then matches_type_names(result.groups, names) else any(result.groups, group => any(group, name => contains(names, name))))
-  report at function_return_info.offset
+  report at function_warning_site(node)
   warn if !disallowed_unknown && any(function_return_info.returns, result => result.union && !matches_type_names(result.groups, names)) then "Functions that return promises must be async. Consider adding an explicit return type annotation if the function is intended to return a union of promise and non-promise types." else "Functions that return promises must be async."
 }
 
@@ -67,7 +67,7 @@ in ts_throw.argument rule only-throw-error {
   when !allowThrowingUnknown || error_value.kind != "unknown"
   when only_throw_error_checked
   when !type_is_allowed(allow, type_specifier_groups)
-  report at error_value.offset
+  report at unparenthesised_node(node)
   warn if error_value.kind == "undefined" then "Do not throw undefined." else "Expected an error object to be thrown."
 }
 
@@ -345,7 +345,7 @@ in duplicate_type_constituent rule no-duplicate-type-constituents {
   when duplicate_type_constituents_checked
   each duplicate_constituent in default(duplicate_type_constituents, [])
   when duplicate_constituent.previous != null
-  report at duplicate_constituent.offset
+  report at duplicate_constituent.node
   warn "{duplicate_constituent.kind} type constituent is duplicated with {duplicate_constituent.previous}."
 }
 in duplicate_type_constituent rule no-duplicate-type-constituents:optional {
@@ -353,7 +353,7 @@ in duplicate_type_constituent rule no-duplicate-type-constituents:optional {
   when duplicate_type_constituents_checked
   each duplicate_constituent in default(duplicate_type_constituents, [])
   when duplicate_constituent.previous == null
-  report at duplicate_constituent.offset
+  report at duplicate_constituent.node
   warn "Explicit undefined is unnecessary on an optional parameter."
 }
 
@@ -403,6 +403,7 @@ in ts_call.argument rule await-thenable:iterable {
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_for_of rule await-thenable:for-of {
+  report at unparenthesised_node(right.node)
   when nonasync_for_of == true
   warn "Unexpected `for await...of` of a value that is not async iterable."
 }
@@ -481,6 +482,7 @@ in ts_logical rule prefer-optional-chain:empty-object {
 
 # ---- more type-aware rules (type_flags) ----------------------------------------
 in ts_for_in rule no-for-in-array {
+  report at unparenthesised_node(right.node)
   when has_only_flags(default(right.type_flags, []), ["array", "tuple", "union", "nullable", "undefined", "null"]) && contains(right.type_flags, "array")
   warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
 }
@@ -556,12 +558,14 @@ in ts_call rule prefer-string-starts-ends-with:regex {
 # Private members never written after construction.
 fn is_private(m) = re_test(m, /\bprivate\b/)
 in ts_class_property rule prefer-readonly {
+  report at key.node
   when (is_private(join([] modifier, " ")) || re_test(key, /^#/)) && !contains([] modifier, "readonly") && !contains([] modifier, "static") && member_writes == 0
   # Computed keys and decorated members can be written where zlint cannot see.
   when !re_test(key, /^\[/) && count(decorator) == 0
   warn "Member '{key}' is never reassigned; mark it as `readonly`."
 }
 in ts_parameter rule prefer-readonly:parameter {
+  report at name.node
   when member_writes == 0 && is_private(join([] modifier, " ")) && !contains([] modifier, "readonly")
   warn "Member '{re_replace(text, /^(?:(?:private|public|protected|readonly|override)\s+)*/, '')}' is never reassigned; mark it as `readonly`."
 }

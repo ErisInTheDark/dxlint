@@ -25,7 +25,7 @@ mod tests {
         let diags = l.lint(Path::new("/root/file.ts"), text);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].start, text.find('B').unwrap());
-        assert_eq!(diags[0].end, text.len());
+        assert_eq!(&text[diags[0].start..diags[0].end], "B");
     }
 
     #[test]

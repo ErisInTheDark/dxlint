@@ -21,13 +21,12 @@ in ts_parenthesized forward primitive_inference, primitive_direct from expressio
 in ts_declarator, ts_class_property, ts_parameter let inferred_annotation if type != null && contains(init.primitive_inference, type) then type else null
 # `readonly` (and optional) properties keep their annotation: it widens.
 in ts_class_property let annotation_widens contains([] modifier, "readonly") || optional != null
-in ts_parameter let annotation_offset name.unparen_offset
 group inferrable_annotation ts_declarator, ts_class_property, ts_parameter
 in inferrable_annotation let no_inferrable_types_checked true
 in inferrable_annotation rule no-inferrable-types {
   when inferred_annotation != null && default(annotation_widens, false) != true
   when no_inferrable_types_checked
-  report at default(annotation_offset, offset)
+  report at type.node
   warn "Type {inferred_annotation} trivially inferred from a {inferred_annotation} literal, remove type annotation."
 }
 

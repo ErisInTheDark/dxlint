@@ -247,9 +247,9 @@ in ts_method.key, ts_class_property.key rule no-dupe-class-members {
 
 # Once per name, at the parameter list.
 in ts_function rule no-dupe-args {
-  each name in duplicate_parameters
+  each duplicate_param in duplicate_parameters
   report at offset + len(re_find(text, /^[^(]*/))
-  warn "Duplicate param '{name}'."
+  warn "Duplicate param '{duplicate_param}'."
 }
 
 in ts_enum_member let enum_value init.literal_value
@@ -431,7 +431,7 @@ in code_path_statement rule no-unreachable {
 in ts_method, ts_function, ts_arrow rule getter-return {
   option allowImplicit boolean = false "a bare `return;` counts as returning"
   when accessor == "get" && code_path == "falls_off"
-  report at function_head
+  report at function_warning_site(node)
   warn if return_values == "none" || return_values == "bare" && !allowImplicit then "Expected to return a value in {function_name}." else "Expected {function_name} to always return a value."
 }
 in ts_return rule getter-return:bare {

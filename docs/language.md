@@ -229,7 +229,7 @@ in ts_line rule indentation {
   indent in ts_block
   # The rule can now read indent_anchor and indent_level as usual.
 }
-override in ts_node let indent_reset matches_selector(node, "ClassBody")
+override in ts_node let indent_reset is ts_block
 ```
 
 Errors in reset, `from` or `by` expressions fail the rule instead of silently using a default anchor or level.
@@ -415,7 +415,7 @@ fix at end_offset as ";"
 | `files "glob" ...` | only these files |
 | `ignore "glob" ...` | not these files |
 | `report node\|change\|end` | where diagnostics point: the whole node (default), only the part the fix changes, or the node's end |
-| `report at expr` | where diagnostics point: a byte offset starts them there (`offset` and `end_offset` are a node's own; native facts give others, such as `write_site`); a `{start, end}` record or a node (`declaration`) gives the whole span |
+| `report at expr` | a byte offset selects a zero-width point; a `{start, end}` record or node selects its span. Without a report clause, diagnostics cover the matched node. Report positions do not change fix regions |
 | `@each name in list` | one diagnostic per item of a list from the rule's options (`@each entry in paths`): `when`, the message, `fix` and `report at` see the item as `name` (`let`s stay per node). The list is known when the config loads; rules never loop over code |
 
 A macro at the start of a body line is pasted as clauses.
@@ -482,8 +482,6 @@ so nested rules compose.
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
 | `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
-| `matches_selector(selector)`, `matches_selector(node, selector)` | whether the current or supplied native node matches an ESTree selector |
-| `selector_spans(selector)` | distinct logical matches under the current node as `{node, type, start, end}`; use the record's span for virtual nodes, not its backing native `node` |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
@@ -609,11 +607,7 @@ the neighbour itself with `is` (`previous is ts_comma`).
 | `js_number(value)` | JavaScript Number conversion of primitives or `literal_value` records; NaN for nonnumeric strings, null for unsupported values (including symbols) |
 | `js_re_test(text, pattern, flags?)` | stateless JavaScript regex matching (`flags` defaults to empty); unsupported syntax and work exhaustion fail the rule. `re_test` keeps its existing regex dialect |
 
-**ESTree selectors.** Selector queries use logical ESTree kinds and fields, not `ts_*` layer names. The shared native view includes virtual nodes such as `ChainExpression`, `ClassBody` and method `FunctionExpression` values. `selector_spans` retains distinct logical matches; its `node` is the backing native node, so report using `{start, end}` for the logical span. `matches_selector` accepts any logical role of its backing native node.
-
-Selectors support type names, `*`, lists, compounds, descendant/child/sibling/adjacent relations, field paths, attribute paths and comparisons, `:not`, `:is`/`:matches`, relative `:has`, child indices and the statement, declaration, expression, pattern and function classes. Empty selectors and `!` subjects are unsupported. Selectors are limited to 64 KiB, 128 nested lists and 128 compounds per chain. Invalid, unsupported or oversized selectors produce rule-error diagnostics.
-
-Regex attributes and `js_re_test` share a bounded JavaScript subset with `i`, `m`, `s`, `u` flags and flat positive/negative lookaheads. Nested assertions, lookbehind, backreferences, named groups, control escapes and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors recognise LF, CR, U+2028 and U+2029, including positions inside CRLF. Legacy `i` supports ordinary Unicode folding; characters in fold groups that differ from JavaScript's non-`u` uppercase canonicalisation (such as Kelvin sign, long s and astral case pairs) fail explicitly in patterns or values. Use `u` for those groups. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.
+`js_re_test` uses a bounded JavaScript subset with `i`, `m`, `s`, `u` flags and flat positive/negative lookaheads. Nested assertions, lookbehind, backreferences, named groups, control escapes and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors recognise LF, CR, U+2028 and U+2029, including positions inside CRLF. Legacy `i` supports ordinary Unicode folding; characters in fold groups that differ from JavaScript's non-`u` uppercase canonicalisation (such as Kelvin sign, long s and astral case pairs) fail explicitly in patterns or values. Use `u` for those groups. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.
 
 Regex sources are limited to 64 KiB and 128 nested groups; assertion patterns allow 64 assertions. Assertion/multiline execution allows 50,000 states per compiled program and 10 million state visits per match, shared with its assertion checks. Exhaustion produces a rule error, never a silent non-match.
 
@@ -634,8 +628,6 @@ in ts_call rule no-eval-call {
 drop group no_extra_parens_inner ts_node
 group no_extra_parens_inner ts_function, ts_arrow, structure_assertion
 group no_extra_parens_spread_allowed ts_conditional
-override in structure_parens let no_extra_parens_checked
-  !matches_selector(structure_parens_outer.parent.node, "CallExpression[callee.name=legacy]")
 ```
 
 `slice` counts characters; offsets (`offset`, `end_offset`, native spans)

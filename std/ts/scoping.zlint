@@ -105,7 +105,7 @@ in ts_function rule func-names {
   let policy if context.generator && generators != null then generators else mode
   when context.eligible && !context.recursive
   when policy == "never" && context.named && context.expression || policy != "never" && !context.named && (policy != "as-needed" || !context.inferred)
-  report at function_head
+  report at function_warning_site(node)
   warn if policy == "never" then "Unexpected named {function_name}." else "Unexpected unnamed {function_name}."
 }
 
@@ -217,12 +217,12 @@ in ts_parameter let underscore_parameter_position if parent is (ts_function, ts_
 in ts_rest let underscore_parameter_position if is ts_parameter.name then parent.underscore_parameter_position else null
 in ts_method let underscore_method_position if parent is ts_class || kind != "get" && kind != "set" then offset else null
 in ts_identifier, ts_private_name let underscore_candidate
-  if underscore_declarator != null then {context: default(underscore_pattern, "variable"), span: underscore_declarator}
-  else if is ts_function.name && declaration_kind == "function" then {context: "function", span: parent.node}
-  else if is (ts_parameter.name, ts_rest.argument) && parent.underscore_parameter_position != null then {context: "parameter", span: parent.underscore_parameter_position}
-  else if is ts_method.key && parent.underscore_method_position != null then {context: "method", span: parent.node}
-  else if is ts_class_property.key then {context: "field", span: parent.node}
-  else if is ts_identifier && is (ts_member.property, ts_index.index) then {context: "member", span: parent.node}
+  if underscore_declarator != null then {context: default(underscore_pattern, "variable")}
+  else if is ts_function.name && declaration_kind == "function" then {context: "function"}
+  else if is (ts_parameter.name, ts_rest.argument) && parent.underscore_parameter_position != null then {context: "parameter"}
+  else if is ts_method.key && parent.underscore_method_position != null then {context: "method"}
+  else if is ts_class_property.key then {context: "field"}
+  else if is ts_identifier && is (ts_member.property, ts_index.index) then {context: "member"}
   else null
 fn underscore_this_constructor(object) = object is ts_member && object.property == "constructor" && default(object.object.scoping_unparen_node, object.object.node) is ts_this
 in ts_identifier, ts_private_name rule no-underscore-dangle {
@@ -245,7 +245,7 @@ in ts_identifier, ts_private_name rule no-underscore-dangle {
   when (enforceInClassFields || candidate.context != "field") && (enforceInMethodNames || candidate.context != "method")
   let receiver if candidate.context == "member" then default(parent.object.scoping_unparen_node, parent.object.node) else null
   when !(candidate.context == "member" && (bare_name == "__proto__" || allowAfterThis && receiver is ts_this || allowAfterSuper && receiver is ts_super || allowAfterThisConstructor && underscore_this_constructor(receiver)))
-  report at candidate.span
+  report at node
   warn "Unexpected dangling '_' in '{text}'."
 }
 
@@ -329,9 +329,9 @@ in ts_identifier rule no-redeclare {
 in ts_program rule no-redeclare:global {
   option builtinGlobals boolean = true "also report built-in global redeclarations"
   option ignoreDeclarationMerge boolean = true "allow typescript declaration merging"
-  each declaration in filter(scoping_global_redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin)
-  report at declaration.offset
-  warn if builtinGlobals && declaration.builtin then "'{declaration.name}' is already defined as a built-in global variable." else if declaration.syntax then "'{declaration.name}' is already defined by a variable declaration." else "'{declaration.name}' is already defined."
+  each redeclaration in filter(scoping_global_redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin)
+  report at redeclaration.offset
+  warn if builtinGlobals && redeclaration.builtin then "'{redeclaration.name}' is already defined as a built-in global variable." else if redeclaration.syntax then "'{redeclaration.name}' is already defined by a variable declaration." else "'{redeclaration.name}' is already defined."
 }
 
 in ts_this let scoping_captures_this true
@@ -400,23 +400,23 @@ in ts_identifier rule no-use-before-define {
   warn "'{text}' was used before it was defined."
 }
 
+fn implicit_global_label(kind) = if kind == "function" || kind == "class" then kind else "'" kind "'"
 in ts_variable_declaration, ts_function, ts_class rule no-implicit-globals {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
-  each declaration in filter(scoping_global_declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
-  let label if declaration.kind == "function" || declaration.kind == "class" then declaration.kind else "'" declaration.kind "'"
-  report at declaration.offset
-  warn if declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable." else if declaration.kind == "var" || declaration.kind == "function" then "Unexpected {label} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable." else "Unexpected {label} declaration in the global scope, wrap in a block or in an IIFE."
+  each global_declaration in filter(scoping_global_declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
+  report at global_declaration.offset
+  warn if global_declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable." else if global_declaration.kind == "var" || global_declaration.kind == "function" then "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable." else "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in a block or in an IIFE."
 }
 in ts_identifier rule no-implicit-globals:leak {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
   when source_type != "module" && !scoping_strict_code && resolved == "global" && (global == null || global == "off") && access == "write"
-  report at write_site
+  report at node
   warn "Global variable leak, declare the variable if it is intended to be local."
 }
 in ts_identifier rule no-implicit-globals:readonly {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
   when source_type != "module" && resolved == "global" && global == "readonly" && access == "write"
-  report at write_site
+  report at node
   warn "Unexpected assignment to read-only global variable."
 }
 
@@ -482,7 +482,7 @@ in ts_method rule class-methods-use-this {
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)
   when !((ignoreClassesWithImplements == "public-fields" || ignoreClassesThatImplementAnInterface == "public-fields") && parent.implements != null && !contains(modifier, "private") && !contains(modifier, "protected") && !starts_with(key, "#"))
-  report at function_head
+  report at function_warning_site(node)
   warn "Expected 'this' to be used by class {function_name}."
 }
 in ts_class_property rule class-methods-use-this:field {
@@ -497,7 +497,7 @@ in ts_class_property rule class-methods-use-this:field {
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)
   when !((ignoreClassesWithImplements == "public-fields" || ignoreClassesThatImplementAnInterface == "public-fields") && parent.implements != null && !contains(modifier, "private") && !contains(modifier, "protected") && !starts_with(key, "#"))
-  report at if contains(modifier, "accessor") then init.scoping_callable_head else init.function_head
+  report at function_warning_site(init.node)
   warn if contains(modifier, "accessor") then "Expected 'this' to be used by class arrow function." else "Expected 'this' to be used by class {init.function_name}."
 }
 

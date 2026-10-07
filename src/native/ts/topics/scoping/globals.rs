@@ -70,6 +70,23 @@ mod tests {
     use crate::engine::tests::native_linter;
 
     #[test]
+    fn assignment_reports_keep_each_offending_binding_distinct() {
+        let linter = native_linter(r#"
+language .js { set sourceType "script" }
+rule no-implicit-globals
+"#);
+        for source in [
+            "[first, second] = [];",
+            "/* global first: readonly, second: readonly */ [first, second] = values;",
+            "/* global first: readonly, second: readonly */ ({ first, value: second } = values);",
+        ] {
+            let reports = linter.lint(Path::new("/root/a.js"), source);
+            let spans: Vec<_> = reports.iter().map(|report| &source[report.start..report.end]).collect();
+            assert_eq!(spans, ["first", "second"], "{source}: {reports:#?}");
+        }
+    }
+
+    #[test]
     fn declaration_metadata_keeps_bindings_exempted_by_standard_rules() {
         let linter = native_linter(r#"
 language .js { set sourceType "script" }

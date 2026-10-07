@@ -238,7 +238,7 @@ in layout_blank_run rule no-multiple-empty-lines {
   when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
   # Blank whitespace cannot contain NUL; split after line endings to retain their byte lengths.
   let blank_parts split(re_replace(blank_text, /(\r\n|[\r\n])/, "$1\0"), "\0")
-  report at { start: offset + blank_prefix + byte_len(join(slice(blank_parts, 0, blank_limit), "")), end: byte_len(source) }
+  report at { start: offset + blank_prefix + byte_len(join(slice(blank_parts, 0, blank_limit), "")), end: end_offset }
   warn if blank_kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_limit} allowed." else if blank_kind == "eof" then "Too many blank lines at the end of file. Max of {blank_limit} allowed." else "More than {blank_limit} blank {if blank_limit == 1 then 'line' else 'lines'} not allowed."
 }
 
@@ -343,7 +343,7 @@ in ts_class.member rule lines-between-class-members {
   let gap_mode if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == prior_member.kind) && (e.next == "*" || e.next == retained_member.kind)).blankLine
   let gap_single_line position(prior_member.start).line == position(gap_start).line
   when gap_mode == "never" && gap_padded || gap_mode == "always" && !gap_padded && !(exceptAfterSingleLine && gap_single_line)
-  report at { start: offset, end: parent.end_offset }
+  report at { start: gap_start, end: gap_end }
   warn if gap_padded then "Unexpected blank line between class members." else "Expected blank line between class members."
 }
 
@@ -556,7 +556,7 @@ in ts_open_angle rule type-generic-spacing {
   when previous_token != null
   let generic_space layout_comma_space(space_before.text, true)
   when before != (generic_space != "")
-  report at { start: offset - byte_len(generic_space), end: parent.end_offset }
+  report at { start: offset - byte_len(generic_space), end: offset }
   warn "Generic spaces mismatch"
 }
 in ts_close_angle rule type-generic-spacing:after {
@@ -565,19 +565,19 @@ in ts_close_angle rule type-generic-spacing:after {
   when next_token != null
   let generic_space layout_comma_space(space_after.text, false)
   when after != (generic_space != "")
-  report at { start: end_offset, end: parent.end_offset }
+  report at { start: end_offset, end: end_offset + byte_len(generic_space) }
   warn "Generic spaces mismatch"
 }
 in ts_open_angle rule type-generic-spacing:inner-open {
   @layout_generic_policy
   when re_test(space_after.text, /\s/) && !re_test(space_after.text, /^[\n\r]/)
-  report at { start: end_offset, end: parent.end_offset }
+  report at { start: end_offset, end: space_after.end }
   warn "Generic spaces mismatch"
 }
 in ts_close_angle rule type-generic-spacing:inner-close {
   @layout_generic_policy
   when re_test(space_before.text, /\s/) && !re_test(space_before.text, /^[\n\r]/)
-  report at { start: space_before.start, end: parent.end_offset }
+  report at { start: space_before.start, end: offset }
   warn "Generic spaces mismatch"
 }
 

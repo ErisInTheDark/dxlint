@@ -23,7 +23,7 @@ define {
   in core_final_newlines rule eol-last:never warn "Newline not allowed at end of file." {
     option mode "always" | "never" = "always" "whether files end in a newline"
     when mode == "never"
-    report at end_offset - (if ends_with(text, "\r\n") then 2 else 1)
+    report at { start: end_offset - (if ends_with(text, "\r\n") then 2 else 1), end: end_offset }
     fix as ""
   }
 

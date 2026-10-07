@@ -224,7 +224,7 @@ in ts_import_specifier rule sort-imports:members {
   let unsorted previous != null && compare_text(previous.restriction_declaration_local, restriction_declaration_local, false, ignoreCase) > 0
   let encountered previous.encountered == true || unsorted
   when parent is ts_import && parent.restriction_declaration_entry != null && unsorted && previous.encountered != true
-  report at {start: offset, end: parent.end_offset}
+  report at default(local.node, imported.node)
   warn "Member '{restriction_declaration_local}' of the import declaration should be sorted alphabetically."
 }
 fn restriction_import_mergeable(a, b) = !(a.type_only && b.type_only && (a.category == "default" && b.category == "named" || a.category == "named" && b.category == "default")) && !(a.category == "all" && contains(["named", "namespace", "default"], b.category) || b.category == "all" && contains(["named", "namespace", "default"], a.category) || a.category == "namespace" && b.category == "named" || a.category == "named" && b.category == "namespace")
@@ -251,7 +251,7 @@ in ts_declarator rule sort-vars {
   let simple_name name is ts_identifier
   let greatest if !simple_name then previous.greatest else if previous.greatest == null || compare_text(name, previous.greatest, false, ignoreCase) >= 0 then name else previous.greatest
   when simple_name && previous.greatest != null && compare_text(name, previous.greatest, false, ignoreCase) < 0
-  report at {start: offset, end: parent.end_offset}
+  report at name.node
   warn "Variables within the same declaration block should be sorted alphabetically."
 }
 in ts_identifier let restriction_sort_key_name text
@@ -259,7 +259,6 @@ in ts_computed_key let restriction_sort_key_name if expression is ts_identifier 
 in ts_property, ts_method {
   let restriction_sort_computed key is ts_computed_key
   let restriction_sort_key_fallback key.restriction_sort_key_name
-  let restriction_sort_key_offset key.offset
 }
 in ts_object let restriction_sort_key_count count(property)
 in ts_property, ts_method, ts_spread rule sort-keys {
@@ -279,7 +278,7 @@ in ts_property, ts_method, ts_spread rule sort-keys {
   when parent is ts_object && parent.restriction_sort_key_count >= minKeys
   when !reset && type_of(name) == "str" && type_of(previous.carried) == "str" && !(allowLineSeparatedGroups && separated)
   when if mode == "asc" then order > 0 else order < 0
-  report at {start: restriction_sort_key_offset, end: parent.end_offset}
+  report at key.node
   warn "Expected object keys to be in {if natural then 'natural ' else ''}{if caseSensitive then '' else 'insensitive '}{mode}ending order. '{name}' should be before '{previous.carried}'."
 }
 
@@ -392,7 +391,7 @@ in restriction_parameter_function rule max-params {
   option max int(0..) = 3 "maximum parameters"
   let amount count(filter([] parameter.node, p => default(p.max_params_counted, true)))
   when amount > max
-  report at if is ts_function_type then default(first(filter([] token.node, t => t.text == "=>")).offset, offset) else default(function_head, offset)
+  report at if is ts_function_type then offset else function_warning_site(node)
   warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like let max_statements_checked true
@@ -400,7 +399,7 @@ in ts_function_like rule max-statements {
   option max int(0..) = 10 "maximum statements"
   when restriction_subtree_statements > max
   when max_statements_checked
-  report at function_head
+  report at function_warning_site(node)
   warn "{@restriction_function_name} has too many statements ({restriction_subtree_statements}). Maximum allowed is {max}."
 }
 in ts_function_like rule complexity {
@@ -408,7 +407,7 @@ in ts_function_like rule complexity {
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
   when amount > max
-  report at function_head
+  report at function_warning_site(node)
   warn "{@restriction_function_name} has a complexity of {amount}. Maximum allowed is {max}."
 }
 in ts_static_block, ts_class_property.init rule complexity:implicit {
@@ -424,13 +423,14 @@ in restriction_depth_control rule max-depth {
   option max int(0..) = 4 "maximum control-flow nesting"
   when !(is ts_if && is ts_if.alternate)
   when restriction_nesting > max
+  report at { start: first_token.start, end: first_token.end }
   warn "Blocks are nested too deeply ({restriction_nesting}). Maximum allowed is {max}."
 }
 in ts_function, ts_arrow rule max-nested-callbacks {
   option max int(0..) = 10 "maximum callback nesting"
   let amount restriction_callbacks
   when max_nested_callbacks_counted && amount > max
-  report at function_head
+  report at function_warning_site(node)
   warn "Too many nested callbacks ({amount}). Maximum allowed is {max}."
 }
 in ts_program rule max-classes-per-file {
@@ -466,7 +466,7 @@ in ts_function_like rule max-lines-per-function {
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
   when max_lines_per_function_checked
   when len(lines) > max
-  report at function_head
+  report at function_warning_site(node)
   warn "{@restriction_function_name} has too many lines ({len(lines)}). Maximum allowed is {max}."
 }
 
@@ -493,7 +493,6 @@ in ts_comment {
 in ts_comment rule no-inline-comments {
   option ignorePattern regex = "" "comments to ignore"
   when (restriction_comment_preamble || restriction_comment_postamble) && !restriction_comment_empty_jsx && !@restriction_directive(restriction_comment_body) && !(ignorePattern != "" && re_test(restriction_comment_body, ignorePattern))
-  report at {start: offset, end: ts_program.end_offset}
   warn "Unexpected comment inline with code."
 }
 in ts_comment rule no-warning-comments {
@@ -518,7 +517,6 @@ in ts_comment let capitalized_comments_checked true
     && !re_test(restriction_comment_body, /^\s*(?:eslint|jshint\s+|jslint\s+|istanbul\s+|globals?\s+|exported\s+|jscs)/)
     && !re_test(restriction_comment_clean, /^\s*[^:/?#\s]+:\/\/[^?#]/)
     && !(ignorePattern != "" && re_test(restriction_comment_clean, "^\\s*(?:" ignorePattern ")"))
-  report at {start: offset, end: ts_program.end_offset}
   warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
 }
 in ts_line_comment rule capitalized-comments:line { @restriction_capitalized_comment_body }
@@ -634,7 +632,6 @@ in ts_assignment, ts_assignment_pattern let restriction_pattern_object right.res
 in ts_object_pattern, ts_object {
   let restriction_property_object parent.restriction_pattern_object
   let restriction_property_pattern is ts_object_pattern || write_site != null
-  let restriction_property_offset offset
 }
 @macro restriction_property_body {
   option options restriction_property[] = [] "restricted object properties"
@@ -651,7 +648,7 @@ in ts_pattern_property, ts_property rule no-restricted-properties:patterns {
   let object_name parent.restriction_property_object
   let property_name static_name
   when parent is (ts_object_pattern, ts_object) && parent.restriction_property_pattern
-  report at {start: parent.restriction_property_offset, end: parent.end_offset}
+  report at key.node
   @restriction_property_body
 }
 @macro restriction_export_options {
@@ -675,7 +672,6 @@ in ts_identifier rule no-restricted-exports:declarations {
   let export_name text
   when (exported && declaration_kind != null || is ts_declarator.name && parent.restriction_exported_declaration) && ts_export != null && ts_export.kind != "default"
   when restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
-  report at {start: offset, end: ts_export.end_offset}
   warn "'{export_name}' is restricted from being used as an exported name."
 }
 in ts_export_specifier rule no-restricted-exports:names {
@@ -683,7 +679,7 @@ in ts_export_specifier rule no-restricted-exports:names {
   let export_name if exported == null then (if local is ts_string then local.static_name else local) else (if exported is ts_string then exported.static_name else exported)
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
   when restricted_name || export_name == "default" && no_restricted_default_export_checked
-  report at {start: default(exported.offset, local.offset), end: parent.end_offset}
+  report at default(exported.node, local.node)
   warn if restricted_name then "'{export_name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
 }
 in ts_export.namespace rule no-restricted-exports:namespace {
@@ -691,7 +687,6 @@ in ts_export.namespace rule no-restricted-exports:namespace {
   let export_name if is ts_string then static_name else text
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
   when restricted_name || export_name == "default" && no_restricted_default_export_checked
-  report at {start: offset, end: parent.end_offset}
   warn if restricted_name then "'{export_name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
 }
 

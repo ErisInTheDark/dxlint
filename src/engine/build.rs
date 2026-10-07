@@ -1027,9 +1027,11 @@ mod demand_tests {
         assert_eq!(diagnostics.iter().map(|d| d.start).collect::<Vec<_>>(), starts);
         for diagnostic in &diagnostics {
             assert_eq!(diagnostic.message, "true");
-            assert_eq!(&source[diagnostic.start..diagnostic.end], if diagnostic.start == starts[0] { "value" } else { "later" });
+            assert_eq!(diagnostic.start, diagnostic.end);
+            let name = if diagnostic.start == starts[0] { "value" } else { "later" };
+            assert!(source[diagnostic.start..].starts_with(name));
             assert_eq!(diagnostic.fix.as_deref(), Some(&[super::super::Edit {
-                start: diagnostic.start, end: diagnostic.end, text: "renamed".into(),
+                start: diagnostic.start, end: diagnostic.start + name.len(), text: "renamed".into(),
             }][..]));
         }
         assert_eq!(super::super::Profile::get(&linter.profile.as_ref().expect("profile").rule_evals[0]), starts.len() as u64);
