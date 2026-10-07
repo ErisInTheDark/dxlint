@@ -21,6 +21,12 @@ anstream = "0.6"
 anstyle = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Rule expressions compiled to native code (src/jit).
+cranelift-codegen = "0.136"
+cranelift-frontend = "0.136"
+cranelift-jit = "0.136"
+cranelift-module = "0.136"
+cranelift-native = "0.136"
 
 [profile.release]
 lto = "thin"

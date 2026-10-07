@@ -262,7 +262,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         }
     }
     let attrs = Attributes::new(attrs, &forwards, &grammar);
-    let linter = Linter {
+    let mut linter = Linter {
         reach: grammar.reach(),
         profile: None,
         split_at: 128 * 1024,
@@ -281,7 +281,10 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         attrs,
         project: Default::default(),
         fingerprint,
+        conditions: None,
+        verify_conditions: false,
     };
+    linter.compile_conditions(super::ConditionMode::from_env());
     Built { linter: Some(linter), errors, sources, symbols }
 }
 
@@ -828,6 +831,8 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         ignore,
         node_when,
         when,
+        node_when_code: Vec::new(),
+        when_code: Vec::new(),
         locals,
         message,
         fix,

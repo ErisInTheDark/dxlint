@@ -70,6 +70,10 @@ pub struct Rule {
     /// before the list is built.
     node_when: Vec<CExpr>,
     when: Vec<CExpr>,
+    /// Native code for `node_when` and `when`, item by item (`None`:
+    /// interpreted); empty until the linter compiles them.
+    node_when_code: Vec<Option<crate::jit::Condition>>,
+    when_code: Vec<Option<crate::jit::Condition>>,
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
@@ -183,9 +187,67 @@ pub struct Linter {
     /// Files at least this big run their rules in groups on several threads.
     pub(crate) split_at: usize,
     rule_jobs: usize,
+    /// The executable memory of the rules' compiled conditions.
+    conditions: Option<crate::jit::Code>,
+    /// `ZLINT_JIT=verify`: also interpret every compiled condition and fail
+    /// loudly on any difference.
+    verify_conditions: bool,
+}
+
+/// How rule conditions run, from `ZLINT_JIT`: compiled (the default),
+/// interpreted only (`0`), or both, checked against each other (`verify`).
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ConditionMode {
+    Compiled,
+    Interpreted,
+    Verified,
+}
+
+impl ConditionMode {
+    pub(crate) fn from_env() -> Self {
+        match std::env::var("ZLINT_JIT").as_deref() {
+            Ok("0") => ConditionMode::Interpreted,
+            Ok("verify") => ConditionMode::Verified,
+            _ => ConditionMode::Compiled,
+        }
+    }
 }
 
 impl Linter {
+    /// Compiles the rules' conditions to native code (see [`crate::jit`]).
+    pub(crate) fn compile_conditions(&mut self, mode: ConditionMode) {
+        if mode == ConditionMode::Interpreted {
+            return;
+        }
+        let mut exprs: Vec<&CExpr> = Vec::new();
+        for rule in &self.rules {
+            exprs.extend(rule.node_when.iter().chain(&rule.when).filter(|e| crate::jit::worth_compiling(e)));
+        }
+        let Some((code, compiled)) = crate::jit::compile(&exprs) else { return };
+        let mut compiled = compiled.into_iter();
+        for rule in &mut self.rules {
+            let mut code_for = |exprs: &[CExpr]| exprs.iter().map(|e| crate::jit::worth_compiling(e).then(|| compiled.next()).flatten()).collect();
+            rule.node_when_code = code_for(&rule.node_when);
+            rule.when_code = code_for(&rule.when);
+        }
+        self.conditions = Some(code);
+        self.verify_conditions = mode == ConditionMode::Verified;
+    }
+
+    /// Whether a rule's `i`th condition (of `exprs`, compiled as `code`) holds.
+    fn condition_holds(&self, ctx: &Ctx, exprs: &[CExpr], code: &[Option<crate::jit::Condition>], i: usize) -> Result<bool, String> {
+        let interpreted = || ctx.eval(&exprs[i]).map(|v| v.truthy());
+        match code.get(i).copied().flatten() {
+            None => interpreted(),
+            Some(compiled) if !self.verify_conditions => compiled.test(ctx),
+            Some(compiled) => {
+                let native = compiled.test(ctx);
+                let expected = interpreted();
+                assert_eq!(native, expected, "compiled condition differs from the interpreter: {:?}", exprs[i]);
+                native
+            }
+        }
+    }
     /// Limit parallel rule groups per file; zero selects serial evaluation.
     pub fn set_rule_jobs(&mut self, jobs: usize) {
         self.rule_jobs = jobs.max(1);
@@ -519,8 +581,8 @@ impl Linter {
             // Guard lambdas are compiled after the rule's item slot even
             // though these guards do not read that item yet.
             let ready = ctx.with_rule_item(Value::Null, || {
-                for w in &f.node_when {
-                    if !ctx.eval(w)?.truthy() {
+                for i in 0..f.node_when.len() {
+                    if !self.condition_holds(ctx, &f.node_when, &f.node_when_code, i)? {
                         return Ok(false);
                     }
                 }
@@ -554,10 +616,10 @@ impl Linter {
             end,
             fix: None,
         };
-        for w in &f.when {
-            match ctx.eval(w) {
-                Ok(v) if v.truthy() => {}
-                Ok(_) => return None,
+        for i in 0..f.when.len() {
+            match self.condition_holds(ctx, &f.when, &f.when_code, i) {
+                Ok(true) => {}
+                Ok(false) => return None,
                 Err(e) => return Some(failed(e)),
             }
         }

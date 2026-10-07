@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn interval_queries_match_sorted_scan() {
-        let nodes = vec![(0, 40, 1), (2, 4, 2), (4, 4, 3), (5, 8, 4), (5, 8, 5), (9, 10, 6), (11, 30, 7), (15, 16, 8)];
+        let nodes = [(0, 40, 1), (2, 4, 2), (4, 4, 3), (5, 8, 4), (5, 8, 5), (9, 10, 6), (11, 30, 7), (15, 16, 8)];
         for len in 0..=nodes.len() {
             let spans = LayerSpans::new(nodes[..len].to_vec());
             let mut sorted = nodes[..len].to_vec();
