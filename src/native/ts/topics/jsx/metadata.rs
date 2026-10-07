@@ -47,15 +47,14 @@ pub fn syntax(file: &NativeFile, node: u32) -> Value<'static> {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use crate::engine::tests::native_linter;
+    use crate::engine::tests::native_front;
 
     #[test]
     fn syntax_spans_exclude_children_and_preserve_tag_punctuation() {
         use crate::grammar::Tree;
         use crate::native::ts::{modules::Project, syntax::Syntax};
         use super::{syntax, F, K, NativeFile};
-        let linter = native_linter("");
-        let front = linter.grammar.natives.first().expect("native ts");
+        let front = native_front();
         for (src, opening, closing) in [
             ("<Box<Type> >text</Box>", "<Box<Type> >", Some("</Box>")),
             ("<Box<Type<Nested>>>text</Box>", "<Box<Type<Nested>>>", Some("</Box>")),
@@ -65,9 +64,9 @@ mod tests {
             ("<Box>< /Box>", "<Box>", Some("< /Box>")),
         ] {
             let parsed = crate::native::ts::parse(src, true).expect("valid jsx");
-            let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
+            let tree = Tree::from_native(parsed.nodes, parsed.root);
             let project = Project::default();
-            let file = NativeFile::new(Syntax::new(&tree, src, front), Path::new("/root/a.tsx"), &project);
+            let file = NativeFile::new(Syntax::new(&tree, src, &front), Path::new("/root/a.tsx"), &project);
             let element = file.syntax.all(tree.root, F::Body).next()
                 .and_then(|statement| file.syntax.get(statement, F::Expr)).expect("expression");
             assert!(matches!(file.syntax.kind(element), Some(K::JsxElement | K::JsxFragment)));

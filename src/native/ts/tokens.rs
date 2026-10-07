@@ -752,14 +752,13 @@ mod lexical_tests {
 
     #[test]
     fn raw_jsx_strings_preserve_following_delimiters() {
-        use crate::engine::tests::native_linter;
+        use crate::engine::tests::native_front;
         use crate::grammar::Tree;
         use crate::native::ts::{modules::Project, syntax::Syntax};
         use std::path::Path;
 
         let src = "const view = <Box a=\"\\\" b={ value }> \n/* raw, text */ \\ </Box>; function after() { return 1; }";
-        let linter = native_linter("");
-        let front = linter.grammar.natives.first().expect("native ts");
+        let front = native_front();
         let mut parsed = super::super::parse(src, true).expect("valid jsx");
         let boundaries: Vec<_> = parsed.nodes.iter()
             .filter(|node| matches!(raw_kind(node), Some(K::JsxExpression | K::Block)))
@@ -770,9 +769,9 @@ mod lexical_tests {
         let attached: Vec<_> = boundaries.iter().map(|&(at, kind, _)| {
             parsed.nodes.iter().any(|node| node.start == at && raw_kind(node) == Some(kind))
         }).collect();
-        let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
+        let tree = Tree::from_native(parsed.nodes, parsed.root);
         let project = Project::default();
-        let file = NativeFile::new(Syntax::new(&tree, src, front), Path::new("/root/a.tsx"), &project);
+        let file = NativeFile::new(Syntax::new(&tree, src, &front), Path::new("/root/a.tsx"), &project);
         assert_first_tokens(&file);
         let code = file.cached(lex);
         for &(at, _, tok) in &boundaries {

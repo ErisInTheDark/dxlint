@@ -14,6 +14,7 @@ mod ts_std_rules;
 mod ts_naming;
 mod ts_type_constituents;
 mod ts_style_types;
+mod ts_style_classes;
 mod ts_arithmetic;
 mod ts_collection_methods;
 mod ts_core_rules;
@@ -549,18 +550,27 @@ pub(crate) fn native_linter(rules: &str) -> Linter {
     built.linter.expect("no errors")
 }
 
+/// Native-only trees keep the parser's kind and field ids.
+pub(crate) fn native_front() -> crate::grammar::NativeFront {
+    crate::grammar::NativeFront {
+        name: "ts",
+        base: 0,
+        labels: crate::native::ts::kinds::ALL_FIELDS.iter().map(|&field| field as u16).collect(),
+    }
+}
+
 /// Runs `f` on `text` parsed as `/root/a.ts`, with the node of each `/*@*/`
 /// marker (the node starting right after it, outermost first): native
 /// owners test their queries directly with this.
 pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts::facts::NativeFile, &[u32]) -> T) -> T {
     use crate::grammar::Tree;
-    use crate::native::ts::{facts::NativeFile, syntax::Syntax};
-    let l = native_linter("");
-    let front = l.grammar.natives.first().expect("native ts");
+    use crate::native::ts::{facts::NativeFile, modules::Project, syntax::Syntax};
+    let front = native_front();
     let parsed = crate::native::ts::parse(text, false).expect("parses");
-    let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
+    let tree = Tree::from_native(parsed.nodes, parsed.root);
     let path = Path::new("/root/a.ts");
-    let file = NativeFile::new(Syntax::new(&tree, text, front), path, &l.project);
+    let project = Project::default();
+    let file = NativeFile::new(Syntax::new(&tree, text, &front), path, &project);
     let marks: Vec<u32> = text.match_indices("/*@*/").map(|(at, m)| {
         let start = at + m.len() + text[at + m.len()..].len() - text[at + m.len()..].trim_start().len();
         tree.order.iter().copied().find(|&n| tree.node(n).start as usize == start && n != tree.root).expect("a node at the marker")
