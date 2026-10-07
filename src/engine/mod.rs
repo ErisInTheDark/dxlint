@@ -80,7 +80,7 @@ pub struct Rule {
     fix_target: FixTarget,
     fix_at: Option<CExpr>,
     /// `indent [in] X by n` lines.
-    indents: Vec<crate::expr::IndentRule>,
+    indents: crate::expr::IndentPlan,
     indent_reset: Option<CExpr>,
     /// Layers it reads by name (`opener.x`, `descendants(x)`): their nodes
     /// must be built.
@@ -120,11 +120,7 @@ impl Rule {
         ].into_iter().flatten() {
             fold(expr);
         }
-        for indent in &mut self.indents {
-            for expr in [&mut indent.by, &mut indent.from].into_iter().flatten() {
-                fold(expr);
-            }
-        }
+        self.indents.specialise(&options);
     }
 
     /// The message with current option values filled in; holes that need a

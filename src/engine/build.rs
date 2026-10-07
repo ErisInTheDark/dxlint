@@ -834,7 +834,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         fix_when,
         fix_at,
         fix_target: def.fix_target,
-        indents,
+        indents: crate::expr::IndentPlan::new(indents, g),
         indent_reset,
         report: def.report.unwrap_or_default(),
         report_at,

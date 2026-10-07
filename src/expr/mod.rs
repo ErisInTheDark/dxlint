@@ -5,8 +5,7 @@ pub mod case;
 pub mod facts;
 pub mod functions;
 pub(crate) mod fold;
-#[cfg(test)]
-mod indent_tests;
+pub mod indent;
 pub(crate) mod re;
 pub mod value;
 
@@ -22,6 +21,8 @@ use crate::pattern::compile::{compile, Labels, Program};
 use crate::pattern::dfa::{is_decidable, Dfa};
 use functions::Function;
 pub use value::Value;
+pub use indent::{IndentPlan, IndentRule};
+use indent::{AnchorBase, IndentHit};
 
 /// Variables every rule can use.
 pub const BUILTIN_VARS: &[(&str, &str)] = &[
@@ -291,6 +292,8 @@ pub struct AttrMemo<'a> {
     /// Facts of `here`'s node, by read slot, with the visit that computed them.
     here_facts: RefCell<Vec<(u32, Value<'a>)>>,
     visit: std::cell::Cell<u32>,
+    /// Indentation queries shared only within the active rule invocation.
+    indent_hits: RefCell<FxHashMap<u32, Option<IndentHit>>>,
 }
 
 struct ParamFrame<'m, 'a> {
@@ -315,6 +318,7 @@ impl AttrMemo<'_> {
 
     /// `rule` is about to run on the node entered last.
     pub fn enter_rule(&self, rule: u32) {
+        self.indent_hits.borrow_mut().clear();
         if let Some((node, _)) = self.here.get() {
             self.here.set(Some((node, rule)));
             self.here_locals.borrow_mut().clear();
@@ -1368,57 +1372,11 @@ pub struct Ctx<'a> {
     /// Facts of the native front end, when `tree` is a native tree.
     pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
     /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
-    pub indents: &'a [IndentRule],
+    pub indents: &'a IndentPlan,
     pub indent_reset: Option<&'a CExpr>,
     /// `--profile`: where fact time is added up.
     pub profile: Option<&'a crate::engine::Profile>,
 }
-
-/// A compiled `indent X by n` / `indent in X by n` rule line.
-pub struct IndentRule {
-    pub inside: bool,
-    /// `dedent`: the levels count back from the anchor.
-    pub dedent: bool,
-    /// (matcher, field) pairs; a field means "what fills that field".
-    pub targets: Vec<(u32, Option<u16>)>,
-    /// Levels, read on the indented node; 1 when absent.
-    pub by: Option<CExpr>,
-    /// `from`: an offset (or node), read on the indented node, whose line
-    /// is the anchor.
-    pub from: Option<CExpr>,
-    /// `class`: levels opened on one line collapse within a class (0, the
-    /// unnamed one, by default) and add up across classes.
-    pub class: u32,
-}
-
-/// Where a line's indentation comes from: the node an `indent` line matched,
-/// the line it is measured from, and for `in` forms the inside's span.
-/// `extra`: levels between that line and an anchor in the middle of it
-/// (the anchor's virtual indentation).
-struct IndentHit {
-    node: u32,
-    /// No declaration index when reset replaces its levels.
-    rule: Option<usize>,
-    base: AnchorBase,
-    extra: f64,
-    inside: Option<(usize, usize)>,
-}
-
-/// What an indent line measures from: a line's indentation, or (`from` a
-/// text) that text itself, `""` being column 0.
-enum AnchorBase {
-    Line(usize),
-    Text(String),
-}
-
-/// Where an indent line's `from` (or default) puts its anchor.
-enum AnchorAt {
-    Offset(usize),
-    Text(String),
-}
-
-/// Mid-line anchors resolve through at most this many indent lines.
-const MAX_VIRTUAL_DEPTH: u32 = 32;
 
 impl<'a> Ctx<'a> {
     /// Binds the next outermost parameter (a rule's `each` item).
@@ -1523,32 +1481,6 @@ impl<'a> Ctx<'a> {
         spans
     }
 
-    /// Leading whitespace of `line`, as fixed when it lies above the node.
-    fn line_indent(&self, line: usize) -> Value<'a> {
-        match self.fixed_indent(line) {
-            Some(ws) => Value::from(ws),
-            None => Value::from(self.indent_at(self.lines.line_start(line))),
-        }
-    }
-
-    /// The whole of `line`, with its fixed indentation when it lies above
-    /// the node.
-    fn whole_line(&self, line: usize) -> Value<'a> {
-        let text = self.lines.line_text(self.source, line);
-        match self.fixed_indent(line) {
-            Some(ws) => Value::from(format!("{ws}{}", text.trim_start_matches([' ', '\t']))),
-            None => Value::from(text),
-        }
-    }
-
-    fn fixed_indent(&self, line: usize) -> Option<String> {
-        let own = self.lines.line_of(self.tree.node(self.node).start as usize);
-        if line >= own {
-            return None;
-        }
-        self.reindented.borrow().get(&line).cloned()
-    }
-
     fn node_text(&self, id: u32) -> &'a str {
         let n = self.tree.node(id);
         &self.source[n.start as usize..n.end as usize]
@@ -1560,221 +1492,6 @@ impl<'a> Ctx<'a> {
             0 => Value::Null,
             1 => items.pop().expect("one"),
             _ => Value::list(items),
-        }
-    }
-
-    /// Leading whitespace of the line holding byte `at`.
-    fn indent_at(&self, at: usize) -> &'a str {
-        let text = self.lines.line_text(self.source, self.lines.line_of(at));
-        &text[..text.len() - text.trim_start_matches([' ', '\t']).len()]
-    }
-
-    /// The `indent` line deciding this node's line: walking out from the
-    /// line's first character, the innermost node one of the rule's `indent`
-    /// lines applies to. `indent X` applies when X starts its own line, below
-    /// its owner's line; `indent in X` when X's inside (its `*`, or its text
-    /// after its first line) opened on an earlier line and holds this one.
-    /// On one node a field-qualified line beats a plain one, then the last.
-    fn indent_hit(&self) -> Result<Option<IndentHit>, String> {
-        if self.indents.is_empty() && self.indent_reset.is_none() {
-            return Ok(None);
-        }
-        let start = self.tree.node(self.node).start as usize;
-        let line = self.lines.line_of(start);
-        let line_start = self.lines.line_start(line);
-        let first = line_start + self.indent_at(line_start).len();
-        let own_line = |at: usize| self.lines.line_start(self.lines.line_of(at)) + self.indent_at(at).len() == at;
-        // Start from the node itself unless it is a layer's root.
-        let mut p = Some(self.node);
-        while let Some(id) = p {
-            // From a named layer, indentation is the default layer's: carry
-            // on from the node holding the line's first character there.
-            if self.tree.layer_roots.iter().any(|&(r, _)| r == id) || self.tree.layer_of(id).is_some() {
-                // Labelled text counts: a line can start with a `?.` field.
-                p = Some(self.tree.innermost_with_text(self.grammar, first as u32, self.node)).filter(|&n| !self.tree.is_root(n));
-                if p == Some(id) {
-                    break;
-                }
-                continue;
-            }
-            if self.tree.is_root(id) {
-                break;
-            }
-            let n = self.tree.node(id);
-            let label = self.tree.label(id);
-            let owner = label.and_then(|_| self.tree.owner(id));
-            let matches = |&(m, field): &(u32, Option<u16>)| match field {
-                None => n.matcher != ROOT && n.matcher != TEXT && self.grammar.is_a(n.matcher, m),
-                Some(f) => label == Some(f) && owner.is_some_and(|o| self.grammar.is_a(self.tree.node(o).matcher, m)),
-            };
-            // Every line that applies here; an `in` form (the node's inside)
-            // beats the node form (the node's own start line decides that
-            // one), then a field-qualified line, then the later one.
-            let (s, e) = (n.start as usize, n.end as usize);
-            if s == first && self.indent_reset_at(id)? {
-                return Ok(Some(IndentHit { node: id, rule: None, base: AnchorBase::Line(line), extra: 0.0, inside: None }));
-            }
-            let inside = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
-            let inside_applies = self.lines.line_of(inside.0) < line && line_start <= inside.1;
-            let owner_line = owner
-                .or_else(|| self.tree.parent(id))
-                .filter(|&o| !self.tree.is_root(o))
-                .map(|o| self.lines.line_of(self.tree.node(o).start as usize));
-            let node_applies = owner_line.is_some_and(|ol| own_line(s) && ol < self.lines.line_of(s)) && self.lines.line_of(s) <= line && line_start <= e;
-            let mut candidates: Vec<(bool, bool, usize)> = self
-                .indents
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| if r.inside { inside_applies } else { node_applies })
-                .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (r.inside, t.1.is_some(), i)).max())
-                .collect();
-            candidates.sort_unstable_by(|a, b| b.cmp(a));
-            for (in_form, _, i) in candidates {
-                let inside = in_form.then_some(inside);
-                let from = self.indent_anchor_at(id, i, in_form)?;
-                if matches!(&from, AnchorAt::Offset(at) if self.lines.line_of(*at) >= line) {
-                    continue;
-                }
-                if self.indent_reset_at(id)? {
-                    return Ok(Some(IndentHit { node: id, rule: None, base: AnchorBase::Line(line), extra: 0.0, inside }));
-                }
-                match from {
-                    AnchorAt::Text(text) => return Ok(Some(IndentHit { node: id, rule: Some(i), base: AnchorBase::Text(text), extra: 0.0, inside })),
-                    AnchorAt::Offset(at) => {
-                        let (base, extra) = self.virtual_anchor(at, &mut vec![self.indents[i].class], 0)?;
-                        return Ok(Some(IndentHit { node: id, rule: Some(i), base, extra, inside }));
-                    }
-                }
-            }
-            p = self.tree.parent(id);
-        }
-        let first_node = self.tree.innermost_with_text(self.grammar, first as u32, self.node);
-        if !self.tree.is_root(first_node) && self.indent_reset_at(first_node)? {
-            return Ok(Some(IndentHit { node: first_node, rule: None, base: AnchorBase::Line(line), extra: 0.0, inside: None }));
-        }
-        Ok(None)
-    }
-
-    fn indent_reset_at(&self, node: u32) -> Result<bool, String> {
-        match self.indent_reset {
-            Some(reset) => Ok(Ctx { node, indents: &[], indent_reset: None, locals: None, ..*self }.eval(reset)?.truthy()),
-            None => Ok(false),
-        }
-    }
-
-    /// Where indent line `i` on node `id` measures from: its `from` (an
-    /// offset, a node, or a text to measure from directly), else the node's
-    /// start (`in` form) or its owner's (node form). `from` is read on the
-    /// node with no indent lines in scope, so it cannot ask for indentation
-    /// itself; null means the default.
-    fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> Result<AnchorAt, String> {
-        let from = match self.indents[i].from.as_ref() {
-            Some(from) => match (Ctx { node: id, indents: &[], indent_reset: None, ..*self }).eval(from)? {
-                Value::Node(n, _) => Some(AnchorAt::Offset(self.tree.node(n).start as usize)),
-                Value::Null => None,
-                Value::Str(text) => Some(AnchorAt::Text(text.to_string())),
-                v => Some(AnchorAt::Offset((v.num()?.max(0.0) as usize).min(self.source.len()))),
-            },
-            None => None,
-        };
-        Ok(from.unwrap_or_else(|| {
-            let owner = if in_form { None } else { self.tree.label(id).and_then(|_| self.tree.owner(id)).or_else(|| self.tree.parent(id)) };
-            AnchorAt::Offset(self.tree.node(owner.unwrap_or(id)).start as usize)
-        }))
-    }
-
-    /// What an anchor at byte `at` stands for, and the levels on top of it.
-    /// An anchor in the middle of a line sits where the indent line deciding
-    /// it puts it, when that line measures from a text or from earlier on
-    /// the same line (so this ends); levels opened on one line collapse, so
-    /// it adds levels only for a class not counted on the line yet (`seen`,
-    /// starting with the indented line's own). Anything else stands for its
-    /// line, whose first token answers for what is above, unless the line
-    /// starts inside a token: it continues the line above, as one line.
-    fn virtual_anchor(&self, at: usize, seen: &mut Vec<u32>, depth: u32) -> Result<(AnchorBase, f64), String> {
-        let line = self.lines.line_of(at);
-        let line_start = self.lines.line_start(line);
-        if depth >= MAX_VIRTUAL_DEPTH || line_start + self.indent_at(line_start).len() >= at {
-            return Ok((AnchorBase::Line(line), 0.0));
-        }
-        let mut p = Some(self.tree.innermost_with_text(self.grammar, at as u32, u32::MAX)).filter(|&n| !self.tree.is_root(n));
-        while let Some(id) = p.filter(|&n| !self.tree.is_root(n)) {
-            let n = self.tree.node(id);
-            let label = self.tree.label(id);
-            let owner = label.and_then(|_| self.tree.owner(id));
-            let matches = |&(m, field): &(u32, Option<u16>)| match field {
-                None => n.matcher != ROOT && n.matcher != TEXT && self.grammar.is_a(n.matcher, m),
-                Some(f) => label == Some(f) && owner.is_some_and(|o| self.grammar.is_a(self.tree.node(o).matcher, m)),
-            };
-            let (s, e) = (n.start as usize, n.end as usize);
-            let inside = self.tree.hole(id).map_or((s, e), |(a, b)| (a as usize, b as usize));
-            // The node's own first token is not inside it.
-            let inside_applies = inside.0 <= at && at < inside.1 && at > s;
-            let node_applies = s <= at && at < e;
-            let mut candidates: Vec<(bool, bool, usize)> = self
-                .indents
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| if r.inside { inside_applies } else { node_applies })
-                .filter_map(|(i, r)| r.targets.iter().filter(|t| matches(t)).map(|t| (r.inside, t.1.is_some(), i)).max())
-                .collect();
-            candidates.sort_unstable_by(|a, b| b.cmp(a));
-            for (in_form, _, i) in candidates {
-                let from = self.indent_anchor_at(id, i, in_form)?;
-                if matches!(&from, AnchorAt::Offset(from) if *from >= at) {
-                    continue;
-                }
-                if self.indent_reset_at(id)? {
-                    return Ok((AnchorBase::Line(line), 0.0));
-                }
-                // A line starting inside a token (template text, a string,
-                // a block comment) has no code indentation to stand for:
-                // it continues the line above, so follow the anchor up.
-                if matches!(&from, AnchorAt::Offset(from) if self.lines.line_of(*from) < line)
-                    && !self.native.is_some_and(|facts| facts.inside_token(line_start))
-                {
-                    return Ok((AnchorBase::Line(line), 0.0));
-                }
-                let rule = &self.indents[i];
-                let counts = !seen.contains(&rule.class);
-                if counts {
-                    seen.push(rule.class);
-                }
-                let levels = match (&rule.by, counts) {
-                    (_, false) => 0.0,
-                    (Some(by), true) => Ctx { node: id, ..*self }.eval(by)?.num()?,
-                    (None, true) => 1.0,
-                };
-                let levels = if rule.dedent { -levels } else { levels };
-                return Ok(match from {
-                    AnchorAt::Text(text) => (AnchorBase::Text(text), levels),
-                    AnchorAt::Offset(from) => {
-                        let (base, extra) = self.virtual_anchor(from, seen, depth + 1)?;
-                        (base, extra + levels)
-                    }
-                });
-            }
-            p = self.tree.parent(id);
-        }
-        Ok((AnchorBase::Line(line), 0.0))
-    }
-
-    /// This line starts with the end of the `in` form's inside (its closer),
-    /// so it sits at the anchor.
-    fn indent_closes(&self, hit: &IndentHit) -> bool {
-        let Some((_, end)) = hit.inside else { return false };
-        let start = self.tree.node(self.node).start as usize;
-        let line = self.lines.line_of(start);
-        let line_start = self.lines.line_start(line);
-        if self.lines.line_of(end) != line {
-            return false;
-        }
-        let first = line_start + self.indent_at(line_start).len();
-        // An `until` ends where its closer starts; a node without one ends
-        // after its closing brackets.
-        match self.tree.hole(hit.node) {
-            Some(_) => self.source[line_start..end].trim().is_empty(),
-            None => first <= end && self.source[first..end].chars().all(|c| matches!(c, ')' | ']' | '}' | '>')) && first < end,
         }
     }
 
