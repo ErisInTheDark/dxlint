@@ -1706,10 +1706,121 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Evaluates `e` on the node. Every rule expression recurses through
+    /// here, so it only dispatches: the common cheap forms inline, the rest
+    /// in [`Ctx::eval_rest`] and other out-of-line owners, keeping this
+    /// frame small (a big arm's locals would otherwise be reserved on every
+    /// nested call).
     pub fn eval(&self, e: &CExpr) -> Result<Value<'a>, String> {
+        match e {
+            CExpr::Const(v) => Ok(v.clone()),
+            CExpr::Hole(inner, _) => self.eval(inner),
+            CExpr::Field(label) => Ok(self.field(self.node, *label)),
+            CExpr::Builtin(i) => self.builtin(*i),
+            CExpr::Attr(a) => self.attr(self.node, *a),
+            CExpr::Opt(i) => Ok(self.options[*i].clone()),
+            CExpr::Not(inner) => Ok(Value::Bool(!self.eval(inner)?.truthy())),
+            CExpr::If(c, a, b) => {
+                if self.eval(c)?.truthy() {
+                    self.eval(a)
+                } else {
+                    self.eval(b)
+                }
+            }
+            CExpr::Binary(op, a, b) => eval_binary(*op, a, b, |expr| self.eval(expr)),
+            CExpr::Key(base, key) => Ok(self.eval(base)?.key(key)),
+            CExpr::Coalesce(a, b) => match self.eval(a)? {
+                v @ Value::Node(..) => Ok(v),
+                _ => self.eval(b),
+            },
+            CExpr::Param(depth) => Ok(self.param(*depth)),
+            CExpr::Local(i) => self.local(*i),
+            CExpr::Is(value, tests) => self.is(value, tests),
+            CExpr::OnParent(inner) => match self.parent_layer() {
+                Some(p) => self.eval_on(p, inner),
+                None => Ok(Value::Null),
+            },
+            _ => self.eval_rest(e),
+        }
+    }
+
+    /// `e` evaluated on another node.
+    #[inline(never)]
+    fn eval_on(&self, node: u32, e: &CExpr) -> Result<Value<'a>, String> {
+        Ctx { node, ..*self }.eval(e)
+    }
+
+    fn param(&self, depth: u16) -> Value<'a> {
+        self.memo.params.borrow().get(self.memo.param_base.get() + depth as usize).cloned().unwrap_or(Value::Null)
+    }
+
+    /// A rule's `let`, memoised per node.
+    #[inline(never)]
+    fn local(&self, i: u16) -> Result<Value<'a>, String> {
+        let Some((rule, exprs, targets)) = self.locals else { return Err("a rule's `let` outside the rule".into()) };
+        // Read on another node (`previous.rank`): only where the rule
+        // could run, so the `let`'s fields exist there.
+        let matcher = self.tree.node(self.node).matcher;
+        if !targets.is_empty() && !targets.iter().any(|&t| self.grammar.is_a(matcher, t)) {
+            return Ok(Value::Null);
+        }
+        let slot = i as usize;
+        if self.memo.here.get() == Some((self.node, rule)) {
+            if let Some(Some(v)) = self.memo.here_locals.borrow().get(slot) {
+                return Ok(v.clone());
+            }
+            let v = self.unbound(|| self.eval(&exprs[slot]))?;
+            let mut slots = self.memo.here_locals.borrow_mut();
+            if slots.len() <= slot {
+                slots.resize(slot + 1, None);
+            }
+            slots[slot] = Some(v.clone());
+            return Ok(v);
+        }
+        let key = (self.node, rule, i);
+        if let Some(v) = self.memo.locals.borrow().get(&key) {
+            return Ok(v.clone());
+        }
+        let v = self.unbound(|| self.eval(&exprs[slot]))?;
+        self.memo.locals.borrow_mut().insert(key, v.clone());
+        Ok(v)
+    }
+
+    /// `value is a, b.field, layer l, .lang`.
+    #[inline(never)]
+    fn is(&self, value: &CExpr, tests: &[IsTest]) -> Result<Value<'a>, String> {
+        let v = self.eval(value)?;
+        let node = match &v {
+            Value::Node(id, _) => Some(*id),
+            _ => None,
+        };
+        let is_a = |m: u32, ids: &[u32]| m != ROOT && m != TEXT && ids.iter().any(|&t| self.grammar.is_a(m, t));
+        // Facts about things that are not nodes (tokens) tag them with
+        // a kind: a kind text, or a record's `kind`.
+        let tagged = match &v {
+            Value::Str(_) => self.grammar.matcher(&v.text()),
+            Value::Record(_) => self.grammar.matcher(&v.key("kind").text()),
+            _ => None,
+        };
+        Ok(Value::Bool(tests.iter().any(|t| match (t, node) {
+            (IsTest::Lang(l), _) => *l == self.lang,
+            (IsTest::Kind(ids), None) => tagged.is_some_and(|m| is_a(m, ids)),
+            (_, None) => false,
+            (IsTest::Kind(ids), Some(id)) => is_a(self.tree.node(id).matcher, ids),
+            (IsTest::Field(ids, label), Some(id)) => {
+                self.tree.label(id) == Some(*label) && self.tree.owner(id).is_some_and(|o| is_a(self.tree.node(o).matcher, ids))
+            }
+            (IsTest::Layer(l), Some(id)) => self.tree.layer_of(id) == Some(*l),
+        })))
+    }
+
+    /// The forms [`Ctx::eval`] does not dispatch inline.
+    #[inline(never)]
+    fn eval_rest(&self, e: &CExpr) -> Result<Value<'a>, String> {
         Ok(match e {
-            CExpr::Const(v) => v.clone(),
-            CExpr::Hole(inner, _) => self.eval(inner)?,
+            CExpr::Const(_) | CExpr::Hole(..) | CExpr::Field(_) | CExpr::Builtin(_) | CExpr::Attr(_) | CExpr::Opt(_)
+            | CExpr::Not(_) | CExpr::If(..) | CExpr::Binary(..) | CExpr::Key(..) | CExpr::Coalesce(..) | CExpr::Param(_)
+            | CExpr::Local(_) | CExpr::Is(..) | CExpr::OnParent(_) => unreachable!("dispatched by Ctx::eval"),
             CExpr::Template(parts) => {
                 let mut s = String::new();
                 for p in parts {
@@ -1718,7 +1829,6 @@ impl<'a> Ctx<'a> {
                 Value::from(s)
             }
             CExpr::List(items) => Value::List(items.iter().map(|i| self.eval(i)).collect::<Result<_, _>>()?),
-            CExpr::Field(label) => self.field(self.node, *label),
             CExpr::Ancestor(m, field) => match self.tree.ancestor(self.grammar, self.node, *m) {
                 None => Value::Null,
                 Some(a) => match field {
@@ -1726,7 +1836,6 @@ impl<'a> Ctx<'a> {
                     Some(label) => self.field(a, *label),
                 },
             },
-            CExpr::Builtin(i) => self.builtin(*i)?,
             CExpr::Dbg(inner, label) => {
                 let v = self.eval(inner)?;
                 let start = self.tree.node(self.node).start as usize;
@@ -1819,7 +1928,6 @@ impl<'a> Ctx<'a> {
                 }
                 v
             }
-            CExpr::Attr(a) => self.attr(self.node, *a)?,
             CExpr::ParentField(label) => match self.parent_layer() {
                 Some(p) => self.field(p, *label),
                 None => Value::Null,
@@ -1861,10 +1969,6 @@ impl<'a> Ctx<'a> {
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
             }
-            CExpr::Coalesce(a, b) => match self.eval(a)? {
-                v @ Value::Node(..) => v,
-                _ => self.eval(b)?,
-            },
             CExpr::Selector(spans, node, source) => {
                 let source = self.eval(source)?;
                 let Value::Str(source) = source else { return Err("selector must be a string".into()) };
@@ -2012,10 +2116,6 @@ impl<'a> Ctx<'a> {
                 false => self.field(self.node, *label),
                 true => self.eval(other)?,
             },
-            CExpr::OnParent(inner) => match self.parent_layer() {
-                Some(p) => Ctx { node: p, ..*self }.eval(inner)?,
-                None => Value::Null,
-            },
             CExpr::OnAncestor(m, inner) => match self.tree.ancestor(self.grammar, self.node, *m) {
                 Some(a) => Ctx { node: a, ..*self }.eval(inner)?,
                 None => Value::Null,
@@ -2031,81 +2131,15 @@ impl<'a> Ctx<'a> {
                     _ => Value::list(values),
                 }
             }
-            CExpr::Opt(i) => self.options[*i].clone(),
             CExpr::Call(f, args) => {
                 eval_args(args, |a| self.eval(a), |args| (f.call)(args).map_err(|e| format!("{}: {e}", f.name)))?
             }
-            CExpr::Not(inner) => Value::Bool(!self.eval(inner)?.truthy()),
             CExpr::Neg(inner) => Value::Num(-self.eval(inner)?.num()?),
-            CExpr::If(c, a, b) => {
-                if self.eval(c)?.truthy() {
-                    self.eval(a)?
-                } else {
-                    self.eval(b)?
-                }
-            }
-            CExpr::Binary(op, a, b) => eval_binary(*op, a, b, |expr| self.eval(expr))?,
             CExpr::Test(value, prog) => Value::Bool(full_match(self.grammar, self.lang, prog, &self.eval(value)?.text())),
             CExpr::TestDfa(value, dfa) => Value::Bool(dfa.is_match(self.eval(value)?.text().as_bytes())),
-            CExpr::Is(value, tests) => {
-                let v = self.eval(value)?;
-                let node = match &v {
-                    Value::Node(id, _) => Some(*id),
-                    _ => None,
-                };
-                let is_a = |m: u32, ids: &[u32]| m != ROOT && m != TEXT && ids.iter().any(|&t| self.grammar.is_a(m, t));
-                // Facts about things that are not nodes (tokens) tag them with
-                // a kind: a kind text, or a record's `kind`.
-                let tagged = match &v {
-                    Value::Str(_) => self.grammar.matcher(&v.text()),
-                    Value::Record(_) => self.grammar.matcher(&v.key("kind").text()),
-                    _ => None,
-                };
-                Value::Bool(tests.iter().any(|t| match (t, node) {
-                    (IsTest::Lang(l), _) => *l == self.lang,
-                    (IsTest::Kind(ids), None) => tagged.is_some_and(|m| is_a(m, ids)),
-                    (_, None) => false,
-                    (IsTest::Kind(ids), Some(id)) => is_a(self.tree.node(id).matcher, ids),
-                    (IsTest::Field(ids, label), Some(id)) => {
-                        self.tree.label(id) == Some(*label) && self.tree.owner(id).is_some_and(|o| is_a(self.tree.node(o).matcher, ids))
-                    }
-                    (IsTest::Layer(l), Some(id)) => self.tree.layer_of(id) == Some(*l),
-                }))
-            }
-            CExpr::Local(i) => {
-                let Some((rule, exprs, targets)) = self.locals else { return Err("a rule's `let` outside the rule".into()) };
-                // Read on another node (`previous.rank`): only where the rule
-                // could run, so the `let`'s fields exist there.
-                let matcher = self.tree.node(self.node).matcher;
-                if !targets.is_empty() && !targets.iter().any(|&t| self.grammar.is_a(matcher, t)) {
-                    return Ok(Value::Null);
-                }
-                let slot = *i as usize;
-                if self.memo.here.get() == Some((self.node, rule)) {
-                    if let Some(Some(v)) = self.memo.here_locals.borrow().get(slot) {
-                        return Ok(v.clone());
-                    }
-                    let v = self.unbound(|| self.eval(&exprs[slot]))?;
-                    let mut slots = self.memo.here_locals.borrow_mut();
-                    if slots.len() <= slot {
-                        slots.resize(slot + 1, None);
-                    }
-                    slots[slot] = Some(v.clone());
-                    return Ok(v);
-                }
-                let key = (self.node, rule, *i);
-                if let Some(v) = self.memo.locals.borrow().get(&key) {
-                    return Ok(v.clone());
-                }
-                let v = self.unbound(|| self.eval(&exprs[slot]))?;
-                self.memo.locals.borrow_mut().insert(key, v.clone());
-                v
-            }
             CExpr::Record(entries) => {
                 Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), self.eval(v)?))).collect::<Result<_, String>>()?)
             }
-            CExpr::Param(depth) => self.memo.params.borrow().get(self.memo.param_base.get() + *depth as usize).cloned().unwrap_or(Value::Null),
-            CExpr::Key(base, key) => self.eval(base)?.key(key),
             CExpr::Each(each, list, body) => {
                 let items = self.eval(list)?;
                 let run = |item: &Value<'a>| -> Result<Value<'a>, String> {
