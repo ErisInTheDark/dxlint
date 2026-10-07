@@ -67,8 +67,7 @@ fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     };
     if !unsafe_if { return false }
     let mut current = block;
-    loop {
-        let Some(parent) = s.parent(current) else { break };
+    while let Some(parent) = s.parent(current) {
         if s.is(parent, K::If) && s.field(current) == Some(F::Consequent) && s.get(parent, F::Alternate).is_some() {
             return true
         }

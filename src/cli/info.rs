@@ -271,7 +271,7 @@ pub fn profile(linter: &Linter) {
         .map(|(i, m)| (Profile::get(&p.matcher_steps[i]), Profile::get(&p.matcher_runs[i]), m.name.as_str()))
         .filter(|(steps, _, _)| *steps > 0)
         .collect();
-    matchers.sort_by(|a, b| b.0.cmp(&a.0));
+    matchers.sort_by_key(|m| std::cmp::Reverse(m.0));
     eprintln!("\n  {BOLD}matchers{BOLD:#} {DIM}by interpreter steps (DFA-only matchers do not show up){DIM:#}");
     for (steps, runs, name) in matchers.iter().take(15) {
         eprintln!("  {steps:>14} steps {runs:>11} runs  {CYAN}{name}{CYAN:#}");
@@ -284,7 +284,7 @@ pub fn profile(linter: &Linter) {
         .map(|(i, m)| (Profile::get(&p.overlay_nanos[i]), Profile::get(&p.overlay_nodes[i]), m.name.as_str()))
         .filter(|(nanos, _, _)| *nanos > 0)
         .collect();
-    overlays.sort_by(|a, b| b.0.cmp(&a.0));
+    overlays.sort_by_key(|o| std::cmp::Reverse(o.0));
     eprintln!("\n  {BOLD}layer searches{BOLD:#} {DIM}by time, part of parsing{DIM:#}");
     for (nanos, nodes, name) in overlays.iter().take(10) {
         eprintln!("  {:>11.1} ms {nodes:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
@@ -296,7 +296,7 @@ pub fn profile(linter: &Linter) {
         .map(|(i, f)| (Profile::get(&p.rule_nanos[i]), Profile::get(&p.rule_evals[i]), f.name.as_str()))
         .filter(|(_, evals, _)| *evals > 0)
         .collect();
-    rules.sort_by(|a, b| b.0.cmp(&a.0));
+    rules.sort_by_key(|r| std::cmp::Reverse(r.0));
     eprintln!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}");
     for (nanos, evals, name) in rules.iter().take(15) {
         eprintln!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos));
@@ -307,7 +307,7 @@ pub fn profile(linter: &Linter) {
         .map(|(i, f)| (Profile::get(&p.fact_nanos[i]), Profile::get(&p.fact_calls[i]), f.name))
         .filter(|(_, calls, _)| *calls > 0)
         .collect();
-    facts.sort_by(|a, b| b.0.cmp(&a.0));
+    facts.sort_by_key(|f| std::cmp::Reverse(f.0));
     eprintln!("\n  {BOLD}facts{BOLD:#} {DIM}by time, part of the rules' (a whole-file analysis counts on the first fact needing it){DIM:#}");
     for (nanos, calls, name) in facts.iter().take(15) {
         eprintln!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*nanos));

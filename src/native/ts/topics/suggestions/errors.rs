@@ -43,7 +43,7 @@ pub fn caught_error(file: &NativeFile, node: u32) -> Value<'static> {
         if args[..=index].iter().any(|&n| s.is(n, K::Spread)) || !s.is(arg, K::Object) { return finding(None, offset) }
         let properties: Vec<_> = s.all(arg, F::Property).collect();
         if properties.iter().any(|&n| s.is(n, K::Spread)) { return finding(None, offset) }
-        let Some(property) = properties.into_iter().filter(|&n| statics::property_name(s, n).as_deref() == Some("cause")).next_back() else { return missing.clone() };
+        let Some(property) = properties.into_iter().rfind(|&n| statics::property_name(s, n).as_deref() == Some("cause")) else { return missing.clone() };
         let value = s.get(property, F::Value).map(|n| s.unparen(n)).unwrap_or(property);
         if !s.is(value, K::Ident) || parameter.is_none_or(|p| s.text(p) != s.text(value)) {
             return finding(Some("The symptom error is being thrown with an incorrect `cause`."), s.tree.node(value).start);

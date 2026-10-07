@@ -65,7 +65,7 @@ impl NativeFile<'_> {
                             Some(_) => flags,
                             None => Some(text[close + 1..].to_string()),
                         };
-                        return Some(Site { pattern, flags, pattern_node: arg, pattern_kind: "regex", spans: Some(spans) }).filter(|_| flags_arg.is_some());
+                        return flags_arg.is_some().then_some(Site { pattern, flags, pattern_node: arg, pattern_kind: "regex", spans: Some(spans) });
                     }
                     K::String | K::Template if !(s.is(arg, K::Template) && s.all(arg, F::Expr).next().is_some()) => {
                         let (pattern, spans) = super::cook_spans(text)?;

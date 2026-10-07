@@ -47,8 +47,7 @@ impl Parser<'_> {
 
     fn pat_seq(&mut self, depth: usize) -> Pat {
         let mut items = Vec::new();
-        loop {
-            let Some(t) = self.pat_peek(depth) else { break };
+        while let Some(t) = self.pat_peek(depth) {
             if is_or(&t) || matches!(t.kind, Tk::Newline | Tk::RParen | Tk::InvClose | Tk::LBrace | Tk::RBrace) {
                 break;
             }

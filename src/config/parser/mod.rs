@@ -716,8 +716,7 @@ impl<'a> Parser<'a> {
                 return;
             }
             // The rest of the line.
-            _ => loop {
-                let Some(t) = self.ts.peek_raw(0).cloned() else { break };
+            _ => while let Some(t) = self.ts.peek_raw(0).cloned() {
                 if t.kind == Tk::Newline && depth == 0 {
                     break;
                 }
