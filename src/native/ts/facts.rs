@@ -28,8 +28,6 @@ pub trait Facts {
     fn with_field(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32, Option<usize>) -> Value<'static>, node: u32, field: Option<usize>) -> Value<'static>;
     /// `f` on the file itself, for links (nodes a node leads to).
     fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
-    fn matches_selector(&self, node: u32, selector: &crate::selector::Selector) -> Result<bool, String>;
-    fn selector_spans(&self, node: u32, selector: &crate::selector::Selector) -> Result<Vec<crate::selector::Span>, String>;
     /// Byte `at` lies strictly inside one token or comment (a line of a
     /// multi-line template, string or block comment starts there).
     fn inside_token(&self, at: usize) -> bool;
@@ -136,14 +134,6 @@ pub struct RegexFinding {
 pub type TypeParamFacts = (Vec<Option<String>>, Vec<Option<String>>);
 
 impl Facts for NativeFile<'_> {
-    fn matches_selector(&self, node: u32, selector: &crate::selector::Selector) -> Result<bool, String> {
-        super::estree::matches(self, node, selector)
-    }
-
-    fn selector_spans(&self, node: u32, selector: &crate::selector::Selector) -> Result<Vec<crate::selector::Span>, String> {
-        super::estree::spans(self, node, selector)
-    }
-
     fn inside_token(&self, at: usize) -> bool {
         use super::lexer::Tok;
         let tokens = self.cached(super::tokens::lex_comments);

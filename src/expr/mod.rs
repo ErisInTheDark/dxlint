@@ -120,8 +120,6 @@ pub enum CExpr {
     KindName(Box<CExpr>),
     /// `node_at(offset)`: the innermost default-layer node holding it.
     NodeAt(Box<CExpr>),
-    /// A selector predicate or logical-node span query.
-    Selector(bool, Option<Box<CExpr>>, Box<CExpr>),
     /// The first value when it is a node, else the second (an `is`
     /// subject: `next_token` is a node read, or the fact's tag).
     Coalesce(Box<CExpr>, Box<CExpr>),
@@ -184,10 +182,6 @@ macro_rules! child_visitor {
                         f(to);
                     }
                 }
-                CExpr::Selector(_, base, span) => {
-                    if let Some(base) = base { f(base) }
-                    f(span);
-                }
                 CExpr::Const(_) | CExpr::Opt(_) | CExpr::Field(_) | CExpr::Ancestor(_, _)
                 | CExpr::Builtin(_) | CExpr::Fact(_, _) | CExpr::FactField(_, _) | CExpr::Attr(_)
                 | CExpr::FieldAttr(_, _) | CExpr::ParentField(_) | CExpr::ParentAttr(_)
@@ -221,8 +215,6 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("dbg(value, label?)", "the value unchanged; prints `file:line:col layer label = value` to stderr for each node it is evaluated on"),
     ("position(offset)", "`{line, column, js_line, js_column}` of a byte offset in the file, 1-based: `line`/`column` like the builtins; `js_line` also counts U+2028/U+2029 as line breaks and `js_column` counts UTF-16 units, as JavaScript tools do; `js_line_start` is the byte offset that JS line starts at"),
     ("node_at(offset)", "the innermost node (default layer) holding a byte offset, null outside any: `node_at(token_neighbours.after.start).indent_level`"),
-    ("matches_selector(node?, selector)", "whether the current or supplied native node matches an ESTree selector; invalid or unsupported selectors fail the rule"),
-    ("selector_spans(selector)", "distinct logical ESTree matches under the current node as `{node, type, start, end}`, including virtual syntax nodes"),
     ("kind_name(node)", "a node's kind as text (`ts_call`; `.lang` for the file), for messages: test kinds with `is`"),
     ("containing(layer)", "the innermost node of a layer or group, in any named layer, whose span holds the node's (null if none); `kind.field` selects what fills that field, as `descendants` and `overlapping` also do"),
     ("descendants(layer)", "the nodes of a layer or group (specialisations too) inside the node, in source order"),
@@ -263,7 +255,7 @@ const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at" | "matches_selector" | "selector_spans") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -791,19 +783,6 @@ impl Scope<'_> {
                 CExpr::Position(Box::new(self.compile(offset, errors)?))
             }
             // `node_at(offset)`: the innermost node holding a byte offset.
-            ExprKind::Call(name, args) if matches!(name.text.as_str(), "matches_selector" | "selector_spans") && self.grammar.function(&name.text).is_none() => {
-                let spans = name.text == "selector_spans";
-                let (node, selector) = match args.as_slice() {
-                    [selector] => (None, selector),
-                    [node, selector] if !spans => (Some(Box::new(self.compile(node, errors)?)), selector),
-                    _ => {
-                        errors.push(ConfigError::new(e.span, if spans { "selector_spans takes one selector" } else { "matches_selector takes a selector, or a node and selector" }));
-                        return None;
-                    }
-                };
-                self.note(name.span, Resolved::Function(if spans { "selector_spans" } else { "matches_selector" }));
-                CExpr::Selector(spans, node, Box::new(self.compile(selector, errors)?))
-            }
             ExprKind::Call(name, args) if name.text == "node_at" && self.grammar.function("node_at").is_none() => {
                 let [offset] = args.as_slice() else {
                     errors.push(ConfigError::new(e.span, "`node_at` takes one byte offset").note("usage: node_at(token_neighbours.after.start).indent_level"));
@@ -1829,34 +1808,6 @@ impl<'a> Ctx<'a> {
                 }
                 found.sort_unstable();
                 Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
-            }
-            CExpr::Selector(spans, node, source) => {
-                let source = self.eval(source)?;
-                let Value::Str(source) = source else { return Err("selector must be a string".into()) };
-                let selector = crate::selector::compile(source.as_ref())?;
-                let node = match node {
-                    None => self.node,
-                    Some(node) => match self.eval(node)? {
-                        Value::Node(node, _) => node,
-                        Value::Null => return Ok(if *spans { Value::list(vec![]) } else { Value::Bool(false) }),
-                        _ => return Err("selector target must be a node".into()),
-                    },
-                };
-                let Some(native) = self.native else { return Ok(if *spans { Value::list(vec![]) } else { Value::Bool(false) }) };
-                if *spans {
-                    let found = native.selector_spans(node, &selector)?;
-                    Value::list(found.into_iter().map(|span| {
-                        let n = self.tree.node(span.node);
-                        Value::record(vec![
-                            ("node".into(), Value::Node(span.node, value::Text::Borrowed(&self.source[n.start as usize..n.end as usize]))),
-                            ("type".into(), Value::from(span.kind)),
-                            ("start".into(), Value::from(span.start as usize)),
-                            ("end".into(), Value::from(span.end as usize)),
-                        ])
-                    }).collect())
-                } else {
-                    Value::Bool(native.matches_selector(node, &selector)?)
-                }
             }
             CExpr::NodeAt(offset) => {
                 let at = self.eval(offset)?;

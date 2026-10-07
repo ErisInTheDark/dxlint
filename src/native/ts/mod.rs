@@ -11,7 +11,6 @@ mod docs;
 mod equality;
 pub(crate) mod environment;
 mod directives;
-mod estree;
 pub mod facts;
 mod flow;
 mod globals;
