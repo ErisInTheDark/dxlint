@@ -722,18 +722,32 @@ in ts_binary rule yoda {
   warn "Expected literal to be on the {if mode == 'always' then 'left' else 'right'} side of {operator}."
 }
 
+fn caught_throw_property_kind(parameter, property) =
+  if property == null then "missing"
+  else if property.value.kind != "ts_identifier" || property.value.name != get(parameter, "name") then "incorrect"
+  else if get(property.value, "binding") != get(parameter, "binding") then "shadowed"
+  else "preserved"
+fn caught_throw_cause_kind(parameter, argument, preceding) =
+  if any(preceding, arg => arg.kind == "ts_spread") || argument != null && (argument.kind != "ts_object" || any(default(argument.properties, []), property => property.kind == "ts_spread")) then "unknown"
+  else caught_throw_property_kind(parameter, find_last(default(argument.properties, []), property => property.name == "cause"))
+
 in ts_throw rule preserve-caught-error {
   option requireCatchParameter boolean = false "require a catch parameter when throwing a symptom error"
   option errorClassNames (string | { name: string; argumentPosition: number })[] = [] "additional error constructors and options positions"
-  let caught_info caught_error_preservation
+  let caught_info catch_throw
   when caught_info != null
+  let caught_parameter get(caught_info, "parameter")
+  let catch_kind if caught_parameter == null then "missing" else if caught_parameter.kind == "ts_identifier" then "present" else "destructured"
+  let builtin_error caught_info.global && contains(["Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError"], caught_info.name)
   let configured_error find_last(errorClassNames, x => caught_info.name == (if type_of(x) == "str" then x else x.name))
-  when caught_info.builtin || configured_error != null
-  let cause_position if caught_info.builtin then caught_info.default_index else if type_of(configured_error) == "str" then 1 else configured_error.argumentPosition - 1
-  let cause_info default(first(slice(caught_info.causes, cause_position)), caught_info.missing)
-  when caught_info.catch == "destructured" || caught_info.catch == "missing" && requireCatchParameter || caught_info.catch == "present" && cause_info.checked
-  report at if caught_info.catch == "destructured" then caught_info.catch_offset else if caught_info.catch == "missing" then caught_info.throw_offset else cause_info.offset
-  warn if caught_info.catch == "destructured" then "Re-throws cannot preserve the caught error as a part of it is being lost due to destructuring." else if caught_info.catch == "missing" then "The caught error is not accessible because the catch clause lacks the error parameter. Start referencing the caught error using the catch parameter." else cause_info.message
+  when builtin_error || configured_error != null
+  let cause_position if builtin_error then (if caught_info.name == "AggregateError" then 2 else 1) else if type_of(configured_error) == "str" then 1 else configured_error.argumentPosition - 1
+  let cause_argument first(slice(caught_info.arguments, cause_position))
+  let cause_kind caught_throw_cause_kind(caught_parameter, cause_argument, if cause_argument == null then caught_info.arguments else slice(caught_info.arguments, 0, cause_position))
+  let cause_property find_last(default(cause_argument.properties, []), property => property.name == "cause")
+  when catch_kind == "destructured" || catch_kind == "missing" && requireCatchParameter || catch_kind == "present" && contains(["missing", "incorrect", "shadowed"], cause_kind)
+  report at if catch_kind == "destructured" then caught_info.catch_offset else if catch_kind == "present" && cause_kind == "incorrect" then cause_property.value.offset else caught_info.throw_offset
+  warn if catch_kind == "destructured" then "Re-throws cannot preserve the caught error as a part of it is being lost due to destructuring." else if catch_kind == "missing" then "The caught error is not accessible because the catch clause lacks the error parameter. Start referencing the caught error using the catch parameter." else if cause_kind == "missing" then "There is no `cause` attached to the symptom error being thrown." else if cause_kind == "incorrect" then "The symptom error is being thrown with an incorrect `cause`." else "The caught error is being attached as `cause`, but is shadowed by a closer scoped redeclaration."
 }
 
 }

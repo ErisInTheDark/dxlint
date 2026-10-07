@@ -1,27 +1,29 @@
-//! Preservation of caught errors across rethrows.
+//! Thrown constructions and their enclosing catch bindings.
 
 use super::super::super::facts::{Facts, NativeFile};
 use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::statics;
 use crate::expr::Value;
 
-fn finding(message: Option<&str>, offset: u32) -> Value<'static> {
+fn node_data(file: &NativeFile, node: u32) -> Value<'static> {
+    let s = &file.syntax;
+    let bindings = file.bindings();
+    let binding = bindings.refs.get(&node).copied()
+        .or_else(|| bindings.decl_scope.contains_key(&node).then_some(node));
     Value::record(vec![
-        ("checked".into(), Value::Bool(message.is_some())),
-        ("message".into(), Value::from(message.unwrap_or("").to_owned())),
-        ("offset".into(), Value::Num(f64::from(offset))),
+        ("kind".into(), s.kind(node).map_or(Value::Null, |kind| Value::from(kind.name()))),
+        ("name".into(), if s.is(node, K::Ident) { Value::from(s.text(node).to_owned()) } else { Value::Null }),
+        ("binding".into(), binding.map_or(Value::Null, |id| Value::from(id as usize))),
+        ("offset".into(), Value::from(s.tree.node(node).start as usize)),
     ])
 }
 
-pub fn caught_error(file: &NativeFile, node: u32) -> Value<'static> {
+pub fn catch_throw(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let Some(call) = s.get(node, F::Arg).map(|n| s.unparen(n)).filter(|&n| matches!(s.kind(n), Some(K::Call | K::New))) else { return Value::Null };
     let Some(callee) = s.get(call, F::Callee).map(|n| s.unparen(n)) else { return Value::Null };
     let target = if s.is(callee, K::Member) { s.get(callee, F::Property).unwrap_or(callee) } else { callee };
-    if !s.is(target, K::Ident) { return Value::Null }
-    let name = s.text(target);
-    let builtin = s.is(callee, K::Ident) && matches!(name, "Error" | "EvalError" | "RangeError" | "ReferenceError" | "SyntaxError" | "TypeError" | "URIError" | "AggregateError")
-        && file.resolved(callee) == Some("global") && file.global_setting(callee) != Some("off");
+    let global = s.is(callee, K::Ident) && file.resolved(callee) == Some("global") && file.global_setting(callee) != Some("off");
     let mut child = node;
     let catch = loop {
         let Some(parent) = s.parent(child) else { return Value::Null };
@@ -30,37 +32,137 @@ pub fn caught_error(file: &NativeFile, node: u32) -> Value<'static> {
         child = parent;
     };
     let parameter = s.get(catch, F::Param);
-    let state = match parameter {
-        None => "missing",
-        Some(n) if !s.is(n, K::Ident) => "destructured",
-        _ => "present",
-    };
     let offset = s.tree.node(node).start;
-    let missing = finding(Some("There is no `cause` attached to the symptom error being thrown."), offset);
-    let args: Vec<_> = s.all(call, F::Arg).map(|n| s.unparen(n)).collect();
-    let absent = if args.iter().any(|&n| s.is(n, K::Spread)) { finding(None, offset) } else { missing.clone() };
-    let causes = args.iter().enumerate().map(|(index, &arg)| {
-        if args[..=index].iter().any(|&n| s.is(n, K::Spread)) || !s.is(arg, K::Object) { return finding(None, offset) }
-        let properties: Vec<_> = s.all(arg, F::Property).collect();
-        if properties.iter().any(|&n| s.is(n, K::Spread)) { return finding(None, offset) }
-        let Some(property) = properties.into_iter().rfind(|&n| statics::property_name(s, n).as_deref() == Some("cause")) else { return missing.clone() };
-        let value = s.get(property, F::Value).map(|n| s.unparen(n)).unwrap_or(property);
-        if !s.is(value, K::Ident) || parameter.is_none_or(|p| s.text(p) != s.text(value)) {
-            return finding(Some("The symptom error is being thrown with an incorrect `cause`."), s.tree.node(value).start);
-        }
-        if file.bindings().refs.get(&value).copied() != parameter {
-            return finding(Some("The caught error is being attached as `cause`, but is shadowed by a closer scoped redeclaration."), offset);
-        }
-        finding(None, offset)
+    let arguments = s.all(call, F::Arg).map(|arg| {
+        let arg = s.unparen(arg);
+        let properties = if s.is(arg, K::Object) { s.all(arg, F::Property).map(|property| {
+            let value = s.get(property, F::Value).map(|n| s.unparen(n)).unwrap_or(property);
+            Value::record(vec![
+                ("kind".into(), s.kind(property).map_or(Value::Null, |kind| Value::from(kind.name()))),
+                ("name".into(), statics::property_name(s, property).map_or(Value::Null, Value::from)),
+                ("value".into(), node_data(file, value)),
+                ("offset".into(), Value::from(s.tree.node(property).start as usize)),
+            ])
+        }).collect() } else { Vec::new() };
+        Value::record(vec![
+            ("kind".into(), s.kind(arg).map_or(Value::Null, |kind| Value::from(kind.name()))),
+            ("properties".into(), Value::list(properties)),
+        ])
     }).collect();
     Value::record(vec![
-        ("name".into(), Value::from(name.to_owned())),
-        ("builtin".into(), Value::Bool(builtin)),
-        ("default_index".into(), Value::from(if name == "AggregateError" { 2.0 } else { 1.0 })),
-        ("catch".into(), Value::from(state)),
+        ("name".into(), if s.is(target, K::Ident) { Value::from(s.text(target).to_owned()) } else { Value::Null }),
+        ("global".into(), Value::Bool(global)),
+        ("parameter".into(), parameter.map_or(Value::Null, |n| node_data(file, n))),
         ("catch_offset".into(), Value::Num(f64::from(s.get(catch, F::Kind).map_or(offset, |n| s.tree.node(n).start)))),
         ("throw_offset".into(), Value::Num(f64::from(offset))),
-        ("causes".into(), Value::list(causes)),
-        ("missing".into(), absent),
+        ("arguments".into(), Value::list(arguments)),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn throw_metadata_exposes_arbitrary_object_properties_and_bound_values() {
+        let linter = native_linter(r#"
+in ts_throw rule probe {
+  let caught catch_throw
+  each property in default(last(caught.arguments).properties, [])
+  when property.name == "details" && get(property.value, "binding") == get(get(caught, "parameter"), "binding")
+  report at property.value.offset
+  warn "binding"
+}
+"#);
+        for source in [
+            "try {} catch (error) { throw new CustomError('text', {details: error, cause: error}); }",
+            "try {} catch (error) { throw new handlers[kind]('text', {details: error}); }",
+        ] {
+            let reports = linter.lint(Path::new("/root/a.mjs"), source);
+            assert_eq!(reports.len(), 1, "{source}\n{reports:#?}");
+            assert!(reports.iter().all(|r| r.rule == "probe"), "{reports:#?}");
+            assert_eq!(reports[0].start, source.find("details: error").unwrap() + "details: ".len());
+        }
+    }
+
+    #[test]
+    fn throw_metadata_distinguishes_same_named_bindings_and_keeps_spreads() {
+        let linter = native_linter(r#"
+in ts_throw rule probe {
+  let caught catch_throw
+  each property in default(last(caught.arguments).properties, [])
+  when property.kind == "ts_spread" || property.name == "cause" && property.value.name == get(caught, "parameter").name && get(property.value, "binding") != get(get(caught, "parameter"), "binding")
+  report at property.offset
+  warn "binding"
+}
+"#);
+        let source = "try {} catch (error) { { let error; throw new Error('text', {cause: error, ...options}); } }";
+        let reports = linter.lint(Path::new("/root/a.mjs"), source);
+        assert_eq!(reports.len(), 2, "{reports:#?}");
+        assert!(reports.iter().all(|r| r.rule == "probe"), "{reports:#?}");
+    }
+
+    #[test]
+    fn cause_decisions_distinguish_binding_identity_and_uncertainty() {
+        for (source, decision) in [
+            ("try {} catch (error) { throw new Error('text', {}); }", "missing"),
+            ("try {} catch (error) { throw new Error('text', {cause: other}); }", "incorrect"),
+            ("try {} catch (error) { { let error; throw new Error('text', {cause: error}); } }", "shadowed"),
+            ("try {} catch (error) { throw new Error('text', {cause: error}); }", "preserved"),
+            ("try {} catch (error) { throw new Error('text', options); }", "unknown"),
+            ("try {} catch (error) { throw new Error('text', {cause: other, ...options}); }", "unknown"),
+        ] {
+            let linter = native_linter(&format!(r#"
+in ts_throw rule probe {{
+  let caught catch_throw
+  when caught_throw_cause_kind(get(caught, "parameter"), first(slice(caught.arguments, 1)), slice(caught.arguments, 0, 1)) == "{decision}"
+  warn "decision"
+}}
+"#));
+            let reports = linter.lint(Path::new("/root/a.mjs"), source);
+            assert_eq!(reports.len(), 1, "{decision}\n{source}\n{reports:#?}");
+            assert!(reports.iter().all(|r| r.rule == "probe"), "{reports:#?}");
+        }
+    }
+
+    #[test]
+    fn caught_error_policy_preserves_reporting_and_selected_sites() {
+        for (source, options, site) in [
+            ("try {} catch (error) { throw new Error('text'); }", "", "throw"),
+            ("try {} catch (error) { throw new Error('text', {cause: other}); }", "", "other"),
+            ("try {} catch (error) { { let error; throw new Error('text', {cause: error}); } }", "", "throw"),
+            ("try {} catch ({message}) { throw new Error('text'); }", "", "catch"),
+            ("try {} catch { throw new Error('text'); }", "set requireCatchParameter true", "throw"),
+            ("try {} catch (error) { throw new AggregateError([], 'text', {}); }", "", "throw"),
+            ("try {} catch (error) { throw new CustomError('text', {cause: other}); }",
+                "set errorClassNames [{name: 'CustomError', argumentPosition: 0}]", "other"),
+        ] {
+            let linter = native_linter(&format!("rule preserve-caught-error {{ {options} }}"));
+            let reports = linter.lint(Path::new("/root/a.mjs"), source);
+            assert_eq!(reports.len(), 1, "{source}\n{reports:#?}");
+            assert_eq!(reports[0].rule, "preserve-caught-error");
+            assert_eq!(reports[0].start, source.find(site).unwrap(), "{source}");
+        }
+    }
+
+    #[test]
+    fn caught_error_policy_keeps_uncertainty_and_nearest_scope_exemptions() {
+        let linter = native_linter("rule preserve-caught-error");
+        for source in [
+            "try {} catch (error) { throw new Error('text', {cause: other, cause: error}); }",
+            "try {} catch (error) { throw new Error(...args, {cause: other}); }",
+            "try {} catch (error) { throw new Error('text', {cause: other, ...options}); }",
+            "try {} catch (error) { throw new Error('text', options); }",
+            "try {} catch { throw new Error('text'); }",
+            "try {} catch (error) { (() => { throw new Error('text'); })(); }",
+            "const Error = CustomError; try {} catch (error) { throw new Error('text'); }",
+        ] {
+            let reports = linter.lint(Path::new("/root/a.mjs"), source);
+            assert!(reports.is_empty(), "{source}\n{reports:#?}");
+        }
+        let linter = native_linter("rule preserve-caught-error { set errorClassNames [{name: 'CustomError', argumentPosition: 0}] }");
+        assert!(linter.lint(Path::new("/root/a.mjs"),
+            "try {} catch (error) { throw new CustomError(...args, {cause: other}); }").is_empty());
+    }
 }

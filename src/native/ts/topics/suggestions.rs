@@ -23,7 +23,7 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "regex_literal_preference", doc: "native layers: static-string or redundant literal RegExp construction diagnostic and wrapping policy", get: |f, n| f.with_file(regex::literal_preference, n) },
     Fact { name: "restricted_binding", doc: "native layers: declaration shadows a restricted global name, including merged declarations and unsafe undefined bindings", get: |f, n| f.with_file(functions::restricted_binding, n) },
     Fact { name: "nonoctal_decimal_escapes", doc: "native layers: unescaped decimal escape spellings and source offsets in a string literal", get: |f, n| f.with_file(expressions::decimal_escapes, n) },
-    Fact { name: "caught_error_preservation", doc: "native layers: thrown constructor, nearest catch parameter status and cause diagnostics by options argument position", get: |f, n| f.with_file(errors::caught_error, n) },
+    Fact { name: "catch_throw", doc: "thrown call/new inside a catch: callee name and global status, catch binding, argument/property syntax, value bindings and source offsets", get: |f, n| f.with_file(errors::catch_throw, n) },
     Fact { name: "curly_body", doc: "native layers: control body name, brace status and all multi/line/nest brace expectations with chain consistency", get: |f, n| f.with_file(statements::curly_body, n) },
     Fact { name: "unicode_regex_flags", doc: "native layers: known literal or global RegExp flags, including missing flags as empty, excluding spread patterns", get: |f, n| f.with_file(regex::unicode_flags, n) },
     Fact { name: "eval_usage", doc: "native layers: direct or indirect eval reference, optional-call status and identifier/property report offset", get: |f, n| f.with_file(expressions::eval_usage, n) },
