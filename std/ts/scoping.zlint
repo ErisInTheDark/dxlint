@@ -402,9 +402,10 @@ in ts_identifier rule no-use-before-define {
 
 in ts_variable_declaration, ts_function, ts_class rule no-implicit-globals {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
-  each declaration in filter(scoping_global_declarations, d => d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
+  each declaration in filter(scoping_global_declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
+  let label if declaration.kind == "function" || declaration.kind == "class" then declaration.kind else "'" declaration.kind "'"
   report at declaration.offset
-  warn if declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable." else if declaration.kind == "var" || declaration.kind == "function" then "Unexpected {declaration.label} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable." else "Unexpected {declaration.label} declaration in the global scope, wrap in a block or in an IIFE."
+  warn if declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable." else if declaration.kind == "var" || declaration.kind == "function" then "Unexpected {label} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable." else "Unexpected {label} declaration in the global scope, wrap in a block or in an IIFE."
 }
 in ts_identifier rule no-implicit-globals:leak {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"

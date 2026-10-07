@@ -51,21 +51,78 @@ pub(super) fn declarations(file: &NativeFile, node: u32) -> Value<'static> {
         declarations.sort_by_key(|&id| s.tree.node(id).start);
         for id in declarations {
             let kind = super::bindings::declaration_kind(s, id);
-            if !matches!(kind, "var" | "let" | "const" | "function" | "class") || exported.0.contains(s.text(id)) {
-                continue;
-            }
-            let setting = file.globals().setting(s.text(id)).filter(|&v| v != "off").unwrap_or("new");
-            let label = match kind {
-                "function" | "class" => kind.to_string(),
-                kind => format!("'{kind}'"),
-            };
+            let name = s.text(id);
             entries.push(Value::record(vec![
                 ("kind".into(), Value::from(kind)),
-                ("label".into(), Value::from(label)),
-                ("setting".into(), Value::from(setting)),
+                ("name".into(), Value::from(name.to_string())),
+                ("exported".into(), Value::Bool(exported.0.contains(name))),
+                ("setting".into(), file.globals().setting(name).map_or(Value::Null, Value::from)),
                 ("offset".into(), Value::from(s.tree.node(owner).start as usize)),
             ]));
         }
     }
     Value::list(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn declaration_metadata_keeps_bindings_exempted_by_standard_rules() {
+        let linter = native_linter(r#"
+language .js { set sourceType "script" }
+in ts_variable_declaration rule probe {
+  each d in scoping_global_declarations
+  when (d.exported && d.name == "a") || d.kind == "using"
+  report at d.offset
+  warn "binding"
+}
+rule no-implicit-globals { set lexicalBindings true }
+"#);
+        let source = "/* exported a */ const [a, b] = []; using resource = open();";
+        let reports = linter.lint(Path::new("/root/a.js"), source);
+        assert_eq!(reports.iter().filter(|r| r.rule == "probe").count(), 2, "{reports:#?}");
+        assert_eq!(reports.iter().filter(|r| r.rule == "no-implicit-globals").count(), 1, "{reports:#?}");
+        assert_eq!(reports.len(), 3, "{reports:#?}");
+    }
+
+    #[test]
+    fn declaration_metadata_preserves_missing_and_disabled_global_settings() {
+        let linter = native_linter(r#"
+language .js { set sourceType "script" }
+in ts_variable_declaration rule probe {
+  each d in scoping_global_declarations
+  when (d.name == "absent" && d.setting == null) || (d.name == "disabled" && d.setting == "off")
+  report at d.offset
+  warn "binding"
+}
+"#);
+        let reports = linter.lint(Path::new("/root/a.js"), "/* global disabled: off */ var absent, disabled;");
+        assert_eq!(reports.len(), 2, "{reports:#?}");
+        assert!(reports.iter().all(|r| r.rule == "probe"), "{reports:#?}");
+    }
+
+    #[test]
+    fn global_rule_owns_binding_exemptions_without_changing_declarator_sites() {
+        let path = Path::new("/root/a.js");
+        for lexical in [false, true] {
+            let linter = native_linter(&format!(r#"
+language .js {{ set sourceType "script" }}
+rule no-implicit-globals {{ set lexicalBindings {lexical} }}
+"#));
+            let source = "var [a, b] = []; function f() {} let l; const c = 1; class C {}";
+            let reports = linter.lint(path, source);
+            assert_eq!(reports.len(), if lexical { 5 } else { 2 }, "{reports:#?}");
+            assert_eq!(reports[0].start, source.find("[a").unwrap());
+            assert!(reports.iter().all(|r| r.rule == "no-implicit-globals"), "{reports:#?}");
+            let reports = linter.lint(path, "/* global writable: true, readonly: false, disabled: off */ var writable, readonly, disabled;");
+            assert_eq!(reports.len(), 2, "{reports:#?}");
+        }
+        for options in ["set sourceType \"module\"", "set sourceType \"script\"\nset globalReturn true"] {
+            let linter = native_linter(&format!("language .js {{ {options} }}\nrule no-implicit-globals {{ set lexicalBindings true }}"));
+            assert!(linter.lint(path, "var a; function f() {} let l; const c = 1; class C {}").is_empty());
+        }
+    }
 }

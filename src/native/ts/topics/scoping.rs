@@ -32,7 +32,7 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "scoping_array_callback", doc: "on a function: array callback method, returns and fallthrough", get: |f, n| f.with_file(callbacks::array_callback, n) },
     Fact { name: "param_property_write", doc: "on a parameter reference: a write to a property reached through that parameter", get: |f, n| f.with_file(bindings::param_property_write, n) },
     Fact { name: "scoping_receiver_use", doc: "on a class method or field: its own body uses this or super", get: |f, n| f.with_file(bindings::scoping_receiver_use, n) },
-    Fact { name: "scoping_global_declarations", doc: "script-global declarations in a variable, function or class statement", get: |f, n| f.with_file(globals::declarations, n) },
+    Fact { name: "scoping_global_declarations", doc: "script-global bindings: kind, name, exported-comment flag, nullable global setting and declarator offset", get: |f, n| f.with_file(globals::declarations, n) },
     Fact { name: "scoping_definition_use", doc: "on a reference: declaration kind, early use and execution-context separation", get: |f, n| f.with_file(bindings::definition_use, n) },
     Fact { name: "scoping_shadow", doc: "on a declaration: outer declaration and shadowing exceptions", get: |f, n| f.with_file(bindings::shadow, n) },
     Fact { name: "scoping_redeclaration", doc: "on a declaration: repeated syntax, safe typescript merge and built-in collision", get: |f, n| f.with_file(bindings::redeclaration, n) },
