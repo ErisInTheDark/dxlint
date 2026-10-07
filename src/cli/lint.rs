@@ -207,7 +207,9 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
         });
 
         let mut results: Vec<FileResult> = Vec::new();
-        let mut stdout = std::io::stdout().lock();
+        // Stdout is line-buffered: one write system call per diagnostic
+        // otherwise, which dominated kernel time on large outputs.
+        let mut stdout = std::io::BufWriter::with_capacity(1 << 16, std::io::stdout().lock());
         for msg in rx {
             match msg {
                 Msg::Error(path, e) => {
@@ -241,6 +243,7 @@ pub fn run(args: LintArgs, config: &ConfigArg) -> ExitCode {
                 }
             }
         }
+        let _ = stdout.flush();
         drop(stdout);
         // Human output is sorted so runs are reproducible.
         results.sort_by(|a, b| a.path.cmp(&b.path));
