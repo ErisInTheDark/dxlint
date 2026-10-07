@@ -4,6 +4,8 @@
 use super::parse::{Node, Parser, ROOT, TEXT};
 use super::Grammar;
 use crate::pattern::compile::NO_LABEL;
+use crate::fx_hash::FxHashMap;
+use std::sync::OnceLock;
 
 const NONE: u32 = u32::MAX;
 
@@ -11,6 +13,7 @@ pub struct Tree {
     pub nodes: Vec<Node>,
     parent: Vec<u32>,
     label: Vec<u16>,
+    field_indices: OnceLock<Vec<usize>>,
     /// Reachable nodes in document order (pre-order).
     pub order: Vec<u32>,
     pub root: u32,
@@ -121,7 +124,7 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, parent, label, order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+        Tree { nodes, parent, label, field_indices: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
     }
 
     /// Where a node's inside (its `*`) starts and ends, if its pattern has one.
@@ -141,6 +144,37 @@ impl Tree {
     /// The field label this node has inside its parent.
     pub fn label(&self, id: u32) -> Option<u16> {
         Some(self.label[id as usize]).filter(|&l| l != NO_LABEL)
+    }
+
+    /// The node's ordinal within its parent's children of the same field.
+    pub fn field_index(&self, id: u32) -> Option<usize> {
+        self.field_index_with(id, || {})
+    }
+
+    fn field_index_with(&self, id: u32, mut inspected: impl FnMut()) -> Option<usize> {
+        self.parent(id)?;
+        if self.label(id).is_none() {
+            return Some(0);
+        }
+        let indices = self.field_indices.get_or_init(|| {
+            let mut indices = vec![usize::MAX; self.nodes.len()];
+            let mut counts = FxHashMap::<u16, usize>::default();
+            for &parent in &self.order {
+                counts.clear();
+                for edge in &self.node(parent).children {
+                    inspected();
+                    let child = edge.node as usize;
+                    // A shared node belongs to its resolved parent; duplicate edges
+                    // stop the old scan at the first occurrence, using its resolved label.
+                    if self.parent[child] == parent && indices[child] == usize::MAX {
+                        indices[child] = counts.get(&self.label[child]).copied().unwrap_or(0);
+                    }
+                    *counts.entry(edge.label).or_default() += 1;
+                }
+            }
+            indices
+        });
+        Some(indices[id as usize])
     }
 
     pub fn is_root(&self, id: u32) -> bool {
@@ -266,6 +300,51 @@ mod tests {
         assert_eq!(tree.label(4), None);
         assert_eq!(tree.fields(5, 10), [1]);
         assert_eq!(tree.fields(1, 20), [0]);
+    }
+
+    #[test]
+    fn field_indices_match_sibling_scans_with_shared_and_unlabelled_nodes() {
+        let edge = |node, label| Edge { node, label };
+        let node = |start, end, children| Node { matcher: TEXT, start, end, children };
+        let tree = Tree::from_native(vec![
+            node(2, 3, vec![]),
+            node(0, 4, vec![edge(0, 2), edge(3, 2), edge(0, 3)]),
+            node(5, 8, vec![edge(0, 7), edge(4, 7), edge(5, NO_LABEL), edge(5, 9)]),
+            node(0, 1, vec![]),
+            node(6, 7, vec![]),
+            node(7, 8, vec![]),
+            node(10, 11, vec![]),
+            Node { matcher: ROOT, start: 0, end: 12, children: vec![edge(2, 11), edge(1, 10)] },
+        ], 7);
+        for id in 0..tree.nodes.len() as u32 {
+            let expected = tree.parent(id).map(|parent| tree.node(parent).children.iter()
+                .take_while(|edge| edge.node != id).filter(|edge| Some(edge.label) == tree.label(id)).count());
+            assert_eq!(tree.field_index(id), expected, "shared node {id}");
+        }
+        for count in 0..64 {
+            let mut nodes: Vec<_> = (0..count).map(|i| node(i, i + 1, vec![])).collect();
+            nodes.push(Node { matcher: ROOT, start: 0, end: count, children: (0..count).rev()
+                .map(|i| edge(i, if i % 3 == 0 { NO_LABEL } else { (i % 3) as u16 })).collect() });
+            let tree = Tree::from_native(nodes, count);
+            for id in 0..=count {
+                let expected = tree.parent(id).map(|parent| tree.node(parent).children.iter()
+                    .take_while(|edge| edge.node != id).filter(|edge| Some(edge.label) == tree.label(id)).count());
+                assert_eq!(tree.field_index(id), expected, "width {count}, node {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn reading_each_field_index_does_not_rescan_wide_sibling_prefixes() {
+        let count = 4096;
+        let mut nodes: Vec<_> = (0..count).map(|i| Node { matcher: TEXT, start: i, end: i + 1, children: vec![] }).collect();
+        nodes.push(Node { matcher: ROOT, start: 0, end: count, children: (0..count).map(|i| Edge { node: i, label: 1 }).collect() });
+        let tree = Tree::from_native(nodes, count);
+        let mut inspected = 0;
+        for id in 0..count {
+            assert_eq!(tree.field_index_with(id, || inspected += 1), Some(id as usize));
+        }
+        assert!(inspected <= count as usize * 2, "reading {count} siblings inspected {inspected} edges");
     }
 
     #[test]
