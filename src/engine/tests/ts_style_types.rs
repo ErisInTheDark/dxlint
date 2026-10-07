@@ -3,6 +3,37 @@ use std::path::Path;
 use super::native_linter;
 
 #[test]
+fn empty_object_contexts_hooks_and_name_patterns_preserve_intrinsic_exemptions() {
+    let source = "interface EmptyInterface {} interface SingleInterface extends Base {} interface KeepInterface {} interface Multiple extends Base, Other {} interface Nonempty { value: string } type EmptyAlias = {}; type KeepAlias = {}; type Intersection = {} & Marker; let inline: {};";
+    let targets = [
+        ("empty", "EmptyInterface", 0),
+        ("single", "SingleInterface", 0),
+        ("keep-interface", "KeepInterface", 0),
+        ("alias", "EmptyAlias = ", "EmptyAlias = ".len()),
+        ("keep-alias", "KeepAlias = ", "KeepAlias = ".len()),
+        ("inline", "inline: ", "inline: ".len()),
+    ];
+    for (config, selected) in [
+        ("rule no-empty-object-type", vec!["empty", "single", "keep-interface", "alias", "keep-alias", "inline"]),
+        ("rule no-empty-object-type:object", vec!["alias", "keep-alias", "inline"]),
+        ("rule no-empty-object-type:interface", vec!["empty", "single", "keep-interface"]),
+        ("rule no-empty-object-type { set allowSingleExtends true }", vec!["empty", "keep-interface", "alias", "keep-alias", "inline"]),
+        ("override in ts_interface, ts_type_literal let no_empty_object_type_checked true\nrule no-empty-object-type", vec!["empty", "single", "keep-interface", "alias", "keep-alias", "inline"]),
+        ("override in ts_interface, ts_type_literal let no_empty_object_type_checked false\nrule no-empty-object-type", vec![]),
+        ("override in ts_interface let no_empty_object_type_checked name != 'EmptyInterface'\noverride in ts_type_literal let no_empty_object_type_checked parent not ts_type_alias\nrule no-empty-object-type", vec!["single", "keep-interface", "inline"]),
+        ("rule no-empty-object-type { set allowWithName /^Keep/ }", vec!["empty", "single", "alias", "inline"]),
+        ("rule no-empty-object-type { set allowWithName '' }", vec!["inline"]),
+        ("rule no-empty-object-type { set allowWithName null }", vec!["empty", "single", "keep-interface", "alias", "keep-alias", "inline"]),
+    ] {
+        let diagnostics = native_linter(config).lint(Path::new("file.ts"), source);
+        let starts: Vec<_> = diagnostics.iter().map(|diagnostic| diagnostic.start).collect();
+        let expected: Vec<_> = targets.iter().filter(|(key, _, _)| selected.contains(key)).map(|(_, marker, advance)| source.find(marker).expect("empty type in source") + advance).collect();
+        assert_eq!(starts, expected, "{config}: {diagnostics:?}");
+        assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+    }
+}
+
+#[test]
 fn parameter_property_hook_selects_both_conversion_directions_without_broadening_eligibility() {
     for (prefer, source) in [
         ("class-property", "class C { constructor(public a: number, readonly b: number, private readonly c: number, ordinary: number, ...rest: any[]) {} }"),

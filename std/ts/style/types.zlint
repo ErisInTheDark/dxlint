@@ -289,22 +289,22 @@ in ts_declarator.type, ts_class_property.type rule prefer-as-const:annotation {
   warn "Expected a `const` assertion instead of a literal type annotation."
 }
 
-@macro empty_object_message(subject, option_name) subject " allows any non-nullish value, including literals like `0` and `\"\"`.\n- If that's what you want, disable this lint rule with an inline comment or configure the '" option_name "' rule option.\n- If you want a type meaning \"any object\", you probably want `object` instead.\n- If you want a type meaning \"any value\", you probably want `unknown` instead."
+fn empty_object_message(subject) = subject " allows any non-nullish value, including literals like `0` and `\"\"`.\n- If that's what you want, disable this lint rule with an inline comment or configure an exemption.\n- If you want a type meaning \"any object\", you probably want `object` instead.\n- If you want a type meaning \"any value\", you probably want `unknown` instead."
+in ts_interface, ts_type_literal let no_empty_object_type_checked true
 in ts_interface.name rule no-empty-object-type:interface {
-  option allowInterfaces ("always" | "never" | "with-single-extends") = "never" "When to allow empty interfaces."
-  option allowObjectTypes ("always" | "never") = "never" "When to allow empty object types."
-  option allowWithName string = "" "Allow matching interface and type alias names."
-  when allowInterfaces != "always" && count(parent.member) == 0 && count(parent.extends) <= 1
-  when !(allowInterfaces == "with-single-extends" && count(parent.extends) == 1) && !(allowWithName != "" && re_test(text, allowWithName))
-  warn if count(parent.extends) == 1 then "An interface declaring no members is equivalent to its supertype." else @empty_object_message("An empty interface declaration", "allowInterfaces")
+  option allowSingleExtends boolean = false "Allow empty interfaces extending one type."
+  option allowWithName regex | null = null "Allow matching interface and type alias names."
+  when parent.no_empty_object_type_checked
+  when count(parent.member) == 0 && count(parent.extends) <= 1
+  when !(allowSingleExtends && count(parent.extends) == 1) && !(type_of(allowWithName) == "str" && re_test(text, allowWithName))
+  warn if count(parent.extends) == 1 then "An interface declaring no members is equivalent to its supertype." else empty_object_message("An empty interface declaration")
 }
-in ts_type_literal rule no-empty-object-type {
-  option allowInterfaces ("always" | "never" | "with-single-extends") = "never" "When to allow empty interfaces."
-  option allowObjectTypes ("always" | "never") = "never" "When to allow empty object types."
-  option allowWithName string = "" "Allow matching interface and type alias names."
-  when allowObjectTypes != "always" && count(member) == 0 && parent not ts_intersection
-  when !(allowWithName != "" && parent is ts_type_alias && re_test(parent.name, allowWithName))
-  warn @empty_object_message("The `{{}}` (\"empty object\") type", "allowObjectTypes")
+in ts_type_literal rule no-empty-object-type:object {
+  option allowWithName regex | null = null "Allow matching interface and type alias names."
+  when no_empty_object_type_checked
+  when count(member) == 0 && parent not ts_intersection
+  when !(type_of(allowWithName) == "str" && parent is ts_type_alias && re_test(parent.name, allowWithName))
+  warn empty_object_message("The `{{}}` (\"empty object\") type")
 }
 
 # A type literal or interface that is only an index signature.
