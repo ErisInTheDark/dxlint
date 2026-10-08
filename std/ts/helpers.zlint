@@ -3,6 +3,8 @@
 # A plain identifier, nothing else (`x`, `$el`, not `a.b` or `f()`).
 fn is_identifier(x) = re_test(x, /^[A-Za-z_$][\w$]*$/)
 
+fn unparenthesised_node(n) = last(walk(n, current => if current is ts_parenthesized then current.expression.node else null))
+
 # Function-wide warnings identify the callable, not its body.
 fn function_warning_site(n) = if n is ts_method then n.key.node
   else if n.name != null then n.name.node
