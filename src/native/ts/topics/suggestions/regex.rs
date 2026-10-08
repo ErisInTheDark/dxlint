@@ -1,6 +1,6 @@
 //! Regular expression construction and flag policies.
 
-use super::super::super::facts::{Facts, NativeFile};
+use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
 use crate::expr::Value;
 
@@ -92,44 +92,6 @@ pub fn unnamed_captures(file: &NativeFile, node: u32) -> Value<'static> {
         .map(|(i, _)| Value::from(ast.raw(i))).collect())
 }
 
-pub fn literal_preference(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let Some(callee) = s.get(node, F::Callee) else { return Value::Null };
-    if file.global_value(callee).as_deref() != Some("RegExp") { return Value::Null }
-    let is_static = |node| {
-        let node = s.unparen(node);
-        match s.kind(node) {
-            Some(K::String) => true,
-            Some(K::Template) => s.all(node, F::Expr).next().is_none(),
-            Some(K::TaggedTemplate) => s.get(node, F::Tag).map(|n| s.unparen(n)).is_some_and(|tag| {
-                super::super::super::statics::property_name(s, tag).as_deref() == Some("raw")
-                    && s.get(tag, F::Object).map(|n| s.unparen(n)).is_some_and(|object|
-                        s.is(object, K::Ident) && s.text(object) == "String"
-                            && file.resolved(object) == Some("global") && file.global_setting(object) != Some("off"))
-                    && s.get(node, F::Quasi).is_some_and(|template| s.all(template, F::Expr).next().is_none())
-            }),
-            _ => false,
-        }
-    };
-    let args: Vec<_> = s.all(node, F::Arg).map(|n| s.unparen(n)).collect();
-    if !(1..=2).contains(&args.len()) { return Value::Null }
-    if args.iter().copied().all(is_static) {
-        return Value::record(vec![
-            ("wrapped".into(), Value::Bool(false)),
-            ("message".into(), Value::from("Use a regular expression literal instead of the 'RegExp' constructor.")),
-        ]);
-    }
-    if s.is(args[0], K::Regex) && (args.len() == 1 || is_static(args[1])) {
-        return Value::record(vec![
-            ("wrapped".into(), Value::Bool(true)),
-            ("message".into(), Value::from(if args.len() == 1 {
-                "Regular expression literal is unnecessarily wrapped within a 'RegExp' constructor."
-            } else { "Use regular expression literal with flags instead of the 'RegExp' constructor." })),
-        ]);
-    }
-    Value::Null
-}
-
 pub fn unicode_flags(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let flags = if s.is(node, K::Regex) {
@@ -150,4 +112,67 @@ pub fn unicode_flags(file: &NativeFile, node: u32) -> Value<'static> {
         }
     };
     Value::record(vec![("flags".into(), Value::from(flags))])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use crate::engine::tests::native_linter;
+
+    #[test]
+    fn regex_construction_decisions_distinguish_wrapping_and_flags() {
+        for (source, decision) in [
+            ("RegExp('pattern');", "static"),
+            ("RegExp(/pattern/);", "wrapped"),
+            ("RegExp(/pattern/, 'g');", "flags"),
+        ] {
+            let linter = native_linter(&format!(r#"
+in ts_call, ts_new rule probe {{
+  when regex_construction_kind([] argument.node) == "{decision}"
+  warn "construction"
+}}
+"#));
+            let reports = linter.lint(Path::new("/root/a.mjs"), source);
+            assert_eq!(reports.len(), 1, "{decision}\n{source}\n{reports:#?}");
+            assert_eq!(reports[0].rule, "probe");
+        }
+    }
+
+    #[test]
+    fn literal_preference_keeps_syntactic_static_arguments_and_global_resolution() {
+        let linter = native_linter("rule prefer-regex-literals { set disallowRedundantWrapping true }");
+        for (source, count) in [
+            ("RegExp('pattern');", 1),
+            ("new RegExp((`pattern`), ('g'));", 1),
+            ("RegExp(String.raw`pattern`, 'g');", 1),
+            ("RegExp((String)['raw']`pattern`);", 1),
+            ("const Constructor = RegExp; Constructor('pattern');", 1),
+            ("RegExp(/pattern/);", 1),
+            ("RegExp(/pattern/, 'g');", 1),
+            ("RegExp();", 0),
+            ("RegExp('pattern', 'g', extra);", 0),
+            ("const pattern = 'pattern'; RegExp(pattern);", 0),
+            ("RegExp(`pattern${value}`);", 0),
+            ("RegExp(String.raw`pattern${value}`);", 0),
+            ("const Raw = String; RegExp(Raw.raw`pattern`);", 0),
+            ("const String = CustomString; RegExp(String.raw`pattern`);", 0),
+            ("const RegExp = CustomRegExp; RegExp('pattern');", 0),
+            ("RegExp(...args);", 0),
+            ("RegExp(/pattern/, flags);", 0),
+        ] {
+            let reports = linter.lint(Path::new("/root/a.mjs"), source);
+            assert_eq!(reports.len(), count, "{source}\n{reports:#?}");
+            assert!(reports.iter().all(|report| report.rule == "prefer-regex-literals"));
+        }
+        let linter = native_linter("rule prefer-regex-literals");
+        assert!(linter.lint(Path::new("/root/a.mjs"), "RegExp(/pattern/); RegExp(/pattern/, 'g');").is_empty());
+        assert_eq!(linter.lint(Path::new("/root/a.mjs"), "RegExp('pattern');").len(), 1);
+        for (globals, source) in [
+            ("{RegExp: 'off'}", "RegExp('pattern');"),
+            ("{String: 'off'}", "RegExp(String.raw`pattern`);"),
+        ] {
+            let linter = native_linter(&format!("language .js {{ set globals {globals} }}\nrule prefer-regex-literals"));
+            assert!(linter.lint(Path::new("/root/a.mjs"), source).is_empty(), "{source}");
+        }
+    }
 }

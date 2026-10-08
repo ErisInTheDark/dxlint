@@ -601,11 +601,20 @@ in ts_regex rule no-div-regex {
   warn "A regular expression literal can be confused with '/='."
 }
 
+fn regex_raw_tag(tag) = tag is (ts_member, ts_index) && tag.static_name == "raw" && enabled_global_identifier(unparenthesised_node(tag.object.node), "String")
+fn regex_static_argument(n) = n is ts_string || n is ts_template && n.static_template == true || n is ts_tagged_template && n.quasi.static_template == true && regex_raw_tag(unparenthesised_node(n.tag.node))
+fn regex_construction_kind(args) =
+  if len(args) < 1 || len(args) > 2 then null
+  else if all(args, arg => regex_static_argument(unparenthesised_node(arg))) then "static"
+  else if unparenthesised_node(first(args)) is ts_regex && (len(args) == 1 || regex_static_argument(unparenthesised_node(last(args)))) then (if len(args) == 1 then "wrapped" else "flags")
+  else null
+
 in ts_call, ts_new rule prefer-regex-literals {
   option disallowRedundantWrapping boolean = false "disallow constructors wrapping regex literals"
-  let regex_preference regex_literal_preference
-  when regex_preference != null && (!regex_preference.wrapped || disallowRedundantWrapping)
-  warn regex_preference.message
+  when callee.global_value == "RegExp"
+  let regex_preference regex_construction_kind([] argument.node)
+  when regex_preference != null && (regex_preference == "static" || disallowRedundantWrapping)
+  warn if regex_preference == "static" then "Use a regular expression literal instead of the 'RegExp' constructor." else if regex_preference == "wrapped" then "Regular expression literal is unnecessarily wrapped within a 'RegExp' constructor." else "Use regular expression literal with flags instead of the 'RegExp' constructor."
 }
 
 in ts_regex, ts_call, ts_new rule require-unicode-regexp {

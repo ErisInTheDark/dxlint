@@ -71,9 +71,9 @@ pub(super) fn captures(file: &NativeFile, function: u32) -> Value<'static> {
                 || execution_scope(file, write, false) != execution_scope(file, declaration, true)
         }));
         let name = s.text(reference);
-        if unsafe_write && seen.insert(name.to_string()) { names.push(format!("'{name}'")); }
+        if unsafe_write && seen.insert(name.to_string()) { names.push(Value::from(name.to_owned())); }
     }
-    if names.is_empty() { Value::Null } else { Value::from(names.join(", ")) }
+    Value::list(names)
 }
 
 fn containing_loop(file: &NativeFile, node: u32) -> Option<u32> {
@@ -221,6 +221,21 @@ fn dynamic_expression(file: &NativeFile, node: u32) -> bool {
 mod tests {
     use std::path::Path;
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn loop_captures_expose_unique_unformatted_binding_names() {
+        let linter = native_linter(r#"
+in ts_function, ts_arrow rule probe {
+  let captured scoping_loop_captures
+  when len(captured) == 2 && contains(captured, "first") && contains(captured, "second")
+  warn "bindings"
+}
+"#);
+        let source = "let first = 0, second = 0; while (first < 3) { queue(() => first + second + first); first++; second++; } queue(() => first);";
+        let reports = linter.lint(Path::new("/root/a.mjs"), source);
+        assert_eq!(reports.len(), 1, "{reports:#?}");
+        assert_eq!(reports[0].rule, "probe");
+    }
 
     #[test]
     fn captures_distinguish_iteration_bindings_and_deferred_writes() {

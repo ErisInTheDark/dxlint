@@ -56,8 +56,9 @@ in ts_identifier rule no-unmodified-loop-condition {
 
 in ts_function, ts_arrow rule no-loop-func {
   let captured scoping_loop_captures
-  when captured != null
-  warn "Function declared in a loop contains unsafe references to variable(s) {captured}."
+  when len(default(captured, [])) > 0
+  let captured_names join(map(captured, name => "'" name "'"), ", ")
+  warn "Function declared in a loop contains unsafe references to variable(s) {captured_names}."
 }
 
 in ts_function, ts_arrow rule array-callback-return {

@@ -20,7 +20,6 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "single_iteration_loop", doc: "native layers: reachable loop body has no normal or correctly targeted continue path for another iteration", get: |f, n| f.with_file(statements::single_iteration, n) },
     Fact { name: "useless_escapes", doc: "native layers: unnecessary string, untagged template and regex identity escapes with source offsets and option-filterable characters", get: |f, n| f.with_file(regex::useless_escapes, n) },
     Fact { name: "unnamed_regex_captures", doc: "native layers: unnamed capturing group source spellings in valid literal or statically known RegExp patterns", get: |f, n| f.with_file(regex::unnamed_captures, n) },
-    Fact { name: "regex_literal_preference", doc: "native layers: static-string or redundant literal RegExp construction diagnostic and wrapping policy", get: |f, n| f.with_file(regex::literal_preference, n) },
     Fact { name: "restricted_binding", doc: "native layers: declaration shadows a restricted global name, including merged declarations and unsafe undefined bindings", get: |f, n| f.with_file(functions::restricted_binding, n) },
     Fact { name: "nonoctal_decimal_escapes", doc: "native layers: unescaped decimal escape spellings and source offsets in a string literal", get: |f, n| f.with_file(expressions::decimal_escapes, n) },
     Fact { name: "catch_throw", doc: "thrown call/new inside a catch: callee name and global status, catch binding, argument/property syntax, value bindings and source offsets", get: |f, n| f.with_file(errors::catch_throw, n) },

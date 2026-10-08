@@ -27,7 +27,7 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "scoping_const_binding", doc: "on a let declaration: unique-writer position, early reads and destructuring group eligibility", get: |f, n| f.with_file(constness::binding, n) },
     Fact { name: "scoping_atomic_update", doc: "on an assignment: shared bindings written using a pre-suspension read", get: |f, n| f.with_file(atomic::updates, n) },
     Fact { name: "scoping_this_context", doc: "on this: validity of its lexical receiver, with capitalised constructor exception", get: |f, n| f.with_file(receivers::context, n) },
-    Fact { name: "scoping_loop_captures", doc: "on a function: unsafe mutable bindings captured across loop iterations", get: |f, n| f.with_file(loops::captures, n) },
+    Fact { name: "scoping_loop_captures", doc: "on a function: ordered unique mutable binding names whose captured values can vary across loop iterations", get: |f, n| f.with_file(loops::captures, n) },
     Fact { name: "scoping_unmodified_condition", doc: "on a condition reference: unmodified with grouped or independent conditional branches", get: |f, n| f.with_file(loops::unmodified_condition, n) },
     Fact { name: "scoping_array_callback", doc: "on a function: array callback method, returns and fallthrough", get: |f, n| f.with_file(callbacks::array_callback, n) },
     Fact { name: "param_property_write", doc: "on a parameter reference: a write to a property reached through that parameter", get: |f, n| f.with_file(bindings::param_property_write, n) },
