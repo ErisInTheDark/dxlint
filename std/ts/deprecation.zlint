@@ -17,12 +17,12 @@ fn deprecation_allowed(names, metadata) =
   any(metadata.declarations, declaration => any(declaration.provenance, gate => contains(names, gate.name)))
 
 in ts_node let deprecation_import
-  if is ts_import || is ts_import_equals then true
-  else if is ts_program || is ts_block || is ts_function || is ts_arrow || is ts_class || is ts_interface then false
+  if is (ts_import, ts_import_equals) then true
+  else if is (ts_program, ts_block, ts_function, ts_arrow, ts_class, ts_interface) then false
   else parent.deprecation_import == true
 in ts_node let deprecation_shorthand is ts_property.key && parent.value.node == null
 in ts_node let deprecation_excluded
-  deprecation_import || uses != null && !(is ts_pattern_property.key) || is ts_function.name || is ts_class.name || is ts_interface.name || is ts_type_alias.name || is ts_enum.name || is ts_namespace.name || is ts_method.key || is ts_class_property.key || is ts_property_signature.key || is ts_method_signature.key || is ts_property.key && !deprecation_shorthand || is ts_enum_member.name || is ts_parameter.name || is ts_type_parameter.name || is ts_import_equals.name || is ts_export_specifier.local || is ts_jsx_closing.name || is ts_index.index
+  deprecation_import || uses != null && !(is ts_pattern_property.key) || is (ts_function.name, ts_class.name, ts_interface.name, ts_type_alias.name, ts_enum.name, ts_namespace.name, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key) || is ts_property.key && !deprecation_shorthand || is (ts_enum_member.name, ts_parameter.name, ts_type_parameter.name, ts_import_equals.name, ts_export_specifier.local, ts_jsx_closing.name, ts_index.index)
 in ts_index let deprecation_key index.node
 in ts_node let deprecation_metadata if deprecation_shorthand then declaration.symbol_metadata else symbol_metadata
 in ts_node let no_deprecated_checked true
