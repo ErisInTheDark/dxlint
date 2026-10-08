@@ -2,12 +2,14 @@
 //! and pre-resolved per language so parsing a file is pure table lookups.
 
 mod parse;
+mod shapes;
 mod states;
 mod text;
 mod tree;
 
 pub use parse::{full_match, probe, Edge, Node, Parser, Probe, ROOT, TEXT};
 pub use tree::Tree;
+pub use shapes::FieldTargets;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -144,6 +146,7 @@ pub struct View {
 }
 
 pub struct Grammar {
+    shapes: shapes::Shapes,
     pub matchers: Vec<Matcher>,
     pub langs: Vec<Lang>,
     pub labels: Labels,
@@ -494,7 +497,8 @@ impl Grammar {
             }
             bits
         }).collect();
-        Grammar {
+        let mut grammar = Grammar {
+            shapes: shapes::Shapes::default(),
             ancestors,
             native_hosts,
             layers,
@@ -508,7 +512,9 @@ impl Grammar {
             cache_pool: Mutex::new(Vec::new()),
             dropped: config.dropped.clone(),
             functions: user_functions(config, errors),
-        }
+        };
+        grammar.shapes = shapes::Shapes::build(&grammar);
+        grammar
     }
 
     /// The native node kind of matcher `m`, if it has one.
