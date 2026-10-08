@@ -141,7 +141,10 @@ fn parentheses_follow_leading_tokens_and_constructor_receivers() {
     ] {
         let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
         assert_eq!(diagnostics.len(), count, "{source}: {diagnostics:#?}");
-        assert!(diagnostics.iter().all(|d| d.fix.is_none()));
+        let (fixed, applied) = crate::engine::apply_fixes(source, &diagnostics);
+        assert_eq!(applied, count, "{source}: {diagnostics:#?}");
+        assert!(crate::native::ts::parse(&fixed, false).is_ok(), "{source} -> {fixed}");
+        assert!(lint.lint(Path::new("/root/a.ts"), &fixed).is_empty(), "{source} -> {fixed}");
     }
 }
 

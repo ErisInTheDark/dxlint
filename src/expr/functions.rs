@@ -152,6 +152,26 @@ fn byte_slice<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
     }
 }
 
+fn byte_char<'s>(a: &[Value<'s>]) -> Result<Value<'s>, String> {
+    let text = a[0].text();
+    let offset = a[1].num()?;
+    if !offset.is_finite() || offset < 0.0 || offset.fract() != 0.0 || offset > text.len() as f64 {
+        return Err("byte_char: offset must be an integer within text".into());
+    }
+    let at = offset as usize;
+    if !text.is_char_boundary(at) {
+        return Err("byte_char: offset is not on a character boundary".into());
+    }
+    let part = if a.get(2).is_some_and(Value::truthy) {
+        let width = text[..at].chars().next_back().map_or(0, char::len_utf8);
+        &text[at - width..at]
+    } else {
+        let width = text[at..].chars().next().map_or(0, char::len_utf8);
+        &text[at..at + width]
+    };
+    Ok(a[0].text_part(part))
+}
+
 /// Extended grapheme clusters, approximately: what joins onto the character
 /// before it (joiners and what they join, marks, variation selectors,
 /// emoji modifiers and tags, the second half of a flag) starts none.
@@ -605,6 +625,14 @@ pub static FUNCTIONS: &[Function] = &[
         call: byte_slice,
     },
     Function {
+        name: "byte_char",
+        signature: "byte_char(text, offset, before?)",
+        doc: "character at a byte boundary, or preceding it when before is true; empty at file edges; errors for invalid offsets",
+        min: 2,
+        max: 3,
+        call: byte_char,
+    },
+    Function {
         name: "str",
         signature: "str(value)",
         doc: "value as text",
@@ -814,6 +842,20 @@ mod tests {
         assert_eq!(call("trim_end", &["ab\r\n\n".into(), "\r\n".into()]), Value::from("ab"));
         assert_eq!(call("pad_start", &["7".into(), 3.0.into(), "0".into()]), Value::from("007"));
         assert_eq!(call("slice", &["hello".into(), (-3.0).into()]), Value::from("llo"));
+    }
+
+    #[test]
+    fn byte_char_reads_both_sides_of_utf8_boundaries() {
+        for input in [Value::from("a\u{1f600}b"), Value::from("a\u{1f600}b".to_owned()), Value::Node(7, "a\u{1f600}b".into())] {
+            for (at, before, expected) in [(0, false, "a"), (1, false, "\u{1f600}"), (5, false, "b"),
+                (6, false, ""), (0, true, ""), (1, true, "a"), (5, true, "\u{1f600}"), (6, true, "b")] {
+                assert_eq!(call("byte_char", &[input.clone(), (at as f64).into(), before.into()]), Value::from(expected));
+            }
+            assert_eq!(call("byte_char", &[input.clone(), 1.0.into()]), Value::from("\u{1f600}"));
+            for invalid in [-1.0, 2.0, 7.0, 1.5, f64::NAN, f64::INFINITY] {
+                assert!((lookup("byte_char").unwrap().call)(&[input.clone(), invalid.into()]).is_err());
+            }
+        }
     }
 
     #[test]

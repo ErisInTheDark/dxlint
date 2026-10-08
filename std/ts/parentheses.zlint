@@ -118,6 +118,15 @@ fn structure_parens_required(source, p, inner, outer) =
   else if outer is (ts_type_assertion.expression, ts_as.expression, ts_satisfies.expression) then structure_parens_need(inner.precedence < 15)
   else if outer is (ts_node.type, ts_node.return_type) then 0 else null
 
+# Removing a delimiter must not join identifiers, operators or comment openers.
+fn structure_boundary_uncertain(left, right) = left != "" && right != ""
+  && !re_test(left, /\s/) && !re_test(right, /\s/)
+  && re_test(left right, /[\\\u{80}-\u{10ffff}]/)
+fn structure_boundary_space(left, right) =
+  re_test(left, /[a-zA-Z0-9_$]/) && re_test(right, /[a-zA-Z0-9_$]/)
+  || left == "/" && re_test(right, /[a-zA-Z0-9_$/*]/)
+  || re_test(left right, /^(?:\+\+|--|\*\*|&&|\|\||\?\?|\?\.|<<|>>|<=|>=|==|!=|=>|[+\-*%&|^]=)$/)
+
 in structure_parens rule no-extra-parens {
   option conditionalAssign boolean = true "enforce assignments in conditions"
   option ternaryOperandBinaryExpressions boolean = true "enforce binary ternary operands"
@@ -163,6 +172,16 @@ in structure_parens rule no-extra-parens {
   when owner not ts_spread || inner not no_extra_parens_spread_allowed
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
   warn "Unnecessary parentheses around expression."
+  let body byte_slice(source, offset + 1, end_offset - 1)
+  let before if any(overlapping(ts_block_comment, max(0, offset - 1), offset), c => c.end_offset == offset) then "" else byte_char(source, offset, true)
+  let after byte_char(source, end_offset)
+  let first byte_char(source, offset + 1)
+  let last byte_char(source, end_offset - 1, true)
+  let fixable byte_char(source, offset) == "(" && byte_char(source, end_offset, true) == ")"
+    && !structure_boundary_uncertain(before, first) && !structure_boundary_uncertain(last, after)
+    && !(structure_parens_count == 1 && owner is ts_expression_statement && inner is ts_string) && !typed_inner
+  let octal_member inner is ts_number && re_test(inner.text, /^0[0-7]+$/) && re_test(last, /[0-7]/) && after == "."
+  fix if fixable as (if structure_boundary_space(before, first) then " " else "") body (if structure_boundary_space(last, after) || octal_member then " " else "")
 }
 
 }

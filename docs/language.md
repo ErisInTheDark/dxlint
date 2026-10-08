@@ -632,6 +632,9 @@ group no_extra_parens_spread_allowed ts_conditional
 
 `slice` counts characters; offsets (`offset`, `end_offset`, native spans)
 count bytes, so cut source text at them with `byte_slice(text, from, to?)`.
+
+`byte_char(text, offset, before?)` reads one character at a UTF-8 byte boundary, or the preceding character when `before` is true. Returns `""` at file edges. Offsets must be finite non-negative integers within text, on character boundaries; invalid offsets are errors.
+
 `position(offset)` gives `{line, column}` of an offset, like the `line` and
 `column` builtins (`position(end_offset).line`), and `{js_line, js_column}`
 as JavaScript tools count them: U+2028 and U+2029 break lines, columns
@@ -1081,6 +1084,7 @@ and `final-newline`.
 | `.ts/import-attributes` | shared pattern-owned import/export attributes for key spacing and trailing commas; loaded by the rule modules that need it |
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
+| `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
 | `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
