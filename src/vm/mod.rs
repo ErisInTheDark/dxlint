@@ -9,7 +9,7 @@
 //! prints mismatches to stderr.
 
 use crate::config::ast::BinOp;
-use crate::expr::{Builtin, CExpr, Each, IsTest, Relative, Value};
+use crate::expr::{facts, Builtin, CExpr, Each, FactOf, IsTest, Relative, Value};
 use crate::grammar::{Grammar, Tree, UserFn, ROOT, TEXT};
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -208,6 +208,10 @@ pub enum VExpr {
     EndsWith(Box<VExpr>, Box<VExpr>),
     /// A lambda parameter: the `n`th value bound while evaluating.
     Bound(u16),
+    /// A native fact read (whole, or one registered projection).
+    Fact { fact: usize, projection: Option<usize>, of: FactOf },
+    /// `re_test(text, "pattern")` with a constant, valid pattern.
+    ReTest(Box<VExpr>, &'static str),
     /// How many items a sequence has, their sum, its first or last item.
     Count(Box<Seq>),
     Sum(Box<Seq>),
@@ -343,6 +347,8 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         },
         CExpr::Attr(a) => VExpr::Attr(*a),
         CExpr::ParentAttr(a) => VExpr::ParentAttr(*a),
+        CExpr::Fact(fact, of) => VExpr::Fact { fact: *fact, projection: None, of: *of },
+        CExpr::FactField(read, of) => VExpr::Fact { fact: facts::FIELD_READS[*read].fact, projection: Some(*read), of: *of },
         CExpr::Relative(Relative::Children, inner) => {
             return Ok(Lowered::Seq(Seq::Nodes { children: true, label: 0, item: boxed(inner)? }));
         }
@@ -406,6 +412,9 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
                 VExpr::InList(items, boxed(needle)?)
             }
             ("contains", [haystack, needle]) => VExpr::Contains(boxed(haystack)?, boxed(needle)?),
+            ("re_test", [text, CExpr::Const(Value::Str(pattern))]) if crate::expr::re::compile(pattern).is_ok() => {
+                VExpr::ReTest(boxed(text)?, intern(pattern).0)
+            }
             ("starts_with", [text, prefix]) => VExpr::StartsWith(boxed(text)?, boxed(prefix)?),
             ("ends_with", [text, suffix]) => VExpr::EndsWith(boxed(text)?, boxed(suffix)?),
             _ => return Err(e),
@@ -445,6 +454,8 @@ pub trait Host {
     fn source(&self) -> &str;
     /// An attribute on a node through the VM; `None` gives up on the VM.
     fn attr(&self, node: u32, attr: u16) -> Option<V>;
+    /// A native fact read on a node, when its value is one the VM holds.
+    fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: FactOf) -> Option<V>;
 }
 
 fn parent_layer(tree: &Tree, node: u32) -> Option<u32> {
@@ -530,6 +541,15 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
     }
     Some(match e {
         VExpr::Bound(slot) => *f.get(*slot as usize)?,
+        VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
+        VExpr::ReTest(text, pattern) => {
+            let hay = match eval!(node, text)? {
+                V::Null => "",
+                v => text_of(v)?,
+            };
+            let found = crate::expr::re::test(&[Value::from(hay), Value::from(*pattern)]).ok()?;
+            V::Bool(found.truthy())
+        }
         VExpr::Count(s) => {
             let mut n = 0.0;
             walk_seq(h, node, s, f, &mut |_, _| { n += 1.0; Some(true) })?;

@@ -339,6 +339,18 @@ impl vm::Host for Ctx<'_> {
             Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
         }
     }
+
+    fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: super::FactOf) -> Option<V> {
+        // Same reads and memo as the interpreter's (recorded reads included).
+        let on = Ctx { node, ..*self };
+        Some(match on.fact_value(fact, projection, of) {
+            Value::Null => V::Null,
+            Value::Bool(b) => V::Bool(b),
+            Value::Num(n) => V::Num(n),
+            Value::Node(id, _) => V::Node(id),
+            _ => return None,
+        })
+    }
 }
 
 impl<'a> Ctx<'a> {
