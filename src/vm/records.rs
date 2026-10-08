@@ -55,17 +55,62 @@ fn decode(cell: u64) -> Cell {
     }
 }
 
-/// One file's VM-computed attribute values. Each node kind has a record
-/// of exactly the attributes the enabled rules can read on it (sizes per
-/// matcher: `layout`, decided at config load); a node gets its record in
-/// one shared buffer when one of its values is first read.
+/// One file's VM-computed attribute values. Layouts group fields by their
+/// first requesting rule root; only read blocks acquire cells.
 #[derive(Default)]
 pub struct FileVm {
-    offsets: RefCell<Vec<u32>>,
-    cells: RefCell<Vec<u64>>,
+    storage: RefCell<Storage>,
 }
 
-/// A node without a record yet.
+#[derive(Default)]
+struct Storage {
+    offsets: Vec<u32>,
+    blocks: Pages<u32, 1024>,
+    cells: Pages<u64, 512>,
+}
+
+/// Fixed-size pages keep allocation peaks independent of existing payload
+/// size. Positions stay stable while either arena grows.
+#[derive(Default)]
+struct Pages<T, const N: usize> {
+    pages: Vec<Box<[T; N]>>,
+    len: usize,
+}
+
+impl<T: Copy, const N: usize> Pages<T, N> {
+    fn allocate(&mut self, count: usize, empty: T) -> usize {
+        let start = self.len;
+        self.len += count;
+        while self.pages.len() < self.len.div_ceil(N) {
+            self.pages.push(Box::new([empty; N]));
+        }
+        start
+    }
+
+    fn get(&self, at: usize) -> T {
+        self.pages[at / N][at % N]
+    }
+
+    fn set(&mut self, at: usize, value: T) {
+        self.pages[at / N][at % N] = value;
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.pages.iter().flat_map(|page| page.iter()).take(self.len)
+    }
+
+    fn bytes(&self) -> usize {
+        self.pages.len() * N * std::mem::size_of::<T>()
+    }
+
+    fn pointer_bytes(&self) -> usize {
+        self.pages.capacity() * std::mem::size_of::<Box<[T; N]>>()
+    }
+}
+
+const BLOCK: usize = 4;
+
+/// A node without a directory, or a block without cells yet.
 const NO_RECORD: u32 = u32::MAX;
 
 /// What [`FileVm::begin`] found.
@@ -78,41 +123,65 @@ pub enum Begin {
 }
 
 impl FileVm {
-    pub(crate) fn report_stats(&self, file: &str) {
-        let offsets = self.offsets.borrow();
-        let cells = self.cells.borrow();
-        let nodes = offsets.iter().filter(|&&offset| offset != NO_RECORD).count();
-        let unset = cells.iter().filter(|&&cell| cell == UNSET).count();
-        let gave_up = cells.iter().filter(|&&cell| cell == GAVE_UP).count();
-        let cell_bytes = cells.capacity() * std::mem::size_of::<u64>();
-        let offset_bytes = offsets.capacity() * std::mem::size_of::<u32>();
-        eprintln!("zlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", cells.len());
-    }
-
-    fn record(&self, tree: &Tree, layout: &[u16], node: u32) -> usize {
-        let mut offsets = self.offsets.borrow_mut();
-        if offsets.is_empty() {
-            *offsets = vec![NO_RECORD; tree.nodes.len()];
+    pub(crate) fn report_stats(&self, tree: &Tree, layout: &[u16], file: &str) {
+        let storage = self.storage.borrow();
+        let nodes = storage.offsets.iter().filter(|&&offset| offset != NO_RECORD).count();
+        let unset = storage.cells.iter().filter(|&&cell| cell == UNSET).count();
+        let gave_up = storage.cells.iter().filter(|&&cell| cell == GAVE_UP).count();
+        let cell_bytes = storage.cells.bytes();
+        let directory_bytes = storage.blocks.bytes();
+        let pointer_bytes = storage.cells.pointer_bytes() + storage.blocks.pointer_bytes();
+        let offset_bytes = storage.offsets.capacity() * std::mem::size_of::<u32>();
+        eprintln!("zlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} directory_bytes={directory_bytes} pointer_bytes={pointer_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", storage.cells.len);
+        for size in [4, 8, 16] {
+            let mut directory = 0;
+            let mut touched = 0;
+            let mut occupied = 0;
+            for (node, &offset) in storage.offsets.iter().enumerate() {
+                if offset == NO_RECORD { continue; }
+                let width = layout[tree.node(node as u32).matcher as usize] as usize;
+                directory += width.div_ceil(size);
+                for start in (0..width).step_by(size) {
+                    let used = (start..(start + size).min(width)).filter(|&slot| {
+                        let block = storage.blocks.get(offset as usize + slot / BLOCK);
+                        block != NO_RECORD && storage.cells.get(block as usize + slot % BLOCK) != UNSET
+                    }).count();
+                    if used != 0 {
+                        touched += 1;
+                        occupied += used;
+                    }
+                }
+            }
+            let payload_bytes = touched * size * std::mem::size_of::<u64>();
+            let directory_bytes = directory * std::mem::size_of::<u32>();
+            let projected_bytes = payload_bytes + directory_bytes + offset_bytes;
+            eprintln!("zlint vm blocks: {file} size={size} touched={touched} occupied={occupied} directory_entries={directory} payload_bytes={payload_bytes} directory_bytes={directory_bytes} projected_bytes={projected_bytes}");
         }
-        let at = &mut offsets[node as usize];
-        if *at == NO_RECORD {
-            let mut cells = self.cells.borrow_mut();
-            let start = cells.len();
-            *at = start as u32;
-            let size = layout.get(tree.node(node).matcher as usize).copied().unwrap_or(0);
-            cells.resize(start + size as usize, UNSET);
-        }
-        *at as usize
     }
 
     pub fn begin(&self, tree: &Tree, layout: &[u16], node: u32, slot: u16) -> Begin {
-        let at = self.record(tree, layout, node) + slot as usize;
-        let mut cells = self.cells.borrow_mut();
-        match decode(cells[at]) {
+        let mut storage = self.storage.borrow_mut();
+        if storage.offsets.is_empty() {
+            storage.offsets = vec![NO_RECORD; tree.nodes.len()];
+        }
+        let mut directory = storage.offsets[node as usize];
+        if directory == NO_RECORD {
+            let width = layout[tree.node(node).matcher as usize] as usize;
+            directory = storage.blocks.allocate(width.div_ceil(BLOCK), NO_RECORD) as u32;
+            storage.offsets[node as usize] = directory;
+        }
+        let block_at = directory as usize + slot as usize / BLOCK;
+        let mut block = storage.blocks.get(block_at);
+        if block == NO_RECORD {
+            block = storage.cells.allocate(BLOCK, UNSET) as u32;
+            storage.blocks.set(block_at, block);
+        }
+        let at = block as usize + slot as usize % BLOCK;
+        match decode(storage.cells.get(at)) {
             Cell::Ready(v) => Begin::Ready(v),
             Cell::Busy | Cell::GaveUp => Begin::GiveUp,
             Cell::Unset => {
-                cells[at] = BUSY;
+                storage.cells.set(at, BUSY);
                 Begin::Compute(at)
             }
         }
@@ -121,13 +190,59 @@ impl FileVm {
     /// Publishes a value, or marks the cell given up so later reads go
     /// straight to the interpreter.
     pub fn finish(&self, at: usize, value: Option<V>) {
-        self.cells.borrow_mut()[at] = value.map_or(GAVE_UP, encode);
+        self.storage.borrow_mut().cells.set(at, value.map_or(GAVE_UP, encode));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grammar::Node;
+
+    fn tree(kinds: impl IntoIterator<Item = u32>) -> Tree {
+        Tree::from_native(kinds.into_iter().map(|matcher| Node { matcher, start: 0, end: 0, children: Vec::new() }).collect(), 0)
+    }
+
+    #[test]
+    fn sparse_reads_do_not_allocate_a_whole_wide_record() {
+        let tree = tree([0]);
+        let vm = FileVm::default();
+        let width = u16::MAX - 1;
+        let Begin::Compute(at) = vm.begin(&tree, &[width], 0, width - 1) else { panic!("first read"); };
+        vm.finish(at, Some(V::Num(7.0)));
+        let storage = vm.storage.borrow();
+        let bytes = storage.cells.bytes() + storage.blocks.bytes() + storage.offsets.capacity() * 4
+            + storage.cells.pointer_bytes() + storage.blocks.pointer_bytes();
+        drop(storage);
+        assert!(bytes < width as usize * 8 / 2, "sparse storage used {bytes} bytes");
+        assert!(matches!(vm.begin(&tree, &[width], 0, width - 1), Begin::Ready(V::Num(7.0))));
+    }
+
+    #[test]
+    fn pending_handles_and_fallbacks_survive_other_nodes_and_storage_growth() {
+        let tree = tree((0..3000).map(|n| n % 2));
+        let layout = [7, 19];
+        let vm = FileVm::default();
+        let Begin::Compute(pending) = vm.begin(&tree, &layout, 0, 6) else { panic!("first read"); };
+        assert!(matches!(vm.begin(&tree, &layout, 0, 6), Begin::GiveUp));
+        let Begin::Compute(gave_up) = vm.begin(&tree, &layout, 1, 18) else { panic!("first read"); };
+        vm.finish(gave_up, None);
+        for node in 2..3000 {
+            let slot = layout[node as usize % 2] - 1;
+            let Begin::Compute(at) = vm.begin(&tree, &layout, node, slot) else { panic!("first read"); };
+            vm.finish(at, Some(V::Node(node)));
+        }
+        vm.finish(pending, Some(V::Bool(false)));
+        assert!(matches!(vm.begin(&tree, &layout, 0, 6), Begin::Ready(V::Bool(false))));
+        assert!(matches!(vm.begin(&tree, &layout, 1, 18), Begin::GiveUp));
+        for node in 2..3000 {
+            let slot = layout[node as usize % 2] - 1;
+            assert!(matches!(vm.begin(&tree, &layout, node, slot), Begin::Ready(V::Node(value)) if value == node));
+        }
+        let Begin::Compute(neighbour) = vm.begin(&tree, &layout, 0, 5) else { panic!("unread neighbour"); };
+        vm.finish(neighbour, Some(V::Null));
+        assert!(matches!(vm.begin(&tree, &layout, 0, 5), Begin::Ready(V::Null)));
+    }
 
     #[test]
     fn stored_values_round_trip_and_stay_distinct_from_states() {

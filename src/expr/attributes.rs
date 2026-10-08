@@ -112,7 +112,7 @@ impl Attributes {
         // Inline payload estimate only: hash-table controls, spare buckets
         // and shared list/record/string allocations are not included.
         let entry_bytes = std::mem::size_of::<((u32, u16), Entry<'_>)>();
-        memo.vm.report_stats(file);
+        memo.vm.report_stats(tree, &self.layout, file);
         eprintln!("zlint vm memo: {file} entries={} capacity={} inline_capacity_approx_bytes={} lowered_entries={lowered} lowered_inline_bytes={}",
             attrs.len(), attrs.capacity(), attrs.capacity() * entry_bytes, lowered * entry_bytes);
     }
@@ -125,15 +125,18 @@ impl Attributes {
     pub fn shape_records(&mut self, grammar: &Grammar, roots: Vec<(KindSet, &CExpr)>) -> usize {
         let need = Needs::find(self, grammar, roots);
         self.layout.fill(0);
-        for (attr, need) in self.attrs.iter_mut().zip(need) {
-            for (matcher, route) in attr.routes.iter_mut().enumerate() {
-                if let Route::Defined(def, slot) = route {
-                    *slot = if need.contains(matcher as u32) && attr.lowered[*def as usize].is_some() {
-                        self.layout[matcher] += 1;
-                        self.layout[matcher] - 1
-                    } else {
-                        NO_SLOT
-                    };
+        for attr in &mut self.attrs {
+            for route in &mut attr.routes {
+                if let Route::Defined(_, slot) = route {
+                    *slot = NO_SLOT;
+                }
+            }
+        }
+        for (matcher, attrs) in need.into_iter().enumerate() {
+            for (slot, attr) in attrs.into_iter().enumerate() {
+                if let Route::Defined(_, field) = &mut self.attrs[attr as usize].routes[matcher] {
+                    *field = slot as u16;
+                    self.layout[matcher] += 1;
                 }
             }
         }
@@ -165,10 +168,13 @@ struct Needs<'e> {
     need: Vec<KindSet>,
     called: Vec<KindSet>,
     pending: Vec<(KindSet, &'e CExpr)>,
+    /// First-request order per kind, grouped by the root that first needs
+    /// each attribute. Shared dependencies occupy their first root's group.
+    order: Vec<Vec<u16>>,
 }
 
 impl<'e> Needs<'e> {
-    fn find(attrs: &'e Attributes, grammar: &'e Grammar, roots: Vec<(KindSet, &'e CExpr)>) -> Vec<KindSet> {
+    fn find(attrs: &'e Attributes, grammar: &'e Grammar, roots: Vec<(KindSet, &'e CExpr)>) -> Vec<Vec<u16>> {
         let n = grammar.matchers.len();
         let mut needs = Needs {
             grammar,
@@ -176,12 +182,16 @@ impl<'e> Needs<'e> {
             all: KindSet::all(n),
             need: vec![KindSet::empty(n); attrs.attrs.len()],
             called: vec![KindSet::empty(n); grammar.functions.len()],
-            pending: roots,
+            pending: Vec::new(),
+            order: vec![Vec::new(); n],
         };
-        while let Some((kinds, e)) = needs.pending.pop() {
-            needs.visit(&kinds, e);
+        for root in roots {
+            needs.pending.push(root);
+            while let Some((kinds, e)) = needs.pending.pop() {
+                needs.visit(&kinds, e);
+            }
         }
-        needs.need
+        needs.order
     }
 
     fn map(&self, kinds: &KindSet, step: impl Fn(u32, &mut KindSet)) -> KindSet {
@@ -254,6 +264,9 @@ impl<'e> Needs<'e> {
             }
             match compiled.routes.get(k as usize) {
                 Some(Route::Defined(def, _)) => {
+                    if compiled.lowered[*def as usize].is_some() {
+                        self.order[k as usize].push(attr);
+                    }
                     match by_def.iter_mut().find(|(d, _)| d == def) {
                         Some((_, set)) => { set.insert(k); }
                         None => {
