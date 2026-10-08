@@ -363,15 +363,17 @@ in ts_case let restriction_case_branch test != null
 in ts_block let restriction_local_statements count(body)
 in ts_function_like, ts_static_block let max_nested_callbacks_counted restriction_call_argument
 in ts_class let max_classes_counted true
+fn restriction_statement_total(local_count, child_totals) = default(local_count, 0) + sum(child_totals)
+fn restriction_branch_total(branch, extra, child_totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(child_totals)
 in ts_node {
   let restriction_metric_boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
   let restriction_flow_branch is restriction_flow_control || restriction_parameter_branch == true || restriction_catch_branch == true || restriction_assignment_branch == true || restriction_optional_branch == true
-  let restriction_subtree_statements default(restriction_local_statements, 0) + sum(children.restriction_statement_contribution)
-  let restriction_statement_contribution if restriction_metric_boundary then 0 else restriction_subtree_statements
-  let restriction_subtree_classic (if restriction_flow_branch then 1 else 0) + (if restriction_case_branch == true then 1 else 0) + sum(children.restriction_classic_contribution)
-  let restriction_classic_contribution if restriction_metric_boundary then 0 else restriction_subtree_classic
-  let restriction_subtree_modified (if restriction_flow_branch then 1 else 0) + (if is ts_switch then 1 else 0) + sum(children.restriction_modified_contribution)
-  let restriction_modified_contribution if restriction_metric_boundary then 0 else restriction_subtree_modified
+  let restriction_subtree_statements restriction_statement_total(restriction_local_statements, children.restriction_statement_contribution)
+  let restriction_statement_contribution if restriction_metric_boundary then 0 else restriction_statement_total(restriction_local_statements, children.restriction_statement_contribution)
+  let restriction_subtree_classic restriction_branch_total(restriction_flow_branch, restriction_case_branch, children.restriction_classic_contribution)
+  let restriction_classic_contribution if restriction_metric_boundary then 0 else restriction_branch_total(restriction_flow_branch, restriction_case_branch, children.restriction_classic_contribution)
+  let restriction_subtree_modified restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
+  let restriction_modified_contribution if restriction_metric_boundary then 0 else restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
   let restriction_function_depth default(parent.restriction_function_depth, 0) + (if parent is (ts_function_like, ts_static_block) then 1 else 0)
   let restriction_ordinary_function_depth default(parent.restriction_ordinary_function_depth, 0) + (if parent is ts_function_like then 1 else 0)
   let restriction_top_functions (if is ts_function_like && restriction_ordinary_function_depth == 0 then 1 else 0) + sum(children.restriction_top_functions)
