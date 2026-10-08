@@ -6,6 +6,15 @@ mod tests {
     use crate::engine::tests::native_linter;
 
     #[test]
+    fn static_complexity_reports_identify_blocks_without_selecting_their_bodies() {
+        let l = native_linter("rule complexity:implicit { set max 1 }");
+        let code = "class C { field = x || y; static { if (x) y(); } static /* keep */\n{ if (x) { y(); y(); y(); } } }";
+        let reports = l.lint(Path::new("/root/file.ts"), code);
+        let spans: Vec<_> = reports.iter().map(|report| &code[report.start..report.end]).collect();
+        assert_eq!(spans, ["x || y", "static", "static"]);
+    }
+
+    #[test]
     fn independent_function_and_class_paths() {
         let l = native_linter("rule complexity { set max 1 }\nrule complexity:implicit { set max 1 }");
         let code = "function outer() { function inner() { if (x) y(); } class C { field = x || y; static { if (x) y(); } } }";

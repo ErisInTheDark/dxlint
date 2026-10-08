@@ -415,6 +415,7 @@ in ts_static_block, ts_class_property.init rule complexity:implicit {
   option variant "classic" | "modified" = "classic" "how switches contribute"
   let amount if is (ts_function, ts_arrow) then 1 else 1 + (if variant == "classic" then restriction_subtree_classic else restriction_subtree_modified)
   when amount > max
+  report at if is ts_static_block then { start: first_token.start, end: first_token.end } else node
   warn "{if is ts_static_block then 'Class static block' else 'Class field initializer'} has a complexity of {amount}. Maximum allowed is {max}."
 }
 group restriction_depth_control ts_if, ts_switch, ts_try, ts_do_while, ts_while, ts_with, ts_for, ts_for_in, ts_for_of

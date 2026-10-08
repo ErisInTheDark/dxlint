@@ -198,6 +198,7 @@ in ts_line rule max-len {
   let comment_applies structure_full_comment && comment_limit > 0
   let limit if comment_applies then comment_limit else code_limit
   when length > limit
+  report at { start: offset, end: offset + byte_len(measured) }
   warn if comment_applies then "This line has a comment length of {length}. Maximum allowed is {limit}." else "This line has a length of {length}. Maximum allowed is {limit}."
 }
 

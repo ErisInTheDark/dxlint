@@ -76,6 +76,29 @@ mod tests {
     }
 
     #[test]
+    fn line_length_reports_cover_only_the_measured_source() {
+        let measured = "const longname = 1;";
+        for separator in ["", "\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+            let lint = native_linter("rule max-len { set options [6] }");
+            let source = format!("{measured}{separator}");
+            let reports = lint.lint(Path::new("/root/a.ts"), &source);
+            let spans: Vec<_> = reports.iter().map(|report| &source[report.start..report.end]).collect();
+            assert_eq!(spans, [measured], "{separator:?}");
+        }
+        for (options, source, expected) in [
+            ("{ code: 6, ignoreTrailingComments: true }", "const longname = 1; // ignored\n", measured),
+            ("{ code: 6, ignoreComments: true }", "const longname = 1; /* ignored */\r\n", measured),
+            ("{ code: 80, comments: 6 }", "// long comment\n", "// long comment"),
+            ("{ code: 6 }", "'\u{1f600}'\t+ x;\n", "'\u{1f600}'\t+ x;"),
+        ] {
+            let lint = native_linter(&format!("rule max-len {{ set options [{options}] }}"));
+            let reports = lint.lint(Path::new("/root/a.ts"), source);
+            let spans: Vec<_> = reports.iter().map(|report| &source[report.start..report.end]).collect();
+            assert_eq!(spans, [expected], "{options}: {source}");
+        }
+    }
+
+    #[test]
     fn length_uses_tab_stops_and_unicode_characters() {
         for (source, width, length) in [("a\t+b;", 4, 7), ("ab\t+c\t+de;", 4, 12), ("'\u{1f600}'\t+x;", 4, 10), ("a\t+b;", 0, 4)] {
             for (limit, expected) in [(length, 0), (length - 1, 1)] {
