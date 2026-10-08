@@ -1345,16 +1345,25 @@ impl<'a> Parser<'a> {
     }
 
     /// The optional message after a severity keyword: the rest of the line,
-    /// up to a `fix` or a `{`.
+    /// up to a `fix` or a rule-clause `{`; pipeline blocks are messages.
     fn message_after_severity(&mut self, def: &mut RuleDef) {
         self.skip(false, true);
+        let pipeline = self.ts.peek_raw(0).is_some_and(|token| token.kind == Tk::LBrace)
+            && self.pipeline_marker_at(1);
         let ends = match self.ts.peek_raw(0) {
             None => true,
-            Some(t) => matches!(t.kind, Tk::Newline | Tk::LBrace | Tk::RBrace) || t.is_ident("fix") || t.is_ident("set"),
+            Some(t) => matches!(t.kind, Tk::Newline | Tk::RBrace)
+                || t.kind == Tk::LBrace && !pipeline || t.is_ident("fix") || t.is_ident("set"),
         };
         if !ends {
             def.message = self.expr();
         }
+    }
+
+    fn pipeline_marker_at(&mut self, mut at: usize) -> bool {
+        while self.ts.peek_raw(at).is_some_and(|token| token.kind == Tk::Newline) { at += 1; }
+        self.ts.peek_raw(at).is_some_and(|token| token.is_ident("value"))
+            && !self.ts.peek_raw(at + 1).is_some_and(|token| token.kind == Tk::Colon)
     }
 
     fn rule_body(&mut self, def: &mut RuleDef, mut options: Option<&mut Vec<(Name, Expr)>>) {
@@ -1601,6 +1610,27 @@ mod tests {
         let (config, errors, _) = parse_str(src);
         assert!(errors.is_empty(), "{errors:#?}");
         config
+    }
+
+    #[test]
+    fn calls_require_simple_arguments_but_check_lambda_bodies_independently() {
+        for expression in [
+            "count(map(items, x => x))", "str([count(items)])",
+            "str({count: count(items)})", "str(count(items) + 1)",
+            "str(if true then items else [])", "str({ value items; first })",
+            "str(\"{count(items)}\")", "map(items, x => str(count(x)))",
+            "{ value items; take (count(items)) }",
+        ] {
+            let (_, errors, _) = parse_str(&format!("fn sample(items) = {expression}"));
+            assert!(errors.iter().any(|error| error.message.contains("simple")), "{expression}: {errors:#?}");
+        }
+        for expression in [
+            "count(items) > 2", "\"{count(items)}\"", "str(\"{{literal}}\")",
+            "map(items, x => count(x))", "str([items.text, 2 + 1])",
+            "str({count: 2 + 1})", "{ value items; map (x) { value x; first }; count }",
+        ] {
+            ok(&format!("fn sample(items) = {expression}"));
+        }
     }
 
     fn parents(m: &MatcherDef) -> Vec<String> {

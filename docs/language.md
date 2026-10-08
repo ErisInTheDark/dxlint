@@ -428,7 +428,7 @@ and can read the `let`s above it:
 in ts_statement rule padding-line-between-statements {
   when index > 0 && parent is (ts_block, ts_program)
   let wanted is_conditional || previous.wants_blank_after == true
-  when wanted && !re_test(default(gap_before, ""), /\n[ \t]*\r?\n/)
+  when wanted && !{ value (gap_before.nonempty ?? ""); re_test /\n[ \t]*\r?\n/ }
   warn "Expected blank line before this statement."
 }
 ```
@@ -461,6 +461,64 @@ so nested rules compose.
 
 ## Expressions
 
+### Pipelines
+
+Start with `value`, then apply each stage to the preceding value:
+
+```zlint
+let names {
+  value declarations.nodes
+  filter (item, i) i % 2 == 0
+  map (item) item.name
+  unique
+  join ", "
+}
+```
+
+A stage names any function, with the preceding value as its first argument: `trim`, `slice 0 8`, `replace "old" "new"`. Remaining arguments are whitespace-separated operands; parenthesise arithmetic or other compound expressions. Newlines or `;` separate steps: `{ value before; trim; nonempty } ?? indent`.
+
+`then (value) expression` transforms the **whole** preceding value, rather than each item. `label: stage` saves a step's result for later steps. Label the seed with `value label: expression`. Labels are unique within a pipeline, shadow surrounding names only after their step, and never escape the block. Another `value expression` restarts the chain without discarding labels:
+
+```zlint
+let selected {
+  value original: declarations.nodes
+  filter (item) item.used
+  used: count
+  value original
+  then (items) { items: items, used: used }
+}
+```
+
+Pipelines are expressions: use them in functions, attributes, rule lets, `when`, conditional arms, lambda bodies, messages and template holes. `{ value: expression }` is still a record; the `value` marker without a following `:` identifies a pipeline.
+
+| stage | result |
+|---|---|
+| `map (item, i) expr`, `flat_map (item, i) expr` | transformed items; `flat_map` flattens one level |
+| `filter (item, i) test` | matching items, in input order |
+| `find (item, i) test`, `find_last (item, i) test` | first or last matching item, or `null` |
+| `any (item, i) test`, `all (item, i) test` | whether any or all items match; stop once decided |
+| `take_while (item, i) test`, `skip_while (item, i) test` | matching prefix, or items after that prefix |
+| `min_by (item, i) key`, `max_by (item, i) key` | item with the smallest or largest key; first wins ties; `null` when empty |
+| `sort_by (item, i) key` | stable ascending order |
+| `unique_by (item, i) key` | first item for each distinct key |
+| `group_by (item, i) key` | first-seen groups as `[{ key, items }]` |
+| `partition (item, i) test` | `{ yes, no }` lists, each in input order |
+| `reduce (acc, item) expr` | first item seeds the accumulator; `null` when empty |
+| `fold initial (acc, item) expr` | explicit initial accumulator; evaluates the input before the initial value |
+| `zip other`, `zip other (a, b) expr` | pairs or paired transformation, stopping at the shorter input |
+| `take n`, `drop n` | first `n` items, or items after them |
+| `flat`, `concat other` | flatten one list level, or append another list |
+| `reverse`, `unique` | reversed items, or first occurrences |
+| `chunk n`, `windows n` | consecutive chunks (last may be shorter), or overlapping full windows; `n` must be positive |
+| `count`, `sum`, `join separator` | item count, numeric total, or joined text |
+| `nonempty` | `null` for `""`, `[]` or `{}`; otherwise unchanged |
+
+Item stages may omit the second parameter. `i` is the original input index, including in `find_last`; no intermediate tuple or enumeration step is needed. Lambdas see surrounding values and pipeline labels.
+
+**Fallbacks.** `a ?? b` evaluates `a` once and evaluates `b` only when `a` is `null`. Unlike truthiness, it preserves `false`, `0`, `""`, `[]` and `{}`. Use `a.nonempty ?? b` when empty text, lists or records should also fall back. `.nonempty` and `.nodes` are reserved suffixes; read record keys with those names using `get(record, "nonempty")` or `get(record, "nodes")`. Grammar fields cannot use these names.
+
+**Calls.** A call's arguments must be simple: names, literals, dot reads, operators over those, or a stage lambda. Do not nest calls within arguments; name an intermediate value with `let` or use a pipeline. `count(params) > max` and `"{count(all)}"` remain valid. Calls inside a lambda body follow the same rule independently.
+
 | syntax | meaning |
 |---|---|
 | `"text {expr} more"` | template string; `{{` and `}}` for literal braces |
@@ -472,21 +530,23 @@ so nested rules compose.
 | `name` | a field of the node, an option, a `let`, or a variable |
 | `option.key`, `x.key`, `f(...).key` | a record's value for `key` (`null` when missing) |
 | `map(xs, x => ...)` | a lambda, for `map`, `filter`, `find`, `find_last`, `all` and `any` |
-| `reduce(xs, init, (state, x) => ...)` | folds a list in order: each step sees the state the previous one gave |
+| `fold(xs, init, (state, x) => ...)`, `reduce(xs, (state, x) => ...)` | accumulation with an explicit seed, or the first item as seed |
 | `matcher` / `matcher.x` | the closest enclosing node of `matcher`, or anything read on it (`ts_function.name`, `ts_class.offset`, `ts_function.my_attr`) |
 | `parent.x` | anything read on the layer the node sits in (`parent.offset`, `parent.depth`) |
 | `field.node`, `field.offset`, `field.attr`, `field.fact`, `field.link` | a builtin, attribute, fact or link read on the node in one of this node's fields (a list for several) |
 | `callee.object.x`, `parent.left.x`, `previous.body.x` | longer paths walk: each field label steps into its node(s), the last part is read there |
 | `first(references).line` | `.x` on a node value (from a link, `node`, or a lambda parameter) reads on that node; longer paths walk (`n.callee.object.offset`) |
 | `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
+| `right.nodes`, `n.callee.nodes` | the field's node values, always a list, including for zero or one match |
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
 | `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
-| `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk([] references.node, n => n.writer.right.node)` |
+| `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk(references.nodes, n => n.writer.right.node)` |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
 | `!a` `-a` `a * b` `a % b` `a + b` `a - b` | arithmetic (`text * n` repeats text) |
 | `== != < <= > >=` | comparisons (numbers compare numerically, even as text) |
 | `a && b`, `a \|\| b` | logic, short-circuiting |
+| `a ?? b` | lazy fallback for `null` only |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
 | `is a`, `x is a`, `x is (a, b)`, `x not (a, b)` | is the node (`x` alone: this node; or a field, `parent`, `previous`, a link, a node value) of one of these kinds: itself, a specialisation, or a group member (`not`: none of them) |
 | `is a.field` | does the node sit in that field of a node of kind `a` (`is ts_if.alternate`) |
@@ -549,7 +609,7 @@ list. `null`, `false`, `0`, `""`, `[]` and `{}` are falsy.
 **Lambdas** walk lists, usually lists of records from an option: `map(xs, x
 => value)`, `filter(xs, x => test)`, `find(xs, x => test)` (first match or
 `null`), `find_last`, `all(xs, x => test)` and `any(xs, x => test)`.
-`reduce(xs, init, (state, x) => next)` carries a value through the list, for
+`fold(xs, init, (state, x) => next)` carries a value through the list, for
 decisions that depend on earlier ones. `keys`, `values`, `get(record, key)`
 and `len` read records. A lambda sees everything the expression around it
 sees, plus its parameters:
@@ -599,7 +659,7 @@ the neighbour itself with `is` (`previous is ts_comma`).
 `repeat`, `pad_start`, `pad_end`, `starts_with`, `ends_with`, `contains`,
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `compact`, `sum`, `any`,
-`count`, `slice`, `str`, `num`, `default`, `min`, `max`, `abs`, `round`,
+`count`, `slice`, `str`, `num`, `nonempty`, `min`, `max`, `abs`, `round`,
 `compare_text`, `js_compare`, `js_number`, `js_re_test`.
 
 | function | value |
@@ -1035,7 +1095,7 @@ in ts_program rule padding-line-between-statements {
 | `name` | a `schema` |
 
 Checking a value fills in record defaults, so a rule can read every key
-(`c.word`) without `default(...)`. Defaults are literal values, and an
+(`c.word`) without a fallback expression. Defaults are literal values, and an
 option's default must fit its own type. `override schema name ...` replaces
 a named type.
 
@@ -1104,6 +1164,7 @@ and `final-newline`.
 | `.ts/conditions` | type-aware condition policy, imported by `.ts`; optional-chain suggestions remain diagnostic-only |
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
 | `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
+| `.ts/expression-fixes` | shared precedence, token-boundary and ASI helpers for expression autofixes |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
 | `.ts/typed/promises` | `no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
@@ -1139,7 +1200,11 @@ share. A body sees its parameters and nothing of the node: pass in what it
 needs. Functions may call each other and themselves.
 
 ```zlint
-fn indent_width(line) = len(line) - len(trim_start(line))
+fn indent_width(line) = {
+  value line
+  trim_start
+  then (trimmed) len(line) - len(trimmed)
+}
 fn rank(order, group) = index_of(order, group)
 in ts_class_body rule late-member warn "out of order" {
   when rank(["field", "method"], kind) < rank(["field", "method"], previous.kind)

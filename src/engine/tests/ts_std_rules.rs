@@ -294,7 +294,7 @@ fn empty_interfaces_use_members_and_supertypes_not_body_text() {
 #[test]
 fn irregular_whitespace_exemptions_follow_syntax_ownership() {
     let linter = native_linter(
-        "override in problem_irregular_ws let irregular_whitespace_checked count(overlapping(ts_jsx_text)) == 0\nrule no-irregular-whitespace",
+        "override in problem_irregular_ws let irregular_whitespace_checked { value overlapping(ts_jsx_text); count } == 0\nrule no-irregular-whitespace",
     );
     for (source, expected) in [
         ("const value = <div>\u{00a0}</div>;", 0),
@@ -342,7 +342,7 @@ fn problem_selection_optional_chaining_separates_arithmetic_and_throwing_uses() 
 
 #[test]
 fn problem_selection_template_quasis_do_not_hide_embedded_code() {
-    let linter = native_linter("override in problem_irregular_ws let irregular_whitespace_checked !any(overlapping(problem_template), template => any(template.quasi.node, quasi => quasi.offset <= offset && end_offset <= quasi.end_offset))\nrule no-irregular-whitespace");
+    let linter = native_linter("override in problem_irregular_ws let irregular_whitespace_checked !{ value overlapping(problem_template); any (template) any(template.quasi.node, quasi => quasi.offset <= offset && end_offset <= quasi.end_offset) }\nrule no-irregular-whitespace");
     for source in [
         "const value = `raw\u{00a0}${a\u{00a0}+b}`;",
         "const value = `raw${`nested\u{00a0}${a\u{00a0}+b}`}`;",
@@ -430,7 +430,7 @@ fn problem_selection_character_classes_retains_unescaped_findings() {
     let source = "/[a\\u0301]/u; /[a\u{0301}]/u;";
     for (policy, expected) in [
         ("", 2),
-        ("override in regex_site let misleading_character_class_findings filter(default(regex_findings, []), finding => finding.check == \"misleading_escaped\")", 1),
+        ("override in regex_site let misleading_character_class_findings { value (regex_findings.nonempty ?? []); filter (finding) finding.check == \"misleading_escaped\" }", 1),
     ] {
         let linter = native_linter(&format!("{policy}\nrule no-misleading-character-class"));
         let diagnostics = linter.lint(Path::new("/root/file.js"), source);

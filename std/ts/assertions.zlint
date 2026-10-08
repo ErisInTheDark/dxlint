@@ -3,20 +3,33 @@ import .ts/expression-fixes
 
 define {
 
-fn assertion_outer(n) = last(walk(n, current => if current.parent is ts_parenthesized then current.parent else null))
-fn assertion_literal_preserved(n) = assertion_outer(n).parent is ts_declarator && assertion_outer(n).parent.parent.kind == "const" || assertion_outer(n).parent is ts_class_property && contains([] assertion_outer(n).parent.modifier, "readonly")
-fn assertion_call(n) = last(walk(unparenthesised_node(n), current => if current is ts_await then unparenthesised_node(current.argument.node) else if current is ts_non_null then unparenthesised_node(current.expression.node) else if current is ts_sequence then unparenthesised_node(last([] current.expression.node)) else null))
-fn assertion_generic_call(n) = assertion_call(n) is ts_call && assertion_call(n).type_argument == null && count(assertion_call(n).type_parameter_defaults) > 0
+fn assertion_outer(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent else null; last }
+fn assertion_literal_preserved(n) = assertion_outer(n).parent is ts_declarator && assertion_outer(n).parent.parent.kind == "const" || assertion_outer(n).parent is ts_class_property && { value [] assertion_outer(n).parent.modifier; contains "readonly" }
+fn assertion_call(n) = {
+  value n
+  unparenthesised_node
+  walk (current) if current is ts_await then unparenthesised_node(current.argument.node) else if current is ts_non_null then unparenthesised_node(current.expression.node) else if current is ts_sequence then { value current.expression.nodes; last; unparenthesised_node } else null
+  last
+}
+fn assertion_generic_call(n) = assertion_call(n) is ts_call && assertion_call(n).type_argument == null && { value assertion_call(n).type_parameter_defaults; count } > 0
 fn assertion_type_same(source, target, relation) = relation.identity == true || source.contains_any == false && target.contains_any == false && !(target.contains_variable == true && (source.contains_variable != true || target.intersection)) && !(source.nonprimitive && !target.nonprimitive) && source.index_signature == target.index_signature && assertion_generics_preserved(source, target) && assertion_generics_preserved(target, source) && relation.properties_equal == true && relation.type_arguments_equal == true && relation.assignable == true && relation.reverse_assignable == true
 fn assertion_same(r) = assertion_type_same(r.operand, r.annotation, r.operand_annotation) || r.operand.property_bag && assertion_type_same(r.widened_operand, r.annotation, r.widened_operand_annotation)
 fn assertion_generics_preserved(source, target) = source.generic_properties != null && target.generic_properties != null && all(target.generic_properties, name => contains(source.generic_properties, name))
 fn assertion_context_known(n, r) = r.context.contains_any == false || r.context.any && assertion_outer(n).parent is (ts_call, ts_new) && r.annotation.contains_any == false
 fn assertion_context(n, r) = r.context != null && assertion_context_known(n, r) && r.operand.contains_any == false && assertion_generics_preserved(r.operand, r.context) && r.operand_context.assignable == true && r.operand_context.type_arguments_equal == true && !(r.annotation.union && (r.operand.null || r.operand.undefined))
-fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && first(slice(n.declaration.parent.token_texts, 1, 2)) != "!" || n.declaration.parent.parent.kind == "var" && any(walk(n.declaration.parent.parent.parent, current => current.parent), current => current is ts_block && (n.offset < current.offset || n.end_offset > current.end_offset))))
+fn assertion_unassigned(n) = n is ts_identifier && (n.declaration == null && n.resolved != "global" || n.declaration.parent is ts_declarator && n.declaration.ambient != true && (n.declaration.parent.init == null && { value n.declaration.parent.token_texts; slice 1 2; first } != "!" || n.declaration.parent.parent.kind == "var" && {
+  value n.declaration.parent.parent.parent
+  walk (current) current.parent
+  any (current) current is ts_block && (n.offset < current.offset || n.end_offset > current.end_offset)
+}))
 fn assertion_non_null_context(r) = r.context != null && r.actual_constrained.identity == true && (!r.operand.unknown || r.context.unknown) && (!r.operand.null || r.context.null) && (!r.operand.undefined || r.context.undefined) && (!r.operand.void || r.context.void)
-fn assertion_receiver(n) = last(walk(n, current => if current.parent is (ts_parenthesized, ts_property, ts_object, ts_array, ts_conditional, ts_logical, ts_sequence) then current.parent else null)).parent
+fn assertion_receiver(n) = {
+  value n
+  walk (current) if current.parent is (ts_parenthesized, ts_property, ts_object, ts_array, ts_conditional, ts_logical, ts_sequence) then current.parent else null
+  last
+}.parent
 fn assertion_context_safe(n) = !(assertion_receiver(n) is (ts_as, ts_type_assertion, ts_satisfies)) && !(assertion_outer(n).parent is (ts_assignment, ts_logical) && assertion_outer(n).parent.operator != "||") && !(assertion_outer(n).parent is ts_property && assertion_outer(n).parent.parent.type_relations.context.union)
-fn assertion_fresh_literal(n, r, written) = unparenthesised_node(n.expression.node) is ts_object && r.annotation.property_literals == true || (r.annotation.literal || written == "const") && unparenthesised_node(n.expression.node) is ts_template && count([] unparenthesised_node(n.expression.node).expression.node) > 0
+fn assertion_fresh_literal(n, r, written) = unparenthesised_node(n.expression.node) is ts_object && r.annotation.property_literals == true || (r.annotation.literal || written == "const") && unparenthesised_node(n.expression.node) is ts_template && { value unparenthesised_node(n.expression.node).expression.nodes; count } > 0
 
 fn assertion_fix_original(r, contextual) = !r.annotation.any && (r.original_annotation.identity == true
   || r.original.property_bag && assertion_type_same(r.widened_original, r.annotation, r.widened_original_annotation))
@@ -29,27 +42,58 @@ fn assertion_fix_fold(source, n, body, chain) =
       text: byte_slice(source, n.offset, n.expression.offset) body.text byte_slice(source, n.expression.end_offset, n.end_offset) }
   else { node: body.node, text:
     if n is ts_type_assertion then byte_slice(source, n.expression.node.token_neighbours.before.end, n.expression.offset) body.text
-    else if n is ts_as then body.text trim_end(byte_slice(source, n.expression.end_offset, n.expression.node.token_neighbours.after.start))
+    else if n is ts_as then body.text { value source; byte_slice n.expression.end_offset n.expression.node.token_neighbours.after.start; trim_end }
     else body.text byte_slice(source, n.expression.end_offset, n.last_token.start) }
-fn assertion_fix_body(source, trace) = reduce(reverse(slice(trace, 0, -1)), { node: last(trace), text: last(trace).text },
-  (body, n) => assertion_fix_fold(source, n, body, count(filter(trace, current => current is (ts_as, ts_type_assertion))) > 1))
-fn assertion_fix_enclosed(n) = any(walk(n, current => if current == n.structure_parens_context then null else current.parent.node),
-  current => current is ts_parenthesized)
-fn assertion_fix_parens(source, n, body, needed) = if needed == null then null else if n.parent is ts_parenthesized then 0 else max(needed,
-  if n.structure_parens_context != null && n.structure_parens_context not ts_return && !assertion_fix_enclosed(n) && body.structure_parens_hazard == true
+fn assertion_fix_body(source, trace) = {
+  value terminal: last(trace)
+  value chained: { value trace; filter (current) current is (ts_as, ts_type_assertion); count } > 1
+  value initial: { node: terminal, text: terminal.text }
+  value trace
+  slice 0 -1
+  reverse
+  fold initial (body, n) assertion_fix_fold(source, n, body, chained)
+}
+fn assertion_fix_enclosed(n) = {
+  value n
+  walk (current) if current == n.structure_parens_context then null else current.parent.node
+  any (current) current is ts_parenthesized
+}
+fn assertion_fix_parens(source, n, body, needed) = if needed == null then null else if n.parent is ts_parenthesized then 0 else {
+  value result: if n.structure_parens_context != null && n.structure_parens_context not ts_return && !assertion_fix_enclosed(n) && body.structure_parens_hazard == true
     || n.structure_parens_for_init && body.structure_parens_has_in == true
-    || n.structure_parens_context is ts_return && re_test(byte_slice(source, n.structure_parens_context.offset, body.offset), /[\n\r\u{2028}\u{2029}]/) then 1 else 0)
+    || n.structure_parens_context is ts_return && { value source; byte_slice n.structure_parens_context.offset body.offset; re_test /[\n\r\u{2028}\u{2029}]/ } then 1 else 0
+  value max(needed, result)
+}
 fn assertion_fix_result(n, text, asi) = if asi == null then null else {
   target: n, text: (if asi then ";" else "") expression_fix_edges(n, text)
 }
-fn assertion_fix_output(n, text) = assertion_fix_result(n, text,
-  if expression_fix_statement(n) != null && contains(["(", "[", "/", "`"], slice(trim_start(text), 0, 1))
-    then expression_fix_asi(expression_fix_statement(n), n.token_neighbours.before, expression_fix_before_nodes(n)) else false)
+fn assertion_fix_output(n, text) = {
+  value statement: expression_fix_statement(n)
+  value asi: if statement != null && {
+    value text
+    trim_start
+    slice 0 1
+    then (head) contains(["(", "[", "/", "`"], head)
+  }
+    then {
+      value owners: expression_fix_before_nodes(n)
+      value expression_fix_asi(statement, n.token_neighbours.before, owners)
+    } else false
+  value assertion_fix_result(n, text, asi)
+}
 fn assertion_fix_wrap_output(n, body, needed) = if needed == null then null
-  else assertion_fix_output(n, expression_fix_wrap(body.text, needed > 0))
-fn assertion_fix_with_body(source, n, body) = assertion_fix_wrap_output(n, body,
-  assertion_fix_parens(source, n, body.node, expression_fix_parens(source, n, body.node)))
-fn assertion_fix(source, n, original) = assertion_fix_with_body(source, n, assertion_fix_body(source, assertion_fix_trace(n, original)))
+  else { value body.text; text: expression_fix_wrap (needed > 0); value assertion_fix_output(n, text) }
+fn assertion_fix_with_body(source, n, body) = {
+  value precedence_parens: expression_fix_parens(source, n, body.node)
+  value required_parens: assertion_fix_parens(source, n, body.node, precedence_parens)
+  value assertion_fix_wrap_output(n, body, required_parens)
+}
+fn assertion_fix(source, n, original) = {
+  value n
+  trace: assertion_fix_trace original
+  value body: assertion_fix_body(source, trace)
+  value assertion_fix_with_body(source, n, body)
+}
 
 in ts_as, ts_type_assertion let no_unnecessary_type_assertion_checked type.text != "const"
 in ts_non_null let no_unnecessary_type_assertion_checked true
@@ -62,7 +106,7 @@ in ts_as, ts_type_assertion rule no-unnecessary-type-assertion {
   let contextual !unchanged && assertion_context_safe(node) && (assertion_context(node, relation) || assertion_context_known(node, relation) && (relation.operand.any || relation.operand.unknown) && relation.original.contains_any == false && assertion_generics_preserved(relation.original, relation.context) && relation.original_context.assignable == true)
   when unchanged || contextual
   warn if unchanged && assertion_generic_call(expression.node) then "The type arguments for this generic call may be inferred from the assertion. Specify them explicitly instead." else if contextual then "This assertion is unnecessary since the receiver accepts the original type of the expression." else "This assertion is unnecessary since it does not change the type of the expression."
-  let edit if unchanged && assertion_generic_call(expression.node) then null else assertion_fix(source, node, assertion_fix_original(relation, contextual))
+  let edit if unchanged && assertion_generic_call(expression.node) then null else { value relation; original: assertion_fix_original contextual; value assertion_fix(source, node, original) }
   fix at edit.target if edit != null as edit.text
 }
 
@@ -72,7 +116,7 @@ in ts_non_null rule no-unnecessary-type-assertion:non-null {
   let relation type_relations
   let assignment outer.parent is ts_assignment && outer.parent.operator == "="
   let target assignment && outer is ts_assignment.left
-  let unchanged relation.operand != null && relation.constrained != null && !relation.constrained.nullable && (!relation.operand.nullable || relation.operand.contains_variable == true && relation.constrained.contains_variable == false) && !assertion_unassigned(unparenthesised_node(expression.node))
+  let unchanged relation.operand != null && relation.constrained != null && !relation.constrained.nullable && (!relation.operand.nullable || relation.operand.contains_variable == true && relation.constrained.contains_variable == false) && !{ value expression.node; unparenthesised_node; assertion_unassigned }
   let contextual (relation.operand.nullable || relation.constrained.nullable) && assertion_non_null_context(relation)
   let unchecked compiler_options.noUncheckedIndexedAccess == true && unparenthesised_node(expression.node) is ts_index && unparenthesised_node(expression.node).access_resolution.from_index
   when target || !assignment && !unchecked && (unchanged || contextual)

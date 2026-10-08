@@ -27,15 +27,41 @@ schema restriction_import_pattern {
   option paths restriction_import_path[] = [] "restricted import paths"
   option patterns restriction_import_pattern[] = [] "restricted import pattern groups"
 }
-@macro restriction_import_list(xs) (if len(xs) < 2 then join(map(xs, x => "'" x "'"), "") else if len(xs) == 2 then join(map(xs, x => "'" x "'"), " and ") else join(map(slice(xs, 0, len(xs) - 1), x => "'" x "'"), ", ") ", and '" last(xs) "'")
+@macro restriction_import_list(xs) (if len(xs) < 2 then { value xs; map (x) "'" x "'"; join "" } else if len(xs) == 2 then { value xs; map (x) "'" x "'"; join " and " } else {
+  value result: len(xs) - 1
+  value slice(xs, 0, result)
+  map (x) "'" x "'"
+  join ", "
+} ", and '" last(xs) "'")
 @macro restriction_import_plural(xs) (if len(xs) == 1 then "is" else "are")
 @macro restriction_import_custom(entry) (if entry.message != null && entry.message != "" then " " entry.message else "")
-@macro restriction_import_glob(path, glob, sensitive) (!starts_with(glob, "#") && re_test(path, (if sensitive then "" else "(?i)") (if contains(trim_start(glob, "!"), "/") then "^" else "(?:^|/)") replace(replace(replace(re_escape(replace(replace(trim_start(glob, "!/"), "\\#", "#"), "\\!", "!")), "\\*\\*/", "(?:.*/)?"), "\\*", "[^/]*"), "\\?", "[^/]") "(?:/|$)"))
-@macro restriction_import_group(path, entry) find_last(default(entry.group, []), import_glob_pattern => @restriction_import_glob(path, import_glob_pattern, entry.caseSensitive))
-@macro restriction_import_group_blocked(path, entry) ((@restriction_import_group(path, entry)) != null && !starts_with(@restriction_import_group(path, entry), "!"))
-@macro restriction_import_pattern_matches(entry) (if entry.regex != null then js_re_test(info.source, entry.regex, if entry.caseSensitive then "u" else "iu") else @restriction_import_group_blocked(info.source, entry) || any(info.parents, p => @restriction_import_group_blocked(p, entry)))
-fn restriction_import_parent(path) = join(slice(split(path, "/"), 0, len(split(path, "/")) - 1), "/")
-fn restriction_import_parents(path) = if contains(path, "/") && restriction_import_parent(path) != "" then [restriction_import_parent(path)] restriction_import_parents(restriction_import_parent(path)) else []
+@macro restriction_import_glob(path, glob, sensitive) (!starts_with(glob, "#") && {
+  value result: (if sensitive then "" else "(?i)") (if { value glob; trim_start "!"; contains "/" } then "^" else "(?:^|/)") {
+  value glob
+  trim_start "!/"
+  replace "\\#" "#"
+  replace "\\!" "!"
+  re_escape
+  replace "\\*\\*/" "(?:.*/)?"
+  replace "\\*" "[^/]*"
+  replace "\\?" "[^/]"
+} "(?:/|$)"
+  value re_test(path, result)
+})
+@macro restriction_import_group(path, entry) ({
+  value entry.group.nonempty ?? []
+  find_last (import_glob_pattern) @restriction_import_glob(path, import_glob_pattern, entry.caseSensitive)
+})
+@macro restriction_import_group_blocked(path, entry) ((@restriction_import_group(path, entry)) != null && !{ value @restriction_import_group(path, entry); starts_with "!" })
+@macro restriction_import_pattern_matches(entry) (if entry.regex != null then { value result: if entry.caseSensitive then "u" else "iu"; value js_re_test(info.source, entry.regex, result) } else @restriction_import_group_blocked(info.source, entry) || any(info.parents, p => @restriction_import_group_blocked(p, entry)))
+fn restriction_import_parent(path) = {
+  value path
+  split: split "/"
+  value result: { value path; split "/"; len } - 1
+  value slice(split, 0, result)
+  join "/"
+}
+fn restriction_import_parents(path) = if contains(path, "/") && restriction_import_parent(path) != "" then [restriction_import_parent(path)] { value path; restriction_import_parent; restriction_import_parents } else []
 fn restriction_import_source(value) = if type_of(value) == "str" then trim(value) else null
 in ts_import_specifier, ts_export_specifier let restriction_import_all_members_type kind == "type" && (previous == null || previous.restriction_import_all_members_type == true)
 in ts_call let restriction_import_argument first([] argument.static_name)
@@ -46,7 +72,12 @@ in ts_import {
   let restriction_import_name ""
   let restriction_import_item false
   let restriction_import_offset offset
-  let restriction_import_star_offset offset + byte_len(first(split(text, "*")))
+  let restriction_import_star_offset offset + {
+    value text
+    split "*"
+    first
+    byte_len
+  }
 }
 in ts_export {
   let restriction_import_source restriction_import_source(from.static_name)
@@ -55,7 +86,12 @@ in ts_export {
   let restriction_import_star count(specifier) == 0 && declaration == null
   let restriction_import_name if restriction_import_star then "*" else ""
   let restriction_import_item restriction_import_star
-  let restriction_import_offset if restriction_import_star then offset + byte_len(first(split(text, "*"))) else offset
+  let restriction_import_offset if restriction_import_star then offset + {
+    value text
+    split "*"
+    first
+    byte_len
+  } else offset
 }
 in ts_import_equals {
   let restriction_import_source restriction_import_source(value.restriction_import_argument)
@@ -65,7 +101,7 @@ in ts_import_equals {
   let restriction_import_item false
   let restriction_import_offset offset
 }
-in ts_import_specifier let restriction_import_name if type_of(imported.static_name) == "str" then imported.static_name else default(imported, local)
+in ts_import_specifier let restriction_import_name if type_of(imported.static_name) == "str" then imported.static_name else imported.nonempty ?? local
 in ts_export_specifier let restriction_import_name if type_of(local.static_name) == "str" then local.static_name else local
 in ts_import_specifier, ts_export_specifier {
   let restriction_import_source parent.restriction_import_source
@@ -181,31 +217,31 @@ in ts_number, ts_bigint rule no-magic-numbers {
   warn if info.declaration then "Number constants declarations must use 'const'." else "No magic number: {if typescript_specific then restriction_numeric_ts_raw else restriction_numeric_raw}."
 }
 
-in ts_import_specifier let restriction_declaration_local default(local, imported)
+in ts_import_specifier let restriction_declaration_local local.nonempty ?? imported
 in ts_export_specifier let restriction_declaration_local local
 in ts_import {
   let restriction_declaration_export false
   let restriction_declaration_category if count(specifier) > 0 then "named" else if namespace != null then "namespace" else if default_import != null then "default" else "side"
   let restriction_declaration_count count(specifier) + (if namespace != null then 1 else 0) + (if default_import != null then 1 else 0)
   let restriction_declaration_syntax if restriction_declaration_count == 0 then "none" else if namespace != null && default_import == null then "all" else if restriction_declaration_count == 1 then "single" else "multiple"
-  let restriction_declaration_local default(default_import, default(namespace, default(first([] specifier.restriction_declaration_local), "")))
+  let restriction_declaration_local default_import.nonempty ?? namespace.nonempty ?? { value [] specifier.restriction_declaration_local; first; nonempty } ?? ""
 }
 in ts_export {
   let restriction_declaration_export true
   let restriction_declaration_category if count(specifier) > 0 then "named" else if namespace != null then "namespace" else "all"
   let restriction_declaration_count count(specifier) + (if namespace != null then 1 else 0)
   let restriction_declaration_syntax if restriction_declaration_count == 0 then "none" else if namespace != null then "all" else if restriction_declaration_count == 1 then "single" else "multiple"
-  let restriction_declaration_local default(namespace, default(first([] specifier.restriction_declaration_local), ""))
+  let restriction_declaration_local namespace.nonempty ?? { value [] specifier.restriction_declaration_local; first; nonempty } ?? ""
 }
 in ts_import, ts_export let restriction_declaration_entry if from == null then null else {
   node: node,
-  offset: offset, end: end_offset, module: default(from.static_name, ""),
+  offset: offset, end: end_offset, module: from.static_name.nonempty ?? "",
   export: restriction_declaration_export, type_only: kind == "type",
   category: restriction_declaration_category, syntax: restriction_declaration_syntax,
   local: restriction_declaration_local
 }
 # Declaration spans contain their literal keyword; skip only impossible subtrees.
-in ts_node let restriction_declarations if !contains(text, "import") && !contains(text, "export") then [] else [] restriction_declaration_entry reduce([] children.restriction_declarations, [], (entries, child) => entries child)
+in ts_node let restriction_declarations if !contains(text, "import") && !contains(text, "export") then [] else [] restriction_declaration_entry { value [] children.restriction_declarations; fold ([]) (entries, child) entries child }
 in ts_import let sort_imports_rank if restriction_declaration_syntax == "none" then 0 else if restriction_declaration_syntax == "all" then 1 else if restriction_declaration_syntax == "multiple" then 2 else 3
 @macro restriction_sort_import_options {
   option ignoreCase boolean = false "ignore letter case"
@@ -213,8 +249,12 @@ in ts_import let sort_imports_rank if restriction_declaration_syntax == "none" t
 }
 in ts_import rule sort-imports:declarations {
   @restriction_sort_import_options
-  let preceding reduce(filter(ts_program.restriction_declarations, entry => !entry.export && entry.offset < offset), null, (nearest, entry) => if nearest == null || entry.offset > nearest.offset then entry else nearest)
-  let separated preceding != null && re_count(byte_slice(source, preceding.end, offset), /\n/) > 1
+  let preceding {
+    value ts_program.restriction_declarations
+    filter (entry) !entry.export && entry.offset < offset
+    fold null (nearest, entry) if nearest == null || entry.offset > nearest.offset then entry else nearest
+  }
+  let separated preceding != null && { value source; byte_slice preceding.end offset; re_count /\n/ } > 1
   when restriction_declaration_entry != null && preceding != null && !(allowSeparatedGroups && separated)
   when restriction_declaration_syntax != preceding.syntax && sort_imports_rank < preceding.node.sort_imports_rank || restriction_declaration_syntax == preceding.syntax && compare_text(restriction_declaration_local, preceding.local, false, ignoreCase) < 0
   warn if restriction_declaration_syntax != preceding.syntax then "Expected '{restriction_declaration_syntax}' syntax before '{preceding.syntax}' syntax." else "Imports should be sorted alphabetically."
@@ -224,7 +264,7 @@ in ts_import_specifier rule sort-imports:members {
   let unsorted previous != null && compare_text(previous.restriction_declaration_local, restriction_declaration_local, false, ignoreCase) > 0
   let encountered previous.encountered == true || unsorted
   when parent is ts_import && parent.restriction_declaration_entry != null && unsorted && previous.encountered != true
-  report at default(local.node, imported.node)
+  report at local.node ?? imported.node
   warn "Member '{restriction_declaration_local}' of the import declaration should be sorted alphabetically."
 }
 fn restriction_import_mergeable(a, b) = !(a.type_only && b.type_only && (a.category == "default" && b.category == "named" || a.category == "named" && b.category == "default")) && !(a.category == "all" && contains(["named", "namespace", "default"], b.category) || b.category == "all" && contains(["named", "namespace", "default"], a.category) || a.category == "namespace" && b.category == "named" || a.category == "named" && b.category == "namespace")
@@ -335,7 +375,7 @@ in ts_call rule no-alert {
 }
 in ts_labeled let restriction_target body.node
 in ts_labeled let restriction_label_entry {name: label, target: restriction_target}
-in ts_statement, ts_case let restriction_label_targets default(parent.restriction_label_targets, []) (if is ts_labeled then [restriction_label_entry] else [])
+in ts_statement, ts_case let restriction_label_targets (parent.restriction_label_targets.nonempty ?? []) (if is ts_labeled then [restriction_label_entry] else [])
 in ts_break, ts_continue let restriction_target (find_last(restriction_label_targets, target => target.name == label)).target
 in ts_labeled, ts_break, ts_continue let no_labels_checked true
 in ts_labeled rule no-labels {
@@ -353,7 +393,7 @@ in ts_continue rule no-labels:continue {
   warn "Unexpected label in continue statement."
 }
 
-@macro restriction_function_name (upper(slice(default(function_name, "function"), 0, 1)) slice(default(function_name, "function"), 1))
+@macro restriction_function_name ({ value function_name.nonempty ?? "function"; slice 0 1; upper } { value function_name.nonempty ?? "function"; slice 1 })
 group restriction_flow_control ts_conditional, ts_logical, ts_for, ts_for_in, ts_for_of, ts_if, ts_while, ts_do_while, ts_assignment_pattern
 in ts_parameter let restriction_parameter_branch init != null
 in ts_try let restriction_catch_branch handler != null
@@ -363,7 +403,7 @@ in ts_case let restriction_case_branch test != null
 in ts_block let restriction_local_statements count(body)
 in ts_function_like, ts_static_block let max_nested_callbacks_counted restriction_call_argument
 in ts_class let max_classes_counted true
-fn restriction_statement_total(local_count, child_totals) = default(local_count, 0) + sum(child_totals)
+fn restriction_statement_total(local_count, child_totals) = (local_count.nonempty ?? 0) + sum(child_totals)
 fn restriction_branch_total(branch, extra, child_totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(child_totals)
 in ts_node {
   let restriction_metric_boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
@@ -374,24 +414,24 @@ in ts_node {
   let restriction_classic_contribution if restriction_metric_boundary then 0 else restriction_branch_total(restriction_flow_branch, restriction_case_branch, children.restriction_classic_contribution)
   let restriction_subtree_modified restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
   let restriction_modified_contribution if restriction_metric_boundary then 0 else restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
-  let restriction_function_depth default(parent.restriction_function_depth, 0) + (if parent is (ts_function_like, ts_static_block) then 1 else 0)
-  let restriction_ordinary_function_depth default(parent.restriction_ordinary_function_depth, 0) + (if parent is ts_function_like then 1 else 0)
+  let restriction_function_depth (parent.restriction_function_depth.nonempty ?? 0) + (if parent is (ts_function_like, ts_static_block) then 1 else 0)
+  let restriction_ordinary_function_depth (parent.restriction_ordinary_function_depth.nonempty ?? 0) + (if parent is ts_function_like then 1 else 0)
   let restriction_top_functions (if is ts_function_like && restriction_ordinary_function_depth == 0 then 1 else 0) + sum(children.restriction_top_functions)
   let restriction_call_argument if parent is ts_parenthesized then parent.restriction_call_argument else is ts_call.argument
   let restriction_constructor_argument if parent is ts_parenthesized then parent.restriction_constructor_argument else is (ts_call.argument, ts_new.argument)
   let restriction_iife if parent is ts_parenthesized then parent.restriction_iife else is ts_call.callee
-  let restriction_callbacks default(parent.restriction_callbacks, 0) + (if max_nested_callbacks_counted == true then 1 else 0)
+  let restriction_callbacks (parent.restriction_callbacks.nonempty ?? 0) + (if max_nested_callbacks_counted == true then 1 else 0)
   let restriction_classes (if max_classes_counted == true then 1 else 0) + sum(children.restriction_classes)
 }
 group restriction_parameter_function ts_function, ts_arrow, ts_method, ts_function_type
 in ts_parameter {
   let restriction_this_parameter name == "this"
   let restriction_void_this_parameter name == "this" && type == "void"
-  let max_params_counted !restriction_void_this_parameter || node != first([] parent.parameter.node)
+  let max_params_counted !restriction_void_this_parameter || node != first(parent.parameter.nodes)
 }
 in restriction_parameter_function rule max-params {
   option max int(0..) = 3 "maximum parameters"
-  let amount count(filter([] parameter.node, p => default(p.max_params_counted, true)))
+  let amount { value parameter.nodes; filter (p) p.max_params_counted.nonempty ?? true; count }
   when amount > max
   report at if is ts_function_type then offset else function_warning_site(node)
   warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {max}."
@@ -421,7 +461,7 @@ in ts_static_block, ts_class_property.init rule complexity:implicit {
   warn "{if is ts_static_block then 'Class static block' else 'Class field initializer'} has a complexity of {amount}. Maximum allowed is {max}."
 }
 group restriction_depth_control ts_if, ts_switch, ts_try, ts_do_while, ts_while, ts_with, ts_for, ts_for_in, ts_for_of
-in ts_statement, ts_arrow, ts_method, ts_static_block, ts_case let restriction_nesting if is (ts_function_like, ts_static_block) then 0 else default(parent.restriction_nesting, 0) + (if is restriction_depth_control && !(is ts_if && is ts_if.alternate) then 1 else 0)
+in ts_statement, ts_arrow, ts_method, ts_static_block, ts_case let restriction_nesting if is (ts_function_like, ts_static_block) then 0 else (parent.restriction_nesting.nonempty ?? 0) + (if is restriction_depth_control && !(is ts_if && is ts_if.alternate) then 1 else 0)
 in restriction_depth_control rule max-depth {
   option max int(0..) = 4 "maximum control-flow nesting"
   when !(is ts_if && is ts_if.alternate)
@@ -440,15 +480,34 @@ in ts_program rule max-classes-per-file {
   option max int(1..) = 1 "maximum classes"
   let amount restriction_classes
   when amount > max
-  report at default(first([] body.offset), 0)
+  report at { value [] body.offset; first; nonempty } ?? 0
   warn "File has too many classes ({amount}). Maximum allowed is {max}."
 }
-fn restriction_line_previous(items, item) = last(slice(items, index_of(items, item) - 1, index_of(items, item)))
-fn restriction_line_comment_gap(source, items, item, start, end) = byte_slice(source, max(start, default(restriction_line_previous(items, item).end_offset, start)), max(start, min(end, item.offset)))
+fn restriction_line_previous(items, item) = {
+  value result: index_of(items, item) - 1
+  value items
+  index_of: index_of item
+  value slice(items, result, index_of)
+  last
+}
+fn restriction_line_comment_gap(source, items, item, start, end) = {
+  value default: { value restriction_line_previous(items, item).end_offset; nonempty } ?? start
+  value max: max(start, default)
+  value end
+  min: min item.offset
+  value max_2: max(start, min)
+  value byte_slice(source, max, max_2)
+}
 in ts_line {
   let restriction_line_comments overlapping(ts_comment)
   let restriction_line_blank trim(text) == ""
-  let restriction_line_comment count(restriction_line_comments) > 0 && all(restriction_line_comments, item => trim(restriction_line_comment_gap(source, restriction_line_comments, item, offset, end_offset)) == "") && trim(byte_slice(source, min(end_offset, max(offset, last(restriction_line_comments).end_offset)), end_offset)) == ""
+  let restriction_line_comment count(restriction_line_comments) > 0 && all(restriction_line_comments, item => { value source; restriction_line_comment_gap restriction_line_comments item offset end_offset; trim } == "") && {
+    value end_offset_2: last(restriction_line_comments).end_offset
+    value max: max(offset, end_offset_2)
+    value min: min(end_offset, max)
+    value byte_slice(source, min, end_offset)
+    trim
+  } == ""
 }
 in ts_program, ts_function_like let restriction_line_rows overlapping(ts_line)
 in ts_program rule max-lines {
@@ -458,7 +517,7 @@ in ts_program rule max-lines {
   let lines filter(restriction_line_rows, l => !(skipComments && l.restriction_line_comment || skipBlankLines && l.restriction_line_blank))
   let amount if source == "" && !skipBlankLines then 1 else len(lines)
   when amount > max
-  report at default(first(slice(lines, max)).offset, offset)
+  report at { value { value lines; slice max; first }.offset; nonempty } ?? offset
   warn "File has too many lines ({amount}). Maximum allowed is {max}."
 }
 in ts_function_like let max_lines_per_function_checked !restriction_iife
@@ -479,19 +538,24 @@ in ts_program {
   let restriction_comment_line_catalog overlapping(ts_line)
 }
 in ts_comment {
-  let restriction_comment_body slice(text, 2, if is ts_block_comment then len(text) - 2 else len(text))
+  let restriction_comment_body { value result: if is ts_block_comment then len(text) - 2 else len(text); value slice(text, 2, result) }
   let restriction_comment_clean replace(restriction_comment_body, "*", "")
   let restriction_comment_lowercase re_test(restriction_comment_clean, /^\s*\p{Lowercase}/)
   let restriction_comment_uppercase re_test(restriction_comment_clean, /^\s*\p{Uppercase}/)
-  let restriction_comment_prefix byte_slice(source, position(offset).js_line_start, offset)
-  let restriction_comment_line_end first(slice(ts_program.restriction_comment_line_catalog, position(end_offset).js_line - 1, position(end_offset).js_line)).end_offset
+  let restriction_comment_prefix { value js_line_start: position(offset).js_line_start; value byte_slice(source, js_line_start, offset) }
+  let restriction_comment_line_end {
+    value result: position(end_offset).js_line - 1
+    value js_line: position(end_offset).js_line
+    value slice(ts_program.restriction_comment_line_catalog, result, js_line)
+    first
+  }.end_offset
   let restriction_comment_suffix byte_slice(source, end_offset, restriction_comment_line_end)
   let restriction_comment_preamble trim(restriction_comment_prefix) != ""
   let restriction_comment_postamble trim(restriction_comment_suffix) != ""
   let restriction_comment_empty_jsx parent is ts_jsx_expression && parent.expression == null && (!restriction_comment_preamble || trim(restriction_comment_prefix) == "{{") && (!restriction_comment_postamble || trim(restriction_comment_suffix) == "}}")
   let restriction_comment_index index_of(ts_program.restriction_comment_catalog, node)
-  let restriction_comment_previous last(slice(ts_program.restriction_comment_catalog, restriction_comment_index - 1, restriction_comment_index))
-  let restriction_comment_consecutive restriction_comment_previous != null && trim(byte_slice(source, restriction_comment_previous.end_offset, offset)) == ""
+  let restriction_comment_previous { value ts_program.restriction_comment_catalog; slice (restriction_comment_index - 1) restriction_comment_index; last }
+  let restriction_comment_consecutive restriction_comment_previous != null && { value source; byte_slice restriction_comment_previous.end_offset offset; trim } == ""
 }
 in ts_comment rule no-inline-comments {
   option ignorePattern regex = "" "comments to ignore"
@@ -502,13 +566,16 @@ in ts_comment rule no-warning-comments {
   option terms string[] = ["todo", "fixme", "xxx"] "warning terms"
   option location "start" | "anywhere" = "start" "where warning terms may occur"
   option decoration string(1..1)[] = [] "characters ignored before a starting warning"
-  let body re_replace(re_replace(text, /^\/[\/*]/, ""), /\*\/$/, "")
-  let compact re_replace(trim(body), /\s+/, " ")
-  let short trim(default(re_find(compact, /^.{0,40}(?:\s|$)/), ""))
+  let body { value text; re_replace /^\/[\/*]/ ""; re_replace /\*\/$/ "" }
+  let compact { value body; trim; re_replace /\s+/ " " }
+  let short { value { value compact; re_find /^.{0,40}(?:\s|$)/; nonempty } ?? ""; trim }
   let display short (if len(compact) > len(short) then "..." else "")
   when !(@restriction_directive(body) && re_test(body, /\bno-warning-comments\b/))
   @each term in terms
-  when re_test(body, "(?i)" (if location == "start" then "^[\\s" re_escape(join(decoration, "")) "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else ""))
+  when {
+    value result: "(?i)" (if location == "start" then "^[\\s" { value decoration; join ""; re_escape } "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else "")
+    value re_test(body, result)
+  }
   warn "Unexpected '{term}' comment: '{display}'."
 }
 in ts_comment let capitalized_comments_checked true
@@ -534,7 +601,7 @@ in ts_property, ts_pattern_property {
   let restriction_import_attribute_group parent.restriction_import_options == true && contains(["with", "assert"], static_name)
   let restriction_name_pattern is ts_pattern_property || parent.write_site != null
   let restriction_name_alias restriction_name_pattern && value != null && (value not ts_assignment_pattern || value.left != null)
-  let restriction_name_same value != null && key == default(value.left, value)
+  let restriction_name_same value != null && key == (value.left.nonempty ?? value)
 }
 in ts_export_specifier {
   let restriction_name_reexport parent.from != null
@@ -552,7 +619,7 @@ in ts_identifier, ts_private_name {
   let restriction_name_assignment is ts_member.property && parent.write_site != null && parent.restriction_name_mutation
   let restriction_name_renamed is ts_import_specifier.imported && parent.local != null || is ts_export_specifier.local && parent.restriction_name_export_alias && parent.restriction_name_reexport
   let restriction_name_property is ts_node.key && (if restriction_name_pattern then !restriction_name_alias || restriction_name_same else parent is ts_property) || restriction_name_assignment
-  let restriction_name_length if parent is (ts_declarator, ts_parameter) then is (ts_declarator.name, ts_parameter.name) else if parent is ts_assignment_pattern then is ts_assignment_pattern.left else if restriction_name_pattern then (if is ts_node.key then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then is ts_property.key else if parent is ts_import_specifier then is ts_import_specifier.local && default(parent.imported.static_name, parent.imported) != restriction_identifier_name else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then is ts_try.parameter else if parent is ts_member then restriction_name_assignment else false
+  let restriction_name_length if parent is (ts_declarator, ts_parameter) then is (ts_declarator.name, ts_parameter.name) else if parent is ts_assignment_pattern then is ts_assignment_pattern.left else if restriction_name_pattern then (if is ts_node.key then !restriction_name_alias || restriction_name_same else !restriction_name_same) else if parent is ts_property then is ts_property.key else if parent is ts_import_specifier then is ts_import_specifier.local && (parent.imported.static_name.nonempty ?? parent.imported) != restriction_identifier_name else if parent is ts_import then is (ts_import.default_import, ts_import.namespace) else if parent is (ts_function, ts_arrow, ts_method, ts_class_property, ts_rest, ts_array_pattern) then true else if parent is ts_class then parent.restriction_name_declaration else if parent is ts_try then is ts_try.parameter else if parent is ts_member then restriction_name_assignment else false
 }
 in ts_identifier, ts_private_name rule id-denylist {
   option names string[] = [] "restricted identifiers"
@@ -627,7 +694,11 @@ schema restriction_property {
   allowProperties?: string[]
   message?: string
 }
-fn restriction_property_match(object, name, options) = default(find_last(options, o => o.object != null && o.object == object && (o.property == name || o.property == null) && !contains(default(o.allowProperties, []), name)), find_last(options, o => o.object == null && o.property == name && !contains(default(o.allowObjects, []), object)))
+fn restriction_property_match(object, name, options) = {
+  value options
+  find_last (o) o.object != null && o.object == object && (o.property == name || o.property == null) && !{ value o.allowProperties.nonempty ?? []; contains name }
+  nonempty
+} ?? find_last(options, o => o.object == null && o.property == name && !{ value o.allowObjects.nonempty ?? []; contains object })
 in ts_identifier let restriction_object_name text
 in ts_parenthesized let restriction_object_name expression.restriction_object_name
 in ts_declarator, ts_parameter let restriction_pattern_object init.restriction_object_name
@@ -660,7 +731,7 @@ in ts_pattern_property, ts_property rule no-restricted-properties:patterns {
 }
 fn restriction_export_forbidden(name, names, pattern) = contains(names, name) || name != "default" && pattern != "" && js_re_test(name, pattern, "u")
 in ts_export let restriction_export_form if kind == "default" then "direct" else null
-in ts_export_specifier let restriction_export_form if parent.from == null then "named" else if default(local.static_name, local) == "default" then "defaultFrom" else "namedFrom"
+in ts_export_specifier let restriction_export_form if parent.from == null then "named" else if (local.static_name.nonempty ?? local) == "default" then "defaultFrom" else "namedFrom"
 in ts_identifier, ts_string let restriction_export_form if is ts_export.namespace then "namespaceFrom" else null
 in ts_export, ts_export_specifier, ts_identifier, ts_string let no_restricted_default_export_checked false
 in ts_variable_declaration let restriction_exported_declaration parent is ts_export && parent.kind != "default"
@@ -682,7 +753,7 @@ in ts_export_specifier rule no-restricted-exports:names {
   let export_name if exported == null then (if local is ts_string then local.static_name else local) else (if exported is ts_string then exported.static_name else exported)
   let restricted_name restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
   when restricted_name || export_name == "default" && no_restricted_default_export_checked
-  report at default(exported.node, local.node)
+  report at exported.node ?? local.node
   warn if restricted_name then "'{export_name}' is restricted from being used as an exported name." else "Exporting 'default' is restricted."
 }
 in ts_export.namespace rule no-restricted-exports:namespace {

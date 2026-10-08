@@ -9,11 +9,17 @@ fn promise_boolean_parent(n) =
 fn promise_boolean_left_parent(n) =
   if n.parent is ts_logical && (n.parent.operator == "??" || n.parent.left.node != n) then null
   else promise_boolean_parent(n)
-fn promise_boolean_use(n) = any(walk(n, current => promise_boolean_parent(current)), current =>
-  current.parent is (ts_if, ts_while, ts_do_while, ts_for, ts_conditional) && current.parent.test.node == current
-  || current.parent is ts_unary && current.parent.operator == "!" && current.parent.argument.node == current)
-  || any(walk(n, current => promise_boolean_left_parent(current)), current =>
-    current.parent is ts_logical && current.parent.operator != "??" && current.parent.left.node == current)
+fn promise_boolean_use(n) = {
+  value n
+  walk (current) promise_boolean_parent(current)
+  any (current) current.parent is (ts_if, ts_while, ts_do_while, ts_for, ts_conditional) && current.parent.test.node == current
+  || current.parent is ts_unary && current.parent.operator == "!" && current.parent.argument.node == current
+}
+  || {
+    value n
+    walk (current) promise_boolean_left_parent(current)
+    any (current) current.parent is ts_logical && current.parent.operator != "??" && current.parent.left.node == current
+  }
 
 in ts_node rule no-misused-promises:conditionals {
   option flagUnions "none" | "strict" | "all" = "none" "Which mixed promise unions to flag"
@@ -37,15 +43,15 @@ fn promise_void_transfer(contract) = contract.complete
   && any(contract.target, result => result.kind == "void")
   && !any(contract.target, result => result.thenable)
 fn promise_contract_site(n) = if n is (ts_property, ts_method, ts_method_signature, ts_class_property, ts_property_signature) then n else n.parent
-fn promise_property_source(n) = if n is ts_property then default(n.value.node, n.key.node) else n
+fn promise_property_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
 fn promise_callable_site(n) = if n is (ts_method, ts_method_signature, ts_class_property, ts_property_signature) then n.key.node
   else if n is (ts_arrow, ts_function) then function_warning_site(n)
   else unparenthesised_node(n)
 in ts_node let promise_builtin_instance builtin_type("Promise")
 fn promise_finally_member(n) = n is (ts_member, ts_index)
-  && default(n.static_name, n.index.static_string) == "finally"
+  && (n.static_name.nonempty ?? n.index.static_string) == "finally"
   && n.object.promise_builtin_instance
-in ts_call let promise_finally_callback promise_finally_member(unparenthesised_node(callee.node))
+in ts_call let promise_finally_callback { value callee.node; unparenthesised_node; promise_finally_member }
 
 in ts_call.argument, ts_new.argument, ts_template.expression rule no-misused-promises:void-arguments {
   when parent not ts_call || node.index != 0 || !parent.promise_finally_callback
@@ -76,7 +82,7 @@ in ts_property, ts_method, ts_class_property.init, ts_assignment.right rule no-m
   when parent not ts_assignment || parent.left is (ts_member, ts_index)
   when not ts_method || parent is ts_object
   let promise_source promise_property_source(node)
-  each promise_contract in callable_contracts(promise_contract_site(node), promise_source)
+  each promise_contract in { value node; promise_contract_site; callable_contracts promise_source }
   when promise_contract.origin != "heritage"
   when promise_void_transfer(promise_contract)
   report at promise_callable_site(promise_source)
@@ -100,7 +106,7 @@ in ts_jsx_expression.expression rule no-misused-promises:void-attributes {
 
 in ts_method, ts_method_signature, ts_class_property, ts_property_signature rule no-misused-promises:void-inherited-methods {
   when !is_static
-  each promise_contract in callable_contracts(promise_contract_site(node), node)
+  each promise_contract in { value node; promise_contract_site; callable_contracts node }
   when promise_contract.origin == "heritage"
   when promise_void_transfer(promise_contract)
   report at promise_callable_site(node)

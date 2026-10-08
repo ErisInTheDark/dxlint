@@ -181,7 +181,6 @@ pub enum VExpr {
     FieldCount(u16),
     Attr(u16),
     ParentAttr(u16),
-    Default(Box<VExpr>, Box<VExpr>),
     Not(Box<VExpr>),
     Neg(Box<VExpr>),
     If(Box<VExpr>, Box<VExpr>, Box<VExpr>),
@@ -203,6 +202,7 @@ pub enum VExpr {
     IsValue(Box<VExpr>, Box<[u32]>),
     /// The first value when it is a node, else the second.
     Coalesce(Box<VExpr>, Box<VExpr>),
+    Nullish(Box<VExpr>, Box<VExpr>),
     /// `contains(haystack, needle)` on text, or membership in constants.
     Contains(Box<VExpr>, Box<VExpr>),
     InList(Box<[V]>, Box<VExpr>),
@@ -341,12 +341,6 @@ fn scalar<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound: 
 
 /// `e` as a list the VM can walk.
 fn seq<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound: u16) -> Result<Seq, &'a CExpr> {
-    // `[] x`: the items of `x`, as a list.
-    if let CExpr::Binary(BinOp::Join, a, b) = e {
-        if matches!(&**a, CExpr::Const(Value::List(items)) if items.is_empty()) {
-            return seq(b, g, args, depth, bound);
-        }
-    }
     match lower_in(e, g, args, depth, bound)? {
         Lowered::Seq(s) => Ok(s),
         Lowered::V(VExpr::Field(label)) => Ok(Seq::Nodes { children: false, label, item: Box::new(VExpr::Text) }),
@@ -460,6 +454,10 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
                 Lowered::Unbound => return Err(e),
             });
         }
+        // `[] x` and `.nodes` remain list views, including pipeline seeds.
+        CExpr::Binary(BinOp::Join, a, b) if matches!(&**a, CExpr::Const(Value::List(items)) if items.is_empty()) => {
+            return Ok(Lowered::Seq(seq(b, g, args, depth, bound)?));
+        }
         CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if null_test(a, b).is_some() => {
             let test = VExpr::IsNull(boxed(null_test(a, b).expect("matched"))?);
             if *op == BinOp::Eq { test } else { VExpr::Not(Box::new(test)) }
@@ -504,7 +502,6 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
             ("count", [list]) => VExpr::Count(boxed_seq(list)?),
             ("first", [list]) => VExpr::First(boxed_seq(list)?),
             ("last", [list]) => VExpr::Last(boxed_seq(list)?),
-            ("default", [a, b]) => VExpr::Default(boxed(a)?, boxed(b)?),
             ("sum", [list]) => VExpr::Sum(boxed_seq(list)?),
             ("nonempty", [value]) => VExpr::NonEmpty(boxed(value)?),
             ("take", [list, n]) => return Ok(Lowered::Seq(Seq::Take(boxed_seq(list)?, boxed(n)?))),
@@ -543,8 +540,10 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         CExpr::FieldAttr(label, a) => VExpr::OnField(*label, Box::new(VExpr::Attr(*a))),
         CExpr::ParentField(label) => VExpr::OnParent(Box::new(VExpr::Field(*label))),
         CExpr::Coalesce(a, b) => VExpr::Coalesce(boxed(a)?, boxed(b)?),
-        // A rule's `let` on its own node, outside every lambda.
-        CExpr::Local(i) if args.is_empty() && depth < INLINE_DEPTH => {
+        CExpr::Nullish(a, b) => VExpr::Nullish(boxed(a)?, boxed(b)?),
+        CExpr::NonEmpty(value) => VExpr::NonEmpty(boxed(value)?),
+        // A rule's `let` on its own node; lambdas don't change the node.
+        CExpr::Local(i) if depth < INLINE_DEPTH => {
             return lower_in(g.locals.get(*i as usize).ok_or(e)?, g, &[], depth + 1, bound);
         }
         CExpr::UserCall(i, call_args) if depth < INLINE_DEPTH => {
@@ -879,11 +878,6 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
             Some(p) => h.attr(p, *a)?,
             None => V::Null,
         },
-        VExpr::Default(a, b) => match eval!(node, a)? {
-            v @ (V::Num(_) | V::Bool(_)) => v,
-            v if v.truthy(tree) => v,
-            _ => eval!(node, b)?,
-        },
         VExpr::Not(inner) => V::Bool(!eval!(node, inner)?.truthy(tree)),
         VExpr::Neg(inner) => V::Num(-eval!(node, inner)?.num(tree, source)?),
         VExpr::If(c, a, b) => if eval!(node, c)?.truthy(tree) { eval!(node, a)? } else { eval!(node, b)? },
@@ -953,6 +947,10 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         VExpr::Coalesce(a, b) => match eval!(node, a)? {
             v @ V::Node(_) => v,
             _ => eval!(node, b)?,
+        },
+        VExpr::Nullish(a, b) => match eval!(node, a)? {
+            V::Null => eval!(node, b)?,
+            value => value,
         },
         VExpr::InList(items, needle) => {
             let needle = eval!(node, needle)?;
@@ -1033,7 +1031,6 @@ mod tests {
             CExpr::Binary(BinOp::Add, num(1.0), num(2.0)),
             CExpr::If(Box::new(CExpr::Attr(0)), num(1.0), Box::new(CExpr::ParentAttr(1))),
             call("sum", vec![CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2)))]),
-            call("default", vec![CExpr::Attr(0), CExpr::Const(Value::Num(0.0))]),
             CExpr::Binary(BinOp::Ne, Box::new(CExpr::Field(3)), Box::new(CExpr::Const(Value::Null))),
             CExpr::Const(Value::from("text")),
             call("starts_with", vec![CExpr::Builtin(Builtin::Text), CExpr::Const(Value::from("a"))]),
@@ -1046,24 +1043,35 @@ mod tests {
             CExpr::Each(Box::new(crate::expr::pipeline::Stage { kind, depth, arity, input: children(), args, body }))
         };
         let add = |a: u16, b: u16| CExpr::Binary(BinOp::Add, Box::new(CExpr::Param(a)), Box::new(CExpr::Param(b)));
-        let null = |x| CExpr::Binary(BinOp::Eq, Box::new(call("type_of", vec![x])), Box::new(CExpr::Const(Value::from("null"))));
         for supported in [
             call("count", vec![stage(Each::Filter, 0, 2, vec![], CExpr::Param(1))]),
             stage(Each::Fold, 0, 2, vec![CExpr::Const(Value::Num(0.0))], add(0, 1)),
             stage(Each::MaxBy, 0, 1, vec![], CExpr::Param(0)),
             call("count", vec![call("take", vec![children(), CExpr::Const(Value::Num(1.0))])]),
-            call("nonempty", vec![CExpr::Builtin(Builtin::Text)]),
+            CExpr::NonEmpty(Box::new(CExpr::Builtin(Builtin::Text))),
             // `x ?? 1`
-            CExpr::Bind(Box::new(CExpr::Attr(0)), 0, Box::new(CExpr::If(Box::new(null(CExpr::Param(0))), num(1.0), Box::new(CExpr::Param(0))))),
+            CExpr::Nullish(Box::new(CExpr::Attr(0)), num(1.0)),
             // A filtered view used inside a later lambda.
             CExpr::Bind(
                 Box::new(stage(Each::Filter, 0, 1, vec![], CExpr::Param(0))),
                 0,
                 Box::new(stage(Each::All, 1, 1, vec![], call("count", vec![CExpr::Param(0)]))),
             ),
+            CExpr::Bind(
+                Box::new(CExpr::Binary(BinOp::Join, Box::new(CExpr::Const(Value::list(vec![]))), Box::new(CExpr::Field(3)))),
+                0,
+                Box::new(call("count", vec![CExpr::Param(0)])),
+            ),
         ] {
             assert!(lower(&supported, g).is_ok(), "{supported:?}");
         }
+        let local = CExpr::Bind(num(3.0), 0, Box::new(CExpr::Param(0)));
+        let condition = CExpr::Bind(num(10.0), 0, Box::new(CExpr::Binary(
+            BinOp::Eq,
+            Box::new(CExpr::Binary(BinOp::Add, Box::new(CExpr::Param(0)), Box::new(CExpr::Local(0)))),
+            num(13.0),
+        )));
+        assert!(lower_condition(&condition, g, &[local]).is_ok(), "a rule let remains lowerable inside a binding");
         for unsupported in [
             stage(Each::SortBy, 0, 1, vec![], CExpr::Param(0)),
             CExpr::Binary(BinOp::Rem, num(1.0), num(0.0)),
@@ -1081,10 +1089,10 @@ mod tests {
         use crate::engine::tests::native_linter;
         use std::path::Path;
         let config = r#"
-            in ts_node let depth default(parent.depth, 0) + 1
+            in ts_node let depth (parent.depth ?? 0) + 1
             in ts_block let local count(body)
             in ts_node let boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
-            in ts_node let total default(local, 0) + sum(children.contribution)
+            in ts_node let total (local ?? 0) + sum(children.contribution)
             in ts_node let contribution if boundary then 0 else total
             in ts_assignment let logical contains(["&&=", "||=", "??="], operator)
             in ts_parameter let defaulted init != null
@@ -1100,22 +1108,22 @@ mod tests {
             in ts_identifier let named starts_with(text, "b") || text == "c" || parent is ts_assignment
             in ts_assignment let left_named left.named
             in ts_identifier rule named info "{named}"
-            in ts_function_like let defaulted_params count(filter([] parameter.node, p => p.defaulted == true))
-            in ts_function_like let all_named all([] parameter.node, p => p.name != null)
-            in ts_function_like let last_default default(last(map([] parameter.node, p => p.defaulted)), false)
+            in ts_function_like let defaulted_params { value parameter.nodes; filter (p) p.defaulted == true; count }
+            in ts_function_like let all_named { value parameter.nodes; all (p) p.name != null }
+            in ts_function_like let last_default { value parameter.nodes; map (p) p.defaulted; last } ?? false
             in ts_block let child_total sum(children.total)
             in ts_function_like rule params info "{defaulted_params}:{all_named}:{last_default}"
-            in ts_function_like let shared { value [] parameter.node; defaulted: filter (p) p.defaulted; value [] parameter.node; all (q) count(defaulted) == 1 }
-            in ts_function_like let staged { value [] parameter.node; filter (p, i) i > 0; map (p) p.defaulted; fold false (a, b) a || b }
-            in ts_function_like let picked { value [] parameter.node; max_by (p) p.offset; then (p) p.name ?? "none" }
-            in ts_function_like let firsts { value [] parameter.node; take 1; concat ([] parameter.node); unique; count }
-            in ts_function_like let label { value [] parameter.node; first; then (p) p.name; nonempty } ?? "anon"
+            in ts_function_like let shared { value parameter.nodes; defaulted: filter (p) p.defaulted; value parameter.nodes; all (q) count(defaulted) == 1 }
+            in ts_function_like let staged { value parameter.nodes; filter (p, i) i > 0; map (p) p.defaulted; fold false (a, b) a || b }
+            in ts_function_like let picked { value parameter.nodes; max_by (p) p.offset; then (p) p.name ?? "none" }
+            in ts_function_like let firsts { value parameter.nodes; take 1; concat parameter.nodes; unique; count }
+            in ts_function_like let label { value parameter.nodes; first; then (p) p.name; nonempty } ?? "anon"
             in ts_function_like rule stages info "{shared}:{staged}:{picked}:{firsts}:{label}"
             in ts_block rule block_total info "{child_total}:{count(children.total)}:{first(children.depth)}"
             in ts_assignment rule left info "{left_named}:{operator == '??='}:{parent.depth}"
             in ts_node rule gated {
                 let twice_total twice(total)
-                when twice_total > 2 && !boundary
+                when { value twice_total; then (t) t > 2 && !boundary }
                 when depth < 9 || logical
                 info "{twice_total}"
             }

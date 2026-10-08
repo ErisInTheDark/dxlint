@@ -33,7 +33,10 @@ define {
     option skipBlankLines boolean = false "ignore whitespace-only lines"
     option ignoreComments boolean = false "ignore comment lines"
     when !(skipBlankLines && re_test(parent.text, /^[ \t\u{00a0}\u{2000}-\u{200b}\u{3000}]*(?:\r\n|[\r\n\u{2028}\u{2029}])?\z/))
-    when !(ignoreComments && (starts_with(parent.text, "#!") || any(overlapping(core_comment), comment => comment is core_line_comment || position(comment.end_offset).js_line > position(offset).js_line)))
+    when !(ignoreComments && (starts_with(parent.text, "#!") || {
+      value overlapping(core_comment)
+      any (comment) comment is core_line_comment || position(comment.end_offset).js_line > position(offset).js_line
+    }))
     when !core_raw_space
     fix as ""
   }

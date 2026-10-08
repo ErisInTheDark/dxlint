@@ -6,8 +6,8 @@ define {
 # Every imported binding is unused, used only as a type (type positions,
 # `typeof x` in types), or used as a value.
 # A list of quoted names as eslint words it: "a", "b" and "c".
-fn word_list(xs) = if count(xs) == 1 then first(xs) else join(slice(xs, 0, -1), ', ') " and " last(xs)
-in ts_program let import_decorator_metadata compiler_options.experimentalDecorators == true && compiler_options.emitDecoratorMetadata == true && count(descendants(ts_decorator)) > 0
+fn word_list(xs) = if count(xs) == 1 then first(xs) else { value xs; slice 0 -1; join ', ' } " and " last(xs)
+in ts_program let import_decorator_metadata compiler_options.experimentalDecorators == true && compiler_options.emitDecoratorMetadata == true && { value descendants(ts_decorator); count } > 0
 in ts_identifier {
   let import_use if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
   let type_only_name if import_use == "type" then '"' text '"' else null
@@ -45,7 +45,7 @@ in ts_import_type rule consistent-type-imports:annotation {
 
 # n/no-sync: `fooSync()` inside functions (top-level code may block).
 in ts_identifier let sync_argument_name if re_test(text, /^[\w$]*Sync$/) then text else null
-in ts_call let sync_method_name first(compact([re_find(callee, /[\w$]*Sync$/)] argument.sync_argument_name))
+in ts_call let sync_method_name { value [re_find(callee, /[\w$]*Sync$/)] argument.sync_argument_name; compact; first }
 in ts_call rule no-sync {
   when sync_method_name != null && (ts_function != null || ts_arrow != null || ts_method != null)
   warn "Unexpected sync method: '{sync_method_name}'."

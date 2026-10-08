@@ -5,7 +5,11 @@ import .rs
 
 # Flat `use a::{c, b}` lists stay sorted. Repeated fields are lists.
 in .rust, braces match rs_flat_use_list /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ item:/[\w:]+/ (/,\s*/ item:/[\w:]+/)* /,?\s*\}/ {
-  rule sorted-use-lists warn "keep `use` lists sorted" fix as "use {path}{{{join(sort(item), ', ')}}}"
+  rule sorted-use-lists {
+    let sorted { value item; sort; join ", " }
+    warn "keep `use` lists sorted"
+    fix as "use {path}{{{sorted}}}"
+  }
 }
 
 # `.expect("...")` messages start lowercase. `msg` is a whole string layer,
@@ -13,7 +17,7 @@ in .rust, braces match rs_flat_use_list /\buse\s+/ path:/(?:\w+::)+/ /\{\s*/ ite
 in rs_code match rs_expect /\.expect\(\s*/ msg:rs_string /\s*\)/
 in rs_expect.msg rule expect-lowercase warn "`expect` messages start lowercase" {
   when slice(text, 1, 2) ~ /[A-Z]/
-  fix as slice(text, 0, 1) lower(slice(text, 1, 2)) slice(text, 2)
+  fix as slice(text, 0, 1) { value text; slice 1 2; lower } slice(text, 2)
 }
 
 # Type annotations are written `name: Type`. Only the separator is a

@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(diagnostics.len(), 3);
         let provenance = native_linter(r#"
             in ts_declarator, ts_property rule provenance {
-                each transfer in default(assignment_transfers, [])
+                each transfer in (assignment_transfers.nonempty ?? [])
                 when transfer.error == true
                 warn "provenance"
             }

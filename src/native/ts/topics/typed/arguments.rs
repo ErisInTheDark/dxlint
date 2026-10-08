@@ -104,7 +104,7 @@ mod tests {
     fn array_spread_provenance_is_distinct_from_explicit_any_arguments() {
         let linter = native_linter(r#"
             in ts_call rule provenance {
-                each transfer in default(argument_transfers, [])
+                each transfer in (argument_transfers.nonempty ?? [])
                 when transfer.error == true
                 warn "provenance"
             }

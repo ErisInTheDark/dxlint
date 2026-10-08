@@ -654,12 +654,7 @@ pub static FUNCTIONS: &[Function] = &[
         doc: "null for empty text, a list or a record; otherwise the value unchanged",
         min: 1,
         max: 1,
-        call: |a| Ok(match &a[0] {
-            Value::Str(text) if text.is_empty() => Value::Null,
-            Value::List(items) if items.is_empty() => Value::Null,
-            Value::Record(entries) if entries.is_empty() => Value::Null,
-            value => value.clone(),
-        }),
+        call: |a| Ok(a[0].clone().nonempty()),
     },
     Function {
         name: "take",
@@ -716,14 +711,6 @@ pub static FUNCTIONS: &[Function] = &[
             if n == 0 { return Err("window size must be positive".into()); }
             Ok(Value::list(a[0].item_slice().windows(n).map(|window| Value::list(window.to_vec())).collect()))
         },
-    },
-    Function {
-        name: "default",
-        signature: "default(value, fallback)",
-        doc: "fallback when value is null or empty",
-        min: 2,
-        max: 2,
-        call: |a| Ok(if a[0].truthy() || matches!(a[0], Value::Num(_) | Value::Bool(_)) { a[0].clone() } else { a[1].clone() }),
     },
     Function {
         name: "min",

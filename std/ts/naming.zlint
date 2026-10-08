@@ -55,47 +55,68 @@ fn naming_underscore_trim(count, policy) = (
   else if policy == "allowSingleOrDouble" then min(count, 2)
   else if contains(["require", "allow"], policy) then min(count, 1) else 0
 )
-fn naming_underscore(name, policy, trailing) = naming_underscore_count(name, policy, trailing, len(default(re_find(name, if trailing then /_+$/ else /^_+/), "")))
+fn naming_underscore(name, policy, trailing) = {
+  value { value result: if trailing then /_+$/ else /^_+/; value re_find(name, result); nonempty } ?? ""
+  count: len
+  value naming_underscore_count(name, policy, trailing, count)
+}
 fn naming_underscore_count(name, policy, trailing, count) = {
-  name: if trailing then slice(name, 0, len(name) - naming_underscore_trim(count, policy)) else slice(name, naming_underscore_trim(count, policy)),
+  name: if trailing then { value result: len(name) - naming_underscore_trim(count, policy); value slice(name, 0, result) } else { value count; naming_underscore_trim: naming_underscore_trim policy; value slice(name, naming_underscore_trim) },
   error: policy == "forbid" && count > 0 || count < naming_underscore_required(policy)
 }
-fn naming_affix(name, choices, suffix) = naming_affix_match(name, choices, suffix, first(filter(choices, p => if suffix then ends_with(name, p) else starts_with(name, p))))
+fn naming_affix(name, choices, suffix) = {
+  value choices
+  filter (p) if suffix then ends_with(name, p) else starts_with(name, p)
+  matched: first
+  value naming_affix_match(name, choices, suffix, matched)
+}
 fn naming_affix_match(name, choices, suffix, matched) = {
-  name: if suffix then slice(name, 0, len(name) - len(matched)) else slice(name, len(matched)),
+  name: if suffix then { value result: len(name) - len(matched); value slice(name, 0, result) } else { value matched; len: len; value slice(name, len) },
   error: len(choices) > 0 && matched == null
 }
 fn naming_format(name, format) = name == ""
-  || format == "camelCase" && slice(name, 0, 1) == lower(slice(name, 0, 1)) && !contains(name, "_")
-  || format == "PascalCase" && slice(name, 0, 1) == upper(slice(name, 0, 1)) && !contains(name, "_")
-  || format == "strictCamelCase" && slice(name, 0, 1) == lower(slice(name, 0, 1)) && !contains(name, "_") && !re_test(name, /\p{Lu}\p{Lu}/)
-  || format == "StrictPascalCase" && slice(name, 0, 1) == upper(slice(name, 0, 1)) && !contains(name, "_") && !re_test(name, /\p{Lu}\p{Lu}/)
+  || format == "camelCase" && slice(name, 0, 1) == { value name; slice 0 1; lower } && !contains(name, "_")
+  || format == "PascalCase" && slice(name, 0, 1) == { value name; slice 0 1; upper } && !contains(name, "_")
+  || format == "strictCamelCase" && slice(name, 0, 1) == { value name; slice 0 1; lower } && !contains(name, "_") && !re_test(name, /\p{Lu}\p{Lu}/)
+  || format == "StrictPascalCase" && slice(name, 0, 1) == { value name; slice 0 1; upper } && !contains(name, "_") && !re_test(name, /\p{Lu}\p{Lu}/)
   || format == "snake_case" && name == lower(name) && !re_test(name, /^_|_$|__/)
   || format == "UPPER_CASE" && name == upper(name) && !re_test(name, /^_|_$|__/)
-fn naming_failure(name, requires_quotes, settings) = naming_leading_failure(requires_quotes, settings, naming_underscore(name, settings.leadingUnderscore, false))
+fn naming_failure(name, requires_quotes, settings) = {
+  value name
+  step: naming_underscore settings.leadingUnderscore false
+  value naming_leading_failure(requires_quotes, settings, step)
+}
 fn naming_leading_failure(quotes, settings, step) = (
   if step.error then {kind: "leading", settings: settings}
-  else naming_trailing_failure(quotes, settings, naming_underscore(step.name, settings.trailingUnderscore, true))
+  else {
+    value step.name
+    step_2: naming_underscore settings.trailingUnderscore true
+    value naming_trailing_failure(quotes, settings, step_2)
+  }
 )
 fn naming_trailing_failure(quotes, settings, step) = (
   if step.error then {kind: "trailing", settings: settings}
-  else naming_prefix_failure(quotes, settings, naming_affix(step.name, settings.prefix, false))
+  else { value step.name; step_2: naming_affix settings.prefix false; value naming_prefix_failure(quotes, settings, step_2) }
 )
 fn naming_prefix_failure(quotes, settings, step) = (
   if step.error then {kind: "prefix", settings: settings}
-  else naming_suffix_failure(quotes, settings, naming_affix(step.name, settings.suffix, true))
+  else { value step.name; step_2: naming_affix settings.suffix true; value naming_suffix_failure(quotes, settings, step_2) }
 )
 fn naming_suffix_failure(quotes, settings, step) = (
   if step.error then {kind: "suffix", settings: settings}
-  else if type_of(settings.customRegex) == "str" && re_test(step.name, settings.customRegex) != default(settings.customMatch, true) then {kind: "custom", settings: settings}
+  else if type_of(settings.customRegex) == "str" && re_test(step.name, settings.customRegex) != (settings.customMatch.nonempty ?? true) then {kind: "custom", settings: settings}
   else if len(settings.formats) > 0 && (quotes || !any(settings.formats, format => naming_format(step.name, format))) then {kind: "format", settings: settings, processed: step.name}
   else null
 )
 fn naming_message(name, failure) = "name `" name "` " (
-  if failure.kind == "leading" || failure.kind == "trailing" then naming_underscore_message(get(failure.settings, if failure.kind == "leading" then "leadingUnderscore" else "trailingUnderscore"), failure.kind)
+  if failure.kind == "leading" || failure.kind == "trailing" then {
+    value result: if failure.kind == "leading" then "leadingUnderscore" else "trailingUnderscore"
+    value get(failure.settings, result)
+    naming_underscore_message failure.kind
+  }
   else if failure.kind == "prefix" then "must have one of the following prefixes: " join(failure.settings.prefix, ", ")
   else if failure.kind == "suffix" then "must have one of the following suffixes: " join(failure.settings.suffix, ", ")
-  else if failure.kind == "custom" then "must " (if default(failure.settings.customMatch, true) then "match" else "not match") " the RegExp: /" replace(failure.settings.customRegex, "/", "\\/") "/u"
+  else if failure.kind == "custom" then "must " (if failure.settings.customMatch.nonempty ?? true then "match" else "not match") " the RegExp: /" replace(failure.settings.customRegex, "/", "\\/") "/u"
   else (if name != failure.processed then "trimmed as `" failure.processed "` " else "") "must match one of the following formats: " join(failure.settings.formats, ", ")
 )
 fn naming_underscore_message(policy, side) = if policy == "forbid" then "must not have a " side " underscore." else "must have " (if naming_underscore_required(policy) == 2 then "two" else "one") " " side " underscore(s)."

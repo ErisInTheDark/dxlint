@@ -49,8 +49,8 @@ fn type_allowance_selection_uses_each_rules_subject_and_origin() {
             ("{ set allow ['Allowed'] }", String::new(), 1),
             ("", format!("override in {target} let {hook} true"), 2),
             ("", format!("override in {target} let {hook} false"), 0),
-            ("", format!("override in {target} let {hook} !all({groups}, group => any(group, gate => gate.name == 'Allowed' && gate.from == 'file' && ends_with(gate.path, 'main.ts')))"), 1),
-            ("", format!("override in {target} let {hook} !all({groups}, group => any(group, gate => gate.name == 'Allowed' && gate.from == 'lib'))"), 2),
+            ("", format!("override in {target} let {hook} !{{ value {groups}; all (group) any(group, gate => gate.name == 'Allowed' && gate.from == 'file' && ends_with(gate.path, 'main.ts')) }}"), 1),
+            ("", format!("override in {target} let {hook} !{{ value {groups}; all (group) any(group, gate => gate.name == 'Allowed' && gate.from == 'lib') }}"), 2),
         ] {
             let messages = lint_project(
                 "type-allowance-selection",

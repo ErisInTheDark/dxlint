@@ -11,9 +11,9 @@ import .ts/typed/promises
 
 define {
 
-@macro thenable contains(default(type_members, []), "then")
-@macro flags (default(type_flags, []))
-fn has_only_flags(fs, wanted) = count(fs) > 0 && count(unique(fs wanted)) == count(unique(wanted))
+@macro thenable ({ value type_members.nonempty ?? []; contains "then" })
+@macro flags type_flags.nonempty ?? []
+fn has_only_flags(fs, wanted) = count(fs) > 0 && { value fs wanted; unique; count } == { value wanted; unique; count }
 fn matches_type_names(groups, names) = all(groups, group => any(group, name => contains(names, name)))
 
 in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
@@ -47,7 +47,7 @@ in promise_function_async_function rule promise-function-async {
   option allowAny boolean = true "Allow any and unknown return types"
   option allowedPromiseNames string[] = [] "Additional promise type names"
   when body != null && !contains([] modifier, "async")
-  when !default(promise_function_async_exempt, false)
+  when !(promise_function_async_exempt.nonempty ?? false)
   when promise_function_async_checked
   let names ("Promise" allowedPromiseNames)
   let disallowed_unknown (!allowAny && any(function_return_info.returns, result => result.unknown))
@@ -74,7 +74,7 @@ in ts_throw.argument rule only-throw-error {
 
 in ts_identifier let rejection_global_promise text == "Promise" && resolved == "global" && global != "off"
 in ts_identifier, ts_member, ts_index let rejection_constructor
-  if re_test(file, /\.[cm]?tsx?$/) then builtin_constructor("Promise") else default(rejection_global_promise, false)
+  if re_test(file, /\.[cm]?tsx?$/) then builtin_constructor("Promise") else rejection_global_promise.nonempty ?? false
 in ts_identifier, ts_member, ts_index let rejection_receiver
   rejection_constructor || re_test(file, /\.[cm]?tsx?$/) && builtin_type("Promise")
 in ts_member, ts_index let rejection_member static_name == "reject" && object.rejection_receiver == true
@@ -115,23 +115,23 @@ fn stringification_leaf(t, unknown) =
   else if unknown && contains(["unknown", "parameter"], t.kind) then 1 else 0
 fn stringification_certainty(t, ignored, unknown) =
   if t.kind == "boolean" || any(t.names t.generic_names t.aliases, name => contains(ignored, name)) then 0
-  else if contains(["union", "intersection"], t.kind) then stringification_compound(map(t.parts, part => stringification_certainty(part, ignored, unknown)), t.kind)
-  else if contains(["array", "tuple"], t.kind) then stringification_collection(map(t.parts, part => stringification_certainty(part, ignored, unknown)))
+  else if contains(["union", "intersection"], t.kind) then { value t.parts; map (part) stringification_certainty(part, ignored, unknown); stringification_compound t.kind }
+  else if contains(["array", "tuple"], t.kind) then { value t.parts; map (part) stringification_certainty(part, ignored, unknown); stringification_collection }
   else stringification_leaf(t, unknown)
 fn stringification_join(t, ignored, unknown) =
-  if contains(["union", "intersection"], t.kind) then stringification_compound(map(t.parts, part => stringification_join(part, ignored, unknown)), t.kind)
-  else if contains(["array", "tuple"], t.kind) then stringification_collection(map(t.parts, part => stringification_certainty(part, ignored, unknown)))
+  if contains(["union", "intersection"], t.kind) then { value t.parts; map (part) stringification_join(part, ignored, unknown); stringification_compound t.kind }
+  else if contains(["array", "tuple"], t.kind) then { value t.parts; map (part) stringification_certainty(part, ignored, unknown); stringification_collection }
   else 0
 in ts_node let stringification_type type_structure(["toString", "toLocaleString", "valueOf", "[Symbol.toPrimitive]"])
 in ts_call let stringification_subjects
-  if callee is ts_identifier && global_callee == "String" then [{node: unparenthesised_node(first([] argument.node)), join: false}]
+  if callee is ts_identifier && global_callee == "String" then [{node: { value argument.nodes; first; unparenthesised_node }, join: false}]
   else if callee is ts_member && callee.property is ts_identifier && contains(["toString", "toLocaleString", "join"], callee.property.text) then [{node: unparenthesised_node(callee.object.node), join: callee.property.text == "join"}]
   else []
 in ts_binary, ts_assignment let stringification_subjects
   if contains(["+", "+="], operator) && left.type_is_string_like then [{node: unparenthesised_node(right.node), join: false}]
   else if contains(["+", "+="], operator) && right.type_is_string_like && left not ts_private_name then [{node: unparenthesised_node(left.node), join: false}]
   else []
-in ts_template let stringification_subjects if parent is ts_tagged_template then [] else map([] expression.node, n => {node: unparenthesised_node(n), join: false})
+in ts_template let stringification_subjects if parent is ts_tagged_template then [] else map(expression.nodes, n => {node: unparenthesised_node(n), join: false})
 in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
   option ignoredTypeNames string[] = ["Error", "RegExp", "URL", "URLSearchParams"] "Types whose string conversion is permitted"
   option checkUnknown boolean = false "Check explicit unknown and unconstrained type parameters"
@@ -153,13 +153,13 @@ in ts_identifier {
   let eval_identifier true
   let eval_core_root if contains(["global", "globalThis", "window", "self"], text) && global != null && global != "off" then text else null
   let eval_timer_global resolved == "global" && (re_test(file, /\.[cm]?tsx?$/) || global != null && global != "off")
-  let eval_constructor builtin_type("FunctionConstructor") || contains(default(type_flags, []), "any") || type_opaque && reference_kind == null
+  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || type_opaque && reference_kind == null
 }
 in ts_member, ts_index {
   let eval_name static_name
   let eval_core_root if object.eval_core_root != null && static_name == object.eval_core_root then object.eval_core_root else null
   let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object is ts_identifier && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
-  let eval_constructor builtin_type("FunctionConstructor") || contains(default(type_flags, []), "any") || type_opaque
+  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || type_opaque
 }
 in ts_member let eval_bind_member property == "bind"
 in ts_parenthesized {
@@ -180,13 +180,13 @@ in typed_simple_expression, ts_binary {
 }
 in typed_simple_expression {
   let eval_string is (ts_string, ts_template)
-    || static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"])
+    || static_string != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) }
 }
 in ts_call {
   let eval_callback callable || builtin_type("Function") || callee.eval_bind_member == true || callee is ts_identifier && callee == "bind"
-  let eval_string static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"]) || callee.global_value == "String" && first([] argument.static_string) != null
+  let eval_string static_string != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || callee.global_value == "String" && first([] argument.static_string) != null
 }
-in ts_binary let eval_string static_string != null && has_only_flags(default(type_flags, []), ["string", "literal"]) || operator == "+" && (left.eval_string == true || right.eval_string == true)
+in ts_binary let eval_string static_string != null && { value type_flags.nonempty ?? []; has_only_flags (["string", "literal"]) } || operator == "+" && (left.eval_string == true || right.eval_string == true)
 in ts_parenthesized {
   let eval_callback expression.eval_callback
   let eval_string expression.eval_string
@@ -225,25 +225,25 @@ fn unsafe_assignment_sender(transfer) = if transfer.error then "error typed" els
 
 in ts_call, ts_new, ts_tagged_template {
   rule no-unsafe-argument {
-    each unsafe_arg in default(argument_transfers, [])
+    each unsafe_arg in argument_transfers.nonempty ?? []
     when unsafe_arg.mode == "argument"
     report at unsafe_arg.offset
     warn "Unsafe argument of type " unsafe_argument_sender(unsafe_arg) " assigned to a parameter of type `{unsafe_arg.receiver}`."
   }
   rule no-unsafe-argument:spread {
-    each unsafe_arg in default(argument_transfers, [])
+    each unsafe_arg in argument_transfers.nonempty ?? []
     when unsafe_arg.mode == "spread"
     report at unsafe_arg.offset
     warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " type."
   }
   rule no-unsafe-argument:array {
-    each unsafe_arg in default(argument_transfers, [])
+    each unsafe_arg in argument_transfers.nonempty ?? []
     when unsafe_arg.mode == "array"
     report at unsafe_arg.offset
     warn "Unsafe spread of an " unsafe_argument_sender(unsafe_arg) " array type."
   }
   rule no-unsafe-argument:tuple {
-    each unsafe_arg in default(argument_transfers, [])
+    each unsafe_arg in argument_transfers.nonempty ?? []
     when unsafe_arg.mode == "tuple"
     report at unsafe_arg.offset
     warn "Unsafe spread of a tuple type. The argument is " unsafe_argument_sender(unsafe_arg) " and is assigned to a parameter of type `{unsafe_arg.receiver}`."
@@ -252,37 +252,37 @@ in ts_call, ts_new, ts_tagged_template {
 
 in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_spread, ts_jsx_attribute {
   rule no-unsafe-assignment {
-    each unsafe_assigned in default(assignment_transfers, [])
+    each unsafe_assigned in assignment_transfers.nonempty ?? []
     when unsafe_assigned.mode == "any"
     report at unsafe_assigned.offset
     warn "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:generic {
-    each unsafe_assigned in default(assignment_transfers, [])
+    each unsafe_assigned in assignment_transfers.nonempty ?? []
     when unsafe_assigned.mode == "generic"
     report at unsafe_assigned.offset
     warn "Unsafe assignment of type " unsafe_assignment_sender(unsafe_assigned) " to a variable of type `{unsafe_assigned.receiver}`."
   }
   rule no-unsafe-assignment:array {
-    each unsafe_assigned in default(assignment_transfers, [])
+    each unsafe_assigned in assignment_transfers.nonempty ?? []
     when unsafe_assigned.mode == "array"
     report at unsafe_assigned.offset
     warn "Unsafe array destructuring of an " unsafe_assignment_sender(unsafe_assigned) " array value."
   }
   rule no-unsafe-assignment:tuple {
-    each unsafe_assigned in default(assignment_transfers, [])
+    each unsafe_assigned in assignment_transfers.nonempty ?? []
     when unsafe_assigned.mode == "tuple"
     report at unsafe_assigned.offset
     warn "Unsafe array destructuring of a tuple element with an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:object {
-    each unsafe_assigned in default(assignment_transfers, [])
+    each unsafe_assigned in assignment_transfers.nonempty ?? []
     when unsafe_assigned.mode == "object"
     report at unsafe_assigned.offset
     warn "Unsafe object destructuring of a property with an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:spread {
-    each unsafe_assigned in default(assignment_transfers, [])
+    each unsafe_assigned in assignment_transfers.nonempty ?? []
     when unsafe_assigned.mode == "spread"
     report at unsafe_assigned.offset
     warn "Unsafe spread of an " unsafe_assignment_sender(unsafe_assigned) " value in an array."
@@ -314,31 +314,31 @@ in ts_call rule prefer-regexp-exec {
 
 in ts_union, ts_intersection {
   rule no-redundant-type-constituents {
-    each redundant_constituent in default(redundant_type_constituents, [])
+    each redundant_constituent in redundant_type_constituents.nonempty ?? []
     when redundant_constituent.mode == "overrides"
     report at redundant_constituent.offset
     warn "'{redundant_constituent.name}' overrides all other types in this {redundant_constituent.container} type."
   }
   rule no-redundant-type-constituents:overridden {
-    each redundant_constituent in default(redundant_type_constituents, [])
+    each redundant_constituent in redundant_type_constituents.nonempty ?? []
     when redundant_constituent.mode == "overridden"
     report at redundant_constituent.offset
     warn "'{redundant_constituent.name}' is overridden by other types in this {redundant_constituent.container} type."
   }
   rule no-redundant-type-constituents:error {
-    each redundant_constituent in default(redundant_type_constituents, [])
+    each redundant_constituent in redundant_type_constituents.nonempty ?? []
     when redundant_constituent.mode == "error"
     report at redundant_constituent.offset
     warn "'{redundant_constituent.name}' is an 'error' type that acts as 'any' and overrides all other types in this {redundant_constituent.container} type."
   }
   rule no-redundant-type-constituents:literal {
-    each redundant_constituent in default(redundant_type_constituents, [])
+    each redundant_constituent in redundant_type_constituents.nonempty ?? []
     when redundant_constituent.mode == "literal"
     report at redundant_constituent.offset
     warn "{redundant_constituent.name} is overridden by {redundant_constituent.primitive} in this union type."
   }
   rule no-redundant-type-constituents:primitive {
-    each redundant_constituent in default(redundant_type_constituents, [])
+    each redundant_constituent in redundant_type_constituents.nonempty ?? []
     when redundant_constituent.mode == "primitive"
     report at redundant_constituent.offset
     warn "{redundant_constituent.primitive} is overridden by the {redundant_constituent.name} in this intersection type."
@@ -349,7 +349,7 @@ group duplicate_type_constituent ts_union, ts_intersection
 in duplicate_type_constituent let duplicate_type_constituents_checked true
 in duplicate_type_constituent rule no-duplicate-type-constituents {
   when duplicate_type_constituents_checked
-  each duplicate_constituent in default(duplicate_type_constituents, [])
+  each duplicate_constituent in duplicate_type_constituents.nonempty ?? []
   when duplicate_constituent.previous != null
   report at duplicate_constituent.node
   warn "{duplicate_constituent.kind} type constituent is duplicated with {duplicate_constituent.previous}."
@@ -357,7 +357,7 @@ in duplicate_type_constituent rule no-duplicate-type-constituents {
 in duplicate_type_constituent rule no-duplicate-type-constituents:optional {
   when is ts_union
   when duplicate_type_constituents_checked
-  each duplicate_constituent in default(duplicate_type_constituents, [])
+  each duplicate_constituent in duplicate_type_constituents.nonempty ?? []
   when duplicate_constituent.previous == null
   report at duplicate_constituent.node
   warn "Explicit undefined is unnecessary on an optional parameter."
@@ -441,24 +441,44 @@ in ts_parenthesized let optional_operands expression.optional_operands
 in ts_logical let optional_operands (if unparenthesised_node(left.node) is ts_logical && unparenthesised_node(left.node).operator == operator then left.optional_operands else [left.node]) (if unparenthesised_node(right.node) is ts_logical && unparenthesised_node(right.node).operator == operator then right.optional_operands else [right.node])
 fn optional_base(n) = if n is (ts_member, ts_index) && n.property not ts_private_name then n.object.node else if n is ts_call then n.callee.node else if n is ts_non_null then n.expression.node else if n is ts_parenthesized && n.expression.in_optional_chain != true then n.expression.node else null
 fn optional_same(a, b) = a.optional_shape != null && a.optional_shape == b.optional_shape
-fn optional_extends(a, b) = last(walk(a, current => if current is ts_non_null then current.expression.node else null)) is (ts_identifier, ts_member, ts_index, ts_call, ts_meta_property) && !optional_same(a, b) && any(slice(walk(b, current => optional_base(current)), 1), current => optional_same(a, current))
+fn optional_extends(a, b) = { value a; walk (current) if current is ts_non_null then current.expression.node else null; last } is (ts_identifier, ts_member, ts_index, ts_call, ts_meta_property) && !optional_same(a, b) && {
+  value b
+  walk (current) optional_base(current)
+  slice 1
+  any (current) optional_same(a, current)
+}
 fn optional_nullish(n) = if n is ts_null then "null" else if n is ts_identifier && n.text == "undefined" then "undefined" else if n is ts_string && n.literal_value.value == "undefined" then "typeof" else null
 fn optional_subject(n, value) = if value == "typeof" && n is ts_unary && n.operator == "typeof" && !(n.argument is ts_identifier && n.argument.is_real_global) then n.argument.node else if value != "typeof" then n else null
 fn optional_comparison_kind(value, comparison, op) = if value != "typeof" && starts_with(comparison, "!") != (op == "&&") then "last" else if comparison == "==" || comparison == "!=" then "nullish" else if value == "typeof" then "undefined" else value
-fn optional_binary_operand(n, op) = if optional_nullish(n.right.node) != null then {node: n, subject: optional_subject(n.left.node, optional_nullish(n.right.node)), kind: optional_comparison_kind(optional_nullish(n.right.node), n.operator, op), matches: starts_with(n.operator, "!") == (op == "&&"), comparison: n.operator} else if optional_nullish(n.left.node) != null then {node: n, subject: optional_subject(n.right.node, optional_nullish(n.left.node)), kind: optional_comparison_kind(optional_nullish(n.left.node), n.operator, op), matches: starts_with(n.operator, "!") == (op == "&&"), comparison: n.operator} else {node: n, subject: null, kind: "last", matches: false, comparison: n.operator}
+fn optional_binary_operand(n, op) = if optional_nullish(n.right.node) != null then {node: n, subject: { value n.right.node; value_2: optional_nullish; value optional_subject(n.left.node, value_2) }, kind: { value n.right.node; optional_nullish; optional_comparison_kind n.operator op }, matches: starts_with(n.operator, "!") == (op == "&&"), comparison: n.operator} else if optional_nullish(n.left.node) != null then {node: n, subject: { value n.left.node; value_3: optional_nullish; value optional_subject(n.right.node, value_3) }, kind: { value n.left.node; optional_nullish; optional_comparison_kind n.operator op }, matches: starts_with(n.operator, "!") == (op == "&&"), comparison: n.operator} else {node: n, subject: null, kind: "last", matches: false, comparison: n.operator}
 fn optional_operand(n, op) = if n is ts_binary then optional_binary_operand(n, op) else if n is ts_unary && n.operator == "!" then {node: n, subject: unparenthesised_node(n.argument.node), kind: "not", matches: op == "||"} else {node: n, subject: unparenthesised_node(n), kind: "plain", matches: op == "&&"}
 fn optional_falsy_literal(n) = any(n.type_literal_values, literal => literal.type == "boolean" && literal.value == false || literal.type == "number" && literal.value == 0 || literal.type == "string" && literal.value == "" || literal.type == "bigint" && re_test(literal.value, /^-?0(?:[xXbBoO]0+|0*)n$/))
-fn optional_type_allowed(n, opts) = !n.type_has_void && all(default(n.type_flags, ["unknown"]), flag => !contains(["any", "unknown", "string", "number", "boolean", "bigint"], flag) || get(opts, flag))
-fn optional_uncertain(n, flag) = any(default(n.type_flags, ["unknown"]), part => contains([flag, "any", "unknown"], part))
-fn optional_span(items, opts) = if len(items) > 1 && (!opts.requireNullish || any(slice(items, 0, -1), item => contains(default(item.subject.type_flags, []), "nullable"))) then {start: if re_test(byte_slice(opts.boundary, 0, first(items).node.offset - opts.boundary.offset), /^(?:\s|\(|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*$/) then opts.boundary.offset else first(items).node.offset, end: last(items).end + byte_len(default(re_find(byte_slice(opts.boundary, last(items).end - opts.boundary.offset), /^(?:(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*\))+/), ""))} else null
+fn optional_type_allowed(n, opts) = !n.type_has_void && {
+  value n.type_flags.nonempty ?? ["unknown"]
+  all (flag) !contains(["any", "unknown", "string", "number", "boolean", "bigint"], flag) || get(opts, flag)
+}
+fn optional_uncertain(n, flag) = { value n.type_flags.nonempty ?? ["unknown"]; any (part) contains([flag, "any", "unknown"], part) }
+fn optional_span(items, opts) = if len(items) > 1 && (!opts.requireNullish || { value items; slice 0 -1; any (item) { value item.subject.type_flags.nonempty ?? []; contains "nullable" } }) then {start: if {
+  value result: first(items).node.offset - opts.boundary.offset
+  value byte_slice(opts.boundary, 0, result)
+  re_test /^(?:\s|\(|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*$/
+} then opts.boundary.offset else first(items).node.offset, end: last(items).end + {
+  value {
+  value result_2: last(items).end - opts.boundary.offset
+  value byte_slice(opts.boundary, result_2)
+  re_find /^(?:(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*\))+/
+  nonempty
+} ?? ""
+  byte_len
+}} else null
 fn optional_flush(state, opts) = if optional_span(state.items, opts) != null then state.reports [optional_span(state.items, opts)] else state.reports
 # Paired strict guards form one logical unit; the fold consumes their next operand.
 fn optional_group(current, next) = current.matches && next.matches && contains(["null", "undefined"], current.kind) && contains(["null", "undefined"], next.kind) && current.kind != next.kind && optional_same(current.subject, next.subject)
 fn optional_valid(current, next, op, last, opts) = current.subject != null && current.matches && (if contains(["plain", "not"], current.kind) then last || optional_type_allowed(current.subject, opts) && !(current.kind == (if op == "&&" then "plain" else "not") && optional_falsy_literal(current.subject)) else current.kind == "nullish" || optional_group(current, next) || current.kind == "null" && (op == "||" || next != null) && !optional_uncertain(current.subject, "undefined") || current.kind == "undefined" && !optional_uncertain(current.subject, "null"))
-fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_uncertain(n, "undefined") else if comparison == (if op == "&&" then "==" else "!=") then !optional_uncertain(n, "null") && !optional_uncertain(n, "undefined") else if comparison == (if op == "&&" then "!==" else "===") then all(default(n.type_flags, ["unknown"]), flag => contains(["undefined", "nullable", "union"], flag)) else if comparison == (if op == "&&" then "!=" else "==") then all(default(n.type_flags, ["unknown"]), flag => contains(["null", "undefined", "nullable", "union"], flag)) else false
-fn optional_terminal(state, current, op, opts) = if len(state.items) > 0 && (optional_extends(last(state.items).subject, current.node.left.node) && !optional_extends(last(state.items).subject, current.node.right.node) && optional_terminal_allowed(current.node.right.node, current.comparison, op) || optional_extends(last(state.items).subject, current.node.right.node) && !optional_extends(last(state.items).subject, current.node.left.node) && optional_terminal_allowed(current.node.left.node, current.comparison, op)) then state.reports [optional_span(state.items [{node: current.node, subject: current.node, end: current.node.end_offset}], opts)] else optional_flush(state, opts)
-fn optional_accept(state, current, next, opts) = if len(state.items) == 0 || optional_extends(last(state.items).subject, current.subject) then {items: state.items [{node: current.node, subject: current.subject, end: if optional_group(current, next) then next.node.end_offset else current.node.end_offset}], reports: state.reports, skip: optional_group(current, next)} else if optional_same(last(state.items).subject, current.subject) then {items: state.items, reports: state.reports, skip: optional_group(current, next)} else {items: [{node: current.node, subject: current.subject, end: if optional_group(current, next) then next.node.end_offset else current.node.end_offset}], reports: optional_flush(state, opts), skip: optional_group(current, next)}
-fn optional_step(state, current, next, op, last, opts) = if state.skip then {items: state.items, reports: state.reports, skip: false} else if current.kind == "last" then {items: [], reports: optional_terminal(state, current, op, opts), skip: false} else if optional_valid(current, next, op, last, opts) then optional_accept(state, current, next, opts) else {items: [], reports: if current.kind == "undefined" && len(state.items) > 0 && optional_extends(last(state.items).subject, current.subject) then state.reports [optional_span(state.items [{node: current.node, subject: current.subject, end: current.node.end_offset}], opts)] else optional_flush(state, opts), skip: false}
+fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&" then "===" else "!==") then !optional_uncertain(n, "undefined") else if comparison == (if op == "&&" then "==" else "!=") then !optional_uncertain(n, "null") && !optional_uncertain(n, "undefined") else if comparison == (if op == "&&" then "!==" else "===") then { value n.type_flags.nonempty ?? ["unknown"]; all (flag) contains(["undefined", "nullable", "union"], flag) } else if comparison == (if op == "&&" then "!=" else "==") then { value n.type_flags.nonempty ?? ["unknown"]; all (flag) contains(["null", "undefined", "nullable", "union"], flag) } else false
+fn optional_terminal(state, current, op, opts) = if len(state.items) > 0 && ({ value last(state.items).subject; optional_extends current.node.left.node } && !{ value last(state.items).subject; optional_extends current.node.right.node } && optional_terminal_allowed(current.node.right.node, current.comparison, op) || { value last(state.items).subject; optional_extends current.node.right.node } && !{ value last(state.items).subject; optional_extends current.node.left.node } && optional_terminal_allowed(current.node.left.node, current.comparison, op)) then state.reports [optional_span(state.items [{node: current.node, subject: current.node, end: current.node.end_offset}], opts)] else optional_flush(state, opts)
+fn optional_accept(state, current, next, opts) = if len(state.items) == 0 || { value last(state.items).subject; optional_extends current.subject } then {items: state.items [{node: current.node, subject: current.subject, end: if optional_group(current, next) then next.node.end_offset else current.node.end_offset}], reports: state.reports, skip: optional_group(current, next)} else if { value last(state.items).subject; optional_same current.subject } then {items: state.items, reports: state.reports, skip: optional_group(current, next)} else {items: [{node: current.node, subject: current.subject, end: if optional_group(current, next) then next.node.end_offset else current.node.end_offset}], reports: optional_flush(state, opts), skip: optional_group(current, next)}
+fn optional_step(state, current, next, op, last, opts) = if state.skip then {items: state.items, reports: state.reports, skip: false} else if current.kind == "last" then {items: [], reports: optional_terminal(state, current, op, opts), skip: false} else if optional_valid(current, next, op, last, opts) then optional_accept(state, current, next, opts) else {items: [], reports: if current.kind == "undefined" && len(state.items) > 0 && { value last(state.items).subject; optional_extends current.subject } then state.reports [optional_span(state.items [{node: current.node, subject: current.subject, end: current.node.end_offset}], opts)] else optional_flush(state, opts), skip: false}
 in ts_logical rule prefer-optional-chain {
   option checkAny boolean = true "Check any values"
   option checkUnknown boolean = true "Check unknown values"
@@ -467,21 +487,32 @@ in ts_logical rule prefer-optional-chain {
   option checkBoolean boolean = true "Check boolean values"
   option checkBigInt boolean = true "Check bigint values"
   option requireNullish boolean = false "Require a nullable checked operand"
-  let enclosing last(walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null))
+  let enclosing { value node; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
   when operator != "??" && !(enclosing.parent is ts_logical && enclosing.parent.operator == operator)
   let opts {any: checkAny, unknown: checkUnknown, string: checkString, number: checkNumber, boolean: checkBoolean, bigint: checkBigInt, requireNullish: requireNullish, boundary: node}
-  let operands map(optional_operands, operand => optional_operand(unparenthesised_node(operand), operator))
-  let state reduce(zip(operands, slice(operands, 1) [null]), {items: [], reports: [], skip: false}, (state, pair) => optional_step(state, first(pair), last(pair), operator, last(pair) == null, opts))
-  each span in filter(optional_flush(state, opts), report => report != null)
+  let operands map(optional_operands, operand => { value operand; unparenthesised_node; optional_operand operator })
+  let state {
+    value result: slice(operands, 1) [null]
+    value zip(operands, result)
+    fold ({items: [], reports: [], skip: false}) (state, pair) {
+      value pair
+      current: first
+      value pair
+      next: last
+      value last: last(pair) == null
+      value optional_step(state, current, next, operator, last, opts)
+    }
+  }
+  each span in { value state; optional_flush opts; filter (report) report != null }
   report at span
   warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
 }
 in ts_logical rule prefer-optional-chain:empty-object {
   option requireNullish boolean = false "Require a nullable checked operand"
-  when contains(["||", "??"], operator) && unparenthesised_node(right.node) is ts_object && count(unparenthesised_node(right.node).property) == 0
-  let enclosing last(walk(node, current => if current.parent is ts_parenthesized then current.parent.node else null))
+  when contains(["||", "??"], operator) && unparenthesised_node(right.node) is ts_object && { value unparenthesised_node(right.node).property; count } == 0
+  let enclosing { value node; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
   when enclosing.parent is (ts_member, ts_index) && enclosing.parent.optional == null
-  when !requireNullish || contains(default(left.type_flags, []), "nullable")
+  when !requireNullish || { value left.type_flags.nonempty ?? []; contains "nullable" }
   report at enclosing.parent
   warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
 }
@@ -489,7 +520,7 @@ in ts_logical rule prefer-optional-chain:empty-object {
 # ---- more type-aware rules (type_flags) ----------------------------------------
 in ts_for_in rule no-for-in-array {
   report at unparenthesised_node(right.node)
-  when has_only_flags(default(right.type_flags, []), ["array", "tuple", "union", "nullable", "undefined", "null"]) && contains(right.type_flags, "array")
+  when { value right.type_flags.nonempty ?? []; has_only_flags (["array", "tuple", "union", "nullable", "undefined", "null"]) } && contains(right.type_flags, "array")
   warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
 }
 
@@ -498,28 +529,47 @@ in ts_binary {
   let other_side_flags if re_test(right, /^(true|false)$/) then left.type_flags else right.type_flags
 }
 in ts_binary rule no-unnecessary-boolean-literal-compare {
-  when re_test(operator, /^[!=]==?$/) && boolean_literal != null && has_only_flags(default(other_side_flags, []), ["boolean", "literal"])
+  when re_test(operator, /^[!=]==?$/) && boolean_literal != null && { value other_side_flags.nonempty ?? []; has_only_flags (["boolean", "literal"]) }
   warn if boolean_literal == "true" then "This expression unnecessarily compares a boolean value to a boolean instead of using it directly." else "This expression unnecessarily compares a boolean value to a boolean instead of negating it."
 }
 
 fn template_interpolation_subject(n) = if n is ts_literal_type then n.value.node else unparenthesised_node(n)
-fn template_interpolation_whitespace(n) = if n is ts_string then n.literal_value.type == "string" && re_test(n.literal_value.value, /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/) else n is (ts_template, ts_template_type) && count(n.quasi) == 1 && re_test(byte_slice(first(n.quasi), 1, byte_len(first(n.quasi)) - 1), /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/)
+fn template_interpolation_whitespace(n) = if n is ts_string then n.literal_value.type == "string" && re_test(n.literal_value.value, /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/) else n is (ts_template, ts_template_type) && count(n.quasi) == 1 && {
+  value n.quasi
+  first_quasi: first
+  value result: { value n.quasi; first; byte_len } - 1
+  value byte_slice(first_quasi, 1, result)
+  re_test /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/
+}
 fn template_interpolation_literal(n, type_syntax) = n is ts_literal || n is (ts_template, ts_template_type) || (if type_syntax then n is ts_type_keyword && contains(["null", "undefined"], n.text) else n is ts_identifier && contains(["undefined", "Infinity", "NaN"], n.text))
 fn template_interpolation_string(n, single, type_syntax) = single && n.type_is_string_like && (!type_syntax || !n.type_is_parameter && !n.type_has_enum)
-in ts_template let template_interpolation_nodes [] expression.node
-in ts_template_type let template_interpolation_nodes [] type.node
+in ts_template let template_interpolation_nodes expression.nodes
+in ts_template_type let template_interpolation_nodes type.nodes
 in ts_template, ts_template_type rule no-unnecessary-template-expression {
   when parent not ts_tagged_template
   let single count(template_interpolation_nodes) == 1 && first([] quasi.text) == "`${{" && last([] quasi.text) == "}}`"
   let comments descendants(ts_comment)
   let type_syntax is ts_template_type
-  let interpolation_pairs map(zip(template_interpolation_nodes, zip([] quasi.node, slice([] quasi.node, 1))), pair => {
-    expression: unparenthesised_node(first(pair)),
-    subject: template_interpolation_subject(first(pair)),
-    previous: first(last(pair)),
-    following: last(last(pair)),
-    string_only: template_interpolation_string(unparenthesised_node(first(pair)), single, type_syntax)
-  })
+  let interpolation_pairs {
+    value quasi.nodes
+    following_quasi: drop 1
+    value quasi.nodes
+    quasi_pairs: zip following_quasi
+    value template_interpolation_nodes
+    zip quasi_pairs
+    map (pair) {
+      expression: { value pair; first; unparenthesised_node },
+      subject: { value pair; first; template_interpolation_subject },
+      previous: { value pair; last; first },
+      following: { value pair; last; last },
+      string_only: {
+        value pair
+        first
+        unparenthesised_node
+        template_interpolation_string single type_syntax
+      }
+    }
+  }
   each interpolation in interpolation_pairs
   when !any(comments, comment => comment.offset >= interpolation.previous.end_offset && comment.end_offset <= interpolation.following.offset)
   when interpolation.string_only || template_interpolation_literal(interpolation.subject, type_syntax) && !(re_test(interpolation.following.text, /^}[\r\n\u2028\u2029]/) && template_interpolation_whitespace(interpolation.subject))
@@ -529,7 +579,7 @@ in ts_template, ts_template_type rule no-unnecessary-template-expression {
 
 # Receivers: what the object of `x.method(...)` is.
 in ts_member let receiver_flags object.type_flags
-@macro receiver_is(kind) (contains(default(callee.receiver_flags, []), kind) && !contains(default(callee.receiver_flags, []), "unknown"))
+@macro receiver_is(kind) ({ value callee.receiver_flags.nonempty ?? []; contains kind } && !{ value callee.receiver_flags.nonempty ?? []; contains "unknown" })
 in ts_call let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) == 1 && (@receiver_is("array") || @receiver_is("string"))
 
 in ts_binary rule prefer-includes {
@@ -539,15 +589,15 @@ in ts_binary rule prefer-includes {
 
 # startsWith / endsWith written the long way, on strings.
 in ts_call {
-  let starts_ends_kind if @receiver_is("string") && re_test(callee, /\.\s*indexOf$/) then "start_index" else if @receiver_is("string") && re_test(callee, /\.\s*charAt$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*(slice|substring)$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*lastIndexOf$/) then "end_index" else if @receiver_is("string") && re_test(callee, /\.\s*slice$/) && re_test(first([] argument), /^-/) && count(argument) == 1 then "end" else null
-  let regex_starts_test re_test(callee, /^\/\^[\w\s-]+\/\.\s*test$/) && count(argument) == 1 && contains(default(argument.type_flags, []), "string")
-  let regex_ends_test re_test(callee, /^\/[\w\s-]+\$\/\.\s*test$/) && count(argument) == 1 && contains(default(argument.type_flags, []), "string")
+  let starts_ends_kind if @receiver_is("string") && re_test(callee, /\.\s*indexOf$/) then "start_index" else if @receiver_is("string") && re_test(callee, /\.\s*charAt$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*(slice|substring)$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*lastIndexOf$/) then "end_index" else if @receiver_is("string") && re_test(callee, /\.\s*slice$/) && { value [] argument; first; re_test /^-/ } && count(argument) == 1 then "end" else null
+  let regex_starts_test re_test(callee, /^\/\^[\w\s-]+\/\.\s*test$/) && count(argument) == 1 && { value argument.type_flags.nonempty ?? []; contains "string" }
+  let regex_ends_test re_test(callee, /^\/[\w\s-]+\$\/\.\s*test$/) && count(argument) == 1 && { value argument.type_flags.nonempty ?? []; contains "string" }
 }
-in ts_index let starts_ends_kind if contains(default(object.type_flags, []), "string") && index == "0" then "start" else if contains(default(object.type_flags, []), "string") && re_test(index, /\.length\s*-\s*1$/) then "end" else null
+in ts_index let starts_ends_kind if { value object.type_flags.nonempty ?? []; contains "string" } && index == "0" then "start" else if { value object.type_flags.nonempty ?? []; contains "string" } && re_test(index, /\.length\s*-\s*1$/) then "end" else null
 in ts_binary rule prefer-string-starts-ends-with {
   when re_test(operator, /^[!=]==?$/)
   when left.starts_ends_kind == "start_index" && right == "0" || left.starts_ends_kind == "start" || left.starts_ends_kind == "end_index" && re_test(right, /\.length\s*-/) || left.starts_ends_kind == "end"
-  warn if re_test(default(left.starts_ends_kind, ""), /^end/) then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
+  warn if { value left.starts_ends_kind.nonempty ?? ""; re_test /^end/ } then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
 }
 in ts_call rule prefer-string-starts-ends-with:regex {
   when regex_starts_test || regex_ends_test
@@ -558,14 +608,14 @@ in ts_call rule prefer-string-starts-ends-with:regex {
 fn is_private(m) = re_test(m, /\bprivate\b/)
 in ts_class_property rule prefer-readonly {
   report at key.node
-  when (is_private(join([] modifier, " ")) || re_test(key, /^#/)) && !contains([] modifier, "readonly") && !contains([] modifier, "static") && member_writes == 0
+  when ({ value [] modifier; join " "; is_private } || re_test(key, /^#/)) && !contains([] modifier, "readonly") && !contains([] modifier, "static") && member_writes == 0
   # Computed keys and decorated members can be written where zlint cannot see.
   when !re_test(key, /^\[/) && count(decorator) == 0
   warn "Member '{key}' is never reassigned; mark it as `readonly`."
 }
 in ts_parameter rule prefer-readonly:parameter {
   report at name.node
-  when member_writes == 0 && is_private(join([] modifier, " ")) && !contains([] modifier, "readonly")
+  when member_writes == 0 && { value [] modifier; join " "; is_private } && !contains([] modifier, "readonly")
   warn "Member '{re_replace(text, /^(?:(?:private|public|protected|readonly|override)\s+)*/, '')}' is never reassigned; mark it as `readonly`."
 }
 
@@ -589,8 +639,8 @@ in ts_template.expression rule restrict-template-expressions {
 }
 
 in ts_unary rule no-unsafe-unary-minus {
-  when operator == "-" && count(default(argument.type_flags, [])) > 0 && !contains(argument.type_flags, "any") && !contains(argument.type_flags, "unknown") && !contains(argument.type_flags, "number") && !contains(argument.type_flags, "bigint") && !contains(argument.type_flags, "enum")
-  warn "Argument of unary negation should be assignable to number | bigint but is {re_replace(default(argument.type, '?'), /^\"[\s\S]*\"$/, 'string')} instead."
+  when operator == "-" && { value argument.type_flags.nonempty ?? []; count } > 0 && !contains(argument.type_flags, "any") && !contains(argument.type_flags, "unknown") && !contains(argument.type_flags, "number") && !contains(argument.type_flags, "bigint") && !contains(argument.type_flags, "enum")
+  warn "Argument of unary negation should be assignable to number | bigint but is { { value argument.type.nonempty ?? '?'; re_replace /^\"[\s\S]*\"$/ 'string' } } instead."
 }
 
 in ts_member, ts_index let object_array_type object.array_type
@@ -645,7 +695,7 @@ in ts_tagged_template.tag rule no-unsafe-call:tag {
 in ts_unary rule no-meaningless-void-operator {
   option checkNever boolean = false "Also check calls returning never"
   when operator == "void" && argument != "0" && void_argument_kind != "assignment"
-  when if void_argument_kind == "call" then has_only_flags(default(argument.type_flags, []), ["undefined", "nullable", "union"]) || checkNever && has_only_flags(default(argument.type_flags, []), ["undefined", "nullable", "never", "union"]) else !contains(default(argument.type_members, []), "then")
+  when if void_argument_kind == "call" then { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "union"]) } || checkNever && { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "never", "union"]) } else !{ value argument.type_members.nonempty ?? []; contains "then" }
   warn if void_argument_kind == "call" then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
 }
 
@@ -686,9 +736,9 @@ in nullish_coalescing_expression rule prefer-nullish-coalescing {
   let replacement nullish_coalescing
   let nullish_flags replacement.flags
   when replacement != null
-  when !replacement.truthiness || replacement.unknown || contains(default(nullish_flags, []), "nullable")
+  when !replacement.truthiness || replacement.unknown || { value nullish_flags.nonempty ?? []; contains "nullable" }
   when prefer_nullish_coalescing_checked
-  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || contains(default(nullish_flags, []), "bigint") && ignoreBigint || contains(default(nullish_flags, []), "boolean") && ignoreBoolean || contains(default(nullish_flags, []), "number") && ignoreNumber || contains(default(nullish_flags, []), "string") && ignoreString)
+  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || { value nullish_flags.nonempty ?? []; contains "bigint" } && ignoreBigint || { value nullish_flags.nonempty ?? []; contains "boolean" } && ignoreBoolean || { value nullish_flags.nonempty ?? []; contains "number" } && ignoreNumber || { value nullish_flags.nonempty ?? []; contains "string" } && ignoreString)
   report at replacement.offset
   warn if replacement.kind == "ternary" then "Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read." else if replacement.kind == "if" then "Prefer using nullish coalescing operator (`??=`) instead of an assignment expression, as it is simpler to read." else if replacement.kind == "assignment" then "Prefer using nullish coalescing operator (`??=`) instead of a logical assignment (`||=`), as it is a safer operator." else "Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator."
 }

@@ -24,7 +24,7 @@ in ts_class_property let annotation_widens contains([] modifier, "readonly") || 
 group inferrable_annotation ts_declarator, ts_class_property, ts_parameter
 in inferrable_annotation let no_inferrable_types_checked true
 in inferrable_annotation rule no-inferrable-types {
-  when inferred_annotation != null && default(annotation_widens, false) != true
+  when inferred_annotation != null && (annotation_widens.nonempty ?? false) != true
   when no_inferrable_types_checked
   report at type.node
   warn "Type {inferred_annotation} trivially inferred from a {inferred_annotation} literal, remove type annotation."

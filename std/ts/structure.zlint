@@ -21,7 +21,7 @@ in ts_index let structure_access_key index.structure_unwrapped
 fn structure_destructure_enabled(settings, role, kind) =
   if settings == null then true
   else if settings.array != null || settings.object != null then get(settings, kind) == true
-  else get(get(settings, role), kind) == true
+  else { value settings; get role; get kind } == true
 
 fn structure_typescript(path) = re_test(path, /\.(?:ts|tsx|mts|cts)$/)
 
@@ -29,14 +29,14 @@ in ts_declarator, ts_assignment rule prefer-destructuring {
   option options ({ array?: boolean; object?: boolean; VariableDeclarator?: { array?: boolean; object?: boolean }; AssignmentExpression?: { array?: boolean; object?: boolean }; enforceForRenamedProperties?: boolean; enforceForDeclarationWithTypeAnnotation?: boolean })[] = [] "destructuring categories, per declaration or assignment, renamed-property and annotated-declaration enforcement"
   when structure_destructure_eligible
   let typed structure_typescript(file)
-  let enforcement first(slice(options, 1))
+  let enforcement { value options; slice 1; first }
   when !(typed && is ts_declarator && structure_destructure_annotated) || enforcement.enforceForDeclarationWithTypeAnnotation == true
   let access structure_destructure_right
   when access is (ts_member, ts_index) && !access.structure_access_optional
   when access.object.structure_unwrapped not ts_super && access.structure_access_key not ts_private_name
   let key access.structure_access_key
   let value key.literal_value
-  let array_index access is ts_index && key is ts_number && value.type == "number" && !contains(["Infinity", "-Infinity", "NaN"], value.value) && num(value.value) == round(num(value.value))
+  let array_index access is ts_index && key is ts_number && value.type == "number" && !contains(["Infinity", "-Infinity", "NaN"], value.value) && num(value.value) == { value value.value; num; round }
   let renamed enforcement.enforceForRenamedProperties == true
   let iterable if typed && array_index then access.object.type_iterable else true
   when iterable != false || renamed
@@ -46,7 +46,10 @@ in ts_declarator, ts_assignment rule prefer-destructuring {
   when array_index || renamed || structure_destructure_left is ts_identifier && (access is ts_member && structure_destructure_left.text == key.text || access is ts_index && key is ts_string && structure_destructure_left.text == value.value)
   let receiver access.object.node
   let fixable is ts_declarator && !structure_destructure_annotated && structure_destructure_left is ts_identifier && access is ts_member && structure_destructure_left.text == key.text
-    && !any(overlapping(ts_comment), comment => comment.offset < receiver.offset || comment.end_offset > receiver.end_offset)
+    && !{
+      value overlapping(ts_comment)
+      any (comment) comment.offset < receiver.offset || comment.end_offset > receiver.end_offset
+    }
   warn "Use {category} destructuring."
   fix if fixable as "{{" key.text "}} = " receiver.text
 }
@@ -75,7 +78,7 @@ in ts_index rule dot-notation:computed {
   let allow_index allowIndexSignaturePropertyAccess || structure_typescript(file) && compiler_options.noPropertyAccessFromIndexSignature == true
   when !allow_index || property.declared == true || !any(object.index_key_types, key_type => key_type.string_like)
   let open index.space_before.start - 1
-  let fixable count(overlapping(ts_comment, open, end_offset)) == 0
+  let fixable { value overlapping(ts_comment, open, end_offset); count } == 0
   let prefix byte_slice(text, 0, open - offset)
   let separator if optional != null then "" else if object is ts_number then " ." else "."
   let trailing if space_after.text == "" && next_token is (ts_identifier, ts_keyword, ts_number, ts_boolean, ts_null) then " " else ""
@@ -89,7 +92,7 @@ in ts_member rule dot-notation:keyword {
   @structure_dot_options
   when !allowKeywords && structure_dot_keyword(property.text)
   let dot property.space_before.start - 1
-  let fixable !(object is ts_identifier && object.text == "let" && optional == null) && count(overlapping(ts_comment, dot, property.offset)) == 0
+  let fixable !(object is ts_identifier && object.text == "let" && optional == null) && { value overlapping(ts_comment, dot, property.offset); count } == 0
   let prefix byte_slice(text, 0, dot - offset)
   report at property.node
   warn ".{property} is a syntax error."
@@ -107,7 +110,7 @@ in ts_variable_declaration let structure_loop_declaration parent is (ts_for, ts_
 in ts_union, ts_intersection let structure_first_type_offset first(type.offset)
 in ts_type_alias let structure_start offset
 in ts_unary let structure_typeof operator == "typeof"
-in ts_parenthesized let structure_typeof default(expression.structure_typeof, false)
+in ts_parenthesized let structure_typeof expression.structure_typeof.nonempty ?? false
 in ts_parenthesized let structure_single_conditional expression is ts_conditional
 
 @macro structure_mixed_operator_rule(name, position) {
@@ -134,11 +137,11 @@ in ts_parenthesized let structure_single_conditional expression is ts_conditiona
 in ts_variable_declaration rule one-var {
   option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
   let info declaration_groups
-  let settings default(first(options), "always")
+  let settings { value options; first; nonempty } ?? "always"
   let kind info.kind
   let common if type_of(settings) == "str" then settings else if kind == "var" then settings.var else if kind == "let" then settings.let else if kind == "const" then settings.const else if kind == "using" then settings.using else settings.awaitUsing
-  let init_mode default(settings.initialized, common)
-  let uninit_mode default(settings.uninitialized, common)
+  let init_mode settings.initialized.nonempty ?? common
+  let uninit_mode settings.uninitialized.nonempty ?? common
   let counts info.counts
   let previous_counts info.previous
   let total counts.initialized + counts.uninitialized
@@ -151,14 +154,17 @@ in ts_variable_declaration rule one-var {
   let consecutive previous_counts != null && !((counts.requires + previous_counts.requires > 0) && (total + previous_counts.initialized + previous_counts.uninitialized > counts.requires + previous_counts.requires))
   let consecutive_message if !consecutive then null else if init_mode == "consecutive" && uninit_mode == "consecutive" then "Combine this with the previous '" kind "' statement." else if init_mode == "consecutive" && counts.initialized > 0 && previous_counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else if uninit_mode == "consecutive" && counts.uninitialized > 0 && previous_counts.uninitialized > 0 then "Combine this with the previous '" kind "' statement with uninitialized variables." else null
   let split_message if total < 2 || info.for_init then null else if init_mode == "never" && uninit_mode == "never" then "Split '" kind "' declarations into multiple statements." else if init_mode == "never" && counts.initialized > 0 then "Split initialized '" kind "' declarations into multiple statements." else if uninit_mode == "never" && counts.uninitialized > 0 then "Split uninitialized '" kind "' declarations into multiple statements." else null
-  each issue in compact([
+  each issue in {
+    value [
     if init_mode == "always" && settings.separateRequires && counts.requires > 0 && counts.requires < total then "Split requires to be separated into a single block." else null,
     consecutive_message,
     if always_failed && both_always then "Combine this with the previous '" kind "' statement." else null,
     if always_failed && !both_always && init_mode == "always" && counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else null,
     if always_failed && !both_always && uninit_mode == "always" && counts.uninitialized > 0 && !info.for_binding then "Combine this with the previous '" kind "' statement with uninitialized variables." else null,
     split_message
-  ])
+  ]
+    compact
+  }
   warn "{issue}"
 }
 
@@ -167,34 +173,53 @@ group structure_literal ts_string, ts_regex
 in ts_comment let structure_comment_span if parent is ts_jsx_expression && parent.expression == null && !re_test(parent.text, /[\n\r\u{2028}\u{2029}]/) then { start: parent.offset, end: parent.end_offset } else { start: offset, end: end_offset }
 in ts_line let structure_line_content re_replace(text, /(?:\r\n|[\n\r\u{2028}\u{2029}])$/, "")
 in ts_line let structure_line_end offset + byte_len(structure_line_content)
-in ts_line let structure_line_comments map(overlapping(ts_comment), comment => comment.structure_comment_span)
+in ts_line let structure_line_comments { value overlapping(ts_comment); map (comment) comment.structure_comment_span }
 in ts_line let structure_last_comment last(structure_line_comments)
 in ts_line let structure_full_comment structure_last_comment != null && structure_last_comment.end >= structure_line_end
-  && (structure_last_comment.start <= offset || trim(byte_slice(structure_line_content, 0, structure_last_comment.start - offset)) == "")
-in ts_line let structure_line_template any(overlapping(structure_template), template => any(template.quasi.node, quasi => quasi.offset <= structure_line_end && quasi.end_offset >= offset))
+  && (structure_last_comment.start <= offset || { value structure_line_content; byte_slice 0 (structure_last_comment.start - offset); trim } == "")
+in ts_line let structure_line_template {
+  value overlapping(structure_template)
+  any (template) any(template.quasi.node, quasi => quasi.offset <= structure_line_end && quasi.end_offset >= offset)
+}
 
-fn expanded_line_length(parts, extra, width) = (if width == 0 then sum(parts) else sum(map(slice(parts, 0, len(parts) - 1), part => part - part % width + width)) + last(parts)) - extra
-fn structure_strip_comments(content, start, comments) = byte_slice(content, 0, reduce(reverse(comments), byte_len(content), (end, comment) =>
-  if comment.start >= start && comment.start <= start + end && comment.end >= start + end
-  then byte_len(trim_end(byte_slice(content, 0, comment.start - start))) else end))
+fn expanded_line_length(parts, extra, width) = (if width == 0 then sum(parts) else {
+  value result: len(parts) - 1
+  value slice(parts, 0, result)
+  map (part) part - part % width + width
+  sum
+} + last(parts)) - extra
+fn structure_strip_comments(content, start, comments) = {
+  value comments
+  reversed: reverse
+  value initial_end: byte_len(content)
+  value reversed
+  end: fold initial_end (end, comment) if comment.start >= start && comment.start <= start + end && comment.end >= start + end
+  then {
+    value content
+    byte_slice 0 (comment.start - start)
+    trim_end
+    byte_len
+  } else end
+  value byte_slice(content, 0, end)
+}
 
 in ts_line rule max-len {
   option options (number | { code?: number; comments?: number; tabWidth?: number; ignorePattern?: string; ignoreComments?: boolean; ignoreStrings?: boolean; ignoreUrls?: boolean; ignoreTemplateLiterals?: boolean; ignoreRegExpLiterals?: boolean; ignoreTrailingComments?: boolean })[] = [] "line limits, tab stops and exemptions"
   let settings last(options)
-  let code_limit if type_of(first(options)) == "num" then first(options) else default(settings.code, 80)
-  let second first(slice(options, 1))
-  let tab_width if type_of(second) == "num" then second else default(settings.tabWidth, 4)
-  let comment_limit default(settings.comments, 0)
+  let code_limit if { value options; first; type_of } == "num" then first(options) else settings.code.nonempty ?? 80
+  let second { value options; slice 1; first }
+  let tab_width if type_of(second) == "num" then second else settings.tabWidth.nonempty ?? 4
+  let comment_limit settings.comments.nonempty ?? 0
   let strip_comments settings.ignoreTrailingComments || settings.ignoreComments
   when !settings.ignoreComments || !structure_full_comment
-  when !settings.ignoreStrings || count(overlapping(ts_string)) == 0
+  when !settings.ignoreStrings || { value overlapping(ts_string); count } == 0
   when !settings.ignoreTemplateLiterals || !structure_line_template
-  when !settings.ignoreRegExpLiterals || count(overlapping(ts_regex)) == 0
+  when !settings.ignoreRegExpLiterals || { value overlapping(ts_regex); count } == 0
   let measured if strip_comments && !structure_full_comment then structure_strip_comments(structure_line_content, offset, structure_line_comments) else structure_line_content
   when !settings.ignoreUrls || !re_test(measured, /[^:/?#]:\/\/[^?#]/)
   when !settings.ignorePattern || !re_test(measured, settings.ignorePattern)
-  let parts map(split(measured, "\t"), part => utf16_len(part))
-  let length expanded_line_length(parts, utf16_len(measured) - len(measured), tab_width)
+  let parts { value measured; split "\t"; map (part) utf16_len(part) }
+  let length { value extra: utf16_len(measured) - len(measured); value expanded_line_length(parts, extra, tab_width) }
   let comment_applies structure_full_comment && comment_limit > 0
   let limit if comment_applies then comment_limit else code_limit
   when length > limit
@@ -211,16 +236,16 @@ fn structure_is_directive(body) = re_test(body, /^(?:eslint|jscs|\/ <reference|\
 
 in ts_program layer text match structure_hashbang /\A#![^\n\r\u{2028}\u{2029}]*/
 group structure_comment ts_comment, structure_hashbang
-in structure_comment let structure_comment_body if is ts_block_comment then slice(text, 2, len(text) - 2) else slice(text, 2)
-in structure_comment let structure_directive structure_is_directive(trim_start(structure_comment_body))
-in ts_comment let structure_comment_beside trim(byte_slice(source, position(offset).js_line_start, offset)) != ""
+in structure_comment let structure_comment_body if is ts_block_comment then { value result: len(text) - 2; value slice(text, 2, result) } else slice(text, 2)
+in structure_comment let structure_directive { value structure_comment_body; trim_start; structure_is_directive }
+in ts_comment let structure_comment_beside { value js_line_start: position(offset).js_line_start; value byte_slice(source, js_line_start, offset); trim } != ""
 
 in ts_line_comment rule line-comment-position {
   option options ("above" | "beside" | { position?: "above" | "beside"; ignorePattern?: string; applyDefaultIgnorePatterns?: boolean })[] = [] "line comment position and exemptions"
   let settings first(options)
-  let position if type_of(settings) == "str" then settings else default(settings.position, "above")
-  let ignore_pattern default(settings.ignorePattern, "")
-  let ignore_default default(settings.applyDefaultIgnorePatterns, true)
+  let position if type_of(settings) == "str" then settings else settings.position.nonempty ?? "above"
+  let ignore_pattern settings.ignorePattern.nonempty ?? ""
+  let ignore_default settings.applyDefaultIgnorePatterns.nonempty ?? true
   when !ignore_default || !structure_directive && !re_test(structure_comment_body, /^\s*falls?\s?through/)
   when ignore_pattern == "" || !re_test(structure_comment_body, ignore_pattern)
   when position == "above" && structure_comment_beside || position == "beside" && !structure_comment_beside
@@ -236,19 +261,22 @@ in ts_comment let structure_style_eligible !structure_directive && !structure_co
 in ts_block_comment let structure_multiline structure_first_row.offset != structure_last_row.offset
 in ts_block_comment let structure_block_first byte_slice(source, offset + 2, structure_first_row.structure_line_end)
 in ts_block_comment let structure_block_last byte_slice(source, structure_last_row.offset, end_offset - 2)
-in ts_block_comment let structure_block_middle filter(overlapping(ts_line), row => row.offset > structure_first_row.offset && row.offset < structure_last_row.offset)
+in ts_block_comment let structure_block_middle {
+  value overlapping(ts_line)
+  filter (row) row.offset > structure_first_row.offset && row.offset < structure_last_row.offset
+}
 in ts_block_comment let structure_block_padded all(structure_block_middle, row => re_test(row.structure_line_content, /^\s/) && contains(row.structure_line_content, " "))
-in ts_block_comment let structure_block_jsdoc starts_with(structure_block_first, "*") && trim(slice(structure_block_first, 1)) == "" && structure_block_padded && trim(structure_block_last) == ""
-in ts_block_comment let structure_block_exclamation starts_with(structure_block_first, "!") && trim(slice(structure_block_first, 1)) == "" && structure_block_padded && trim(structure_block_last) == ""
+in ts_block_comment let structure_block_jsdoc starts_with(structure_block_first, "*") && { value structure_block_first; slice 1; trim } == "" && structure_block_padded && trim(structure_block_last) == ""
+in ts_block_comment let structure_block_exclamation starts_with(structure_block_first, "!") && { value structure_block_first; slice 1; trim } == "" && structure_block_padded && trim(structure_block_last) == ""
 
 in ts_block_comment rule multiline-comment-style:shape {
   @structure_comment_style_options
   when structure_style_eligible && structure_multiline
   when if mode == "bare-block" then trim(structure_block_first) == "" && trim(structure_block_last) == ""
-    && all(structure_block_middle, row => starts_with(trim_start(row.structure_line_content), "*"))
+    && all(structure_block_middle, row => { value row.structure_line_content; trim_start; starts_with "*" })
     && !structure_block_jsdoc && !structure_block_exclamation
     else mode == "separate-lines"
-      && trim(byte_slice(source, end_offset, structure_last_row.structure_line_end)) == ""
+      && { value source; byte_slice end_offset structure_last_row.structure_line_end; trim } == ""
       && (checkJSDoc || !structure_block_jsdoc) && (checkExclamation || !structure_block_exclamation)
   warn if mode == "bare-block" then "Expected a block comment without padding stars." else "Expected multiple line comments instead of a block comment."
 }
@@ -256,7 +284,10 @@ in ts_block_comment rule multiline-comment-style:shape {
 in ts_block_comment rule multiline-comment-style:open {
   @structure_comment_style_options
   when mode == "starred-block" && structure_style_eligible && structure_multiline
-  when trim(if starts_with(structure_block_first, "*") || starts_with(structure_block_first, "!") then slice(structure_block_first, 1) else structure_block_first) != ""
+  when {
+    value if starts_with(structure_block_first, "*") || starts_with(structure_block_first, "!") then slice(structure_block_first, 1) else structure_block_first
+    trim
+  } != ""
   report at offset
   warn "Expected a linebreak after '/*'."
 }
@@ -271,26 +302,33 @@ in ts_block_comment rule multiline-comment-style:close {
 in ts_line rule multiline-comment-style:alignment {
   @structure_comment_style_options
   when mode == "starred-block"
-  let comment first(filter(overlapping(ts_block_comment), comment => comment.structure_style_eligible && comment.offset < offset))
+  let comment {
+    value overlapping(ts_block_comment)
+    filter (comment) comment.structure_style_eligible && comment.offset < offset
+    first
+  }
   when comment != null
   let prefix byte_slice(source, comment.structure_first_row.offset, comment.offset) " *"
   when !starts_with(text, prefix)
   report at offset
-  warn if starts_with(trim_start(text), "*") then "Expected this line to be aligned with the start of the comment." else "Expected a '*' at the start of this line."
+  warn if { value text; trim_start; starts_with "*" } then "Expected this line to be aligned with the start of the comment." else "Expected a '*' at the start of this line."
 }
 
 fn structure_line_comments_join(source, previous, next) = previous != null && next != null
   && previous is ts_line_comment && next is ts_line_comment
   && previous.structure_style_eligible && next.structure_style_eligible && previous.end_offset <= next.offset
   && position(next.offset).js_line == position(previous.end_offset).js_line + 1
-  && trim(byte_slice(source, previous.end_offset, next.offset)) == ""
+  && { value source; byte_slice previous.end_offset next.offset; trim } == ""
 in ts_line_comment let structure_previous_comment last(structure_previous_row.structure_row_comments)
 in ts_line_comment let structure_next_comment first(structure_next_row.structure_row_comments)
 in ts_line_comment let structure_joins_previous structure_line_comments_join(source, structure_previous_comment, node)
 in ts_line_comment let structure_joins_next structure_line_comments_join(source, node, structure_next_comment)
 in ts_line_comment let structure_group_unsafe contains(structure_comment_body, "*/")
-  || any(walk(if structure_joins_next then structure_next_comment.node else null, comment => if comment.structure_joins_next then comment.structure_next_comment.node else null),
-    comment => contains(comment.structure_comment_body, "*/"))
+  || {
+    value if structure_joins_next then structure_next_comment.node else null
+    walk (comment) if comment.structure_joins_next then comment.structure_next_comment.node else null
+    any (comment) contains(comment.structure_comment_body, "*/")
+  }
 in ts_line_comment rule multiline-comment-style:consecutive {
   @structure_comment_style_options
   when mode != "separate-lines" && structure_style_eligible && !structure_joins_previous && structure_joins_next && !structure_group_unsafe
@@ -313,7 +351,7 @@ in ts_question, ts_colon rule multiline-ternary {
 in ts_line match structure_tab_run /\t+/
 in structure_tab_run rule no-tabs {
   option allowIndentationTabs boolean = false "allow tabs at the start of a line"
-  when !allowIndentationTabs || !re_test(byte_slice(parent.text, 0, offset - parent.offset), /^[ \t]*$/)
+  when !allowIndentationTabs || !{ value parent.text; byte_slice 0 (offset - parent.offset); re_test /^[ \t]*$/ }
   warn "Unexpected tab character."
 }
 
@@ -323,10 +361,13 @@ in ts_line rule no-mixed-spaces-and-tabs {
   when indentation != null && contains(indentation, " ") && contains(indentation, "\t")
   let smart_prefix re_find(indentation, /^[ \t]*? \t/)
   when mode != "smart-tabs" || smart_prefix != null
-  let boundary offset + (if mode == "smart-tabs" then len(smart_prefix) - 2 else len(re_find(indentation, /^(?: +|\t+)/)) - 1)
-  when !any(overlapping(ts_comment), comment => comment.offset < offset && offset < comment.end_offset)
-  when !any(overlapping(structure_literal), literal => literal.offset < offset && boundary < literal.end_offset)
-  when !any(overlapping(structure_template), template => any(template.quasi.node, quasi => quasi.offset < offset && boundary < quasi.end_offset))
+  let boundary offset + (if mode == "smart-tabs" then len(smart_prefix) - 2 else { value indentation; re_find /^(?: +|\t+)/; len } - 1)
+  when !{ value overlapping(ts_comment); any (comment) comment.offset < offset && offset < comment.end_offset }
+  when !{ value overlapping(structure_literal); any (literal) literal.offset < offset && boundary < literal.end_offset }
+  when !{
+    value overlapping(structure_template)
+    any (template) any(template.quasi.node, quasi => quasi.offset < offset && boundary < quasi.end_offset)
+  }
   report at boundary
   warn "Mixed spaces and tabs."
 }
@@ -353,21 +394,21 @@ in ts_declarator rule one-var-declaration-per-line {
 
 in ts_binary rule eqeqeq {
   option options ("always" | "smart" | "allow-null" | { null: "always" | "never" | "ignore" })[] = [] "equality mode and null policy"
-  let mode default(first(options), "always")
-  let null_mode default(last(options).null, "always")
+  let mode { value options; first; nonempty } ?? "always"
+  let null_mode { value last(options).null; nonempty } ?? "always"
   let left_literal left.literal_value
   let right_literal right.literal_value
   let null_check left_literal.type == "null" || right_literal.type == "null"
   let same_literal_type left_literal != null && right_literal != null && left_literal.type == right_literal.type
   let loose operator == "==" || operator == "!="
   let strict_null (operator == "===" || operator == "!==") && null_check && mode == "always" && null_mode == "never"
-  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || default(left.structure_typeof, false) || default(right.structure_typeof, false)))
-  let expected if strict_null then slice(operator, 0, len(operator) - 1) else operator "="
+  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || (left.structure_typeof.nonempty ?? false) || (right.structure_typeof.nonempty ?? false)))
+  let expected if strict_null then { value result: len(operator) - 1; value slice(operator, 0, result) } else operator "="
   report at operator.offset
   warn "Expected '{expected}' and instead saw '{operator}'."
 }
 
-fn padding_selector_matches(info, selector) = (if type_of(selector) == "str" then contains(info.tags, selector) else contains(info.selectors, re_replace(selector.selector, /["']/, "")) && (default(selector.lineMode, "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
+fn padding_selector_matches(info, selector) = (if type_of(selector) == "str" then contains(info.tags, selector) else { value selector.selector; re_replace: re_replace /["']/ ""; value contains(info.selectors, re_replace) } && ((selector.lineMode.nonempty ?? "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
 fn padding_category_side_matches(info, selectors) = any(selectors, selector => padding_selector_matches(info, selector))
 fn padding_side_matches(item, selectors) =
   if type_of(selectors) == "str" then
@@ -385,15 +426,18 @@ in ts_interface, ts_type_literal let structure_padding_items filter(member.node,
 in structure_padding_owner let structure_padding_first_non_directive find(structure_padding_items, item => !item.structure_padding_directive)
 in ts_expression_statement let structure_padding_directive expression is ts_string
   && (parent is ts_program || parent is ts_block && parent.parent is (ts_function, ts_arrow, ts_method))
-in ts_labeled let structure_padding_unlabel default(body.structure_padding_unlabel, body.node)
-in ts_sequence let structure_padding_sequence default((last(expression.node)).structure_padding_sequence, (last(expression.node)).structure_unwrapped)
-in ts_parenthesized let structure_padding_sequence default(expression.structure_padding_sequence, expression.structure_unwrapped)
+in ts_labeled let structure_padding_unlabel body.structure_padding_unlabel.nonempty ?? body.node
+in ts_sequence let structure_padding_sequence { value (last(expression.node)).structure_padding_sequence; nonempty } ?? (last(expression.node)).structure_unwrapped
+in ts_parenthesized let structure_padding_sequence expression.structure_padding_sequence.nonempty ?? expression.structure_unwrapped
 in ts_unary let structure_padding_iife_expression argument.structure_unwrapped
 in ts_parenthesized let structure_padding_iife_expression expression.structure_padding_iife_expression
-in ts_expression_statement let structure_padding_iife structure_padding_is_iife(default(expression.structure_padding_iife_expression, expression.structure_unwrapped))
-fn structure_padding_is_iife(n) = default(n.callee.structure_padding_sequence, n.callee.structure_unwrapped) is (ts_function, ts_arrow)
-in ts_member, ts_index let structure_padding_receiver default(object.structure_padding_receiver, object.structure_unwrapped)
-in ts_parenthesized let structure_padding_receiver default(expression.structure_padding_receiver, expression.structure_unwrapped)
+in ts_expression_statement let structure_padding_iife {
+  value expression.structure_padding_iife_expression.nonempty ?? expression.structure_unwrapped
+  structure_padding_is_iife
+}
+fn structure_padding_is_iife(n) = (n.callee.structure_padding_sequence.nonempty ?? n.callee.structure_unwrapped) is (ts_function, ts_arrow)
+in ts_member, ts_index let structure_padding_receiver object.structure_padding_receiver.nonempty ?? object.structure_unwrapped
+in ts_parenthesized let structure_padding_receiver expression.structure_padding_receiver.nonempty ?? expression.structure_unwrapped
 in ts_member, ts_index let structure_padding_exports
   if object is ts_identifier then object.text == "exports" || object.text == "module" && node.property == "exports"
   else object.structure_unwrapped.structure_padding_exports
@@ -427,7 +471,7 @@ fn structure_padding_node_type(n) =
   else if n is ts_method_signature then "TSMethodSignature" else if n is ts_expression_statement then "ExpressionStatement"
   else if n is ts_return then "ReturnStatement"
   else if n is ts_export then (if n.kind == "default" then "ExportDefaultDeclaration" else if n.operator == "*" then "ExportAllDeclaration" else "ExportNamedDeclaration")
-  else default(last(n.structure_padding_keyword_tag), default(n.structure_padding_declaration_type, ""))
+  else { value n.structure_padding_keyword_tag; last; nonempty } ?? n.structure_padding_declaration_type.nonempty ?? ""
 in ts_block let structure_padding_plain_tag "block"
 in ts_empty let structure_padding_plain_tag "empty"
 in ts_method_signature let structure_padding_plain_tag "ts-method"
@@ -440,58 +484,128 @@ in ts_type_alias let structure_padding_sized_tag if structure_padding_keyword ==
 in ts_return let structure_padding_sized_tag if structure_padding_keyword == "return" then "return" else null
 in ts_declarator let structure_padding_init init.node
 in ts_variable_declaration let structure_padding_first_init first(declaration.structure_padding_init)
-in ts_variable_declaration let structure_padding_extra_tags compact([
-  if structure_padding_is_require(structure_padding_receiver(structure_padding_first_init)) then "require" else null,
+in ts_variable_declaration let structure_padding_extra_tags {
+  value [
+  if { value structure_padding_first_init; structure_padding_receiver; structure_padding_is_require } then "require" else null,
   if starts_with(structure_padding_first_init.text, "require(") then "cjs-import" else null
-])
-in ts_expression_statement let structure_padding_extra_tags compact([
+]
+  compact
+}
+in ts_expression_statement let structure_padding_extra_tags {
+  value [
   if structure_padding_iife then "iife" else null,
-  if expression.structure_unwrapped is ts_assignment && re_test(re_replace(expression.structure_unwrapped.left.text, /\s/, ""), /^(?:module\.)?exports(?:$|[.\[])/) then "cjs-export" else null,
+  if expression.structure_unwrapped is ts_assignment && { value expression.structure_unwrapped.left.text; re_replace /\s/ ""; re_test /^(?:module\.)?exports(?:$|[.\[])/ } then "cjs-export" else null,
   if expression.structure_unwrapped is ts_assignment && expression.structure_unwrapped.left.structure_padding_exports then "exports" else null
-])
-in ts_function let structure_padding_selectors compact([if name != null then structure_padding_type "[id.name=" name "]" else null, structure_padding_type])
-in ts_export let structure_padding_selectors compact([if declaration != null then structure_padding_type "[declaration.type=" default(declaration.structure_padding_declaration_type, "") "]" else null, structure_padding_type])
-in ts_expression_statement let structure_padding_selectors compact([if expression.structure_unwrapped.callee is ts_identifier then "ExpressionStatement[expression.callee.name=" expression.structure_unwrapped.callee.text "]" else null, structure_padding_type])
-in ts_node let structure_padding_trimmed trim_end(re_replace(trim_end(text), /;+$/, ""))
+]
+  compact
+}
+in ts_function let structure_padding_selectors { value [if name != null then structure_padding_type "[id.name=" name "]" else null, structure_padding_type]; compact }
+in ts_export let structure_padding_selectors {
+  value [if declaration != null then structure_padding_type "[declaration.type=" (declaration.structure_padding_declaration_type.nonempty ?? "") "]" else null, structure_padding_type]
+  compact
+}
+in ts_expression_statement let structure_padding_selectors {
+  value [if expression.structure_unwrapped.callee is ts_identifier then "ExpressionStatement[expression.callee.name=" expression.structure_unwrapped.callee.text "]" else null, structure_padding_type]
+  compact
+}
+in ts_node let structure_padding_trimmed {
+  value text
+  trim_end
+  re_replace /;+$/ ""
+  trim_end
+}
 in ts_node let structure_padding_block_like structure_padding_iife
   || is ts_do_while && node.body is ts_block
-  || ends_with(structure_padding_trimmed, "}}") && (is structure_padding_block && end_offset == offset + byte_len(structure_padding_trimmed)
-    || any(overlapping(structure_padding_block, offset + byte_len(structure_padding_trimmed) - 1, offset + byte_len(structure_padding_trimmed)), block => block.end_offset == offset + byte_len(structure_padding_trimmed)))
-in ts_node let structure_padding_categories (default(structure_padding_unlabel, node)).structure_padding_category
+  || { value result: "}}"; value ends_with(structure_padding_trimmed, result) } && (is structure_padding_block && end_offset == offset + byte_len(structure_padding_trimmed)
+    || {
+      value result_2: offset + byte_len(structure_padding_trimmed) - 1
+      value result_3: offset + byte_len(structure_padding_trimmed)
+      value overlapping(structure_padding_block, result_2, result_3)
+      any (block) block.end_offset == offset + byte_len(structure_padding_trimmed)
+    })
+in ts_node let structure_padding_categories (structure_padding_unlabel.nonempty ?? node).structure_padding_category
 in ts_node let structure_padding_category {
-  tags: ["*"] compact([structure_padding_plain_tag, if structure_padding_keyword == first(structure_padding_keyword_tag) then first(structure_padding_keyword_tag) else null]) default(structure_padding_extra_tags, [])
-    structure_padding_tags(structure_padding_sized_tag, re_test(text, /[\n\r\u2028\u2029]/))
-    (if structure_padding_block_like then structure_padding_tags("block-like", re_test(text, /[\n\r\u2028\u2029]/)) else []),
-  selectors: default(structure_padding_selectors, [structure_padding_type]),
+  tags: ["*"] {
+    value [structure_padding_plain_tag, if structure_padding_keyword == first(structure_padding_keyword_tag) then first(structure_padding_keyword_tag) else null]
+    compact
+  } (structure_padding_extra_tags.nonempty ?? [])
+    {
+      value text
+      multiline: re_test /[\n\r\u2028\u2029]/
+      value structure_padding_tags(structure_padding_sized_tag, multiline)
+    }
+    (if structure_padding_block_like then { value text; multiline_2: re_test /[\n\r\u2028\u2029]/; value structure_padding_tags("block-like", multiline_2) } else []),
+  selectors: structure_padding_selectors.nonempty ?? [structure_padding_type],
   multiline: re_test(text, /[\n\r\u2028\u2029]/)
 }
 fn structure_padding_tags(tag, multiline) = if tag == null then [] else [tag, (if multiline then "multiline-" else "singleline-") tag]
-fn structure_padding_receiver(n) = default(n.structure_padding_receiver, n.structure_unwrapped)
+fn structure_padding_receiver(n) = n.structure_padding_receiver.nonempty ?? n.structure_unwrapped
 fn structure_padding_is_require(n) = n.callee is ts_identifier && n.callee.text == "require"
-fn structure_padding_blank(text) = re_test(replace(text, "\r\n", "\n"), /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/)
-fn structure_padding_gap_end(previous, next, source) = if ends_with(previous.text, ";")
-  && re_test(byte_slice(source, previous.offset + byte_len(trim_end(byte_slice(previous.text, 0, byte_len(previous.text) - 1))), previous.end_offset - 1), /[\n\r\u2028\u2029]/)
-  && !re_test(byte_slice(source, previous.end_offset - 1, next.offset), /[\n\r\u2028\u2029]/)
-  then previous.offset + byte_len(trim_end(byte_slice(previous.text, 0, byte_len(previous.text) - 1))) else previous.end_offset
-fn structure_padding_padded(source, end, start, comments) = any(zip([end] map(comments, comment => comment.end_offset), map(comments, comment => comment.offset) [start]),
-  segment => structure_padding_blank(byte_slice(source, first(segment), last(segment))))
+fn structure_padding_blank(text) = { value text; replace "\r\n" "\n"; re_test /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/ }
+fn structure_padding_gap_end(previous, next, source) =
+  if !ends_with(previous.text, ";") then previous.end_offset else {
+    value content_end: byte_len(previous.text) - 1
+    value previous.text
+    byte_slice 0 content_end
+    trim_end
+    byte_len
+    trimmed_end: then (length) previous.offset + length
+    value if { value source; byte_slice trimmed_end (previous.end_offset - 1); re_test /[\n\r\u2028\u2029]/ }
+      && !{ value source; byte_slice (previous.end_offset - 1) next.offset; re_test /[\n\r\u2028\u2029]/ }
+      then trimmed_end else previous.end_offset
+  }
+fn structure_padding_padded(source, end, start, comments) = {
+  value result: [end] map(comments, comment => comment.end_offset)
+  value result_2: map(comments, comment => comment.offset) [start]
+  value zip(result, result_2)
+  any (segment) {
+    value segment
+    first_segment_2: first
+    value segment
+    last_segment_2: last
+    value byte_slice(source, first_segment_2, last_segment_2)
+    structure_padding_blank
+  }
+}
 
 in structure_padding_owner rule padding-line-between-statements {
   option options { blankLine: "any" | "always" | "never"; prev: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[]; next: string | { selector: string; lineMode?: "any" | "singleline" | "multiline" } | (string | { selector: string; lineMode?: "any" | "singleline" | "multiline" })[] }[] = [] "ordered statement padding policies"
   when any(options, policy => policy.blankLine != "any")
-  let pairs map(zip(structure_padding_items, slice(structure_padding_items, 1)), pair => {
-    prior: first(pair),
-    following: last(pair),
-    end: structure_padding_gap_end(first(pair), last(pair), source),
-    start: (last(pair)).offset
-  })
-  let policies filter(map(pairs, pair => {
-    end: pair.end, start: pair.start,
-    policy: default(find_last(options, config => padding_side_matches(pair.prior, config.prev) && padding_side_matches(pair.following, config.next)).blankLine, "any")
-  }), pair => pair.end <= pair.start && pair.policy != "any")
+  let pairs {
+    value structure_padding_items
+    slice: slice 1
+    value zip(structure_padding_items, slice)
+    map (pair) {
+      prior: first(pair),
+      following: last(pair),
+      end: {
+        value pair
+        previous_2: first
+        value pair
+        next_2: last
+        value structure_padding_gap_end(previous_2, next_2, source)
+      },
+      start: (last(pair)).offset
+    }
+  }
+  let policies {
+    value pairs
+    map (pair) {
+      end: pair.end, start: pair.start,
+      policy: {
+        value find_last(options, config => padding_side_matches(pair.prior, config.prev) && padding_side_matches(pair.following, config.next)).blankLine
+        nonempty
+      } ?? "any"
+    }
+    filter (pair) pair.end <= pair.start && pair.policy != "any"
+  }
   let findings map(policies, pair => {
     offset: pair.start, policy: pair.policy,
-    padded: structure_padding_padded(source, pair.end, pair.start, filter(overlapping(ts_comment, pair.end, pair.start), comment => pair.end <= comment.offset && comment.end_offset <= pair.start))
+    padded: {
+      value overlapping(ts_comment, pair.end, pair.start)
+      comments: filter (comment) pair.end <= comment.offset && comment.end_offset <= pair.start
+      value structure_padding_padded(source, pair.end, pair.start, comments)
+    }
   })
   each info in findings
   when info.policy == "always" && !info.padded || info.policy == "never" && info.padded
@@ -499,18 +613,21 @@ in structure_padding_owner rule padding-line-between-statements {
   warn if info.policy == "always" then "Expected blank line before this statement." else "Unexpected blank line before this statement."
 }
 
-fn operand_cached_indent(records, row, fallback) = default(last(filter(records, prior => prior.right_line == row)).expected, fallback)
+fn operand_cached_indent(records, row, fallback) = { value { value records; filter (prior) prior.right_line == row; last }.expected; nonempty } ?? fallback
 
 in ts_program rule indent-binary-ops {
   option mode number | "tab" = 2 "indent width or tabs"
   let width if mode == "tab" then 1 else mode
   let unit if mode == "tab" then "\t" else " "
-  let measurements reduce(binary_operand_indents, [], (state, info) => state [{
-    offset: info.offset,
-    right_line: info.right_line,
-    actual: operand_cached_indent(state, info.right_line, info.right),
-    expected: if info.adjust > 0 then (operand_cached_indent(state, info.left_line, info.left) repeat(unit, width)) else if info.adjust < 0 then slice(operand_cached_indent(state, info.left_line, info.left), width) else operand_cached_indent(state, info.left_line, info.left),
-  }])
+  let measurements {
+    value binary_operand_indents
+    fold ([]) (state, info) state [{
+      offset: info.offset,
+      right_line: info.right_line,
+      actual: operand_cached_indent(state, info.right_line, info.right),
+      expected: if info.adjust > 0 then (operand_cached_indent(state, info.left_line, info.left) repeat(unit, width)) else if info.adjust < 0 then { value state; operand_cached_indent info.left_line info.left; slice width } else operand_cached_indent(state, info.left_line, info.left),
+    }]
+  }
   each info in measurements
   when info.actual != info.expected
   report at info.offset
@@ -524,7 +641,7 @@ in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, t
     || parent is (ts_conditional, ts_conditional_type) && contains(["?", ":"], text)
     || parent is (ts_declarator, ts_class_property, ts_import_equals, ts_type_alias, ts_type_parameter, ts_enum_member) && text == "="
     || parent is (ts_union, ts_intersection) && contains(["|", "&"], text) && offset > parent.structure_first_type_offset
-  let placement default(get(overrides, text), if mode == null && contains(["?", ":"], text) then "before" else default(mode, "after"))
+  let placement { value overrides; get text; nonempty } ?? if mode == null && contains(["?", ":"], text) then "before" else mode.nonempty ?? "after"
   let next_text if parent is ts_type_alias then byte_slice(parent_text, space_after.end - parent.structure_start) else null
   let policy if placement != "ignore" && parent is ts_type_alias && re_test(next_text, /^[|&]/) then "after" else placement
   when policy != "ignore" && (space_before.line_break || space_after.line_break)
@@ -567,43 +684,70 @@ group structure_suppress_statement_entry ts_do_while, ts_for, ts_for_in, ts_for_
 @register_max_statements_counted(ts_with, true)
 @register_max_statements_counted(ts_export, true)
 in max_statements_counted let max_statements_entry_line if parent is structure_suppress_statement_entry && not ts_node.alternate || parent is ts_export && parent.operator != "*" then null else position(offset).js_line
-in max_statements_counted let max_statements_exit_offset offset + byte_len(default(trim_end(trim_end(trim_end(text), ";")), text))
+in max_statements_counted let max_statements_exit_offset offset + {
+  value {
+  value text
+  trim_end
+  trim_end ";"
+  trim_end
+  nonempty
+} ?? text
+  byte_len
+}
 in max_statements_counted let max_statements_exit_line position(max_statements_exit_offset).js_line
 
 in ts_line rule max-statements-per-line {
   option max int(1..) = 1 "maximum statements on one line"
   let row position(offset).js_line
-  let statements filter(overlapping(max_statements_counted), statement => default(statement.max_statements_counted_here, true))
-  let tally reduce(statements, { count: 0, first_entry: null, first_exit: null, at_limit: null, after_limit: null }, (state, statement) => {
-    count: state.count + (if statement.max_statements_entry_line == row then 1 else 0),
-    first_entry: if statement.max_statements_entry_line == row then default(state.first_entry, statement.offset) else state.first_entry,
-    first_exit: if statement.max_statements_exit_line == row then min(default(state.first_exit, statement.max_statements_exit_offset), statement.max_statements_exit_offset) else state.first_exit,
-    at_limit: if statement.max_statements_entry_line == row && state.count + 1 == max then statement.offset else state.at_limit,
-    after_limit: if statement.max_statements_entry_line == row && state.count == max then statement.offset else state.after_limit,
-  })
+  let statements { value overlapping(max_statements_counted); filter (statement) statement.max_statements_counted_here.nonempty ?? true }
+  let tally {
+    value statements
+    fold ({ count: 0, first_entry: null, first_exit: null, at_limit: null, after_limit: null }) (state, statement) {
+      count: state.count + (if statement.max_statements_entry_line == row then 1 else 0),
+      first_entry: if statement.max_statements_entry_line == row then state.first_entry.nonempty ?? statement.offset else state.first_entry,
+      first_exit: if statement.max_statements_exit_line == row then { value state.first_exit.nonempty ?? statement.max_statements_exit_offset; min statement.max_statements_exit_offset } else state.first_exit,
+      at_limit: if statement.max_statements_entry_line == row && state.count + 1 == max then statement.offset else state.at_limit,
+      after_limit: if statement.max_statements_entry_line == row && state.count == max then statement.offset else state.after_limit,
+    }
+  }
   let carried if tally.first_exit != null && (tally.first_entry == null || tally.first_exit <= tally.first_entry) then 1 else 0
   when tally.count + carried > max
   report at if carried == 1 then tally.at_limit else tally.after_limit
   warn "This line has {tally.count + carried} statements. Maximum allowed is {max}."
 }
 
-fn structure_gap_parts(source, from, to, comments) = reduce(filter(comments, comment => comment.offset < to && comment.end_offset > from), { cursor: from, code: false }, (state, comment) => {
-  cursor: min(comment.end_offset, to),
-  code: state.code || trim(byte_slice(source, state.cursor, max(comment.offset, from))) != "",
-})
-fn structure_gap_has_code(source, to, parts) = parts.code || trim(byte_slice(source, parts.cursor, to)) != ""
+fn structure_gap_parts(source, from, to, comments) = {
+  value comments
+  filter (comment) comment.offset < to && comment.end_offset > from
+  fold ({ cursor: from, code: false }) (state, comment) {
+    cursor: min(comment.end_offset, to),
+    code: state.code || {
+      value comment.offset
+      max: max from
+      value byte_slice(source, state.cursor, max)
+      trim
+    } != "",
+  }
+}
+fn structure_gap_has_code(source, to, parts) = parts.code || { value source; byte_slice parts.cursor to; trim } != ""
 
 in ts_line let structure_row_comments overlapping(structure_comment)
 in ts_line let structure_row_blocked trim(text) == "" || any(structure_row_comments, comment =>
   position(comment.offset).js_line == position(offset).js_line || position(comment.end_offset).js_line == position(offset).js_line)
-in structure_comment let structure_first_row first(overlapping(ts_line, offset, offset + 1))
-in structure_comment let structure_last_row first(overlapping(ts_line, end_offset - 1, end_offset))
-in structure_comment let structure_previous_row if structure_first_row.offset > 0 then first(overlapping(ts_line, structure_first_row.offset - 1, structure_first_row.offset)) else null
-in structure_comment let structure_next_row first(overlapping(ts_line, structure_last_row.end_offset, structure_last_row.end_offset + 1))
-in structure_comment let structure_inline structure_gap_has_code(source, offset,
-  structure_gap_parts(source, structure_first_row.offset, offset, structure_first_row.structure_row_comments))
-  || structure_gap_has_code(source, structure_last_row.end_offset,
-    structure_gap_parts(source, end_offset, structure_last_row.end_offset, structure_last_row.structure_row_comments))
+in structure_comment let structure_first_row { value overlapping(ts_line, offset, offset + 1); first }
+in structure_comment let structure_last_row { value overlapping(ts_line, end_offset - 1, end_offset); first }
+in structure_comment let structure_previous_row if structure_first_row.offset > 0 then { value overlapping(ts_line, structure_first_row.offset - 1, structure_first_row.offset); first } else null
+in structure_comment let structure_next_row { value overlapping(ts_line, structure_last_row.end_offset, structure_last_row.end_offset + 1); first }
+in structure_comment let structure_inline {
+  value source
+  parts: structure_gap_parts structure_first_row.offset offset structure_first_row.structure_row_comments
+  value structure_gap_has_code(source, offset, parts)
+}
+  || {
+    value source
+    parts_2: structure_gap_parts end_offset structure_last_row.end_offset structure_last_row.structure_row_comments
+    value structure_gap_has_code(source, structure_last_row.end_offset, parts_2)
+  }
 
 in ts_class let structure_boundary_targets ["Block", "Class"]
 in ts_block let structure_boundary_targets if parent is ts_namespace then ["Module"] else ["Block"]
@@ -641,8 +785,14 @@ in structure_comment rule name {
   option allowEnumEnd boolean = false "allow comments at enum ends"
   option allowModuleStart boolean = false "allow comments at module starts"
   option allowModuleEnd boolean = false "allow comments at module ends"
-  let allowedStart compact([if allowClassStart == true then "Class" else null, if allowObjectStart then "Object" else null, if allowArrayStart then "Array" else null, if allowInterfaceStart then "Interface" else null, if allowTypeStart then "Type" else null, if allowEnumStart then "Enum" else null, if allowModuleStart then "Module" else null])
-  let allowedEnd compact([if allowClassEnd == true then "Class" else null, if allowObjectEnd then "Object" else null, if allowArrayEnd then "Array" else null, if allowInterfaceEnd then "Interface" else null, if allowTypeEnd then "Type" else null, if allowEnumEnd then "Enum" else null, if allowModuleEnd then "Module" else null])
+  let allowedStart {
+    value [if allowClassStart == true then "Class" else null, if allowObjectStart then "Object" else null, if allowArrayStart then "Array" else null, if allowInterfaceStart then "Interface" else null, if allowTypeStart then "Type" else null, if allowEnumStart then "Enum" else null, if allowModuleStart then "Module" else null]
+    compact
+  }
+  let allowedEnd {
+    value [if allowClassEnd == true then "Class" else null, if allowObjectEnd then "Object" else null, if allowArrayEnd then "Array" else null, if allowInterfaceEnd then "Interface" else null, if allowTypeEnd then "Type" else null, if allowEnumEnd then "Enum" else null, if allowModuleEnd then "Module" else null]
+    compact
+  }
   when if before then (if is ts_block_comment then beforeBlockComment else beforeLineComment)
     else (if is structure_hashbang then afterHashbangComment else if is ts_block_comment then afterBlockComment else afterLineComment)
   when !(applyDefaultIgnorePatterns && structure_directive) && (ignorePattern == "" || !re_test(structure_comment_body, ignorePattern))
@@ -656,8 +806,8 @@ in structure_comment rule name {
   let boundary parent.structure_boundary_start != null && parent.structure_boundary_start <= offset
     && (if before then position(parent.structure_boundary_start).js_line + 1 == position(offset).js_line
       else position(parent.end_offset).js_line == position(end_offset).js_line + 1)
-  let targets if boundary then default(parent.structure_boundary_targets, []) else []
-  when !any(targets, target => contains(if before then allowedStart else allowedEnd, target))
+  let targets if boundary then parent.structure_boundary_targets.nonempty ?? [] else []
+  when !any(targets, target => { value if before then allowedStart else allowedEnd; contains target })
   when !(contains(targets, "Block") && (if before then allowBlockStart else allowBlockEnd) && !(contains(targets, "Class") && (if before then allowClassStart else allowClassEnd) == false))
   warn if before then "Expected line before comment." else "Expected line after comment."
 }
@@ -665,31 +815,34 @@ in structure_comment rule name {
 @structure_comment_gap(lines-around-comment:before, true)
 @structure_comment_gap(lines-around-comment:after, false)
 
-in ts_parenthesized let structure_unwrapped_end default(expression.structure_unwrapped_end, expression.end_offset)
-in ts_parenthesized let structure_unwrapped_text default(expression.structure_unwrapped_text, expression.text)
+in ts_parenthesized let structure_unwrapped_end expression.structure_unwrapped_end.nonempty ?? expression.end_offset
+in ts_parenthesized let structure_unwrapped_text expression.structure_unwrapped_text.nonempty ?? expression.text
 in ts_parenthesized let structure_chain_info expression.structure_chain_info
 in ts_parenthesized let structure_call_depth expression.structure_call_depth
-in ts_call, ts_new let structure_call_depth default((callee.structure_chain_info).depth, 1)
+in ts_call, ts_new let structure_call_depth (callee.structure_chain_info).depth.nonempty ?? 1
 
 @macro structure_chain_owner(kind, property_start, property_text, is_computed) {
   in kind let structure_chain_info {
-    depth: 1 + default(object.structure_call_depth, 0),
+    depth: 1 + (object.structure_call_depth.nonempty ?? 0),
     offset: (object.space_after).end,
-    gap: byte_slice(source, default(object.structure_unwrapped_end, object.end_offset), property_start),
+    gap: {
+      value default: object.structure_unwrapped_end.nonempty ?? object.end_offset
+      value byte_slice(source, default, property_start)
+    },
     property: property_text,
     computed: is_computed,
     optional: optional != null,
   }
 }
-@structure_chain_owner(ts_member, property.offset, default(property.structure_unwrapped_text, property.text), false)
-@structure_chain_owner(ts_index, index.offset, default(index.structure_unwrapped_text, index.text), true)
+@structure_chain_owner(ts_member, property.offset, property.structure_unwrapped_text.nonempty ?? property.text, false)
+@structure_chain_owner(ts_index, index.offset, index.structure_unwrapped_text.nonempty ?? index.text, true)
 
 in ts_call rule newline-per-chained-call {
   option ignoreChainWithDepth number = 2 "allow chains up to this depth"
   let info callee.structure_chain_info
   when info != null && info.depth > ignoreChainWithDepth && !re_test(info.gap, /[\n\r\u{2028}\u{2029}]/)
   report at info.offset
-  let first_line default(re_find(info.property, /^[^\n\r\u{2028}\u{2029}]*/), "")
+  let first_line { value info.property; re_find /^[^\n\r\u{2028}\u{2029}]*/; nonempty } ?? ""
   let prefix if info.optional then (if info.computed then "?.[" else "?.") else (if info.computed then "[" else ".")
   let suffix if info.computed && len(first_line) == len(info.property) then "]" else ""
   let callee_name prefix first_line suffix
@@ -708,7 +861,7 @@ in ts_arrow rule no-confusing-arrow {
   option allowParens boolean = true "parentheses disambiguate a conditional body"
   option onlyOneSimpleParam boolean = false "check only single identifier parameters"
   when body is ts_conditional || !allowParens && body is ts_parenthesized && body.structure_single_conditional
-  when !onlyOneSimpleParam || count(parameter) == 1 && re_test(first(parameter), /^[A-Za-z_$][\w$]*$/)
+  when !onlyOneSimpleParam || count(parameter) == 1 && { value parameter; first; re_test /^[A-Za-z_$][\w$]*$/ }
   warn "Arrow function used ambiguously with a conditional expression."
 }
 
@@ -716,7 +869,10 @@ in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.bo
   option mode "beside" | "below" | "any" = "beside"
   option overrides { if?: "beside" | "below" | "any"; else?: "beside" | "below" | "any"; while?: "beside" | "below" | "any"; do?: "beside" | "below" | "any"; for?: "beside" | "below" | "any" } = {} "position by statement"
   let kind if parent is ts_if then (if is ts_if.alternate then "else" else "if") else if parent is ts_while then "while" else if parent is ts_do_while then "do" else "for"
-  let style default(if kind == "if" then overrides.if else if kind == "else" then overrides.else else if kind == "while" then overrides.while else if kind == "do" then overrides.do else overrides.for, mode)
+  let style {
+    value (if kind == "if" then overrides.if else if kind == "else" then overrides.else else if kind == "while" then overrides.while else if kind == "do" then overrides.do else overrides.for)
+    nonempty
+  } ?? mode
   let broken re_test(parent_before, /\n[ \t]*$/)
   when not ts_block && !(kind == "else" && is ts_if)
   when style != "any" && (style == "beside" && broken || style == "below" && !broken)

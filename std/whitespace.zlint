@@ -18,14 +18,14 @@ in .* layer text match line_text /^[^\r\n]+/ {
 in .* layer text match tab_indent /^ *\t[ \t]*/ {
   rule tab-indent warn "indent with spaces, not tabs" {
     option width int(1..) = 4 "spaces per tab"
-    fix as replace(text, "\t", repeat(" ", width))
+    fix as { value " "; repeat: repeat width; value replace(text, "\t", repeat) }
   }
 }
 
 in .* layer text match blank_run /\n(?:[ \t]*\r?\n){2,}/ {
   rule blank-lines warn "at most {max} blank lines in a row" {
     option max int(0..) = 2 "blank lines allowed in a row"
-    when len(split(text, "\n")) - 2 > max
+    when { value text; split "\n"; len } - 2 > max
     fix as "\n" repeat("\n", max)
   }
 }

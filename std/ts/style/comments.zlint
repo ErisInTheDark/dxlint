@@ -16,8 +16,8 @@ in ts_line_comment rule triple-slash-reference {
   let directive re_replace(text, /^\/\/\/\s*<reference\s*(types|path|lib)\s*=[\s\S]*$/, "$1")
   let module re_replace(text, /^\/\/\/\s*<reference\s*(?:types|path|lib)\s*=\s*["'|](.*)["'|][\s\S]*$/, "$1")
   when re_test(text, /^\/\/\/\s*<reference\s*(?:types|path|lib)\s*=\s*["'|].*["'|]/)
-  when re_test(slice(source, 0, offset), /^(?:\s|\/\/[^\r\n]*(?:\r?\n|$)|\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/)*$/)
-  when directive == "lib" && lib == "never" || directive == "path" && path == "never" || directive == "types" && (types == "never" || types == "prefer-import" && re_test(source, "(?:import|from|require\\s*\\()\\s*[\"']" re_escape(module) "[\"']"))
+  when { value source; slice 0 offset; re_test /^(?:\s|\/\/[^\r\n]*(?:\r?\n|$)|\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/)*$/ }
+  when directive == "lib" && lib == "never" || directive == "path" && path == "never" || directive == "types" && (types == "never" || types == "prefer-import" && { value result: "(?:import|from|require\\s*\\()\\s*[\"']" re_escape(module) "[\"']"; value re_test(source, result) })
   warn "Do not use a triple slash reference for {module}, use `import` style instead."
 }
 

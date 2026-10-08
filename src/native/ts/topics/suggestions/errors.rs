@@ -69,8 +69,8 @@ mod tests {
         let linter = native_linter(r#"
 in ts_throw rule probe {
   let caught catch_throw
-  each property in default(last(caught.arguments).properties, [])
-  when property.name == "details" && get(property.value, "binding") == get(get(caught, "parameter"), "binding")
+  each property in (last(caught.arguments).properties.nonempty ?? [])
+  when property.name == "details" && get(property.value, "binding") == { value caught; get "parameter"; get "binding" }
   report at property.value.offset
   warn "binding"
 }
@@ -91,8 +91,8 @@ in ts_throw rule probe {
         let linter = native_linter(r#"
 in ts_throw rule probe {
   let caught catch_throw
-  each property in default(last(caught.arguments).properties, [])
-  when property.kind == "ts_spread" || property.name == "cause" && property.value.name == get(caught, "parameter").name && get(property.value, "binding") != get(get(caught, "parameter"), "binding")
+  each property in (last(caught.arguments).properties.nonempty ?? [])
+  when property.kind == "ts_spread" || property.name == "cause" && property.value.name == get(caught, "parameter").name && get(property.value, "binding") != { value caught; get "parameter"; get "binding" }
   report at property.offset
   warn "binding"
 }
@@ -116,7 +116,15 @@ in ts_throw rule probe {
             let linter = native_linter(&format!(r#"
 in ts_throw rule probe {{
   let caught catch_throw
-  when caught_throw_cause_kind(get(caught, "parameter"), first(slice(caught.arguments, 1)), slice(caught.arguments, 0, 1)) == "{decision}"
+  when {{
+    value parameter: get(caught, "parameter")
+    value caught.arguments
+    slice 1
+    cause: first
+    value caught.arguments
+    leading: slice 0 1
+    value caught_throw_cause_kind(parameter, cause, leading)
+  }} == "{decision}"
   warn "decision"
 }}
 "#));

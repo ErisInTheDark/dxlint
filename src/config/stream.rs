@@ -203,7 +203,7 @@ impl Stream {
                     args.push(Vec::new());
                     continue;
                 }
-                Tk::Newline => continue,
+                Tk::Newline if depth == 0 => continue,
                 _ => {}
             }
             args.last_mut().expect("non-empty").push(t);

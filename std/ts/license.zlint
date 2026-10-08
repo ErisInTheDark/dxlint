@@ -7,14 +7,14 @@
 
 define {
 
-@macro license_text replace(license, "\n", @newline)
+@macro license_text ({ value to: @newline; value replace(license, "\n", to) })
 @macro license_wanted license != "" && (skip_files == "" || !re_test(file, skip_files))
 fn license_like(comment) = re_test(comment, /(?i)(?:Copyright|@license|SPDX-License-Identifier)\b/)
 
 in ts_program let license_prefix re_find(text, /\A\s*/)
-in ts_program let license_first_comment first(overlapping(ts_comment))
+in ts_program let license_first_comment { value overlapping(ts_comment); first }
 in ts_program let license_header if license_first_comment != null && license_first_comment.offset == byte_len(license_prefix) then license_first_comment else null
-in ts_program let license_suffix_space if license_header == null then "" else re_find(byte_slice(text, license_header.end_offset), /\A\s*/)
+in ts_program let license_suffix_space if license_header == null then "" else { value text; byte_slice license_header.end_offset; re_find /\A\s*/ }
 
 in ts_program rule header:missing warn "Missing license header" {
   option license string = "" "the license header"
@@ -22,7 +22,7 @@ in ts_program rule header:missing warn "Missing license header" {
   report change
   when @license_wanted && byte_len(license_prefix) < byte_len(text)
   when license_header == null || !license_like(license_header.text)
-  fix as license_prefix @license_text @newline @newline byte_slice(text, byte_len(license_prefix))
+  fix as license_prefix @license_text @newline @newline { value license_prefix; byte_len: byte_len; value byte_slice(text, byte_len) }
 }
 in ts_program rule header:invalid warn "Invalid license header" {
   option license string = "" "the license header"

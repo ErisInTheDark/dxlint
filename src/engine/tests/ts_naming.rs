@@ -205,8 +205,8 @@ fn enabled_hook_preserves_intrinsic_context_and_merged_declarations() {
 fn custom_typed_naming_policy_requires_homogeneous_non_nullish_parts() {
     let l = native_linter(r#"
         fn boolean_domain(d) = d.kind == "boolean" || d.kind == "union"
-            && count(filter(d.parts, p => !contains(["null", "undefined"], p.kind))) > 0
-            && all(filter(d.parts, p => !contains(["null", "undefined"], p.kind)), p => boolean_domain(p))
+            && { value d.parts; filter (p) !contains(["null", "undefined"], p.kind); count } > 0
+            && { value d.parts; filter (p) !contains(["null", "undefined"], p.kind); all (p) boolean_domain(p) }
         in ts_identifier rule boolean-names {
             when naming_context == "variable" && boolean_domain(type_domains)
             let failure naming_failure(naming_name, false, { formats: ["UPPER_CASE"], prefix: ["IS_"] })

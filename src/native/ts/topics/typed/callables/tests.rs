@@ -30,7 +30,7 @@ fn callable_contract_paths_select_only_the_requested_callable() {
     ] {
         let lint = crate::engine::tests::native_linter(&format!(r#"
             in ts_declarator.init rule selected-contract {{
-                when count(callable_contracts(parent, node, {path})) == {expected}
+                when {{ value callable_contracts(parent, node, {path}); count }} == {expected}
                 warn "selected"
             }}
         "#));

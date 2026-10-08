@@ -240,10 +240,12 @@ impl Parser<'_> {
     }
 
     /// Does another joined value follow? The words that may follow an
-    /// expression (`then`, `else`, `fix`), `{` and the end of the line
+    /// expression (`then`, `else`, `fix`), a rule-clause `{` and the end of the line
     /// (outside brackets) end it.
     fn joins_next(&mut self) -> bool {
         self.skip(self.expr_depth > 0, false);
+        let Some(kind) = self.ts.peek_raw(0).map(|token| token.kind) else { return false };
+        if kind == Tk::LBrace { return self.pipeline_marker_at(1); }
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
             // `set` ends a rule line's message: `rule x error "..." set never`.
@@ -342,9 +344,7 @@ impl Parser<'_> {
             Tk::LBrace => {
                 self.ts.next_raw();
                 self.skip(true, false);
-                if self.ts.peek_raw(0).is_some_and(|next| next.is_ident("value"))
-                    && !self.ts.peek_raw(1).is_some_and(|next| next.kind == Tk::Colon)
-                {
+                if self.pipeline_marker_at(0) {
                     self.pipeline(t)
                 } else {
                     self.record(t)
@@ -468,15 +468,20 @@ impl Parser<'_> {
                     if crate::expr::Each::named(&name.text).is_some_and(|(_, kind)| matches!(kind, crate::expr::Each::Fold | crate::expr::Each::Zip)) {
                         args.push(self.operand()?);
                     }
-                    let params = self.stage_params()?;
-                    let body = self.expr()?;
-                    let span = name.span.to(body.span);
-                    args.push(Expr { kind: ExprKind::Lambda(params, Box::new(body)), span });
+                    let paired_only = name.is_ident("zip")
+                        && self.ts.peek_raw(0).is_none_or(|token| matches!(token.kind, Tk::Newline | Tk::RBrace));
+                    if !paired_only {
+                        let params = self.stage_params()?;
+                        let body = self.expr()?;
+                        let span = name.span.to(body.span);
+                        args.push(Expr { kind: ExprKind::Lambda(params, Box::new(body)), span });
+                    }
                 } else {
                     while self.ts.peek_raw(0).is_some_and(|token| !matches!(token.kind, Tk::Newline | Tk::RBrace)) {
                         args.push(self.operand()?);
                     }
                 }
+                self.call_arguments(&args);
                 PipelineStage::Call(function, args)
             };
             if steps.is_empty() && !matches!(stage, PipelineStage::Value(_)) {
@@ -655,10 +660,31 @@ impl Parser<'_> {
             }
             self.ts.next_raw();
             let args = self.comma_list(Tk::RParen, "`)`")?;
+            self.call_arguments(&args);
             let span = span.to(self.ts.last_span.unwrap_or(p.span));
             return Some(Expr { kind: ExprKind::Call(path.pop().expect("one"), args), span });
         }
         Some(Expr { kind: ExprKind::Var(path), span })
+    }
+
+    fn call_arguments(&mut self, args: &[Expr]) {
+        fn simple(expr: &Expr) -> bool {
+            match &expr.kind {
+                ExprKind::Str(_) | ExprKind::Num(_) | ExprKind::Bool(_) | ExprKind::Null
+                | ExprKind::Var(_) | ExprKind::Lambda(..) => true,
+                ExprKind::Template(parts) => parts.iter().all(|part| matches!(part, TemplatePart::Lit(_))),
+                ExprKind::List(items) => items.iter().all(simple),
+                ExprKind::Record(entries) => entries.iter().all(|(_, value)| simple(value)),
+                ExprKind::Key(value, _) | ExprKind::Unary(_, value)
+                | ExprKind::Test(value, _) | ExprKind::Is(value, _) => simple(value),
+                ExprKind::Binary(_, left, right) | ExprKind::Nullish(left, right) => simple(left) && simple(right),
+                ExprKind::Call(..) | ExprKind::If(..) | ExprKind::Pipeline(_) => false,
+            }
+        }
+        for arg in args.iter().filter(|arg| !simple(arg)) {
+            self.errors.push(ConfigError::new(arg.span, "call arguments must be simple values")
+                .note("use a pipeline or an intermediate `let` for calls and other compound values"));
+        }
     }
 
     /// Splits a string literal into literal text and `{expr}` holes.

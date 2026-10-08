@@ -89,6 +89,9 @@ pub enum CExpr {
     Each(Box<pipeline::Stage>),
     /// A lexical pipeline value, evaluated once at this parameter depth.
     Bind(Box<CExpr>, u16, Box<CExpr>),
+    /// Lazy null-only fallback; the left value is evaluated once.
+    Nullish(Box<CExpr>, Box<CExpr>),
+    NonEmpty(Box<CExpr>),
     /// `fact(args)` on the node: the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>),
@@ -149,13 +152,13 @@ macro_rules! child_visitor {
                 | CExpr::FactCall(_, items) | CExpr::UserCall(_, items) => {
                     for item in items { f(item) }
                 }
-                CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner)
+                CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner) | CExpr::NonEmpty(inner)
                 | CExpr::Test(inner, _) | CExpr::TestDfa(inner, _) | CExpr::Dbg(inner, _)
                 | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Key(inner, _)
                 | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
                 | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
                 | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => f(inner),
-                CExpr::Binary(_, a, b) | CExpr::Bind(a, _, b) | CExpr::Walk(a, b) | CExpr::Coalesce(a, b) => {
+                CExpr::Binary(_, a, b) | CExpr::Bind(a, _, b) | CExpr::Nullish(a, b) | CExpr::Walk(a, b) | CExpr::Coalesce(a, b) => {
                     f(a);
                     f(b);
                 }
@@ -231,7 +234,8 @@ pub const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("find_last(list, x => test)", "the last item for which `test` is truthy, or null"),
     ("all(list, x => test)", "whether `test` is truthy for every item"),
     ("any(list, x => test)", "whether `test` is truthy for some item (`any(list)`: some item is truthy)"),
-    ("reduce(list, initial, (state, x) => next)", "folds the list in order: `state` starts as `initial` and becomes each `next`"),
+    ("fold(list, initial, (state, x) => next)", "folds the list in order from an explicit initial value"),
+    ("reduce(list, (state, x) => next)", "folds from the first item; null on an empty list"),
 ];
 
 /// A function whose last argument is a lambda run on each item.
@@ -576,7 +580,7 @@ impl<'a> Scope<'a> {
         if let Some(i) = keys.iter().position(|key| matches!(key.text.as_str(), "nodes" | "nonempty")) {
             let suffix = &keys[i];
             let value = if suffix.text == "nonempty" {
-                CExpr::Call(functions::lookup("nonempty").expect("registered nonempty"), vec![self.member_path(base, &keys[..i])])
+                CExpr::NonEmpty(Box::new(self.member_path(base, &keys[..i])))
             } else {
                 let mut node_keys = keys[..i].to_vec();
                 node_keys.push(Name { text: "node".into(), span: suffix.span });
@@ -628,7 +632,7 @@ impl Scope<'_> {
                 let input = self.compile(&Expr { kind: ExprKind::Var(vec![previous?]), span: step.span }, errors)?;
                 let mut inner = self.clone();
                 inner.params.push(param.text.clone());
-                CExpr::Bind(Box::new(input), self.params.len() as u16, Box::new(inner.compile(body, errors)?))
+                fold::bind(input, self.params.len() as u16, inner.compile(body, errors)?)
             }
         };
         if rest.is_empty() {
@@ -637,20 +641,13 @@ impl Scope<'_> {
         let name = step.label.clone().unwrap_or_else(|| Name { text: format!("$pipeline{}", self.params.len()), span: step.span });
         let mut inner = self.clone();
         inner.params.push(name.text.clone());
-        Some(CExpr::Bind(Box::new(value), self.params.len() as u16, Box::new(inner.pipeline_steps(rest, Some(name), errors)?)))
+        Some(fold::bind(value, self.params.len() as u16, inner.pipeline_steps(rest, Some(name), errors)?))
     }
 
     pub fn compile(&self, e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
         Some(match &e.kind {
             ExprKind::Pipeline(steps) => self.pipeline_steps(steps, None, errors)?,
-            ExprKind::Nullish(left, right) => {
-                let depth = self.params.len() as u16;
-                let mut inner = self.clone();
-                inner.params.push(format!("$nullish{depth}"));
-                let type_of = functions::FUNCTIONS.iter().find(|f| f.name == "type_of").expect("registered type_of");
-                let null = CExpr::Binary(BinOp::Eq, Box::new(CExpr::Call(type_of, vec![CExpr::Param(depth)])), Box::new(CExpr::Const(Value::from("null"))));
-                CExpr::Bind(Box::new(self.compile(left, errors)?), depth, Box::new(CExpr::If(Box::new(null), Box::new(inner.compile(right, errors)?), Box::new(CExpr::Param(depth)))))
-            }
+            ExprKind::Nullish(left, right) => CExpr::Nullish(Box::new(self.compile(left, errors)?), Box::new(self.compile(right, errors)?)),
             ExprKind::Str(s) => CExpr::Const(Value::from(s.clone())),
             ExprKind::Num(n) => CExpr::Const(Value::Num(*n)),
             ExprKind::Bool(b) => CExpr::Const(Value::Bool(*b)),
@@ -794,7 +791,7 @@ impl Scope<'_> {
                 CExpr::Walk(Box::new(roots), Box::new(body))
             }
             ExprKind::Call(name, args) if args.last().is_some_and(|arg| matches!(arg.kind, ExprKind::Lambda(..))) => {
-                let Some((fname, mut each)) = Each::named(&name.text) else {
+                let Some((fname, each)) = Each::named(&name.text) else {
                     errors.push(
                         ConfigError::new(name.span, format!("`{}` does not take a lambda", name.text))
                             .note("lambdas go to `map`, `filter`, `find`, `find_last`, `all`, `any` and `reduce`"),
@@ -802,9 +799,6 @@ impl Scope<'_> {
                     return None;
                 };
                 self.note(name.span, Resolved::Function(fname));
-                if each == Each::Reduce && args.len() == 3 {
-                    each = Each::Fold;
-                }
                 let extra = usize::from(matches!(each, Each::Fold | Each::Zip));
                 let paired = matches!(each, Each::Fold | Each::Reduce | Each::Zip);
                 let lambda = args.last().expect("matched lambda");
@@ -909,7 +903,11 @@ impl Scope<'_> {
                         }
                     }
                 }
-                CExpr::Call(f, args)
+                if f.name == "nonempty" {
+                    CExpr::NonEmpty(Box::new(args.into_iter().next().expect("checked arity")))
+                } else {
+                    CExpr::Call(f, args)
+                }
             }
             ExprKind::Unary(op, inner) => {
                 let inner = Box::new(self.compile(inner, errors)?);
@@ -1058,7 +1056,7 @@ impl Scope<'_> {
         if let Some(i) = path.iter().enumerate().skip(1).find_map(|(i, key)| matches!(key.text.as_str(), "nodes" | "nonempty").then_some(i)) {
             let suffix = &path[i];
             let value = if suffix.text == "nonempty" {
-                CExpr::Call(functions::lookup("nonempty").expect("registered nonempty"), vec![self.var(&path[..i], e, errors)?])
+                CExpr::NonEmpty(Box::new(self.var(&path[..i], e, errors)?))
             } else {
                 let mut node_path = path[..i].to_vec();
                 node_path.push(Name { text: "node".into(), span: suffix.span });
@@ -1625,6 +1623,11 @@ impl<'a> Ctx<'a> {
             }
             CExpr::Binary(op, a, b) => eval_binary(*op, a, b, |expr| self.eval(expr)),
             CExpr::Key(base, key) => Ok(self.eval(base)?.key(key)),
+            CExpr::Nullish(a, b) => match self.eval(a)? {
+                Value::Null => self.eval(b),
+                value => Ok(value),
+            },
+            CExpr::NonEmpty(inner) => Ok(self.eval(inner)?.nonempty()),
             CExpr::Coalesce(a, b) => match self.eval(a)? {
                 v @ Value::Node(..) => Ok(v),
                 _ => self.eval(b),
@@ -1760,7 +1763,7 @@ impl<'a> Ctx<'a> {
         Ok(match e {
             CExpr::Const(_) | CExpr::Hole(..) | CExpr::Field(_) | CExpr::Builtin(_) | CExpr::Attr(_) | CExpr::Opt(_)
             | CExpr::Not(_) | CExpr::If(..) | CExpr::Binary(..) | CExpr::Key(..) | CExpr::Coalesce(..) | CExpr::Param(_)
-            | CExpr::Local(_) | CExpr::Is(..) | CExpr::OnParent(_) => unreachable!("dispatched by Ctx::eval"),
+            | CExpr::Local(_) | CExpr::Is(..) | CExpr::OnParent(_) | CExpr::Nullish(..) | CExpr::NonEmpty(_) => unreachable!("dispatched by Ctx::eval"),
             CExpr::Template(parts) => {
                 let mut s = String::new();
                 for p in parts {
@@ -2157,6 +2160,7 @@ mod evaluation_tests {
     #[test]
     fn pipelines_nest_in_lambda_bodies_conditions_and_template_holes() {
         let l = linter(r#"
+            @macro pass(x) x
             fn summary(items) = {
                 value original: items
                 map (item, i) { value item; then (value) value + i + count(original) }
@@ -2167,13 +2171,36 @@ mod evaluation_tests {
                     let record { value: 2 }
                     when record.value == 2
                       && (if text == "a" then { value [1, 2]; any (item, i) i == 1 } else { value true })
-                    warn "{ { value [1, 2]; summary } }"
+                    warn {
+                        value "{ { value [1, 2]; summary } }"
+                        then (message) "" { value message } ":" @pass({
+                            value [1, 2];
+                            map (item) item * 2
+                            sum
+                        })
+                    }
                 }
             }
         "#);
         let reports = lint(&l, "a b");
         assert_eq!(reports.len(), 2);
-        assert!(reports.iter().all(|report| report.message == "3:5"));
+        assert!(reports.iter().all(|report| report.message == "3:5:6"));
+    }
+
+    #[test]
+    fn pipeline_zip_forms_share_shorter_input_pairing() {
+        let l = linter(r#"
+            in .t match word /[a-z]+/ {
+                rule zip {
+                    let left if text == "a" then [1, 2, 3] else [3]
+                    let paired { value left; zip [9, 8] }
+                    let sums { value left; zip [9, 8] (a, b) a + b }
+                    warn "{count(paired)}:{join(sums, ',')}"
+                }
+            }
+        "#);
+        let reports = lint(&l, "a b");
+        assert_eq!(reports.iter().map(|report| report.message.as_str()).collect::<Vec<_>>(), ["2:10,10", "1:12"]);
     }
 
     #[test]
@@ -2208,7 +2235,7 @@ mod evaluation_tests {
                     when empty_text == "" && type_of(empty_list) == "list"
                       && (false ?? num("bad")) == false
                       && (0 ?? num("bad")) == 0
-                      && type_of({} ?? "wrong") == "record"
+                      && { value {} ?? "wrong"; type_of } == "record"
                       && type_of({}.nonempty) == "null"
                       && false.nonempty == false && 0.nonempty == 0
                       && ("".nonempty ?? "yes") == "yes"
@@ -2300,7 +2327,7 @@ mod evaluation_tests {
             match word /[a-z]+/
             in .t, paren match word
             in paren, word rule selected {
-                let node if starts_with(text, "(") then first(descendants(word)) else null
+                let node if starts_with(text, "(") then { value descendants(word); first } else null
                 when parent is paren && !(parent is word)
                 warn "actual parent selected"
             }
@@ -2337,7 +2364,7 @@ mod evaluation_tests {
                 let doubled map([2, 3], n => n * 2)
                 rule bindings {
                     @each outer in [10, 20]
-                    when map([1, 2], inner => total(outer, identity(inner), count(doubled), first(pair(inner)), last(pair(inner))))
+                    when map([1, 2], inner => { value inner; identity_2: identity; value doubled; doubled_count: count; value pair(inner); first_pair: first; value pair(inner); last_pair: last; value total(outer, identity_2, doubled_count, first_pair, last_pair) })
                       != [outer + 6, outer + 9]
                     warn "bindings changed"
                 }
@@ -2375,9 +2402,9 @@ mod evaluation_tests {
             in .t match word /[a-z]+/ {
                 rule folds {
                 @each outer in [10, 20]
-                when reduce([1, 2], [], (state, n) => state map([n], inner => identity(inner + outer))) != [outer + 1, outer + 2]
-                  || reduce(null, [outer], (state, n) => state [n]) != [outer]
-                  || reduce(3, outer, (state, n) => state + n) != outer + 3
+                when { value [1, 2]; fold ([]) (state, n) state map([n], inner => identity(inner + outer)) } != [outer + 1, outer + 2]
+                  || { value null; fold ([outer]) (state, n) state [n] } != [outer]
+                  || { value 3; fold outer (state, n) state + n } != outer + 3
                 warn "fold bindings changed"
                 }
             }
@@ -2388,7 +2415,7 @@ mod evaluation_tests {
     #[test]
     fn failed_calls_and_lambdas_restore_bindings_before_the_next_rule() {
         let l = linter(r#"
-            fn fail(value) = reduce([value], 0, (state, n) => n % 0)
+            fn fail(value) = { value [value]; fold 0 (state, n) n % 0 }
             fn identity(value) = value
             in .t match word /[a-z]+/ {
                 rule failing {

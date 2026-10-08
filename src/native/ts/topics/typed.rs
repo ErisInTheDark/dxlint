@@ -491,7 +491,7 @@ mod tests {
     fn block_aliases_use_their_lexical_declarations() {
         let linter = native_linter(r#"
             in ts_call.callee rule callable {
-                when contains(default(type_flags, []), "function")
+                when { value (type_flags.nonempty ?? []); contains "function" }
                 error "callable"
             }
         "#);
@@ -601,28 +601,28 @@ mod tests {
 
     #[test]
     fn callback_parameters_read_declared_and_aliased_function_contexts() {
-        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen contains(default(type_flags, []), \"string\")\ninfo \"typed\"\n}");
+        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen { value (type_flags.nonempty ?? []); contains \"string\" }\ninfo \"typed\"\n}");
         let code = "const f: (x: string) => string = x => { x; return x; }; type Fn = (x: string) => void; declare function take(f: Fn): void; take(x => { x; });";
         assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 2);
     }
 
     #[test]
     fn awaited_types_follow_nested_thenable_callback_values() {
-        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen contains(default(type_flags, []), \"string\")\ninfo \"typed\"\n}");
+        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen { value (type_flags.nonempty ?? []); contains \"string\" }\ninfo \"typed\"\n}");
         let code = "interface Task<T> { then(cb: (value: T) => void): void; } declare const p: Task<Task<string>>; await p;";
         assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
     }
 
     #[test]
     fn explicit_constructor_type_arguments_select_a_generic_overload() {
-        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen contains(default(type_flags, []), \"string\")\ninfo \"typed\"\n}");
+        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen { value (type_flags.nonempty ?? []); contains \"string\" }\ninfo \"typed\"\n}");
         let code = "interface Box<K, V> { key: K; value: V; } interface Ctor { new(): Box<any, any>; new<K, V>(): Box<K, V>; } declare const Maker: Ctor; new Maker<string, number>().key;";
         assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
     }
 
     #[test]
     fn this_parameters_override_dynamic_functions_but_arrows_keep_class_this() {
-        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen contains(default(type_flags, []), \"string\")\ninfo \"typed\"\n}");
+        let linter = native_linter("in ts_expression_statement.expression rule typed {\nwhen { value (type_flags.nonempty ?? []); contains \"string\" }\ninfo \"typed\"\n}");
         let code = "function f(this: { value: string }) { this.value; } class C { value: string; m() { (() => { this.value; })(); function nested() { this.value; } } }";
         assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 2);
     }
@@ -631,7 +631,7 @@ mod tests {
     fn typeof_narrows_unknown_only_on_the_matching_branch() {
         let linter = native_linter(r#"
             in ts_identifier rule narrowed {
-                when text == "x" && contains(default(type_flags, []), "string")
+                when text == "x" && { value (type_flags.nonempty ?? []); contains "string" }
                 error "narrowed"
             }
         "#);

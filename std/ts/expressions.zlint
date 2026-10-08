@@ -3,22 +3,30 @@ import .ts/expression-fixes
 
 define {
 
-fn boolean_cast_operand(n, negation) = unparenthesised_node(if negation
-  then unparenthesised_node(n.argument.node).argument.node else first([] n.argument.node))
-fn boolean_cast_empty_target(n) = last(walk(n, current => if current.parent is ts_parenthesized then current.parent.node else null))
+fn boolean_cast_operand(n, negation) = {
+  value if negation
+  then unparenthesised_node(n.argument.node).argument.node else first(n.argument.nodes)
+  unparenthesised_node
+}
+fn boolean_cast_empty_target(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
 fn boolean_cast_fix(source, n, info) =
   if !info.negation && count(n.argument.node) == 0 then
     if boolean_cast_empty_target(n).parent is ts_unary && boolean_cast_empty_target(n).parent.operator == "!" then
-      if expression_fix_clean(boolean_cast_empty_target(n).parent.node) then {
+      if { value boolean_cast_empty_target(n).parent.node; expression_fix_clean } then {
         target: boolean_cast_empty_target(n).parent.node,
-        text: expression_fix_edges(boolean_cast_empty_target(n).parent.node, "true")
+        text: { value boolean_cast_empty_target(n).parent.node; expression_fix_edges "true" }
       } else null
     else if expression_fix_clean(n) then { target: n, text: expression_fix_edges(n, "false") } else null
-  else if !expression_fix_clean(n) || !info.negation && (count(n.argument.node) != 1 || first([] n.argument.node) is ts_spread) then null
-  else if expression_fix_parens(source, n, boolean_cast_operand(n, info.negation)) == null then null
-  else { target: n, text: expression_fix_edges(n, expression_fix_wrap(boolean_cast_operand(n, info.negation).text,
-    expression_fix_parens(source, n, boolean_cast_operand(n, info.negation)) > 0
-    || n.parent not ts_parenthesized && boolean_cast_operand(n, info.negation) is structure_assertion)) }
+  else if !expression_fix_clean(n) || !info.negation && (count(n.argument.node) != 1 || first(n.argument.nodes) is ts_spread) then null
+  else {
+    value operand: boolean_cast_operand(n, info.negation)
+    value required: expression_fix_parens(source, n, operand)
+    value if required == null then null else { target: n, text: {
+      value operand.text
+      wrapped: expression_fix_wrap (required > 0 || n.parent not ts_parenthesized && operand is structure_assertion)
+      value expression_fix_edges(n, wrapped)
+    } }
+  }
 
 in ts_unary, ts_call rule no-extra-boolean-cast {
   option enforceForInnerExpressions boolean = false "check casts nested inside boolean expressions"
@@ -39,20 +47,42 @@ fn exponentiation_outer_parens(n, base) = n.parent not ts_parenthesized
     && !(n is ts_binary.right && n.parent.operator == "**")
     && n not (ts_call.argument, ts_new.argument, ts_import_call.argument, ts_index.index))
 fn exponentiation_statement_head(base) = base is (ts_function, ts_class, ts_object)
-  || contains(["function", "class", "{{"], base.first_token.text)
+  || { value ["function", "class", "{{"]; contains base.first_token.text }
   || base.first_token.text == "async" && re_test(base.text, /^async\s+function\b/)
-fn exponentiation_text(n, base, exponent) = expression_fix_wrap(
-  expression_fix_wrap(base.text, exponentiation_base_parens(base))
-  "**" expression_fix_wrap(exponent.text, exponent.precedence < 14 || exponent is structure_assertion),
-  exponentiation_outer_parens(n, base) || expression_fix_statement(n) != null && exponentiation_statement_head(base) && !exponentiation_base_parens(base))
-fn exponentiation_asi(n, text) = if expression_fix_statement(n) != null && contains(["(", "[", "/", "`"], slice(text, 0, 1))
-  then expression_fix_asi(expression_fix_statement(n), n.token_neighbours.before, expression_fix_before_nodes(n)) else false
+fn exponentiation_text(n, base, exponent) = {
+  value text: (
+    { value base; needed: exponentiation_base_parens; value expression_fix_wrap(base.text, needed) }
+    "**" expression_fix_wrap(exponent.text, exponent.precedence < 14 || exponent is structure_assertion)
+  )
+  value needed_2: exponentiation_outer_parens(n, base) || expression_fix_statement(n) != null && exponentiation_statement_head(base) && !exponentiation_base_parens(base)
+  value expression_fix_wrap(text, needed_2)
+}
+fn exponentiation_asi(n, text) = {
+  value statement: expression_fix_statement(n)
+  value if statement != null && {
+    value text
+    slice 0 1
+    then (head) contains(["(", "[", "/", "`"], head)
+  } then {
+    value owners: expression_fix_before_nodes(n)
+    value expression_fix_asi(statement, n.token_neighbours.before, owners)
+  } else false
+}
 fn exponentiation_fix_result(n, text, semicolon) = if semicolon == null then null
   else (if semicolon then ";" else "") expression_fix_edges(n, text)
-fn exponentiation_fix_output(n, text) = exponentiation_fix_result(n, text, exponentiation_asi(n, text))
+fn exponentiation_fix_output(n, text) = { value n; semicolon: exponentiation_asi text; value exponentiation_fix_result(n, text, semicolon) }
 fn exponentiation_fix(n) =
-  if count(n.argument.node) != 2 || any([] n.argument.node, argument => argument is ts_spread) || !expression_fix_clean(n) then null
-  else exponentiation_fix_output(n, exponentiation_text(n, unparenthesised_node(first([] n.argument.node)), unparenthesised_node(last([] n.argument.node))))
+  if count(n.argument.node) != 2 || any(n.argument.nodes, argument => argument is ts_spread) || !expression_fix_clean(n) then null
+  else {
+    value n.argument.nodes
+    first
+    base: unparenthesised_node
+    value n.argument.nodes
+    last
+    exponent: unparenthesised_node
+    value text: exponentiation_text(n, base, exponent)
+    value exponentiation_fix_output(n, text)
+  }
 
 in ts_call rule prefer-exponentiation-operator {
   when global_method_callee == "Math.pow"
@@ -66,55 +96,138 @@ fn logical_reference(n) = n != null && !logical_chain_top(n) && (n is (ts_member
 fn logical_same_reference(a, b) = a.reference_key != null && a.reference_key == b.reference_key
 fn logical_nullish(n) = if n is ts_null then false else if n is ts_identifier && n.text == "undefined" && n.resolved == "global" || n is ts_unary && n.operator == "void" && unparenthesised_node(n.argument.node) is ts_number && unparenthesised_node(n.argument.node).literal_value.value == 0 then true else null
 fn logical_nullish_reference(reference, value) = if logical_reference(reference) && logical_nullish(value) != null then { reference: reference, undefined: logical_nullish(value), operator: "??" } else null
-fn logical_nullish_comparison(n, op) = if n is ts_binary && n.operator == op then default(logical_nullish_reference(unparenthesised_node(n.left.node), unparenthesised_node(n.right.node)), logical_nullish_reference(unparenthesised_node(n.right.node), unparenthesised_node(n.left.node))) else null
+fn logical_nullish_comparison(n, op) = if n is ts_binary && n.operator == op then {
+  value n.left.node
+  reference: unparenthesised_node
+  value n.right.node
+  value_2: unparenthesised_node
+  value logical_nullish_reference(reference, value_2)
+  nonempty
+} ?? {
+  value n.right.node
+  reference_2: unparenthesised_node
+  value n.left.node
+  value_3: unparenthesised_node
+  value logical_nullish_reference(reference_2, value_3)
+} else null
 fn logical_nullish_pair(a, b) = if a != null && b != null && a.undefined != b.undefined && logical_same_reference(a.reference, b.reference) then a else null
-fn logical_boolean_existence(n, negated) = if logical_reference(n) then { reference: n, operator: if negated then "||" else "&&" } else if n is ts_unary && n.operator == "!" && logical_reference(unparenthesised_node(n.argument.node)) then { reference: unparenthesised_node(n.argument.node), operator: "&&" } else if n is ts_call && n.global_callee == "Boolean" && count(n.argument.node) == 1 && logical_reference(unparenthesised_node(first(n.argument.node))) then { reference: unparenthesised_node(first(n.argument.node)), operator: if negated then "||" else "&&" } else null
-fn logical_existence(n) = default(logical_boolean_existence(unparenthesised_node(if n is ts_unary && n.operator == "!" then n.argument.node else n), n is ts_unary && n.operator == "!"), default(logical_nullish_comparison(n, "=="), if n is ts_logical && n.operator == "||" then logical_nullish_pair(logical_nullish_comparison(unparenthesised_node(n.left.node), "==="), logical_nullish_comparison(unparenthesised_node(n.right.node), "===")) else null))
-fn logical_leftmost(value) = last(walk(value.left.node, current => if current is ts_logical && current.operator == value.operator then current.left.node else null))
-fn logical_assignment_value(assigned, value) = if value is ts_logical && logical_same_reference(assigned, logical_leftmost(value)) then { kind: "assignment", operator: value.operator "=" } else null
+fn logical_boolean_existence(n, negated) = if logical_reference(n) then { reference: n, operator: if negated then "||" else "&&" } else if n is ts_unary && n.operator == "!" && { value n.argument.node; unparenthesised_node; logical_reference } then { reference: unparenthesised_node(n.argument.node), operator: "&&" } else if n is ts_call && n.global_callee == "Boolean" && count(n.argument.node) == 1 && {
+  value n.argument.node
+  first
+  unparenthesised_node
+  logical_reference
+} then { reference: { value n.argument.node; first; unparenthesised_node }, operator: if negated then "||" else "&&" } else null
+fn logical_existence(n) = {
+  value if n is ts_unary && n.operator == "!" then n.argument.node else n
+  unparenthesised_node
+  logical_boolean_existence (n is ts_unary && n.operator == "!")
+  nonempty
+} ?? { value n; logical_nullish_comparison "=="; nonempty } ?? if n is ts_logical && n.operator == "||" then {
+  value n.left.node
+  unparenthesised_node
+  logical_nullish_comparison: logical_nullish_comparison "==="
+  value n.right.node
+  unparenthesised_node
+  logical_nullish_comparison_2: logical_nullish_comparison "==="
+  value logical_nullish_pair(logical_nullish_comparison, logical_nullish_comparison_2)
+} else null
+fn logical_leftmost(value) = {
+  value value.left.node
+  walk (current) if current is ts_logical && current.operator == value.operator then current.left.node else null
+  last
+}
+fn logical_assignment_value(assigned, value) = if value is ts_logical && { value value; logical_leftmost: logical_leftmost; value logical_same_reference(assigned, logical_leftmost) } then { kind: "assignment", operator: value.operator "=" } else null
 fn logical_expression_value(reference, assignment, op, kind) = if logical_reference(reference) && assignment is ts_assignment && assignment.operator == "=" && logical_same_reference(reference, assignment.left.node) then { kind: kind, operator: op "=" } else null
 fn logical_if_body(n) = if n.consequent is ts_block then (if count(n.consequent.body.node) == 1 then first(n.consequent.body.node) else null) else n.consequent.node
-fn logical_if_value(existence, body) = if existence != null && body is ts_expression_statement then logical_expression_value(existence.reference, unparenthesised_node(body.expression.node), existence.operator, "if") else null
-fn logical_assignment_info(n) = if n is ts_assignment && contains(["&&=", "||=", "??="], n.operator) then { kind: "shorthand", operator: n.operator } else if n is ts_assignment && n.operator == "=" then logical_assignment_value(n.left.node, unparenthesised_node(n.right.node)) else if n is ts_logical then logical_expression_value(unparenthesised_node(n.left.node), unparenthesised_node(n.right.node), n.operator, "logical") else if n is ts_if && n.alternate == null then logical_if_value(logical_existence(unparenthesised_node(n.test.node)), logical_if_body(n)) else null
-fn logical_fix_root(n) = first(filter(walk(n, current => current.parent.node), current => current is ts_program))
+fn logical_if_value(existence, body) = if existence != null && body is ts_expression_statement then {
+  value body.expression.node
+  assignment: unparenthesised_node
+  value logical_expression_value(existence.reference, assignment, existence.operator, "if")
+} else null
+fn logical_assignment_info(n) = if n is ts_assignment && contains(["&&=", "||=", "??="], n.operator) then { kind: "shorthand", operator: n.operator } else if n is ts_assignment && n.operator == "=" then { value n.right.node; value_2: unparenthesised_node; value logical_assignment_value(n.left.node, value_2) } else if n is ts_logical then {
+  value n.left.node
+  reference: unparenthesised_node
+  value n.right.node
+  assignment: unparenthesised_node
+  value logical_expression_value(reference, assignment, n.operator, "logical")
+} else if n is ts_if && n.alternate == null then {
+  value n.test.node
+  unparenthesised_node
+  existence: logical_existence
+  value n
+  body: logical_if_body
+  value logical_if_value(existence, body)
+} else null
+fn logical_fix_root(n) = {
+  value n
+  walk (current) current.parent.node
+  filter (current) current is ts_program
+  first
+}
 fn logical_fix_with(n) = !logical_fix_root(n).scoping_strict_code
-  && any(walk(n, current => current.parent.node), current => current is ts_with.body)
+  && { value n; walk (current) current.parent.node; any (current) current is ts_with.body }
 fn logical_fix_identifier(n) = n is ts_identifier && !logical_fix_with(n)
 # Getters can change a mutable base or key between the read and write.
 # Ambient const declarations provide types, not immutable runtime bindings.
 fn logical_fix_const(n) = n.scoping_definition_use.kind == "const" && n.declaration != null
-  && !any(walk(n.declaration.node, current => current.parent.node), current => contains([] current.modifier, "declare"))
-  && any(walk(n.declaration.node, current => if current is ts_declarator then null else current.parent.node),
-    current => current is ts_declarator && (current.init != null || current.parent is (ts_for_in.left, ts_for_of.left)))
+  && !{ value n.declaration.node; walk (current) current.parent.node; any (current) contains([] current.modifier, "declare") }
+  && {
+    value n.declaration.node
+    walk (current) if current is ts_declarator then null else current.parent.node
+    any (current) current is ts_declarator && (current.init != null || current.parent is (ts_for_in.left, ts_for_of.left))
+  }
 fn logical_fix_property(n) = !logical_fix_with(n) && n is (ts_member, ts_index)
   && (unparenthesised_node(n.object.node) is ts_this
-    || unparenthesised_node(n.object.node) is ts_identifier && logical_fix_const(unparenthesised_node(n.object.node)))
+    || unparenthesised_node(n.object.node) is ts_identifier && { value n.object.node; unparenthesised_node; logical_fix_const })
   && (n is ts_member || unparenthesised_node(n.index.node) is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null))
 fn logical_fix_operator(source, n, operator) = byte_slice(source, n.offset, n.operator.offset) operator byte_slice(source, n.operator.end_offset, n.end_offset)
-fn logical_fix_expand(source, n) = if !logical_fix_identifier(unparenthesised_node(n.left.node)) then null
+fn logical_fix_expand(source, n) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } then null
   else (byte_slice(source, n.offset, n.operator.offset) "= " unparenthesised_node(n.left.node).text " " slice(n.operator, 0, -1)
     byte_slice(source, n.operator.end_offset, n.right.offset)
-    expression_fix_wrap(n.right.text, n.right not ts_parenthesized
-      && (n.right is structure_assertion || n.right.precedence <= (if n.operator == "&&=" then 5 else 4) || n.operator == "??=" && n.right is ts_logical)))
-fn logical_fix_assignment(source, n, value, first) = if !logical_fix_identifier(unparenthesised_node(n.left.node)) then null
+    {
+      value needed: n.right not ts_parenthesized
+      && (n.right is structure_assertion || n.right.precedence <= (if n.operator == "&&=" then 5 else 4) || n.operator == "??=" && n.right is ts_logical)
+      value expression_fix_wrap(n.right.text, needed)
+    })
+fn logical_fix_assignment(source, n, value, first) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } then null
   else (byte_slice(source, n.offset, n.operator.offset) value.operator "="
     byte_slice(source, n.operator.end_offset, first.parent.offset) byte_slice(source, first.parent.right.offset, n.end_offset))
-fn logical_fix_expression(source, n, assignment) = if !logical_fix_identifier(unparenthesised_node(n.left.node)) && !logical_fix_property(unparenthesised_node(n.left.node)) then null
+fn logical_fix_expression(source, n, assignment) = if !{ value n.left.node; unparenthesised_node; logical_fix_identifier } && !{ value n.left.node; unparenthesised_node; logical_fix_property } then null
   else if expression_fix_parens(source, n, assignment) == null then null
-  else expression_fix_wrap(logical_fix_operator(source, assignment, n.operator "="),
-    expression_fix_parens(source, n, assignment) > 0)
+  else {
+    value source
+    text: logical_fix_operator assignment (n.operator "=")
+    value needed: expression_fix_parens(source, n, assignment) > 0
+    value expression_fix_wrap(text, needed)
+  }
 fn logical_fix_if(source, n, body, assignment, existence) =
   if !logical_fix_identifier(existence.reference) && !(unparenthesised_node(n.test.node) not ts_logical && logical_fix_property(existence.reference)) then null
-  else if n.token_neighbours.before != null && !contains([";", "{{"], n.token_neighbours.before.text)
+  else if n.token_neighbours.before != null && !{ value [";", "{{"]; contains n.token_neighbours.before.text }
     && !re_test(body.first_token.text, /^[\w$\\]/) then null
   else (byte_slice(source, body.offset, assignment.operator.offset) existence.operator "="
     byte_slice(source, assignment.operator.end_offset, body.end_offset)
-    (if n.consequent is ts_block && !ends_with(trim_end(body.text), ";") then ";" else ""))
+    (if n.consequent is ts_block && !{ value body.text; trim_end; ends_with ";" } then ";" else ""))
 fn logical_assignment_fix(source, n, info) = if !expression_fix_clean(n) then null
   else if info.kind == "shorthand" then logical_fix_expand(source, n)
-  else if info.kind == "assignment" then logical_fix_assignment(source, n, unparenthesised_node(n.right.node), logical_leftmost(unparenthesised_node(n.right.node)))
-  else if info.kind == "logical" then logical_fix_expression(source, n, unparenthesised_node(n.right.node))
-  else logical_fix_if(source, n, logical_if_body(n), unparenthesised_node(logical_if_body(n).expression.node), logical_existence(unparenthesised_node(n.test.node)))
+  else if info.kind == "assignment" then {
+    value n.right.node
+    value_2: unparenthesised_node
+    value n.right.node
+    unparenthesised_node
+    first: logical_leftmost
+    value logical_fix_assignment(source, n, value_2, first)
+  }
+  else if info.kind == "logical" then { value n.right.node; assignment: unparenthesised_node; value logical_fix_expression(source, n, assignment) }
+  else {
+    value n
+    body: logical_if_body
+    value logical_if_body(n).expression.node
+    assignment_2: unparenthesised_node
+    value n.test.node
+    unparenthesised_node
+    existence: logical_existence
+    value logical_fix_if(source, n, body, assignment_2, existence)
+  }
 
 in ts_assignment, ts_logical, ts_if rule logical-assignment-operators {
   option mode ("always" | "never") = "always" "logical assignment policy"

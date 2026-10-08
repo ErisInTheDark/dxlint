@@ -2,18 +2,17 @@
 define {
 fn core_list_violation(info, by_node, by_bracket, empty, single, multi) =
   !(by_node == "off" || by_node == null && by_bracket == "off")
-  && !(info.count == 0 && default(by_node.empty, default(by_bracket.empty, empty)) == "ignore")
-  && (if info.single && info.count <= default(by_node.singleLine.maxItems, default(by_bracket.singleLine.maxItems, default(single.maxItems, 1000000000))) then
-    info.mode == "spacing" && (if info.count == 0 then default(by_node.empty, default(by_bracket.empty, empty)) == "always"
-      else default(by_node.singleLine.spacing, default(by_bracket.singleLine.spacing,
-        if info.brackets == "{{}}" && by_bracket != "off" then "always" else default(single.spacing, "never"))) == "always") != info.spaced
+  && !(info.count == 0 && (by_node.empty.nonempty ?? by_bracket.empty.nonempty ?? empty) == "ignore")
+  && (if info.single && info.count <= (by_node.singleLine.maxItems.nonempty ?? by_bracket.singleLine.maxItems.nonempty ?? single.maxItems.nonempty ?? 1000000000) then
+    info.mode == "spacing" && (if info.count == 0 then (by_node.empty.nonempty ?? by_bracket.empty.nonempty ?? empty) == "always"
+      else (by_node.singleLine.spacing.nonempty ?? by_bracket.singleLine.spacing.nonempty ?? if info.brackets == "{{}}" && by_bracket != "off" then "always" else single.spacing.nonempty ?? "never") == "always") != info.spaced
     else if info.count == 0 then
       info.mode == "empty_wrapping"
-      && (info.empty_comments || default(by_node.multiLine.minItems, default(by_bracket.multiLine.minItems, default(multi.minItems, 0))) != 0)
+      && (info.empty_comments || (by_node.multiLine.minItems.nonempty ?? by_bracket.multiLine.minItems.nonempty ?? multi.minItems.nonempty ?? 0) != 0)
       && info.empty_comments != info.broken
     else info.mode == "wrapping"
-      && (if info.node_single then info.count > default(by_node.singleLine.maxItems, default(by_bracket.singleLine.maxItems, default(single.maxItems, 1000000000)))
-        else info.count >= default(by_node.multiLine.minItems, default(by_bracket.multiLine.minItems, default(multi.minItems, 0))) && info.first_broken) != info.broken)
+      && (if info.node_single then info.count > (by_node.singleLine.maxItems.nonempty ?? by_bracket.singleLine.maxItems.nonempty ?? single.maxItems.nonempty ?? 1000000000)
+        else info.count >= (by_node.multiLine.minItems.nonempty ?? by_bracket.multiLine.minItems.nonempty ?? multi.minItems.nonempty ?? 0) && info.first_broken) != info.broken)
 
 group core_list
   in core_list rule list-style {
@@ -22,7 +21,13 @@ group core_list
     option multiLine { minItems?: number } = { minItems: 0 } "multiline lists"
     option overrides { [key: string]: "off" | { empty?: "ignore" | "always" | "never"; singleLine?: { spacing?: "always" | "never"; maxItems?: number }; multiLine?: { minItems?: number } } } = { "{}": { singleLine: { spacing: "always" } } } "bracket and node type overrides"
     each info in core_list_layout
-    when core_list_violation(info, get(overrides, info.kind), get(overrides, info.brackets), empty, singleLine, multiLine)
+    when {
+      value overrides
+      by_node: get info.kind
+      value overrides
+      by_bracket: get info.brackets
+      value core_list_violation(info, by_node, by_bracket, empty, singleLine, multiLine)
+    }
     report at info.offset
     warn (if info.mode == "spacing" then (if !info.spaced then "Should have space between '" else "Should not have space(s) between '") else (if !info.broken then "Should have line break between '" else "Should not have line break(s) between '")) info.prev "' and '" info.next "'"
   }

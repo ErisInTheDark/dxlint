@@ -68,7 +68,13 @@ in ts_type_reference rule no-wrapper-object-types {
 in ts_non_null rule no-non-null-assertion {
   warn "Forbidden non-null assertion."
 }
-in ts_declarator let initialised_declaration_end if init != null || starts_with(trim_start(slice(text, len(name))), "!") then end_offset else null
+in ts_declarator let initialised_declaration_end if init != null || {
+  value name
+  len: len
+  value slice(text, len)
+  trim_start
+  starts_with "!"
+} then end_offset else null
 in ts_identifier let binding_initialised_end if parent is ts_declarator then parent.initialised_declaration_end else null
 in ts_identifier let binding_write_end if access == "write" || access == "read_write" then end_offset else null
 in ts_identifier let binding_assignment_history if declaration == null then null else { initialised: declaration.binding_initialised_end, writes: [] declaration.references.binding_write_end }
@@ -97,7 +103,7 @@ in style_tree_node let void_union_member if is ts_type_keyword then contains(["v
 in ts_union let valid_void_union all([] type.void_union_member, t => t == true)
 in ts_type_keyword {
   let void_type_context if is ts_node.return_type then "return" else if is ts_node.type_argument then (if parent is ts_type_reference then "generic" else if parent is ts_call then "other" else "generic-other") else if is ts_type_parameter.default then "default" else if parent is ts_parameter && parent.name == "this" then "this" else if parent is ts_union then (if parent.valid_void_union || parent.function_overload_context == true then "return" else "union") else "other"
-  let void_type_generic_name re_replace(default(parent.name, ""), /\s+/, "")
+  let void_type_generic_name { value parent.name.nonempty ?? ""; re_replace /\s+/ "" }
   let no_invalid_void_type_checked !contains(["generic", "generic-other", "default"], void_type_context)
 }
 in ts_type_keyword rule no-invalid-void-type {
@@ -139,7 +145,7 @@ in ts_namespace rule no-namespace {
   warn "ES2015 module syntax is preferred over namespaces."
 }
 
-in ts_export let empty_module_export declaration == null && expression == null && from == null && namespace == null && count(specifier) == 0 && contains(text, "{{")
+in ts_export let empty_module_export declaration == null && expression == null && from == null && namespace == null && count(specifier) == 0 && { value result: "{{"; value contains(text, result) }
 in ts_export let module_item !empty_module_export
 in ts_import, ts_import_equals, ts_export_assignment let module_item true
 in ts_program let has_module_item any([] body.module_item, x => x == true)
@@ -204,7 +210,7 @@ in ts_assignment.left rule no-this-alias:assignment {
 in ts_import_specifier let type_only_specifier kind == "type"
 in ts_import rule no-import-type-side-effects {
   when kind != "type" && default_import == null && namespace == null && count(specifier) > 0
-  when count(filter([] specifier.type_only_specifier, t => t)) == count(specifier)
+  when { value [] specifier.type_only_specifier; filter (t) t; count } == count(specifier)
   warn "TypeScript will only remove the inline type specifiers which will leave behind a side effect import at runtime. Convert this to a top-level type qualifier to properly remove the entire import."
 }
 
@@ -252,7 +258,7 @@ in ts_as, ts_type_assertion rule consistent-type-assertions:array {
   warn "Always prefer const x: T[] = [ ... ]."
 }
 
-fn property_modifiers(xs) = join(filter(["public", "protected", "private", "readonly"], m => contains(xs, m)), " ")
+fn property_modifiers(xs) = { value ["public", "protected", "private", "readonly"]; filter (m) contains(xs, m); join " " }
 in ts_parameter, ts_class_property let parameter_modifiers property_modifiers([] modifier)
 in ts_parameter, ts_class_property let parameter_properties_checked true
 in ts_parameter rule parameter-properties {
@@ -307,23 +313,29 @@ in ts_type_literal rule no-empty-object-type:object {
   when no_empty_object_type_checked
   when count(member) == 0 && parent not ts_intersection
   when !(type_of(allowWithName) == "str" && parent is ts_type_alias && re_test(parent.name, allowWithName))
-  warn empty_object_message("The `{{}}` (\"empty object\") type")
+  warn { value "The `{{}}` (\"empty object\") type"; empty_object_message }
 }
 
 # A type literal or interface that is only an index signature.
 in ts_type_alias, ts_interface let indexed_type_name name.offset
 in style_tree_node let indexed_type_scope if is (ts_type_alias, ts_interface) then indexed_type_name else if is (ts_index_signature, ts_property_signature, ts_parameter, ts_declarator, ts_class_property, ts_method, ts_function, ts_function_type, ts_call_signature, ts_method_signature) then null else parent.indexed_type_scope
 in ts_identifier let indexed_syntax_refs [] declaration.offset
-in ts_type_literal, ts_interface let indexed_syntax_refs reduce([] member.indexed_type_refs, [], (ids, child) => ids child)
-in ts_type_alias, ts_index_signature, ts_mapped_type, ts_parenthesized_type let indexed_syntax_refs default(type.indexed_type_refs, [])
-in ts_union, ts_intersection, ts_indexed_access, ts_conditional_type, ts_type_reference let indexed_syntax_refs reduce([] children.indexed_type_refs, [], (ids, child) => ids child)
-in style_tree_node let indexed_type_refs default(indexed_syntax_refs, [])
+in ts_type_literal, ts_interface let indexed_syntax_refs { value [] member.indexed_type_refs; fold ([]) (ids, child) ids child }
+in ts_type_alias, ts_index_signature, ts_mapped_type, ts_parenthesized_type let indexed_syntax_refs type.indexed_type_refs.nonempty ?? []
+in ts_union, ts_intersection, ts_indexed_access, ts_conditional_type, ts_type_reference let indexed_syntax_refs { value [] children.indexed_type_refs; fold ([]) (ids, child) ids child }
+in style_tree_node let indexed_type_refs indexed_syntax_refs.nonempty ?? []
 in ts_type_alias, ts_interface let indexed_type_entry { id: name.offset, refs: indexed_type_refs }
-in style_tree_node let indexed_type_entries [] indexed_type_entry reduce([] children.indexed_type_entries, [], (entries, child) => entries child)
+in style_tree_node let indexed_type_entries [] indexed_type_entry { value [] children.indexed_type_entries; fold ([]) (entries, child) entries child }
 in style_tree_node let indexed_type_graph if is ts_program then indexed_type_entries else parent.indexed_type_graph
-fn expand_graph_refs(graph, ids) = unique(ids reduce(filter(graph, entry => contains(ids, entry.id)), [], (refs, entry) => refs entry.refs))
+fn expand_graph_refs(graph, ids) = { value ids { value graph; filter (entry) contains(ids, entry.id); fold ([]) (refs, entry) refs entry.refs }; unique }
 fn expanded_graph_state(previous_state, ids, target) = { ids: ids, done: ids == previous_state.ids || contains(ids, target) }
-fn type_reaches(graph, ids, target) = target != null && contains(reduce(graph, { ids: ids, done: contains(ids, target) }, (state, entry) => if state.done then state else expanded_graph_state(state, expand_graph_refs(graph, state.ids), target)).ids, target)
+fn type_reaches(graph, ids, target) = target != null && {
+  value initial_state: { ids: ids, done: contains(ids, target) }
+  value graph
+  final_state: fold initial_state (state, entry) if state.done then state else { value graph; expanded_ids: expand_graph_refs state.ids; value expanded_graph_state(state, expanded_ids, target) }
+  value final_state.ids
+  contains target
+}
 in ts_parameter let indexed_parameter name is ts_identifier && type != null
 in ts_index_signature let indexed_signature type != null && any([] parameter.indexed_parameter, p => p == true)
 in ts_type_literal, ts_interface let record_shape count(member) == 1 && first([] member.indexed_signature) == true
@@ -331,7 +343,10 @@ in ts_identifier let indexed_type_uses [] references.access
 in ts_type_operator let indexed_keyof operator == "keyof"
 in ts_type_parameter let indexed_key_parameter name != null && !contains(name.indexed_type_uses, "type") && constraint.indexed_keyof != true
 in ts_mapped_type let record_shape type_parameter.indexed_key_parameter == true
-in ts_type_literal, ts_interface, ts_mapped_type let indexed_record_eligible record_shape && !type_reaches(indexed_type_graph, if is ts_mapped_type then parent.indexed_type_refs else indexed_type_refs, indexed_type_scope)
+in ts_type_literal, ts_interface, ts_mapped_type let indexed_record_eligible record_shape && !{
+  value ids: if is ts_mapped_type then parent.indexed_type_refs else indexed_type_refs
+  value type_reaches(indexed_type_graph, ids, indexed_type_scope)
+}
 in ts_type_literal rule consistent-indexed-object-style {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
@@ -368,19 +383,19 @@ in ts_interface.name rule consistent-type-definitions:interface {
 }
 
 # Only a call signature: a function type says it better.
-in style_tree_node let function_this_offset if is ts_type_literal then null else if is ts_type_keyword && text == "this" then offset else first(compact(children.function_this_offset))
+in style_tree_node let function_this_offset if is ts_type_literal then null else if is ts_type_keyword && text == "this" then offset else { value children.function_this_offset; compact; first }
 in ts_type_reference let function_base name == "Function"
 in ts_interface let function_type_container { name: name, kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
 in ts_type_literal let function_type_container { name: "", kind: "Type literal", eligible: count(member) == 1, this: null }
 in ts_call_signature rule prefer-function-type {
   let container parent.function_type_container
   when return_type != null && container.eligible == true
-  report at default(container.this, offset)
+  report at container.this.nonempty ?? offset
   warn if container.this != null then "`this` refers to the function type '" container.name "', did you intend to use a generic `this` parameter like `<Self>(this: Self, ...) => Self` instead?" else container.kind " only has a call signature, you should use a function type instead."
 }
 
 in ts_namespace rule prefer-namespace-keyword {
-  when kind == "module" && is_identifier(re_replace(name, /\..*$/, ""))
+  when kind == "module" && { value name; re_replace /\..*$/ ""; is_identifier }
   warn "Use 'namespace' instead of 'module' to declare custom TypeScript modules."
 }
 

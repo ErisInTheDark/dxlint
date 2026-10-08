@@ -2,18 +2,18 @@
 
 define {
 
-fn spread_parts(t) = if contains(["union", "intersection"], t.kind) then reduce(t.parts, [], (parts, part) => parts spread_parts(part)) else [t]
+fn spread_parts(t) = if contains(["union", "intersection"], t.kind) then { value t.parts; fold ([]) (parts, part) parts spread_parts(part) } else [t]
 fn spread_builtin(t, names) = any(t.declarations, d => d.from == "lib" && contains(names, d.name))
-fn spread_string(t) = any(spread_parts(t), part => part.kind == "string")
+fn spread_string(t) = { value t; spread_parts; any (part) part.kind == "string" }
 fn spread_expando(n) = n.declaration.parent is ts_function || n.declaration.parent is ts_declarator && n.declaration.parent.type == null && unparenthesised_node(n.declaration.parent.init.node) is (ts_function, ts_arrow)
 fn spread_object_category(n, t) =
-  if any(spread_parts(t), part => spread_builtin(part, ["Promise"])) then "promise"
-  else if !(spread_expando(n) && len(default(t.property_writes, [])) > 0) && any(spread_parts(t), part => part.callable && len(part.property_names) == 0) then "function"
-  else if any(spread_parts(t), part => spread_builtin(part, ["Map", "ReadonlyMap", "WeakMap"])) then "map"
-  else if any(spread_parts(t), part => contains(["array", "tuple"], part.kind)) then "array"
-  else if !spread_string(t) && any(spread_parts(t), part => part.iterable == true) then "iterable"
-  else if any(spread_parts(t), part => !part.constructor && part.symbol_constructor) then "instance"
-  else if any(spread_parts(t), part => part.class_value) then "class" else null
+  if { value t; spread_parts; any (part) spread_builtin(part, ["Promise"]) } then "promise"
+  else if !(spread_expando(n) && { value t.property_writes.nonempty ?? []; len } > 0) && { value t; spread_parts; any (part) part.callable && len(part.property_names) == 0 } then "function"
+  else if { value t; spread_parts; any (part) spread_builtin(part, ["Map", "ReadonlyMap", "WeakMap"]) } then "map"
+  else if { value t; spread_parts; any (part) contains(["array", "tuple"], part.kind) } then "array"
+  else if !spread_string(t) && { value t; spread_parts; any (part) part.iterable == true } then "iterable"
+  else if { value t; spread_parts; any (part) !part.constructor && part.symbol_constructor } then "instance"
+  else if { value t; spread_parts; any (part) part.class_value } then "class" else null
 
 in ts_node let spread_type type_structure([], ["kind", "parts", "declarations", "callable", "constructor", "symbol_constructor", "class_value", "property_names", "iterable", "property_writes"])
 in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked true

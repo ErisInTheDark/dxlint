@@ -43,7 +43,7 @@ in ts_node let structure_parens_has_call is (ts_call, ts_import_call)
   || is (ts_non_null, ts_parenthesized) && expression.structure_parens_has_call == true
   || is ts_tagged_template && tag.structure_parens_has_call == true
 in ts_node let structure_parens_has_in node.operator == "in"
-  || any([] children.node, child =>
+  || any(children.nodes, child =>
     if child is structure_parens then structure_parens_required(source, child.parent.node, child.structure_parens_inner.structure_unwrapped, child) == 0
       && child.structure_parens_inner.structure_unwrapped.structure_parens_has_in == true
     else !structure_parens_enclosed_in(child) && child.structure_parens_has_in == true)
@@ -54,7 +54,7 @@ in ts_node let structure_parens_leading_child if is (ts_call, ts_new) then calle
   else if is structure_member then object.node
   else if is (structure_binary, ts_assignment) then left.node
   else if is ts_conditional then test.node
-  else if is (ts_sequence, ts_as, ts_satisfies, ts_non_null) then first([] expression.node) else null
+  else if is (ts_sequence, ts_as, ts_satisfies, ts_non_null) then first(expression.nodes) else null
 in ts_node let structure_parens_hazard is (ts_object, ts_function, ts_class)
   || is ts_index && node.object == "let"
   || structure_parens_leading_child != null && structure_parens_leading_child not ts_parenthesized && structure_parens_leading_child.structure_parens_hazard == true
@@ -79,24 +79,36 @@ fn structure_parens_enclosed_in(child) = child.parent is (ts_array, ts_object, t
 
 fn structure_parens_need(required) = if required then 1 else 0
 fn structure_parens_required(source, p, inner, outer) =
-  if p is structure_binary then structure_parens_need(
-    p.operator == "??" && contains(["&&", "||"], inner.operator) || contains(["&&", "||"], p.operator) && inner.operator == "??"
+  if p is structure_binary then {
+    value p.operator == "??" && contains(["&&", "||"], inner.operator) || contains(["&&", "||"], p.operator) && inner.operator == "??"
     || inner is structure_assertion || outer is ts_node.left && p.operator == "**" && inner is (ts_unary, ts_await)
-    || inner.precedence < p.precedence || inner.precedence == p.precedence && (outer is ts_node.right) != (p.operator == "**"))
-  else if p is ts_conditional then structure_parens_need(inner is structure_assertion || inner.precedence < (if outer is ts_node.test then 4 else 1))
-  else if outer is (ts_call.callee, ts_new.callee) then structure_parens_need(p is ts_call && inner is ts_function
+    || inner.precedence < p.precedence || inner.precedence == p.precedence && (outer is ts_node.right) != (p.operator == "**")
+    structure_parens_need
+  }
+  else if p is ts_conditional then {
+    value inner is structure_assertion || inner.precedence < (if outer is ts_node.test then 4 else 1)
+    structure_parens_need
+  }
+  else if outer is (ts_call.callee, ts_new.callee) then {
+    value p is ts_call && inner is ts_function
     || inner.precedence < (if p is ts_new && p.callee.end_offset == p.end_offset then 18 else 19) || inner.structure_parens_optional
-    || p is ts_new && inner.structure_parens_has_call)
+    || p is ts_new && inner.structure_parens_has_call
+    structure_parens_need
+  }
   else if p is (ts_call, ts_new, ts_import_call) then structure_parens_need(inner.precedence < 1)
-  else if outer is (ts_member.object, ts_index.object) then (if inner is ts_regex then null else structure_parens_need(
-    inner is ts_number && p is ts_member && re_test(inner.text, /^[0-9_]+$/) && !re_test(inner.text, /^0[0-7]+$/)
+  else if outer is (ts_member.object, ts_index.object) then (if inner is ts_regex then null else {
+    value inner is ts_number && p is ts_member && re_test(inner.text, /^[0-9_]+$/) && !re_test(inner.text, /^0[0-7]+$/)
     || inner is structure_assertion || inner.structure_parens_optional && p.optional == null || inner.precedence < 19
-    || p.structure_parens_new_receiver != null && inner.structure_parens_has_call))
+    || p.structure_parens_new_receiver != null && inner.structure_parens_has_call
+    structure_parens_need
+  })
   else if p is structure_member then 0
   else if p is ts_arrow then (if inner is structure_assertion then null else structure_parens_need(inner is ts_object || inner.precedence < 1))
   else if outer is ts_declarator.init then (if inner is ts_regex then null else structure_parens_need(inner.precedence < 1))
-  else if p is (ts_return, ts_throw, ts_yield) then (if inner is ts_regex && p is ts_return then null else structure_parens_need(
-    re_test(byte_slice(source, p.offset, inner.offset), /[\n\r\u{2028}\u{2029}]/) || p is ts_yield && inner.precedence < 1))
+  else if p is (ts_return, ts_throw, ts_yield) then (if inner is ts_regex && p is ts_return then null else {
+    value { value source; byte_slice p.offset inner.offset; re_test /[\n\r\u{2028}\u{2029}]/ } || p is ts_yield && inner.precedence < 1
+    structure_parens_need
+  })
   else if p is (ts_expression_statement, ts_export_assignment) then structure_parens_need(inner.structure_parens_hazard || inner.structure_parens_iife)
   else if p is (ts_if, ts_while, ts_do_while, ts_switch, ts_with, ts_case) then (if p is ts_case && inner is structure_assertion then null else 0)
   else if outer is ts_export.expression then structure_parens_need(inner.precedence < 1)
@@ -152,13 +164,20 @@ in structure_parens rule no-extra-parens {
     || context != null && context not ts_return && (inner.structure_parens_hazard
       || context is ts_for_of && inner.structure_parens_leading_let || inner is ts_identifier && inner.text == "async" && context is ts_for_of)
     || context is (ts_expression_statement, ts_for, ts_for_in) && inner is ts_identifier && inner.text == "let" && outer.next_token is (ts_identifier, ts_open_bracket)
-    || context is ts_return && re_test(byte_slice(source, context.offset, inner.offset), /[\n\r\u{2028}\u{2029}]/)
+    || context is ts_return && { value source; byte_slice context.offset inner.offset; re_test /[\n\r\u{2028}\u{2029}]/ }
     || outer.structure_parens_for_init && inner.structure_parens_has_in
-    || owner is ts_update && re_test(byte_slice(source, inner.end_offset, owner.end_offset), /[\n\r]/)
+    || owner is ts_update && { value source; byte_slice inner.end_offset owner.end_offset; re_test /[\n\r]/ }
     || owner is ts_await && inner is ts_non_null
   when structure_parens_count > (if protected && required < 1 then 1 else required)
-  let comment find_last(overlapping(ts_comment, default((outer.space_before).start, 0), outer.offset + 1), c => c.end_offset <= outer.offset && trim(byte_slice(source, c.end_offset, outer.offset)) == "")
-  let typed_inner any(overlapping(ts_block_comment, outer.offset, inner.offset), c => c.offset > outer.offset && c.end_offset <= inner.offset && contains(c.structure_comment_body, "@type"))
+  let comment {
+    value default: (outer.space_before).start.nonempty ?? 0
+    value overlapping(ts_comment, default, outer.offset + 1)
+    find_last (c) c.end_offset <= outer.offset && { value source; byte_slice c.end_offset outer.offset; trim } == ""
+  }
+  let typed_inner {
+    value overlapping(ts_block_comment, outer.offset, inner.offset)
+    any (c) c.offset > outer.offset && c.end_offset <= inner.offset && contains(c.structure_comment_body, "@type")
+  }
   when !(comment is ts_block_comment && contains(comment.structure_comment_body, "@type") && (structure_parens_count == 1 || typed_inner))
   when conditionalAssign || !(inner is ts_assignment && owner.structure_parens_conditional_owner is (ts_if, ts_while, ts_do_while, ts_conditional, ts_for))
   when ternaryOperandBinaryExpressions || !(inner is structure_binary && owner is ts_conditional)
@@ -173,7 +192,12 @@ in structure_parens rule no-extra-parens {
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
   warn "Unnecessary parentheses around expression."
   let body byte_slice(source, offset + 1, end_offset - 1)
-  let before if any(overlapping(ts_block_comment, max(0, offset - 1), offset), c => c.end_offset == offset) then "" else byte_char(source, offset, true)
+  let before if {
+    value 0
+    max: max (offset - 1)
+    value overlapping(ts_block_comment, max, offset)
+    any (c) c.end_offset == offset
+  } then "" else byte_char(source, offset, true)
   let after byte_char(source, end_offset)
   let first byte_char(source, offset + 1)
   let last byte_char(source, end_offset - 1, true)

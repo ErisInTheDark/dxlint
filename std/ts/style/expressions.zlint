@@ -5,7 +5,7 @@ define {
 # ---- expressions -----------------------------------------------------------------------
 in ts_assignment rule no-multi-assign {
   option ignoreNonDeclaration boolean = false "Allow chained assignments outside declaration initializers."
-  let owner last(walk(parent.node, current => if current is ts_parenthesized then current.parent.node else null))
+  let owner { value parent.node; walk (current) if current is ts_parenthesized then current.parent.node else null; last }
   when owner is ts_declarator && unparenthesised_node(owner.init.node) == node
     || owner is ts_class_property && unparenthesised_node(owner.init.node) == node
     || !ignoreNonDeclaration && owner is ts_assignment && unparenthesised_node(owner.right.node) == node
@@ -36,11 +36,11 @@ in ts_for rule prefer-for-of {
 in style_tree_node let assignment_node_start offset
 in style_tree_node let assignment_call_start if parent is ts_parenthesized then parent.assignment_call_start else if parent is ts_call then parent.assignment_node_start else null
 in ts_parenthesized let assignment_inner_start expression.assignment_value_start
-in style_tree_node let assignment_value_start default(assignment_inner_start, offset)
+in style_tree_node let assignment_value_start assignment_inner_start.nonempty ?? offset
 in ts_parameter let assignment_property_name if is_parameter_property && name is ts_identifier then name else null
 in ts_method let assignment_constructor_properties [] parameter.assignment_property_name
 in ts_method let assignment_is_constructor key == "constructor"
-in ts_method, ts_function, ts_arrow let assignment_function_node { node: node, constructor: assignment_is_constructor == true, properties: default(assignment_constructor_properties, []), call: if is ts_arrow then assignment_call_start else null, outer: parent.assignment_nearest_function }
+in ts_method, ts_function, ts_arrow let assignment_function_node { node: node, constructor: assignment_is_constructor == true, properties: assignment_constructor_properties.nonempty ?? [], call: if is ts_arrow then assignment_call_start else null, outer: parent.assignment_nearest_function }
 in style_tree_node let assignment_nearest_function if is (ts_method, ts_function, ts_arrow) then assignment_function_node else parent.assignment_nearest_function
 fn assignment_owner(owner) = if owner.node is ts_arrow && owner.call != null then owner.outer else owner
 in ts_class_property let assignment_property_node { init: init.assignment_value_start }
@@ -58,9 +58,14 @@ fn parameter_assignment_entry(start, owner, nearest, property, left_name, left_p
   candidate: assignment_constructor(owner) && left_name != null && left_name == right_parameter && contains(owner.properties, left_name) && contains(["=", "??=", "&&=", "||="], op),
   name: left_name
 }
-in ts_assignment let parameter_assignment_entry parameter_assignment_entry(offset, assignment_owner(assignment_nearest_function), assignment_nearest_function, assignment_nearest_property, left.assignment_this_name, if left is ts_identifier then left.assignment_parameter_value else null, right.assignment_parameter_value, operator)
-in style_tree_node let parameter_assignment_entries if is ts_class then [] else [] parameter_assignment_entry reduce([] children.parameter_assignment_entries, [], (entries, child) => entries child)
-in ts_class let parameter_assignment_catalog reduce([] children.parameter_assignment_entries, [], (entries, child) => entries child)
+in ts_assignment let parameter_assignment_entry {
+  value assignment_nearest_function
+  owner: assignment_owner
+  value left_parameter: if left is ts_identifier then left.assignment_parameter_value else null
+  value parameter_assignment_entry(offset, owner, assignment_nearest_function, assignment_nearest_property, left.assignment_this_name, left_parameter, right.assignment_parameter_value, operator)
+}
+in style_tree_node let parameter_assignment_entries if is ts_class then [] else [] parameter_assignment_entry { value [] children.parameter_assignment_entries; fold ([]) (entries, child) entries child }
+in ts_class let parameter_assignment_catalog { value [] children.parameter_assignment_entries; fold ([]) (entries, child) entries child }
 in ts_assignment rule no-unnecessary-parameter-property-assignment {
   when ts_class.node != null
   let entry parameter_assignment_entry
@@ -82,7 +87,7 @@ in ts_call rule no-require-imports {
   option allowAsImport boolean = false "allow `import x = require(...)`"
   when callee == "require" && (callee.resolved == "global" || parent is ts_import_equals)
   when !(allowAsImport && parent is ts_import_equals)
-  when !any(allow, p => re_test(default(first([] argument.literal_value).value, "\u{0}"), p) && first([] argument.literal_value).type == "string")
+  when !any(allow, p => { value { value first([] argument.literal_value).value; nonempty } ?? "\u{0}"; re_test p } && first([] argument.literal_value).type == "string")
   warn "A `require()` style import is forbidden."
 }
 in ts_call rule no-var-requires {

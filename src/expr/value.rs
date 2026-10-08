@@ -181,6 +181,15 @@ impl<'s> Value<'s> {
         }
     }
 
+    pub fn nonempty(self) -> Self {
+        match &self {
+            Value::Str(text) if text.is_empty() => Value::Null,
+            Value::List(items) if items.is_empty() => Value::Null,
+            Value::Record(entries) if entries.is_empty() => Value::Null,
+            _ => self,
+        }
+    }
+
     /// A node as the text it stands for (outside `.x` reads and `is`).
     fn as_text(&self) -> Option<&str> {
         match self {

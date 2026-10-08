@@ -279,7 +279,7 @@ mod tests {
             assert_eq!(lint.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1, "{code}");
         }
         let lint = native_linter("in ts_expression_statement.expression rule resolved { when type_is_string_like\nwarn 'resolved' }");
-        let preserved = native_linter("in ts_expression_statement.expression rule preserved { when contains(default(type_flags, []), 'any') || contains(default(type_flags, []), 'never')\nwarn 'preserved' }");
+        let preserved = native_linter("in ts_expression_statement.expression rule preserved { when { value (type_flags.nonempty ?? []); contains 'any' } || { value (type_flags.nonempty ?? []); contains 'never' }\nwarn 'preserved' }");
         for name in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
             let code = format!("type {name}<S extends string> = intrinsic; declare const broad: {name}<string>; declare const loose: {name}<any>; declare const empty: {name}<never>; declare const missing: {name}<Missing>; broad; loose; empty; missing;");
             assert_eq!(lint.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1, "{code}");
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn readonly_preserves_nested_property_types() {
-        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when contains(default(type_flags, []), 'any')\nwarn 'unsafe result' }");
+        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe result' }");
         let code = "type Readonly<T> = { readonly [P in keyof T]: T[P] }; interface Shape { value: any; safe: number; } declare const wrapped: Readonly<Readonly<Shape>>; wrapped.value; wrapped.safe;";
         assert_eq!(linter.lint(Path::new("/root/lib.fixture.d.ts"), code).len(), 1);
         let code = "type Readonly<T> = { safe: number }; declare const wrapped: Readonly<{ value: any }>; wrapped.value; wrapped.safe;";
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn mapped_key_filters_keep_inherited_generic_properties_and_methods() {
-        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when contains(default(type_flags, []), 'any')\nwarn 'unsafe result' }");
+        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe result' }");
         let code = format!("{FILTER_TYPES} interface Base<T> {{ keep: T; drop: T; optional?: number; method(): T; }} interface Shape extends Base<any> {{}} declare const omitted: Omit<Shape, 'drop'>; declare const picked: Pick<Shape, 'keep'>; declare const nullable: Omit<Shape | null, 'keep'>; omitted.keep; omitted.drop; omitted.method(); picked.keep; picked.drop; nullable.drop;");
         assert_eq!(linter.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 3);
     }

@@ -5,11 +5,29 @@ import .ts/type-specifiers
 define {
 fn deprecation_tag(doc) =
   if doc == null || !re_test(doc, /(?m)^@deprecated\b/) then null
-  else {reason: trim(re_replace(re_find(doc, /(?m)^@deprecated[^\n]*(?:\n[^@\n][^\n]*)*/), /^@deprecated[ \t]*/, ''))}
-fn deprecation_first(docs) = first(filter(map(docs, doc => deprecation_tag(doc)), reason => reason != null))
-fn deprecation_declarations(declarations) = first(filter(map(declarations, declaration => deprecation_first(if declaration.kind == "class" then [declaration.doc] else [declaration.doc] declaration.signature_docs)), reason => reason != null))
+  else {reason: {
+    value doc
+    re_find /(?m)^@deprecated[^\n]*(?:\n[^@\n][^\n]*)*/
+    re_replace /^@deprecated[ \t]*/ ''
+    trim
+  }}
+fn deprecation_first(docs) = {
+  value docs
+  map (doc) deprecation_tag(doc)
+  filter (reason) reason != null
+  first
+}
+fn deprecation_declarations(declarations) = {
+  value declarations
+  map (declaration) {
+    value if declaration.kind == "class" then [declaration.doc] else [declaration.doc] declaration.signature_docs
+    deprecation_first
+  }
+  filter (reason) reason != null
+  first
+}
 fn deprecation_reason(metadata, computed) =
-  if deprecation_first(map(metadata.aliases, alias => alias.doc)) != null then deprecation_first(map(metadata.aliases, alias => alias.doc))
+  if { value metadata.aliases; map (alias) alias.doc; deprecation_first } != null then { value metadata.aliases; map (alias) alias.doc; deprecation_first }
   else if !computed && metadata.selected_signature != null && count(metadata.declarations) > 0 && all(metadata.declarations, declaration => contains(["function", "method"], declaration.kind)) then deprecation_tag(metadata.selected_signature.doc)
   else if deprecation_declarations(metadata.declarations) != null then deprecation_declarations(metadata.declarations)
   else deprecation_tag(metadata.selected_signature.doc)

@@ -1309,7 +1309,7 @@ mod tests {
 
     #[test]
     fn logical_types_exclude_unreachable_operands_but_keep_enum_fallbacks() {
-        let linter = native_linter("in ts_logical rule reachable-string { when contains(default(type_flags, []), 'string')\nwarn 'string result' }");
+        let linter = native_linter("in ts_logical rule reachable-string { when { value (type_flags.nonempty ?? []); contains 'string' }\nwarn 'string result' }");
         let code = "({}) || 'unreachable'; false && 'unreachable'; true && 'reachable'; ({}) ?? 'unreachable'; enum E { Zero, One } declare const value: E; value || 'reachable'; 1 || 'unreachable'; 0 ?? 'unreachable';";
         let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
         assert_eq!(diagnostics.len(), 2);
@@ -1319,7 +1319,7 @@ mod tests {
 
     #[test]
     fn optional_callback_context_reaches_conditional_and_final_sequence_functions() {
-        let linter = native_linter("in ts_parameter.name rule contextual-any { when contains(default(type_flags, []), 'any')\nwarn 'unsafe parameter' }");
+        let linter = native_linter("in ts_parameter.name rule contextual-any { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe parameter' }");
         let code = "declare function receive(callback: ((e: any) => void) | undefined): void; declare const flag: boolean; receive(e => {}); receive(flag ? e => {} : e => {}); receive((e => {}, e => {}));";
         assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 5);
     }

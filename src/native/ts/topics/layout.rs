@@ -131,7 +131,7 @@ mod tests {
             in ts_identifier rule neighbour {
                 when text == "probe"
                 when starts_with(token_neighbours.before.text, "`left")
-                when starts_with(token_neighbours.after.text, "}} right")
+                when { value result: "}} right"; value starts_with(token_neighbours.after.text, result) }
                 when token_neighbours.before.gap == " /* before */ "
                 when token_neighbours.after.gap == " /* after */ "
                 error "neighbour"

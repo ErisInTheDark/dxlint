@@ -1030,16 +1030,16 @@ mod demand_tests {
         let valid = "const good = 1;";
         let invalid = "const broken = ;";
         for (setup, target, message, clauses) in [
-            ("", "line", "{count(overlapping(ts_if))}", ""),
+            ("", "line", "{ { value overlapping(ts_if); count } }", ""),
             ("", "line", "{parent is ts_program}", ""),
             ("", "line", "{type_flags}", ""),
             ("", "line", "{declaration}", ""),
             ("in ts_program let ready true", "line", "{parent.ready}", ""),
             ("in line let ready true\nin ts_program forward ready from body", "line", "{parent.ready}", ""),
-            ("in line let ready count(overlapping(ts_if))\nfn inner(n) = n.ready\nfn outer(n) = inner(n)", "line", "{outer(node)}", ""),
-            ("", "line", "dependent", "report at default(first(overlapping(ts_if)).offset, offset)"),
-            ("", "line", "dependent", "fix at {start: offset, end: offset + 1 + count(overlapping(ts_if))} as \"\""),
-            ("", "line", "{entry}", "each entry in [count(overlapping(ts_if))]"),
+            ("in line let ready { value overlapping(ts_if); count }\nfn inner(n) = n.ready\nfn outer(n) = inner(n)", "line", "{outer(node)}", ""),
+            ("", "line", "dependent", "report at ({ value overlapping(ts_if); first }.offset.nonempty ?? offset)"),
+            ("", "line", "dependent", "fix at {start: offset, end: offset + 1 + { value overlapping(ts_if); count }} as \"\""),
+            ("", "line", "{entry}", "each entry in [{ value overlapping(ts_if); count }]"),
             ("", "line", "{indent_level}", "indent in ts_block"),
             ("", "ts_program", "dependent", ""),
         ] {
@@ -1077,7 +1077,7 @@ mod demand_tests {
             in .js layer lines match line /[^\n]+\n?/
             in ts_program match hosted_comment /\/\/[^\n]*/
             in hosted_comment rule comment info "comment" { files "included.ts" }
-            in line rule structure info "{count(overlapping(ts_if))}" {
+            in line rule structure info "{ { value overlapping(ts_if); count } }" {
                 files "included.ts"
                 fix as ""
             }
@@ -1334,9 +1334,9 @@ mod demand_tests {
     #[test]
     fn reading_a_nodes_own_tokens_builds_them() {
         let actual: Vec<_> = [
-            "in ts_call rule tokens info \"{count([] token.node)}\"",
-            "in ts_call let own_tokens count([] token.node)\nin ts_call rule tokens info \"{own_tokens}\"",
-            "fn own_tokens(n) = count([] n.token.node)\nin ts_call rule tokens info \"{own_tokens(node)}\"",
+            "in ts_call rule tokens info \"{ count(token.nodes) }\"",
+            "in ts_call let own_tokens count(token.nodes)\nin ts_call rule tokens info \"{own_tokens}\"",
+            "fn own_tokens(n) = count(n.token.nodes)\nin ts_call rule tokens info \"{own_tokens(node)}\"",
         ].into_iter().map(|rules| messages(&native(rules), "/root/file.ts", "f(a, b);")).collect();
         assert_eq!(actual, [["3"], ["3"], ["3"]]);
     }

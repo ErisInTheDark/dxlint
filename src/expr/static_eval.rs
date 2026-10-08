@@ -63,6 +63,11 @@ impl Frame<'_, '_> {
                 eval(if eval(condition)?.truthy() { yes } else { no })?
             }
             CExpr::Binary(op, left, right) => eval_binary(*op, left, right, eval)?,
+            CExpr::Nullish(left, right) => match eval(left)? {
+                Value::Null => eval(right)?,
+                value => value,
+            },
+            CExpr::NonEmpty(inner) => eval(inner)?.nonempty(),
             CExpr::Bind(value, _, body) => {
                 let mut params = self.params.to_vec();
                 params.push(Some(eval(value)?));

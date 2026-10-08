@@ -45,7 +45,10 @@ define {
   # Each line, its line break included (the last may have none): over the
   # file, across whatever nodes it runs through.
   in .js layer lines match ts_line like core_line @core_line_pattern
-  override in core_trailing_spaces let core_raw_space any(overlapping(ts_template), template => any(template.quasi.node, quasi => offset >= quasi.offset && end_offset <= quasi.end_offset))
+  override in core_trailing_spaces let core_raw_space {
+    value overlapping(ts_template)
+    any (template) any(template.quasi.node, quasi => offset >= quasi.offset && end_offset <= quasi.end_offset)
+  }
 }
 group ts_comment ts_line_comment, ts_block_comment
 

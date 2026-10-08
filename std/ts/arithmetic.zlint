@@ -3,11 +3,16 @@ define {
 
 fn arithmetic_type_name(t) =
   if contains(["string", "number", "bigint", "boolean"], t.kind) then t.kind
-  else if t.kind == "union" then join(unique(map(t.parts, part => arithmetic_type_name(part))), " | ")
-  else default(first(t.aliases), default(first(t.names), if t.kind == "unresolved" then "unknown" else t.kind))
+  else if t.kind == "union" then {
+    value t.parts
+    map (part) arithmetic_type_name(part)
+    unique
+    join " | "
+  }
+  else { value t.aliases; first; nonempty } ?? { value t.names; first; nonempty } ?? if t.kind == "unresolved" then "unknown" else t.kind
 
-fn arithmetic_union_parts(t) = if t.kind == "union" then reduce(t.parts, [], (parts, part) => parts arithmetic_union_parts(part)) else [t]
-fn arithmetic_has_type(t, kinds) = any(arithmetic_union_parts(t), part => contains(kinds, part.kind))
+fn arithmetic_union_parts(t) = if t.kind == "union" then { value t.parts; fold ([]) (parts, part) parts arithmetic_union_parts(part) } else [t]
+fn arithmetic_has_type(t, kinds) = { value t; arithmetic_union_parts; any (part) contains(kinds, part.kind) }
 fn arithmetic_object_type(t) = if contains(["union", "intersection"], t.kind) then all(t.parts, part => arithmetic_object_type(part))
   else contains(["object", "array", "tuple", "function"], t.kind)
 fn arithmetic_regexp(t) = t.kind == "object" && contains(t.names, "RegExp")
@@ -23,10 +28,13 @@ fn arithmetic_operand_errors(subject, t, other, options) =
     || !options.allowBoolean && arithmetic_has_type(t, ["boolean"])
     || !options.allowNullish && arithmetic_has_type(t, ["null", "undefined"])
   then [{ node: subject, type: arithmetic_type_name(t) }]
-  else reduce(arithmetic_union_parts(t), [], (errors, part) =>
-    if (if arithmetic_regexp(part) then !options.allowRegExp || other.kind == "number"
+  else {
+    value t
+    arithmetic_union_parts
+    fold ([]) (errors, part) if (if arithmetic_regexp(part) then !options.allowRegExp || other.kind == "number"
       else !options.allowAny && part.kind == "any" || arithmetic_object_type(part))
-    then errors [{ node: subject, type: arithmetic_type_name(part) }] else errors)
+    then errors [{ node: subject, type: arithmetic_type_name(part) }] else errors
+  }
 
 fn arithmetic_pair_error(left, right, options) =
   if !options.allowNumberAndString && (arithmetic_has_type(left, ["string"]) && arithmetic_has_type(right, ["number", "bigint"])

@@ -36,48 +36,91 @@ define {
   group json_list json_object, json_array
   group core_list json_list
   group json_comment json_line_comment, json_block_comment
-  fn json_edge(value, tail) = {
-    start: if tail && contains(["[", "{{"], slice(value.text, 0, 1)) then value.end_offset - 1 else value.offset,
-    end: if !tail && contains(["[", "{{"], slice(value.text, 0, 1)) then value.offset + 1 else value.end_offset,
-    text: if contains(["[", "{{"], slice(value.text, 0, 1)) then (if tail then slice(value.text, len(value.text) - 1) else slice(value.text, 0, 1)) else value.text,
-    comment: false,
+  fn json_edge(item, tail) = {
+    value head: slice(item.text, 0, 1)
+    value bracketed: contains(["[", "{{"], head)
+    value {
+      start: if tail && bracketed then item.end_offset - 1 else item.offset,
+      end: if !tail && bracketed then item.offset + 1 else item.end_offset,
+      text: if !bracketed then item.text else if !tail then head else {
+        value tail_start: len(item.text) - 1
+        value item.text
+        slice tail_start
+      },
+      comment: false,
+    }
   }
   in json_property let json_child_edges [json_edge(key.node, false), json_edge(value.node, true)]
   in json_value let json_child_edges [json_edge(node, false), json_edge(node, true)]
   in json_comma, json_comment let json_child_edges [{ start: offset, end: end_offset, text: text, comment: is json_comment }]
-  fn json_gap_parts(source, from, to, comments) = reduce(filter(comments, comment => comment.offset >= from && comment.end_offset <= to), { cursor: from, text: "" }, (state, comment) => {
-    cursor: comment.end_offset, text: state.text byte_slice(source, state.cursor, comment.offset),
-  })
+  fn json_gap_parts(source, from, to, comments) = {
+    value comments
+    filter (comment) comment.offset >= from && comment.end_offset <= to
+    fold ({ cursor: from, text: "" }) (state, comment) {
+      cursor: comment.end_offset, text: state.text byte_slice(source, state.cursor, comment.offset),
+    }
+  }
   fn json_gap_text(source, to, parts) = parts.text byte_slice(source, parts.cursor, to)
   fn json_layout_site(source, context, mode, before, after, comments) = {
     kind: context.kind, brackets: context.brackets, count: context.count,
     single: context.single, node_single: context.single,
     first_broken: context.first_broken, empty_comments: context.empty_comments,
     mode: mode, offset: before.end, prev: before.text, next: after.text,
-    spaced: re_test(json_gap_text(source, after.start, json_gap_parts(source, before.end, after.start, comments)), /\s/),
-    broken: re_test(byte_slice(source, before.end, after.start), /[\n\r\u{2028}\u{2029}]/),
+    spaced: {
+      value source
+      parts: json_gap_parts before.end after.start comments
+      value json_gap_text(source, after.start, parts)
+      re_test /\s/
+    },
+    broken: { value source; byte_slice before.end after.start; re_test /[\n\r\u{2028}\u{2029}]/ },
   }
   in json_list let json_items filter(children.node, child => child is (json_property, json_value))
-  in json_list let json_edges reduce(children.node, [], (edges, child) => edges child.json_child_edges)
+  in json_list let json_edges { value children.node; fold ([]) (edges, child) edges child.json_child_edges }
   in json_list let json_plain filter(json_edges, edge => !edge.comment)
   in json_list let json_open { start: offset, end: offset + 1, text: slice(text, 0, 1) }
-  in json_list let json_close { start: end_offset - 1, end: end_offset, text: slice(text, len(text) - 1) }
-  in json_list let json_first default(first(json_edges), json_close)
-  in json_list let json_last default(last(json_edges), json_open)
+  in json_list let json_close { start: end_offset - 1, end: end_offset, text: { value result: len(text) - 1; value slice(text, result) } }
+  in json_list let json_first { value json_edges; first; nonempty } ?? json_close
+  in json_list let json_last { value json_edges; last; nonempty } ?? json_open
   in json_list let json_layout_context {
     kind: if is json_object then "JSONObjectExpression" else "JSONArrayExpression",
     brackets: if is json_object then "{{}}" else "[]",
     count: count(json_items), single: !re_test(text, /[\n\r\u{2028}\u{2029}]/),
-    first_broken: count(json_items) > 0 && re_test(byte_slice(source, offset + 1, first(json_items).offset), /[\n\r\u{2028}\u{2029}]/),
+    first_broken: count(json_items) > 0 && {
+      value offset_2: first(json_items).offset
+      value byte_slice(source, offset + 1, offset_2)
+      re_test /[\n\r\u{2028}\u{2029}]/
+    },
     empty_comments: count(json_edges) > 0,
   }
   in json_list let json_spacing_pairs [[json_open, json_first]] (if count(json_edges) == 0 then [] else [[json_last, json_close]])
-  in json_list let json_wrapping_pairs ([[json_open, default(first(json_plain), json_close)]]
-    map(slice(json_items, 1), item => [last(filter(json_plain, edge => edge.end <= item.offset)), json_edge(if item is json_property then item.key.node else item, false)])
-    [[default(last(json_plain), json_open), json_close]])
+  in json_list let json_wrapping_pairs ([[json_open, { value json_plain; first; nonempty } ?? json_close]]
+    {
+      value json_items
+      slice 1
+      map (item) [{ value json_plain; filter (edge) edge.end <= item.offset; last }, { value if item is json_property then item.key.node else item; json_edge false }]
+    }
+    [[{ value json_plain; last; nonempty } ?? json_open, json_close]])
   in json_list let json_layout_comments descendants(json_comment)
   in json_list let core_list_layout (
-    map(json_spacing_pairs, pair => json_layout_site(source, json_layout_context, "spacing", first(pair), last(pair), json_layout_comments))
-    map(json_wrapping_pairs, pair => json_layout_site(source, json_layout_context, "wrapping", first(pair), last(pair), json_layout_comments))
-    map(json_spacing_pairs, pair => json_layout_site(source, json_layout_context, "empty_wrapping", first(pair), last(pair), json_layout_comments)))
+    map(json_spacing_pairs, pair => {
+      value pair
+      before: first
+      value pair
+      after: last
+      value json_layout_site(source, json_layout_context, "spacing", before, after, json_layout_comments)
+    })
+    map(json_wrapping_pairs, pair => {
+      value pair
+      before_2: first
+      value pair
+      after_2: last
+      value json_layout_site(source, json_layout_context, "wrapping", before_2, after_2, json_layout_comments)
+    })
+    map(json_spacing_pairs, pair => {
+      value pair
+      before_3: first
+      value pair
+      after_3: last
+      value json_layout_site(source, json_layout_context, "empty_wrapping", before_3, after_3, json_layout_comments)
+    }))
 }

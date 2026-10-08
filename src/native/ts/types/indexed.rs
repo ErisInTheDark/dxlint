@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn readonly_dynamic_indexes_keep_source_values_and_key_domains() {
-        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when contains(default(type_flags, []), 'any')\nwarn 'unsafe result' }");
+        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe result' }");
         let source = "type Readonly<T> = { readonly [P in keyof T]: T[P] }; declare const at: number; declare const key: string; declare const array: Readonly<any[]>; declare const dictionary: Readonly<{ [name: string]: any }>; array[at]; array[key]; dictionary[key];";
         let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), source);
         let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();

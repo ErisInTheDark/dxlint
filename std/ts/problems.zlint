@@ -206,7 +206,11 @@ in ts_member let on_real_global object.is_real_global == true || object.on_real_
 in ts_parenthesized, ts_non_null let on_real_global expression.on_real_global == true
 in ts_call rule no-import-assign:call {
   when callee.on_real_global == true
-  when re_test(re_replace(callee, /[\s()]/, ""), /^(?:Object\??\.(?:assign|defineProperty|defineProperties|freeze|setPrototypeOf)|Reflect\??\.(?:defineProperty|deleteProperty|set|setPrototypeOf))$/)
+  when {
+    value callee
+    re_replace /[\s()]/ ""
+    re_test /^(?:Object\??\.(?:assign|defineProperty|defineProperties|freeze|setPrototypeOf)|Reflect\??\.(?:defineProperty|deleteProperty|set|setPrototypeOf))$/
+  }
   when first([] argument.imported_name) == "*"
   warn "The members of '{first(argument)}' are read-only."
 }
@@ -224,9 +228,9 @@ in ts_property let proto_setter static_name == "__proto__" && value != null && !
 in ts_method let proto_setter false
 in ts_property, ts_method let key_entry if !@has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
 in ts_object let keyed [] property.key_entry
-in ts_property, ts_method let duplicate_key parent is ts_object && parent.write_site == null && key_entry != null && any(slice(parent.keyed, 0, index), e => @duplicate_of(e))
+in ts_property, ts_method let duplicate_key parent is ts_object && parent.write_site == null && key_entry != null && { value parent.keyed; slice 0 index; any (e) @duplicate_of(e) }
 # At the name: inside the brackets of a computed key.
-@macro at_key_name (offset + len(re_find(text, /^\[\s*/)))
+@macro at_key_name (offset + { value text; re_find /^\[\s*/; len })
 in ts_property.key, ts_method.key rule no-dupe-keys {
   when parent.duplicate_key
   report at @at_key_name
@@ -238,7 +242,7 @@ in ts_property.key, ts_method.key rule no-dupe-keys {
 in ts_method let member_entry if !@has_static_name || body == null || static_name == "constructor" && !is_static && !starts_with(key, "[") then null else { name: static_name, kind: accessor_kind, static: is_static }
 in ts_class_property let member_entry if !@has_static_name then null else { name: static_name, kind: accessor_kind, static: is_static }
 in ts_class let member_entries [] member.member_entry
-in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && any(slice(parent.member_entries, 0, index), e => @duplicate_of(e) && e.static == is_static)
+in ts_method, ts_class_property let duplicate_member parent is ts_class && member_entry != null && { value parent.member_entries; slice 0 index; any (e) @duplicate_of(e) && e.static == is_static }
 in ts_method.key, ts_class_property.key rule no-dupe-class-members {
   when parent.duplicate_member
   report at @at_key_name
@@ -248,14 +252,18 @@ in ts_method.key, ts_class_property.key rule no-dupe-class-members {
 # Once per name, at the parameter list.
 in ts_function rule no-dupe-args {
   each duplicate_param in duplicate_parameters
-  report at offset + len(re_find(text, /^[^(]*/))
+  report at offset + { value text; re_find /^[^(]*/; len }
   warn "Duplicate param '{duplicate_param}'."
 }
 
 in ts_enum_member let enum_value init.literal_value
 in ts_enum let enum_values [] member.enum_value
 in ts_enum_member rule no-duplicate-enum-values {
-  when enum_value != null && any(slice(parent.enum_values, 0, index), v => v != null && v.type == enum_value.type && v.value == enum_value.value)
+  when enum_value != null && {
+    value parent.enum_values
+    slice 0 index
+    any (v) v != null && v.type == enum_value.type && v.value == enum_value.value
+  }
   warn "Duplicate enum member value {if enum_value.value == '-0' then '0' else enum_value.value}."
 }
 
@@ -267,18 +275,18 @@ in ts_class.name, ts_interface.name rule no-unsafe-declaration-merging {
 # ---- @ts- directives (ban-ts-comment) -----------------------------------------------
 # The directive and its description, as TypeScript reads them: `// @ts-x`
 # (`///` too for check/nocheck) or the last line of a block comment.
-in ts_comment let ts_comment_body if is ts_line_comment then slice(text, 2) else re_replace(slice(text, 2, len(text) - 2), /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/, "")
+in ts_comment let ts_comment_body if is ts_line_comment then slice(text, 2) else { value result: len(text) - 2; value slice(text, 2, result); re_replace /^[\s\S]*(?:\r\n|[\r\n\u{2028}\u{2029}])/ "" }
 in ts_comment let ts_pragma is ts_line_comment && re_test(text, /^\/\/\/?\s*@ts-(?:check|nocheck)/)
 in ts_comment let ts_suppress if is ts_line_comment then re_test(ts_comment_body, /^\/*\s*@ts-(?:expect-error|ignore)/) else re_test(ts_comment_body, /^\s*(?:\/|\*)*\s*@ts-(?:expect-error|ignore)/)
 in ts_comment let ts_directive if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(check|nocheck)[\s\S]*$/, "$1") else if ts_suppress then re_replace(ts_comment_body, /^[\/*\s]*@ts-(expect-error|ignore)[\s\S]*$/, "$1") else null
 in ts_comment let ts_directive_description if ts_pragma then re_replace(text, /^\/\/\/?\s*@ts-(?:check|nocheck)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1") else re_replace(ts_comment_body, /^[\/*\s]*@ts-(?:expect-error|ignore)([^\r\n\u{2028}\u{2029}]*)[\s\S]*$/, "$1")
 # `@ts-nocheck` only counts before the first statement.
-in ts_comment let ts_directive_effective ts_directive != "nocheck" || (first(overlapping(ts_program))).first_token.start == null || offset < (first(overlapping(ts_program))).first_token.start
+in ts_comment let ts_directive_effective ts_directive != "nocheck" || { value overlapping(ts_program); first }.first_token.start == null || offset < { value overlapping(ts_program); first }.first_token.start
 fn ts_directive_message(directive, description, mode, minimum, pattern) = (
   if mode == "allow" then null
   else if mode == "deny" && directive == "ignore" then "Use \"@ts-expect-error\" instead of \"@ts-ignore\", as \"@ts-ignore\" will do nothing if the following line is error-free."
   else if mode == "deny" then "Do not use \"@ts-{directive}\" because it alters compilation errors."
-  else if graphemes(trim(description)) < minimum then "Include a description after the \"@ts-{directive}\" directive to explain why the @ts-{directive} is necessary. The description must be {minimum} characters or longer."
+  else if { value description; trim; graphemes } < minimum then "Include a description after the \"@ts-{directive}\" directive to explain why the @ts-{directive} is necessary. The description must be {minimum} characters or longer."
   else if pattern != null && !re_test(description, pattern) then "The description for the \"@ts-{directive}\" directive must match the {pattern} format."
   else null
 )
@@ -312,7 +320,7 @@ in optional_chain_head let heads_optional_chain is (ts_member.object, ts_index.o
   || parent is ts_parenthesized && parent.heads_optional_chain == true
 in ts_non_null rule no-extra-non-null-assertion {
   when parent is ts_non_null || parent is ts_parenthesized && parent.under_non_null == true || heads_optional_chain
-  fix as slice(text, 0, len(text) - 1)
+  fix as { value result: len(text) - 1; value slice(text, 0, result) }
   warn "Forbidden extra non-null assertion."
 }
 # `x?.y!` (at the end of the chain), `(x?.y)!`.
@@ -342,7 +350,7 @@ in ts_arrow.body rule no-setter-return:arrow {
 # ---- calls that cannot work --------------------------------------------------------
 in ts_call, ts_new rule no-obj-calls {
   when contains(["Atomics", "JSON", "Math", "Reflect", "Intl", "Temporal"], callee.global_value)
-  let called re_replace(re_replace(callee, /^[\s(]+|[\s)!]+$/, ""), /^.*[.\[]\s*['"`]?|['"`]?\s*\]$/, "")
+  let called { value callee; re_replace /^[\s(]+|[\s)!]+$/ ""; re_replace /^.*[.\[]\s*['"`]?|['"`]?\s*\]$/ "" }
   warn if called == callee.global_value then "'{called}' is not a function." else "'{called}' is reference to '{callee.global_value}', which is not a function."
 }
 in ts_new rule no-new-native-nonconstructor {
@@ -407,12 +415,12 @@ in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
 }
 
 in ts_labeled.label rule no-unused-labels {
-  when !re_test(parent.body, "\\b(?:break|continue)\\s+" re_escape(text) "\\b")
+  when !{ value result: "\\b(?:break|continue)\\s+" re_escape(text) "\\b"; value re_test(parent.body, result) }
   warn "'{text}:' is defined but never used."
 }
 
 in ts_function, ts_method rule require-yield {
-  when contains(modifier, "*") && !has_yield && !re_test(default(body, ""), /^\{\s*\}$/)
+  when contains(modifier, "*") && !has_yield && !{ value body.nonempty ?? ""; re_test /^\{\s*\}$/ }
   warn "This generator function does not have 'yield'."
 }
 
@@ -451,29 +459,33 @@ in ts_switch {
 # whose only statement is a block.
 @macro last_comment(t) re_find(t, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/)
 @macro block_case /^\s*(?:case\b[\s\S]*?|default\s*):\s*\{([\s\S]*)\}\s*$/
-@macro previous_case_comment default(@last_comment(if re_test(default(previous_sibling, ""), @block_case) then re_replace(previous_sibling, @block_case, "$1") else ""), @last_comment(default(gap_before, "")))
+@macro previous_case_comment ({
+  value result: if { value previous_sibling.nonempty ?? ""; re_test @block_case } then re_replace(previous_sibling, @block_case, "$1") else ""
+  value @last_comment(result)
+  nonempty
+} ?? @last_comment(gap_before.nonempty ?? ""))
 in ts_case rule no-fallthrough {
   option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
-  let previous_path last(slice(parent.case_paths, 0, index))
-  let previous_has_body last(slice(parent.case_bodies, 0, index))
-  let comment_body trim(re_replace(default(@previous_case_comment, ""), /^\/[*\/]|\*\/$/, ""))
-  let allowing @previous_case_comment != null && re_test(comment_body, default(commentPattern, "(?i)falls?\\s?through")) && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
-  when index > 0 && previous_path == "falls_through" && (previous_has_body || !allowEmptyCase && re_count(default(gap_before, ""), /\n/) >= 2)
+  let previous_path { value parent.case_paths; slice 0 index; last }
+  let previous_has_body { value parent.case_bodies; slice 0 index; last }
+  let comment_body { value @previous_case_comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
+  let allowing @previous_case_comment != null && { value default: commentPattern.nonempty ?? "(?i)falls?\\s?through"; value re_test(comment_body, default) } && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
+  when index > 0 && previous_path == "falls_through" && (previous_has_body || !allowEmptyCase && { value gap_before.nonempty ?? ""; re_count /\n/ } >= 2)
   when !allowing
   warn "Expected a 'break' statement before '{if test == null then 'default' else 'case'}'."
 }
 in ts_case rule no-fallthrough:unused-comment {
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
-  let gap default(gap_before, "")
+  let gap gap_before.nonempty ?? ""
   let comment @last_comment(gap)
-  let comment_body trim(re_replace(default(comment, ""), /^\/[*\/]|\*\/$/, ""))
+  let comment_body { value comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
   when reportUnusedFallthroughComment && index > 0 && comment != null
-  when last(slice(parent.case_paths, 0, index)) == "leaves"
-  when re_test(comment_body, default(commentPattern, "(?i)falls?\\s?through")) && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
-  report at offset - len(gap) + len(re_replace(gap, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/, ""))
+  when { value parent.case_paths; slice 0 index; last } == "leaves"
+  when { value default: commentPattern.nonempty ?? "(?i)falls?\\s?through"; value re_test(comment_body, default) } && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
+  report at offset - len(gap) + { value gap; re_replace /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/ ""; len }
   warn "Found a comment that would permit fallthrough, but case cannot fall through."
 }
 
@@ -534,7 +546,7 @@ in ts_import rule no-unassigned-import {
 in ts_identifier rule no-unused-imports {
   when declaration_kind == "import" && uses == 0
   # TypeScript counts `{@link X}` in JSDoc as a use.
-  when !re_test(source, "\\x7B@link(?:code|plain)?\\s+" re_escape(text) "\\b")
+  when !{ value result: "\\x7B@link(?:code|plain)?\\s+" re_escape(text) "\\b"; value re_test(source, result) }
   warn "'{text}' is defined but never used."
 }
 
@@ -542,7 +554,7 @@ in ts_identifier rule no-unused-imports {
 # Literals and calls of the global `RegExp` (`regex_findings`): literals
 # report themselves, calls the call, except where eslint points inside.
 group regex_site ts_regex, ts_call, ts_new
-@macro findings_of(check) filter(default(regex_findings, []), f => f.check == check)
+@macro findings_of(check) ({ value regex_findings.nonempty ?? []; filter (f) f.check == check })
 fn backreference_reason(kind) = (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
 fn misleading_message(kind) = (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
@@ -561,7 +573,7 @@ in regex_site rule no-control-regex {
 
 in regex_site rule no-useless-backreference {
   each f in @findings_of("backref")
-  warn "Backreference '{first(f.data)}' will be ignored. It references group '{first(slice(f.data, 1))}'{last(f.data)} {backreference_reason(f.kind)}."
+  warn "Backreference '{first(f.data)}' will be ignored. It references group '{ { value f.data; slice 1; first } }'{last(f.data)} {backreference_reason(f.kind)}."
 }
 
 # Each sequence where it is written (or at the pattern when it is
@@ -587,7 +599,7 @@ in ts_call, ts_new rule no-invalid-regexp {
   let flags_problem if regex_flags == null then null else regex_flags_error(regex_flags, allowConstructorFlags)
   when callee.global_value == "RegExp"
   when flags_problem != null || regex_pattern_error != null
-  warn "{default(flags_problem, regex_pattern_error)}."
+  warn "{ flags_problem.nonempty ?? regex_pattern_error }."
 }
 
 # ---- whitespace and line breaks -------------------------------------------------
@@ -595,7 +607,7 @@ in ts_call, ts_new rule no-invalid-regexp {
 # starting the file is not one.
 group problem_template ts_template, ts_template_type
 in ts_program layer text match problem_irregular_ws /[\u{000B}\u{000C}\u{0085}\u{00A0}\u{1680}\u{180E}\u{2000}-\u{200B}\u{202F}\u{205F}\u{3000}\u{FEFF}]+|[\u{2028}\u{2029}]/
-in problem_irregular_ws let irregular_whitespace_checked count(overlapping(ts_string)) == 0
+in problem_irregular_ws let irregular_whitespace_checked { value overlapping(ts_string); count } == 0
 in problem_irregular_ws rule no-irregular-whitespace {
   when !(offset == 0 && text == "\u{FEFF}")
   when irregular_whitespace_checked

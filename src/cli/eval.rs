@@ -52,7 +52,7 @@ pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, f
     let question = WithQuestion {
         path: dir.join("(zlint eval).zlint"),
         // `null` shows as `null` rather than as an empty message.
-        text: format!("import \"./{stem}\"\nin {target} rule {RULE} info (if ({expr}) == null then \"null\" else str({expr}))\n"),
+        text: format!("import \"./{stem}\"\nin {target} rule {RULE} info {{ value ({expr}); then (result) if result == null then \"null\" else str(result) }}\n"),
     };
     let project = match load_from(output, &question.path, &question) {
         Ok(p) => p,

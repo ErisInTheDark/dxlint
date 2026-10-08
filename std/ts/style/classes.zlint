@@ -3,27 +3,37 @@
 define {
 
 fn member_display_name(name, key) = if name != "" && key is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null) && !re_test(name, /^[\p{Alphabetic}_$][\p{Alphabetic}\p{Number}_$]*$/) then '"' name '"' else name
-fn public_modifier_offset(xs, positions, head) = if contains(xs, "public") then first(slice(positions, index_of(xs, "public"), index_of(xs, "public") + 1)) else head
+fn public_modifier_offset(xs, positions, head) = if contains(xs, "public") then {
+  value xs
+  index_of: index_of "public"
+  value result: index_of(xs, "public") + 1
+  value slice(positions, index_of, result)
+  first
+} else head
 in ts_decorator let after_decorator space_after.end
 in ts_computed_key {
   let member_key_node expression.node
   let member_key_text expression
   let member_key_offset expression.offset
 }
-in ts_method, ts_class_property, ts_method_signature let style_member_name member_display_name(default(static_name, default(key.member_key_text, key)), default(key.member_key_node, key.node))
+in ts_method, ts_class_property, ts_method_signature let style_member_name {
+  value name: static_name.nonempty ?? key.member_key_text.nonempty ?? key
+  value key_2: key.member_key_node.nonempty ?? key.node
+  value member_display_name(name, key_2)
+}
 in ts_parameter let style_member_name member_display_name(name, name.node)
-in ts_method, ts_class_property let style_key_offset default(key.member_key_offset, key.offset)
+in ts_method, ts_class_property let style_key_offset key.member_key_offset.nonempty ?? key.offset
 in ts_parameter let style_key_offset name.offset
-in ts_method, ts_class_property, ts_parameter let style_head_offset default(last([] decorator.after_decorator), offset)
+in ts_method, ts_class_property, ts_parameter let style_head_offset { value [] decorator.after_decorator; last; nonempty } ?? offset
 in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, public: public_modifier_offset([] modifier, [] modifier.offset, style_head_offset), key: style_key_offset }
 in ts_method let class_constructor parent is ts_class && key is (ts_identifier, ts_string) && static_name == "constructor" && !contains([] modifier, "static") && kind != "get" && kind != "set"
 in ts_class_property rule explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
-  let check default(overrides.properties, accessibility)
+  let check overrides.properties.nonempty ?? accessibility
   let shape style_member
-  when !re_test(key, /^#/) && (check == "explicit" && !has_accessibility(@modifiers) || check == "no-public" && contains([] modifier, "public"))
+  when !re_test(key, /^#/) && (check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public"))
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on class property {shape.name}."
 }
@@ -31,10 +41,13 @@ in ts_method rule explicit-member-accessibility:method {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
-  let check default(if class_constructor then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods, accessibility)
+  let check {
+    value (if class_constructor then overrides.constructors else if kind == "get" || kind == "set" then overrides.accessors else overrides.methods)
+    nonempty
+  } ?? accessibility
   let shape style_member
   when parent is ts_class && !re_test(key, /^#/) && !contains(ignoredMethodNames, shape.name)
-  when check == "explicit" && !has_accessibility(@modifiers) || check == "no-public" && contains([] modifier, "public")
+  when check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on {if kind == 'get' then 'get property accessor' else if kind == 'set' then 'set property accessor' else 'method definition'} {shape.name}."
 }
@@ -42,10 +55,10 @@ in ts_parameter rule explicit-member-accessibility:parameter {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
   option ignoredMethodNames string[] = [] "Ignored method names."
   option overrides { properties?: string; methods?: string; accessors?: string; constructors?: string; parameterProperties?: string } = {} "Requirements by member kind."
-  let check default(overrides.parameterProperties, accessibility)
+  let check overrides.parameterProperties.nonempty ?? accessibility
   let shape style_member
   when contains([] modifier, "readonly") && parent is ts_method
-  when check == "explicit" && !has_accessibility(@modifiers) || check == "no-public" && contains([] modifier, "public")
+  when check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on parameter property {shape.name}."
 }
@@ -56,14 +69,14 @@ in ts_template let member_literal count(expression) == 0
 in ts_tagged_template let member_literal quasi.member_literal
 in ts_parenthesized let member_literal expression.member_literal
 in ts_return let returned_member_literal argument.member_literal == true
-in ts_block let first_member_literal first([] body.returned_member_literal) == true && first([] body.node) is ts_return
+in ts_block let first_member_literal first([] body.returned_member_literal) == true && first(body.nodes) is ts_return
 in ts_computed_key let member_static_name expression.static_string
-in ts_method, ts_class_property let member_static_name default(static_name, key.member_static_name)
+in ts_method, ts_class_property let member_static_name static_name.nonempty ?? key.member_static_name
 in ts_method let setter_member_name if kind == "set" then member_static_name else null
 in ts_member, ts_index let written_this_member if object is ts_this && write_site != null then static_name else null
-in style_tree_node let constructor_write_names if is (ts_function, ts_arrow, ts_method, ts_class) then [] else [] written_this_member reduce([] children.constructor_write_names, [], (names, child) => names child)
+in style_tree_node let constructor_write_names if is (ts_function, ts_arrow, ts_method, ts_class) then [] else [] written_this_member { value [] children.constructor_write_names; fold ([]) (names, child) names child }
 in ts_method let constructor_member_writes if class_constructor then body.constructor_write_names else []
-in ts_class let constructor_member_writes reduce([] member.constructor_member_writes, [], (names, child) => names child)
+in ts_class let constructor_member_writes { value [] member.constructor_member_writes; fold ([]) (names, child) names child }
 in ts_class let setter_member_names [] member.setter_member_name
 in ts_method let literal_member_candidate kind == "get" && !contains([] modifier, "override") && body.first_member_literal && (member_static_name == null || !contains(parent.setter_member_names, member_static_name))
 in ts_class_property let literal_member_candidate contains([] modifier, "readonly") && !contains([] modifier, "declare") && !contains([] modifier, "override") && init.member_literal == true && (member_static_name == null || !contains(parent.constructor_member_writes, member_static_name))
@@ -82,7 +95,7 @@ in ts_class_property.key rule class-literal-property-style:getters {
   warn "Literals should be exposed using getters."
 }
 
-in ts_parameter let is_parameter_property re_test(@modifiers, /\b(?:public|private|protected|readonly)\b/)
+in ts_parameter let is_parameter_property { value @modifiers; re_test /\b(?:public|private|protected|readonly)\b/ }
 in ts_method, ts_class_property let is_static contains([] modifier, "static")
 in ts_method let constructor_parameter_properties any([] parameter.is_parameter_property, p => p == true)
 in ts_method let class_constructor_only class_constructor && !constructor_parameter_properties
@@ -116,12 +129,12 @@ in ts_block let constructor_super_call if count(body) == 1 then first([] body.co
 fn constructor_spreads_arguments(arg) = arg is ts_spread && arg.argument is ts_identifier && arg.argument == "arguments"
 in ts_method rule no-useless-constructor {
   # A public constructor of a derived class may widen a protected one.
-  when class_constructor && body != null && count(decorator) == 0 && !re_test(@modifiers, /\b(?:private|protected)\b/)
-  when !(ts_class.extends != null && re_test(@modifiers, /\bpublic\b/))
+  when class_constructor && body != null && count(decorator) == 0 && !{ value @modifiers; re_test /\b(?:private|protected)\b/ }
+  when !(ts_class.extends != null && { value @modifiers; re_test /\bpublic\b/ })
   when !any([] parameter.constructor_parameter_exempt)
   let super_call body.constructor_super_call
   when if ts_class.extends == null then count(body.body) == 0 else super_call != null && count(parameter) == count([] parameter.constructor_forwarding_key)
-    && (count(super_call.argument) == 1 && constructor_spreads_arguments(first([] super_call.argument.node)) || count(parameter) == count(super_call.argument) && [] parameter.constructor_forwarding_key == [] super_call.argument.constructor_forwarding_key)
+    && (count(super_call.argument) == 1 && { value super_call.argument.nodes; first; constructor_spreads_arguments } || count(parameter) == count(super_call.argument) && [] parameter.constructor_forwarding_key == [] super_call.argument.constructor_forwarding_key)
   warn "Useless constructor."
 }
 

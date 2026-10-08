@@ -28,14 +28,14 @@ in ts_satisfies, ts_parenthesized let returned_const_assertion expression.return
 in ts_unary let returned_void operator == "void"
 in ts_parenthesized let returned_void expression.returned_void
 in ts_return let return_value { value: argument.node, function: argument.returned_function == true }
-in style_tree_node let function_return_values if is ts_return then [return_value] else if is (ts_function, ts_arrow, ts_method, ts_class) then [] else reduce([] children.function_return_values, [], (values, child) => values child)
+in style_tree_node let function_return_values if is ts_return then [return_value] else if is (ts_function, ts_arrow, ts_method, ts_class) then [] else { value [] children.function_return_values; fold ([]) (values, child) values child }
 in ts_method let return_method_valid key == "constructor" || kind == "set"
 in ts_arrow let return_arrow_head operator.offset
 in ts_function, ts_arrow, ts_method let return_declaration is ts_function && return_parent_info.node is (ts_program, ts_block, ts_export, ts_namespace)
 in ts_function, ts_arrow, ts_method let return_context_typed !return_declaration && (return_parent_typed || return_property_typed) || is ts_method && return_object_typed
 in ts_function, ts_arrow, ts_method let explicit_return_shape {
-  name: default(return_own_name, default(return_parent_info.name, "")),
-  offset: if is ts_method then style_head_offset else default(return_parent_info.head, default(return_arrow_head, offset)),
+  name: return_own_name.nonempty ?? return_parent_info.name.nonempty ?? "",
+  offset: if is ts_method then style_head_offset else return_parent_info.head.nonempty ?? return_arrow_head.nonempty ?? offset,
   valid: return_annotation || return_method_valid == true,
   typed: return_context_typed || !return_declaration && return_ancestor_typed,
   context_typed: return_context_typed,
@@ -72,31 +72,31 @@ in ts_function, ts_arrow, ts_method let explicit_return_shape {
 # explicit-module-boundary-types: what other modules see needs types.
 group style_boundary_export ts_export, ts_export_assignment
 in ts_class_property, ts_method let boundary_private contains([] modifier, "private") || key is ts_private_name
-in ts_function, ts_arrow, ts_method let boundary_returned_functions if is ts_arrow && body not ts_block then if body.returned_function == true then [] body.node else [] else if count(body.function_return_values) > 0 && all(body.function_return_values, value => value.function) then map(body.function_return_values, value => value.value) else []
+in ts_function, ts_arrow, ts_method let boundary_returned_functions if is ts_arrow && body not ts_block then if body.returned_function == true then body.nodes else [] else if count(body.function_return_values) > 0 && all(body.function_return_values, value => value.function) then map(body.function_return_values, value => value.value) else []
 in ts_assignment let boundary_written_value right.node
 in ts_identifier let boundary_binding_owner parent.node
 in ts_identifier let boundary_identifier_refs if reference_kind != null && !contains(["parameter", "catch", "import"], reference_kind) then [] declaration.boundary_binding_owner [] declaration.references.writer.boundary_written_value else []
-in ts_class let boundary_structural_refs [] member.node
-in ts_object let boundary_structural_refs [] property.node
-in ts_array let boundary_structural_refs [] element.node
-in ts_variable_declaration let boundary_structural_refs [] declaration.node
-in ts_declarator let boundary_structural_refs [] init.node
-in ts_class_property let boundary_structural_refs if boundary_private then [] else [] init.node
-in ts_property let boundary_structural_refs if value != null then [] value.node else if key is ts_identifier then [] key.node else []
-in ts_parenthesized let boundary_structural_refs [] expression.node
+in ts_class let boundary_structural_refs member.nodes
+in ts_object let boundary_structural_refs property.nodes
+in ts_array let boundary_structural_refs element.nodes
+in ts_variable_declaration let boundary_structural_refs declaration.nodes
+in ts_declarator let boundary_structural_refs init.nodes
+in ts_class_property let boundary_structural_refs if boundary_private then [] else init.nodes
+in ts_property let boundary_structural_refs if value != null then value.nodes else if key is ts_identifier then key.nodes else []
+in ts_parenthesized let boundary_structural_refs expression.nodes
 in ts_function, ts_arrow, ts_method let boundary_structural_refs if boundary_private == true then [] else boundary_returned_functions
-in style_tree_node let boundary_next default(boundary_structural_refs, default(boundary_identifier_refs, []))
+in style_tree_node let boundary_next boundary_structural_refs.nonempty ?? boundary_identifier_refs.nonempty ?? []
 in ts_export_specifier let boundary_export_value local.node
-in ts_export let boundary_export_roots if from == null then [] declaration.node [] expression.node [] specifier.boundary_export_value else []
-in ts_export_assignment let boundary_export_roots [] expression.node
-in ts_program let boundary_roots reduce(descendants(style_boundary_export), [], (roots, n) => roots n.boundary_export_roots)
+in ts_export let boundary_export_roots if from == null then declaration.nodes [] expression.node [] specifier.boundary_export_value else []
+in ts_export_assignment let boundary_export_roots expression.nodes
+in ts_program let boundary_roots { value descendants(style_boundary_export); fold ([]) (roots, n) roots n.boundary_export_roots }
 in ts_program let boundary_export_nodes walk(boundary_roots, n => n.boundary_next)
 in ts_declarator let boundary_context_name if name is ts_identifier then name else ""
-in ts_class_property let boundary_context_name default(member_static_name, "")
+in ts_class_property let boundary_context_name member_static_name.nonempty ?? ""
 in style_tree_node let boundary_parent_name if parent is ts_parenthesized then parent.boundary_parent_name else parent.boundary_context_name
-in ts_function let boundary_function_name if return_declaration then default(name, "") else default(boundary_parent_name, "")
-in ts_arrow let boundary_function_name default(boundary_parent_name, "")
-in ts_method let boundary_function_name default(member_static_name, "")
+in ts_function let boundary_function_name if return_declaration then name.nonempty ?? "" else boundary_parent_name.nonempty ?? ""
+in ts_arrow let boundary_function_name boundary_parent_name.nonempty ?? ""
+in ts_method let boundary_function_name member_static_name.nonempty ?? ""
 in ts_function, ts_method let boundary_overload_entry { name: boundary_function_name, empty: body == null, exported: parent is ts_export, default: parent.boundary_default_export == true }
 in ts_export let boundary_default_export kind == "default"
 in ts_export let boundary_overload_entry declaration.boundary_overload_entry
@@ -105,7 +105,7 @@ in ts_function, ts_arrow, ts_method let boundary_has_overload any(parent.boundar
 in ts_method let boundary_empty_method body == null
 in ts_method let boundary_empty_offset key.unified_next_offset
 in ts_class_property let boundary_accessor contains([] modifier, "accessor")
-in ts_function, ts_arrow, ts_method let boundary_offset if boundary_empty_method == true then boundary_empty_offset else if parent.boundary_accessor == true then default(return_arrow_head, offset) else explicit_return_shape.offset
+in ts_function, ts_arrow, ts_method let boundary_offset if boundary_empty_method == true then boundary_empty_offset else if parent.boundary_accessor == true then return_arrow_head.nonempty ?? offset else explicit_return_shape.offset
 in ts_function, ts_arrow, ts_method let boundary_function_reachable boundary_private != true && contains(ts_program.boundary_export_nodes, node)
 in ts_parameter let boundary_argument {
   eligible: init == null && (type == null || type == "any"),

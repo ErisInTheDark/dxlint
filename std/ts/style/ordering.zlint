@@ -18,9 +18,9 @@ in ts_class_property let ordering_kind if contains([] modifier, "accessor") then
 in ts_property_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-field" else "field"
 in ts_index_signature let ordering_kind if contains([] modifier, "readonly") then "readonly-signature" else "signature"
 in ts_static_block let ordering_kind "static-initialization"
-in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_key { text: default(static_name, default(key.member_key_text, key)), private: key is ts_private_name }
+in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_key { text: static_name.nonempty ?? key.member_key_text.nonempty ?? key, private: key is ts_private_name }
 in ts_parameter let ordering_parameter_name if name is ts_identifier then name else null
-in ts_index_signature let ordering_name default(first([] parameter.ordering_parameter_name), "(index signature)")
+in ts_index_signature let ordering_name { value [] parameter.ordering_parameter_name; first; nonempty } ?? "(index signature)"
 in ts_call_signature let ordering_name if kind == "new" then "new" else "call"
 in ts_static_block let ordering_name "static block"
 in ts_method, ts_method_signature, ts_class_property, ts_property_signature let ordering_name if ordering_kind == "constructor" then "constructor" else if ordering_key.private then re_replace(ordering_key.text, /^#+/, "") else ordering_key.text
@@ -28,10 +28,18 @@ in ts_method let ordering_skip body == null && !contains([] modifier, "abstract"
 in ts_class_property let ordering_initialiser init != null
 in ts_member let ordering_this_dependency if object is ts_this then re_replace(property, /^#+/, "") else null
 in ts_index let ordering_this_dependency if object is ts_this then index.static_string else null
-in style_tree_node let ordering_dependencies if is (ts_function, ts_arrow, ts_method, ts_class) then [] else unique([] ordering_this_dependency reduce([] children.ordering_dependencies, [], (names, child) => names child))
-in ts_class_property let ordering_initialiser_dependencies default(init.ordering_dependencies, [])
+in style_tree_node let ordering_dependencies if is (ts_function, ts_arrow, ts_method, ts_class) then [] else {
+  value [] ordering_this_dependency { value [] children.ordering_dependencies; fold ([]) (names, child) names child }
+  unique
+}
+in ts_class_property let ordering_initialiser_dependencies init.ordering_dependencies.nonempty ?? []
 in ts_method, ts_class_property, ts_method_signature, ts_property_signature let ordering_optional_member optional != null
-in ordering_member_node let ordering_access if ordering_key.private == true then "#private" else default(first(filter(["public", "protected", "private"], access => contains(ordering_modifiers, access))), "public")
+in ordering_member_node let ordering_access if ordering_key.private == true then "#private" else {
+  value ["public", "protected", "private"]
+  filter (access) contains(ordering_modifiers, access)
+  first
+  nonempty
+} ?? "public"
 in ordering_member_node let ordering_scope if ordering_decorated == true then "decorated" else if contains(ordering_modifiers, "static") then "static" else if contains(ordering_modifiers, "abstract") then "abstract" else "instance"
 fn ordering_standard_rank(kind, class_member, access, scope) = (
   if kind == null then null else get({ signature: 0, "readonly-signature": 0, "call-signature": 100, field: 200, "readonly-field": 200, "static-initialization": 300, constructor: 400, accessor: 500, get: 600, set: 700, method: 800 }, kind)
@@ -42,9 +50,10 @@ fn ordering_standard_rank(kind, class_member, access, scope) = (
       + (if kind != "constructor" && (scope == "abstract" && contains(["private", "#private"], access) || scope == "decorated" && access == "#private") then 0 else index_of(["public", "protected", "private", "#private"], access)))
 )
 in ordering_member_node let member_ordering_rank if ordering_skip == true then null else ordering_standard_rank(ordering_kind, parent is ts_class, ordering_access, ordering_scope)
-fn ordering_standard_label(kind, class_member, access, scope) = ordering_category_label(
-  if kind == "readonly-field" then "field" else if kind == "readonly-signature" then "signature" else kind,
-  class_member, access, scope)
+fn ordering_standard_label(kind, class_member, access, scope) = {
+  value if kind == "readonly-field" then "field" else if kind == "readonly-signature" then "signature" else kind
+  ordering_category_label class_member access scope
+}
 fn ordering_category_label(kind, class_member, access, scope) = (
   if !class_member || contains(["signature", "call-signature", "static-initialization"], kind) then kind
   else if kind == "constructor" then access " constructor"
@@ -53,24 +62,33 @@ fn ordering_category_label(kind, class_member, access, scope) = (
 )
 in ordering_member_node let member_ordering_label ordering_standard_label(ordering_kind, parent is ts_class, ordering_access, ordering_scope)
 in ordering_member_node let ordering_member {
-  index: index, name: default(ordering_name, ""), optional: ordering_optional_member == true,
+  index: index, name: ordering_name.nonempty ?? "", optional: ordering_optional_member == true,
   rank: member_ordering_rank, label: member_ordering_label,
-  init: ordering_initialiser == true, dependencies: default(ordering_initialiser_dependencies, [])
+  init: ordering_initialiser == true, dependencies: ordering_initialiser_dependencies.nonempty ?? []
 }
 in ordering_container let ordering_members [] member.ordering_member
 fn ordering_at_rank(states, partition, rank) = find(states, state => state.partition == partition && state.rank == rank)
-fn ordering_frontier(states, partition, rank) = reduce(states, null, (best, state) =>
-  if state.partition == partition && state.rank > rank && (best == null || state.rank < best.rank) then state else best)
+fn ordering_frontier(states, partition, rank) = {
+  value states
+  fold null (best, state) if state.partition == partition && state.rank > rank && (best == null || state.rank < best.rank) then state else best
+}
 # Displaced members must not become explanations for later failures.
 fn ordering_frontiers(states, row, partition) = if row.rank == null || ordering_at_rank(states, partition, row.rank) != null || ordering_frontier(states, partition, row.rank) != null then states else states [{ partition: partition, rank: row.rank, label: row.label }]
-fn ordering_alpha_bad(name, previous_name, mode) = name != "" && previous_name != null && name != previous_name && (if starts_with(mode, "natural") then compare_text(name, previous_name, true, ends_with(mode, "case-insensitive")) <= 0 else compare_text(name, previous_name, false, ends_with(mode, "case-insensitive")) < 0)
+fn ordering_alpha_bad(name, previous_name, mode) = name != "" && previous_name != null && name != previous_name && (if starts_with(mode, "natural") then { value mode; ends_with: ends_with "case-insensitive"; value compare_text(name, previous_name, true, ends_with) } <= 0 else { value mode; ends_with_2: ends_with "case-insensitive"; value compare_text(name, previous_name, false, ends_with_2) } < 0)
 fn ordering_alpha_blocked(row, before, rows, optionality) = row.init && any(rows, earlier =>
   earlier.index >= before.index && earlier.index < row.index && earlier.rank == row.rank && earlier.init
   && (optionality == "none" || earlier.optional == row.optional) && contains(row.dependencies, earlier.name))
 fn ordering_alpha_previous(states, row, previous_row, reset) = if reset && previous_row.rank != row.rank then [] else states
 fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enabled) = (
-  if !enabled || row.name == "" || ordering_alpha_bad(row.name, ordering_at_rank(states, partition, row.rank).name, mode)
-    && ordering_alpha_blocked(row, ordering_at_rank(states, partition, row.rank), rows, optionality) then states
+  if !enabled || row.name == "" || {
+    value previous_name: ordering_at_rank(states, partition, row.rank).name
+    value ordering_alpha_bad(row.name, previous_name, mode)
+  }
+    && {
+      value states
+      before: ordering_at_rank partition row.rank
+      value ordering_alpha_blocked(row, before, rows, optionality)
+    } then states
   else filter(states, state => state.partition != partition || state.rank != row.rank) [{ partition: partition, rank: row.rank, name: row.name, index: row.index }]
 )
 
@@ -83,22 +101,38 @@ fn ordering_alpha_states(states, row, partition, rows, mode, optionality, enable
     let checked row != null && row.rank != null
     let preferred optionality == "optional-first"
     let partition if optionality == "none" || row.optional == preferred then 0 else 1
-    let first_index default(previous.first_index, if checked then row.index else null)
+    let first_index previous.first_index.nonempty ?? if checked then row.index else null
     let first_optional if previous.first_index != null then previous.first_optional else if checked then row.optional else null
-    let phase_start default(previous.phase_start, if checked && row.optional != preferred then row.index else null)
+    let phase_start previous.phase_start.nonempty ?? if checked && row.optional != preferred then row.index else null
     let contains_preferred checked && row.optional == preferred || next.contains_preferred == true
     let optionality_error optionality != "none" && checked && row.optional != preferred && next.contains_preferred == true
       && row.index == (if first_optional != preferred then first_index else phase_start)
     let optionality_bad if ordering_is_container == true then any(children.optionality_error, bad => bad == true) else parent.optionality_bad
-    let frontiers ordering_frontiers(default(previous.frontiers, []), row, partition)
-    let before_frontiers default(previous.frontiers, [])
+    let frontiers { value previous.frontiers.nonempty ?? []; ordering_frontiers row partition }
+    let before_frontiers previous.frontiers.nonempty ?? []
     let frontier ordering_frontier(before_frontiers, partition, row.rank)
     let rank_bad checked && frontier != null
     let rank_status if checked then { partition: partition, bad: rank_bad } else null
-    let bad_partitions if ordering_is_container == true then unique(map(filter(children.rank_status, status => status.bad), status => status.partition)) else parent.bad_partitions
+    let bad_partitions if ordering_is_container == true then {
+      value children.rank_status
+      filter (status) status.bad
+      map (status) status.partition
+      unique
+    } else parent.bad_partitions
     let alpha_enabled checked && order != "as-written" && !optionality_bad
-    let alpha_states ordering_alpha_states(ordering_alpha_previous(default(previous.alpha_states, []), row, previous.row, contains(bad_partitions, partition)), row, partition, owner.ordering_members, order, optionality, alpha_enabled)
-    let before_alpha ordering_alpha_previous(default(previous.alpha_states, []), row, previous.row, contains(bad_partitions, partition))
+    let alpha_states {
+      value states: previous.alpha_states.nonempty ?? []
+      value bad_partitions
+      reset: contains partition
+      value ordering_alpha_previous(states, row, previous.row, reset)
+      ordering_alpha_states row partition owner.ordering_members order optionality alpha_enabled
+    }
+    let before_alpha {
+      value states: previous.alpha_states.nonempty ?? []
+      value bad_partitions
+      reset: contains partition
+      value ordering_alpha_previous(states, row, previous.row, reset)
+    }
     let alpha_before ordering_at_rank(before_alpha, partition, row.rank)
     let alpha_bad alpha_enabled && ordering_alpha_bad(row.name, alpha_before.name, order)
     let alpha_blocked alpha_bad && ordering_alpha_blocked(row, alpha_before, owner.ordering_members, optionality)

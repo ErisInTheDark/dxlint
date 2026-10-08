@@ -5,7 +5,7 @@ import .ts/import-attributes
 
 define {
 
-fn layout_comma_space(gap, before_side) = default(re_find(gap, if before_side then /\s*$/ else /^\s*/), "")
+fn layout_comma_space(gap, before_side) = { value result: if before_side then /\s*$/ else /^\s*/; value re_find(gap, result); nonempty } ?? ""
 fn layout_same_line(gap) = !re_test(gap, /[\n\r\u{2028}\u{2029}]/)
 @macro layout_block_space_options {
   option style "always" | "never" = "always" "spaces inside non-empty blocks"
@@ -19,9 +19,9 @@ in ts_computed_key, ts_index, ts_indexed_access let computed_spacing_enabled tru
   option before boolean = false "space before case colon"
   option after boolean = true "space after case colon"
 }
-in ts_block, ts_static_block, ts_switch, ts_enum let layout_block_line_comment starts_with(trim_start(opener.ts_open_brace.space_after.text), "//")
+in ts_block, ts_static_block, ts_switch, ts_enum let layout_block_line_comment { value opener.ts_open_brace.space_after.text; trim_start; starts_with "//" }
 in ts_method let layout_class_method parent is ts_class
-in ts_computed_key let layout_computed_class parent is ts_class_property || default(parent.layout_class_method, false)
+in ts_computed_key let layout_computed_class parent is ts_class_property || (parent.layout_class_method.nonempty ?? false)
 in ts_rest, ts_spread let layout_spread_property parent is (ts_object, ts_object_pattern)
 in ts_block let layout_block_function parent is (ts_function, ts_arrow, ts_method)
 in ts_block let layout_block_case parent is ts_case
@@ -49,13 +49,30 @@ in ts_method let generator_star_shorthand parent is ts_object
 }
 @macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
 @macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
-fn layout_padding_attached_start(gap) = default(re_find(gap, "^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"), "")
-fn layout_padding_attached_end(gap) = default(re_find(gap, "(?:" @layout_comment_pattern @layout_horizontal_space "*)*$"), "")
-fn layout_padding_last_attached(prefix) = re_replace(prefix, "^(?:" @layout_horizontal_space "*(" @layout_comment_pattern "))*$", "$1")
-fn layout_padding_last_comment(gap) = re_replace(gap, "^(?:\\s*(" @layout_comment_pattern "))*\\s*$", "$1")
-fn layout_padding_top_space(gap) = layout_comma_space(slice(gap, len(layout_padding_attached_start(gap))), false)
-fn layout_padding_tail_space(gap) = default(re_find(gap, if starts_with(layout_padding_last_comment(gap), "//") then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/), "")
-fn layout_padding_bottom_space(gap) = layout_padding_tail_space(slice(gap, 0, len(gap) - len(layout_padding_attached_end(gap))))
+fn layout_padding_attached_start(gap) = { value gap; re_find ("^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"); nonempty } ?? ""
+fn layout_padding_attached_end(gap) = { value gap; re_find ("(?:" @layout_comment_pattern @layout_horizontal_space "*)*$"); nonempty } ?? ""
+fn layout_padding_last_attached(prefix) = {
+  value pattern: "^(?:" @layout_horizontal_space "*(" @layout_comment_pattern "))*$"
+  value re_replace(prefix, pattern, "$1")
+}
+fn layout_padding_last_comment(gap) = { value pattern: "^(?:\\s*(" @layout_comment_pattern "))*\\s*$"; value re_replace(gap, pattern, "$1") }
+fn layout_padding_top_space(gap) = {
+  value gap
+  layout_padding_attached_start
+  len: len
+  value slice(gap, len)
+  layout_comma_space false
+}
+fn layout_padding_tail_space(gap) = {
+  value result: if { value gap; layout_padding_last_comment; starts_with "//" } then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/
+  value re_find(gap, result)
+  nonempty
+} ?? ""
+fn layout_padding_bottom_space(gap) = {
+  value result: len(gap) - { value gap; layout_padding_attached_end; len }
+  value slice(gap, 0, result)
+  layout_padding_tail_space
+}
 fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
 fn layout_padding_mode(style, blocks, switches, classes, owner) = if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
 @macro layout_padding_options {
@@ -100,20 +117,36 @@ in ts_comma, ts_import_attribute_comma rule comma-style {
 @macro multiple_space_horizontal "[ \\t\\u{{b}}\\u{{c}}\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
 @macro multiple_space_nonspace "[^ \\t\\u{{b}}\\u{{c}}\\r\\n\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{2028}}\\u{{2029}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
 in ts_code match multiple_space_gap /[ \t\u{b}\u{c}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{feff}]+/
-fn multiple_space_preview_body(body) = if contains(body, "\n") || len(body) > 12 then slice(first(split(body, "\n")), 0, 12) "..." else body
-fn multiple_space_comment_preview(comment) = (if comment is ts_block_comment then "/*" else "//") multiple_space_preview_body(slice(comment.text, 2, if comment is ts_block_comment then -2 else len(comment.text))) (if comment is ts_block_comment then "*/" else "")
+fn multiple_space_preview_body(body) = if contains(body, "\n") || len(body) > 12 then {
+  value body
+  split "\n"
+  first
+  slice 0 12
+} "..." else body
+fn multiple_space_comment_preview(comment) = (if comment is ts_block_comment then "/*" else "//") {
+  value result: if comment is ts_block_comment then -2 else len(comment.text)
+  value slice(comment.text, 2, result)
+  multiple_space_preview_body
+} (if comment is ts_block_comment then "*/" else "")
 in multiple_space_gap {
   let multiple_space_right node_at(end_offset)
-  let multiple_space_eol_comment multiple_space_right is ts_comment && re_test(multiple_space_right.text_after, "^" @multiple_space_horizontal "*(?:$|[\\r\\n\\u{{2028}}\\u{{2029}}])")
+  let multiple_space_eol_comment multiple_space_right is ts_comment && {
+    value result: "^" @multiple_space_horizontal "*(?:$|[\\r\\n\\u{{2028}}\\u{{2029}}])"
+    value re_test(multiple_space_right.text_after, result)
+  }
   let multiple_space_display if multiple_space_right is ts_comment then multiple_space_comment_preview(multiple_space_right) else token_neighbours.after.text
   let multiple_spaces_checked true
 }
 in multiple_space_gap rule no-multi-spaces {
   option includeTabs boolean = true "include tabs in repeated whitespace"
-  when multiple_spaces_checked && re_test(text, if includeTabs then /[ \t]{2}/ else / {2}/)
-    && re_test(byte_slice(source, position(offset).js_line_start, offset), @multiple_space_nonspace)
-    && re_test(text_after, "^" @multiple_space_nonspace)
-    && count(overlapping(ts_comment)) == 0
+  when multiple_spaces_checked && { value result: if includeTabs then /[ \t]{2}/ else / {2}/; value re_test(text, result) }
+    && {
+      value js_line_start: position(offset).js_line_start
+      value byte_slice(source, js_line_start, offset)
+      re_test @multiple_space_nonspace
+    }
+    && { value pattern: "^" @multiple_space_nonspace; value re_test(text_after, pattern) }
+    && { value overlapping(ts_comment); count } == 0
   fix as " "
   warn "Multiple spaces found before '{multiple_space_display}'."
 }
@@ -123,7 +156,7 @@ in ts_literal_type let layout_quote_import_argument parent is ts_import_type && 
 in ts_call let layout_quote_external_module parent is ts_import_equals && offset == parent.value.offset
 in ts_program let layout_quote_prologue true
 in ts_block let layout_quote_prologue (parent is ts_function || parent is ts_arrow || parent is ts_method) && offset == parent.body.offset
-in ts_expression_statement let layout_quote_directive default(parent.layout_quote_prologue, false) && expression is ts_string && (previous == null || default(previous.layout_quote_directive, false))
+in ts_expression_statement let layout_quote_directive (parent.layout_quote_prologue.nonempty ?? false) && expression is ts_string && (previous == null || (previous.layout_quote_directive.nonempty ?? false))
 in ts_template let layout_quote_template_feature count(expression) > 0 || is ts_tagged_template.quasi || re_test(text, /(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]/)
 group quoted_literals ts_string, ts_template
 in quoted_literals rule quotes {
@@ -131,7 +164,7 @@ in quoted_literals rule quotes {
   option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
   option allowTemplateLiterals "never" | "avoidEscape" | "always" = "never" "allow unused template delimiters"
   let quote_template is ts_template
-  let quote_fixed default(layout_quote_fixed_string, false) || parent is ts_expression_statement && parent.layout_quote_directive || parent is ts_literal_type && default(parent.layout_quote_import_argument, false) || parent is ts_call && default(parent.layout_quote_external_module, false)
+  let quote_fixed (layout_quote_fixed_string.nonempty ?? false) || parent is ts_expression_statement && parent.layout_quote_directive || parent is ts_literal_type && (parent.layout_quote_import_argument.nonempty ?? false) || parent is ts_call && (parent.layout_quote_external_module.nonempty ?? false)
   let quote_delimiter if style == "single" then "'" else if style == "double" then "\"" else "`"
   let quote_alternate if style == "double" then "'" else "\""
   when if quote_template then style != "backtick" && allowTemplateLiterals != "always" && !layout_quote_template_feature && !((allowTemplateLiterals == "avoidEscape") && avoidEscape && contains(text, quote_delimiter)) else parent not ts_jsx_attribute && !(style == "backtick" && quote_fixed) && !starts_with(text, quote_delimiter) && !(avoidEscape && starts_with(text, quote_alternate) && contains(text, quote_delimiter))
@@ -145,7 +178,7 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
   option numbers boolean = false "require quoted numeric keys"
   let property_any_quoted any(property_quote_sites, s => s.quoted)
   let property_necessary any(property_quote_sites, s => s.quoted && !s.redundant || keywords && s.keyword)
-  let property_keyword last(filter(property_quote_sites, s => !s.quoted && s.keyword)).name
+  let property_keyword { value property_quote_sites; filter (s) !s.quoted && s.keyword; last }.name
   each property_site in filter(property_quote_sites, s => s.group == (style == "consistent" || style == "consistent-as-needed"))
   when if style == "always" then !property_site.quoted else if style == "as-needed" then (if property_site.quoted then unnecessary && property_site.redundant && !(numbers && property_site.redundant_number) && !(keywords && property_site.keyword) else keywords && property_site.keyword || numbers && property_site.numeric) else if style == "consistent-as-needed" && property_any_quoted && !property_necessary then property_site.quoted else !property_site.quoted && (property_any_quoted || style == "consistent-as-needed" && keywords && property_keyword != null)
   report at property_site.offset
@@ -169,8 +202,8 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
   let member_override if parent is ts_interface then overrides.interface else overrides.typeLiteral
   let member_base if member_single then singleline else multiline
   let member_policy if member_single then member_override.singleline else member_override.multiline
-  let member_delimiter default(member_policy.delimiter, default(member_base.delimiter, default(delimiter, "semi")))
-  let member_require_last default(member_policy.requireLast, default(member_base.requireLast, !member_single))
+  let member_delimiter member_policy.delimiter.nonempty ?? member_base.delimiter.nonempty ?? delimiter.nonempty ?? "semi"
+  let member_require_last member_policy.requireLast.nonempty ?? member_base.requireLast.nonempty ?? !member_single
   let member_last offset == parent.layout_last_member.offset
   let member_token layout_member_token
   let member_actual if member_token.text == ";" then "semi" else if member_token.text == "," then "comma" else "none"
@@ -184,10 +217,10 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
   option exceptions string[] = [] "repeated sequences exempt from spacing"
   option markers string[] = [] "comment prefix markers"
   let comment_block is ts_block_comment
-  let comment_body byte_slice(text, 2, byte_len(text) - (if comment_block then 2 else 0))
-  let comment_marker_pattern "(?:" join(map(markers, m => re_escape(m)), "|") (if count(markers) > 0 then "|\\*)" else "\\*)")
-  let comment_exception_pattern if count(exceptions) == 0 then "\\s" else "(?:\\s|(?:" join(map(exceptions, e => "(?:" re_escape(e) ")+"), "|") ")(?:$|[\\n\\r\\u{{2028}}\\u{{2029}}]))"
-  let comment_marker default(re_find(comment_body, "^" comment_marker_pattern), "")
+  let comment_body { value result: byte_len(text) - (if comment_block then 2 else 0); value byte_slice(text, 2, result) }
+  let comment_marker_pattern "(?:" { value markers; map (m) re_escape(m); join "|" } (if count(markers) > 0 then "|\\*)" else "\\*)")
+  let comment_exception_pattern if count(exceptions) == 0 then "\\s" else "(?:\\s|(?:" { value exceptions; map (e) "(?:" re_escape(e) ")+"; join "|" } ")(?:$|[\\n\\r\\u{{2028}}\\u{{2029}}]))"
+  let comment_marker { value comment_body; re_find ("^" comment_marker_pattern); nonempty } ?? ""
   when comment_body != "" && comment_body != "*" && !contains(markers, comment_body)
   when comment_block || !re_test(comment_body, /^\/\s*<(?:reference|amd-)/)
 }
@@ -232,13 +265,18 @@ in layout_blank_run rule no-multiple-empty-lines {
   let blank_text byte_slice(text, blank_prefix)
   let blank_kind if offset == 0 then "bof" else if end_offset == byte_len(source) then "eof" else "middle"
   let blank_count re_count(blank_text, /\r\n|[\n\r]/) + (if re_test(blank_text, /[\r\n]\z/) then 0 else 1)
-  let blank_limit if blank_kind == "bof" then default(maxBOF, max) else if blank_kind == "eof" then default(maxEOF, max) else max
+  let blank_limit if blank_kind == "bof" then maxBOF.nonempty ?? max else if blank_kind == "eof" then maxEOF.nonempty ?? max else max
   when blank_count > blank_limit
   # Searching the syntax tree costs more than counting, so it comes after.
   when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
   # Blank whitespace cannot contain NUL; split after line endings to retain their byte lengths.
-  let blank_parts split(re_replace(blank_text, /(\r\n|[\r\n])/, "$1\0"), "\0")
-  report at { start: offset + blank_prefix + byte_len(join(slice(blank_parts, 0, blank_limit), "")), end: end_offset }
+  let blank_parts { value blank_text; re_replace /(\r\n|[\r\n])/ "$1\0"; split "\0" }
+  report at { start: offset + blank_prefix + {
+    value blank_parts
+    slice 0 blank_limit
+    join ""
+    byte_len
+  }, end: end_offset }
   warn if blank_kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_limit} allowed." else if blank_kind == "eof" then "Too many blank lines at the end of file. Max of {blank_limit} allowed." else "More than {blank_limit} blank {if blank_limit == 1 then 'line' else 'lines'} not allowed."
 }
 
@@ -259,12 +297,12 @@ in ts_colon let layout_annotation_optional token_neighbours.before.text == "?"
   let annotation_category parent.layout_annotation_category
   let annotation_policy if annotation_category == "variable" then overrides.variable else if annotation_category == "property" then overrides.property else if annotation_category == "parameter" then overrides.parameter else if annotation_category == "returnType" then overrides.returnType else overrides.colon
   when annotation_policy != "ignore"
-  let annotation_colon_before default(overrides.colon.before, before)
-  let annotation_colon_after default(overrides.colon.after, after)
+  let annotation_colon_before overrides.colon.before.nonempty ?? before
+  let annotation_colon_after overrides.colon.after.nonempty ?? after
   let annotation_optional layout_annotation_optional && overrides.questionMark != "ignore"
   let annotation_label if !annotation_optional then ":" else if starts_with(parent.optional, "+") then "+?:" else if starts_with(parent.optional, "-") then "-?:" else "?:"
-  let annotation_before if annotation_optional then default(overrides.questionMark.before, annotation_colon_before) else default(annotation_policy.before, annotation_colon_before)
-  let annotation_after default(annotation_policy.after, annotation_colon_after)
+  let annotation_before if annotation_optional then overrides.questionMark.before.nonempty ?? annotation_colon_before else annotation_policy.before.nonempty ?? annotation_colon_before
+  let annotation_after annotation_policy.after.nonempty ?? annotation_colon_after
 }
 in ts_colon rule type-annotation-spacing:before {
   @layout_annotation_options
@@ -282,7 +320,7 @@ in ts_colon rule type-annotation-spacing:between {
   when layout_annotation_optional
   @layout_annotation_options
   when annotation_optional
-  let annotation_inner default(overrides.questionMark.after, false)
+  let annotation_inner overrides.questionMark.after.nonempty ?? false
   when space_before.spaced != annotation_inner
   warn if annotation_inner then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'."
 }
@@ -297,7 +335,7 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
   let padding_space layout_padding_top_space(opener.ts_open_brace.space_after.text)
   let padding_padded layout_line_breaks(padding_space) >= 2
   when padding_padded != (padding_mode == "always" || padding_mode == "start")
-  report at if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - byte_len(layout_padding_last_attached(layout_padding_open_prefix))
+  report at if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - { value layout_padding_open_prefix; layout_padding_last_attached; byte_len }
   warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
 }
 
@@ -318,7 +356,10 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
 in ts_code match layout_class_line_gap /[\r\n](?:[^\S\r\n]*[\r\n])+/
 in layout_class_line_gap let layout_class_blank re_count(text, /\r\n|[\r\n]/) > 1
 in ts_semicolon let layout_member_before token_neighbours.before
-in ts_semicolon let layout_member_preceding_end max(layout_member_before.end, default(last(overlapping(ts_comment, layout_member_before.end, offset).end_offset), 0))
+in ts_semicolon let layout_member_preceding_end {
+  value default: { value overlapping(ts_comment, layout_member_before.end, offset).end_offset; last; nonempty } ?? 0
+  value max(layout_member_before.end, default)
+}
 
 in ts_class.member rule lines-between-class-members {
   option style "always" | "never" = "always" "blank lines between class members"
@@ -332,14 +373,14 @@ in ts_class.member rule lines-between-class-members {
     start: offset,
     kind: if is ts_method then "method" else if is ts_class_property then "field" else "*",
     tail: member_tail,
-    before_tail: if member_tail is ts_semicolon then last(overlapping(ts_semicolon, offset, end_offset).layout_member_preceding_end) else null
+    before_tail: if member_tail is ts_semicolon then { value overlapping(ts_semicolon, offset, end_offset).layout_member_preceding_end; last } else null
   }
   let prior_member previous.retained_member
   when !member_skipped && prior_member != null
   let gap_moved_semicolon prior_member.tail.text == ";" && position(prior_member.before_tail).line != position(prior_member.tail.start).line && position(prior_member.tail.end).line == position(first_token.start).line
   let gap_start if gap_moved_semicolon then prior_member.before_tail else prior_member.tail.end
   let gap_end if gap_moved_semicolon then prior_member.tail.start else first_token.start
-  let gap_padded contains(overlapping(layout_class_line_gap, gap_start, gap_end).layout_class_blank, true)
+  let gap_padded { value overlapping(layout_class_line_gap, gap_start, gap_end).layout_class_blank; contains true }
   let gap_mode if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == prior_member.kind) && (e.next == "*" || e.next == retained_member.kind)).blankLine
   let gap_single_line position(prior_member.start).line == position(gap_start).line
   when gap_mode == "never" && gap_padded || gap_mode == "always" && !gap_padded && !(exceptAfterSingleLine && gap_single_line)
@@ -372,13 +413,13 @@ in ts_open_brace rule space-before-blocks {
   option modules "always" | "never" | "off" | null = null "module body policy"
   when parent is (ts_block, ts_switch, ts_class, ts_interface, ts_enum) && previous_token != null
   let block_class parent is (ts_class, ts_interface, ts_enum)
-  let block_function default(parent.layout_block_function, false)
+  let block_function parent.layout_block_function.nonempty ?? false
   let block_previous token_neighbours.before.text
   when block_previous != "=>"
   when !(contains(["try", "do", "else", "finally", "catch", "static"], block_previous) && !block_class && !block_function)
-  when !(block_previous == ":" && default(parent.layout_block_case, false))
+  when !(block_previous == ":" && (parent.layout_block_case.nonempty ?? false))
   when !space_before.line_break
-  let block_mode if block_class then default(classes, style) else if block_function then default(functions, style) else if default(parent.layout_block_module, false) then default(modules, style) else default(keywords, style)
+  let block_mode if block_class then classes.nonempty ?? style else if block_function then functions.nonempty ?? style else if parent.layout_block_module.nonempty ?? false then modules.nonempty ?? style else keywords.nonempty ?? style
   when block_mode != "off" && space_before.spaced != (block_mode == "always")
   warn if space_before.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
 }
@@ -394,7 +435,7 @@ in ts_open_paren rule space-before-function-paren {
   when !(parent is ts_function && !function_named && contains(parent.modifier, "*"))
   when parent not ts_arrow || token_neighbours.before.text == "async"
   when parent not ts_try || parent.parameter != null
-  let paren_mode if parent is ts_try then default(catch, style) else if parent is ts_arrow then default(asyncArrow, style) else if function_named then default(named, style) else default(anonymous, style)
+  let paren_mode if parent is ts_try then catch.nonempty ?? style else if parent is ts_arrow then asyncArrow.nonempty ?? style else if function_named then named.nonempty ?? style else anonymous.nonempty ?? style
   when paren_mode != "ignore" && !(paren_mode == "always" && !function_named && parent.type_parameter != null)
   when space_before.spaced != (paren_mode == "always")
   report at if space_before.spaced then space_before.start else offset
@@ -402,16 +443,16 @@ in ts_open_paren rule space-before-function-paren {
 }
 
 schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
-fn layout_dangle_mode(kind, style, policies) = default(get(policies, kind), style)
+fn layout_dangle_mode(kind, style, policies) = { value policies; get kind; nonempty } ?? style
 fn layout_dangle_enabled(kind, edition) = (kind != "functions" || edition >= 2017) && (kind != "dynamicImports" || edition >= 2025)
 fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
-in ts_import_attributes let layout_attribute_last last(descendants(ts_import_attribute))
-in ts_import_attributes let layout_attribute_comma first(filter(descendants(ts_import_attribute_comma), c => c.offset >= layout_attribute_last.end_offset))
+in ts_import_attributes let layout_attribute_last { value descendants(ts_import_attribute); last }
+in ts_import_attributes let layout_attribute_comma { value descendants(ts_import_attribute_comma); filter (c) c.offset >= layout_attribute_last.end_offset; first }
 in ts_import_attributes let layout_attribute_comma_sites if layout_attribute_last == null then [] else [{
   kind: "importAttributes",
-  offset: default(layout_attribute_comma.offset, layout_attribute_last.end_offset),
+  offset: layout_attribute_comma.offset.nonempty ?? layout_attribute_last.end_offset,
   trailing: layout_attribute_comma != null,
-  multiline: position(default(layout_attribute_comma.end_offset, layout_attribute_last.end_offset)).js_line != position(close.end_offset).js_line,
+  multiline: { value layout_attribute_comma.end_offset.nonempty ?? layout_attribute_last.end_offset; position }.js_line != position(close.end_offset).js_line,
   allowed: true,
   tsx_single: false
 }]
@@ -430,27 +471,27 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
   let dangle_policies {arrays:arrays, objects:objects, functions:functions, imports:imports, exports:exports, importAttributes:importAttributes, dynamicImports:dynamicImports, enums:enums, generics:generics, tuples:tuples, "type-arguments":"never"}
   each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites
   when layout_dangle_enabled(dangle_site.kind, ecma_version)
-  when layout_dangle_wrong(dangle_site, layout_dangle_mode(dangle_site.kind, style, dangle_policies))
+  when { value dangle_site.kind; mode: layout_dangle_mode style dangle_policies; value layout_dangle_wrong(dangle_site, mode) }
   report at dangle_site.offset
   fix at {start:dangle_site.offset, end:dangle_site.offset + (if dangle_site.trailing then 1 else 0)} as if dangle_site.trailing then "" else ","
   warn if dangle_site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
 }
 
-in ts_parenthesized let layout_property_name default(expression.layout_property_name, expression)
-in ts_parenthesized_type let layout_property_name default(type.layout_property_name, type)
+in ts_parenthesized let layout_property_name expression.layout_property_name.nonempty ?? expression
+in ts_parenthesized_type let layout_property_name type.layout_property_name.nonempty ?? type
 in ts_member let layout_property_name property
-in ts_index, ts_indexed_access let layout_property_name default(index.layout_property_name, index)
+in ts_index, ts_indexed_access let layout_property_name index.layout_property_name.nonempty ?? index
 in ts_qualified_name let layout_property_name right
 in ts_member let layout_property_spaced object.space_after.spaced || property.space_before.spaced
 in ts_qualified_name let layout_property_spaced left.space_after.spaced || right.space_before.spaced
 in ts_member let layout_property_same_line position(object.end_offset).line == position(property.offset).line
 in ts_index let layout_property_same_line position(object.end_offset).line == position(index.offset).line
 in ts_member, ts_qualified_name rule no-whitespace-before-property {
-  when default(layout_property_same_line, true) && layout_property_spaced
+  when (layout_property_same_line.nonempty ?? true) && layout_property_spaced
   warn "Unexpected whitespace before property {layout_property_name}."
 }
 in ts_index, ts_indexed_access rule no-whitespace-before-property:computed {
-  when default(layout_property_same_line, true)
+  when layout_property_same_line.nonempty ?? true
   when object.space_after.spaced || opener.ts_open_bracket.space_before.spaced
   warn "Unexpected whitespace before property {layout_property_name}."
 }
@@ -508,14 +549,14 @@ in ts_close_bracket rule computed-property-spacing:before {
 in ts_yield.operator rule yield-star-spacing:before {
   @layout_yield_star_options
   when text == "*" && previous_token != null
-  when space_before.spaced != default(before, mode == "before" || mode == "both")
+  when space_before.spaced != (before.nonempty ?? mode == "before" || mode == "both")
   warn if space_before.spaced then "Unexpected space before *." else "Missing space before *."
 }
 
 in ts_yield.operator rule yield-star-spacing:after {
   @layout_yield_star_options
   when text == "*" && next_token != null
-  when space_after.spaced != default(after, mode == "after" || mode == "both")
+  when space_after.spaced != (after.nonempty ?? mode == "after" || mode == "both")
   warn if space_after.spaced then "Unexpected space after *." else "Missing space after *."
 }
 
@@ -602,7 +643,7 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
   let unary_separated if unary_prefix then unary_token.end != unary_argument.start else unary_argument.end != unary_token.start
   let unary_joinable unary_argument not (ts_identifier, ts_keyword, ts_this, ts_super, ts_boolean, ts_null, ts_yield, ts_number, ts_bigint)
   let unary_override if is ts_non_null then "ts-non-null" else unary_operator
-  let wants_space default(get(overrides, unary_override), default(get(overrides, unary_operator), if unary_word then words else nonwords))
+  let wants_space { value overrides; get unary_override; nonempty } ?? { value overrides; get unary_operator; nonempty } ?? if unary_word then words else nonwords
   when wants_space != unary_separated
   when !(wants_space && layout_unary_double_bang == true) && !(unary_word && !wants_space && !unary_joinable)
   warn if unary_word then
@@ -646,13 +687,13 @@ in ts_empty, ts_semicolon rule no-extra-semi {
 group layout_semi_owner ts_break, ts_continue, ts_debugger, ts_do_while, ts_export, ts_export_assignment, ts_expression_statement, ts_import, ts_return, ts_throw, ts_variable_declaration, ts_class_property
 in layout_semi_owner let layout_semi_last parent is ts_do_while || parent is ts_if && parent.alternate != null && end_offset == parent.consequent.end_offset || parent is (ts_program, ts_block, ts_static_block, ts_case, ts_class) && next == null
 in ts_variable_declaration let layout_semi_initializer parent is ts_for && offset == parent.init.offset
-in ts_semicolon let layout_semi_header if parent is ts_for then parent.init != null && (parent.test == null && previous_token not ts_semicolon || offset < parent.test.offset) || parent.test != null && offset >= parent.test.end_offset else default(parent.layout_semi_initializer, false)
+in ts_semicolon let layout_semi_header if parent is ts_for then parent.init != null && (parent.test == null && previous_token not ts_semicolon || offset < parent.test.offset) || parent.test != null && offset >= parent.test.end_offset else parent.layout_semi_initializer.nonempty ?? false
 in ts_semicolon let layout_semi_statement parent is layout_semi_owner && end_offset == parent.end_offset
 in ts_semicolon rule semi-style {
   option style "last" | "first" = "last" "semicolon line position"
   when layout_semi_header || layout_semi_statement
   let semi_at_end style == "last" || layout_semi_header
-  when if semi_at_end then space_before.line_break else !default(parent.layout_semi_last, false) && space_after.line_break
+  when if semi_at_end then space_before.line_break else !(parent.layout_semi_last.nonempty ?? false) && space_after.line_break
   warn if semi_at_end then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
 }
 
@@ -702,12 +743,12 @@ in ts_comma rule comma-spacing:after {
   when space_after.comments || next_token not (ts_comma, ts_close_paren, ts_close_bracket, ts_close_brace)
   when !(parent is (ts_array, ts_array_pattern) && previous_token is (ts_open_bracket, ts_comma) && next_token is (ts_comma, ts_close_bracket))
   when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
-  when after || !starts_with(trim_start(space_after.text), "//")
+  when after || !{ value space_after.text; trim_start; starts_with "//" }
   fix space_after as if after then " " else ""
   warn if after then "A space is required after ','." else "There should be no space after ','."
 }
 
-in ts_call, ts_new let layout_invocation_end default(last(type_argument.end_offset), callee.end_offset)
+in ts_call, ts_new let layout_invocation_end { value type_argument.end_offset; last; nonempty } ?? callee.end_offset
 in ts_import_call let layout_invocation_end offset + 6
 in ts_call let layout_invocation_optional optional != null
 in ts_new, ts_import_call let layout_invocation_optional false
@@ -752,7 +793,7 @@ in ts_tuple_member.name rule type-named-tuple-spacing:before {
 in ts_colon rule type-named-tuple-spacing:after {
   when parent is ts_tuple_member
   when parent.layout_tuple_prefix
-  when len(re_find(space_after.text, /^\s*/)) != 1
+  when { value space_after.text; re_find /^\s*/; len } != 1
   report at parent.offset
   fix space_after as " "
   warn "Expected a space after the ':'."
@@ -762,7 +803,7 @@ in ts_colon rule type-named-tuple-spacing:after {
   option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
   option allowSingleLine boolean = false "allow single-line block bodies"
   when parent is (ts_block, ts_static_block, ts_switch, ts_class)
-  when !default(parent.layout_brace_excluded, false)
+  when !(parent.layout_brace_excluded.nonempty ?? false)
 }
 in ts_open_brace rule brace-style:open {
   @layout_brace_options
@@ -784,7 +825,7 @@ in ts_close_brace rule brace-style:close {
 }
 in ts_close_brace rule brace-style:keyword {
   @layout_brace_options
-  when default(parent.layout_brace_keyword, false)
+  when parent.layout_brace_keyword.nonempty ?? false
   when contains(["else", "catch", "finally"], token_neighbours.after.text)
   when space_after.line_break == (style == "1tbs")
   warn if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block."
