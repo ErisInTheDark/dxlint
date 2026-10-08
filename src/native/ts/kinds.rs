@@ -1,6 +1,11 @@
 //! The node kinds of the TypeScript front end, and the fields each kind can
 //! have. Rules see a kind as the layer `ts_<name>` and its fields as fields.
 
+mod shapes;
+pub use shapes::{field_kinds, field_shape, FieldShape};
+#[cfg(test)]
+pub(super) use shapes::validate_shapes;
+
 macro_rules! fields {
     ($($v:ident = $s:literal),* $(,)?) => {
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,8 +51,8 @@ kinds! {
     Var = "ts_variable_declaration" [Kind, Decl, Modifier],
     Declarator = "ts_declarator" [Name, Type, Init],
     If = "ts_if" [Test, Consequent, Alternate],
-    For = "ts_for" [Init, Test, Update, Body],
-    ForIn = "ts_for_in" [Left, Right, Body],
+    For = "ts_for" [Modifier, Init, Test, Update, Body],
+    ForIn = "ts_for_in" [Modifier, Left, Right, Body],
     // `modifier`: the `await` of `for await`.
     ForOf = "ts_for_of" [Modifier, Left, Right, Body],
     While = "ts_while" [Test, Body],
@@ -72,9 +77,9 @@ kinds! {
     Param = "ts_parameter" [Decorator, Modifier, Name, Optional, Type, Init],
     Class = "ts_class" [Decorator, Modifier, Name, TypeParam, Extends, TypeArg, Implements, Member],
     Method = "ts_method" [Decorator, Modifier, Kind, Key, Optional, TypeParam, Param, ReturnType, Body],
-    ClassProp = "ts_class_property" [Decorator, Modifier, Key, Optional, Type, Init],
+    ClassProp = "ts_class_property" [Decorator, Modifier, Kind, Key, Optional, Type, Init],
     StaticBlock = "ts_static_block" [Body],
-    IndexSig = "ts_index_signature" [Modifier, Param, Type],
+    IndexSig = "ts_index_signature" [Decorator, Modifier, Param, Type],
     Decorator = "ts_decorator" [Expr],
     // ---- modules
     Import = "ts_import" [Kind, DefaultImport, Namespace, Specifier, From],
@@ -95,7 +100,7 @@ kinds! {
     ArrayPattern = "ts_array_pattern" [Element, Type],
     AssignPattern = "ts_assignment_pattern" [Left, Right],
     PatternProp = "ts_pattern_property" [Key, Value],
-    Rest = "ts_rest" [Arg, Type],
+    Rest = "ts_rest" [Arg, Name, Optional, Type],
     Hole = "ts_hole" [],
     // ---- expressions
     Ident = "ts_identifier" [],
@@ -112,7 +117,7 @@ kinds! {
     TaggedTemplate = "ts_tagged_template" [Tag, TypeArg, Quasi],
     Array = "ts_array" [Element],
     Object = "ts_object" [Property],
-    Prop = "ts_property" [Key, Value],
+    Prop = "ts_property" [Modifier, Kind, Key, Value],
     // `[expression]` as a property name.
     Computed = "ts_computed_key" [Expr],
     Spread = "ts_spread" [Arg],
@@ -182,10 +187,10 @@ kinds! {
     ArrayType = "ts_array_type" [Type],
     TupleType = "ts_tuple_type" [Element],
     TupleMember = "ts_tuple_member" [Name, Optional, Type],
-    FnType = "ts_function_type" [Kind, TypeParam, Param, ReturnType],
+    FnType = "ts_function_type" [Modifier, Kind, TypeParam, Param, ReturnType],
     TypeLit = "ts_type_literal" [Member],
     PropSig = "ts_property_signature" [Modifier, Key, Optional, Type],
-    MethodSig = "ts_method_signature" [Kind, Key, Optional, TypeParam, Param, ReturnType],
+    MethodSig = "ts_method_signature" [Modifier, Kind, Key, Optional, TypeParam, Param, ReturnType],
     CallSig = "ts_call_signature" [Kind, TypeParam, Param, ReturnType],
     TypeQuery = "ts_type_query" [Name, TypeArg],
     TypeOperator = "ts_type_operator" [Op, Type],

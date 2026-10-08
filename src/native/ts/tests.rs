@@ -9,6 +9,7 @@ fn dump(src: &str) -> String {
 
 fn dump_as(src: &str, jsx: bool) -> String {
     let p = parse(src, jsx).unwrap_or_else(|(at, e)| panic!("{e} at {at}: {}", &src[at as usize..]));
+    super::kinds::validate_shapes(&p);
     let mut out = String::new();
     let root = &p.nodes[p.root as usize];
     for (i, e) in root.children.iter().enumerate() {
