@@ -288,13 +288,15 @@ in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_
   }
 }
 
+fn unsafe_return_sender(transfer) = if transfer.error then "error" else if transfer.mode == "array" then "`any[]`" else if transfer.mode == "promise" then "`Promise<any>`" else "`any`"
+
 in ts_return, ts_arrow.body rule no-unsafe-return {
-  when unsafe_return != null && unsafe_return.kind != null
-  warn "Unsafe return of a value of type {unsafe_return.kind}."
+  when return_transfer != null && return_transfer.mode != "generic"
+  warn "Unsafe return of a value of type " unsafe_return_sender(return_transfer) "."
 }
 in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
-  when unsafe_return != null && unsafe_return.sender != null
-  warn "Unsafe return of type `{unsafe_return.sender}` from function with return type `{unsafe_return.receiver}`."
+  when return_transfer != null && return_transfer.mode == "generic"
+  warn "Unsafe return of type `{return_transfer.sender}` from function with return type `{return_transfer.receiver}`."
 }
 
 in ts_method, ts_function, ts_arrow rule prefer-return-this-type {

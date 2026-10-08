@@ -188,8 +188,8 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(assignments::findings, n),
     },
     Fact {
-        name: "unsafe_return",
-        doc: "native returns and arrow bodies: unsafe any category or generic sender/receiver types",
+        name: "return_transfer",
+        doc: "native returns and arrow bodies: any carrier, raw types and error provenance",
         get: |f, n| f.with_file(transfers::returned, n),
     },
     Fact {
