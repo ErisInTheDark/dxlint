@@ -138,8 +138,7 @@ pub enum CExpr {
     Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
 }
 
-/// `for_each_child` and its `mut` twin: one list of which forms hold which
-/// subexpressions.
+/// `for_each_child_mut`: one list of which forms hold which subexpressions.
 macro_rules! child_visitor {
     ($name:ident $(, $m:ident)?) => {
         /// Calls `f` on each direct subexpression, in evaluation order.
@@ -193,7 +192,6 @@ macro_rules! child_visitor {
 }
 
 impl CExpr {
-    child_visitor!(for_each_child);
     child_visitor!(for_each_child_mut, mut);
 }
 

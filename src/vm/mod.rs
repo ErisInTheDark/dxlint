@@ -49,7 +49,7 @@ pub enum V {
 }
 
 impl V {
-    fn truthy(self) -> bool {
+    pub fn truthy(self) -> bool {
         match self {
             V::Null => false,
             V::Bool(b) => b,
@@ -126,16 +126,25 @@ enum Lowered {
 /// How deep `fn` calls are inlined while lowering.
 const INLINE_DEPTH: u32 = 8;
 
-/// The typed form of an attribute definition, if its body is in the subset
-/// (`functions`: the config's `fn`s, inlined where called).
-pub fn lower(e: &CExpr, functions: &[UserFn]) -> Option<VExpr> {
-    match lower_in(e, functions, &[], 0)? {
-        Lowered::V(v) => Some(v),
-        Lowered::Children(_) => None,
-    }
+/// What lowering can inline: the config's `fn`s, and for rule conditions
+/// the rule's `let`s.
+struct Scope<'a> {
+    functions: &'a [UserFn],
+    locals: &'a [CExpr],
 }
 
-fn scalar(e: &CExpr, g: &[UserFn], args: &[Lowered], depth: u32) -> Option<VExpr> {
+/// The typed form of an attribute definition, if its body is in the subset.
+pub fn lower(e: &CExpr, functions: &[UserFn]) -> Option<VExpr> {
+    scalar(e, &Scope { functions, locals: &[] }, &[], 0)
+}
+
+/// The typed form of a rule condition, reading the rule's `let`s inline
+/// (they are pure here, so inlining keeps their values).
+pub fn lower_condition(e: &CExpr, functions: &[UserFn], locals: &[CExpr]) -> Option<VExpr> {
+    scalar(e, &Scope { functions, locals }, &[], 0)
+}
+
+fn scalar(e: &CExpr, g: &Scope, args: &[Lowered], depth: u32) -> Option<VExpr> {
     match lower_in(e, g, args, depth)? {
         Lowered::V(v) => Some(v),
         Lowered::Children(_) => None,
@@ -151,7 +160,7 @@ fn constant(v: &Value) -> Option<V> {
     })
 }
 
-fn lower_in(e: &CExpr, g: &[UserFn], args: &[Lowered], depth: u32) -> Option<Lowered> {
+fn lower_in(e: &CExpr, g: &Scope, args: &[Lowered], depth: u32) -> Option<Lowered> {
     let boxed = |e: &CExpr| scalar(e, g, args, depth).map(Box::new);
     Some(Lowered::V(match e {
         CExpr::Const(v) => VExpr::Const(constant(v)?),
@@ -208,8 +217,12 @@ fn lower_in(e: &CExpr, g: &[UserFn], args: &[Lowered], depth: u32) -> Option<Low
             }
             _ => return None,
         },
+        // A rule's `let` on its own node, outside every lambda.
+        CExpr::Local(i) if args.is_empty() && depth < INLINE_DEPTH => {
+            return lower_in(g.locals.get(*i as usize)?, g, &[], depth + 1);
+        }
         CExpr::UserCall(i, call_args) if depth < INLINE_DEPTH => {
-            let body = g.get(*i as usize)?.body.get()?;
+            let body = g.functions.get(*i as usize)?.body.get()?;
             let lowered = call_args.iter().map(|a| lower_in(a, g, args, depth)).collect::<Option<Vec<_>>>()?;
             return lower_in(body, g, &lowered, depth + 1);
         }
@@ -450,6 +463,12 @@ mod tests {
             in ts_parameter rule param info "{defaulted}"
             in ts_identifier rule ident info "{size}:{depth}"
             in ts_return rule cycle info "{cyclic}"
+            in ts_node rule gated {
+                let twice_total twice(total)
+                when twice_total > 2 && !boundary
+                when depth < 9 || logical
+                info "{twice_total}"
+            }
         "#;
         let sources = [
             "function f(a = 1, b) { if (a) { b ??= c; } else { d = e?.f; } switch (a) { case 1: break; default: } return; }",

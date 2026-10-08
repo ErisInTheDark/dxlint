@@ -6,7 +6,7 @@
 //! - [`grammar`] turns matchers into layers and parses files into trees
 //! - [`expr`] evaluates formatter expressions
 //! - [`engine`] runs formatters over trees and applies fixes
-//! - [`jit`] compiles rule conditions to native code
+//! - `vm` evaluates attributes and rule conditions lowered to typed code
 
 pub mod alloc;
 pub mod cli;
@@ -15,7 +15,6 @@ pub mod engine;
 pub mod expr;
 pub mod fx_hash;
 pub mod grammar;
-pub mod jit;
 pub mod line_index;
 pub mod lsp;
 pub mod native;

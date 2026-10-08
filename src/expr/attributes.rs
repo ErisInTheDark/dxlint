@@ -97,6 +97,12 @@ impl Attributes {
         Self { attrs, layout }
     }
 
+    /// Definitions lowered to the VM, and all definitions.
+    pub fn lowered_counts(&self) -> (usize, usize) {
+        let defs = self.attrs.iter().flat_map(|attr| &attr.lowered);
+        (defs.clone().filter(|d| d.is_some()).count(), defs.count())
+    }
+
     fn route(&self, matcher: u32, attr: u16) -> Route {
         if matcher == ROOT || matcher == TEXT { return Route::Missing; }
         self.attrs[attr as usize].routes.get(matcher as usize).copied().unwrap_or(Route::Missing)

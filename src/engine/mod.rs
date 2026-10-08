@@ -72,10 +72,10 @@ pub struct Rule {
     /// before the list is built.
     node_when: Vec<CExpr>,
     when: Vec<CExpr>,
-    /// Native code for `node_when` and `when`, item by item (`None`:
-    /// interpreted); empty until the linter compiles them.
-    node_when_code: Vec<Option<crate::jit::Compiled>>,
-    when_code: Vec<Option<crate::jit::Compiled>>,
+    /// `node_when` and `when` lowered to the VM, item by item (`None`:
+    /// interpreted).
+    node_when_vm: Vec<Option<crate::vm::VExpr>>,
+    when_vm: Vec<Option<crate::vm::VExpr>>,
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
@@ -191,80 +191,44 @@ pub struct Linter {
     /// Files at least this big run their rules in groups on several threads.
     pub(crate) split_at: usize,
     rule_jobs: usize,
-    /// The executable memory of the rules' compiled conditions.
-    conditions: Option<crate::jit::Code>,
-    /// `ZLINT_JIT=verify`: also interpret every compiled condition and fail
-    /// loudly on any difference.
-    verify_conditions: bool,
-}
-
-/// How rule conditions run, from `ZLINT_JIT`: compiled (the default),
-/// interpreted only (`0`), or both, checked against each other (`verify`).
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum ConditionMode {
-    Compiled,
-    Interpreted,
-    Verified,
-}
-
-impl ConditionMode {
-    pub(crate) fn from_env() -> Self {
-        match std::env::var("ZLINT_JIT").as_deref() {
-            Ok("0") => ConditionMode::Interpreted,
-            Ok("verify") => ConditionMode::Verified,
-            _ => ConditionMode::Compiled,
-        }
-    }
 }
 
 impl Linter {
-    /// Compiles the rules' conditions to native code (see [`crate::jit`]).
-    pub(crate) fn compile_conditions(&mut self, mode: ConditionMode) {
-        if mode == ConditionMode::Interpreted {
-            return;
-        }
-        // Rules turned off never run: compiling them would only slow loading.
-        let on = |rule: &&Rule| rule.severity != Severity::Off;
-        let exprs: Vec<(&CExpr, crate::jit::Want)> = self.rules.iter().filter(on)
-            .flat_map(|rule| rule.node_when.iter().chain(&rule.when))
-            .filter(|e| crate::jit::worth_compiling(e))
-            .map(|e| (e, crate::jit::Want::Truth))
-            .collect();
-        if exprs.is_empty() {
-            return;
-        }
-        let Some(compilation) = crate::jit::compile(&exprs) else { return };
-        // A failure is a compiler bug: that expression stays interpreted,
-        // but it must never go unnoticed where correctness is being checked.
-        for (i, error) in &compilation.errors {
-            let message = format!("zlint: rule condition not compiled ({error}): {:?}", exprs[*i].0);
-            assert!(mode != ConditionMode::Verified, "{message}");
-            if cfg!(debug_assertions) {
-                eprintln!("{message}");
-            }
-        }
-        let code = compilation.code;
-        let mut compiled = compilation.compiled.into_iter();
+    /// Lowers enabled rules' conditions (with the `let`s they read) to the
+    /// VM; `ZLINT_VM_STATS` prints how much of the config lowered.
+    pub(crate) fn lower_conditions(&mut self) {
+        let mut lowered = 0;
+        let mut total = 0;
+        let functions = &self.grammar.functions;
         for rule in self.rules.iter_mut().filter(|rule| rule.severity != Severity::Off) {
-            let mut code_for = |exprs: &[CExpr]| exprs.iter().map(|e| crate::jit::worth_compiling(e).then(|| compiled.next().flatten()).flatten()).collect();
-            rule.node_when_code = code_for(&rule.node_when);
-            rule.when_code = code_for(&rule.when);
+            let lower = |exprs: &[CExpr], locals: &[CExpr]| -> Vec<Option<crate::vm::VExpr>> {
+                exprs.iter().map(|e| crate::vm::lower_condition(e, functions, locals)).collect()
+            };
+            rule.node_when_vm = lower(&rule.node_when, &rule.locals);
+            rule.when_vm = lower(&rule.when, &rule.locals);
+            total += rule.node_when_vm.len() + rule.when_vm.len();
+            lowered += rule.node_when_vm.iter().chain(&rule.when_vm).filter(|e| e.is_some()).count();
         }
-        self.conditions = Some(code);
-        self.verify_conditions = mode == ConditionMode::Verified;
+        if std::env::var_os("ZLINT_VM_STATS").is_some() {
+            let (attrs, attr_defs) = self.attrs.lowered_counts();
+            eprintln!("zlint vm: {lowered}/{total} enabled rule conditions, {attrs}/{attr_defs} attribute definitions lowered");
+        }
     }
 
-    /// Whether a rule's `i`th condition (of `exprs`, compiled as `code`) holds.
-    fn condition_holds(&self, ctx: &Ctx, exprs: &[CExpr], code: &[Option<crate::jit::Compiled>], i: usize) -> Result<bool, String> {
+    /// Whether a rule's `i`th condition (of `exprs`, lowered as `vm`) holds.
+    fn condition_holds(&self, ctx: &Ctx, exprs: &[CExpr], vm: &[Option<crate::vm::VExpr>], i: usize) -> Result<bool, String> {
         let interpreted = || ctx.eval(&exprs[i]).map(|v| v.truthy());
-        match code.get(i).copied().flatten() {
+        let mode = crate::vm::mode();
+        let Some(lowered) = vm.get(i).and_then(Option::as_ref).filter(|_| mode != crate::vm::Mode::Off) else { return interpreted() };
+        match crate::vm::eval(ctx, ctx.node, lowered) {
             None => interpreted(),
-            Some(compiled) if !self.verify_conditions => compiled.test(ctx),
-            Some(compiled) => {
-                let native = compiled.test(ctx);
+            Some(v) if mode == crate::vm::Mode::On => Ok(v.truthy()),
+            Some(v) => {
                 let expected = interpreted();
-                assert_eq!(native, expected, "compiled condition differs from the interpreter: {:?}", exprs[i]);
-                native
+                if expected.as_ref().ok() != Some(&v.truthy()) {
+                    eprintln!("zlint vm mismatch: {} condition {:?} on node {}: vm {v:?}, interpreter {expected:?}", ctx.file, exprs[i], ctx.node);
+                }
+                expected
             }
         }
     }
@@ -606,7 +570,7 @@ impl Linter {
             // though these guards do not read that item yet.
             let ready = ctx.with_rule_item(Value::Null, || {
                 for i in 0..f.node_when.len() {
-                    if !self.condition_holds(ctx, &f.node_when, &f.node_when_code, i)? {
+                    if !self.condition_holds(ctx, &f.node_when, &f.node_when_vm, i)? {
                         return Ok(false);
                     }
                 }
@@ -641,7 +605,7 @@ impl Linter {
             fix: None,
         };
         for i in 0..f.when.len() {
-            match self.condition_holds(ctx, &f.when, &f.when_code, i) {
+            match self.condition_holds(ctx, &f.when, &f.when_vm, i) {
                 Ok(true) => {}
                 Ok(false) => return None,
                 Err(e) => return Some(failed(e)),
@@ -733,20 +697,6 @@ struct Run<'a> {
     lines: &'a LineIndex,
     file: &'a str,
     active: &'a [bool],
-}
-
-#[cfg(test)]
-mod condition_compile_tests {
-    use super::ConditionMode;
-    use crate::engine::tests::native_linter;
-
-    /// Every standard rule's conditions compile: a compiler bug in one would
-    /// otherwise only show as that condition running interpreted.
-    #[test]
-    fn every_standard_rule_condition_compiles() {
-        let mut linter = native_linter("rule *");
-        linter.compile_conditions(ConditionMode::Verified);
-    }
 }
 
 #[cfg(test)]
