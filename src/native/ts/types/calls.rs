@@ -391,6 +391,34 @@ impl Checker<'_> {
         Some((sig.params.iter().map(|param| param.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect(), sig.params.last().is_some_and(|param| param.rest)))
     }
 
+    /// Declared parameter contracts, before inferring from the values being checked.
+    /// Callback contexts keep parameters open; transfer contexts use their upper bounds.
+    pub fn argument_context_parameters(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>, construct: bool, bound: bool) -> Option<(Vec<Ty>, bool)> {
+        let (sig, env) = self.signature_for(callee, args, construct)?;
+        let mut env = (*env).clone();
+        let signature_args = if let (Ty::Class(symbol), true) = (callee, construct) {
+            let reference = *symbol.first()?;
+            let summary = self.summary_of(reference.file)?;
+            self.context_parameters(&summary.decls[reference.decl as usize].type_params, targs, bound, &mut env);
+            Vec::new()
+        } else { targs };
+        self.context_parameters(&sig.type_params, signature_args, bound, &mut env);
+        Some((sig.params.iter().map(|param| param.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect(), sig.params.last().is_some_and(|param| param.rest)))
+    }
+
+    fn context_parameters(&self, parameters: &[TParam], arguments: Vec<Ty>, bound: bool, env: &mut Env) {
+        let explicit = !arguments.is_empty();
+        let mut arguments = arguments.into_iter();
+        for parameter in parameters {
+            let ty = if explicit {
+                arguments.next().unwrap_or_else(|| parameter.default.as_ref().map_or(Ty::Unknown, |default| self.eval(default, env)))
+            } else if bound {
+                parameter.constraint.as_ref().map_or_else(|| Ty::Param(parameter.name.clone()), |constraint| self.eval(constraint, env))
+            } else { Ty::Param(parameter.name.clone()) };
+            env.tparams.push((parameter.name.clone(), ty));
+        }
+    }
+
     /// One query bounds inherited graph, signature and parameter work together.
     pub(crate) const CONTRACT_WORK_LIMIT: usize = 4096;
 

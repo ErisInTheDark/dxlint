@@ -32,8 +32,9 @@ pub(super) fn flow(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let Some(source) = args.get(1).and_then(node_id) else { return Value::Null };
     let checker = &file.typing().checker;
     let mut query = Query::new();
-    let transfers = file.argument_types(source, false).map(|pairs| ("argument", pairs))
+    let transfers = file.argument_types(source).map(|pairs| ("argument", pairs))
         .or_else(|| file.return_types(source).map(|pairs| ("return", pairs)))
+        .or_else(|| file.index_types(site, source).map(|pairs| ("index", pairs)))
         .or_else(|| file.spread_types(source).map(|pairs| ("contextual", pairs)));
     let contexts = if let Some((origin, pairs)) = transfers {
         pairs.into_iter().map(|(sender, receiver)| (origin, sender, receiver)).collect()
@@ -104,15 +105,7 @@ fn domains(checker: &Checker<'_>, ty: &Ty) -> Vec<Value<'static>> {
     match ty {
         Ty::Prim(domain) | Ty::Lit(_, domain) => vec![Value::from(*domain)],
         Ty::Named(symbol, _) if checker.is_enum(symbol) => {
-            let mut domains = Vec::new();
-            for decl in symbol.iter() {
-                let Some(summary) = checker.summary_of(decl.file) else { continue };
-                for member in &summary.decls[decl.decl as usize].members {
-                    let domain = if member.ty.is_some() { "string" } else { "number" };
-                    if !domains.contains(&domain) { domains.push(domain) }
-                }
-            }
-            domains.into_iter().map(Value::from).collect()
+            checker.enum_domains(symbol).into_iter().map(Value::from).collect()
         }
         _ => Vec::new(),
     }
@@ -300,6 +293,55 @@ mod tests {
         let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
         let source = "enum Fruit { Apple } function take(value: { fruit: Fruit }): void {} take({ fruit: Fruit.Apple }); take({ fruit: 1 }); function safe(): { fruit: Fruit } { return { fruit: Fruit.Apple }; } function unsafe(): { fruit: Fruit } { return { fruit: 1 }; }";
         assert_eq!(linter.lint(std::path::Path::new("/root/a.ts"), source).len(), 2);
+    }
+
+    #[test]
+    fn generic_enum_arguments_retain_declared_constraints_without_container_duplicates() {
+        let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
+        for calls in [
+            "function take<T extends Fruit>(value: T): void {} take(Fruit.Apple); take(1);",
+            "class Box<T extends Fruit> { constructor(public value: T) {} } new Box(Fruit.Apple); new Box(1);",
+            "class Box<T extends { fruit: Fruit }> { constructor(public value: T) {} } new Box({ fruit: Fruit.Apple }); new Box({ fruit: 1 });",
+        ] {
+            let source = format!("enum Fruit {{ Apple }} {calls}");
+            assert_eq!(linter.lint(std::path::Path::new("/root/a.ts"), &source).len(), 1, "{calls}");
+        }
+    }
+
+    #[test]
+    fn enum_index_contracts_follow_mapped_and_computed_keys() {
+        let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
+        for body in [
+            "declare const value: { [P in Fruit]: string }; value[Fruit.Apple]; value[0];",
+            "declare const value: { [P in Vegetable]: string }; value[Vegetable.Asparagus]; value?.['asparagus'];",
+            "declare const value: { [Fruit.Apple]: string }; value[Fruit.Apple]; value[0];",
+            "declare const value: { [Vegetable.Asparagus]: string; [Fruit.Apple]: string; other: string }; value.other; value['other']; value[Fruit.Apple]; value[0];",
+            "declare const value: { [Vegetable.Asparagus]: string; [Fruit.Apple]: string; other: string }; value['other']; value[Vegetable.Asparagus]; value['asparagus'];",
+            "declare const value: { [P in Fruit]: string }; function read<K extends number>(key: K) { return value[key]; }",
+            "function read<K extends number>(value: { [P in Fruit]: string }, key: K) { return value[key]; }",
+            "declare const value: { fruits: { [P in Fruit]: string } }; value.fruits[Fruit.Apple]; value.fruits[0];",
+            "class Basket { fruits: { [P in Fruit]: string } = { [Fruit.Apple]: 'apple' }; read() { return this.fruits[0]; } }",
+            "class Basket { get fruits(): { [P in Fruit]: string } { return { [Fruit.Apple]: 'apple' }; } read() { return this.fruits[0]; } }",
+        ] {
+            let source = format!("enum Fruit {{ Apple }} enum Vegetable {{ Asparagus = 'asparagus' }} {body}");
+            assert_eq!(linter.lint(std::path::Path::new("/root/a.ts"), &source).len(), 1, "{body}");
+        }
+    }
+
+    #[test]
+    fn enum_key_queries_do_not_invent_contracts_for_unknown_or_remapped_keys() {
+        let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
+        let source = "enum Fruit { Apple } declare const unknown: Missing; unknown[0]; declare const remapped: { [P in Fruit as string]: string }; remapped[0]; declare const plain: { [P in number]: string }; plain[0]; declare const dictionary: { [key: string]: string }; dictionary['apple'];";
+        assert!(linter.lint(std::path::Path::new("/root/a.ts"), source).is_empty());
+    }
+
+    #[test]
+    fn imported_enum_key_contracts_keep_their_declaration_scope() {
+        let messages = crate::engine::tests::lint_project("enum-imported-key-contracts", &[
+            ("keys.ts", "export enum Fruit { Apple } export type Basket = { [P in Fruit]: string };"),
+            ("main.ts", "import { Fruit, Basket } from './keys'; enum Local { Apple } declare const basket: Basket; basket[Fruit.Apple]; basket[Local.Apple]; basket[0];"),
+        ], "main.ts", "rule no-unsafe-enum-assignment");
+        assert_eq!(messages.len(), 2);
     }
 
     fn relation_count(value: &Value<'_>) -> usize {

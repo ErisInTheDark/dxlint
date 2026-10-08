@@ -389,6 +389,19 @@ impl Checker<'_> {
             })
         })
     }
+
+    /// Primitive domains backing an enum, including mixed and merged declarations.
+    pub fn enum_domains(&self, symbols: &[DeclRef]) -> Vec<&'static str> {
+        let mut domains = Vec::new();
+        for reference in symbols {
+            let Some(summary) = self.summary_of(reference.file) else { continue };
+            for member in &summary.decls[reference.decl as usize].members {
+                let domain = if member.ty.is_some() { "string" } else { "number" };
+                if !domains.contains(&domain) { domains.push(domain); }
+            }
+        }
+        domains
+    }
 }
 
 /// Every answer true: true; any false: false; else unknown.

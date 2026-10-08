@@ -260,8 +260,18 @@ impl NativeFile<'_> {
     }
 
     /// Source/parameter pairs at a resolved call position, including tuple spreads.
-    pub fn argument_types(&self, value: u32, contextual: bool) -> Option<Vec<(Ty, Ty)>> {
-        self.arguments_at(value, contextual, true)
+    pub fn argument_types(&self, value: u32) -> Option<Vec<(Ty, Ty)>> {
+        self.arguments_at(value, false, true)
+    }
+
+    /// An indexed read's source key and the declared domains that can receive it.
+    pub fn index_types(&self, site: u32, source: u32) -> Option<Vec<(Ty, Ty)>> {
+        let syntax = &self.syntax;
+        if !syntax.is(site, K::Index) || syntax.get(site, F::Index) != Some(source) { return None }
+        let object = self.constrained_type_of(syntax.get(site, F::Object)?);
+        let sender = self.constrained_type_of(source);
+        let receiver = self.ck().index_contract_keys(&object, &sender);
+        Some(vec![(sender, receiver)])
     }
 
     /// All callable parameter contracts at a position, without choosing an overload.
@@ -334,19 +344,7 @@ impl NativeFile<'_> {
             } else { self.type_of(argument) }
         }).collect();
         let type_args = self.type_args(call);
-        let (types, rest) = if contextual {
-            let (sig, env) = self.ck().signature_for(&callee, &actuals, s.is(call, K::New))?;
-            let mut env = (*env).clone();
-            for parameter in &sig.type_params {
-                let ty = if bound {
-                    parameter.constraint.as_ref().map_or_else(|| Ty::Param(parameter.name.clone()), |bound| self.ck().eval(bound, &env))
-                } else { Ty::Param(parameter.name.clone()) };
-                env.tparams.push((parameter.name.clone(), ty));
-            }
-            (sig.params.iter().map(|parameter| parameter.ty.as_ref().map_or(Ty::Unknown, |ty| self.ck().eval(ty, &env))).collect(), sig.params.last().is_some_and(|parameter| parameter.rest))
-        } else {
-            self.ck().argument_parameters(&callee, &actuals, type_args, s.is(call, K::New))?
-        };
+        let (types, rest) = self.ck().argument_context_parameters(&callee, &actuals, type_args, s.is(call, K::New), bound)?;
         let mut parameters = Parameters::new(types, rest, usize::from(tagged));
         let mut transfers = HashMap::new();
         for argument in args {
@@ -403,6 +401,35 @@ impl NativeFile<'_> {
 mod tests {
     use crate::engine::tests::with_native_file;
     use super::Ty;
+
+    #[test]
+    fn declared_generic_contracts_do_not_replace_inferred_call_results() {
+        with_native_file("enum Fruit { Apple } function take<T extends Fruit>(value: T): T { return value; } const result = take(/*@*/1);", |file, nodes| {
+            let checker = &file.typing().checker;
+            let argument = nodes[0];
+            let call = file.syntax.parent(argument).unwrap();
+            assert_eq!(checker.equivalent(&file.type_of(call), &Ty::Prim("number")), Some(true));
+            let pairs = file.argument_types(argument).unwrap();
+            let receiver = &pairs[0].1;
+            assert!(matches!(receiver, Ty::Named(symbol, _) if checker.is_enum(symbol)), "{receiver:?}");
+            assert_eq!(checker.assignable(&Ty::Prim("number"), receiver), Some(true));
+        });
+    }
+
+    #[test]
+    fn generic_transfer_contracts_keep_explicit_arguments_and_ordered_bounds() {
+        for (source, expected) in [
+            ("function take<T extends number>(value: T): void {} take<string>(/*@*/'value');", Ty::Prim("string")),
+            ("function take<T extends number, V extends T>(value: V): void {} take(/*@*/'value');", Ty::Prim("number")),
+            ("class Box<T extends number> { constructor(public value: T) {} } new Box(/*@*/'value');", Ty::Prim("number")),
+            ("class Box<T extends number> { constructor(public value: T) {} } new Box<string>(/*@*/'value');", Ty::Prim("string")),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let pairs = file.argument_types(nodes[0]).unwrap();
+                assert_eq!(file.typing().checker.equivalent(&pairs[0].1, &expected), Some(true), "{source}: {:?}", pairs[0].1);
+            });
+        }
+    }
 
     #[test]
     fn querying_every_array_element_walks_positions_once() {

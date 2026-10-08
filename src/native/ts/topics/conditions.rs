@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn condition_policy_respects_unchecked_fallback_and_chain_prefix() {
+    fn condition_policy_respects_unchecked_mapped_fallback_and_chain_prefix() {
         let linter = native_linter("rule no-unnecessary-condition { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }");
         let fallback = "declare const foo: { key?: { [key: string]: { key: string } } }; foo.key?.someKey?.key;";
         assert!(linter.lint(Path::new("/root/a.ts"), fallback).is_empty());
@@ -313,5 +313,16 @@ mod tests {
         assert_eq!(linter.lint(Path::new("/root/a.ts"), dictionary).len(), 1);
         let array = "declare const array: { x: { y: { z: object } } }[]; array[42]?.x?.y?.z;";
         assert!(linter.lint(Path::new("/root/a.ts"), array).is_empty());
+        for (unchecked, expected) in [(false, 1), (true, 0)] {
+            let config = format!(r#"{{"compilerOptions":{{"strictNullChecks":true,"noUncheckedIndexedAccess":{unchecked}}}}}"#);
+            for (source, expected) in [
+                ("type A = { [name in string]: { a: 1 } }; declare const a: A; a.a?.a;", expected),
+                ("type A = { [name in string]?: { [name in string]: { a: 1 } } }; declare const a: A; a.a?.a?.a;", 0),
+            ] {
+                let diagnostics = lint_project("condition-mapped-unchecked", &[("tsconfig.json", &config), ("main.ts", source)],
+                    "main.ts", "rule no-unnecessary-condition");
+                assert_eq!(diagnostics.len(), expected, "unchecked={unchecked}, source={source}: {diagnostics:#?}");
+            }
+        }
     }
 }

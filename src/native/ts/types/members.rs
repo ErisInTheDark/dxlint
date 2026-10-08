@@ -345,7 +345,11 @@ impl Checker<'_> {
             }
             Ty::Obj(members, env) => {
                 let env = Env { this: Some(Box::new(receiver.clone())), ..(**env).clone() };
-                self.member_from::<METADATA>(members.iter(), name, &env, None).unwrap_or_else(|| self.object_member::<METADATA, PROTOTYPE>(name, receiver))
+                self.member_from::<METADATA>(members.iter(), name, &env, None)
+                    .or_else(|| members.iter().filter(|member| member.kind == MemberKind::Mapped).find_map(|member| {
+                        self.mapped_resolution::<METADATA>(member, &Ty::Lit(format!("{name:?}").into(), "string"), &env)
+                    }))
+                    .unwrap_or_else(|| self.object_member::<METADATA, PROTOTYPE>(name, receiver))
             }
             Ty::Struct(props) => match props.iter().find(|property| &*property.name == name) {
                 Some(property) => Resolution::property::<METADATA>(name, property.ty.clone(), property.origin),
@@ -542,7 +546,15 @@ impl Checker<'_> {
                 }
             }
             Ty::Union(items) | Ty::Inter(items) => items.iter().for_each(|i| self.member_names(i, out)),
-            Ty::Obj(members, _) => out.extend(members.iter().filter(|m| m.kind != MemberKind::Index).map(|m| m.name.clone())),
+            Ty::Obj(members, env) => {
+                for member in members.iter() {
+                    if member.kind == MemberKind::Mapped {
+                        if let Some(names) = member.index_key.as_ref().and_then(|key| super::utilities::required_keys(&self.eval(key, env))) {
+                            out.extend(names.into_iter().map(String::into_boxed_str));
+                        }
+                    } else if member.kind != MemberKind::Index { out.push(member.name.clone()); }
+                }
+            }
             Ty::Struct(props) => out.extend(props.iter().map(|property| property.name.clone())),
             Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) => {
                 let a = self.apparent(t);

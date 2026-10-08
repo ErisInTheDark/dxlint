@@ -10,6 +10,84 @@ thread_local! {
 }
 
 impl Checker<'_> {
+    /// Declared key types for an indexed read, retaining computed-key identity.
+    pub fn index_contract_keys(&self, object: &Ty, index: &Ty) -> Ty {
+        self.deeper(|| {
+            if let Some(source) = self.readonly_source(object) { return self.index_contract_keys(source, index) }
+            if let Some(name) = literal_key(index) {
+                let property = self.member_resolution(object, &name);
+                if property.declared && property.declarations.iter().all(|declaration| {
+                    declaration.member.kind == MemberKind::Prop && declaration.member.computed_key.is_none()
+                }) { return index.clone() }
+            }
+            if let Some((keys, _)) = self.record_parts(object) {
+                return keys.clone();
+            }
+            let mut keys = self.index_signature_keys(object);
+            match object {
+                Ty::Obj(members, env) => keys.extend(self.member_key_contracts(members.iter(), env)),
+                Ty::Named(symbols, arguments) => {
+                    for &reference in symbols.iter() {
+                        let Some(summary) = self.summary_of(reference.file) else { continue };
+                        let declaration = &summary.decls[reference.decl as usize];
+                        let mut env = self.decl_env(reference);
+                        env.tparams = self.bind_tparams(&declaration.type_params, arguments.clone(), &env);
+                        keys.extend(self.member_key_contracts(declaration.members.iter().filter(|member| !member.is_static), &env));
+                        for base in self.bases(declaration) {
+                            keys.push(self.index_contract_keys(&self.eval(base, &env), index));
+                        }
+                    }
+                }
+                Ty::Union(parts) | Ty::Inter(parts) => {
+                    keys.extend(parts.iter().map(|part| self.index_contract_keys(part, index)));
+                }
+                Ty::Unknown | Ty::IntrinsicUnknown | Ty::Any | Ty::Param(_) => return Ty::Unknown,
+                _ => {}
+            }
+            Ty::union(keys)
+        })
+    }
+
+    fn member_key_contracts<'m>(&self, members: impl Iterator<Item = &'m Member>, env: &Env) -> Vec<Ty> {
+        members.filter_map(|member| {
+            if member.kind == MemberKind::Mapped {
+                member.index_key.as_ref().map(|key| self.eval(key, env))
+            } else {
+                member.computed_key.as_ref().map(|path| self.eval(&super::super::summary::TypeSyn::Query(path.clone(), Vec::new()), env))
+            }
+        }).collect()
+    }
+
+    fn key_domains_overlap(&self, index: &Ty, key: &Ty) -> bool {
+        let domain = |ty: &Ty| match ty {
+            Ty::Named(symbols, _) if self.is_enum(symbols) =>
+                Ty::union(self.enum_domains(symbols).into_iter().map(Ty::Prim).collect()),
+            ty => ty.clone(),
+        };
+        match (index, key) {
+            (Ty::Union(parts), _) => parts.iter().any(|part| self.key_domains_overlap(part, key)),
+            (_, Ty::Union(parts)) => parts.iter().any(|part| self.key_domains_overlap(index, part)),
+            _ => self.assignable(&domain(index), &domain(key)) != Some(false),
+        }
+    }
+
+    pub(super) fn mapped_resolution<const METADATA: bool>(&self, member: &Member, index: &Ty, env: &Env) -> Option<Resolution> {
+        let key = self.eval(member.index_key.as_ref()?, env);
+        if !self.key_domains_overlap(index, &key) { return None }
+        let mut environment = env.clone();
+        environment.tparams.push((member.name.clone(), index.clone()));
+        let ty = member.ty.as_ref().map_or(Ty::Unknown, |value| self.eval(value, &environment));
+        let ty = if member.optional { ty.or_undefined() } else { ty };
+        let mut resolution = if super::utilities::open_key_domain(&key) {
+            Resolution::signature::<METADATA>(ty, key)
+        } else { Resolution::typed(ty) };
+        resolution.declared = true;
+        if METADATA {
+            resolution.declarations.push(MemberDeclaration { owner: None, member: member.clone(), environment: Some(environment), origin: None });
+        }
+        Some(resolution)
+    }
+
     pub fn index_resolution(&self, object: &Ty, index: &Ty) -> Resolution {
         self.index_query::<true>(object, index)
     }
@@ -142,7 +220,12 @@ impl Checker<'_> {
     }
 
     fn index_from<'m, const METADATA: bool, const KEYS: bool>(&self, members: impl Iterator<Item = &'m Member>, index: &Ty, env: &Env, owner: Option<super::super::modules::DeclRef>) -> Option<Resolution> {
-        let found: Vec<_> = members.filter(|member| member.kind == MemberKind::Index).filter_map(|member| {
+        let found: Vec<_> = members.filter_map(|member| {
+            if member.kind == MemberKind::Mapped {
+                if KEYS { return None }
+                return self.mapped_resolution::<METADATA>(member, index, env).map(|resolution| (2, resolution));
+            }
+            if member.kind != MemberKind::Index { return None }
             let key = self.eval(member.index_key.as_ref()?, env);
             let priority = if KEYS { 1 } else { self.index_key_priority(index, &key) };
             (priority > 0).then(|| {
@@ -208,6 +291,61 @@ mod tests {
     use crate::engine::tests::with_native_file;
     use super::{Ty, INDEX_WORK};
     use std::path::Path;
+
+    #[test]
+    fn mapped_values_bind_the_selected_key_and_keep_optional_readonly_metadata() {
+        for (mapping, readonly, optional) in [
+            ("readonly [P in \"a\" | \"b\"]?: P", true, true),
+            ("+ readonly [P in \"a\" | \"b\"] + ?: P", true, true),
+            ("- readonly [P in \"a\" | \"b\"] - ?: P", false, false),
+            ("+ /*add*/ readonly [P in \"a\" | \"b\"] + /*add*/ ?: P", true, true),
+            ("- /*remove*/ readonly [P in \"a\" | \"b\"] - /*remove*/ ?: P", false, false),
+        ] {
+            with_native_file(&format!("declare const value: {{ {mapping} }}; const result = /*@*/value;"), |file, nodes| {
+                let checker = &file.typing().checker;
+                let object = file.type_of(nodes[0]);
+                let key = Ty::Lit("\"a\"".into(), "string");
+                let result = checker.indexed_type(&object, &key);
+                let expected = if optional { key.clone().or_undefined() } else { key };
+                assert_eq!(checker.equivalent(&result, &expected), Some(true), "{mapping}");
+                assert_eq!(checker.property_readonly(&object, "a"), Some(readonly), "{mapping}");
+                assert!(checker.index_signature_keys(&object).is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn key_contracts_retain_all_declared_domains_while_plain_properties_win() {
+        with_native_file("enum Fruit { Apple } enum Vegetable { Asparagus = 'asparagus' } declare const value: { [Fruit.Apple]: string; [Vegetable.Asparagus]: string; other: string }; const fruit = /*@*/Fruit.Apple; const vegetable = /*@*/Vegetable.Asparagus; const object = /*@*/value;", |file, nodes| {
+            let checker = &file.typing().checker;
+            let object = file.type_of(nodes[2]);
+            let keys = checker.index_contract_keys(&object, &Ty::Prim("number"));
+            assert_eq!(checker.assignable(&file.type_of(nodes[0]), &keys), Some(true));
+            assert_eq!(checker.assignable(&file.type_of(nodes[1]), &keys), Some(true));
+            let plain = Ty::Lit("'other'".into(), "string");
+            let keys = checker.index_contract_keys(&object, &plain);
+            assert_eq!(checker.equivalent(&plain, &keys), Some(true));
+        });
+    }
+
+    #[test]
+    fn mapped_reads_keep_open_key_origins_separate_from_declared_properties() {
+        for (domain, from_index) in [
+            ("string", true), ("number", true), ("string | number", true),
+            ("'a' | 'b'", false), ("Fruit", false),
+        ] {
+            with_native_file(&format!("enum Fruit {{ Apple }} declare const value: {{ [P in {domain}]: string }}; const object = /*@*/value;"), |file, nodes| {
+                let checker = &file.typing().checker;
+                let object = file.type_of(nodes[0]);
+                let key = if domain == "number" || domain == "Fruit" { Ty::Lit("0".into(), "number") } else { Ty::Lit("'a'".into(), "string") };
+                let resolved = checker.index_resolution(&object, &key);
+                assert_eq!(resolved.from_index, from_index, "{domain}: {resolved:?}");
+                assert_eq!(resolved.signature_keys.is_empty(), !from_index, "{domain}: {resolved:?}");
+                assert!(resolved.declared);
+                assert_eq!(checker.equivalent(&resolved.ty, &Ty::Prim("string")), Some(true));
+            });
+        }
+    }
 
     #[test]
     fn self_members_keep_index_lookup_work_bounded() {

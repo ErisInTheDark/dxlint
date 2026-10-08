@@ -67,6 +67,14 @@ impl Checker<'_> {
             Ty::Fn(_) => "Function".into(),
             Ty::Obj(members, env) => {
                 let properties: Vec<_> = members.iter().map(|member| {
+                    if member.kind == super::super::summary::MemberKind::Mapped {
+                        let key = member.index_key.as_ref().map_or(Ty::Unknown, |key| self.eval(key, env));
+                        let mut environment = (**env).clone();
+                        environment.tparams.push((member.name.clone(), Ty::Param(member.name.clone())));
+                        let value = member.ty.as_ref().map_or(Ty::Unknown, |value| self.eval(value, &environment));
+                        return format!("{}[{} in {}]{}: {}", if member.readonly == Some(true) { "readonly " } else { "" },
+                            member.name, self.print(&key), if member.optional { "?" } else { "" }, self.print(&value));
+                    }
                     let ty = member.ty.as_ref().map_or(Ty::Unknown, |syn| self.eval(syn, env));
                     format!("{}{}: {}", member.name, if member.optional { "?" } else { "" }, self.print(&ty))
                 }).collect();

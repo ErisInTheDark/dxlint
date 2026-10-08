@@ -74,4 +74,9 @@ in ts_return.argument, ts_arrow.body rule no-unsafe-enum-assignment:returns {
   report at if is ts_return.argument then parent.node else node
   warn "The value returned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
+in ts_index.index rule no-unsafe-enum-assignment:access {
+  let contexts type_flow(parent.node, node)
+  when any(contexts, context => context.origin == "index" && enum_context_bad(context))
+  warn "The computed key used here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
 }

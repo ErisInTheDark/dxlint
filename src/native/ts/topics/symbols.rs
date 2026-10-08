@@ -200,7 +200,7 @@ fn metadata(file: &NativeFile<'_>, node: u32) -> Value<'static> {
                 ("name".into(), Value::text_copy(&d.member.name)),
                 ("kind".into(), Value::from(match d.member.kind {
                     MemberKind::Method => "method", MemberKind::Prop => "property",
-                    MemberKind::Call => "call", MemberKind::Construct => "construct", MemberKind::Index => "index",
+                    MemberKind::Call => "call", MemberKind::Construct => "construct", MemberKind::Index => "index", MemberKind::Mapped => "mapped",
                 })),
                 ("doc".into(), doc.as_deref().or(d.member.doc.as_deref()).map_or(Value::Null, Value::text_copy)),
                 ("signature_docs".into(), Value::list(d.member.sigs.iter().map(|sig| sig.doc.as_deref().map_or(Value::Null, Value::text_copy)).collect())),

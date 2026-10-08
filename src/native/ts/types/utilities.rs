@@ -138,6 +138,8 @@ impl Checker<'_> {
                 for name in self.known_property_names(part, depth + 1)? { if !names.contains(&name) { names.push(name); } }
                 Some(names)
             }),
+            Ty::Obj(members, env) if members.iter().any(|member| member.kind == super::super::summary::MemberKind::Mapped
+                && member.index_key.as_ref().and_then(|key| finite_keys(&self.eval(key, env))).is_none()) => None,
             Ty::Obj(..) | Ty::Struct(_) => {
                 let mut names = Vec::new();
                 self.member_names(ty, &mut names);
@@ -157,6 +159,14 @@ impl Checker<'_> {
             Ty::Named(sym, args) if args.len() == 2 && self.is_builtin_symbol(sym, "Record") => Some((&args[0], &args[1])),
             _ => None,
         }
+    }
+}
+
+pub(super) fn open_key_domain(ty: &Ty) -> bool {
+    match ty {
+        Ty::Prim("string" | "number" | "symbol") => true,
+        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(open_key_domain),
+        _ => false,
     }
 }
 

@@ -145,7 +145,7 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
                 ("owner".into(), owner),
                 ("kind".into(), Value::from(match declaration.member.kind {
                     MemberKind::Prop => "property", MemberKind::Method => "method", MemberKind::Call => "call",
-                    MemberKind::Construct => "construct", MemberKind::Index => "index",
+                    MemberKind::Construct => "construct", MemberKind::Index => "index", MemberKind::Mapped => "mapped",
                 })),
                 ("signature".into(), Value::Bool(declaration.member.signature)),
                 ("key_symbol".into(), ck.declaration_key_symbol(declaration).map_or(Value::Null, |name| Value::from(name.to_string()))),

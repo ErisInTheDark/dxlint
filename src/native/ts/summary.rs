@@ -113,6 +113,8 @@ pub enum MemberKind {
     Call,
     Construct,
     Index,
+    /// Properties generated from a key parameter's domain.
+    Mapped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -373,6 +375,7 @@ pub fn type_syn(v: &impl View, id: u32) -> TypeSyn {
             }
         }
         Some(K::TypeLit) => TypeSyn::Obj(Arc::new(v.all(id, F::Member).into_iter().filter_map(|m| member(v, m)).collect())),
+        Some(K::Mapped) => member(v, id).map_or(TypeSyn::Other, |member| TypeSyn::Obj(Arc::new(vec![member]))),
         Some(K::TypeQuery) => TypeSyn::Query(v.get(id, F::Name).map(|n| path_of(v, n)).unwrap_or_default().into(),
             v.all(id, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect()),
         Some(K::ParenType) => v.get(id, F::Type).map_or(TypeSyn::Other, |t| type_syn(v, t)),
@@ -514,6 +517,19 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         Some(Member { doc: doc.clone(), name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
     };
     match v.kind(id)? {
+        K::Mapped => {
+            if v.get(id, F::Name).is_some() { return None }
+            let parameter = *v.all(id, F::TypeParam).first()?;
+            Some(Member {
+                doc, name: v.text(v.get(parameter, F::Name)?).into(), kind: MemberKind::Mapped,
+                visibility, signature: false, computed_key: None, is_static: false,
+                readonly: Some(v.all(id, F::Modifier).iter().any(|&modifier| !v.text(modifier).starts_with('-'))),
+                optional: v.get(id, F::Optional).is_some_and(|optional| !v.text(optional).starts_with('-')),
+                ty: v.get(id, F::Type).map(|ty| type_syn(v, ty)),
+                index_key: v.get(parameter, F::Constraint).map(|key| type_syn(v, key)),
+                sigs: Vec::new(), init: None,
+            })
+        }
         K::Method | K::MethodSig => {
             let s = Arc::new(sig(v, id));
             match v.get(id, F::Kind).map(|k| v.text(k)) {
