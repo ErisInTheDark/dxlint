@@ -40,7 +40,8 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 ## Scratch
 
 - `scratch/` (gitignored) is agent workspace; `scratch/INDEX.md` lists every entry: owner, purpose, delete-when. Add the row when creating; unlisted entries are deletable
-- Battle-test codebases (`wayward`, `fluff`, `transition` and derived `-z`/`-mut` copies) are permanent
+- Battle-test codebases (`wayward`, `fluff`, `transition` and derived `-z`/`-mut` copies) and the conformance corpus (`scratch/corpus/`) are permanent
+- Keep and disposable never share a directory: permanent data gets its own top-level entry; never ask anyone to delete only part of a folder
 - Never copy binaries or libraries: pin `target/bin/<id>.exe` + `target/build/<id>/library` by hash
 - Campaigns keep summaries and changed cases, not full raw jsonl or profiles; one dir per task
 - Never create shapes that are slow to delete: no per-case file trees or deep copies; pack many small items into one file
