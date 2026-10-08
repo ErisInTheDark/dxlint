@@ -38,6 +38,14 @@ struct ReadDependencies {
     all_tokens: bool,
     /// Every token kind, always: reads of nodes' own `token` field.
     own_tokens: bool,
+    requires_native: bool,
+}
+
+struct ReadRequirements {
+    layers: Vec<u32>,
+    all_tokens: bool,
+    own_tokens: bool,
+    requires_native: bool,
 }
 
 impl ReadDependencies {
@@ -49,7 +57,17 @@ impl ReadDependencies {
             _ => None,
         }).collect();
         let own_tokens = uses.iter().any(|(_, resolved)| matches!(resolved, Resolved::Field(name) if name == "token"));
-        Self { layers, helpers, all_tokens, own_tokens }
+        let requires_native = layers.iter().any(|&m| is_native_layer(g, m))
+            || uses.iter().any(|(_, resolved)| match resolved {
+                Resolved::Fact(_) => true,
+                Resolved::Layer(name) => g.matcher(name).is_some_and(|m| is_native_layer(g, m)),
+                Resolved::Group(name) => g.group(name).is_some_and(|members| members.iter().any(|member| match member {
+                    Parent::Matcher(name) => g.matcher(&name.text).is_some_and(|m| is_native_layer(g, m)),
+                    _ => false,
+                })),
+                _ => false,
+            });
+        Self { layers, helpers, all_tokens, own_tokens, requires_native }
     }
 
     fn extend(&mut self, other: Self) {
@@ -57,14 +75,14 @@ impl ReadDependencies {
         self.helpers.extend(other.helpers);
         self.all_tokens |= other.all_tokens;
         self.own_tokens |= other.own_tokens;
+        self.requires_native |= other.requires_native;
     }
 
-    /// The layers read, and whether every token kind is needed when some
-    /// are / always.
-    fn resolve(self, helpers: &[Self]) -> (Vec<u32>, bool, bool) {
+    fn resolve(self, helpers: &[Self]) -> ReadRequirements {
         let mut layers = self.layers;
         let mut all_tokens = self.all_tokens;
         let mut own_tokens = self.own_tokens;
+        let mut requires_native = self.requires_native;
         let mut pending = self.helpers;
         let mut seen = vec![false; helpers.len()];
         // Recursive functions and cross-node attributes can refer back to themselves.
@@ -76,9 +94,10 @@ impl ReadDependencies {
             layers.extend(&dependency.layers);
             all_tokens |= dependency.all_tokens;
             own_tokens |= dependency.own_tokens;
+            requires_native |= dependency.requires_native;
             pending.extend(&dependency.helpers);
         }
-        (unique(layers), all_tokens, own_tokens)
+        ReadRequirements { layers: unique(layers), all_tokens, own_tokens, requires_native }
     }
 }
 
@@ -130,6 +149,9 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
+    for &(matcher, attr, _) in &forwards {
+        helper_reads[attr as usize].requires_native |= is_native_layer(&grammar, matcher);
+    }
     let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &schemas, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -596,6 +618,7 @@ fn attributes(
                 let attribute_uses = &attribute_uses[uses_before..];
                 let (children, siblings) = reads_neighbours(attribute_uses);
                 dependencies[id].extend(ReadDependencies::collect(g, names, attribute_uses, layer_reads.into_inner(), children || is_token_layer(g, m) && siblings));
+                dependencies[id].requires_native |= is_native_layer(g, m);
             }
         }
     }
@@ -619,6 +642,12 @@ fn unique(mut ids: Vec<u32>) -> Vec<u32> {
 
 fn is_token_layer(g: &Grammar, m: u32) -> bool {
     g.native_kind(m).and_then(|k| crate::native::ts::kinds::ALL_KINDS.get(k.kind as usize)).is_some_and(|k| k.is_token())
+}
+
+fn is_native_layer(g: &Grammar, m: u32) -> bool {
+    let native = |m: u32| g.native_kind(m).is_some() || !g.native_hosts[m as usize].is_empty();
+    // A base also matches its native-hosted specialisations.
+    native(m) || g.matchers.iter().enumerate().any(|(id, _)| native(id as u32) && g.is_a(id as u32, m))
 }
 
 /// Whether these reads include `children.x`, and `previous.x` / `next.x`.
@@ -808,7 +837,13 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
     let rule_uses = uses.borrow();
     let rule_uses = &rule_uses[uses_before..];
     let (reads_children, reads_siblings) = reads_neighbours(rule_uses);
-    let (layer_reads, helper_tokens, own_tokens) = ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
+    let ReadRequirements { layers: layer_reads, all_tokens: helper_tokens, own_tokens, requires_native } =
+        ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
+    let requires_native = requires_native || targets.iter().any(|target| match target {
+        Target::Matcher(m) | Target::Field(m, _) => is_native_layer(g, *m),
+        Target::Link(_, _) => true,
+        Target::Lang(_) => false,
+    });
     let needs_tokens = |m| is_token_layer(g, m) || g.native_hosts[m as usize].iter().any(|&host| is_token_layer(g, host));
     let on_tokens = layer_reads.iter().any(|&m| needs_tokens(m)) || targets.iter().any(|target| match target {
         Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => needs_tokens(*m),
@@ -821,6 +856,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         && (indents.iter().flat_map(|i| &i.targets).any(|t| t.1 == token_label) || targets.iter().any(|t| matches!(t, Target::Field(_, l) if Some(*l) == token_label)));
     Some(Rule {
         layer_reads,
+        requires_native,
         all_tokens: reads_children || helper_tokens || on_tokens && reads_siblings,
         token_fields: targets_tokens || own_tokens,
         target_layers,
@@ -989,6 +1025,98 @@ mod demand_tests {
     }
 
     const SHAPE: &str = "in ts_call rule shape info \"{count(children)}\"";
+
+    #[test]
+    fn failed_native_parse_blocks_dependent_reports_and_fixes_through_every_owner_route() {
+        let mut failures = Vec::new();
+        let valid = "const good = 1;";
+        let invalid = "const broken = ;";
+        for (setup, target, message, clauses) in [
+            ("", "line", "{count(overlapping(ts_if))}", ""),
+            ("", "line", "{parent is ts_program}", ""),
+            ("", "line", "{type_flags}", ""),
+            ("", "line", "{declaration}", ""),
+            ("in ts_program let ready true", "line", "{parent.ready}", ""),
+            ("in line let ready true\nin ts_program forward ready from body", "line", "{parent.ready}", ""),
+            ("in line let ready count(overlapping(ts_if))\nfn inner(n) = n.ready\nfn outer(n) = inner(n)", "line", "{outer(node)}", ""),
+            ("", "line", "dependent", "report at default(first(overlapping(ts_if)).offset, offset)"),
+            ("", "line", "dependent", "fix at {start: offset, end: offset + 1 + count(overlapping(ts_if))} as \"\""),
+            ("", "line", "{entry}", "each entry in [count(overlapping(ts_if))]"),
+            ("", "line", "{indent_level}", "indent in ts_block"),
+            ("", "ts_program", "dependent", ""),
+        ] {
+            let fix = if clauses.starts_with("fix ") { "" } else { "fix as \"\"" };
+            let linter = native(&format!(r#"
+                in .js layer lines match line /[^\n]+\n?/
+                {setup}
+                in line rule text info "text"
+                in {target} rule dependent info "{message}" {{
+                    {clauses}
+                    {fix}
+                }}
+            "#));
+            let path = Path::new("/root/file.ts");
+            let diagnostics = linter.lint(path, valid);
+            if !diagnostics.iter().any(|diagnostic| diagnostic.rule == "dependent") {
+                failures.push((setup, target, message, clauses, "supported input was disabled", diagnostics));
+                continue;
+            }
+            let diagnostics = linter.lint(path, invalid);
+            if diagnostics.iter().any(|diagnostic| diagnostic.rule == "dependent")
+                || !diagnostics.iter().any(|diagnostic| diagnostic.rule == "text")
+                || diagnostics.iter().filter(|diagnostic| diagnostic.rule == "zlint").count() != 1
+                || linter.fix(path, invalid).text != invalid
+            {
+                failures.push((setup, target, message, clauses, "failed input ran a native-dependent rule", diagnostics));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn failed_native_parse_keeps_text_fixes_and_respects_file_scoped_dependencies() {
+        let linter = native(r#"
+            in .js layer lines match line /[^\n]+\n?/
+            in ts_program match hosted_comment /\/\/[^\n]*/
+            in hosted_comment rule comment info "comment" { files "included.ts" }
+            in line rule structure info "{count(overlapping(ts_if))}" {
+                files "included.ts"
+                fix as ""
+            }
+            in line rule text info "text" {
+                when contains(text, "broken")
+                fix as replace(text, "broken", "unfinished")
+            }
+        "#);
+        let source = "const broken = ;";
+        for (file, expected_parse_warnings) in [("included.ts", 1), ("excluded.ts", 0)] {
+            let path = PathBuf::from("/root").join(file);
+            let diagnostics = linter.lint(&path, source);
+            assert!(diagnostics.iter().all(|diagnostic| matches!(diagnostic.rule.as_str(), "text" | "zlint")), "{diagnostics:#?}");
+            assert_eq!(diagnostics.iter().filter(|diagnostic| diagnostic.rule == "zlint").count(), expected_parse_warnings);
+            assert_eq!(linter.fix(&path, source).text, "const unfinished = ;");
+        }
+        let valid = "const good = 1;\n//bad\nconst more = 2;";
+        let diagnostics = linter.lint(Path::new("/root/included.ts"), valid);
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.rule == "comment"), "{diagnostics:#?}");
+        for setup in [
+            r"in ts_program match hosted_comment /\/\/[^\n]*/",
+            r"in .js match hosted_comment /\/\/[^\n]*/
+              in ts_program match specialised_comment like hosted_comment /\/\/[^\n]*/",
+        ] {
+            let hosted_only = native(&format!(r#"
+                {setup}
+                in hosted_comment rule comment info "comment"
+                in .js layer lines match line /[^\n]+\n?/
+                in line rule text info "text"
+            "#));
+            let diagnostics = hosted_only.lint(Path::new("/root/file.ts"), valid);
+            assert!(diagnostics.iter().any(|diagnostic| diagnostic.rule == "comment"), "{diagnostics:#?}");
+            let diagnostics = hosted_only.lint(Path::new("/root/file.ts"), source);
+            assert_eq!(diagnostics.iter().filter(|diagnostic| diagnostic.rule == "zlint").count(), 1, "{diagnostics:#?}");
+            assert!(diagnostics.iter().any(|diagnostic| diagnostic.rule == "text"), "{diagnostics:#?}");
+        }
+    }
 
     #[test]
     fn each_items_cannot_hide_names_visible_in_the_rule() {

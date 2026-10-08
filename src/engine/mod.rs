@@ -91,6 +91,8 @@ pub struct Rule {
     /// Layers it reads by name (`opener.x`, `descendants(x)`): their nodes
     /// must be built.
     layer_reads: Vec<u32>,
+    /// Its targets or expressions require a successfully parsed native tree.
+    requires_native: bool,
     /// Its expressions or consumed helpers need unfiltered token neighbours.
     all_tokens: bool,
     /// It targets or indents nodes' own tokens (`ts_member.token`): every
@@ -338,9 +340,8 @@ impl Linter {
         let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
         // A layer some active rule targets or reads by name (`opener.x`,
         // `descendants(x)`): its nodes must be built.
-        let mut need = |m: u32, target: bool, targets: &mut [bool]| {
+        let mut need = |m: u32, targets: &mut [bool]| {
             if self.grammar.native_kind(m).is_some() {
-                wants_native |= target;
                 if let Some(k) = token_kind(m) {
                     token_kinds[k] = true;
                 }
@@ -356,12 +357,13 @@ impl Linter {
             }
         };
         for (f, _) in self.rules.iter().zip(&active).filter(|(_, a)| **a) {
+            wants_native |= f.requires_native;
             for &m in &f.layer_reads {
-                need(m, false, &mut targets);
+                need(m, &mut targets);
             }
             for t in &f.targets {
                 match *t {
-                    Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => need(m, true, &mut targets),
+                    Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => need(m, &mut targets),
                     Target::Lang(_) => lang_layers = true,
                 }
             }
@@ -386,6 +388,7 @@ impl Linter {
             false => None,
         };
         let mut pattern_tree = wants_layers;
+        let mut fallback_active = None;
         if let Some((front, jsx)) = front {
             let parse_started = std::time::Instant::now();
             let mut parsed = crate::native::ts::parse(text, jsx);
@@ -455,14 +458,17 @@ impl Linter {
                     }
                     pattern_tree = false;
                 }
-                // Text layers still apply to a file the front end cannot
-                // read: from the file's root alone.
-                Err((at, msg)) if wants_native => out.push(engine_warning(at as usize, format!("could not parse this file as TypeScript: {msg}"))),
+                // Only native-free rules can use root-only pattern layers.
+                Err((at, msg)) if wants_native => {
+                    fallback_active = Some(self.rules.iter().zip(&active).map(|(rule, active)| *active && !rule.requires_native).collect::<Vec<_>>());
+                    out.push(engine_warning(at as usize, format!("could not parse this file as TypeScript: {msg}; native-dependent checks are incomplete")));
+                }
                 Err(_) => {}
             }
         }
 
         if pattern_tree {
+            let run = Run { active: fallback_active.as_deref().unwrap_or(&active), ..run };
             let parse_started = std::time::Instant::now();
             let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
             let rules_started = std::time::Instant::now();
