@@ -60,8 +60,8 @@ impl SourceMap {
     }
 }
 
-/// Where configuration text comes from. The CLI reads the disk; the LSP
-/// overlays unsaved editor buffers on top of it.
+/// Where configuration text comes from. Disk reads honour registered buffers;
+/// the LSP can provide its own document overlay.
 pub trait SourceProvider: Sync {
     fn read(&self, path: &Path) -> io::Result<String>;
 }
@@ -70,6 +70,9 @@ pub struct Disk;
 
 impl SourceProvider for Disk {
     fn read(&self, path: &Path) -> io::Result<String> {
+        if let Some(text) = crate::native::ts::reads::buffer(&normalize_path(path)) {
+            return Ok(text.to_string());
+        }
         std::fs::read_to_string(path)
     }
 }

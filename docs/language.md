@@ -1180,6 +1180,14 @@ well as the files they lint:
 
 Normal CLI linting compiles enabled rules and reachable helpers only. Errors in off-rule bodies and unreachable function bodies are deferred until activation. Parse errors and configured option errors still report. `zlint check`, tooling commands and the language server keep full compilation and validation.
 
+### Packed sources
+
+`zlint --sources <file|->` reads a JSONL stream of `{"path":"main.ts","text":"..."}` records; `-` reads stdin. Paths resolve relative to the current directory. Sources are registered before config discovery, so the stream may include `.zlint` and its imports. Buffered files and implied directories participate in TypeScript module and global resolution; dependencies not supplied still read from disk.
+
+Only supplied files matching the config are linted: no disk discovery. Use `--sources - --format jsonl --no-cache --jobs 1` to lint an in-memory project without writing source files or a cache. Positional paths and `--fix` cannot be combined with `--sources`. Malformed records and duplicate normalised paths report their input line and exit with a configuration/input error. Buffers last only for that invocation.
+
+Tooling commands also accept packed configs and files: for example, `zlint rules --sources - --config project/.zlint`. `tree` and `eval` still take their target file arguments. `lsp` rejects `--sources` because it owns stdin as a protocol stream.
+
 ## Performance and caching
 
 `zlint --stats` prints throughput, and `zlint --profile` lists the matchers

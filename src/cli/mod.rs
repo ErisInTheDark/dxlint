@@ -9,8 +9,10 @@ mod render;
 mod tests;
 
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
@@ -18,6 +20,66 @@ use crate::config::source::{normalize_path, Disk, SourceProvider};
 use crate::config;
 use crate::engine::symbols::Symbols;
 use crate::engine::{build, build_for_lint, Linter};
+use crate::native::ts::reads;
+
+#[derive(serde::Deserialize)]
+struct SourceRecord {
+    path: PathBuf,
+    text: String,
+}
+
+/// Owns invocation overlays, including restoration on malformed input.
+#[derive(Default)]
+struct Sources {
+    files: Vec<(u64, PathBuf)>,
+    previous: Vec<(PathBuf, Option<Arc<str>>)>,
+}
+
+impl Sources {
+    fn load(path: &Path, cwd: &Path, input: impl Read) -> Result<Self, String> {
+        if path == Path::new("-") {
+            Self::read(BufReader::new(input), cwd)
+        } else {
+            let file = std::fs::File::open(cwd.join(path)).map_err(|error| format!("{}: {error}", path.display()))?;
+            Self::read(BufReader::new(file), cwd)
+        }
+    }
+
+    fn read(reader: impl BufRead, cwd: &Path) -> Result<Self, String> {
+        let mut sources = Self::default();
+        let mut seen = HashSet::new();
+        for (index, line) in reader.lines().enumerate() {
+            let parse = || -> Result<(), String> {
+                let line = line.map_err(|error| error.to_string())?;
+                let record: SourceRecord = serde_json::from_str(&line).map_err(|error| error.to_string())?;
+                if record.path.as_os_str().is_empty() {
+                    return Err("source path is empty".into());
+                }
+                let path = normalize_path(&cwd.join(&record.path));
+                if !seen.insert(path.clone()) {
+                    return Err(format!("duplicate source path: {}", record.path.display()));
+                }
+                sources.previous.push((path.clone(), reads::buffer(&path)));
+                sources.files.push((record.text.len() as u64, path.clone()));
+                reads::set_buffer(&path, &record.text);
+                Ok(())
+            };
+            parse().map_err(|error| format!("sources line {}: {error}", index + 1))?;
+        }
+        Ok(sources)
+    }
+}
+
+impl Drop for Sources {
+    fn drop(&mut self) {
+        for (path, previous) in &self.previous {
+            match previous {
+                Some(text) => reads::set_buffer(path, text),
+                None => reads::drop_buffer(path),
+            }
+        }
+    }
+}
 
 struct Output<'a> {
     cwd: &'a Path,
@@ -57,6 +119,9 @@ pub struct ConfigArg {
 pub struct LintArgs {
     /// Files or directories to lint (default: the project root)
     pub paths: Vec<PathBuf>,
+    /// JSONL source records ({path,text}); `-` reads stdin instead of a file
+    #[arg(long, global = true, value_name = "FILE|-")]
+    pub sources: Option<PathBuf>,
     /// Limit lint workers and parallel rule groups (default: available CPUs)
     #[arg(long)]
     pub jobs: Option<std::num::NonZeroUsize>,
@@ -144,13 +209,31 @@ where
             return error.exit_code() as u8;
         }
     };
+    // Clap global arguments cannot reference root-only conflict IDs.
+    if cli.lint.sources.is_some() && (!cli.lint.paths.is_empty() || cli.lint.fix) {
+        let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+        render::error(&mut output, "--sources cannot be combined with positional lint paths or --fix");
+        return 2;
+    }
     if matches!(&cli.command, Some(Command::Lsp)) {
+        if cli.lint.sources.is_some() {
+            let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+            render::error(&mut output, "--sources cannot be combined with lsp");
+            return 2;
+        }
         return crate::lsp::run(input, stdout, &mut stderr);
     }
     let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+    let sources = match cli.lint.sources.as_ref().map(|path| Sources::load(path, cwd, input)).transpose() {
+        Ok(sources) => sources,
+        Err(error) => {
+            render::error(&mut output, &error);
+            return 2;
+        }
+    };
     let config = &cli.config;
     match cli.command {
-        None => lint::run(&mut output, cli.lint, config),
+        None => lint::run(&mut output, cli.lint, config, sources.as_ref()),
         Some(Command::Check) => match load(&mut output, config) {
             Ok(Project { config_ok: true, .. }) => {
                 output.err(format_args!("config ok"));

@@ -37,12 +37,16 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
 }
 
 fn zlint(dir: &Path, args: &[&str]) -> Output {
+    zlint_input(dir, args, "")
+}
+
+fn zlint_input(dir: &Path, args: &[&str], input: &str) -> Output {
     let stdout = Capture::default();
     let stderr = Capture::default();
     let code = super::run(
         std::iter::once("zlint").chain(args.iter().copied()),
         dir,
-        io::empty(),
+        io::Cursor::new(input.as_bytes().to_vec()),
         anstream::StripStream::new(Box::new(stdout.clone()) as Box<dyn Write + Send>),
         anstream::StripStream::new(Box::new(stderr.clone()) as Box<dyn Write + Send>),
     );
@@ -61,6 +65,77 @@ in .t match shout /\b[A-Z]{3,}\b/ {
   rule no-shout warn "`{text}` is shouting" fix as lower(text)
 }
 "#;
+
+#[test]
+fn packed_sources_resolve_virtual_projects_without_writing_files() {
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("packed-sources");
+    std::fs::create_dir_all(&dir).expect("empty project directory");
+    let pack = [
+        (".zlint", "import shared\n"),
+        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when imported_from != null }\n"),
+        ("dir/index.ts", "export const x: number = 1;\n"),
+        ("main.ts", "import { x } from './dir';\nx;\n"),
+    ].into_iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text }).to_string()).collect::<Vec<_>>().join("\n");
+    for jobs in ["1", "3"] {
+        let out = zlint_input(&dir, &["--sources", "-", "--no-cache", "--format", "jsonl", "--stats", "--jobs", jobs], &pack);
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+        let reports: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert!(!reports.is_empty(), "typed import was not checked");
+        assert!(reports.iter().all(|report| report["file"] == "main.ts" && report["message"] == "x: number"), "{reports:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("2 files"), "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    }
+    assert!(!crate::native::ts::reads::is_file(&dir.join("main.ts")), "invocation leaked buffers");
+    std::fs::remove_dir(&dir).expect("empty project cleanup");
+}
+
+#[test]
+fn packed_input_errors_restore_existing_buffers_before_any_lint() {
+    use crate::native::ts::reads;
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("packed-input-errors");
+    let file = dir.join("main.ts");
+    reads::set_buffer(&file, "original");
+    let record = serde_json::json!({ "path": "main.ts", "text": "replacement" }).to_string();
+    for tail in [
+        "not json".to_owned(),
+        serde_json::json!({ "path": "sub/../main.ts", "text": "duplicate" }).to_string(),
+    ] {
+        let out = zlint_input(&dir, &["--sources", "-", "--no-cache", "--format", "jsonl"], &format!("{record}\n{tail}"));
+        assert_eq!(out.code, 2);
+        assert!(out.stdout.is_empty());
+        assert_eq!(reads::read(&file).as_deref(), Some("original"));
+    }
+    for extra in ["main.ts", "--fix"] {
+        let out = zlint_input(&dir, &["--sources", "-", extra], &record);
+        assert_eq!(out.code, 2);
+        assert_eq!(reads::read(&file).as_deref(), Some("original"));
+    }
+    reads::drop_buffer(&file);
+}
+
+#[test]
+fn packed_config_is_available_to_tooling_commands() {
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("packed-tooling");
+    let pack = [
+        (".zlint", "import rules/shout\n"),
+        ("rules/shout.zlint", RULES),
+        ("main.t", "LOUD"),
+    ].into_iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text }).to_string()).collect::<Vec<_>>().join("\n");
+    let out = zlint_input(&dir, &["rules", "--sources", "-", "--config", ".zlint"], &pack);
+    assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout(&out).contains("no-shout"));
+    for args in [
+        vec!["--sources", "-", "check"],
+        vec!["--sources", "-", "tree", "main.t"],
+        vec!["--sources", "-", "eval", "shout", "lower(text)", "main.t"],
+    ] {
+        let out = zlint_input(&dir, &args, &pack);
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let out = zlint_input(&dir, &["--sources", "-", "lsp"], "");
+    assert_eq!(out.code, 2);
+    assert!(!crate::native::ts::reads::is_file(&dir.join(".zlint")));
+}
 
 #[test]
 fn json_fix_edits_reproduce_fixing_unicode_files_and_survive_cache_replay() {

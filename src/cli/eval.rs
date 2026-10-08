@@ -65,7 +65,7 @@ pub fn run(output: &mut Output<'_>, arg: &ConfigArg, target: &str, expr: &str, f
     let mut failed = false;
     for file in files {
         let path = cwd.join(file);
-        let text = match std::fs::read_to_string(&path) {
+        let text = match Disk.read(&path) {
             Ok(t) => t,
             Err(e) => {
                 render::error(output, &format!("cannot read {}: {e}", file.display()));

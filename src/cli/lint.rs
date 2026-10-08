@@ -7,11 +7,12 @@ use std::time::Instant;
 use ignore::{WalkBuilder, WalkState};
 use serde::Serialize;
 
-use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output};
+use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Sources};
 use crate::config::ast::Severity;
 use crate::engine::cache::{self, Cache};
 use crate::engine::{Diagnostic, Edit, Linter};
 use crate::line_index::LineIndex;
+use crate::native::ts::reads;
 
 struct FileResult {
     path: PathBuf,
@@ -86,12 +87,16 @@ fn display(path: &Path, cwd: &Path) -> String {
 }
 
 fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
-    let text = match std::fs::read(path) {
-        Ok(bytes) => match String::from_utf8(bytes) {
-            Ok(t) => t,
-            Err(_) => return Msg::File(FileResult { path: path.to_path_buf(), text: String::new(), diags: Vec::new(), fixed: 0 }),
-        },
-        Err(e) => return Msg::Error(path.to_path_buf(), e.to_string()),
+    let text = if let Some(text) = reads::buffer(path) {
+        text.to_string()
+    } else {
+        match std::fs::read(path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(t) => t,
+                Err(_) => return Msg::File(FileResult { path: path.to_path_buf(), text: String::new(), diags: Vec::new(), fixed: 0 }),
+            },
+            Err(e) => return Msg::Error(path.to_path_buf(), e.to_string()),
+        }
     };
     let rel = linter.relative(path).to_string_lossy().replace('\\', "/");
     // With `--fix`, a cached result only saves work when there is nothing
@@ -121,15 +126,15 @@ fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> 
     Msg::File(FileResult { path: path.to_path_buf(), text: fixed.text, diags: fixed.remaining, fixed: fixed.applied })
 }
 
-pub fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
+pub(super) fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
     let mut stdout = std::io::BufWriter::with_capacity(1 << 16, &mut *output.stdout);
     let mut buffered = Output { cwd: output.cwd, stdout: &mut stdout, stderr: &mut *output.stderr };
-    let code = lint(&mut buffered, args, config);
+    let code = lint(&mut buffered, args, config, sources);
     let _ = buffered.stdout.flush();
     code
 }
 
-fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
+fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
     let started = Instant::now();
     let (mut linter, config_ok, load_time, build_time) = match load_for_lint(output, config) {
         Ok(p) => (p.linter, p.config_ok, p.load_time, p.build_time),
@@ -144,11 +149,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
 
-    let mut walker = WalkBuilder::new(&roots[0]);
-    for r in &roots[1..] {
-        walker.add(r);
-    }
-    walker.hidden(false).threads(jobs).filter_entry(|e| e.file_name() != ".git");
+    let packed = sources.map(|sources| sources.files.iter().filter(|(_, path)| linter.wants(path)).cloned().collect::<Vec<_>>());
 
     let (tx, rx) = mpsc::channel::<Msg>();
     let fix = args.fix;
@@ -167,29 +168,38 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
         let cache = cache.as_ref();
         let explicit: Vec<PathBuf> = roots.iter().filter(|r| r.is_file()).cloned().collect();
         s.spawn(move || {
-            // Walk first, then lint the biggest files first: a big file found
-            // late would otherwise be the tail every other thread waits on.
-            let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
-            walker.build_parallel().run(|| {
-                let linter = &*linter;
-                let explicit = &explicit;
-                let found = &found;
-                Box::new(move |entry| {
-                    let Ok(entry) = entry else { return WalkState::Continue };
-                    if !entry.file_type().is_some_and(|t| t.is_file()) {
-                        return WalkState::Continue;
-                    }
-                    let path = entry.path();
-                    // Explicitly named files are linted even if ignored by git.
-                    let wanted = linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path));
-                    if wanted {
-                        let size = entry.metadata().map_or(0, |m| m.len());
-                        found.lock().expect("file list").push((size, path.to_path_buf()));
-                    }
-                    WalkState::Continue
-                })
-            });
-            let mut queue = found.into_inner().expect("file list");
+            let mut queue = if let Some(queue) = packed {
+                queue
+            } else {
+                let mut walker = WalkBuilder::new(&roots[0]);
+                for root in &roots[1..] {
+                    walker.add(root);
+                }
+                walker.hidden(false).threads(jobs).filter_entry(|entry| entry.file_name() != ".git");
+                // Walk first, then lint the biggest files first: a big file found
+                // late would otherwise be the tail every other thread waits on.
+                let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
+                walker.build_parallel().run(|| {
+                    let linter = &*linter;
+                    let explicit = &explicit;
+                    let found = &found;
+                    Box::new(move |entry| {
+                        let Ok(entry) = entry else { return WalkState::Continue };
+                        if !entry.file_type().is_some_and(|t| t.is_file()) {
+                            return WalkState::Continue;
+                        }
+                        let path = entry.path();
+                        // Explicitly named files are linted even if ignored by git.
+                        let wanted = linter.wants(path) || (explicit.iter().any(|e| e == path) && !linter.is_ignored(path));
+                        if wanted {
+                            let size = entry.metadata().map_or(0, |m| m.len());
+                            found.lock().expect("file list").push((size, path.to_path_buf()));
+                        }
+                        WalkState::Continue
+                    })
+                });
+                found.into_inner().expect("file list")
+            };
             queue.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
             let next = std::sync::atomic::AtomicUsize::new(0);
             let threads = jobs.min(queue.len().max(1));
@@ -267,7 +277,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg) -> u8 {
     let cached = cache.as_ref().map_or(0, Cache::hits);
     if let Some(cache) = cache {
         // A run over the whole project forgets files that are gone.
-        if let Err(e) = cache.save(args.paths.is_empty()) {
+        if let Err(e) = cache.save(sources.is_none() && args.paths.is_empty()) {
             render::error(output, &format!("cannot write {}: {e}", cache::FILE_NAME));
         }
     }

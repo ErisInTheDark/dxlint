@@ -6,6 +6,7 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
@@ -38,7 +39,7 @@ impl Dep {
     /// change this dep's answer?
     pub fn touches(&self, changed: &Path) -> bool {
         match self {
-            Dep::List(dir, _) => changed.parent() == Some(dir.as_path()),
+            Dep::List(dir, _) | Dep::IsDir(dir, _) => changed.starts_with(dir),
             Dep::Globals(dir, _) => changed.starts_with(dir),
             dep => dep.path() == changed,
         }
@@ -51,7 +52,7 @@ impl Dep {
         match self {
             Dep::Text(p, h) => content(p).1 == *h,
             Dep::IsFile(p, b) => file_exists(p) == *b,
-            Dep::IsDir(p, b) => p.is_dir() == *b,
+            Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,
             Dep::Summary(p, content_hash, f) => content(p).1 == *content_hash || fingerprint(p) == *f,
             Dep::Globals(p, h) => walk_globals(p).1 == *h,
@@ -169,23 +170,79 @@ pub fn note_group(group: &Arc<Reads>) {
 
 // ---- editor buffers ----------------------------------------------------------------
 
-fn buffers() -> &'static RwLock<HashMap<PathBuf, Arc<str>>> {
-    static BUFFERS: OnceLock<RwLock<HashMap<PathBuf, Arc<str>>>> = OnceLock::new();
+#[derive(Default)]
+struct Buffers {
+    texts: HashMap<PathBuf, Arc<str>>,
+    /// Child reference counts include descendants: inserting `a/b.ts`
+    /// supplies `a` in its parent without scanning all open files.
+    directories: HashMap<PathBuf, HashMap<OsString, usize>>,
+}
+
+impl Buffers {
+    fn index(&mut self, path: &Path, add: bool) {
+        let mut child = path;
+        while let (Some(parent), Some(name)) = (child.parent(), child.file_name()) {
+            if add {
+                *self.directories.entry(parent.to_path_buf()).or_default().entry(name.to_os_string()).or_default() += 1;
+            } else if let Some(children) = self.directories.get_mut(parent) {
+                if let Some(count) = children.get_mut(name) {
+                    *count -= 1;
+                    if *count == 0 {
+                        children.remove(name);
+                    }
+                }
+                if children.is_empty() {
+                    self.directories.remove(parent);
+                }
+            }
+            child = parent;
+        }
+    }
+
+    fn files_under(&self, dir: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        let mut dirs = vec![dir.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            if let Some(children) = self.directories.get(&dir) {
+                for name in children.keys() {
+                    let path = dir.join(name);
+                    if self.texts.contains_key(&path) {
+                        files.push(path.clone());
+                    }
+                    if self.directories.contains_key(&path) {
+                        dirs.push(path);
+                    }
+                }
+            }
+        }
+        files.sort_unstable();
+        files
+    }
+}
+
+fn buffers() -> &'static RwLock<Buffers> {
+    static BUFFERS: OnceLock<RwLock<Buffers>> = OnceLock::new();
     BUFFERS.get_or_init(Default::default)
 }
 
 /// From now on, `path` reads as `text` (an unsaved editor buffer).
 pub fn set_buffer(path: &Path, text: &str) {
-    buffers().write().expect("buffers lock").insert(path.to_path_buf(), text.into());
+    let mut buffers = buffers().write().expect("buffers lock");
+    if buffers.texts.insert(path.to_path_buf(), text.into()).is_none() {
+        buffers.index(path, true);
+    }
 }
 
 /// `path` reads from disk again.
 pub fn drop_buffer(path: &Path) {
-    buffers().write().expect("buffers lock").remove(path);
+    let mut buffers = buffers().write().expect("buffers lock");
+    if buffers.texts.remove(path).is_some() {
+        buffers.index(path, false);
+    }
 }
 
-fn buffer(path: &Path) -> Option<Arc<str>> {
-    buffers().read().ok()?.get(path).cloned()
+pub(crate) fn buffer(path: &Path) -> Option<Arc<str>> {
+    buffers().read().ok()?.texts.get(path).cloned()
 }
 
 // ---- reading -----------------------------------------------------------------------
@@ -221,17 +278,25 @@ pub fn is_file(path: &Path) -> bool {
 }
 
 pub fn is_dir(path: &Path) -> bool {
-    let found = path.is_dir();
+    let found = directory_exists(path);
     note(Dep::IsDir(path.to_path_buf(), found));
     found
+}
+
+fn directory_exists(path: &Path) -> bool {
+    buffers().read().expect("buffers lock").directories.contains_key(path) || path.is_dir()
 }
 
 fn listing(dir: &Path) -> (Vec<String>, u64) {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
         .unwrap_or_default();
+    if let Some(children) = buffers().read().expect("buffers lock").directories.get(dir) {
+        names.extend(children.keys().map(|name| name.to_string_lossy().into_owned()));
+    }
     names.sort_unstable();
-    let hash = if names.is_empty() && !dir.is_dir() { MISSING } else { hash_bytes(names.join("\n").as_bytes()) };
+    names.dedup();
+    let hash = if names.is_empty() && !directory_exists(dir) { MISSING } else { hash_bytes(names.join("\n").as_bytes()) };
     (names, hash)
 }
 
@@ -272,6 +337,17 @@ fn walk_globals(dir: &Path) -> (Vec<PathBuf>, u64) {
             found.push(path.to_path_buf());
         }
     }
+    let buffers = buffers().read().expect("buffers lock");
+    let mut seen: HashSet<PathBuf> = found.iter().cloned().collect();
+    for path in buffers.files_under(dir) {
+        let name = path.to_string_lossy();
+        if (name.ends_with(".ts") || name.ends_with(".tsx"))
+            && buffers.texts.get(&path).is_some_and(|text| declares_globals(&path, text))
+            && seen.insert(path.clone())
+        {
+            found.push(path);
+        }
+    }
     let mut h = std::collections::hash_map::DefaultHasher::new();
     found.hash(&mut h);
     let hash = h.finish();
@@ -279,7 +355,7 @@ fn walk_globals(dir: &Path) -> (Vec<PathBuf>, u64) {
 }
 
 /// The TypeScript files below `dir` (gitignore respected) that add to the
-/// global scope, in walk order.
+/// global scope, in disk walk order followed by sorted buffer-only paths.
 pub fn global_files(dir: &Path) -> Vec<PathBuf> {
     let (found, hash) = walk_globals(dir);
     walks().write().expect("walks lock").insert(dir.to_path_buf(), Arc::new(found.iter().cloned().collect()));
@@ -309,6 +385,38 @@ pub fn globals_changed(changed: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffered_directories_merge_with_disk_and_invalidate_reads() {
+        let dir = std::env::temp_dir().join(format!("zlint-buffer-directories-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("disk.txt"), "").unwrap();
+        let file = dir.join("virtual/nested/globals.d.ts");
+        let other = dir.join("virtual/other.ts");
+        set_buffer(&file, "declare const PackedGlobal: number;");
+        set_buffer(&other, "export {};");
+        set_buffer(&other, "export const replacement = 1;");
+        set_buffer(&dir.join("disk.txt"), "buffer wins");
+        let (_, reads) = track(|| {
+            assert!(is_dir(&dir.join("virtual")));
+            assert!(is_dir(&dir.join("virtual/nested")));
+            assert_eq!(list(&dir), ["disk.txt", "virtual"]);
+            assert_eq!(list(&dir.join("virtual")), ["nested", "other.ts"]);
+            assert_eq!(global_files(&dir).as_slice(), std::slice::from_ref(&file));
+        });
+        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        assert!(reads.deps.iter().filter(|dep| matches!(dep, Dep::IsDir(..) | Dep::List(..))).all(|dep| dep.touches(&file)));
+        drop_buffer(&file);
+        assert!(!is_dir(&dir.join("virtual/nested")));
+        assert!(reads.deps.iter().any(|dep| !dep.holds(|_| 0)));
+        assert_eq!(list(&dir.join("virtual")), ["other.ts"]);
+        drop_buffer(&other);
+        assert!(!is_dir(&dir.join("virtual")));
+        assert_eq!(list(&dir), ["disk.txt"]);
+        drop_buffer(&dir.join("disk.txt"));
+        std::fs::remove_file(dir.join("disk.txt")).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
 
     #[test]
     fn shared_reads_reach_their_users_as_groups() {

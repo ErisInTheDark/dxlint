@@ -5,6 +5,7 @@ use anstyle::{AnsiColor, Style};
 
 use super::{render, Output};
 use crate::config::ast::Severity;
+use crate::config::source::{Disk, SourceProvider};
 use crate::engine::symbols::Symbols;
 use crate::engine::Linter;
 use crate::expr::show;
@@ -86,7 +87,7 @@ pub fn describe(output: &mut Output<'_>, symbols: &Symbols, name: &str) -> u8 {
 /// A file's text and the language that owns it.
 fn read_source(output: &mut Output<'_>, linter: &Linter, file: &Path) -> Result<(String, usize), u8> {
     let path = output.cwd.join(file);
-    let text = match std::fs::read_to_string(&path) {
+    let text = match Disk.read(&path) {
         Ok(t) => t,
         Err(e) => {
             render::error(output, &format!("cannot read {}: {e}", file.display()));
