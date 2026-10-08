@@ -133,7 +133,7 @@ fn fixes_can_transform_text_with_functions() {
 fn repeated_fields_are_lists() {
     let l = linter(r#"
         in .t match use /use \{/ item:/\w+/ (/, */ item:/\w+/)* /\}/ {
-          rule sorted warn "sorted imports" fix as "use {{{join(sort(item), ', ')}}}"
+          rule sorted warn "sorted imports" fix as "use {{{ { value item; sort; join ', ' } }}}"
         }
     "#);
     let fixed = l.fix(Path::new("/root/file.t"), "use {b, c,a}");
@@ -288,7 +288,7 @@ fn layers_are_separate_trees_related_by_position() {
     let l = linter(r#"
         group spots comment, str, paren
         in .t, paren layer marks match bad /BAD/ {
-          rule where warn "{kind_name(containing(spots))}|{kind_name(parent)}|{is layer marks}|{is bad}|{parent is paren}"
+          rule where warn "{ { value containing(spots); kind_name } }|{kind_name(parent)}|{is layer marks}|{is bad}|{parent is paren}"
         }
     "#);
     let messages: Vec<String> = lint(&l, "BAD // BAD\n(BAD \"BAD\")").into_iter().map(|d| d.message).collect();
@@ -465,7 +465,7 @@ fn indent_lines_see_text_fields_and_paths_prefer_fields_over_builtins() {
     // `n.index.node` in a function: the `index` field, not the builtin.
     let l = native_linter(r#"
         fn idx(n) = n.index.node
-        in ts_index rule i info "{kind_name(idx(node))}"
+        in ts_index rule i info "{ { value node; idx; kind_name } }"
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a[1];\n").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["ts_number"]);
@@ -475,7 +475,7 @@ fn indent_lines_see_text_fields_and_paths_prefer_fields_over_builtins() {
 fn node_at_reads_the_node_holding_an_offset() {
     // A comment asks for the indentation of the code token after it.
     let l = native_linter(r#"
-        in ts_line_comment rule c info "{kind_name(node_at(token_neighbours.after.start))}:{node_at(token_neighbours.after.start).indent_level}" { indent in ts_block }
+        in ts_line_comment rule c info "{ { value token_neighbours.after.start; node_at; kind_name } }:{node_at(token_neighbours.after.start).indent_level}" { indent in ts_block }
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "function f() {\n  // hi\n  b();\n}\n").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["ts_identifier:1"]);
@@ -724,14 +724,14 @@ fn declared_types_follow_imports_members_and_initializers() {
             ),
         ],
         "src/b.ts",
-        "in ts_expression_statement.expression rule t info \"{default(type, '?')}\"",
+        "in ts_expression_statement.expression rule t info \"{ type.nonempty ?? '?' }\"",
     );
     assert_eq!(messages, vec!["Task<string>", "number", "never", "Store<string>"]);
 }
 
 /// The type of every expression statement in a single file.
 fn statement_types(text: &str) -> Vec<String> {
-    let l = native_linter("in ts_expression_statement.expression rule t info \"{default(type, '?')}\"");
+    let l = native_linter("in ts_expression_statement.expression rule t info \"{ type.nonempty ?? '?' }\"");
     l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect()
 }
 
@@ -837,10 +837,14 @@ function* r() { yield 1; }
 
 #[test]
 fn regexes_and_regexp_patterns() {
-    let l = native_linter(
-        "in ts_regex, ts_call, ts_new rule r info \"{f.check}:{f.kind}@{f.offset}\" { each f in default(regex_findings, []) }\n\
-         in ts_call, ts_new rule e info \"{default(regex_flags_error(default(regex_flags, ''), []), regex_pattern_error)}\" { when regex_pattern_error != null || regex_flags_error(default(regex_flags, ''), []) != null }",
-    );
+    let l = native_linter(r#"
+        in ts_regex, ts_call, ts_new rule r info "{f.check}:{f.kind}@{f.offset}" {
+          each f in regex_findings.nonempty ?? []
+        }
+        in ts_call, ts_new rule e info "{ { value regex_flags.nonempty ?? ''; regex_flags_error ([]); nonempty } ?? regex_pattern_error }" {
+          when regex_pattern_error != null || { value regex_flags.nonempty ?? ''; regex_flags_error ([]) } != null
+        }
+    "#);
     // Literals, and patterns of `RegExp` (an alias too) written in strings:
     // findings point into the string.
     let text = "/a  b/;\n/(a)|\\1/;\nnew RegExp(\"(\");\nRegExp(\"a\", \"gg\");\nconst R = RegExp; R(\"x\\\\1(y)\");\n";
@@ -860,11 +864,11 @@ fn regexes_and_regexp_patterns() {
 
 #[test]
 fn facts_of_fields_and_parents_and_sibling_builtins() {
-    let l = native_linter(
-        "in ts_call rule c info \"{callee}:{callee.resolved}\"\n\
-         in ts_call.argument rule a info \"{index}:{text}:{parent.type_flags == null}\"\n\
-         in ts_expression_statement rule g info \"{default(gap_before, 'first')}\" { when index > 0 }",
-    );
+    let l = native_linter(r#"
+        in ts_call rule c info "{callee}:{callee.resolved}"
+        in ts_call.argument rule a info "{index}:{text}:{parent.type_flags == null}"
+        in ts_expression_statement rule g info "{ gap_before.nonempty ?? 'first' }" { when index > 0 }
+    "#);
     let text = "import { f } from \"m\";\nf(a, b);\n\n// note\ng(c);\n";
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), text).into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["f:import", "\n", "0:a:true", "1:b:true", "g:global", "\n\n// note\n", "0:c:false"]);
@@ -999,7 +1003,7 @@ fn regex_functions_and_line_context() {
     let l = linter(r#"
         in .t match word /\b[a-z]+\b/ {
           rule ctx {
-            when re_test(default(next_line, ''), "^end") || previous_line == null
+            when { value next_line.nonempty ?? ''; re_test "^end" } || previous_line == null
             warn "{text}|{before}|{after}|{re_replace(text, '([aeiou])', '<$1>')}"
           }
         }
@@ -1401,7 +1405,12 @@ fn each_reports_once_per_item_where_report_at_says() {
 fn lambdas_map_filter_and_test_lists() {
     let l = linter(r#"
         in .t match word /[a-z]+/ {
-          rule each info "{join(map(split(text, ''), c => upper(c)), '')}|{join(filter([1, 2, 3, 4], n => n % 2 == 0), ',')}|{all([1, 2], n => n > 0)}|{find([1, 2, 3], n => n > 5)}|{keys({ a: 1, b: 2 })}"
+          rule each info "{ {
+            value text
+            split ''
+            map (c) upper(c)
+            join ''
+          } }|{ { value [1, 2, 3, 4]; filter (n) n % 2 == 0; join ',' } }|{all([1, 2], n => n > 0)}|{find([1, 2, 3], n => n > 5)}|{keys({ a: 1, b: 2 })}"
         }
     "#);
     assert_eq!(rule_messages(&l, "ab"), vec!["each: AB|2,4|true||a, b"]);
@@ -1498,7 +1507,7 @@ fn paths_reach_ancestors_parents_fields_and_nodes() {
         in ts_function let fname name
         fn is_marked(n) = n.marked
         in ts_call rule c info "{ts_function.offset}|{kind_name(parent)}|{kind_name(callee.object.node)}|{callee.property}|{callee.object.declaration.offset}|{ts_function.fname}|{position(end_offset).line}|{byte_slice(source, offset + 4, end_offset - 1)}|{join(token_texts, ' ')}"
-        in ts_identifier rule r info "{first(references).offset}:{is_marked(first(references))}" { when count(references) > 0 }
+        in ts_identifier rule r info "{first(references).offset}:{ { value references; first; is_marked } }" { when count(references) > 0 }
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "function f(a) {\n  a.b('é');\n}").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["18:true", "0|ts_expression_statement|ts_identifier|b|11|f|2|'é'|a . b ( 'é' )"]);
@@ -1546,8 +1555,13 @@ fn node_values_walk_and_read_paths() {
     // (the cycle a = b; b = a ends); `n.a.b` reads on node values; JS
     // positions break lines at U+2028 and count UTF-16 units (😀 is two).
     let l = native_linter(r#"
-        in ts_identifier let sources [] references.writer.right.node
-        in ts_variable_declaration rule w info "{join(map(walk([] declaration.name.node, n => n.sources), n => n.text), ',')}"
+        in ts_identifier let sources references.writer.right.nodes
+        in ts_variable_declaration rule w info "{ {
+          value declaration.name.nodes
+          walk (n) n.sources
+          map (n) n.text
+          join ','
+        } }"
         in ts_call rule p info "{kind_name(node.callee.object.node)}|{node.callee.property}"
         in ts_bigint rule b info "{literal_value.value}"
         in ts_string rule j info "{position(offset).line}:{position(offset).js_line}:{position(end_offset).js_column}"
@@ -1584,7 +1598,7 @@ fn trivia_layers_and_descendants() {
         .collect();
     assert_eq!(messages, ["ts_template:/* yes */"]);
     let l = native_linter(r#"
-        in ts_program rule d info "{join(map(descendants(ts_function_like), n => kind_name(n)), ',')}"
+        in ts_program rule d info "{ { value descendants(ts_function_like); map (n) kind_name(n); join ',' } }"
         in ts_new rule t info "{first_token is ts_keyword}:{last_token.text}"
         in ts_try rule y info "{type}"
     "#);
@@ -1610,11 +1624,11 @@ fn node_values_step_to_their_parent() {
 fn descendants_of_trivia_bring_their_nodes() {
     // No rule targets `ts_line`: reading it is enough. Lines are their own
     // layer: not descendants of the program, found by position.
-    let l = native_linter(r#"in ts_program rule d info "{count(descendants(ts_line))}/{count(overlapping(ts_line))}/{count(overlapping(ts_line, 0, 4))}/{count(overlapping(ts_line, 6, 6))}""#);
+    let l = native_linter(r#"in ts_program rule d info "{ { value descendants(ts_line); count } }/{ { value overlapping(ts_line); count } }/{ { value overlapping(ts_line, 0, 4); count } }/{ { value overlapping(ts_line, 6, 6); count } }""#);
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "a;\nb;\nc;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["0/3/2/1"]);
     // `overlapping`: the comments and strings on each line, nothing else.
-    let l = native_linter(r#"in ts_line rule o info "{line}:{join(map(overlapping(ts_comment), c => c.text), '|')}:{count(overlapping(ts_string))}""#);
+    let l = native_linter(r#"in ts_line rule o info "{line}:{ { value overlapping(ts_comment); map (c) c.text; join '|' } }:{ { value overlapping(ts_string); count } }""#);
     let messages: Vec<String> =
         l.lint(Path::new("/root/a.ts"), "a; /* x\ny */ 'q';\nb; // z\nc;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["1:/* x\ny */:0", "2:/* x\ny */:1", "3:// z:0", "4::0"]);
@@ -1707,7 +1721,7 @@ fn own_brackets_and_variant_families() {
 
 #[test]
 fn builtins_read_on_a_fields_nodes() {
-    let l = native_linter("in ts_if rule i info \"{alternate is ts_if}@{alternate.offset}|{map([] consequent.node, c => kind_name(c))}\"");
+    let l = native_linter("in ts_if rule i info \"{alternate is ts_if}@{alternate.offset}|{ map(consequent.nodes, c => kind_name(c)) }\"");
     let messages: Vec<String> = l.lint(Path::new("/root/a.ts"), "if (a) b; else if (c) d;").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, ["true@15|ts_expression_statement", "false@|ts_expression_statement"]);
 }
@@ -1717,9 +1731,9 @@ fn config_functions_compute_from_their_arguments() {
     let l = linter(r#"
         fn twice(x) = x * 2
         fn fact(n) = if n <= 1 then 1 else n * fact(n - 1)
-        fn shout(words) = join(map(words, w => upper(w) "!"), " ")
+        fn shout(words) = { value words; map (w) upper(w) "!"; join " " }
         in .t match word /[a-z]+/ {
-          rule f info "{twice(len(text))}|{fact(4)}|{shout([text, 'x'])}"
+          rule f info "{ { value text; len; twice } }|{fact(4)}|{shout([text, 'x'])}"
         }
     "#);
     assert_eq!(rule_messages(&l, "ab"), vec!["f: 4|24|AB! X!"]);
@@ -1744,7 +1758,7 @@ fn reduce_folds_in_order_and_records_read_computed_keys() {
     // values, not of the originals.
     let l = linter(r#"
         in .t match word /[a-z]+/ {
-          rule fold info "{join(reduce([3, 1, 4], [], (seen, n) => seen [n + count(seen)]), ',')}|{get({ ab: 1 }, text)}|{index_of(['x', text], text)}|{index_of([], 1)}"
+          rule fold info "{ { value [3, 1, 4]; fold ([]) (seen, n) seen [n + count(seen)]; join ',' } }|{get({ ab: 1 }, text)}|{index_of(['x', text], text)}|{index_of([], 1)}"
         }
     "#);
     assert_eq!(rule_messages(&l, "ab"), vec!["fold: 3,2,6|1|1|-1"]);
@@ -1768,8 +1782,8 @@ fn configuring_adds_conditions_and_replaces_messages() {
 #[test]
 fn children_and_siblings_read_neighbouring_nodes() {
     let l = native_linter(r#"
-        in ts_call rule kids info "{join(map(children.node, c => kind_name(c)), ',')}"
-        in ts_call.argument rule around info "{default(previous, '-')}<{text}>{default(next, '-')}"
+        in ts_call rule kids info "{ { value children.node; map (c) kind_name(c); join ',' } }"
+        in ts_call.argument rule around info "{ previous.nonempty ?? '-' }<{text}>{ next.nonempty ?? '-' }"
         in ts_expression_statement rule first info "first" { when previous == null && index == 0 }
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f(a, b);\n").into_iter().map(|d| d.message).collect();
@@ -1803,7 +1817,7 @@ fn span_queries_select_what_fills_a_field() {
         in .t match pair /\[/ inner:box /\]/
         in .t match box
         in word rule w info "{text}:{containing(pair.inner) != null}"
-        in pair rule p info "{count(descendants(pair.inner))}"
+        in pair rule p info "{ { value descendants(pair.inner); count } }"
     "#);
     assert_eq!(rule_messages(&l, "<ab> [<cd>]"), vec!["w: ab:false", "p: 1", "w: cd:true"]);
 }
@@ -1812,7 +1826,7 @@ fn span_queries_select_what_fills_a_field() {
 fn span_queries_find_native_text_fields() {
     // Template text is unkinded text filling `quasi`: still selectable.
     let l = native_linter(r#"
-        in ts_template rule t info "{count(descendants(ts_template.quasi))}"
+        in ts_template rule t info "{ { value descendants(ts_template.quasi); count } }"
         in ts_identifier rule i info "{text}:{containing(ts_template.quasi) != null}/{containing(ts_template) != null}"
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "`x${b}y`;\n").into_iter().map(|d| d.message).collect();
@@ -1823,7 +1837,7 @@ fn span_queries_find_native_text_fields() {
 fn key_chains_on_any_node_value_read_like_paths() {
     // `(n).callee.node` and `first(...).callee.node` read as `n.callee.node`.
     let l = native_linter(r#"
-        in ts_expression_statement rule s info "{kind_name((expression.node).callee.node)}/{kind_name(first([] expression.node).callee.node)}/{kind_name(expression.callee.node)}"
+        in ts_expression_statement rule s info "{kind_name((expression.node).callee.node)}/{ { value first(expression.nodes).callee.node; kind_name } }/{kind_name(expression.callee.node)}"
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "f();\n").into_iter().map(|d| d.message).collect();
     assert_eq!(messages, vec!["ts_identifier/ts_identifier/ts_identifier"]);
@@ -1833,7 +1847,7 @@ fn key_chains_on_any_node_value_read_like_paths() {
 fn nodes_held_in_records_read_the_rest_of_a_path() {
     let l = native_linter(r#"
         in ts_call rule c {
-          let entry { callee: callee.node, args: { first: first([] argument.node) } }
+          let entry { callee: callee.node, args: { first: first(argument.nodes) } }
           info "{entry.callee.end_offset}/{entry.args.first.offset}/{kind_name(entry.args.first.node)}"
         }
     "#);
@@ -1847,7 +1861,7 @@ fn forward_reads_attributes_through_wrappers() {
         in ts_identifier let size len(text)
         in ts_identifier let kind_of "id"
         in ts_parenthesized, ts_non_null forward size from expression
-        in ts_expression_statement rule s info "{expression.size}/{default(expression.kind_of, '-')}"
+        in ts_expression_statement rule s info "{expression.size}/{ expression.kind_of.nonempty ?? '-' }"
     "#);
     let messages: Vec<String> = l.lint(Path::new("/root/file.ts"), "((abc))!;\n").into_iter().map(|d| d.message).collect();
     // Only the attributes named pass through.
