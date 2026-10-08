@@ -8,7 +8,7 @@ use super::super::kinds::{Field as F, Kind as K};
 use super::super::modules::{DeclRef, ExportAlias};
 use super::super::summary::{DeclKind, MemberKind};
 use super::super::types::{Checker, Ty};
-use super::typed::specifiers::{file_gate, named_gate};
+use super::typed::specifiers::file_gate;
 
 pub const FACTS: &[Fact] = &[Fact {
     name: "symbol_metadata",
@@ -17,24 +17,22 @@ pub const FACTS: &[Fact] = &[Fact {
 }];
 
 fn origin(ck: &Checker<'_>, declaration: DeclRef, name: &str) -> Value<'static> {
-    let gate = named_gate(ck, declaration);
-    let Value::Record(entries) = gate else { return Value::list(Vec::new()) };
+    let gate = file_gate(ck, declaration.file, name.trim_start_matches('#'));
     let module = ck.summary_of(declaration.file).and_then(|summary| {
         summary.decls[declaration.decl as usize].module.map(|i| summary.ambient_modules[i].0.clone())
     });
-    let entries: Vec<_> = entries.iter().map(|(key, value)| {
-        (key.clone(), if &**key == "name" { Value::text_copy(name.trim_start_matches('#')) } else { value.clone() })
-    }).collect();
-    let mut origins = vec![Value::record(entries.clone())];
+    let mut origins = vec![gate];
     if let Some(module) = module {
-        origins.push(Value::record(entries.into_iter().map(|(key, value)| {
-            let value = match &*key {
+        let Value::Record(entries) = &origins[0] else { return Value::list(Vec::new()) };
+        let package = Value::record(entries.iter().map(|(key, value)| {
+            let value = match &**key {
                 "from" => Value::from("package"),
                 "package" => Value::text_copy(&module),
-                _ => value,
+                _ => value.clone(),
             };
-            (key, value)
-        }).collect::<Vec<_>>()));
+            (key.clone(), value)
+        }).collect::<Vec<_>>());
+        origins.push(package);
     }
     Value::list(origins)
 }
