@@ -2,7 +2,7 @@
 
 use super::{CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
-use crate::vm::{self, Begin, VExpr, V};
+use crate::vm::{self, Begin, KindSet, VExpr, V};
 use std::collections::hash_map::Entry as MapEntry;
 
 /// A `let` attribute: its expression on each layer that defines it.
@@ -14,6 +14,9 @@ pub struct Attr {
 
 pub struct Attributes {
     attrs: Vec<CompiledAttr>,
+    /// Per matcher: how many fields its VM records hold
+    /// ([`Attributes::shape_records`]).
+    layout: Vec<u16>,
     /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
     vm_blockers: Vec<String>,
 }
@@ -26,10 +29,14 @@ struct CompiledAttr {
     routes: Vec<Route>,
 }
 
+/// A `Route::Defined` without a field in the matcher's VM record.
+const NO_SLOT: u16 = u16::MAX;
+
 #[derive(Clone, Copy)]
 enum Route {
     Missing,
-    Defined(u32),
+    /// The definition's index, and its field in the matcher's VM record.
+    Defined(u32, u16),
     Forward(u16),
 }
 
@@ -40,7 +47,7 @@ pub(super) enum Entry<'a> {
 
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
-        if attrs.is_empty() { return Self { attrs: Vec::new(), vm_blockers: Vec::new() }; }
+        if attrs.is_empty() { return Self { attrs: Vec::new(), layout: Vec::new(), vm_blockers: Vec::new() }; }
         let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
         let mut vm_blockers = Vec::new();
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
@@ -78,7 +85,7 @@ impl Attributes {
                 }
                 routes = ancestors.iter().map(|chain| {
                     let definition = chain.iter().map(|&id| definitions[id]).min().unwrap_or(u32::MAX);
-                    if definition != u32::MAX { return Route::Defined(definition); }
+                    if definition != u32::MAX { return Route::Defined(definition, NO_SLOT); }
                     // Forwards keep declaration order, not nearest-ancestor order.
                     chain.iter().filter_map(|&id| forwarding[id]).min_by_key(|(index, _)| *index)
                         .map_or(Route::Missing, |(_, label)| Route::Forward(label))
@@ -91,7 +98,31 @@ impl Attributes {
                 routes,
             }
         }).collect();
-        Self { attrs, vm_blockers }
+        let layout = vec![0; grammar.matchers.len()];
+        Self { attrs, layout, vm_blockers }
+    }
+
+    /// Lays out each node kind's VM record: exactly the lowered attributes
+    /// that `roots` (expressions evaluated on nodes of the given kinds) can
+    /// read on that kind, following reads through attribute definitions,
+    /// `fn` bodies, fields, parents and children with the grammar's shapes.
+    /// Returns the number of record fields over all kinds.
+    pub fn shape_records(&mut self, grammar: &Grammar, roots: Vec<(KindSet, &CExpr)>) -> usize {
+        let need = Needs::find(self, grammar, roots);
+        self.layout.fill(0);
+        for (attr, need) in self.attrs.iter_mut().zip(need) {
+            for (matcher, route) in attr.routes.iter_mut().enumerate() {
+                if let Route::Defined(def, slot) = route {
+                    *slot = if need.contains(matcher as u32) && attr.lowered[*def as usize].is_some() {
+                        self.layout[matcher] += 1;
+                        self.layout[matcher] - 1
+                    } else {
+                        NO_SLOT
+                    };
+                }
+            }
+        }
+        self.layout.iter().map(|&n| n as usize).sum()
     }
 
     /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
@@ -111,6 +142,183 @@ impl Attributes {
     }
 }
 
+/// Which kinds each attribute can be read on ([`Attributes::shape_records`]).
+struct Needs<'e> {
+    grammar: &'e Grammar,
+    attrs: &'e Attributes,
+    all: KindSet,
+    need: Vec<KindSet>,
+    called: Vec<KindSet>,
+    pending: Vec<(KindSet, &'e CExpr)>,
+}
+
+impl<'e> Needs<'e> {
+    fn find(attrs: &'e Attributes, grammar: &'e Grammar, roots: Vec<(KindSet, &'e CExpr)>) -> Vec<KindSet> {
+        let n = grammar.matchers.len();
+        let mut needs = Needs {
+            grammar,
+            attrs,
+            all: KindSet::all(n),
+            need: vec![KindSet::empty(n); attrs.attrs.len()],
+            called: vec![KindSet::empty(n); grammar.functions.len()],
+            pending: roots,
+        };
+        while let Some((kinds, e)) = needs.pending.pop() {
+            needs.visit(&kinds, e);
+        }
+        needs.need
+    }
+
+    fn map(&self, kinds: &KindSet, step: impl Fn(u32, &mut KindSet)) -> KindSet {
+        let mut out = KindSet::empty(self.grammar.matchers.len());
+        for k in kinds.iter() {
+            step(k, &mut out);
+        }
+        out
+    }
+
+    /// Parent layer nodes (looking through text captures, as reads do).
+    fn parents(&self, kinds: &KindSet) -> KindSet {
+        self.map(kinds, |k, out| {
+            let mut stack = vec![k];
+            let mut seen_text = false;
+            while let Some(k) = stack.pop() {
+                for &p in self.grammar.parent_kinds(k) {
+                    if p == TEXT {
+                        if !seen_text {
+                            seen_text = true;
+                            stack.push(TEXT);
+                        }
+                    } else {
+                        out.insert(p);
+                    }
+                }
+            }
+        })
+    }
+
+    fn children(&self, kinds: &KindSet) -> KindSet {
+        self.map(kinds, |k, out| {
+            for &c in self.grammar.children_kinds(k) {
+                out.insert(c);
+            }
+        })
+    }
+
+    fn field(&self, kinds: &KindSet, label: u16) -> KindSet {
+        if kinds.iter().any(|k| self.grammar.field_targets(k, label).any) {
+            return self.all.clone();
+        }
+        self.map(kinds, |k, out| {
+            for &c in &self.grammar.field_targets(k, label).kinds {
+                out.insert(c);
+            }
+        })
+    }
+
+    fn specialisations(&self, base: u32) -> KindSet {
+        let mut out = KindSet::empty(self.grammar.matchers.len());
+        for k in 0..self.grammar.matchers.len() as u32 {
+            if self.grammar.is_a(k, base) {
+                out.insert(k);
+            }
+        }
+        out
+    }
+
+    /// `attr` is read on `kinds`: its definitions there are evaluated too.
+    fn request(&mut self, attr: u16, kinds: &KindSet) {
+        let attrs = self.attrs;
+        let Some(compiled) = attrs.attrs.get(attr as usize) else { return };
+        let mut by_def: Vec<(u32, KindSet)> = Vec::new();
+        for k in kinds.iter() {
+            // Each (attribute, kind) is followed once; forwarding kinds too,
+            // since forwards can chain through themselves.
+            if !self.need[attr as usize].insert(k) {
+                continue;
+            }
+            match compiled.routes.get(k as usize) {
+                Some(Route::Defined(def, _)) => {
+                    match by_def.iter_mut().find(|(d, _)| d == def) {
+                        Some((_, set)) => { set.insert(k); }
+                        None => {
+                            let mut set = KindSet::empty(self.grammar.matchers.len());
+                            set.insert(k);
+                            by_def.push((*def, set));
+                        }
+                    }
+                }
+                Some(Route::Forward(label)) => {
+                    let mut one = KindSet::empty(self.grammar.matchers.len());
+                    one.insert(k);
+                    let targets = self.field(&one, *label);
+                    self.request(attr, &targets);
+                }
+                _ => {}
+            }
+        }
+        for (def, set) in by_def {
+            self.pending.push((set, &compiled.defs[def as usize]));
+        }
+    }
+
+    fn visit(&mut self, kinds: &KindSet, e: &'e CExpr) {
+        use super::Relative;
+        match e {
+            CExpr::Attr(a) => self.request(*a, kinds),
+            CExpr::ParentAttr(a) => {
+                let parents = self.parents(kinds);
+                self.request(*a, &parents);
+            }
+            CExpr::FieldAttr(label, a) => {
+                let fields = self.field(kinds, *label);
+                self.request(*a, &fields);
+            }
+            CExpr::OnParent(inner) => self.pending.push((self.parents(kinds), inner)),
+            CExpr::OnField(label, inner) => self.pending.push((self.field(kinds, *label), inner)),
+            CExpr::Relative(Relative::Children, inner) | CExpr::OwnChild(_, _, inner) => self.pending.push((self.children(kinds), inner)),
+            CExpr::Relative(_, inner) => {
+                let siblings = self.children(&self.parents(kinds));
+                self.pending.push((siblings, inner));
+            }
+            CExpr::OnAncestor(base, inner) => self.pending.push((self.specialisations(*base), inner)),
+            CExpr::Member(base, _, part) => {
+                self.visit(kinds, base);
+                if let Some(part) = part {
+                    self.pending.push((self.all.clone(), part));
+                }
+            }
+            CExpr::Path(base, _, parts) => {
+                self.visit(kinds, base);
+                for part in parts.iter().flatten() {
+                    self.pending.push((self.all.clone(), part));
+                }
+            }
+            CExpr::UserCall(i, args) => {
+                for arg in args {
+                    self.visit(kinds, arg);
+                }
+                let grammar = self.grammar;
+                if let (Some(called), Some(body)) = (self.called.get_mut(*i as usize), grammar.functions.get(*i as usize).and_then(|f| f.body.get())) {
+                    let new = {
+                        let mut new = KindSet::empty(grammar.matchers.len());
+                        for k in kinds.iter() {
+                            if called.insert(k) {
+                                new.insert(k);
+                            }
+                        }
+                        new
+                    };
+                    if !new.is_empty() {
+                        self.pending.push((new, body));
+                    }
+                }
+            }
+            other => other.for_each_child(&mut |child| self.visit(kinds, child)),
+        }
+    }
+}
+
 impl vm::Host for Ctx<'_> {
     fn tree(&self) -> &crate::grammar::Tree {
         self.tree
@@ -127,24 +335,23 @@ impl vm::Host for Ctx<'_> {
     fn attr(&self, node: u32, attr: u16) -> Option<V> {
         match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => Some(V::Null),
-            Route::Forward(_) => None,
-            Route::Defined(index) => self.vm_attr(node, attr, index),
+            Route::Forward(_) | Route::Defined(_, NO_SLOT) => None,
+            Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
         }
     }
 }
 
 impl<'a> Ctx<'a> {
-    /// A VM-lowered attribute from the file's VM cells, computing it there
-    /// first; `None` when the definition isn't lowered or the VM gives up
-    /// (the interpreter answers).
-    fn vm_attr(&self, node: u32, attr: u16, index: u32) -> Option<V> {
-        let lowered = self.attrs.attrs[attr as usize].lowered[index as usize].as_ref()?;
-        match self.memo.vm.begin(node, attr) {
+    /// A VM-lowered attribute from the node's record, computing it there
+    /// first; `None` when the VM gives up (the interpreter answers).
+    fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
+        match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
             Begin::Ready(v) => Some(v),
             Begin::GiveUp => None,
-            Begin::Compute => {
+            Begin::Compute(at) => {
+                let lowered = self.attrs.attrs[attr as usize].lowered[index as usize].as_ref().expect("record fields are lowered");
                 let v = vm::eval(self, node, lowered);
-                self.memo.vm.finish(node, attr, v);
+                self.memo.vm.finish(at, v);
                 v
             }
         }
@@ -174,9 +381,9 @@ impl<'a> Ctx<'a> {
                     _ => Value::list(values),
                 });
             }
-            Route::Defined(index) => {
-                if vm::mode() != vm::Mode::Off {
-                    if let Some(v) = self.vm_attr(node, attr, index) {
+            Route::Defined(index, slot) => {
+                if slot != NO_SLOT && vm::mode() != vm::Mode::Off {
+                    if let Some(v) = self.vm_attr(node, attr, index, slot) {
                         if vm::mode() == vm::Mode::On {
                             return Ok(v.value(self.tree, self.source));
                         }
@@ -250,7 +457,7 @@ mod tests {
             Attr { name: "fallback".into(), defs: vec![(base, number(3.0))] },
         ], &[(leaf, 0, 0), (leaf, 1, 0)], &g);
         let read = |attr| match plan.route(leaf, attr) {
-            Route::Defined(index) => match &plan.attrs[attr as usize].defs[index as usize] {
+            Route::Defined(index, _) => match &plan.attrs[attr as usize].defs[index as usize] {
                 CExpr::Const(Value::Num(n)) => *n,
                 _ => panic!("number"),
             },
@@ -260,6 +467,28 @@ mod tests {
         assert_eq!(read(1), 3.0);
         for matcher in [other, ROOT, TEXT] {
             assert!(matches!(plan.route(matcher, 0), Route::Missing));
+        }
+    }
+
+    #[test]
+    fn records_hold_exactly_the_attributes_read_on_each_kind() {
+        let g = grammar();
+        let base = g.matcher("base").unwrap();
+        let member = g.matcher("member").unwrap();
+        let leaf = g.matcher("leaf").unwrap();
+        let other = g.matcher("other").unwrap();
+        let mut plan = Attributes::new(vec![
+            Attr { name: "read".into(), defs: vec![(base, number(1.0))] },
+            Attr { name: "unread".into(), defs: vec![(base, number(2.0))] },
+            Attr { name: "chained".into(), defs: vec![(base, CExpr::Attr(0))] },
+        ], &[], &g);
+        let mut on_leaf = KindSet::empty(g.matchers.len());
+        on_leaf.insert(leaf);
+        let root = CExpr::Attr(2);
+        assert_eq!(plan.shape_records(&g, vec![(on_leaf, &root)]), 2);
+        assert_eq!(plan.layout[leaf as usize], 2);
+        for m in [base, member, other] {
+            assert_eq!(plan.layout[m as usize], 0);
         }
     }
 

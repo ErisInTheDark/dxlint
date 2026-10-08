@@ -219,9 +219,10 @@ impl Linter {
             total += rule.node_when_vm.len() + rule.when_vm.len();
             lowered += rule.node_when_vm.iter().chain(&rule.when_vm).filter(|e| e.is_some()).count();
         }
+        let fields = self.shape_records();
         if stats {
             let (attrs, attr_defs) = self.attrs.lowered_counts();
-            eprintln!("zlint vm: {lowered}/{total} enabled rule conditions, {attrs}/{attr_defs} attribute definitions lowered");
+            eprintln!("zlint vm: {lowered}/{total} enabled rule conditions, {attrs}/{attr_defs} attribute definitions lowered, {fields} record fields");
             for blocker in self.attrs.vm_blockers() {
                 *blockers.entry(format!("attribute: {blocker}")).or_default() += 1;
             }
@@ -231,6 +232,50 @@ impl Linter {
                 eprintln!("zlint vm blocker: {count:>6} {blocker}");
             }
         }
+    }
+
+    /// Sizes each node kind's VM record from what the enabled rules read on
+    /// the kinds they target; the number of record fields.
+    fn shape_records(&mut self) -> usize {
+        use crate::vm::KindSet;
+        let g = &self.grammar;
+        let n = g.matchers.len();
+        let specialisations = |base: u32| {
+            let mut set = KindSet::empty(n);
+            for k in 0..n as u32 {
+                if g.is_a(k, base) {
+                    set.insert(k);
+                }
+            }
+            set
+        };
+        let mut roots = Vec::new();
+        for rule in self.rules.iter().filter(|rule| rule.severity != Severity::Off) {
+            let mut kinds = KindSet::empty(n);
+            for target in &rule.targets {
+                match *target {
+                    Target::Matcher(m) => kinds.extend(&specialisations(m)),
+                    Target::Field(m, label) => {
+                        for owner in specialisations(m).iter() {
+                            let targets = g.field_targets(owner, label);
+                            if targets.any {
+                                kinds = KindSet::all(n);
+                            }
+                            for &k in &targets.kinds {
+                                kinds.insert(k);
+                            }
+                        }
+                    }
+                    Target::Link(..) => kinds = KindSet::all(n),
+                    Target::Lang(_) => {}
+                }
+            }
+            // Whole-file rules still read other nodes (`descendants(x).y`).
+            let exprs = rule.node_when.iter().chain(&rule.when).chain(&rule.locals)
+                .chain([&rule.message, &rule.fix, &rule.fix_when, &rule.fix_at, &rule.indent_reset, &rule.report_at, &rule.each].into_iter().flatten());
+            roots.extend(exprs.map(|e| (kinds.clone(), e)));
+        }
+        self.attrs.shape_records(g, roots)
     }
 
     /// Whether a rule's `i`th condition (of `exprs`, lowered as `vm`) holds.

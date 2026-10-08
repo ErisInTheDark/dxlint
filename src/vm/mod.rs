@@ -562,41 +562,108 @@ fn decode(cell: u64) -> Cell {
     }
 }
 
-/// One file's VM-computed attribute values, as 8-byte cells keyed by
-/// (node, attribute). Rules read only a few values on most nodes, so only
-/// computed values take space.
+/// A set of matchers, as a bitset over matcher ids (ROOT and TEXT are never
+/// members: they hold no attributes).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KindSet(Vec<u64>);
+
+impl KindSet {
+    pub fn empty(matchers: usize) -> Self {
+        KindSet(vec![0; matchers.div_ceil(64)])
+    }
+
+    pub fn all(matchers: usize) -> Self {
+        let mut set = Self::empty(matchers);
+        for k in 0..matchers as u32 {
+            set.insert(k);
+        }
+        set
+    }
+
+    /// Adds `k`; whether it was new. Ids outside the set (ROOT, TEXT) are ignored.
+    pub fn insert(&mut self, k: u32) -> bool {
+        let Some(word) = self.0.get_mut(k as usize / 64) else { return false };
+        let bit = 1u64 << (k % 64);
+        let new = *word & bit == 0;
+        *word |= bit;
+        new
+    }
+
+    pub fn contains(&self, k: u32) -> bool {
+        self.0.get(k as usize / 64).is_some_and(|word| word >> (k % 64) & 1 == 1)
+    }
+
+    pub fn extend(&mut self, other: &KindSet) {
+        for (a, b) in self.0.iter_mut().zip(&other.0) {
+            *a |= b;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|&w| w == 0)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.iter().enumerate().flat_map(|(i, &word)| (0..64).filter(move |b| word >> b & 1 == 1).map(move |b| (i * 64 + b) as u32))
+    }
+}
+
+/// One file's VM-computed attribute values. Each node kind has a record
+/// of exactly the attributes the enabled rules can read on it (sizes per
+/// matcher: `layout`, decided at config load); a node gets its record in
+/// one shared buffer when one of its values is first read.
 #[derive(Default)]
 pub struct FileVm {
-    cells: RefCell<crate::fx_hash::FxHashMap<(u32, u16), u64>>,
+    offsets: RefCell<Vec<u32>>,
+    cells: RefCell<Vec<u64>>,
 }
+
+/// A node without a record yet.
+const NO_RECORD: u32 = u32::MAX;
 
 /// What [`FileVm::begin`] found.
 pub enum Begin {
     Ready(V),
     /// Busy, or given up before: the interpreter handles it.
     GiveUp,
-    /// Marked busy: evaluate, then [`FileVm::finish`].
-    Compute,
+    /// Marked busy at this cell: evaluate, then [`FileVm::finish`].
+    Compute(usize),
 }
 
 impl FileVm {
-    pub fn begin(&self, node: u32, attr: u16) -> Begin {
+    fn record(&self, tree: &Tree, layout: &[u16], node: u32) -> usize {
+        let mut offsets = self.offsets.borrow_mut();
+        if offsets.is_empty() {
+            *offsets = vec![NO_RECORD; tree.nodes.len()];
+        }
+        let at = &mut offsets[node as usize];
+        if *at == NO_RECORD {
+            let mut cells = self.cells.borrow_mut();
+            let start = cells.len();
+            *at = start as u32;
+            let size = layout.get(tree.node(node).matcher as usize).copied().unwrap_or(0);
+            cells.resize(start + size as usize, UNSET);
+        }
+        *at as usize
+    }
+
+    pub fn begin(&self, tree: &Tree, layout: &[u16], node: u32, slot: u16) -> Begin {
+        let at = self.record(tree, layout, node) + slot as usize;
         let mut cells = self.cells.borrow_mut();
-        let cell = cells.entry((node, attr)).or_insert(UNSET);
-        match decode(*cell) {
+        match decode(cells[at]) {
             Cell::Ready(v) => Begin::Ready(v),
             Cell::Busy | Cell::GaveUp => Begin::GiveUp,
             Cell::Unset => {
-                *cell = BUSY;
-                Begin::Compute
+                cells[at] = BUSY;
+                Begin::Compute(at)
             }
         }
     }
 
     /// Publishes a value, or marks the cell given up so later reads go
     /// straight to the interpreter.
-    pub fn finish(&self, node: u32, attr: u16, value: Option<V>) {
-        self.cells.borrow_mut().insert((node, attr), value.map_or(GAVE_UP, encode));
+    pub fn finish(&self, at: usize, value: Option<V>) {
+        self.cells.borrow_mut()[at] = value.map_or(GAVE_UP, encode);
     }
 }
 

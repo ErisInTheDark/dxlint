@@ -138,11 +138,12 @@ pub enum CExpr {
     Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
 }
 
-/// `for_each_child_mut`: one list of which forms hold which subexpressions.
+/// `for_each_child` and its `mut` twin: one list of which forms hold which
+/// subexpressions.
 macro_rules! child_visitor {
     ($name:ident $(, $m:ident)?) => {
         /// Calls `f` on each direct subexpression, in evaluation order.
-        pub(crate) fn $name(& $($m)? self, f: &mut impl FnMut(& $($m)? CExpr)) {
+        pub(crate) fn $name<'e>(&'e $($m)? self, f: &mut impl FnMut(&'e $($m)? CExpr)) {
             match self {
                 CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
                 | CExpr::FactCall(_, items) | CExpr::UserCall(_, items) => {
@@ -192,6 +193,7 @@ macro_rules! child_visitor {
 }
 
 impl CExpr {
+    child_visitor!(for_each_child);
     child_visitor!(for_each_child_mut, mut);
 }
 
