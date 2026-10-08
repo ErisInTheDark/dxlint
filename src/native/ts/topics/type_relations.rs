@@ -101,8 +101,25 @@ fn profile(ty: &Ty, ck: &Checker<'_>) -> Value<'static> {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::tests::{native_linter, with_native_file};
+    use crate::engine::tests::{buffered_project, native_linter, with_native_file};
     use std::path::Path;
+
+    fn assert_fixes(linter: &crate::engine::Linter, path: &Path, cases: &[(&str, &str)]) {
+        let checked: Vec<_> = cases.iter().map(|&(source, expected)| {
+            assert!(crate::native::ts::parse(source, false).is_ok(), "invalid fixture: {source}");
+            let reports = linter.lint(path, source);
+            assert_eq!(reports.len(), 1, "{source}: {reports:?}");
+            (source, expected, reports)
+        }).collect();
+        for (source, expected, reports) in checked {
+            let (fixed, applied) = crate::engine::apply_fixes(source, &reports);
+            assert_eq!(applied, 1, "{source}: {reports:?}");
+            assert_eq!(fixed, expected);
+            assert!(crate::native::ts::parse(&fixed, false).is_ok(), "{fixed}");
+            assert!(linter.lint(path, &fixed).is_empty(), "{fixed}");
+            assert_eq!(linter.fix(path, &fixed).text, fixed);
+        }
+    }
 
     #[test]
     fn type_relations_preserve_known_identity() {
@@ -140,7 +157,74 @@ mod tests {
             (start, start + text.len())
         }).collect();
         assert_eq!(diagnostics.iter().map(|diagnostic| (diagnostic.start, diagnostic.end)).collect::<Vec<_>>(), expected);
-        assert!(diagnostics.iter().all(|diagnostic| diagnostic.fix.is_none()));
+        let (fixed, applied) = crate::engine::apply_fixes(source, &diagnostics);
+        assert_eq!(applied, 3);
+        assert_eq!(fixed, "const exact = 3; let narrower = 3 as 3; declare const text: string; text; declare const nullable: string | null; const receiving: string | null = nullable;");
+    }
+
+    #[test]
+    fn assertion_fixes_preserve_comment_ownership_and_byte_boundaries() {
+        let linter = native_linter("rule no-unnecessary-type-assertion");
+        let path = Path::new("/root/a.ts");
+        assert_fixes(&linter, path, &[
+            ("const value = ( 3 + 5 ) /*keep*/ as //type\n(number);", "const value = ( 3 + 5 ) /*keep*/;"),
+            ("declare const value: number; const result = (value //keep\n) as number;", "declare const value: number; const result = (value //keep\n);"),
+            ("const value = <number> /*keep*/ (3 + 5);", "const value =  /*keep*/ (3 + 5);"),
+            ("const value = <number /*type*/>(3 + 5);", "const value = (3 + 5);"),
+            ("const unicode = '🌿'; declare const value: number; value /*keep*/ !;", "const unicode = '🌿'; declare const value: number; value /*keep*/ ;"),
+        ]);
+    }
+
+    #[test]
+    fn assertion_fixes_keep_expression_precedence_and_statement_boundaries() {
+        let project = buffered_project("assertion-precedence", &[
+            ("tsconfig.json", r#"{"compilerOptions":{"lib":["es5"],"types":[]}}"#),
+            ("node_modules/typescript/lib/lib.es5.d.ts", "interface Function { readonly length: number; }"),
+        ], "rule no-unnecessary-type-assertion");
+        let linter = &project.linter;
+        let path = &project.path("a.ts");
+        assert_fixes(linter, path, &[
+            ("<number>class Clazz {}.length;", "(class Clazz {}.length);"),
+            ("<number>function Fun() {}.length;", "(function Fun() {}.length);"),
+            ("<{ a: string }>{ a: 'foo' };", "({ a: 'foo' });"),
+            ("const f = () => <{ a: string }>{ a: 'foo' };", "const f = () => ({ a: 'foo' });"),
+            ("const value = <number>(3 + 5) * 2;", "const value = (3 + 5) * 2;"),
+            ("function f() { return <number>\n(3 + 5); }", "function f() { return (\n(3 + 5)); }"),
+            ("declare const n: number\n<number>(3 + 5);", "declare const n: number\n;(3 + 5);"),
+            ("declare const value: number; value!instanceof Object;", "declare const value: number; value instanceof Object;"),
+            ("interface Overloaded { (): void; (value: string): undefined; }\n((value => {}) as Overloaded)('') as undefined;", "interface Overloaded { (): void; (value: string): undefined; }\n((value => {}) as Overloaded)('');"),
+            ("(<{ a: string }>{ a: 'foo' }, 1);", "({ a: 'foo' }, 1);"),
+        ]);
+    }
+
+    #[test]
+    fn assertion_fixes_remove_redundant_chains_and_contextual_casts() {
+        let project = buffered_project("assertion-context", &[
+            ("tsconfig.json", r#"{"compilerOptions":{"lib":["es5"],"types":[]}}"#),
+            ("node_modules/typescript/lib/lib.es5.d.ts", "type Pick<T, K extends keyof T> = { [P in K]: T[P] };"),
+        ], "rule no-unnecessary-type-assertion");
+        let linter = &project.linter;
+        let path = &project.path("a.ts");
+        assert_fixes(linter, path, &[
+            ("const value = 5 as any as 5;", "const value = 5;"),
+            ("const value = (1 + 1) as any as number;", "const value = 1 + 1;"),
+            ("const value = 2 * ((1 + 1) as any as number);", "const value = 2 * (1 + 1);"),
+            ("declare const value: number; const result = <number>(<any>value);", "declare const value: number; const result = value;"),
+            ("declare const value: number; const result = (value /*keep*/) as any as number;", "declare const value: number; const result = (value /*keep*/);"),
+            ("declare function fn(value: number): void; fn(42 as unknown as number);", "declare function fn(value: number): void; fn(42);"),
+            ("interface T { a: string } declare function fn<U extends T>(args: Pick<U, 'a'>): void; fn<T>({ a: '' as string });", "interface T { a: string } declare function fn<U extends T>(args: Pick<U, 'a'>): void; fn<T>({ a: '' });"),
+        ]);
+    }
+
+    #[test]
+    fn assertion_fixes_do_not_erase_generic_call_context() {
+        let linter = native_linter("rule no-unnecessary-type-assertion");
+        let source = "declare function get<T = number>(): T; const value = get() as number;";
+        let path = Path::new("/root/a.ts");
+        let reports = linter.lint(path, source);
+        assert_eq!(reports.len(), 1, "{reports:?}");
+        assert!(reports[0].fix.is_none());
+        assert_eq!(linter.fix(path, source).text, source);
     }
 
     #[test]

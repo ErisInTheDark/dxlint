@@ -1,39 +1,7 @@
 # Expression simplification and atomic, precedence-safe fixes.
-import .ts/parentheses
-import .ts/helpers
+import .ts/expression-fixes
 
 define {
-
-fn expression_fix_clean(n) = !any(overlapping(ts_comment, n.offset, n.end_offset), comment => n.offset <= comment.offset && comment.end_offset <= n.end_offset)
-fn expression_fix_wrap(text, needed) = if needed then "(" text ")" else text
-fn expression_fix_separator(left, right) = if re_test(left, /[\w$\u{200c}\u{200d}]$/) && re_test(right, /^[\w$\u{200c}\u{200d}]/)
-  || ends_with(left, "+") && starts_with(right, "+")
-  || ends_with(left, "-") && starts_with(right, "-")
-  || ends_with(left, "/") && (starts_with(right, "/") || starts_with(right, "*")) then " " else ""
-fn expression_fix_edges(n, text) =
-  ((if n.token_neighbours.before.end == n.offset then expression_fix_separator(n.token_neighbours.before.text, text) else "")
-  text
-  (if n.token_neighbours.after.start == n.end_offset then expression_fix_separator(text, n.token_neighbours.after.text) else ""))
-fn expression_fix_parens(source, n, operand) = if n.parent is ts_parenthesized then 0
-  else structure_parens_required(source, n.parent.node, operand, n)
-fn expression_fix_statement(n) = find_last(walk(n, current => if current.parent.offset == n.offset then current.parent.node else null), current => current is ts_expression_statement)
-fn expression_fix_before_nodes(n) = if n.token_neighbours.before == null then []
-  else overlapping(ts_node, n.token_neighbours.before.start, n.token_neighbours.before.end)
-fn expression_fix_declaration(n) = n.parent is (ts_program, ts_block, ts_export, ts_case, ts_if, ts_labeled, ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of)
-fn expression_fix_asi(n, before, owners) =
-  if before == null || contains([":", ";", "{{", "=>", "++", "--"], before.text) then false
-  else if any(owners, owner => owner is (ts_type_alias, ts_interface) && owner.end_offset == before.end) then null
-  else if before.text == ")" then !any(owners, owner =>
-    owner is ts_do_while && owner.end_offset == before.end
-    || owner is ts_if && owner.consequent.offset >= before.end
-    || owner is (ts_for, ts_for_in, ts_for_of, ts_while, ts_with) && owner.body.offset >= before.end)
-  else if before.text == "}}" then any(owners, owner => owner.end_offset == before.end
-    && (owner is (ts_object, ts_arrow) || owner is (ts_function, ts_class) && !expression_fix_declaration(owner)))
-  else if any(owners, owner => owner.end_offset == before.end && owner is (ts_break, ts_continue, ts_debugger, ts_return, ts_yield)
-    || owner is ts_declarator && owner.init == null && owner.name.end_offset == before.end
-    || owner is (ts_import, ts_export) && owner.from.end_offset == before.end) then false
-  else if before.text == "else" && n.parent is ts_if || before.text == "do" && n.parent is ts_do_while then false
-  else true
 
 fn boolean_cast_operand(n, negation) = unparenthesised_node(if negation
   then unparenthesised_node(n.argument.node).argument.node else first([] n.argument.node))
