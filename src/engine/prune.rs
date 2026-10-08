@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::ast::{Config, Expr, ExprKind, Parent, Target, TemplatePart};
+use crate::config::ast::{Config, Expr, ExprKind, Parent, PipelineStage, Target, TemplatePart};
 use crate::pattern::Pat;
 
 /// Runtime compilation keeps only helpers reachable from enabled rules
@@ -59,9 +59,20 @@ fn expr_names(e: &Expr, out: &mut HashSet<String>) {
             args.iter().for_each(|a| expr_names(a, out));
         }
         ExprKind::Unary(_, a) => expr_names(a, out),
-        ExprKind::Binary(_, a, b) => {
+        ExprKind::Binary(_, a, b) | ExprKind::Nullish(a, b) => {
             expr_names(a, out);
             expr_names(b, out);
+        }
+        ExprKind::Pipeline(steps) => {
+            for step in steps {
+                match &step.stage {
+                    PipelineStage::Value(value) | PipelineStage::Then(_, value) => expr_names(value, out),
+                    PipelineStage::Call(name, args) => {
+                        out.insert(name.text.clone());
+                        args.iter().for_each(|arg| expr_names(arg, out));
+                    }
+                }
+            }
         }
         ExprKind::If(c, a, b) => {
             expr_names(c, out);

@@ -11,6 +11,15 @@ use super::Parser;
 use crate::pattern::{regex, Pat};
 
 impl Parser<'_> {
+    fn field_name(&mut self, token: &Token) -> bool {
+        if matches!(&*token.text, "nodes" | "nonempty") {
+            self.errors.push(ConfigError::new(token.span, format!("field `{}` is a reserved expression suffix", token.text)));
+            false
+        } else {
+            true
+        }
+    }
+
     /// Parses a pattern running to the end of the line.
     pub(super) fn pattern_line(&mut self) -> Option<(Pat, Span)> {
         let start = self.here()?;
@@ -88,6 +97,7 @@ impl Parser<'_> {
         if t.kind == Tk::Ident {
             let label_follows = self.ts.peek_raw(1).is_some_and(|c| c.kind == Tk::Colon && t.touches(c));
             if label_follows {
+                if !self.field_name(&t) { return None; }
                 if self.ts.is_macro(&t.text) {
                     self.errors.push(ConfigError::new(t.span, format!("label `{}` clashes with a macro of the same name", t.text)));
                     return None;
@@ -178,6 +188,7 @@ impl Parser<'_> {
                 self.ts.next_raw();
                 match self.ts.peek_raw(0).cloned() {
                     Some(n) if n.kind == Tk::Ident && t.touches(&n) => {
+                        if !self.field_name(&n) { return None; }
                         self.ts.next_raw();
                         self.config.uses.push(Use::Layer(Name { text: n.text.to_string(), span: n.span }));
                         Some(Pat::Ref { name: n.text.to_string(), label: Some(n.text.to_string()) })

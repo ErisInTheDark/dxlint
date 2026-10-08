@@ -34,7 +34,7 @@ fn text<'a>(v: &'a Value<'_>) -> Cow<'a, str> {
 
 fn count(v: &Value) -> Result<usize, String> {
     let n = v.num()?;
-    if n < 0.0 || n.fract() != 0.0 {
+    if !n.is_finite() || n < 0.0 || n.fract() != 0.0 {
         return Err(format!("expected a whole non-negative number, got {n}"));
     }
     Ok(n as usize)
@@ -647,6 +647,75 @@ pub static FUNCTIONS: &[Function] = &[
         min: 1,
         max: 1,
         call: |a| a[0].num().map(Value::Num),
+    },
+    Function {
+        name: "nonempty",
+        signature: "nonempty(value)",
+        doc: "null for empty text, a list or a record; otherwise the value unchanged",
+        min: 1,
+        max: 1,
+        call: |a| Ok(match &a[0] {
+            Value::Str(text) if text.is_empty() => Value::Null,
+            Value::List(items) if items.is_empty() => Value::Null,
+            Value::Record(entries) if entries.is_empty() => Value::Null,
+            value => value.clone(),
+        }),
+    },
+    Function {
+        name: "take",
+        signature: "take(list, n)",
+        doc: "the first n items",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::list(a[0].item_slice().iter().take(count(&a[1])?).cloned().collect())),
+    },
+    Function {
+        name: "drop",
+        signature: "drop(list, n)",
+        doc: "items after the first n",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::list(a[0].item_slice().iter().skip(count(&a[1])?).cloned().collect())),
+    },
+    Function {
+        name: "flat",
+        signature: "flat(list)",
+        doc: "flatten one level of lists",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::list(a[0].item_slice().iter().flat_map(|item| item.item_slice().iter().cloned()).collect())),
+    },
+    Function {
+        name: "concat",
+        signature: "concat(list, other)",
+        doc: "append the items of other",
+        min: 2,
+        max: 2,
+        call: |a| Ok(Value::list(a[0].item_slice().iter().chain(a[1].item_slice()).cloned().collect())),
+    },
+    Function {
+        name: "chunk",
+        signature: "chunk(list, n)",
+        doc: "consecutive groups of n items; includes a shorter final group",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let n = count(&a[1])?;
+            if n == 0 { return Err("chunk size must be positive".into()); }
+            Ok(Value::list(a[0].item_slice().chunks(n).map(|chunk| Value::list(chunk.to_vec())).collect()))
+        },
+    },
+    Function {
+        name: "windows",
+        signature: "windows(list, n)",
+        doc: "overlapping groups of exactly n items",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let n = count(&a[1])?;
+            if n == 0 { return Err("window size must be positive".into()); }
+            Ok(Value::list(a[0].item_slice().windows(n).map(|window| Value::list(window.to_vec())).collect()))
+        },
     },
     Function {
         name: "default",

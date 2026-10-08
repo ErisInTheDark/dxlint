@@ -452,12 +452,29 @@ pub enum ExprKind {
     Call(Name, Vec<Expr>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
+    /// Null-only, lazy fallback.
+    Nullish(Box<Expr>, Box<Expr>),
+    Pipeline(Vec<PipelineStep>),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
     /// `value ~ pattern`: does the whole value match?
     Test(Box<Expr>, Box<Pat>),
     /// `is a`, `parent is (a, b)`, `is a.field`, `n is layer lines`,
     /// `is .rust`: does the node pass one of these tests?
     Is(Box<Expr>, Vec<IsName>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PipelineStep {
+    pub label: Option<Name>,
+    pub stage: PipelineStage,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub enum PipelineStage {
+    Value(Expr),
+    Call(Name, Vec<Expr>),
+    Then(Name, Expr),
 }
 
 /// One alternative of an `is` test.

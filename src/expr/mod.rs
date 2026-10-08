@@ -6,6 +6,7 @@ mod builtins;
 pub mod case;
 pub mod facts;
 pub mod functions;
+pub mod pipeline;
 pub(crate) mod fold;
 pub mod indent;
 pub(crate) mod re;
@@ -16,7 +17,7 @@ pub mod value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::config::ast::{BinOp, Dropped, Expr, ExprKind, TemplatePart, UnOp};
+use crate::config::ast::{BinOp, Dropped, Expr, ExprKind, Name, PipelineStage, PipelineStep, TemplatePart, UnOp};
 use crate::config::error::{closest, ConfigError};
 use crate::fx_hash::FxHashMap;
 use crate::grammar::{full_match, Grammar, Tree, ROOT, TEXT};
@@ -85,7 +86,9 @@ pub enum CExpr {
     Key(Box<CExpr>, Box<str>),
     /// `map(list, x => body)` and friends; the body reads the item as the
     /// innermost `Param`, at this depth.
-    Each(Each, u16, Box<CExpr>, Box<CExpr>),
+    Each(Box<pipeline::Stage>),
+    /// A lexical pipeline value, evaluated once at this parameter depth.
+    Bind(Box<CExpr>, u16, Box<CExpr>),
     /// `fact(args)` on the node: the fact reads its arguments through
     /// [`facts::args`].
     FactCall(usize, Vec<CExpr>),
@@ -133,9 +136,6 @@ pub enum CExpr {
     OnAncestor(u32, Box<CExpr>),
     /// A config `fn`, by index in [`Grammar::functions`], with its arguments.
     UserCall(u32, Vec<CExpr>),
-    /// `reduce(list, initial, (state, item) => next)`; the body reads the
-    /// state and the item as the two innermost `Param`s.
-    Reduce(Box<CExpr>, Box<CExpr>, Box<CExpr>),
 }
 
 /// `for_each_child` and its `mut` twin: one list of which forms hold which
@@ -155,11 +155,16 @@ macro_rules! child_visitor {
                 | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
                 | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
                 | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => f(inner),
-                CExpr::Binary(_, a, b) | CExpr::Each(_, _, a, b) | CExpr::Walk(a, b) | CExpr::Coalesce(a, b) => {
+                CExpr::Binary(_, a, b) | CExpr::Bind(a, _, b) | CExpr::Walk(a, b) | CExpr::Coalesce(a, b) => {
                     f(a);
                     f(b);
                 }
-                CExpr::If(a, b, c) | CExpr::Reduce(a, b, c) => {
+                CExpr::Each(stage) => {
+                    f(& $($m)? stage.input);
+                    for arg in & $($m)? stage.args { f(arg); }
+                    f(& $($m)? stage.body);
+                }
+                CExpr::If(a, b, c) => {
                     f(a);
                     f(b);
                     f(c);
@@ -238,13 +243,32 @@ pub enum Each {
     FindLast,
     All,
     Any,
+    FlatMap,
+    TakeWhile,
+    SkipWhile,
+    MinBy,
+    MaxBy,
+    SortBy,
+    GroupBy,
+    Partition,
+    UniqueBy,
+    Zip,
+    Fold,
+    Reduce,
 }
 
 impl Each {
     const NAMES: &'static [(&'static str, Each)] =
-        &[("map", Each::Map), ("filter", Each::Filter), ("find", Each::Find), ("find_last", Each::FindLast), ("all", Each::All), ("any", Each::Any)];
+        &[
+            ("map", Each::Map), ("filter", Each::Filter), ("find", Each::Find), ("find_last", Each::FindLast),
+            ("all", Each::All), ("any", Each::Any), ("flat_map", Each::FlatMap),
+            ("take_while", Each::TakeWhile), ("skip_while", Each::SkipWhile),
+            ("min_by", Each::MinBy), ("max_by", Each::MaxBy), ("sort_by", Each::SortBy),
+            ("group_by", Each::GroupBy), ("partition", Each::Partition), ("unique_by", Each::UniqueBy),
+            ("zip", Each::Zip), ("fold", Each::Fold), ("reduce", Each::Reduce),
+        ];
 
-    fn named(name: &str) -> Option<(&'static str, Each)> {
+    pub(crate) fn named(name: &str) -> Option<(&'static str, Each)> {
         Each::NAMES.iter().find(|(n, _)| *n == name).copied()
     }
 }
@@ -549,6 +573,17 @@ impl<'a> Scope<'a> {
     /// `base.a.b...`: on records the keys; on node values the whole rest
     /// read there (`n.callee.object.layer`).
     fn member_path(&self, base: CExpr, keys: &[crate::config::ast::Name]) -> CExpr {
+        if let Some(i) = keys.iter().position(|key| matches!(key.text.as_str(), "nodes" | "nonempty")) {
+            let suffix = &keys[i];
+            let value = if suffix.text == "nonempty" {
+                CExpr::Call(functions::lookup("nonempty").expect("registered nonempty"), vec![self.member_path(base, &keys[..i])])
+            } else {
+                let mut node_keys = keys[..i].to_vec();
+                node_keys.push(Name { text: "node".into(), span: suffix.span });
+                CExpr::Binary(BinOp::Join, Box::new(CExpr::Const(Value::list(vec![]))), Box::new(self.member_path(base, &node_keys)))
+            };
+            return self.member_path(value, &keys[i + 1..]);
+        }
         if let Some((first, rest)) = keys.split_first() {
             if let Some(projected) = project_fact(&base, Some(&first.text)) {
                 return self.member_path(projected, rest);
@@ -580,8 +615,42 @@ impl<'a> Scope<'a> {
 }
 
 impl Scope<'_> {
+    fn pipeline_steps(&self, steps: &[PipelineStep], previous: Option<Name>, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        let (step, rest) = steps.split_first()?;
+        let value = match &step.stage {
+            PipelineStage::Value(value) => self.compile(value, errors)?,
+            PipelineStage::Call(name, args) => {
+                let input = Expr { kind: ExprKind::Var(vec![previous?]), span: step.span };
+                let args = std::iter::once(input).chain(args.iter().cloned()).collect();
+                self.compile(&Expr { kind: ExprKind::Call(name.clone(), args), span: step.span }, errors)?
+            }
+            PipelineStage::Then(param, body) => {
+                let input = self.compile(&Expr { kind: ExprKind::Var(vec![previous?]), span: step.span }, errors)?;
+                let mut inner = self.clone();
+                inner.params.push(param.text.clone());
+                CExpr::Bind(Box::new(input), self.params.len() as u16, Box::new(inner.compile(body, errors)?))
+            }
+        };
+        if rest.is_empty() {
+            return Some(value);
+        }
+        let name = step.label.clone().unwrap_or_else(|| Name { text: format!("$pipeline{}", self.params.len()), span: step.span });
+        let mut inner = self.clone();
+        inner.params.push(name.text.clone());
+        Some(CExpr::Bind(Box::new(value), self.params.len() as u16, Box::new(inner.pipeline_steps(rest, Some(name), errors)?)))
+    }
+
     pub fn compile(&self, e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
         Some(match &e.kind {
+            ExprKind::Pipeline(steps) => self.pipeline_steps(steps, None, errors)?,
+            ExprKind::Nullish(left, right) => {
+                let depth = self.params.len() as u16;
+                let mut inner = self.clone();
+                inner.params.push(format!("$nullish{depth}"));
+                let type_of = functions::FUNCTIONS.iter().find(|f| f.name == "type_of").expect("registered type_of");
+                let null = CExpr::Binary(BinOp::Eq, Box::new(CExpr::Call(type_of, vec![CExpr::Param(depth)])), Box::new(CExpr::Const(Value::from("null"))));
+                CExpr::Bind(Box::new(self.compile(left, errors)?), depth, Box::new(CExpr::If(Box::new(null), Box::new(inner.compile(right, errors)?), Box::new(CExpr::Param(depth)))))
+            }
             ExprKind::Str(s) => CExpr::Const(Value::from(s.clone())),
             ExprKind::Num(n) => CExpr::Const(Value::Num(*n)),
             ExprKind::Bool(b) => CExpr::Const(Value::Bool(*b)),
@@ -632,24 +701,6 @@ impl Scope<'_> {
                     "a lambda only goes to `map`, `filter`, `find`, `find_last`, `all`, `any` (`x => ...`) or `reduce` (`(state, x) => ...`)",
                 ));
                 return None;
-            }
-            // `reduce(list, initial, (state, item) => next)`.
-            ExprKind::Call(name, args) if name.text == "reduce" => {
-                let lambda = match args.as_slice() {
-                    [_, _, Expr { kind: ExprKind::Lambda(params, body), .. }] if params.len() == 2 => Some((params, body)),
-                    _ => None,
-                };
-                let Some((params, body)) = lambda else {
-                    errors.push(ConfigError::new(e.span, "`reduce` takes a list, an initial value and a lambda").note("usage: reduce(list, initial, (state, x) => next)"));
-                    return None;
-                };
-                self.note(name.span, Resolved::Function("reduce"));
-                let list = self.compile(&args[0], errors)?;
-                let initial = self.compile(&args[1], errors)?;
-                let mut inner = self.clone();
-                inner.params.extend(params.iter().map(|p| p.text.clone()));
-                let body = inner.compile(body, errors)?;
-                CExpr::Reduce(Box::new(list), Box::new(initial), Box::new(body))
             }
             // `descendants(layer)`: nodes of a layer or group under this one.
             // `overlapping(layer)`: nodes of a layer or group sharing some of
@@ -742,8 +793,8 @@ impl Scope<'_> {
                 let body = inner.compile(body, errors)?;
                 CExpr::Walk(Box::new(roots), Box::new(body))
             }
-            ExprKind::Call(name, args) if args.len() == 2 && matches!(args[1].kind, ExprKind::Lambda(..)) => {
-                let Some((fname, each)) = Each::named(&name.text) else {
+            ExprKind::Call(name, args) if args.last().is_some_and(|arg| matches!(arg.kind, ExprKind::Lambda(..))) => {
+                let Some((fname, mut each)) = Each::named(&name.text) else {
                     errors.push(
                         ConfigError::new(name.span, format!("`{}` does not take a lambda", name.text))
                             .note("lambdas go to `map`, `filter`, `find`, `find_last`, `all`, `any` and `reduce`"),
@@ -751,19 +802,26 @@ impl Scope<'_> {
                     return None;
                 };
                 self.note(name.span, Resolved::Function(fname));
-                let ExprKind::Lambda(params, body) = &args[1].kind else { unreachable!("matched") };
-                let [param] = params.as_slice() else {
-                    errors.push(ConfigError::new(args[1].span, format!("`{fname}` takes a one-parameter lambda: `x => ...`")));
+                if each == Each::Reduce && args.len() == 3 {
+                    each = Each::Fold;
+                }
+                let extra = usize::from(matches!(each, Each::Fold | Each::Zip));
+                let paired = matches!(each, Each::Fold | Each::Reduce | Each::Zip);
+                let lambda = args.last().expect("matched lambda");
+                let ExprKind::Lambda(params, body) = &lambda.kind else { unreachable!("matched") };
+                if args.len() != 2 + extra || !(if paired { params.len() == 2 } else { (1..=2).contains(&params.len()) }) {
+                    errors.push(ConfigError::new(e.span, format!("`{fname}` takes an input{}, and a {}-parameter lambda", if extra == 1 { ", one argument" } else { "" }, if paired { "two" } else { "one- or two" })));
                     return None;
-                };
+                }
                 let list = self.compile(&args[0], errors)?;
+                let stage_args = args[1..1 + extra].iter().map(|arg| self.compile(arg, errors)).collect::<Option<Vec<_>>>()?;
                 let depth = self.params.len() as u16;
                 let mut inner = self.clone();
-                inner.params.push(param.text.clone());
+                inner.params.extend(params.iter().map(|param| param.text.clone()));
                 let body = inner.compile(body, errors)?;
-                CExpr::Each(each, depth, Box::new(list), Box::new(body))
+                CExpr::Each(Box::new(pipeline::Stage { kind: each, depth, arity: params.len() as u8, input: list, args: stage_args, body }))
             }
-            ExprKind::Call(name, _) if Each::named(&name.text).is_some_and(|(_, e)| e != Each::Any) => {
+            ExprKind::Call(name, _) if Each::named(&name.text).is_some_and(|(_, e)| !matches!(e, Each::Any | Each::Zip)) => {
                 errors.push(
                     ConfigError::new(e.span, format!("`{}` takes a list and a lambda", name.text)).note(format!("usage: {}(list, x => ...)", name.text)),
                 );
@@ -997,6 +1055,17 @@ impl Scope<'_> {
     }
 
     fn var(&self, path: &[crate::config::ast::Name], e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        if let Some(i) = path.iter().enumerate().skip(1).find_map(|(i, key)| matches!(key.text.as_str(), "nodes" | "nonempty").then_some(i)) {
+            let suffix = &path[i];
+            let value = if suffix.text == "nonempty" {
+                CExpr::Call(functions::lookup("nonempty").expect("registered nonempty"), vec![self.var(&path[..i], e, errors)?])
+            } else {
+                let mut node_path = path[..i].to_vec();
+                node_path.push(Name { text: "node".into(), span: suffix.span });
+                CExpr::Binary(BinOp::Join, Box::new(CExpr::Const(Value::list(vec![]))), Box::new(self.var(&node_path, e, errors)?))
+            };
+            return Some(self.member_path(value, &path[i + 1..]));
+        }
         let first = &path[0];
         // Values holding records: lambda parameters, options and `let`s;
         // `.key` reads into them.
@@ -1919,30 +1988,23 @@ impl<'a> Ctx<'a> {
             CExpr::Record(entries) => {
                 Value::Record(entries.iter().map(|(k, v)| Ok((k.clone(), self.eval(v)?))).collect::<Result<_, String>>()?)
             }
-            CExpr::Each(each, _, list, body) => {
-                let items = self.eval(list)?;
-                let run = |item: &Value<'a>| -> Result<Value<'a>, String> {
-                    self.push_param(item.clone());
-                    let v = self.eval(body);
-                    self.pop_param();
-                    v
-                };
-                each_over(*each, items.item_slice(), run)?
+            CExpr::Each(stage) => {
+                let input = self.eval(&stage.input)?;
+                let args = stage.args.iter().map(|arg| self.eval(arg)).collect::<Result<Vec<_>, _>>()?;
+                pipeline::run(stage.kind, &input, &args, stage.arity, |bindings| {
+                    self.memo.params.borrow_mut().extend_from_slice(bindings);
+                    let result = self.eval(&stage.body);
+                    let mut params = self.memo.params.borrow_mut();
+                    let bound = params.len() - bindings.len();
+                    params.truncate(bound);
+                    result
+                })?
             }
-            CExpr::Reduce(list, initial, body) => {
-                let mut state = self.eval(initial)?;
-                let items = self.eval(list)?;
-                for item in items.item_slice() {
-                    self.memo.params.borrow_mut().extend([state, item.clone()]);
-                    let next = self.eval(body);
-                    {
-                        let mut params = self.memo.params.borrow_mut();
-                        let bound = params.len() - 2;
-                        params.truncate(bound);
-                    }
-                    state = next?;
-                }
-                state
+            CExpr::Bind(value, _, body) => {
+                self.push_param(self.eval(value)?);
+                let result = self.eval(body);
+                self.pop_param();
+                result?
             }
             CExpr::Relative(rel, inner) => match rel {
                 Relative::Children => {
@@ -2024,54 +2086,6 @@ fn eval_args<'a, T>(
     }
 }
 
-/// Runs a lambda (`run`) over `items` for `map` and friends.
-fn each_over<'s>(each: Each, items: &[Value<'s>], mut run: impl FnMut(&Value<'s>) -> Result<Value<'s>, String>) -> Result<Value<'s>, String> {
-    Ok(match each {
-        Each::Map => Value::List(items.iter().map(&mut run).collect::<Result<_, _>>()?),
-        Each::Filter => {
-            let mut out = Vec::new();
-            for item in items {
-                if run(item)?.truthy() {
-                    out.push(item.clone());
-                }
-            }
-            Value::list(out)
-        }
-        Each::Find => {
-            for item in items {
-                if run(item)?.truthy() {
-                    return Ok(item.clone());
-                }
-            }
-            Value::Null
-        }
-        Each::FindLast => {
-            for item in items.iter().rev() {
-                if run(item)?.truthy() {
-                    return Ok(item.clone());
-                }
-            }
-            Value::Null
-        }
-        Each::All => {
-            for item in items {
-                if !run(item)?.truthy() {
-                    return Ok(Value::Bool(false));
-                }
-            }
-            Value::Bool(true)
-        }
-        Each::Any => {
-            for item in items {
-                if run(item)?.truthy() {
-                    return Ok(Value::Bool(true));
-                }
-            }
-            Value::Bool(false)
-        }
-    })
-}
-
 pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, String> {
     Ok(match op {
         BinOp::And | BinOp::Or => Value::Bool(b.truthy()),
@@ -2114,6 +2128,121 @@ mod evaluation_tests {
     use crate::engine::tests::{lint, linter};
     use crate::engine::tests::native_linter;
     use std::path::Path;
+
+    #[test]
+    fn pipelines_keep_lexical_labels_indices_and_value_restarts() {
+        let l = linter(r#"
+            fn collected(seed) = {
+                value seed
+                original: then (value) value
+                value [1, 2, 3]
+                picked: filter (item, i) i % 2 == 0
+                sum
+                then (total) [total, count(picked), original]
+            }
+            in .t match word /[a-z]+/ {
+                rule pipeline {
+                    let seed count(text) + 9
+                    let result collected(seed)
+                    when { value result; then (value) first(value) == 4 }
+                    warn "{result}"
+                }
+            }
+        "#);
+        let reports = lint(&l, "a b");
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.message == "4, 2, 10"));
+    }
+
+    #[test]
+    fn pipelines_nest_in_lambda_bodies_conditions_and_template_holes() {
+        let l = linter(r#"
+            fn summary(items) = {
+                value original: items
+                map (item, i) { value item; then (value) value + i + count(original) }
+                join ":"
+            }
+            in .t match word /[a-z]+/ {
+                rule nested {
+                    let record { value: 2 }
+                    when record.value == 2
+                      && (if text == "a" then { value [1, 2]; any (item, i) i == 1 } else { value true })
+                    warn "{ { value [1, 2]; summary } }"
+                }
+            }
+        "#);
+        let reports = lint(&l, "a b");
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.message == "3:5"));
+    }
+
+    #[test]
+    fn pipeline_labels_do_not_leak_or_resolve_before_their_step() {
+        for body in [
+            "let result { value 1; stored: then (value) value }\nwhen stored == 1",
+            "let result { value future; future: then (value) value }",
+            "let result { value stored: 1; stored: then (value) value }",
+        ] {
+            assert!(!crate::engine::tests::errors(&format!("in .t match word /[a-z]+/ {{ rule scoped {{ {body}\nwarn \"invalid\" }} }}")).is_empty());
+        }
+        let l = linter(r#"
+            in .t match word /[a-z]+/ {
+                rule shadows {
+                    let stored 7
+                    let result { value stored: stored + 1; then (value) value == stored }
+                    when result && stored == 7
+                    warn "scoped"
+                }
+            }
+        "#);
+        assert_eq!(lint(&l, "a").len(), 1);
+    }
+
+    #[test]
+    fn nullish_preserves_empty_values_and_nonempty_only_replaces_empty_containers() {
+        let l = linter(r#"
+            in .t match word /[a-z]+/ {
+                rule fallback {
+                    let empty_text "" ?? "wrong"
+                    let empty_list [] ?? "wrong"
+                    when empty_text == "" && type_of(empty_list) == "list"
+                      && (false ?? num("bad")) == false
+                      && (0 ?? num("bad")) == 0
+                      && type_of({} ?? "wrong") == "record"
+                      && type_of({}.nonempty) == "null"
+                      && false.nonempty == false && 0.nonempty == 0
+                      && ("".nonempty ?? "yes") == "yes"
+                      && ([].nonempty ?? "yes") == "yes"
+                      && (null ?? "yes") == "yes"
+                    warn "fallback preserved"
+                }
+            }
+        "#);
+        assert_eq!(lint(&l, "a").len(), 1);
+    }
+
+    #[test]
+    fn nodes_suffix_matches_list_coercion_on_fields_and_node_paths() {
+        let make = |direct: &str, parameter: &str, call: &str| native_linter(&format!(r#"
+            fn identity(value) = value
+            in ts_call rule fields {{
+                let owner node
+                let direct {direct}
+                let parameter {parameter}
+                let call {call}
+                when direct == parameter && parameter == call
+                warn "{{count(direct)}}:{{direct.offset}}"
+            }}
+        "#));
+        let old = make("[] argument.node", "[] owner.argument.node", "[] identity(node).argument.node");
+        let new = make("argument.nodes", "owner.argument.nodes", "identity(node).argument.nodes");
+        let path = Path::new("/root/a.ts");
+        let source = "zero(); one(a); many(b, c);";
+        let reports = new.lint(path, source);
+        assert_eq!(reports.len(), 3);
+        assert!(reports.iter().zip([0, 1, 2]).all(|(report, count)| report.message.starts_with(&format!("{count}:"))));
+        assert_eq!(serde_json::to_value(reports).unwrap(), serde_json::to_value(old.lint(path, source)).unwrap());
+    }
 
     #[test]
     fn parent_tests_keep_null_roots_and_node_kinds_fields_layers_languages() {

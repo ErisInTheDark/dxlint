@@ -63,6 +63,20 @@ impl Frame<'_, '_> {
                 eval(if eval(condition)?.truthy() { yes } else { no })?
             }
             CExpr::Binary(op, left, right) => eval_binary(*op, left, right, eval)?,
+            CExpr::Bind(value, _, body) => {
+                let mut params = self.params.to_vec();
+                params.push(Some(eval(value)?));
+                Frame { params: &params, ..*self }.eval(body)?
+            }
+            CExpr::Each(stage) => {
+                let input = eval(&stage.input)?;
+                let args = stage.args.iter().map(eval).collect::<Result<Vec<_>, _>>()?;
+                super::pipeline::run(stage.kind, &input, &args, stage.arity, |bindings| {
+                    let mut params = self.params.to_vec();
+                    params.extend(bindings.iter().cloned().map(Some));
+                    Frame { params: &params, ..*self }.eval(&stage.body)
+                })?
+            }
             CExpr::UserCall(id, args) => {
                 // Do not unfold recursion or invent a compile-time failure for it.
                 if self.calls.contains(id) || self.calls.len() >= MAX_CALL_DEPTH as usize {

@@ -354,16 +354,18 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         CExpr::Relative(Relative::Children, inner) => {
             return Ok(Lowered::Seq(Seq::Nodes { children: true, label: 0, item: boxed(inner)? }));
         }
-        CExpr::Each(kind, param, list, body) => {
-            let of = boxed_seq(list)?;
-            let test = Box::new(lambda(body, g, args, *param, depth, bound)?);
-            let kind = match kind {
+        CExpr::Each(stage) => {
+            if stage.arity != 1 || !stage.args.is_empty() { return Err(e); }
+            let of = boxed_seq(&stage.input)?;
+            let test = Box::new(lambda(&stage.body, g, args, stage.depth, depth, bound)?);
+            let kind = match stage.kind {
                 Each::Filter => return Ok(Lowered::Seq(Seq::Filter(of, test))),
                 Each::Map => return Ok(Lowered::Seq(Seq::Map(of, test))),
                 Each::Find => EachKind::Find,
                 Each::FindLast => EachKind::FindLast,
                 Each::All => EachKind::All,
                 Each::Any => EachKind::Any,
+                _ => return Err(e),
             };
             VExpr::Each(kind, of, test)
         }

@@ -13,6 +13,8 @@ pub(crate) fn specialise(expr: &mut CExpr, options: &[Value<'static>], functions
     let eligible = match expr {
         CExpr::Opt(_) => true,
         CExpr::UserCall(_, _) => true,
+        CExpr::Bind(value, _, _) => constant(value),
+        CExpr::Each(stage) => constant(&stage.input) && stage.args.iter().all(constant),
         CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items) => items.iter().all(constant),
         CExpr::Record(entries) => entries.iter().all(|(_, value)| constant(value)),
         CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner)
