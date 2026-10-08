@@ -43,4 +43,5 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - Battle-test codebases (`wayward`, `fluff`, `transition` and derived `-z`/`-mut` copies) are permanent
 - Never copy binaries or libraries: pin `target/bin/<id>.exe` + `target/build/<id>/library` by hash
 - Campaigns keep summaries and changed cases, not full raw jsonl or profiles; one dir per task
-- Delete only with user approval; propose a task's scratch cleanup when its work lands
+- Never create shapes that are slow to delete: no per-case file trees or deep copies; pack many small items into one file
+- Agents own cleanup: when a task lands, its owner deletes that task's scratch entries and INDEX rows. Never delete permanent entries or another agent's live task
