@@ -197,21 +197,39 @@ impl Linter {
     /// Lowers enabled rules' conditions (with the `let`s they read) to the
     /// VM; `ZLINT_VM_STATS` prints how much of the config lowered.
     pub(crate) fn lower_conditions(&mut self) {
+        let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
         let mut lowered = 0;
         let mut total = 0;
+        let mut blockers: crate::fx_hash::FxHashMap<String, usize> = Default::default();
         let functions = &self.grammar.functions;
         for rule in self.rules.iter_mut().filter(|rule| rule.severity != Severity::Off) {
-            let lower = |exprs: &[CExpr], locals: &[CExpr]| -> Vec<Option<crate::vm::VExpr>> {
-                exprs.iter().map(|e| crate::vm::lower_condition(e, functions, locals)).collect()
+            let mut lower = |exprs: &[CExpr], locals: &[CExpr]| -> Vec<Option<crate::vm::VExpr>> {
+                exprs.iter().map(|e| match crate::vm::lower_condition(e, functions, locals) {
+                    Ok(lowered) => Some(lowered),
+                    Err(blocker) => {
+                        if stats {
+                            *blockers.entry(format!("condition: {}", crate::vm::blocker_name(blocker))).or_default() += 1;
+                        }
+                        None
+                    }
+                }).collect()
             };
             rule.node_when_vm = lower(&rule.node_when, &rule.locals);
             rule.when_vm = lower(&rule.when, &rule.locals);
             total += rule.node_when_vm.len() + rule.when_vm.len();
             lowered += rule.node_when_vm.iter().chain(&rule.when_vm).filter(|e| e.is_some()).count();
         }
-        if std::env::var_os("ZLINT_VM_STATS").is_some() {
+        if stats {
             let (attrs, attr_defs) = self.attrs.lowered_counts();
             eprintln!("zlint vm: {lowered}/{total} enabled rule conditions, {attrs}/{attr_defs} attribute definitions lowered");
+            for blocker in self.attrs.vm_blockers() {
+                *blockers.entry(format!("attribute: {blocker}")).or_default() += 1;
+            }
+            let mut ranked: Vec<_> = blockers.into_iter().collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            for (blocker, count) in ranked.iter().take(25) {
+                eprintln!("zlint vm blocker: {count:>6} {blocker}");
+            }
         }
     }
 

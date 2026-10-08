@@ -133,21 +133,40 @@ struct Scope<'a> {
     locals: &'a [CExpr],
 }
 
-/// The typed form of an attribute definition, if its body is in the subset.
-pub fn lower(e: &CExpr, functions: &[UserFn]) -> Option<VExpr> {
+/// The typed form of an attribute definition, or the subexpression that
+/// kept it out of the subset.
+pub fn lower<'a>(e: &'a CExpr, functions: &'a [UserFn]) -> Result<VExpr, &'a CExpr> {
     scalar(e, &Scope { functions, locals: &[] }, &[], 0)
 }
 
 /// The typed form of a rule condition, reading the rule's `let`s inline
 /// (they are pure here, so inlining keeps their values).
-pub fn lower_condition(e: &CExpr, functions: &[UserFn], locals: &[CExpr]) -> Option<VExpr> {
+pub fn lower_condition<'a>(e: &'a CExpr, functions: &'a [UserFn], locals: &'a [CExpr]) -> Result<VExpr, &'a CExpr> {
     scalar(e, &Scope { functions, locals }, &[], 0)
 }
 
-fn scalar(e: &CExpr, g: &Scope, args: &[Lowered], depth: u32) -> Option<VExpr> {
+/// A short name for what blocked lowering, for `ZLINT_VM_STATS`.
+pub fn blocker_name(e: &CExpr) -> String {
+    match e {
+        CExpr::Call(f, _) => format!("call {}", f.name),
+        CExpr::Builtin(b) => format!("builtin {}", b.name()),
+        CExpr::Const(v) => format!("const {}", match v {
+            Value::Str(_) => "text",
+            Value::List(_) => "list",
+            Value::Record(_) => "record",
+            _ => "other",
+        }),
+        other => {
+            let debug = format!("{other:?}");
+            debug.split(['(', ' ', '{']).next().unwrap_or("?").to_string()
+        }
+    }
+}
+
+fn scalar<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32) -> Result<VExpr, &'a CExpr> {
     match lower_in(e, g, args, depth)? {
-        Lowered::V(v) => Some(v),
-        Lowered::Children(_) => None,
+        Lowered::V(v) => Ok(v),
+        Lowered::Children(_) => Err(e),
     }
 }
 
@@ -160,43 +179,43 @@ fn constant(v: &Value) -> Option<V> {
     })
 }
 
-fn lower_in(e: &CExpr, g: &Scope, args: &[Lowered], depth: u32) -> Option<Lowered> {
-    let boxed = |e: &CExpr| scalar(e, g, args, depth).map(Box::new);
-    Some(Lowered::V(match e {
-        CExpr::Const(v) => VExpr::Const(constant(v)?),
+fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32) -> Result<Lowered, &'a CExpr> {
+    let boxed = |e: &'a CExpr| scalar(e, g, args, depth).map(Box::new);
+    Ok(Lowered::V(match e {
+        CExpr::Const(v) => VExpr::Const(constant(v).ok_or(e)?),
         CExpr::Hole(inner, _) => return lower_in(inner, g, args, depth),
-        CExpr::Param(d) => return args.get(*d as usize).cloned(),
+        CExpr::Param(d) => return args.get(*d as usize).cloned().ok_or(e),
         CExpr::Attr(a) => VExpr::Attr(*a),
         CExpr::ParentAttr(a) => VExpr::ParentAttr(*a),
         CExpr::Relative(Relative::Children, inner) => match &**inner {
-            CExpr::Attr(a) => return Some(Lowered::Children(*a)),
-            _ => return None,
+            CExpr::Attr(a) => return Ok(Lowered::Children(*a)),
+            _ => return Err(e),
         },
         CExpr::Is(subject, tests) => {
             let parent = match &**subject {
                 CExpr::Builtin(Builtin::Node) => false,
                 CExpr::Builtin(Builtin::Parent) => true,
-                _ => return None,
+                _ => return Err(e),
             };
             let mut parts = Vec::new();
             for test in tests {
                 parts.push(match test {
                     IsTest::Kind(ids) => VExpr::Is { parent, kinds: ids.clone().into() },
                     IsTest::Field(ids, label) if !parent => VExpr::InField(ids.clone().into(), *label),
-                    _ => return None,
+                    _ => return Err(e),
                 });
             }
-            parts.into_iter().reduce(|a, b| VExpr::Binary(BinOp::Or, Box::new(a), Box::new(b)))?
+            parts.into_iter().reduce(|a, b| VExpr::Binary(BinOp::Or, Box::new(a), Box::new(b))).ok_or(e)?
         }
         CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if matches!((&**a, &**b), (CExpr::Field(_), CExpr::Const(Value::Null)) | (CExpr::Const(Value::Null), CExpr::Field(_))) => {
-            let ((CExpr::Field(label), _) | (_, CExpr::Field(label))) = (&**a, &**b) else { return None };
+            let ((CExpr::Field(label), _) | (_, CExpr::Field(label))) = (&**a, &**b) else { return Err(e) };
             let present = VExpr::FieldPresent(*label);
             if *op == BinOp::Ne { present } else { VExpr::Not(Box::new(present)) }
         }
         CExpr::Binary(op, a, b) => match op {
             BinOp::And | BinOp::Or | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
             | BinOp::Add | BinOp::Sub | BinOp::Mul => VExpr::Binary(*op, boxed(a)?, boxed(b)?),
-            _ => return None,
+            _ => return Err(e),
         },
         CExpr::Not(inner) => VExpr::Not(boxed(inner)?),
         CExpr::Neg(inner) => VExpr::Neg(boxed(inner)?),
@@ -206,27 +225,27 @@ fn lower_in(e: &CExpr, g: &Scope, args: &[Lowered], depth: u32) -> Option<Lowere
             ("default", [a, b]) => VExpr::Default(boxed(a)?, boxed(b)?),
             ("sum", [list]) => match lower_in(list, g, args, depth)? {
                 Lowered::Children(a) => VExpr::SumChildren(a),
-                Lowered::V(_) => return None,
+                Lowered::V(_) => return Err(e),
             },
             ("contains", [CExpr::Const(Value::List(items)), CExpr::Field(label)]) => {
                 let texts = items.iter().map(|item| match item {
                     Value::Str(s) => Some(Box::from(&**s)),
                     _ => None,
-                }).collect::<Option<Box<[Box<str>]>>>()?;
+                }).collect::<Option<Box<[Box<str>]>>>().ok_or(e)?;
                 VExpr::FieldTextIn(*label, texts)
             }
-            _ => return None,
+            _ => return Err(e),
         },
         // A rule's `let` on its own node, outside every lambda.
         CExpr::Local(i) if args.is_empty() && depth < INLINE_DEPTH => {
-            return lower_in(g.locals.get(*i as usize)?, g, &[], depth + 1);
+            return lower_in(g.locals.get(*i as usize).ok_or(e)?, g, &[], depth + 1);
         }
         CExpr::UserCall(i, call_args) if depth < INLINE_DEPTH => {
-            let body = g.functions.get(*i as usize)?.body.get()?;
-            let lowered = call_args.iter().map(|a| lower_in(a, g, args, depth)).collect::<Option<Vec<_>>>()?;
+            let body = g.functions.get(*i as usize).and_then(|f| f.body.get()).ok_or(e)?;
+            let lowered = call_args.iter().map(|a| lower_in(a, g, args, depth)).collect::<Result<Vec<_>, _>>()?;
             return lower_in(body, g, &lowered, depth + 1);
         }
-        _ => return None,
+        _ => return Err(e),
     }))
 }
 
@@ -429,7 +448,7 @@ mod tests {
             call("default", vec![CExpr::Attr(0), CExpr::Const(Value::Num(0.0))]),
             CExpr::Binary(BinOp::Ne, Box::new(CExpr::Field(3)), Box::new(CExpr::Const(Value::Null))),
         ] {
-            assert!(lower(&supported, g).is_some(), "{supported:?}");
+            assert!(lower(&supported, g).is_ok(), "{supported:?}");
         }
         for unsupported in [
             CExpr::Binary(BinOp::Rem, num(1.0), num(0.0)),
@@ -438,7 +457,7 @@ mod tests {
             call("len", vec![CExpr::Builtin(Builtin::Text)]),
             CExpr::Binary(BinOp::Add, Box::new(CExpr::Field(3)), num(1.0)),
         ] {
-            assert!(lower(&unsupported, g).is_none(), "{unsupported:?}");
+            assert!(lower(&unsupported, g).is_err(), "{unsupported:?}");
         }
     }
 

@@ -16,6 +16,8 @@ pub struct Attributes {
     attrs: Vec<CompiledAttr>,
     /// Per matcher: how many VM-lowered attributes its records hold.
     layout: Vec<u16>,
+    /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
+    vm_blockers: Vec<String>,
 }
 
 struct CompiledAttr {
@@ -44,8 +46,10 @@ pub(super) enum Entry<'a> {
 
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
-        if attrs.is_empty() { return Self { attrs: Vec::new(), layout: Vec::new() }; }
+        if attrs.is_empty() { return Self { attrs: Vec::new(), layout: Vec::new(), vm_blockers: Vec::new() }; }
         let mut layout = vec![0u16; grammar.matchers.len()];
+        let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
+        let mut vm_blockers = Vec::new();
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
             let mut chain = Vec::new();
             let mut at = Some(kind as u32);
@@ -60,7 +64,15 @@ impl Attributes {
             by_attr[attr as usize].push((matcher, index, label));
         }
         let attrs = attrs.into_iter().zip(by_attr).map(|(attr, forwards)| {
-            let lowered: Vec<Option<VExpr>> = attr.defs.iter().map(|(_, expr)| vm::lower(expr, &grammar.functions)).collect();
+            let lowered: Vec<Option<VExpr>> = attr.defs.iter().map(|(_, expr)| match vm::lower(expr, &grammar.functions) {
+                Ok(lowered) => Some(lowered),
+                Err(blocker) => {
+                    if stats {
+                        vm_blockers.push(vm::blocker_name(blocker));
+                    }
+                    None
+                }
+            }).collect();
             let mut routes = Vec::new();
             if !attr.defs.is_empty() || !forwards.is_empty() {
                 let mut definitions = vec![u32::MAX; grammar.matchers.len()];
@@ -94,7 +106,12 @@ impl Attributes {
                 routes,
             }
         }).collect();
-        Self { attrs, layout }
+        Self { attrs, layout, vm_blockers }
+    }
+
+    /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
+    pub fn vm_blockers(&self) -> &[String] {
+        &self.vm_blockers
     }
 
     /// Definitions lowered to the VM, and all definitions.
