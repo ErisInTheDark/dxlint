@@ -523,6 +523,88 @@ mod tests {
     use crate::engine::tests::native_linter;
 
     #[test]
+    fn unsafe_fix_var_declarations_still_report_without_changing_bindings() {
+        let lint = native_linter("language .js { set sourceType 'module' }\nrule no-var");
+        let path = Path::new("/root/file.js");
+        for source in [
+            "function f() { use(x); var x = 1; }",
+            "function f() { var x = x; }",
+            "function f() { var x = (() => x)(); }",
+            "function f() { var x = consume(() => x); }",
+            "function f() { var x = 1; return () => x; }",
+            "function f(x) { var x = 1; }",
+            "function f() { var x; var x = 1; }",
+            "function f() { for (var x = 0; x < 2; x++) {} use(x); }",
+            "function f() { for (var x = 0; x < 2; x++) { callbacks.push(() => x); } }",
+            "function f() { for (var x in obj) {} use(x); }",
+            "function f() { for (var x = 0, x = 0; false;) {} }",
+            "function f() { if (flag) var x = 1; }",
+            "function f() { if (flag) { var x = 1; } }",
+            "function f() { var {a = b, b} = {}; }",
+            "function f() { try {} catch (e) { var e = 1; } }",
+            "function f() { var x = 1; eval('x'); }",
+            "function f() { var arguments; return arguments; }",
+            "function f() { use(\\u0078); var x = 1; }",
+            "function f() { var x = 1, y = y; }",
+        ] {
+            assert!(crate::native::ts::parse(source, false).is_ok(), "{source}");
+            let reports = lint.lint(path, source);
+            assert!(!reports.is_empty(), "{source}");
+            assert!(reports.iter().all(|report| report.fix.is_none()), "{source}: {reports:?}");
+            let (fixed, edits) = crate::engine::apply_fixes(source, &reports);
+            assert_eq!(edits, 0, "{source}");
+            assert!(crate::native::ts::parse(&fixed, false).is_ok(), "{fixed}");
+        }
+    }
+
+    #[test]
+    fn unsafe_fix_var_guard_preserves_safe_conversions_and_partial_fixes() {
+        let lint = native_linter("language .js { set sourceType 'module' }\nrule no-var");
+        let path = Path::new("/root/file.js");
+        for source in [
+            "var x = 1; use(x);",
+            "export var x = 1;",
+            "function f() { var x = 1; use(x); }",
+            "function f() { var x = 1, y = 2; return x + y; }",
+        ] {
+            let reports = lint.lint(path, source);
+            assert_eq!(reports.len(), 1, "{source}: {reports:?}");
+            assert!(reports[0].fix.is_some(), "{source}");
+            let (fixed, edits) = crate::engine::apply_fixes(source, &reports);
+            assert_eq!(edits, 1);
+            assert!(crate::native::ts::parse(&fixed, false).is_ok(), "{source} -> {fixed}");
+            assert!(lint.lint(path, &fixed).is_empty(), "{fixed}");
+        }
+        let source = "function f() { var y = x; var x = 1; }";
+        let reports = lint.lint(path, source);
+        assert_eq!(reports.len(), 2);
+        assert!(reports[0].fix.is_some());
+        assert!(reports[1].fix.is_none());
+        let (fixed, edits) = crate::engine::apply_fixes(source, &reports);
+        assert_eq!(edits, 1);
+        assert!(crate::native::ts::parse(&fixed, false).is_ok());
+        assert_eq!(lint.lint(path, &fixed).len(), 1);
+    }
+
+    #[test]
+    fn unsafe_fix_var_guard_distinguishes_real_script_globals_from_wrappers() {
+        for (options, source, fixable) in [
+            ("set sourceType 'script'", "var x = 1; use(x);", false),
+            ("set sourceType 'script'\nset globalReturn true", "var x = 1; use(x);", true),
+            ("set sourceType 'commonjs'", "var x = 1; use(x);", true),
+            ("set sourceType 'script'\nset globalReturn true", "var let = 1;", false),
+            ("set sourceType 'script'\nset globalReturn true", "var l\\u0065t = 1;", false),
+            ("set sourceType 'script'\nset globalReturn true", "with (obj) { var x = 1; }", false),
+            ("set sourceType 'module'\nset ecmaVersion 5", "var x = 1;", false),
+        ] {
+            let lint = native_linter(&format!("language .js {{ {options} }}\nrule no-var"));
+            let reports = lint.lint(Path::new("/root/file.js"), source);
+            assert_eq!(reports.len(), 1, "{options}: {source}: {reports:?}");
+            assert_eq!(reports[0].fix.is_some(), fixable, "{options}: {source}");
+        }
+    }
+
+    #[test]
     fn strict_code_requires_expression_statement_directives() {
         let lint = native_linter("in ts_function rule strict_probe info 'strict' { when scoping_strict_code }");
         for (source, expected) in [

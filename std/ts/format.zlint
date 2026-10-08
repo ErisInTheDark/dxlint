@@ -22,10 +22,29 @@ in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body 
 # `declare global { var x }` is the only way to declare a global.
 in ts_namespace let format_global_namespace kind == "global"
 in ts_node let format_global_scope default(format_global_namespace, false) || default(parent.format_global_scope, false)
+in ts_program let format_lexical_body source_type != "script" || source_environment.root_function
+in ts_block let format_lexical_body parent is ts_function_like
+# Dynamic names and escaped identifiers prevent a binding-preservation proof.
+in ts_program, ts_block let format_lexical_dynamic
+  count(descendants(ts_with)) > 0
+  || any(descendants(ts_call), call => call.callee.structure_unwrapped is ts_identifier && call.callee.structure_unwrapped.text == "eval")
+  || any(descendants(ts_identifier), identifier => contains(identifier.text, "\\"))
+fn format_lexical_binding(declarator) =
+  declarator.name is ts_identifier
+  && !contains(["let", "arguments"], declarator.name.text)
+  && count(declarator.name.declarations) == 1
+  && all(declarator.name.references, reference => reference.scoping_definition_use != null && !reference.scoping_definition_use.before && !reference.scoping_definition_use.separate)
+in ts_variable_declaration let format_lexical_bindings count(declaration) > 0 && all([] declaration.node, declarator => format_lexical_binding(declarator))
 in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or const instead." {
   when text == "var"
   when ts_namespace.format_global_scope != true
-  fix as "let"
+  let owner parent.node
+  let body if owner.parent is ts_export then owner.parent.parent.node else owner.parent.node
+  let fixable ecma_version >= 2015 && body.format_lexical_body == true
+    && !contains(owner.modifier, "declare")
+    && !body.format_lexical_dynamic
+    && owner.format_lexical_bindings
+  fix if fixable as "let"
 }
 
 # ---- spacing ---------------------------------------------------------------
