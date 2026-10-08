@@ -11,7 +11,7 @@
 use crate::config::ast::BinOp;
 use crate::expr::{Builtin, CExpr, IsTest, Relative, Value};
 use crate::grammar::{Grammar, Tree, UserFn, ROOT, TEXT};
-use std::cell::{OnceCell, RefCell};
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -40,54 +40,128 @@ pub fn mode() -> Mode {
     })
 }
 
-/// A VM value: what the subset can produce.
+/// A VM value: what the subset can produce. Text is never built: it is a
+/// node's source text or an interned config constant.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum V {
     Null,
     Bool(bool),
     Num(f64),
+    /// A node as a value (reads as its text).
+    Node(u32),
+    /// The source text of a node, as plain text.
+    NodeText(u32),
+    /// A config text constant.
+    Str(&'static str),
+}
+
+/// Text constants from configs, interned for the process: configs repeat
+/// the same few strings, so the pool stays small across reloads.
+type Pool = (crate::fx_hash::FxHashMap<&'static str, u32>, Vec<&'static str>);
+
+fn pool() -> &'static std::sync::RwLock<Pool> {
+    static POOL: OnceLock<std::sync::RwLock<Pool>> = OnceLock::new();
+    POOL.get_or_init(Default::default)
+}
+
+/// The pooled copy of a text constant, and its index (stored in records).
+fn intern(text: &str) -> (&'static str, u32) {
+    if let Some((&s, &i)) = pool().read().expect("pool lock").0.get_key_value(text) {
+        return (s, i);
+    }
+    let mut pool = pool().write().expect("pool lock");
+    if let Some((&s, &i)) = pool.0.get_key_value(text) {
+        return (s, i);
+    }
+    let s: &'static str = Box::leak(text.into());
+    let i = pool.1.len() as u32;
+    pool.0.insert(s, i);
+    pool.1.push(s);
+    (s, i)
+}
+
+/// A text constant by the index [`intern`] gave it.
+fn interned(i: u32) -> &'static str {
+    pool().read().expect("pool lock").1[i as usize]
 }
 
 impl V {
-    pub fn truthy(self) -> bool {
+    /// The value's text, when it is text or a node.
+    fn text<'s>(self, tree: &Tree, source: &'s str) -> Option<&'s str> {
+        match self {
+            V::Node(id) | V::NodeText(id) => {
+                let n = tree.node(id);
+                Some(&source[n.start as usize..n.end as usize])
+            }
+            V::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn truthy(self, tree: &Tree) -> bool {
         match self {
             V::Null => false,
             V::Bool(b) => b,
             V::Num(n) => n != 0.0,
+            V::Node(_) => true,
+            V::NodeText(id) => {
+                let n = tree.node(id);
+                n.end > n.start
+            }
+            V::Str(s) => !s.is_empty(),
         }
     }
 
-    fn num(self) -> f64 {
+    /// [`Value::num`]: `None` where the interpreter would fail.
+    fn num(self, tree: &Tree, source: &str) -> Option<f64> {
         match self {
-            V::Null => 0.0,
-            V::Bool(b) => f64::from(u8::from(b)),
-            V::Num(n) => n,
+            V::Null => Some(0.0),
+            V::Bool(b) => Some(f64::from(u8::from(b))),
+            V::Num(n) => Some(n),
+            text => text.text(tree, source)?.trim().parse().ok(),
         }
     }
 
-    /// [`Value::loose_eq`] restricted to these kinds.
-    fn loose_eq(self, other: V) -> bool {
+    /// [`Value::loose_eq`].
+    fn loose_eq(self, other: V, tree: &Tree, source: &str) -> bool {
         match (self, other) {
+            (V::Node(a), V::Node(b)) => a == b,
             (V::Null, V::Null) => true,
             (V::Bool(a), V::Bool(b)) => a == b,
             (V::Num(a), V::Num(b)) => a == b,
-            _ => false,
+            (V::Num(a), text) | (text, V::Num(a)) => text.text(tree, source).is_some_and(|s| s.trim().parse::<f64>().is_ok_and(|b| b == a)),
+            (V::Null, text) | (text, V::Null) => text.text(tree, source).is_some_and(str::is_empty),
+            (a, b) => match (a.text(tree, source), b.text(tree, source)) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            },
         }
     }
 
-    pub fn value(self) -> Value<'static> {
+    pub fn value<'s>(self, tree: &Tree, source: &'s str) -> Value<'s> {
         match self {
             V::Null => Value::Null,
             V::Bool(b) => Value::Bool(b),
             V::Num(n) => Value::Num(n),
+            V::Node(id) => {
+                let n = tree.node(id);
+                Value::Node(id, crate::expr::value::Text::Borrowed(&source[n.start as usize..n.end as usize]))
+            }
+            V::NodeText(id) => {
+                let n = tree.node(id);
+                Value::from(&source[n.start as usize..n.end as usize])
+            }
+            V::Str(s) => Value::from(s),
         }
     }
 
-    pub fn same(self, value: &Value) -> bool {
+    pub fn same(self, value: &Value, tree: &Tree, source: &str) -> bool {
         match (self, value) {
             (V::Null, Value::Null) => true,
             (V::Bool(a), Value::Bool(b)) => a == *b,
             (V::Num(a), Value::Num(b)) => a == *b || a.is_nan() && b.is_nan(),
+            (V::Node(a), Value::Node(b, _)) => a == *b,
+            (V::NodeText(_) | V::Str(_), Value::Str(s)) => self.text(tree, source) == Some(&**s),
             _ => false,
         }
     }
@@ -103,8 +177,6 @@ pub enum VExpr {
     InField(Box<[u32]>, u16),
     FieldPresent(u16),
     FieldCount(u16),
-    /// The field holds exactly one node whose text is one of these.
-    FieldTextIn(u16, Box<[Box<str>]>),
     Attr(u16),
     ParentAttr(u16),
     /// Sum of an attribute over all direct children (null counts as 0).
@@ -114,6 +186,28 @@ pub enum VExpr {
     Neg(Box<VExpr>),
     If(Box<VExpr>, Box<VExpr>, Box<VExpr>),
     Binary(BinOp, Box<VExpr>, Box<VExpr>),
+    /// The node itself, its text, its parent layer node, its span.
+    Node,
+    Text,
+    Parent,
+    Offset,
+    EndOffset,
+    /// A field's text: null, or one node's text (several: give up).
+    Field(u16),
+    /// `inner` evaluated on the node `base` gives (null stays null).
+    On(Box<VExpr>, Box<VExpr>),
+    /// `inner` on the single node of a field (none: null).
+    OnField(u16, Box<VExpr>),
+    OnParent(Box<VExpr>),
+    /// A value's kind: its node's matcher, or a kind named by its text.
+    IsValue(Box<VExpr>, Box<[u32]>),
+    /// The first value when it is a node, else the second.
+    Coalesce(Box<VExpr>, Box<VExpr>),
+    /// `contains(haystack, needle)` on text, or membership in constants.
+    Contains(Box<VExpr>, Box<VExpr>),
+    InList(Box<[V]>, Box<VExpr>),
+    StartsWith(Box<VExpr>, Box<VExpr>),
+    EndsWith(Box<VExpr>, Box<VExpr>),
 }
 
 #[derive(Clone)]
@@ -175,6 +269,7 @@ fn constant(v: &Value) -> Option<V> {
         Value::Null => V::Null,
         Value::Bool(b) => V::Bool(*b),
         Value::Num(n) => V::Num(*n),
+        Value::Str(s) => V::Str(intern(s).0),
         _ => return None,
     })
 }
@@ -191,12 +286,18 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32) -> Re
             CExpr::Attr(a) => return Ok(Lowered::Children(*a)),
             _ => return Err(e),
         },
+        CExpr::Is(subject, tests) if !matches!(&**subject, CExpr::Builtin(Builtin::Node | Builtin::Parent)) => {
+            let mut kinds = Vec::new();
+            for test in tests {
+                match test {
+                    IsTest::Kind(ids) => kinds.extend(ids),
+                    _ => return Err(e),
+                }
+            }
+            VExpr::IsValue(boxed(subject)?, kinds.into())
+        }
         CExpr::Is(subject, tests) => {
-            let parent = match &**subject {
-                CExpr::Builtin(Builtin::Node) => false,
-                CExpr::Builtin(Builtin::Parent) => true,
-                _ => return Err(e),
-            };
+            let parent = matches!(&**subject, CExpr::Builtin(Builtin::Parent));
             let mut parts = Vec::new();
             for test in tests {
                 parts.push(match test {
@@ -227,15 +328,30 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32) -> Re
                 Lowered::Children(a) => VExpr::SumChildren(a),
                 Lowered::V(_) => return Err(e),
             },
-            ("contains", [CExpr::Const(Value::List(items)), CExpr::Field(label)]) => {
-                let texts = items.iter().map(|item| match item {
-                    Value::Str(s) => Some(Box::from(&**s)),
-                    _ => None,
-                }).collect::<Option<Box<[Box<str>]>>>().ok_or(e)?;
-                VExpr::FieldTextIn(*label, texts)
+            ("contains", [CExpr::Const(Value::List(items)), needle]) => {
+                let items = items.iter().map(constant).collect::<Option<Box<[V]>>>().ok_or(e)?;
+                VExpr::InList(items, boxed(needle)?)
             }
+            ("contains", [haystack, needle]) => VExpr::Contains(boxed(haystack)?, boxed(needle)?),
+            ("starts_with", [text, prefix]) => VExpr::StartsWith(boxed(text)?, boxed(prefix)?),
+            ("ends_with", [text, suffix]) => VExpr::EndsWith(boxed(text)?, boxed(suffix)?),
             _ => return Err(e),
         },
+        CExpr::Builtin(b) => match b {
+            Builtin::Node => VExpr::Node,
+            Builtin::Text => VExpr::Text,
+            Builtin::Parent => VExpr::Parent,
+            Builtin::Offset => VExpr::Offset,
+            Builtin::EndOffset => VExpr::EndOffset,
+            _ => return Err(e),
+        },
+        CExpr::Field(label) => VExpr::Field(*label),
+        CExpr::Member(base, _, Some(part)) => VExpr::On(boxed(base)?, boxed(part)?),
+        CExpr::OnField(label, inner) => VExpr::OnField(*label, boxed(inner)?),
+        CExpr::OnParent(inner) => VExpr::OnParent(boxed(inner)?),
+        CExpr::FieldAttr(label, a) => VExpr::OnField(*label, Box::new(VExpr::Attr(*a))),
+        CExpr::ParentField(label) => VExpr::OnParent(Box::new(VExpr::Field(*label))),
+        CExpr::Coalesce(a, b) => VExpr::Coalesce(boxed(a)?, boxed(b)?),
         // A rule's `let` on its own node, outside every lambda.
         CExpr::Local(i) if args.is_empty() && depth < INLINE_DEPTH => {
             return lower_in(g.locals.get(*i as usize).ok_or(e)?, g, &[], depth + 1);
@@ -274,6 +390,8 @@ fn is_a(g: &Grammar, m: u32, kinds: &[u32]) -> bool {
 /// back to the interpreter).
 pub fn eval(h: &impl Host, node: u32, e: &VExpr) -> Option<V> {
     let tree = h.tree();
+    let source = h.source();
+    let text_of = |v: V| v.text(tree, source);
     Some(match e {
         VExpr::Const(v) => *v,
         VExpr::Is { parent, kinds } => {
@@ -285,14 +403,6 @@ pub fn eval(h: &impl Host, node: u32, e: &VExpr) -> Option<V> {
         ),
         VExpr::FieldPresent(label) => V::Bool(!tree.fields(node, *label).is_empty()),
         VExpr::FieldCount(label) => V::Num(tree.fields(node, *label).len() as f64),
-        VExpr::FieldTextIn(label, texts) => V::Bool(match tree.fields(node, *label).as_slice() {
-            [one] => {
-                let n = tree.node(*one);
-                let text = &h.source()[n.start as usize..n.end as usize];
-                texts.iter().any(|t| &**t == text)
-            }
-            _ => false,
-        }),
         VExpr::Attr(a) => h.attr(node, *a)?,
         VExpr::ParentAttr(a) => match parent_layer(tree, node) {
             Some(p) => h.attr(p, *a)?,
@@ -301,38 +411,100 @@ pub fn eval(h: &impl Host, node: u32, e: &VExpr) -> Option<V> {
         VExpr::SumChildren(a) => {
             let mut total = 0.0;
             for edge in &tree.node(node).children {
-                total += h.attr(edge.node, *a)?.num();
+                total += h.attr(edge.node, *a)?.num(tree, source)?;
             }
             V::Num(total)
         }
         VExpr::Default(a, b) => match eval(h, node, a)? {
-            V::Null => eval(h, node, b)?,
-            v => v,
+            v @ (V::Num(_) | V::Bool(_)) => v,
+            v if v.truthy(tree) => v,
+            _ => eval(h, node, b)?,
         },
-        VExpr::Not(inner) => V::Bool(!eval(h, node, inner)?.truthy()),
-        VExpr::Neg(inner) => V::Num(-eval(h, node, inner)?.num()),
-        VExpr::If(c, a, b) => if eval(h, node, c)?.truthy() { eval(h, node, a)? } else { eval(h, node, b)? },
+        VExpr::Not(inner) => V::Bool(!eval(h, node, inner)?.truthy(tree)),
+        VExpr::Neg(inner) => V::Num(-eval(h, node, inner)?.num(tree, source)?),
+        VExpr::If(c, a, b) => if eval(h, node, c)?.truthy(tree) { eval(h, node, a)? } else { eval(h, node, b)? },
         VExpr::Binary(op, a, b) => {
             let a = eval(h, node, a)?;
             match op {
-                BinOp::And if !a.truthy() => return Some(V::Bool(false)),
-                BinOp::Or if a.truthy() => return Some(V::Bool(true)),
+                BinOp::And if !a.truthy(tree) => return Some(V::Bool(false)),
+                BinOp::Or if a.truthy(tree) => return Some(V::Bool(true)),
                 _ => {}
             }
             let b = eval(h, node, b)?;
+            let order = || -> Option<std::cmp::Ordering> {
+                let texts = matches!(a, V::NodeText(_) | V::Str(_)) && matches!(b, V::NodeText(_) | V::Str(_));
+                match (a.num(tree, source), b.num(tree, source)) {
+                    (Some(x), Some(y)) if !texts => Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)),
+                    // Text order needs both sides as text the VM holds.
+                    _ => Some(text_of(a)?.cmp(text_of(b)?)),
+                }
+            };
             match op {
-                BinOp::And | BinOp::Or => V::Bool(b.truthy()),
-                BinOp::Eq => V::Bool(a.loose_eq(b)),
-                BinOp::Ne => V::Bool(!a.loose_eq(b)),
-                BinOp::Lt => V::Bool(a.num().partial_cmp(&b.num()).is_some_and(|o| o.is_lt())),
-                BinOp::Le => V::Bool(a.num().partial_cmp(&b.num()).is_none_or(|o| o.is_le())),
-                BinOp::Gt => V::Bool(a.num().partial_cmp(&b.num()).is_some_and(|o| o.is_gt())),
-                BinOp::Ge => V::Bool(a.num().partial_cmp(&b.num()).is_none_or(|o| o.is_ge())),
-                BinOp::Add => V::Num(a.num() + b.num()),
-                BinOp::Sub => V::Num(a.num() - b.num()),
-                BinOp::Mul => V::Num(a.num() * b.num()),
+                BinOp::And | BinOp::Or => V::Bool(b.truthy(tree)),
+                BinOp::Eq => V::Bool(a.loose_eq(b, tree, source)),
+                BinOp::Ne => V::Bool(!a.loose_eq(b, tree, source)),
+                BinOp::Lt => V::Bool(order()?.is_lt()),
+                BinOp::Le => V::Bool(order()?.is_le()),
+                BinOp::Gt => V::Bool(order()?.is_gt()),
+                BinOp::Ge => V::Bool(order()?.is_ge()),
+                BinOp::Add => V::Num(a.num(tree, source)? + b.num(tree, source)?),
+                BinOp::Sub => V::Num(a.num(tree, source)? - b.num(tree, source)?),
+                BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_))) => {
+                    V::Num(a.num(tree, source)? * b.num(tree, source)?)
+                }
                 _ => return None,
             }
+        }
+        VExpr::Node => V::Node(node),
+        VExpr::Text => V::NodeText(node),
+        VExpr::Parent => parent_layer(tree, node).map_or(V::Null, V::Node),
+        VExpr::Offset => V::Num(f64::from(tree.node(node).start)),
+        VExpr::EndOffset => V::Num(f64::from(tree.node(node).end)),
+        VExpr::Field(label) => match tree.fields(node, *label).as_slice() {
+            [] => V::Null,
+            [one] => V::NodeText(*one),
+            _ => return None,
+        },
+        VExpr::On(base, inner) => match eval(h, node, base)? {
+            V::Node(id) => eval(h, id, inner)?,
+            _ => V::Null,
+        },
+        VExpr::OnField(label, inner) => match tree.fields(node, *label).as_slice() {
+            [] => V::Null,
+            [one] => eval(h, *one, inner)?,
+            _ => return None,
+        },
+        VExpr::OnParent(inner) => match parent_layer(tree, node) {
+            Some(p) => eval(h, p, inner)?,
+            None => V::Null,
+        },
+        VExpr::IsValue(subject, kinds) => {
+            let matcher = match eval(h, node, subject)? {
+                V::Node(id) => Some(tree.node(id).matcher),
+                v @ (V::NodeText(_) | V::Str(_)) => h.grammar().matcher(text_of(v)?),
+                _ => None,
+            };
+            V::Bool(matcher.is_some_and(|m| is_a(h.grammar(), m, kinds)))
+        }
+        VExpr::Coalesce(a, b) => match eval(h, node, a)? {
+            v @ V::Node(_) => v,
+            _ => eval(h, node, b)?,
+        },
+        VExpr::InList(items, needle) => {
+            let needle = eval(h, node, needle)?;
+            V::Bool(items.iter().any(|item| item.loose_eq(needle, tree, source)))
+        }
+        VExpr::Contains(haystack, needle) => {
+            let (haystack, needle) = (eval(h, node, haystack)?, eval(h, node, needle)?);
+            V::Bool(text_of(haystack)?.contains(text_of(needle)?))
+        }
+        VExpr::StartsWith(text, prefix) => {
+            let (text, prefix) = (eval(h, node, text)?, eval(h, node, prefix)?);
+            V::Bool(text_of(text)?.starts_with(text_of(prefix)?))
+        }
+        VExpr::EndsWith(text, suffix) => {
+            let (text, suffix) = (eval(h, node, text)?, eval(h, node, suffix)?);
+            V::Bool(text_of(text)?.ends_with(text_of(suffix)?))
         }
     })
 }
@@ -356,16 +528,26 @@ const GAVE_UP: u64 = 5;
 /// Numbers are stored as their bits inverted, so a zeroed buffer reads as
 /// unset; every NaN is stored as the canonical one, keeping the small codes
 /// above free.
+/// Nodes, node texts and text constants: a tag in bits 32.. over a 32-bit
+/// payload. Inverted, these codes are sign-set NaNs no number encodes to.
+const NODE_TAG: u64 = 1 << 32;
+const NODE_TEXT_TAG: u64 = 2 << 32;
+const STR_TAG: u64 = 3 << 32;
+
 fn encode(v: V) -> u64 {
     match v {
         V::Null => NULL,
         V::Bool(false) => FALSE,
         V::Bool(true) => TRUE,
         V::Num(n) => !(if n.is_nan() { f64::NAN } else { n }).to_bits(),
+        V::Node(id) => NODE_TAG | u64::from(id),
+        V::NodeText(id) => NODE_TEXT_TAG | u64::from(id),
+        V::Str(s) => STR_TAG | u64::from(intern(s).1),
     }
 }
 
 fn decode(cell: u64) -> Cell {
+    let payload = cell as u32;
     match cell {
         UNSET => Cell::Unset,
         BUSY => Cell::Busy,
@@ -373,16 +555,19 @@ fn decode(cell: u64) -> Cell {
         FALSE => Cell::Ready(V::Bool(false)),
         TRUE => Cell::Ready(V::Bool(true)),
         GAVE_UP => Cell::GaveUp,
+        _ if cell >> 32 == NODE_TAG >> 32 => Cell::Ready(V::Node(payload)),
+        _ if cell >> 32 == NODE_TEXT_TAG >> 32 => Cell::Ready(V::NodeText(payload)),
+        _ if cell >> 32 == STR_TAG >> 32 => Cell::Ready(V::Str(interned(payload))),
         bits => Cell::Ready(V::Num(f64::from_bits(!bits))),
     }
 }
 
-/// One file's records: each node's lowered attributes, at the node's offset
-/// in one shared buffer (record sizes per matcher: `layout`).
+/// One file's VM-computed attribute values, as 8-byte cells keyed by
+/// (node, attribute). Rules read only a few values on most nodes, so only
+/// computed values take space.
 #[derive(Default)]
 pub struct FileVm {
-    offsets: OnceCell<Vec<u32>>,
-    cells: RefCell<Vec<u64>>,
+    cells: RefCell<crate::fx_hash::FxHashMap<(u32, u16), u64>>,
 }
 
 /// What [`FileVm::begin`] found.
@@ -390,44 +575,28 @@ pub enum Begin {
     Ready(V),
     /// Busy, or given up before: the interpreter handles it.
     GiveUp,
-    /// Marked busy at this cell: evaluate, then [`FileVm::finish`].
-    Compute(usize),
+    /// Marked busy: evaluate, then [`FileVm::finish`].
+    Compute,
 }
 
 impl FileVm {
-    fn offset(&self, tree: &Tree, layout: &[u16], node: u32) -> usize {
-        let offsets = self.offsets.get_or_init(|| {
-            let mut at = 0u32;
-            let offsets = tree.nodes.iter().map(|n| {
-                let start = at;
-                if n.matcher != ROOT && n.matcher != TEXT {
-                    at += u32::from(layout.get(n.matcher as usize).copied().unwrap_or(0));
-                }
-                start
-            }).collect();
-            *self.cells.borrow_mut() = vec![UNSET; at as usize];
-            offsets
-        });
-        offsets[node as usize] as usize
-    }
-
-    pub fn begin(&self, tree: &Tree, layout: &[u16], node: u32, slot: u16) -> Begin {
-        let at = self.offset(tree, layout, node) + slot as usize;
+    pub fn begin(&self, node: u32, attr: u16) -> Begin {
         let mut cells = self.cells.borrow_mut();
-        match decode(cells[at]) {
+        let cell = cells.entry((node, attr)).or_insert(UNSET);
+        match decode(*cell) {
             Cell::Ready(v) => Begin::Ready(v),
             Cell::Busy | Cell::GaveUp => Begin::GiveUp,
             Cell::Unset => {
-                cells[at] = BUSY;
-                Begin::Compute(at)
+                *cell = BUSY;
+                Begin::Compute
             }
         }
     }
 
     /// Publishes a value, or marks the cell given up so later reads go
     /// straight to the interpreter.
-    pub fn finish(&self, at: usize, value: Option<V>) {
-        self.cells.borrow_mut()[at] = value.map_or(GAVE_UP, encode);
+    pub fn finish(&self, node: u32, attr: u16, value: Option<V>) {
+        self.cells.borrow_mut().insert((node, attr), value.map_or(GAVE_UP, encode));
     }
 }
 
@@ -437,7 +606,7 @@ mod tests {
     use crate::expr::functions;
 
     #[test]
-    fn only_infallible_null_bool_number_bodies_lower() {
+    fn only_bodies_the_vm_can_answer_without_building_values_lower() {
         let g: &[UserFn] = &[];
         let num = |n: f64| Box::new(CExpr::Const(Value::Num(n)));
         let call = |name: &str, args: Vec<CExpr>| CExpr::Call(functions::lookup(name).expect("registered"), args);
@@ -447,15 +616,18 @@ mod tests {
             call("sum", vec![CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2)))]),
             call("default", vec![CExpr::Attr(0), CExpr::Const(Value::Num(0.0))]),
             CExpr::Binary(BinOp::Ne, Box::new(CExpr::Field(3)), Box::new(CExpr::Const(Value::Null))),
+            CExpr::Const(Value::from("text")),
+            call("starts_with", vec![CExpr::Builtin(Builtin::Text), CExpr::Const(Value::from("a"))]),
+            CExpr::OnParent(Box::new(CExpr::Field(3))),
         ] {
             assert!(lower(&supported, g).is_ok(), "{supported:?}");
         }
         for unsupported in [
             CExpr::Binary(BinOp::Rem, num(1.0), num(0.0)),
-            CExpr::Const(Value::from("text")),
+            CExpr::Binary(BinOp::Join, num(1.0), num(2.0)),
             CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2))),
             call("len", vec![CExpr::Builtin(Builtin::Text)]),
-            CExpr::Binary(BinOp::Add, Box::new(CExpr::Field(3)), num(1.0)),
+            CExpr::Builtin(Builtin::Line),
         ] {
             assert!(lower(&unsupported, g).is_err(), "{unsupported:?}");
         }
@@ -482,6 +654,10 @@ mod tests {
             in ts_parameter rule param info "{defaulted}"
             in ts_identifier rule ident info "{size}:{depth}"
             in ts_return rule cycle info "{cyclic}"
+            in ts_identifier let named starts_with(text, "b") || text == "c" || parent is ts_assignment
+            in ts_assignment let left_named left.named
+            in ts_identifier rule named info "{named}"
+            in ts_assignment rule left info "{left_named}:{operator == '??='}:{parent.depth}"
             in ts_node rule gated {
                 let twice_total twice(total)
                 when twice_total > 2 && !boundary
@@ -510,9 +686,13 @@ mod tests {
 
     #[test]
     fn stored_values_round_trip_and_stay_distinct_from_states() {
-        for v in [V::Null, V::Bool(false), V::Bool(true), V::Num(0.0), V::Num(-0.0), V::Num(1.5), V::Num(f64::INFINITY), V::Num(-1e300)] {
-            match decode(encode(v)) {
-                Cell::Ready(back) => assert!(back == v && back.num().to_bits() == v.num().to_bits(), "{v:?} -> {back:?}"),
+        for v in [
+            V::Null, V::Bool(false), V::Bool(true), V::Num(0.0), V::Num(-0.0), V::Num(1.5), V::Num(f64::INFINITY),
+            V::Num(f64::NEG_INFINITY), V::Num(-1e300), V::Node(0), V::Node(u32::MAX), V::NodeText(7), V::Str(intern("a").0), V::Str(intern("").0),
+        ] {
+            match (decode(encode(v)), v) {
+                (Cell::Ready(V::Num(back)), V::Num(n)) => assert_eq!(back.to_bits(), n.to_bits(), "{v:?}"),
+                (Cell::Ready(back), _) => assert_eq!(back, v),
                 _ => panic!("{v:?} decoded as a state"),
             }
         }

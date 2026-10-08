@@ -14,8 +14,6 @@ pub struct Attr {
 
 pub struct Attributes {
     attrs: Vec<CompiledAttr>,
-    /// Per matcher: how many VM-lowered attributes its records hold.
-    layout: Vec<u16>,
     /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
     vm_blockers: Vec<String>,
 }
@@ -28,14 +26,10 @@ struct CompiledAttr {
     routes: Vec<Route>,
 }
 
-/// A `Route::Defined` that is not in the VM's records.
-const NO_SLOT: u16 = u16::MAX;
-
 #[derive(Clone, Copy)]
 enum Route {
     Missing,
-    /// The definition's index, and its slot in the matcher's VM record.
-    Defined(u32, u16),
+    Defined(u32),
     Forward(u16),
 }
 
@@ -46,8 +40,7 @@ pub(super) enum Entry<'a> {
 
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
-        if attrs.is_empty() { return Self { attrs: Vec::new(), layout: Vec::new(), vm_blockers: Vec::new() }; }
-        let mut layout = vec![0u16; grammar.matchers.len()];
+        if attrs.is_empty() { return Self { attrs: Vec::new(), vm_blockers: Vec::new() }; }
         let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
         let mut vm_blockers = Vec::new();
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
@@ -83,17 +76,9 @@ impl Attributes {
                 for (matcher, index, label) in forwards {
                     forwarding[matcher as usize] = Some((index, label));
                 }
-                routes = ancestors.iter().enumerate().map(|(matcher, chain)| {
+                routes = ancestors.iter().map(|chain| {
                     let definition = chain.iter().map(|&id| definitions[id]).min().unwrap_or(u32::MAX);
-                    if definition != u32::MAX {
-                        let slot = if lowered[definition as usize].is_some() {
-                            layout[matcher] += 1;
-                            layout[matcher] - 1
-                        } else {
-                            NO_SLOT
-                        };
-                        return Route::Defined(definition, slot);
-                    }
+                    if definition != u32::MAX { return Route::Defined(definition); }
                     // Forwards keep declaration order, not nearest-ancestor order.
                     chain.iter().filter_map(|&id| forwarding[id]).min_by_key(|(index, _)| *index)
                         .map_or(Route::Missing, |(_, label)| Route::Forward(label))
@@ -106,7 +91,7 @@ impl Attributes {
                 routes,
             }
         }).collect();
-        Self { attrs, layout, vm_blockers }
+        Self { attrs, vm_blockers }
     }
 
     /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
@@ -142,23 +127,24 @@ impl vm::Host for Ctx<'_> {
     fn attr(&self, node: u32, attr: u16) -> Option<V> {
         match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => Some(V::Null),
-            Route::Forward(_) | Route::Defined(_, NO_SLOT) => None,
-            Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
+            Route::Forward(_) => None,
+            Route::Defined(index) => self.vm_attr(node, attr, index),
         }
     }
 }
 
 impl<'a> Ctx<'a> {
-    /// A VM-lowered attribute from the file's records, computing it there
-    /// first; `None` when the VM gives up (the interpreter answers).
-    fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
-        match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
+    /// A VM-lowered attribute from the file's VM cells, computing it there
+    /// first; `None` when the definition isn't lowered or the VM gives up
+    /// (the interpreter answers).
+    fn vm_attr(&self, node: u32, attr: u16, index: u32) -> Option<V> {
+        let lowered = self.attrs.attrs[attr as usize].lowered[index as usize].as_ref()?;
+        match self.memo.vm.begin(node, attr) {
             Begin::Ready(v) => Some(v),
             Begin::GiveUp => None,
-            Begin::Compute(at) => {
-                let lowered = self.attrs.attrs[attr as usize].lowered[index as usize].as_ref().expect("slotted definitions are lowered");
+            Begin::Compute => {
                 let v = vm::eval(self, node, lowered);
-                self.memo.vm.finish(at, v);
+                self.memo.vm.finish(node, attr, v);
                 v
             }
         }
@@ -188,11 +174,11 @@ impl<'a> Ctx<'a> {
                     _ => Value::list(values),
                 });
             }
-            Route::Defined(index, slot) => {
-                if slot != NO_SLOT && vm::mode() != vm::Mode::Off {
-                    if let Some(v) = self.vm_attr(node, attr, index, slot) {
+            Route::Defined(index) => {
+                if vm::mode() != vm::Mode::Off {
+                    if let Some(v) = self.vm_attr(node, attr, index) {
                         if vm::mode() == vm::Mode::On {
-                            return Ok(v.value());
+                            return Ok(v.value(self.tree, self.source));
                         }
                         checked = Some(v);
                     }
@@ -212,7 +198,7 @@ impl<'a> Ctx<'a> {
         let ctx = Ctx { node, options: &[], ..*self };
         match ctx.eval(&def.defs[index]) {
             Ok(value) => {
-                if let Some(v) = checked.filter(|v| !v.same(&value)) {
+                if let Some(v) = checked.filter(|v| !v.same(&value, self.tree, self.source)) {
                     eprintln!("zlint vm mismatch: {} attribute `{}` on node {node}: vm {v:?}, interpreter {value:?}", self.file, def.name);
                 }
                 self.memo.attributes.borrow_mut().insert(key, Entry::Ready(value.clone()));
@@ -264,7 +250,7 @@ mod tests {
             Attr { name: "fallback".into(), defs: vec![(base, number(3.0))] },
         ], &[(leaf, 0, 0), (leaf, 1, 0)], &g);
         let read = |attr| match plan.route(leaf, attr) {
-            Route::Defined(index, _) => match &plan.attrs[attr as usize].defs[index as usize] {
+            Route::Defined(index) => match &plan.attrs[attr as usize].defs[index as usize] {
                 CExpr::Const(Value::Num(n)) => *n,
                 _ => panic!("number"),
             },

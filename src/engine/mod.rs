@@ -240,10 +240,10 @@ impl Linter {
         let Some(lowered) = vm.get(i).and_then(Option::as_ref).filter(|_| mode != crate::vm::Mode::Off) else { return interpreted() };
         match crate::vm::eval(ctx, ctx.node, lowered) {
             None => interpreted(),
-            Some(v) if mode == crate::vm::Mode::On => Ok(v.truthy()),
+            Some(v) if mode == crate::vm::Mode::On => Ok(v.truthy(ctx.tree)),
             Some(v) => {
                 let expected = interpreted();
-                if expected.as_ref().ok() != Some(&v.truthy()) {
+                if expected.as_ref().ok() != Some(&v.truthy(ctx.tree)) {
                     eprintln!("zlint vm mismatch: {} condition {:?} on node {}: vm {v:?}, interpreter {expected:?}", ctx.file, exprs[i], ctx.node);
                 }
                 expected
