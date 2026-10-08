@@ -208,8 +208,14 @@ pub enum VExpr {
     InList(Box<[V]>, Box<VExpr>),
     StartsWith(Box<VExpr>, Box<VExpr>),
     EndsWith(Box<VExpr>, Box<VExpr>),
-    /// A lambda parameter: the `n`th value bound while evaluating.
+    /// A lambda parameter or pipeline value: frame slot `n`.
     Bound(u16),
+    /// A pipeline value, evaluated once and bound at the slot for the body.
+    Let(Box<VExpr>, u16, Box<VExpr>),
+    /// `type_of(x) == "null"`: the null-only test behind `??`.
+    IsNull(Box<VExpr>),
+    /// `nonempty(x)`: null for empty text, otherwise the value.
+    NonEmpty(Box<VExpr>),
     /// A native fact read (whole, or one registered projection).
     Fact { fact: usize, projection: Option<usize>, of: FactOf },
     /// `re_test(text, "pattern")` with a constant, valid pattern.
@@ -219,8 +225,23 @@ pub enum VExpr {
     Sum(Box<Seq>),
     First(Box<Seq>),
     Last(Box<Seq>),
-    /// `find`/`find_last`/`all`/`any`, the item bound as the next frame value.
-    Each(EachKind, Box<Seq>, Box<VExpr>),
+    /// `find`/`find_last`/`all`/`any` over a sequence.
+    Each(EachKind, Box<Seq>, Box<VExpr>, Binder),
+    /// `fold` (from `init`) or `reduce` (from the first item): the state at
+    /// `slot`, the item after it.
+    Fold { of: Box<Seq>, init: Option<Box<VExpr>>, body: Box<VExpr>, slot: u16 },
+    /// `min_by`/`max_by` over numeric keys; the first item wins ties.
+    Pick { max: bool, of: Box<Seq>, key: Box<VExpr>, bind: Binder },
+}
+
+/// Where an item stage's lambda binds its item (and index, if it takes one).
+/// Binding saves and restores those frame slots, so a lowered sequence can
+/// be walked at any frame depth (a `fn` argument or pipeline value used
+/// inside a deeper lambda).
+#[derive(Clone, Copy, Debug)]
+pub struct Binder {
+    slot: u16,
+    indexed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,10 +259,29 @@ pub enum Seq {
     /// value, so a null there is no item), or of every child.
     Nodes { children: bool, label: u16, item: Box<VExpr> },
     Const(Box<[V]>),
-    /// Items where `test` holds / mapped by `item`, each item bound as the
-    /// next frame value.
-    Filter(Box<Seq>, Box<VExpr>),
-    Map(Box<Seq>, Box<VExpr>),
+    /// An item stage, its lambda run on each item.
+    Stage(SeqStage, Box<Seq>, Box<VExpr>, Binder),
+    /// `flat_map`: each item's body is itself a sequence.
+    FlatMap(Box<Seq>, Box<Seq>, Binder),
+    /// `zip other (a, b) body`, as long as the shorter; the pair binds at
+    /// the slot.
+    Zip(Box<Seq>, Box<Seq>, Box<VExpr>, u16),
+    Take(Box<Seq>, Box<VExpr>),
+    Drop(Box<Seq>, Box<VExpr>),
+    Concat(Box<Seq>, Box<Seq>),
+    Reverse(Box<Seq>),
+    Unique(Box<Seq>),
+    /// A pipeline value bound at the slot while the sequence is walked.
+    Let(Box<VExpr>, u16, Box<Seq>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeqStage {
+    Filter,
+    Map,
+    TakeWhile,
+    SkipWhile,
+    UniqueBy,
 }
 
 #[derive(Clone)]
@@ -315,13 +355,22 @@ fn seq<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound: u16
     }
 }
 
-/// A lambda body over `args`, its parameter at `slot` (the rule's `each`
-/// item and other unknown parameters below it stay unbound).
-fn lambda<'a>(body: &'a CExpr, g: &Scope<'a>, args: &[Lowered], param: u16, depth: u32, bound: u16) -> Result<VExpr, &'a CExpr> {
+/// `args` with `arity` parameters at `param` bound from frame slot `bound`
+/// (the rule's `each` item and other unknown parameters below stay unbound).
+fn bind_params(args: &[Lowered], param: u16, arity: u16, bound: u16) -> Vec<Lowered> {
     let mut inner = args.to_vec();
     inner.resize(param as usize, Lowered::Unbound);
-    inner.push(Lowered::V(VExpr::Bound(bound)));
-    scalar(body, g, &inner, depth, bound + 1)
+    inner.extend((0..arity).map(|i| Lowered::V(VExpr::Bound(bound + i))));
+    inner
+}
+
+/// The `x` of `type_of(x) == "null"`, either way round.
+fn null_test<'a>(a: &'a CExpr, b: &'a CExpr) -> Option<&'a CExpr> {
+    match (a, b) {
+        (CExpr::Call(f, x), CExpr::Const(Value::Str(s))) | (CExpr::Const(Value::Str(s)), CExpr::Call(f, x))
+            if f.name == "type_of" && &**s == "null" && x.len() == 1 => Some(&x[0]),
+        _ => None,
+    }
 }
 
 fn constant(v: &Value) -> Option<V> {
@@ -355,19 +404,65 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
             return Ok(Lowered::Seq(Seq::Nodes { children: true, label: 0, item: boxed(inner)? }));
         }
         CExpr::Each(stage) => {
-            if stage.arity != 1 || !stage.args.is_empty() { return Err(e); }
+            let arity = u16::from(stage.arity);
+            let inner = bind_params(args, stage.depth, arity, bound);
+            let body = || scalar(&stage.body, g, &inner, depth, bound + arity).map(Box::new);
+            let bind = Binder { slot: bound, indexed: stage.arity == 2 };
             let of = boxed_seq(&stage.input)?;
-            let test = Box::new(lambda(&stage.body, g, args, stage.depth, depth, bound)?);
-            let kind = match stage.kind {
-                Each::Filter => return Ok(Lowered::Seq(Seq::Filter(of, test))),
-                Each::Map => return Ok(Lowered::Seq(Seq::Map(of, test))),
-                Each::Find => EachKind::Find,
-                Each::FindLast => EachKind::FindLast,
-                Each::All => EachKind::All,
-                Each::Any => EachKind::Any,
+            return Ok(match (stage.kind, stage.args.as_slice()) {
+                (Each::Fold, [init]) => Lowered::V(VExpr::Fold { of, init: Some(boxed(init)?), body: body()?, slot: bound }),
+                (Each::Reduce, []) => Lowered::V(VExpr::Fold { of, init: None, body: body()?, slot: bound }),
+                (Each::Zip, [other]) => Lowered::Seq(Seq::Zip(of, boxed_seq(other)?, body()?, bound)),
+                (Each::FlatMap, []) => Lowered::Seq(Seq::FlatMap(of, Box::new(seq(&stage.body, g, &inner, depth, bound + arity)?), bind)),
+                (kind, []) => {
+                    let body = body()?;
+                    let stage = match kind {
+                        Each::Filter => Some(SeqStage::Filter),
+                        Each::Map => Some(SeqStage::Map),
+                        Each::TakeWhile => Some(SeqStage::TakeWhile),
+                        Each::SkipWhile => Some(SeqStage::SkipWhile),
+                        Each::UniqueBy => Some(SeqStage::UniqueBy),
+                        _ => None,
+                    };
+                    if let Some(stage) = stage {
+                        Lowered::Seq(Seq::Stage(stage, of, body, bind))
+                    } else {
+                        Lowered::V(match kind {
+                            Each::Find => VExpr::Each(EachKind::Find, of, body, bind),
+                            Each::FindLast => VExpr::Each(EachKind::FindLast, of, body, bind),
+                            Each::All => VExpr::Each(EachKind::All, of, body, bind),
+                            Each::Any => VExpr::Each(EachKind::Any, of, body, bind),
+                            Each::MinBy | Each::MaxBy => VExpr::Pick { max: kind == Each::MaxBy, of, key: body, bind },
+                            // These build lists or records.
+                            _ => return Err(e),
+                        })
+                    }
+                }
                 _ => return Err(e),
-            };
-            VExpr::Each(kind, of, test)
+            });
+        }
+        CExpr::Bind(value, param, body) => {
+            let mut inner = bind_params(args, *param, 0, bound);
+            return Ok(match lower_in(value, g, args, depth, bound)? {
+                // A sequence stays a view: walked again where it is used.
+                Lowered::Seq(s) => {
+                    inner.push(Lowered::Seq(s));
+                    lower_in(body, g, &inner, depth, bound)?
+                }
+                Lowered::V(v) => {
+                    inner.push(Lowered::V(VExpr::Bound(bound)));
+                    match lower_in(body, g, &inner, depth, bound + 1)? {
+                        Lowered::V(b) => Lowered::V(VExpr::Let(Box::new(v), bound, Box::new(b))),
+                        Lowered::Seq(s) => Lowered::Seq(Seq::Let(Box::new(v), bound, Box::new(s))),
+                        Lowered::Unbound => return Err(e),
+                    }
+                }
+                Lowered::Unbound => return Err(e),
+            });
+        }
+        CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if null_test(a, b).is_some() => {
+            let test = VExpr::IsNull(boxed(null_test(a, b).expect("matched"))?);
+            if *op == BinOp::Eq { test } else { VExpr::Not(Box::new(test)) }
         }
         CExpr::Is(subject, tests) if !matches!(&**subject, CExpr::Builtin(Builtin::Node | Builtin::Parent)) => {
             let mut kinds = Vec::new();
@@ -411,6 +506,16 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
             ("last", [list]) => VExpr::Last(boxed_seq(list)?),
             ("default", [a, b]) => VExpr::Default(boxed(a)?, boxed(b)?),
             ("sum", [list]) => VExpr::Sum(boxed_seq(list)?),
+            ("nonempty", [value]) => VExpr::NonEmpty(boxed(value)?),
+            ("take", [list, n]) => return Ok(Lowered::Seq(Seq::Take(boxed_seq(list)?, boxed(n)?))),
+            ("drop", [list, n]) => return Ok(Lowered::Seq(Seq::Drop(boxed_seq(list)?, boxed(n)?))),
+            ("concat", [a, b]) => return Ok(Lowered::Seq(Seq::Concat(boxed_seq(a)?, boxed_seq(b)?))),
+            ("unique", [list]) => return Ok(Lowered::Seq(Seq::Unique(boxed_seq(list)?))),
+            // Reversing a text reverses its characters: lists only.
+            ("reverse", [list]) => match lower_in(list, g, args, depth, bound)? {
+                Lowered::Seq(s) => return Ok(Lowered::Seq(Seq::Reverse(Box::new(s)))),
+                _ => return Err(e),
+            },
             ("contains", [CExpr::Const(Value::List(items)), needle]) => {
                 let items = items.iter().map(constant).collect::<Option<Box<[V]>>>().ok_or(e)?;
                 VExpr::InList(items, boxed(needle)?)
@@ -514,24 +619,132 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
                 }
             }
         }
-        Seq::Filter(of, test) => {
+        Seq::Stage(stage, of, body, bind) => {
+            let source = h.source();
+            let mut index = 0.0;
+            // `take_while`: still taking; `skip_while`: still skipping.
+            let mut open = true;
+            let mut keys: Vec<V> = Vec::new();
             return walk_seq(h, node, of, f, &mut |v, f| {
-                f.push(v);
-                let keep = ev(h, node, test, f).map(|t| t.truthy(tree));
-                f.pop();
-                if keep? { each(v, f) } else { Some(true) }
+                let at = index;
+                index += 1.0;
+                match stage {
+                    SeqStage::Map => {
+                        let mapped = call_bound(h, node, body, f, *bind, v, at)?;
+                        each(mapped, f)
+                    }
+                    SeqStage::Filter => if call_bound(h, node, body, f, *bind, v, at)?.truthy(tree) { each(v, f) } else { Some(true) },
+                    SeqStage::TakeWhile => {
+                        open = open && call_bound(h, node, body, f, *bind, v, at)?.truthy(tree);
+                        if open { each(v, f) } else { Some(true) }
+                    }
+                    SeqStage::SkipWhile => {
+                        open = open && call_bound(h, node, body, f, *bind, v, at)?.truthy(tree);
+                        if open { Some(true) } else { each(v, f) }
+                    }
+                    SeqStage::UniqueBy => {
+                        let key = call_bound(h, node, body, f, *bind, v, at)?;
+                        if keys.iter().any(|k| k.loose_eq(key, tree, source)) { return Some(true); }
+                        keys.push(key);
+                        each(v, f)
+                    }
+                }
             });
         }
-        Seq::Map(of, item) => {
+        Seq::FlatMap(of, body, bind) => {
+            let mut index = 0.0;
             return walk_seq(h, node, of, f, &mut |v, f| {
-                f.push(v);
-                let mapped = ev(h, node, item, f);
-                f.pop();
-                each(mapped?, f)
+                let values = [v, V::Num(index)];
+                index += 1.0;
+                with_bound(f, bind.slot, &values[..bind.width()], |f| walk_seq(h, node, body, f, &mut *each))
             });
+        }
+        Seq::Zip(of, other, body, slot) => {
+            let mut others = Vec::new();
+            walk_seq(h, node, other, f, &mut |v, _| { others.push(v); Some(true) })?;
+            let mut index = 0;
+            return walk_seq(h, node, of, f, &mut |v, f| {
+                // Past the shorter list, items are still evaluated (as the
+                // interpreter does) but not paired.
+                let Some(&b) = others.get(index) else { return Some(true) };
+                index += 1;
+                let paired = with_bound(f, *slot, &[v, b], |f| ev(h, node, body, f))?;
+                each(paired, f)
+            });
+        }
+        Seq::Take(of, n) | Seq::Drop(of, n) => {
+            let n = whole(ev(h, node, n, f)?.num(tree, h.source())?)?;
+            let take = matches!(s, Seq::Take(..));
+            let mut seen = 0;
+            return walk_seq(h, node, of, f, &mut |v, f| {
+                seen += 1;
+                if (seen <= n) == take { each(v, f) } else { Some(true) }
+            });
+        }
+        Seq::Concat(a, b) => {
+            if !walk_seq(h, node, a, f, &mut *each)? {
+                return Some(false);
+            }
+            return walk_seq(h, node, b, f, each);
+        }
+        Seq::Reverse(of) => {
+            let mut items = Vec::new();
+            walk_seq(h, node, of, f, &mut |v, _| { items.push(v); Some(true) })?;
+            for v in items.into_iter().rev() {
+                if !each(v, f)? {
+                    return Some(false);
+                }
+            }
+        }
+        Seq::Unique(of) => {
+            let source = h.source();
+            let mut seen: Vec<V> = Vec::new();
+            return walk_seq(h, node, of, f, &mut |v, f| {
+                if seen.iter().any(|s| s.loose_eq(v, tree, source)) { return Some(true); }
+                seen.push(v);
+                each(v, f)
+            });
+        }
+        Seq::Let(value, slot, body) => {
+            let v = ev(h, node, value, f)?;
+            return with_bound(f, *slot, &[v], |f| walk_seq(h, node, body, f, each));
         }
     }
     Some(true)
+}
+
+impl Binder {
+    fn width(self) -> usize {
+        1 + usize::from(self.indexed)
+    }
+}
+
+/// Runs `run` with `values` in the frame from `slot`, restoring what those
+/// slots held before.
+fn with_bound<R>(f: &mut Vec<V>, slot: u16, values: &[V], run: impl FnOnce(&mut Vec<V>) -> R) -> R {
+    let at = slot as usize;
+    let end = at + values.len();
+    if f.len() < end {
+        f.resize(end, V::Null);
+    }
+    let mut saved = [V::Null; 2];
+    saved[..values.len()].copy_from_slice(&f[at..end]);
+    f[at..end].copy_from_slice(values);
+    let result = run(f);
+    f[at..end].copy_from_slice(&saved[..values.len()]);
+    result
+}
+
+/// A stage lambda on one item (and its index, when the lambda takes one).
+fn call_bound(h: &impl Host, node: u32, body: &VExpr, f: &mut Vec<V>, bind: Binder, item: V, index: f64) -> Option<V> {
+    let values = [item, V::Num(index)];
+    with_bound(f, bind.slot, &values[..bind.width()], |f| ev(h, node, body, f))
+}
+
+/// A count argument (`take`, `drop`): a whole non-negative number, else the
+/// interpreter reports the error.
+fn whole(n: f64) -> Option<usize> {
+    (n.is_finite() && n >= 0.0 && n.fract() == 0.0).then_some(n as usize)
 }
 
 fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
@@ -576,46 +789,81 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
             walk_seq(h, node, s, f, &mut |v, _| { last = v; Some(true) })?;
             last
         }
-        VExpr::Each(kind, s, test) => {
+        // Like the interpreter, the whole list is evaluated before any test.
+        VExpr::Each(kind, s, test, bind) => {
             let mut items = Vec::new();
             walk_seq(h, node, s, f, &mut |v, _| { items.push(v); Some(true) })?;
-            let holds = |v: V, f: &mut Vec<V>| -> Option<bool> {
-                f.push(v);
-                let t = ev(h, node, test, f).map(|t| t.truthy(tree));
-                f.pop();
-                t
+            let holds = |at: usize, f: &mut Vec<V>| -> Option<bool> {
+                Some(call_bound(h, node, test, f, *bind, items[at], at as f64)?.truthy(tree))
             };
             match kind {
-                EachKind::Find => {
+                EachKind::Find | EachKind::FindLast => {
                     let mut found = V::Null;
-                    for v in items {
-                        if holds(v, f)? { found = v; break; }
-                    }
-                    found
-                }
-                EachKind::FindLast => {
-                    let mut found = V::Null;
-                    for v in items.into_iter().rev() {
-                        if holds(v, f)? { found = v; break; }
+                    let order: Box<dyn Iterator<Item = usize>> =
+                        if *kind == EachKind::Find { Box::new(0..items.len()) } else { Box::new((0..items.len()).rev()) };
+                    for at in order {
+                        if holds(at, f)? { found = items[at]; break; }
                     }
                     found
                 }
                 EachKind::All => {
                     let mut all = true;
-                    for v in items {
-                        if !holds(v, f)? { all = false; break; }
+                    for at in 0..items.len() {
+                        if !holds(at, f)? { all = false; break; }
                     }
                     V::Bool(all)
                 }
                 EachKind::Any => {
                     let mut any = false;
-                    for v in items {
-                        if holds(v, f)? { any = true; break; }
+                    for at in 0..items.len() {
+                        if holds(at, f)? { any = true; break; }
                     }
                     V::Bool(any)
                 }
             }
         }
+        VExpr::Fold { of, init, body, slot } => {
+            let mut state = match init {
+                Some(init) => Some(eval!(node, init)?),
+                None => None,
+            };
+            walk_seq(h, node, of, f, &mut |v, f| {
+                state = Some(match state {
+                    None => v,
+                    Some(acc) => with_bound(f, *slot, &[acc, v], |f| ev(h, node, body, f))?,
+                });
+                Some(true)
+            })?;
+            state.unwrap_or(V::Null)
+        }
+        VExpr::Pick { max, of, key, bind } => {
+            let mut best: Option<(f64, V)> = None;
+            let mut index = 0.0;
+            walk_seq(h, node, of, f, &mut |v, f| {
+                // Only numeric keys: other values (and NaN) use the
+                // interpreter's general ordering.
+                let V::Num(k) = call_bound(h, node, key, f, *bind, v, index)? else { return None };
+                index += 1.0;
+                if k.is_nan() {
+                    return None;
+                }
+                if best.is_none_or(|(b, _)| if *max { k > b } else { k < b }) {
+                    best = Some((k, v));
+                }
+                Some(true)
+            })?;
+            best.map_or(V::Null, |(_, v)| v)
+        }
+        VExpr::Let(value, slot, body) => {
+            let v = eval!(node, value)?;
+            with_bound(f, *slot, &[v], |f| ev(h, node, body, f))?
+        }
+        VExpr::IsNull(value) => V::Bool(eval!(node, value)? == V::Null),
+        VExpr::NonEmpty(value) => match eval!(node, value)? {
+            V::Str("") => V::Null,
+            V::NodeText(id) if tree.node(id).end == tree.node(id).start => V::Null,
+            v => v,
+        },
         VExpr::Const(v) => *v,
         VExpr::Is { parent, kinds } => {
             let subject = if *parent { parent_layer(tree, node) } else { Some(node) };
@@ -793,7 +1041,31 @@ mod tests {
         ] {
             assert!(lower(&supported, g).is_ok(), "{supported:?}");
         }
+        let children = || CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2)));
+        let stage = |kind, depth, arity, args, body| {
+            CExpr::Each(Box::new(crate::expr::pipeline::Stage { kind, depth, arity, input: children(), args, body }))
+        };
+        let add = |a: u16, b: u16| CExpr::Binary(BinOp::Add, Box::new(CExpr::Param(a)), Box::new(CExpr::Param(b)));
+        let null = |x| CExpr::Binary(BinOp::Eq, Box::new(call("type_of", vec![x])), Box::new(CExpr::Const(Value::from("null"))));
+        for supported in [
+            call("count", vec![stage(Each::Filter, 0, 2, vec![], CExpr::Param(1))]),
+            stage(Each::Fold, 0, 2, vec![CExpr::Const(Value::Num(0.0))], add(0, 1)),
+            stage(Each::MaxBy, 0, 1, vec![], CExpr::Param(0)),
+            call("count", vec![call("take", vec![children(), CExpr::Const(Value::Num(1.0))])]),
+            call("nonempty", vec![CExpr::Builtin(Builtin::Text)]),
+            // `x ?? 1`
+            CExpr::Bind(Box::new(CExpr::Attr(0)), 0, Box::new(CExpr::If(Box::new(null(CExpr::Param(0))), num(1.0), Box::new(CExpr::Param(0))))),
+            // A filtered view used inside a later lambda.
+            CExpr::Bind(
+                Box::new(stage(Each::Filter, 0, 1, vec![], CExpr::Param(0))),
+                0,
+                Box::new(stage(Each::All, 1, 1, vec![], call("count", vec![CExpr::Param(0)]))),
+            ),
+        ] {
+            assert!(lower(&supported, g).is_ok(), "{supported:?}");
+        }
         for unsupported in [
+            stage(Each::SortBy, 0, 1, vec![], CExpr::Param(0)),
             CExpr::Binary(BinOp::Rem, num(1.0), num(0.0)),
             CExpr::Binary(BinOp::Join, num(1.0), num(2.0)),
             CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2))),
@@ -833,6 +1105,12 @@ mod tests {
             in ts_function_like let last_default default(last(map([] parameter.node, p => p.defaulted)), false)
             in ts_block let child_total sum(children.total)
             in ts_function_like rule params info "{defaulted_params}:{all_named}:{last_default}"
+            in ts_function_like let shared { value [] parameter.node; defaulted: filter (p) p.defaulted; value [] parameter.node; all (q) count(defaulted) == 1 }
+            in ts_function_like let staged { value [] parameter.node; filter (p, i) i > 0; map (p) p.defaulted; fold false (a, b) a || b }
+            in ts_function_like let picked { value [] parameter.node; max_by (p) p.offset; then (p) p.name ?? "none" }
+            in ts_function_like let firsts { value [] parameter.node; take 1; concat ([] parameter.node); unique; count }
+            in ts_function_like let label { value [] parameter.node; first; then (p) p.name; nonempty } ?? "anon"
+            in ts_function_like rule stages info "{shared}:{staged}:{picked}:{firsts}:{label}"
             in ts_block rule block_total info "{child_total}:{count(children.total)}:{first(children.depth)}"
             in ts_assignment rule left info "{left_named}:{operator == '??='}:{parent.depth}"
             in ts_node rule gated {
