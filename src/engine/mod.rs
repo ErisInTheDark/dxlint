@@ -641,8 +641,15 @@ impl Linter {
                 Err(e) => return Some(failed(e)),
             }
         }
-        let fix = match &f.fix {
-            Some(expr) => match ctx.eval(expr) {
+        let fix_enabled = match &f.fix_when {
+            Some(cond) => match ctx.eval(cond) {
+                Ok(v) => v.truthy(),
+                Err(e) => return Some(failed(e)),
+            },
+            None => true,
+        };
+        let fix = match (&f.fix, fix_enabled) {
+            (Some(expr), true) => match ctx.eval(expr) {
                 Ok(v) => {
                     let want = v.text();
                     let (from, to) = match &f.fix_at {
@@ -659,7 +666,7 @@ impl Linter {
                 }
                 Err(e) => return Some(failed(e)),
             },
-            None => None,
+            _ => None,
         };
         let (start, end) = match (f.report, &fix) {
             (Report::Change, Some(edit)) => (edit.start, edit.end),
@@ -700,14 +707,6 @@ impl Linter {
                 }
             }
             None => (start, end),
-        };
-        let fix = match &f.fix_when {
-            Some(cond) => match ctx.eval(cond) {
-                Ok(v) if v.truthy() => fix,
-                Ok(_) => None,
-                Err(e) => return Some(failed(e)),
-            },
-            None => fix,
         };
         let fix = fix.map(|edit| vec![edit]);
         let message = match &f.message {
@@ -893,6 +892,53 @@ fn record_reindent(reindented: &mut HashMap<usize, String>, source: &str, lines:
 mod fix_span_tests {
     use super::*;
     use super::tests::{linter, native_linter};
+
+    #[test]
+    fn conditional_fix_guards_skip_unchanged_text_failed_values_and_invalid_spans() {
+        for fix in [
+            "fix if false as text",
+            "fix if false as num(text)",
+            "fix at -1 if false as \"\"",
+        ] {
+            let lint = linter(&format!("in .t match word /[a-z]+/\nin word rule guarded warn \"finding\" {{ {fix} }}"));
+            let reports = lint.lint(Path::new("/root/guard.t"), "word");
+            assert_eq!(reports.len(), 1, "{fix}: false fix guard suppressed the diagnostic");
+            assert_eq!(reports[0].severity, Severity::Warn, "{fix}: false fix guard evaluated its payload");
+            assert!(reports[0].fix.is_none(), "{fix}");
+        }
+    }
+
+    #[test]
+    fn conditional_fix_guards_keep_enabled_payload_and_guard_failures_visible() {
+        for fix in [
+            "fix if true as num(text)",
+            "fix at -1 if true as \"\"",
+            "fix if num(text) > 0 as text",
+        ] {
+            let lint = linter(&format!("in .t match word /[a-z]+/\nin word rule guarded warn \"finding\" {{ {fix} }}"));
+            let reports = lint.lint(Path::new("/root/guard.t"), "word");
+            assert_eq!(reports.len(), 1, "{fix}");
+            assert_eq!(reports[0].severity, Severity::Error, "{fix}: rule failure vanished");
+            assert!(reports[0].fix.is_none(), "{fix}");
+        }
+    }
+
+    #[test]
+    fn conditional_fix_guards_report_the_node_without_an_edit_and_keep_explicit_positions() {
+        for (report, enabled, expected) in [
+            ("report change", false, (1, 3)),
+            ("report change", true, (2, 3)),
+            ("report change\nreport at 0", false, (0, 0)),
+            ("report change\nreport at 0", true, (0, 0)),
+        ] {
+            let lint = linter(&format!("in .t match item /XX/ {{ rule guarded warn \"finding\" {{ {report}\nfix if {enabled} as \"X!\" }} }}"));
+            let reports = lint.lint(Path::new("/root/guard.t"), "aXXb");
+            assert_eq!(reports.len(), 1);
+            assert_eq!(reports[0].severity, Severity::Warn);
+            assert_eq!((reports[0].start, reports[0].end), expected, "{report}, guard {enabled}");
+            assert_eq!(reports[0].fix.is_some(), enabled);
+        }
+    }
 
     #[test]
     fn configured_fixes_replace_the_previous_condition() {
