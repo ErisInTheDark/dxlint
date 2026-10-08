@@ -157,6 +157,8 @@ pub struct Grammar {
     pub layers: Vec<String>,
     views: Vec<View>,
     by_name: HashMap<String, u32>,
+    /// Per matcher: itself and its resolved `like` ancestors.
+    ancestors: Vec<Vec<u64>>,
     /// Warm DFA caches, reused across files (building one is not cheap).
     cache_pool: Mutex<Vec<DfaCaches>>,
     /// What the config `drop`ped: unknown names that were dropped are
@@ -209,16 +211,11 @@ impl Grammar {
     }
 
     /// Is matcher `m` `base` itself, or a specialisation of it?
-    pub fn is_a(&self, mut m: u32, base: u32) -> bool {
-        loop {
-            if m == base {
-                return true;
-            }
-            match self.matchers.get(m as usize).and_then(|x| x.like) {
-                Some(next) => m = next,
-                None => return false,
-            }
-        }
+    pub fn is_a(&self, m: u32, base: u32) -> bool {
+        m == base
+            || self.ancestors.get(m as usize)
+                .and_then(|bits| bits.get(base as usize / 64))
+                .is_some_and(|word| word & (1 << (base % 64)) != 0)
     }
 
     /// For every matcher, which matchers can appear inside its nodes (via
@@ -488,7 +485,17 @@ impl Grammar {
 
         let views = (0..langs.len()).map(|li| build_view(li, &langs[li], &matchers)).collect();
         let native_hosts = native_hosts(&matchers);
+        let ancestors = matchers.iter().enumerate().map(|(id, _)| {
+            let mut bits = vec![0; matchers.len().div_ceil(64)];
+            let mut current = Some(id as u32);
+            while let Some(m) = current {
+                bits[m as usize / 64] |= 1 << (m % 64);
+                current = matchers[m as usize].like;
+            }
+            bits
+        }).collect();
         Grammar {
+            ancestors,
             native_hosts,
             layers,
             matchers,
@@ -926,6 +933,30 @@ in attributes {
         let grammar = Grammar::build(&loaded.config, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         grammar
+    }
+
+    #[test]
+    fn specialisations_keep_transitive_ancestors_without_sibling_matches() {
+        let grammar = grammar(r#"
+lang t "*.t"
+match root "r"
+match branch like root "b"
+match leaf like branch "l"
+match sibling like root "s"
+"#);
+        let ids: Vec<_> = ["root", "branch", "leaf", "sibling"].map(|name| grammar.matcher(name).unwrap()).into();
+        for (i, &m) in ids.iter().enumerate() {
+            for (j, &base) in ids.iter().enumerate() {
+                assert_eq!(grammar.is_a(m, base), i == j || j == 0 || i == 2 && j == 1);
+            }
+        }
+        for sentinel in [ROOT, TEXT, grammar.matchers.len() as u32, u32::MAX - 2] {
+            assert!(grammar.is_a(sentinel, sentinel));
+            for &m in &ids {
+                assert!(!grammar.is_a(m, sentinel));
+                assert!(!grammar.is_a(sentinel, m));
+            }
+        }
     }
 
     #[test]
