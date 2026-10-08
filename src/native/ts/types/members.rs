@@ -449,7 +449,7 @@ impl Checker<'_> {
             }
         }
         if let Some(env) = sig_env {
-            return Resolution { ty: Ty::Fn(Arc::new(Callable { sigs, env: Arc::new(env), ret: None })), from_index: false, declared: true, declarations, signature_keys: Vec::new() };
+            return Resolution { ty: Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env), None))), from_index: false, declared: true, declarations, signature_keys: Vec::new() };
         }
         // Inherited.
         let mut unresolved_base = false;
@@ -496,7 +496,7 @@ impl Checker<'_> {
             }
         }
         (!sigs.is_empty()).then(|| Resolution {
-            ty: Ty::Fn(Arc::new(Callable { sigs, env: Arc::new(env.clone()), ret: None })),
+            ty: Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env.clone()), None))),
             from_index: false, declared: true, declarations,
             signature_keys: Vec::new(),
         })

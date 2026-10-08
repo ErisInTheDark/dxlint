@@ -208,6 +208,7 @@ impl Checker<'_> {
     /// target returns something other than `void`.
     fn relate_fns(&self, x: &super::Callable, y: &super::Callable) -> Option<bool> {
         let ([a], [b]) = (&x.sigs[..], &y.sigs[..]) else { return None };
+        let (a, b) = (&a.syntax, &b.syntax);
         let required = a.params.iter().filter(|p| !p.optional && !p.rest).count();
         if required > b.params.len() && !b.params.iter().any(|p| p.rest) {
             return Some(false);
@@ -339,7 +340,7 @@ impl Checker<'_> {
         for m in members.filter(|m| !m.is_static) {
             match m.kind {
                 MemberKind::Prop => out.push((m.name.clone(), self.prop_type(m, env), m.optional)),
-                MemberKind::Method => out.push((m.name.clone(), Ty::Fn(std::sync::Arc::new(super::Callable { sigs: m.sigs.clone(), env: std::sync::Arc::new(env.clone()), ret: None })), m.optional)),
+                MemberKind::Method => out.push((m.name.clone(), Ty::Fn(std::sync::Arc::new(super::Callable::new(m.sigs.clone(), std::sync::Arc::new(env.clone()), None))), m.optional)),
                 _ => return None,
             }
         }

@@ -39,7 +39,7 @@ pub(super) fn flow(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         pairs.into_iter().map(|(sender, receiver)| (origin, sender, receiver)).collect()
     } else {
         let sender = file.constrained_type_of(source);
-        contexts(file, site, source).into_iter().map(|(origin, receiver)| (origin, sender.clone(), receiver)).collect::<Vec<_>>()
+        file.expected_contracts(site, source).into_iter().map(|(origin, receiver)| (origin, sender.clone(), receiver)).collect::<Vec<_>>()
     };
     Value::list(contexts.into_iter().map(|(origin, sender, receiver)| {
         let expression = checker.with_relation_work(|| typed_expression(file, source, &receiver, Some(&sender), 0, &mut query));
@@ -88,42 +88,6 @@ fn typed_expression(file: &NativeFile<'_>, source: u32, receiver: &Ty, sender: O
 
 fn node_id(value: &Value<'_>) -> Option<u32> {
     match value { Value::Node(node, _) => Some(*node), _ => None }
-}
-
-fn contexts(file: &NativeFile<'_>, site: u32, source: u32) -> Vec<(&'static str, Ty)> {
-    let syntax = &file.syntax;
-    let explicit = match syntax.kind(site) {
-        Some(K::Declarator | K::Param | K::ClassProp | K::As | K::TypeAssertion) =>
-            syntax.get(site, F::Type).map(|annotation| ("declared", file.constrained_type_of(annotation))),
-        Some(K::Assign | K::AssignPattern) =>
-            syntax.get(site, F::Left).map(|left| {
-                let target = file.constrained_type_of(left);
-                ("declared", if target.is_opaque() { file.contextual_constraint_of(source) } else { target })
-            }),
-        Some(K::Update) =>
-            syntax.get(site, F::Arg).map(|target| ("declared", file.constrained_type_of(target))),
-        _ => None,
-    };
-    let mut contexts = vec![explicit.unwrap_or_else(|| ("contextual", file.contextual_constraint_of(source)))];
-    if syntax.is(site, K::ClassProp) {
-        if let Some(name) = super::super::super::statics::property_name(syntax, site) {
-            let mut class = syntax.parent(site);
-            while class.is_some_and(|node| !syntax.is(node, K::Class)) {
-                class = class.and_then(|node| syntax.parent(node));
-            }
-            if let Some(class) = class {
-                let checker = &file.typing().checker;
-                for heritage in syntax.all(class, F::Extends).chain(syntax.all(class, F::Implements)) {
-                    let target = file.constrained_type_of(heritage);
-                    let target = if matches!(target, Ty::Class(_)) {
-                        checker.construct(&target, &[], syntax.all(class, F::TypeArg).map(|argument| file.constrained_type_of(argument)).collect())
-                    } else { target };
-                    contexts.push(("heritage", checker.member(&target, &name)));
-                }
-            }
-        }
-    }
-    contexts
 }
 
 fn parts(ty: &Ty) -> &[Ty] {

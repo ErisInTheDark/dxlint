@@ -18,9 +18,68 @@ struct Contexts {
     types: RefCell<HashMap<(u32, bool), Ty>>,
     arrays: RefCell<HashMap<u32, HashMap<u32, Option<usize>>>>,
     calls: RefCell<HashMap<u32, Transfers>>,
+    contracts: RefCell<HashMap<u32, Option<Transfers>>>,
 }
 
 impl NativeFile<'_> {
+    /// The explicit or contextual receiver, before adding inherited contracts.
+    pub fn receiver_contract(&self, site: u32, source: u32) -> (&'static str, Ty) {
+        let syntax = &self.syntax;
+        let explicit = match syntax.kind(site) {
+            Some(K::Declarator | K::Param | K::ClassProp | K::As | K::TypeAssertion) =>
+                syntax.get(site, F::Type).map(|annotation| ("declared", self.constrained_type_of(annotation))),
+            Some(K::Assign | K::AssignPattern) =>
+                syntax.get(site, F::Left).map(|left| {
+                    let target = self.constrained_type_of(left);
+                    ("declared", if target.is_opaque() { self.contextual_constraint_of(source) } else { target })
+                }),
+            Some(K::Update) =>
+                syntax.get(site, F::Arg).map(|target| ("declared", self.constrained_type_of(target))),
+            _ => None,
+        };
+        explicit.unwrap_or_else(|| ("contextual", self.contextual_constraint_of(source)))
+    }
+
+    /// Transfer receivers; class properties also retain their inherited contracts.
+    pub fn expected_contracts(&self, site: u32, source: u32) -> Vec<(&'static str, Ty)> {
+        let mut contracts = vec![self.receiver_contract(site, source)];
+        if self.syntax.is(site, K::ClassProp) {
+            contracts.extend(self.inherited_contracts(site).into_iter().map(|(_, receiver)| ("heritage", receiver)));
+        }
+        contracts
+    }
+
+    /// An object method or accessor inherits the declared object's member type.
+    pub fn object_member_contract(&self, site: u32) -> Option<Ty> {
+        let syntax = &self.syntax;
+        let object = syntax.parent(site).filter(|&owner| syntax.is(owner, K::Object))?;
+        let name = self.property_key_name(site)?;
+        let sender = self.constrained_type_of(object);
+        let receiver = self.constrained_type(self.contextual_constraint_of(object), object);
+        Some(if self.member_keys_match(&sender, &receiver, &name, false) { self.ck().member(&receiver, &name) } else { Ty::Unknown })
+    }
+
+    /// A member's contracts from each direct base, retaining their syntax identity.
+    pub fn inherited_contracts(&self, site: u32) -> Vec<(u32, Ty)> {
+        let syntax = &self.syntax;
+        let Some(name) = super::super::statics::property_name(syntax, site) else { return Vec::new() };
+        let mut owner = syntax.parent(site);
+        if !syntax.is(site, K::ClassProp) && !owner.is_some_and(|owner| matches!(syntax.kind(owner), Some(K::Class | K::Interface))) {
+            return Vec::new();
+        }
+        while owner.is_some_and(|node| !matches!(syntax.kind(node), Some(K::Class | K::Interface))) {
+            owner = owner.and_then(|node| syntax.parent(node));
+        }
+        let Some(owner) = owner else { return Vec::new() };
+        syntax.all(owner, F::Extends).chain(syntax.all(owner, F::Implements)).map(|heritage| {
+            let target = self.constrained_type_of(heritage);
+            let target = if matches!(target, Ty::Class(_)) {
+                self.ck().construct(&target, &[], syntax.all(owner, F::TypeArg).map(|argument| self.constrained_type_of(argument)).collect())
+            } else { target };
+            (heritage, self.ck().member(&target, &name))
+        }).collect()
+    }
+
     /// Callback lookup excludes function arguments to avoid inference recursion.
     pub fn contextual_type_of(&self, value: u32) -> Ty {
         self.contextual_projection(value, false)
@@ -205,6 +264,51 @@ impl NativeFile<'_> {
         self.arguments_at(value, contextual, true)
     }
 
+    /// All callable parameter contracts at a position, without choosing an overload.
+    pub fn argument_contract_types(&self, value: u32) -> Option<Result<Vec<(Ty, Ty)>, ()>> {
+        let s = &self.syntax;
+        let owner = s.parent(value)?;
+        let (call, tagged) = if s.field(value) == Some(F::Arg) && matches!(s.kind(owner), Some(K::Call | K::New)) {
+            (owner, false)
+        } else if s.is(owner, K::Template) && s.field(value) == Some(F::Expr) {
+            let call = s.parent(owner)?;
+            if !s.is(call, K::TaggedTemplate) { return None }
+            (call, true)
+        } else { return None };
+        let contexts = self.cached(|_| Contexts::default());
+        if let Some(transfers) = contexts.contracts.borrow().get(&call) {
+            return Some(transfers.as_ref().map(|pairs| pairs.get(&value).cloned().unwrap_or_default()).ok_or(()));
+        }
+        let args: Vec<_> = if tagged { s.all(owner, F::Expr).collect() } else { s.all(call, F::Arg).collect() };
+        let callee = s.get(call, if tagged { F::Tag } else { F::Callee })?;
+        let actuals: Vec<_> = args.iter().map(|&argument| self.type_of(argument)).collect();
+        let Some(candidates) = self.ck().argument_contract_parameters(&self.type_of(callee), &actuals, self.type_args(call), s.is(call, K::New)) else {
+            contexts.contracts.borrow_mut().insert(call, None);
+            return Some(Err(()));
+        };
+        let mut receivers: HashMap<u32, Vec<(Ty, Vec<Ty>)>> = HashMap::new();
+        for (types, rest) in candidates {
+            let mut parameters = Parameters::new(types, rest, usize::from(tagged));
+            for &argument in &args {
+                let pairs = self.argument_transfer(&mut parameters, argument, self.type_of(argument));
+                let merged = receivers.entry(argument).or_default();
+                for (index, (sender, receiver)) in pairs.into_iter().enumerate() {
+                    if let Some((_, receivers)) = merged.get_mut(index) {
+                        receivers.push(receiver);
+                    } else {
+                        merged.push((sender, vec![receiver]));
+                    }
+                }
+            }
+        }
+        let transfers: Transfers = receivers.into_iter().map(|(argument, pairs)| (
+            argument, pairs.into_iter().map(|(sender, receivers)| (sender, Ty::union(receivers))).collect(),
+        )).collect();
+        let result = transfers.get(&value).cloned().unwrap_or_default();
+        contexts.contracts.borrow_mut().insert(call, Some(transfers));
+        Some(Ok(result))
+    }
+
     fn arguments_at(&self, value: u32, contextual: bool, bound: bool) -> Option<Vec<(Ty, Ty)>> {
         let s = &self.syntax;
         let owner = s.parent(value)?;
@@ -247,22 +351,28 @@ impl NativeFile<'_> {
         let mut transfers = HashMap::new();
         for argument in args {
             let sender = if contextual && argument == value { Ty::Unknown } else { self.type_of(argument) };
-            let source = if s.is(argument, K::Spread) { s.get(argument, F::Arg).map_or(Ty::Unknown, |source| self.spread_source_type(source)) } else { sender };
-            let mut pairs = Vec::new();
-            if s.is(argument, K::Spread) {
-                if let Ty::Tuple(tuple) = &source {
-                    for element in &tuple.elements {
-                        let sender = if element.rest { self.ck().iteration_element(&element.ty) } else { element.ty.clone() };
-                        if let Some(receiver) = parameters.next_recovery() { pairs.push((sender, receiver)); }
-                    }
-                    if tuple.elements.iter().any(|element| element.rest) { parameters.consume_remaining(); }
-                } else if let Some(receiver) = parameters.next_recovery() { pairs.push((self.ck().iteration_element(&source), receiver)); }
-            } else if let Some(receiver) = parameters.next_recovery() { pairs.push((source, receiver)); }
+            let pairs = self.argument_transfer(&mut parameters, argument, sender);
             if contextual && argument == value { return Some(pairs) }
             transfers.insert(argument, pairs);
         }
         let pairs = transfers.get(&value).cloned();
         if !contextual { contexts.calls.borrow_mut().insert(call, transfers); }
+        pairs
+    }
+
+    fn argument_transfer(&self, parameters: &mut Parameters, argument: u32, sender: Ty) -> Vec<(Ty, Ty)> {
+        let s = &self.syntax;
+        let source = if s.is(argument, K::Spread) { s.get(argument, F::Arg).map_or(Ty::Unknown, |source| self.spread_source_type(source)) } else { sender };
+        let mut pairs = Vec::new();
+        if s.is(argument, K::Spread) {
+            if let Ty::Tuple(tuple) = &source {
+                for element in &tuple.elements {
+                    let sender = if element.rest { self.ck().iteration_element(&element.ty) } else { element.ty.clone() };
+                    if let Some(receiver) = parameters.next_recovery() { pairs.push((sender, receiver)); }
+                }
+                if tuple.elements.iter().any(|element| element.rest) { parameters.consume_remaining(); }
+            } else if let Some(receiver) = parameters.next_recovery() { pairs.push((self.ck().iteration_element(&source), receiver)); }
+        } else if let Some(receiver) = parameters.next_recovery() { pairs.push((source, receiver)); }
         pairs
     }
 

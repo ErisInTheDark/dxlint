@@ -13,6 +13,7 @@ mod enum_types;
 mod properties;
 mod unsafe_types;
 mod awaitability;
+mod callables;
 mod assertions;
 mod accessors;
 mod conversions;
@@ -37,6 +38,16 @@ fn is_typescript(file: &NativeFile<'_>) -> bool {
 }
 
 pub const FACTS: &[Fact] = &[
+    Fact {
+        name: "type_awaitability",
+        doc: "native expressions: structural thenable union any/all certainty, mutual assignability of awaited and ordinary union arms, and analysis completeness",
+        get: |f, n| f.with_file(awaitability::type_awaitability, n),
+    },
+    Fact {
+        name: "callable_contracts",
+        doc: "native expressions: callable_contracts(site, source, member_path?) gives callable return kinds and thenability at the requested member path (default root), through receiver contracts and direct heritage; incomplete rows indicate unresolved signatures or work limits",
+        get: |f, n| f.with_file(callables::contracts, n),
+    },
     Fact {
         name: "static_number",
         doc: "native expressions: statically known numeric value, including numeric/boolean/bigint literals, arithmetic and unmodified local bindings; null when unresolved",

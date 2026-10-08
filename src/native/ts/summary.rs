@@ -15,6 +15,8 @@ use super::docs::leading_doc;
 use super::kinds::{Field as F, Kind as K};
 use super::view::View;
 
+mod scopes;
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static MEMBER_INSPECTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -34,12 +36,14 @@ pub enum TypeSyn {
     Array(Box<TypeSyn>),
     Tuple(Vec<TupleElement>),
     Readonly(Box<TypeSyn>),
+    /// Symbol identity syntax; evaluation does not yet model unique types.
+    Unique(Box<TypeSyn>),
     Fn(Arc<Sig>),
     /// `new (...) => T`
     Ctor(Arc<Sig>),
     Obj(Arc<Vec<Member>>),
     /// `typeof a.b`
-    Query(Box<[Box<str>]>),
+    Query(Box<[Box<str>]>, Vec<TypeSyn>),
     /// `keyof T`
     Keyof(Box<TypeSyn>),
     Indexed(Box<TypeSyn>, Box<TypeSyn>),
@@ -154,6 +158,8 @@ pub struct Member {
 /// calls and member chains over names, annotations and literals.
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Init {
+    Class(u32),
+    Instantiate(Box<Init>, Vec<TypeSyn>),
     New(Box<[Box<str>]>, Vec<TypeSyn>),
     Call(Box<Init>, Vec<TypeSyn>),
     Member(Box<Init>, Box<str>),
@@ -175,6 +181,8 @@ pub enum DeclKind {
     Var,
     Enum,
     Namespace,
+    /// Hidden lexical environment captured by a class expression.
+    Lexical,
     /// `import { name } from "from"` (`default`, or `*` for namespaces).
     Import { from: Box<str>, name: Box<str> },
     /// `import x = A.B`
@@ -196,13 +204,13 @@ pub struct Decl {
     pub ty: Option<TypeSyn>,
     pub init: Option<Init>,
     pub doc: Option<Box<str>>,
-    /// Namespace members: name -> decl indices.
+    /// Names visible within this declaration.
     pub scope: Option<Scope>,
     /// Inside `declare` (or a declaration file).
     pub ambient: bool,
     /// Where it is declared (for local lookups).
     pub start: u32,
-    /// The namespace it is declared in.
+    /// Enclosing declaration scope.
     pub parent: Option<u32>,
     /// The `declare module "x"` it is declared in.
     pub module: Option<usize>,
@@ -365,7 +373,8 @@ pub fn type_syn(v: &impl View, id: u32) -> TypeSyn {
             }
         }
         Some(K::TypeLit) => TypeSyn::Obj(Arc::new(v.all(id, F::Member).into_iter().filter_map(|m| member(v, m)).collect())),
-        Some(K::TypeQuery) => TypeSyn::Query(v.get(id, F::Name).map(|n| path_of(v, n)).unwrap_or_default().into()),
+        Some(K::TypeQuery) => TypeSyn::Query(v.get(id, F::Name).map(|n| path_of(v, n)).unwrap_or_default().into(),
+            v.all(id, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect()),
         Some(K::ParenType) => v.get(id, F::Type).map_or(TypeSyn::Other, |t| type_syn(v, t)),
         Some(K::TypePredicate) => {
             if v.get(id, F::Modifier).is_some() {
@@ -379,6 +388,9 @@ pub fn type_syn(v: &impl View, id: u32) -> TypeSyn {
         }
         Some(K::TypeOperator) if v.get(id, F::Op).is_some_and(|o| v.text(o) == "keyof") => {
             v.get(id, F::Type).map_or(TypeSyn::Other, |t| TypeSyn::Keyof(Box::new(type_syn(v, t))))
+        }
+        Some(K::TypeOperator) if v.get(id, F::Op).is_some_and(|o| v.text(o) == "unique") => {
+            v.get(id, F::Type).map_or(TypeSyn::Other, |t| TypeSyn::Unique(Box::new(type_syn(v, t))))
         }
         Some(K::TemplateType) => TypeSyn::Kw("string".into()),
         Some(K::IndexedAccess) => TypeSyn::Indexed(
@@ -548,6 +560,8 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
 fn init(v: &impl View, id: u32) -> Init {
     let targs = |n| v.all(n, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect::<Vec<_>>();
     match v.kind(id) {
+        Some(K::Class) => Init::Class(v.start(id)),
+        Some(K::Instantiation) => v.get(id, F::Expr).map_or(Init::Other, |expression| Init::Instantiate(Box::new(init(v, expression)), targs(id))),
         Some(K::New) => v.get(id, F::Callee).map_or(Init::Other, |c| Init::New(path_of(v, c).into(), targs(id))),
         Some(K::Call) => v.get(id, F::Callee).map_or(Init::Other, |c| Init::Call(Box::new(init(v, c)), targs(id))),
         Some(K::Ident | K::This) => Init::Path(path_of(v, id).into()),
@@ -577,11 +591,12 @@ fn init(v: &impl View, id: u32) -> Init {
 struct Builder<'v, V: View> {
     v: &'v V,
     out: FileSummary,
+    lexical: bool,
 }
 
 /// `dts`: a declaration file, where everything is ambient.
 pub fn summarise(v: &impl View, root: u32, dts: bool) -> FileSummary {
-    let mut b = Builder { v, out: FileSummary::default() };
+    let mut b = Builder { v, out: FileSummary::default(), lexical: false };
     for line in v.src().lines().filter(|l| l.trim_start().starts_with("/// <reference")) {
         for attr in ["types", "lib", "path"] {
             if let Some(rest) = line.split_once(&format!("{attr}=\"")).map(|(_, r)| r) {
@@ -643,6 +658,76 @@ impl<V: View> Builder<'_, V> {
         }
     }
 
+    fn class_decl(&self, s: u32, name: &str, ambient: bool) -> Decl {
+        let v = self.v;
+        let mut decl = self.base(s, name, DeclKind::Class, ambient);
+        if let Some(e) = v.get(s, F::Extends) {
+            let args = v.all(s, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect();
+            decl.extends.push(TypeSyn::Ref(path_of(v, e).into(), args));
+        }
+        decl.implements.extend(v.all(s, F::Implements).into_iter().map(|t| type_syn(v, t)));
+        for m in v.all(s, F::Member) {
+            if v.is(m, K::Method) && v.get(m, F::Key).is_some_and(|k| v.text(k) == "constructor") {
+                decl.sigs.push(Arc::new(sig(v, m)));
+                // Parameter properties: `constructor(private x: T)`.
+                for p in v.all(m, F::Param) {
+                    if v.get(p, F::Modifier).is_some() {
+                        if let Some(n) = v.get(p, F::Name).filter(|&n| v.is(n, K::Ident)) {
+                            decl.members.push(Member {
+                                doc: leading_doc(v.src(), v.start(p) as usize).map(String::into_boxed_str),
+                                name: v.text(n).into(),
+                                kind: MemberKind::Prop,
+                                visibility: Visibility::of(v, p),
+                                signature: false,
+                                computed_key: None,
+                                is_static: false,
+                                readonly: Some(v.has_word(p, F::Modifier, "readonly")),
+                                optional: false,
+                                ty: v.get(p, F::Type).map(|t| type_syn(v, t)),
+                                index_key: None,
+                                sigs: Vec::new(),
+                                init: None,
+                            });
+                        }
+                    }
+                }
+            } else if let Some(mem) = member(v, m) {
+                decl.members.push(mem);
+            }
+        }
+        decl
+    }
+
+    fn class_expressions(&mut self, root: u32, ambient: bool) {
+        let v = self.v;
+        let mut pending = vec![(root, false)];
+        let mut ancestors = Vec::new();
+        while let Some((node, leaving)) = pending.pop() {
+            if leaving {
+                ancestors.pop();
+                continue;
+            }
+            let Some(kind) = v.kind(node) else { continue };
+            if kind as u16 >= K::TypeRef as u16 || matches!(kind, K::TypeKeyword | K::Namespace) { continue }
+            if kind == K::Class && ancestors.last().and_then(|&parent| v.kind(parent)).is_some_and(|kind| !matches!(kind, K::Block | K::Program | K::Export))
+                && !self.out.decls.iter().any(|decl| decl.kind == DeclKind::Class && decl.start == v.start(node)) {
+                let parent = self.lexical_ancestors(&ancestors, ambient);
+                let name = v.get(node, F::Name).map(|name| v.text(name));
+                let mut decl = self.class_decl(node, name.unwrap_or("<class>"), ambient);
+                let mut scope = Scope::default();
+                if let Some(name) = name {
+                    scope.names.insert(name.into(), vec![self.out.decls.len() as u32]);
+                }
+                decl.scope = Some(scope);
+                decl.parent = parent;
+                self.out.decls.push(decl);
+            }
+            ancestors.push(node);
+            pending.push((node, true));
+            pending.extend(v.children(node).rev().map(|child| (child, false)));
+        }
+    }
+
     /// Declares what `s` declares into `scope`; returns the declared ids.
     fn statement(&mut self, s: u32, scope: &mut Scope, mut module: Option<&mut Module>, ambient: bool) -> Vec<u32> {
         let v = self.v;
@@ -651,7 +736,15 @@ impl<V: View> Builder<'_, V> {
         match v.kind(s) {
             Some(K::Var) => {
                 for d in v.all(s, F::Decl) {
-                    let Some(n) = v.get(d, F::Name).filter(|&n| v.is(n, K::Ident)) else { continue };
+                    let Some(n) = v.get(d, F::Name) else { continue };
+                    if !v.is(n, K::Ident) {
+                        if self.lexical {
+                            let first = self.out.decls.len() as u32;
+                            self.lexical_pattern(n, None, scope, ambient);
+                            ids.extend(first..self.out.decls.len() as u32);
+                        }
+                        continue;
+                    }
                     let mut decl = self.base(s, v.text(n), DeclKind::Var, ambient);
                     decl.type_params.clear();
                     decl.ty = v.get(d, F::Type).map(|t| type_syn(v, t));
@@ -685,41 +778,7 @@ impl<V: View> Builder<'_, V> {
             }
             Some(K::Class) => {
                 let name = v.get(s, F::Name).map_or("default", |n| v.text(n));
-                let mut decl = self.base(s, name, DeclKind::Class, ambient);
-                if let Some(e) = v.get(s, F::Extends) {
-                    let args = v.all(s, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect();
-                    decl.extends.push(TypeSyn::Ref(path_of(v, e).into(), args));
-                }
-                decl.implements.extend(v.all(s, F::Implements).into_iter().map(|t| type_syn(v, t)));
-                for m in v.all(s, F::Member) {
-                    if v.is(m, K::Method) && v.get(m, F::Key).is_some_and(|k| v.text(k) == "constructor") {
-                        decl.sigs.push(Arc::new(sig(v, m)));
-                        // Parameter properties: `constructor(private x: T)`.
-                        for p in v.all(m, F::Param) {
-                            if v.get(p, F::Modifier).is_some() {
-                                if let Some(n) = v.get(p, F::Name).filter(|&n| v.is(n, K::Ident)) {
-                                    decl.members.push(Member {
-                                        doc: leading_doc(v.src(), v.start(p) as usize).map(String::into_boxed_str),
-                                        name: v.text(n).into(),
-                                        kind: MemberKind::Prop,
-                                        visibility: Visibility::of(v, p),
-                                        signature: false,
-                                        computed_key: None,
-                                        is_static: false,
-                                        readonly: Some(v.has_word(p, F::Modifier, "readonly")),
-                                        optional: false,
-                                        ty: v.get(p, F::Type).map(|t| type_syn(v, t)),
-                                        index_key: None,
-                                        sigs: Vec::new(),
-                                        init: None,
-                                    });
-                                }
-                            }
-                        }
-                    } else if let Some(mem) = member(v, m) {
-                        decl.members.push(mem);
-                    }
-                }
+                let decl = self.class_decl(s, name, ambient);
                 ids.push(self.push(scope, decl));
             }
             Some(K::Interface) => {
@@ -978,6 +1037,7 @@ impl<V: View> Builder<'_, V> {
             }
             _ => {}
         }
+        if !self.lexical && !(v.is(s, K::Export) && v.get(s, F::Decl).is_some()) { self.class_expressions(s, ambient); }
         ids
     }
 }

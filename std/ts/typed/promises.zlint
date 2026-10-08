@@ -1,0 +1,110 @@
+# Promise contracts: types describe values; rules decide which consumers are unsafe.
+
+define {
+
+fn promise_boolean_parent(n) =
+  if n.parent is (ts_parenthesized, ts_logical) then n.parent
+  else if n.parent is ts_conditional && n.parent.test.node != n then n.parent
+  else null
+fn promise_boolean_left_parent(n) =
+  if n.parent is ts_logical && (n.parent.operator == "??" || n.parent.left.node != n) then null
+  else promise_boolean_parent(n)
+fn promise_boolean_use(n) = any(walk(n, current => promise_boolean_parent(current)), current =>
+  current.parent is (ts_if, ts_while, ts_do_while, ts_for, ts_conditional) && current.parent.test.node == current
+  || current.parent is ts_unary && current.parent.operator == "!" && current.parent.argument.node == current)
+  || any(walk(n, current => promise_boolean_left_parent(current)), current =>
+    current.parent is ts_logical && current.parent.operator != "??" && current.parent.left.node == current)
+
+in ts_node rule no-misused-promises:conditionals {
+  option flagUnions "none" | "strict" | "all" = "none" "Which mixed promise unions to flag"
+  when not (ts_parenthesized, ts_logical, ts_conditional)
+  when !(is ts_unary && node.operator == "!")
+  when promise_boolean_use(node)
+  let awaitability type_awaitability
+  when awaitability.all || awaitability.any && (flagUnions == "all" || flagUnions == "strict" && awaitability.union_equivalent == true)
+  warn "Expected non-Promise value in a boolean conditional."
+}
+
+in ts_spread rule no-misused-promises:spreads {
+  when parent is ts_object
+  when argument.type_awaitability.any
+  report at argument.node
+  warn "Expected a non-Promise value to be spread in an object."
+}
+
+fn promise_void_transfer(contract) = contract.complete
+  && any(contract.source, result => result.thenable)
+  && any(contract.target, result => result.kind == "void")
+  && !any(contract.target, result => result.thenable)
+fn promise_contract_site(n) = if n is (ts_property, ts_method, ts_method_signature, ts_class_property, ts_property_signature) then n else n.parent
+fn promise_property_source(n) = if n is ts_property then default(n.value.node, n.key.node) else n
+fn promise_callable_site(n) = if n is (ts_method, ts_method_signature, ts_class_property, ts_property_signature) then n.key.node
+  else if n is (ts_arrow, ts_function) then function_warning_site(n)
+  else unparenthesised_node(n)
+in ts_node let promise_builtin_instance builtin_type("Promise")
+fn promise_finally_member(n) = n is (ts_member, ts_index)
+  && default(n.static_name, n.index.static_string) == "finally"
+  && n.object.promise_builtin_instance
+in ts_call let promise_finally_callback promise_finally_member(unparenthesised_node(callee.node))
+
+in ts_call.argument, ts_new.argument, ts_template.expression rule no-misused-promises:void-arguments {
+  when parent not ts_call || node.index != 0 || !parent.promise_finally_callback
+  each promise_contract in callable_contracts(parent, node)
+  when promise_void_transfer(promise_contract)
+  report at promise_callable_site(node)
+  warn "Promise returned in function argument where a void return was expected."
+}
+
+in ts_call.argument rule no-misused-promises:predicates {
+  when node.index == 0 && condition_array_callback(parent)
+  each promise_contract in callable_contracts(parent, node)
+  when any(promise_contract.source, result => result.thenable)
+  report at promise_callable_site(node)
+  warn "Expected a non-Promise value to be returned."
+}
+
+in ts_declarator.init, ts_parameter.init, ts_assignment.right rule no-misused-promises:void-variables {
+  when parent not ts_assignment || parent.left is ts_identifier
+  each promise_contract in callable_contracts(parent, node) callable_contracts(parent, node, ["[Symbol.dispose]"])
+  when promise_contract.origin != "heritage"
+  when promise_void_transfer(promise_contract)
+  report at promise_callable_site(node)
+  warn "Promise-returning function provided to variable where a void return was expected."
+}
+
+in ts_property, ts_method, ts_class_property.init, ts_assignment.right rule no-misused-promises:void-properties {
+  when parent not ts_assignment || parent.left is (ts_member, ts_index)
+  when not ts_method || parent is ts_object
+  let promise_source promise_property_source(node)
+  each promise_contract in callable_contracts(promise_contract_site(node), promise_source)
+  when promise_contract.origin != "heritage"
+  when promise_void_transfer(promise_contract)
+  report at promise_callable_site(promise_source)
+  warn "Promise-returning function provided to property where a void return was expected."
+}
+
+in ts_return.argument, ts_arrow.body rule no-misused-promises:void-returns {
+  each promise_contract in callable_contracts(parent, node)
+  when promise_void_transfer(promise_contract)
+  report at promise_callable_site(node)
+  warn "Promise-returning function provided to return value where a void return was expected."
+}
+
+in ts_jsx_expression.expression rule no-misused-promises:void-attributes {
+  when parent.parent is ts_jsx_attribute
+  each promise_contract in callable_contracts(parent, node)
+  when promise_void_transfer(promise_contract)
+  report at promise_callable_site(node)
+  warn "Promise-returning function provided to attribute where a void return was expected."
+}
+
+in ts_method, ts_method_signature, ts_class_property, ts_property_signature rule no-misused-promises:void-inherited-methods {
+  when !is_static
+  each promise_contract in callable_contracts(promise_contract_site(node), node)
+  when promise_contract.origin == "heritage"
+  when promise_void_transfer(promise_contract)
+  report at promise_callable_site(node)
+  warn "Promise-returning method provided where a void return was expected by extended/implemented type '" promise_contract.heritage.text "'."
+}
+
+}

@@ -10,6 +10,7 @@ pub trait View {
     fn kind(&self, id: u32) -> Option<Kind>;
     fn get(&self, id: u32, field: Field) -> Option<u32>;
     fn all(&self, id: u32, field: Field) -> Vec<u32>;
+    fn children(&self, id: u32) -> impl DoubleEndedIterator<Item = u32> + '_;
     fn text(&self, id: u32) -> &str;
     fn start(&self, id: u32) -> u32;
     fn src(&self) -> &str;
@@ -42,6 +43,10 @@ impl View for Raw<'_> {
         self.nodes[id as usize].children.iter().filter(|e| e.label == field as u16).map(|e| e.node).collect()
     }
 
+    fn children(&self, id: u32) -> impl DoubleEndedIterator<Item = u32> + '_ {
+        self.nodes[id as usize].children.iter().map(|edge| edge.node)
+    }
+
     fn text(&self, id: u32) -> &str {
         let n = &self.nodes[id as usize];
         &self.src[n.start as usize..n.end as usize]
@@ -67,6 +72,10 @@ impl View for Syntax<'_> {
 
     fn all(&self, id: u32, field: Field) -> Vec<u32> {
         Syntax::all(self, id, field).collect()
+    }
+
+    fn children(&self, id: u32) -> impl DoubleEndedIterator<Item = u32> + '_ {
+        self.tree.node(id).children.iter().map(|edge| edge.node)
     }
 
     fn text(&self, id: u32) -> &str {

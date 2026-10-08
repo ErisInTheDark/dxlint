@@ -153,14 +153,25 @@ impl FromIterator<Ty> for Tuple {
 #[derive(Clone, Copy, Debug)]
 pub struct ModRefKey(pub ModRef);
 
-/// Signatures with the environment their types are written in.
+#[derive(Clone, Debug)]
+pub struct BoundSignature {
+    pub syntax: Arc<Sig>,
+    pub env: Arc<Env>,
+}
+
+/// Each overload keeps the environment its types are written in.
 #[derive(Debug)]
 pub struct Callable {
-    pub sigs: Vec<Arc<Sig>>,
-    pub env: Arc<Env>,
+    pub sigs: Vec<BoundSignature>,
     /// The return type when it is known without the syntax (an arrow's
     /// expression body).
     pub ret: Option<Ty>,
+}
+
+impl Callable {
+    pub fn new(sigs: Vec<Arc<Sig>>, env: Arc<Env>, ret: Option<Ty>) -> Self {
+        Self { sigs: sigs.into_iter().map(|syntax| BoundSignature { syntax, env: env.clone() }).collect(), ret }
+    }
 }
 
 /// Where type syntax is evaluated: a file, the module and namespaces it
@@ -169,7 +180,7 @@ pub struct Callable {
 pub struct Env {
     pub file: FileId,
     pub module: ModuleAt,
-    /// Enclosing namespace declarations, innermost first.
+    /// Enclosing declaration scopes, innermost first (namespaces or class self names).
     pub namespaces: Vec<u32>,
     pub tparams: Vec<(Box<str>, Ty)>,
     pub this: Option<Box<Ty>>,
@@ -377,11 +388,25 @@ impl<'p> Checker<'p> {
             if let Some(m) = decl.module {
                 env.module = ModuleAt::Ambient(m);
             }
+            if decl.kind == DeclKind::Class && decl.scope.is_some() {
+                env.namespaces.push(d.decl);
+            }
             let mut p = decl.parent;
+            let mut parameters = Vec::new();
             while let Some(ns) = p {
                 env.namespaces.push(ns);
-                p = s.decls[ns as usize].parent;
+                let enclosing = &s.decls[ns as usize];
+                if enclosing.kind == DeclKind::Lexical {
+                    for parameter in enclosing.type_params.iter().rev() {
+                        if decl.kind != DeclKind::Class || decl.scope.as_ref().is_none_or(|scope| scope.get(&parameter.name).is_empty()) {
+                            parameters.push((parameter.name.clone(), Ty::Param(parameter.name.clone())));
+                        }
+                    }
+                }
+                p = enclosing.parent;
             }
+            parameters.reverse();
+            env.tparams = parameters;
         }
         env
     }
@@ -594,11 +619,14 @@ impl<'p> Checker<'p> {
                     None => Ty::Unknown,
                 }
             },
-            TypeSyn::Fn(sig) => Ty::Fn(Arc::new(Callable { sigs: vec![sig.clone()], env: Arc::new(env.clone()), ret: None })),
+            TypeSyn::Fn(sig) => Ty::Fn(Arc::new(Callable::new(vec![sig.clone()], Arc::new(env.clone()), None))),
             TypeSyn::Obj(members) => Ty::Obj(members.clone(), Arc::new(env.clone())),
-            TypeSyn::Query(path) => self.value_path(path, env),
+            TypeSyn::Query(path, args) => {
+                let value = self.value_path(path, env);
+                if args.is_empty() { value } else { self.instantiate(&value, args.iter().map(|argument| self.eval(argument, env)).collect()) }
+            }
             TypeSyn::Keyof(t) => self.keyof(&self.eval(t, env)),
-            TypeSyn::Ctor(_) | TypeSyn::Other => Ty::Unknown,
+            TypeSyn::Ctor(_) | TypeSyn::Unique(_) | TypeSyn::Other => Ty::Unknown,
         }
     }
 
@@ -681,6 +709,14 @@ impl<'p> Checker<'p> {
 
     // ---- values ------------------------------------------------------------
 
+    pub(crate) fn class_value_at(&self, start: u32, file: FileId) -> Ty {
+        let Some(summary) = self.summary_of(file) else { return Ty::Unknown };
+        let classes: Vec<_> = summary.decls.iter().enumerate()
+            .filter(|(_, decl)| decl.kind == DeclKind::Class && decl.start == start)
+            .map(|(decl, _)| DeclRef { file, decl: decl as u32 }).collect();
+        if classes.is_empty() { Ty::Unknown } else { Ty::Class(classes.into()) }
+    }
+
     /// The type of a value path (`a.b.c`) in `env`.
     pub fn value_path(&self, path: &[Box<str>], env: &Env) -> Ty {
         let Some((first, rest)) = path.split_first() else { return Ty::Unknown };
@@ -741,7 +777,7 @@ impl<'p> Checker<'p> {
                     })
                     .flatten()
                     .collect();
-                let f = Ty::Fn(Arc::new(Callable { sigs, env: Arc::new(env), ret: None }));
+                let f = Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env), None)));
                 // A function merged with a namespace has its members too.
                 let namespaces: Vec<DeclRef> = all.iter().copied().filter(|&r| self.kind_of(r) == Some(DeclKind::Namespace)).collect();
                 if namespaces.is_empty() {
@@ -772,6 +808,8 @@ impl<'p> Checker<'p> {
     fn init_type(&self, init: &super::summary::Init, env: &Env) -> Ty {
         use super::summary::Init;
         match init {
+            Init::Class(start) => self.class_value_at(*start, env.file),
+            Init::Instantiate(value, args) => self.instantiate(&self.init_type(value, env), args.iter().map(|argument| self.eval(argument, env)).collect()),
             Init::New(path, targs) => {
                 let targs = targs.iter().map(|t| self.eval(t, env)).collect::<Vec<_>>();
                 let class = self.value_path(path, env);

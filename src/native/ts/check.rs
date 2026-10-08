@@ -156,11 +156,12 @@ impl<'t> NativeFile<'t> {
         let mut node = Some(at);
         let mut tparams = Vec::new();
         let mut namespaces = Vec::new();
+        let mut self_names = Vec::new();
         while let Some(n) = node {
             for tp in s.all(n, F::TypeParam) {
                 if let Some(name) = s.get(tp, F::Name) {
                     let name: Box<str> = s.text(name).into();
-                    tparams.push((name.clone(), Ty::Param(name)));
+                    if !self_names.contains(&name) { tparams.push((name.clone(), Ty::Param(name))) }
                 }
             }
             if s.is(n, K::Namespace) {
@@ -170,6 +171,15 @@ impl<'t> NativeFile<'t> {
                     if let Some(i) = found {
                         namespaces.push(i as u32);
                     }
+                }
+            }
+            if s.is(n, K::Class) {
+                if let Some(i) = ck.summary.decls.iter().position(|decl|
+                    decl.kind == DeclKind::Class && decl.start == s.tree.node(n).start && decl.scope.is_some()) {
+                    for scope in ck.decl_env(DeclRef { file: ck.file, decl: i as u32 }).namespaces {
+                        if !namespaces.contains(&scope) { namespaces.push(scope) }
+                    }
+                    if let Some(name) = s.get(n, F::Name) { self_names.push(s.text(name).into()); }
                 }
             }
             node = s.parent(n);
@@ -204,7 +214,16 @@ impl<'t> NativeFile<'t> {
         let ck = self.ck();
         let start = self.syntax.tree.node(stmt).start;
         let file = ck.file;
-        let hit = ck.summary.decls.iter().enumerate().find(|(_, d)| &*d.name == name && d.start == start);
+        let hit = ck.summary.decls.iter().enumerate().find(|(_, d)| {
+            if &*d.name != name || d.start != start { return false }
+            let mut parent = d.parent;
+            while let Some(scope) = parent {
+                let enclosing = &ck.summary.decls[scope as usize];
+                if enclosing.kind == DeclKind::Lexical { return false }
+                parent = enclosing.parent;
+            }
+            true
+        });
         let Some((i, d)) = hit else { return Vec::new() };
         // Every declaration merged with it.
         let env = ck.decl_env(DeclRef { file, decl: i as u32 });
@@ -229,12 +248,17 @@ impl<'t> NativeFile<'t> {
                 Some(K::Function) => return Ty::Any,
                 Some(K::Method | K::ClassProp | K::StaticBlock) => is_static = s.has_word(n, F::Modifier, "static") || s.is(n, K::StaticBlock),
                 Some(K::Class) => {
-                    let Some(name) = s.get(n, F::Name) else { return Ty::Unknown };
-                    let classes: Vec<DeclRef> = self
-                        .summary_decls(s.text(name), n)
-                        .into_iter()
-                        .filter(|r| self.ck().summary_of(r.file).is_some_and(|sm| sm.decls[r.decl as usize].kind == DeclKind::Class))
-                        .collect();
+                    let mut classes: Vec<DeclRef> = match s.get(n, F::Name) {
+                        Some(name) => self.summary_decls(s.text(name), n).into_iter()
+                            .filter(|r| self.ck().summary_of(r.file).is_some_and(|sm| sm.decls[r.decl as usize].kind == DeclKind::Class)).collect(),
+                        None => match self.ck().class_value_at(s.tree.node(n).start, self.ck().file) {
+                            Ty::Class(classes) => classes.to_vec(),
+                            _ => Vec::new(),
+                        },
+                    };
+                    if classes.is_empty() && s.parent(n).is_some_and(|parent| !matches!(s.kind(parent), Some(K::Block | K::Program | K::Export))) {
+                        if let Ty::Class(found) = self.ck().class_value_at(s.tree.node(n).start, self.ck().file) { classes = found.to_vec(); }
+                    }
                     if classes.is_empty() {
                         return Ty::Unknown;
                     }
@@ -274,6 +298,7 @@ impl<'t> NativeFile<'t> {
         let kind = self.binding(decl).map(|b| b.kind).unwrap_or("");
         let Some(owner) = s.parent(decl) else { return Ty::Unknown };
         match kind {
+            "class_name" => ck.class_value_at(s.tree.node(owner).start, ck.file),
             "import" => {
                 let env = Env::file(ck.file);
                 ck.value_of(&ck.lookup(&env, name))
@@ -285,7 +310,7 @@ impl<'t> NativeFile<'t> {
                 }
                 if kind == "function" {
                     let sig = Arc::new(sig(&self.syntax, owner));
-                    return Ty::Fn(Arc::new(Callable { sigs: vec![sig], env: Arc::new(self.env_at(owner)), ret: None }));
+                    return Ty::Fn(Arc::new(Callable::new(vec![sig], Arc::new(self.env_at(owner)), None)));
                 }
                 Ty::Unknown
             }
@@ -358,7 +383,7 @@ impl<'t> NativeFile<'t> {
         match ty {
             Ty::Union(parts) | Ty::Inter(parts) => parts.iter().flat_map(|part| self.callable_return_types(part)).collect(),
             Ty::Fn(callable) if callable.ret.is_none() => callable.sigs.iter().map(|sig| {
-                self.own_return(sig, callable.env.file).unwrap_or_else(|| self.ck().sig_result(sig, &callable.env, &[], Vec::new()))
+                self.own_return(&sig.syntax, sig.env.file).unwrap_or_else(|| self.ck().sig_result(&sig.syntax, &sig.env, &[], Vec::new()))
             }).collect(),
             _ => self.ck().callable_returns(ty),
         }
@@ -601,6 +626,10 @@ impl<'t> NativeFile<'t> {
                 self.narrow(id, t)
             }
             K::This => self.this_type(id),
+            K::Instantiation => self.ck().instantiate(&inner(F::Expr), s.all(id, F::TypeArg).map(|argument| self.annotation(argument)).collect()),
+            K::Class if s.parent(id).is_some_and(|parent|
+                !matches!(s.kind(parent), Some(K::Block | K::Program | K::Export))) =>
+                self.ck().class_value_at(s.tree.node(id).start, self.ck().file),
             K::Number => Ty::Lit(s.text(id).into(), "number"),
             K::String => Ty::Lit(s.text(id).into(), "string"),
             K::Template => Ty::Prim("string"),
@@ -770,7 +799,7 @@ impl<'t> NativeFile<'t> {
                     }
                     _ => None,
                 };
-                Ty::Fn(Arc::new(Callable { sigs: vec![Arc::new(sig)], env: Arc::new(self.env_at(id)), ret }))
+                Ty::Fn(Arc::new(Callable::new(vec![Arc::new(sig)], Arc::new(self.env_at(id)), ret)))
             }
             K::TaggedTemplate => {
                 let f = inner(F::Tag);
@@ -796,7 +825,7 @@ impl<'t> NativeFile<'t> {
                 continue;
             }
             let Some(key) = s.get(p, F::Key) else { return Ty::Unknown };
-            let Some(name) = super::statics::property_name(s, p) else { return Ty::Unknown };
+            let Some(name) = self.property_key_name(p) else { return Ty::Unknown };
             let name = name.into_boxed_str();
             let t = match s.kind(p) {
                 Some(K::Prop) => s.get(p, F::Value).map_or_else(|| self.type_of(key), |v| self.type_of(v)),
@@ -811,6 +840,64 @@ impl<'t> NativeFile<'t> {
             props.push(StructProperty { name, ty: t, origin: Some(PropertyOrigin { file: self.ck().file, node: p }) });
         }
         Ty::Struct(props.into())
+    }
+
+    /// Only direct references to a library Symbol constructor identify symbolic keys.
+    pub(super) fn symbolic_property_key(&self, property: u32) -> Option<String> {
+        let s = &self.syntax;
+        let key = s.get(property, F::Key).filter(|&key| s.is(key, K::Computed))?;
+        let expression = s.get(key, F::Expr).filter(|&expression| s.is(expression, K::Member))?;
+        let object = s.get(expression, F::Object).filter(|&object| s.is(object, K::Ident) && s.text(object) == "Symbol")?;
+        if self.decl_of(object).is_some() { return None }
+        let checker = self.ck();
+        let symbol = checker.lookup(&self.env_at(object), "Symbol");
+        let globals = checker.project.globals(checker.file);
+        let declarations = globals.names.get("Symbol")?;
+        if symbol.is_empty() || !symbol.iter().all(|decl| declarations.contains(decl) && checker.is_lib_decl(*decl)) { return None }
+        let name = s.get(expression, F::Property).map(|property| s.text(property))?;
+        self.symbol_constructor_key(&symbol, name).then(|| name.to_owned())
+    }
+
+    fn symbol_constructor_key(&self, symbol: &[DeclRef], name: &str) -> bool {
+        let resolution = self.ck().member_resolution(&self.ck().value_of(symbol), name);
+        if !resolution.declared { return false }
+        if matches!(resolution.ty, Ty::Prim("symbol")) { return true }
+        !resolution.declarations.is_empty() && resolution.declarations.iter().all(|declaration| {
+            declaration.member.kind == super::summary::MemberKind::Prop
+                && matches!(declaration.member.ty.as_ref(), Some(TypeSyn::Unique(inner))
+                    if matches!(&**inner, TypeSyn::Kw(keyword) if &**keyword == "symbol"))
+        })
+    }
+
+    pub(super) fn property_key_name(&self, property: u32) -> Option<String> {
+        super::statics::property_name(&self.syntax, property)
+            .or_else(|| self.symbolic_property_key(property).map(|name| format!("[Symbol.{name}]")))
+    }
+
+    /// Printed Symbol names share the string namespace, but not key identity.
+    /// Symbol path selectors require real keys; ordinary property contexts allow two strings.
+    pub(super) fn member_keys_match(&self, sender: &Ty, receiver: &Ty, name: &str, require_symbol: bool) -> bool {
+        if !(name.starts_with("[Symbol.") && name.ends_with(']')) { return true }
+        let key = |ty: &Ty| {
+            let resolution = self.ck().member_resolution(ty, name);
+            let mut keys = resolution.declarations.iter().map(|declaration| {
+                if let Some(origin) = &declaration.origin {
+                    if origin.file == self.ck().file {
+                        return self.property_key_name(origin.node).map(|_| self.symbolic_property_key(origin.node).is_some());
+                    }
+                }
+                if declaration.member.computed_key.is_some() {
+                    self.ck().declaration_key_symbol(declaration).and_then(|name| {
+                        let checker = self.ck();
+                        let symbol = checker.lookup(declaration.environment.as_ref()?, "Symbol");
+                        self.symbol_constructor_key(&symbol, name).then_some(true)
+                    })
+                } else { Some(false) }
+            });
+            let first = keys.next()??;
+            keys.all(|key| key == Some(first)).then_some(first)
+        };
+        key(sender).zip(key(receiver)).is_some_and(|(sender, receiver)| sender == receiver && (!require_symbol || sender))
     }
 
     fn object_spread_properties(&self, source: &Ty) -> Option<Vec<StructProperty>> {
@@ -893,7 +980,7 @@ impl<'t> NativeFile<'t> {
         let t = self.ck().call(f, &args, self.type_args(id));
         match f {
             Ty::Fn(c) if c.ret.is_none() => match &c.sigs[..] {
-                [sig] if sig.ret.is_none() => self.own_return(sig, c.env.file).unwrap_or(t),
+                [sig] if sig.syntax.ret.is_none() => self.own_return(&sig.syntax, sig.env.file).unwrap_or(t),
                 _ => t,
             },
             _ => t,
@@ -931,6 +1018,109 @@ fn may_be_nullish(ty: &Ty) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn class_expressions_keep_constructor_static_and_lexical_self_types() {
+        let source = r#"
+            class C { marker: string }
+            const K = class C { marker: number; self(): C { return this; } static marker: boolean };
+            /*@*/ new K().self().marker;
+            /*@*/ K.marker;
+            /*@*/ new C().marker;
+        "#;
+        crate::engine::tests::with_native_file(source, |file, marks| {
+            for (mark, expected) in marks.iter().zip(["number", "boolean", "string"]) {
+                let expression = file.syntax.get(*mark, super::F::Expr).unwrap();
+                assert!(matches!(file.type_of(expression), super::Ty::Prim(kind) if kind == expected),
+                    "{expected}: {:?}", file.type_of(expression));
+            }
+        });
+    }
+
+    fn symbolic_project(name: &str, source: &str, rules: &str) -> Vec<String> {
+        crate::engine::tests::lint_project(name, &[
+            ("tsconfig.json", r#"{"compilerOptions":{"lib":["fixture"],"types":[]}}"#),
+            ("node_modules/typescript/lib/lib.fixture.d.ts", "interface SymbolConstructor { readonly dispose: unique symbol; iterator: symbol; readonly asyncDispose: unique symbol; ordinary: number; for(value: string): symbol } declare const Symbol: SymbolConstructor; interface Promise<T> { then(callback: (value: T) => unknown): unknown } interface Disposable { [Symbol.dispose](): void } interface AsyncDisposable { [Symbol.asyncDispose](): Promise<void> }"),
+            ("main.ts", source),
+        ], "main.ts", rules)
+    }
+
+    #[test]
+    fn well_known_symbol_objects_expose_sources_and_callable_member_types() {
+        let rules = r#"
+            in ts_declarator.init rule source-known {
+                when !type_opaque && contains(type_members, "[Symbol.dispose]")
+                warn "resolved source"
+            }
+            in ts_declarator.init rule member-known {
+                each symbol_contract in callable_contracts(parent, node, ["[Symbol.dispose]"])
+                when any(symbol_contract.source, result => result.thenable)
+                warn "resolved callable"
+            }
+        "#;
+        for (name, source, key) in [
+            ("symbol-member-types", "const value: Disposable = { async [Symbol.dispose]() {} };", "[Symbol.dispose]"),
+            ("primitive-symbol-member-types", "interface Consumer { [Symbol.iterator](): void } const value: Consumer = { async [Symbol.iterator]() {} };", "[Symbol.iterator]"),
+        ] {
+            let messages = symbolic_project(name, source, &rules.replace("[Symbol.dispose]", key));
+            assert_eq!(messages.len(), 2, "{source}: {messages:?}");
+        }
+    }
+
+    #[test]
+    fn computed_symbol_keys_do_not_trust_shadowed_or_arbitrary_properties() {
+        let rules = "in ts_declarator.init rule known {\n when is ts_object && !type_opaque\n warn \"resolved\"\n}";
+        for (name, source) in [
+            ("symbol-shadow", "function f(Symbol: SymbolConstructor) { const value = { [Symbol.dispose]() {} }; }"),
+            ("symbol-unknown-member", "const value = { [Symbol.missing]() {} };"),
+            ("symbol-arbitrary", "declare function key(): symbol; const value = { [key()]() {} };"),
+            ("symbol-alias", "const S = Symbol; const value = { [S.dispose]() {} };"),
+            ("symbol-non-symbol-member", "const value = { [Symbol.ordinary]() {} };"),
+            ("symbol-constructor-method", "const value = { [Symbol.for]() {} };"),
+        ] {
+            assert!(symbolic_project(name, source, rules).is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn class_expression_keys_keep_the_lexical_symbol_binding() {
+        for (name, source, expected) in [
+            ("class-symbol-global", "using value = new (class { async [Symbol.dispose]() {} })();", 1),
+            ("class-symbol-param", "function f(Symbol: SymbolConstructor) { using value = new (class { async [Symbol.dispose]() {} })(); }", 0),
+            ("class-symbol-local", "function f() { const Symbol = { dispose: 'local' }; using value = new (class { async [Symbol.dispose]() {} })(); }", 0),
+        ] {
+            assert_eq!(symbolic_project(name, source, "rule no-misused-promises").len(), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn printed_symbol_names_keep_property_contracts_without_disposal_contracts() {
+        let source = "interface Consumer { '[Symbol.dispose]'(): void } const value: Consumer = { async '[Symbol.dispose]'() {} };";
+        let counts: Vec<_> = [
+            ("printed-symbol-root", "rule no-misused-promises"),
+            ("printed-symbol-variable", "rule no-misused-promises:void-variables"),
+            ("printed-symbol-property", "rule no-misused-promises:void-properties"),
+        ].into_iter().map(|(name, rules)| symbolic_project(name, source, rules).len()).collect();
+        assert_eq!(counts, vec![1, 0, 1]);
+    }
+
+    #[test]
+    fn disposal_contracts_follow_real_symbol_keys_not_printed_property_names() {
+        let cases = [
+            ("symbol-declared-disposal", "const source = { async [Symbol.dispose]() {} }; const value: Disposable = source;", 1),
+            ("symbol-inline-disposal", "using value = { async [Symbol.dispose]() {} };", 1),
+            ("symbol-bound-disposal", "const source = { async [Symbol.dispose]() {} }; using value = source;", 1),
+            ("symbol-string-disposal", "const value: Disposable = { async '[Symbol.dispose]'() {} };", 0),
+            ("symbol-shadow-disposal", "function f(Symbol: SymbolConstructor) { using value = { async [Symbol.dispose]() {} }; }", 0),
+            ("symbol-sync-disposal", "using value = { [Symbol.dispose]() {} };", 0),
+            ("symbol-awaited-disposal", "async function f() { await using value = { async [Symbol.asyncDispose]() {} }; }", 0),
+        ];
+        let counts: Vec<_> = cases.iter().map(|(name, source, _)| {
+            let messages = symbolic_project(name, source, "rule no-misused-promises");
+            messages.len()
+        }).collect();
+        assert_eq!(counts, cases.iter().map(|(_, _, expected)| *expected).collect::<Vec<_>>(), "{cases:?}");
+    }
+
     use crate::engine::tests::{native_linter, with_native_file};
     use std::path::Path;
 

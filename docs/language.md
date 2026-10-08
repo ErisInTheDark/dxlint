@@ -853,6 +853,8 @@ is wrong, messages) is written in the rule.
 | `static_number` | statically known numeric value of an expression (numeric, boolean and bigint literals, arithmetic, unmodified local bindings); null when unresolved |
 | `type_relations` | operand, annotation, original and context identity, bounded assignability, nested property mutability and generic shape; null when unresolved |
 | `type_flow(site, source)` | source/expected type relation records at declared, contextual and heritage sites: union domains and enum identities, tri-state assignability, aligned generic/index/property children, typed operands and receiver enum names; `complete: false` marks traversal limits |
+| `type_awaitability` | structural thenable union facts `{any, all, union_equivalent, complete}`; `all` requires every non-never arm to be known thenable, `any` needs one; `union_equivalent` is mutual assignability between awaited and ordinary arms of a known mixed union, or null |
+| `callable_contracts(site, source, member_path?)` | callable transfer rows `{origin, source, target, heritage, member_path, complete}`; source/target contain return arms `{kind, thenable}`. Origins are `argument`, `return`, `declared`, `contextual`, `heritage` or `resource`; heritage is a direct base node or null. The optional string-list path selects exactly one member chain; omitted or `[]` selects the root. Argument contracts include every visible overload, not only the selected one; unresolved signatures or work limits mark rows incomplete |
 | `type_structure(names, fields?)` | constrained recursive `{kind, parts, names, generic_names, aliases, members}`: array/tuple elements or union/intersection parts; optional tuple slots include undefined. Explicit `unknown`, open `parameter` and `unresolved` are distinct. `names` includes printed base types; `generic_names` contains root generic declaration names. `aliases` contains retained root-annotation alias names, not aliases propagated through inferred values or calls. Queried members contain winning `{owner, kind, signature, key_symbol}` declarations; owner is `{name, kind, from}` or null, and `key_symbol` verifies standard-library Symbol computed-key identity. The second argument selects the recursive fields returned (default: the six above); opt-in fields: `declarations` (`{name, kind, from, inherited}`), `callable`, `constructor` (declared construct signatures or class values), `symbol_constructor` (a named type's constructible value side), `class_value`, `property_names` (without signature markers or apparent function prototype members), `iterable` (null when unresolved) and, on the root, `property_writes` (property names assigned through the binding) |
 | `type_parameter_defaults`, `type_parameters_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
@@ -866,6 +868,10 @@ is wrong, messages) is written in the rule.
 | `first_token`, `last_token` | the node's first / last code token: `{text, kind, start, end}`; test it with `is` (`first_token is ts_identifier`) |
 | `paired_token` | on a node starting with `(`, `[` or `{` (a bracket token node, or `(a)`), or else ending with `)`, `]` or `}`: the matching bracket, as `first_token` |
 | `token_texts` | the node's code tokens, in order (comments and spacing dropped): equal lists mean the same tokens |
+
+`callable_contracts(parent, node, ["[Symbol.dispose]"])` asks only about that member, without traversing unrelated fields. `[Symbol.<name>]` path selectors require real Symbol identity on both sides, never printed-string properties. Symbol keys require the actual unshadowed library `Symbol` constructor and a declared symbol-valued member; aliases and arbitrary computed keys remain unknown. Ordinary object-property contexts still match string keys to string keys.
+
+Explicit instantiation (`fn<T>` or `typeof fn<T>`) binds each declared function signature independently; later calls do not infer those parameters again. Constructor instantiation, callable-object instantiation and functions with inferred body-return overrides remain unsupported and produce unknown types.
 
 Values and types are separate namespaces (`const X` does not hide an
 imported type `X`), and merged declarations (`interface X` + `const X`,
@@ -925,6 +931,17 @@ rule padding-line-between-statements {
   ignore "scripts/**"                # clauses add to the rule
 }
 ```
+
+Promise misuse checks are independent variants; the family enables all nine:
+
+```zlint
+rule no-misused-promises
+rule no-misused-promises:spreads off
+rule no-misused-promises:predicates off
+rule no-misused-promises:conditionals { set flagUnions "strict" }
+```
+
+`flagUnions` defaults to `"none"` (only provably all-thenable values). `"strict"` also flags known mixed unions whose awaited and ordinary arms are mutually assignable; `"all"` flags any known thenable arm.
 
 - `rule name` without `in` configures an existing rule: it turns it on at
   its default severity (unless it is on already), `rule name <severity>`
@@ -1087,6 +1104,7 @@ and `final-newline`.
 | `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
+| `.ts/typed/promises` | `no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
 | `.ts/assertions` | type-aware assertion and non-null policy, imported by `.ts` |
 | `.ts/naming` | name-format policy (`naming-convention` variants), open context groups and shared `naming_failure` helper; imported by `.ts/scoping` |

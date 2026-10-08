@@ -2,7 +2,7 @@
 
 use super::{Checker, Env, Ty};
 use super::super::modules::ModuleAt;
-use crate::fx_hash::FxHashMap;
+use crate::fx_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -39,7 +39,7 @@ impl Checker<'_> {
                 let mut generic = Vec::new();
                 for name in self.known_property_names(ty, 0)? {
                     match self.member(ty, &name) {
-                        Ty::Fn(callable) if callable.sigs.iter().any(|signature| !signature.type_params.is_empty()) => generic.push(name),
+                        Ty::Fn(callable) if callable.sigs.iter().any(|signature| !signature.syntax.type_params.is_empty()) => generic.push(name),
                         Ty::Unknown => return None,
                         member @ (Ty::Named(..) | Ty::Obj(..)) if self.known_property_names(&member, 0).is_none() => return None,
                         _ => {}
@@ -87,7 +87,11 @@ impl Checker<'_> {
                 Ty::Unknown => None,
                 Ty::Named(_, args) => Some(args.iter().collect()),
                 Ty::Obj(_, env) => Some(env.tparams.iter().map(|(_, ty)| ty).collect()),
-                Ty::Fn(callable) => Some(callable.env.tparams.iter().map(|(_, ty)| ty).collect()),
+                Ty::Fn(callable) => {
+                    let mut environments = FxHashSet::default();
+                    Some(callable.sigs.iter().filter(|signature| environments.insert(Arc::as_ptr(&signature.env)))
+                        .flat_map(|signature| signature.env.tparams.iter().map(|(_, ty)| ty)).collect())
+                }
                 Ty::Array(array) => Some(vec![&array.element]),
                 Ty::Tuple(tuple) => Some(tuple.iter().collect()),
                 _ => Some(Vec::new()),
@@ -122,12 +126,12 @@ impl Checker<'_> {
             Ty::Tuple(tuple) => nested.extend(tuple.iter().cloned()),
             Ty::Fn(callable) => {
                 for signature in &callable.sigs {
-                    if nested.len() + signature.params.len() + 1 > *remaining { return None }
-                    nested.extend(signature.params.iter().filter(|param| &*param.name != "this").map(|param| {
-                        param.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &callable.env))
+                    if nested.len() + signature.syntax.params.len() + 1 > *remaining { return None }
+                    nested.extend(signature.syntax.params.iter().filter(|param| &*param.name != "this").map(|param| {
+                        param.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &signature.env))
                     }));
                     nested.push(callable.ret.clone().unwrap_or_else(|| {
-                        signature.ret.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &callable.env))
+                        signature.syntax.ret.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &signature.env))
                     }));
                 }
             }

@@ -45,6 +45,7 @@ fn declaration(ck: &Checker<'_>, reference: DeclRef) -> Option<Value<'static>> {
         DeclKind::Alias => "type_alias", DeclKind::Function => "function",
         DeclKind::Var => "variable", DeclKind::Enum => "enum",
         DeclKind::Namespace => "namespace", DeclKind::Import { .. } | DeclKind::ImportAlias(_) => "import",
+        DeclKind::Lexical => return None,
     };
     Some(Value::record(vec![
         ("name".into(), Value::text_copy(&d.name)),
