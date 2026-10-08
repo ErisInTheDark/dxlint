@@ -840,6 +840,9 @@ is wrong, messages) is written in the rule.
 | `type_iterable` | constrained type supports synchronous iteration; null when unresolved |
 | `could_be_error` | expression syntax permits an Error-valued result through a possible value branch; does not require type analysis |
 | `error_value` | constrained value category (`error`, `any`, `unknown`, `undefined`, `other`), caught-binding provenance (`rethrown`), and unparenthesised byte `offset` |
+| `argument_transfers` | calls, constructions and tagged templates: any/generic argument and spread transfer rows `{offset, mode, error, sender, receiver}`; modes `argument`, `spread`, `array`, `tuple`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
+| `assignment_transfers` | assignments, initialisers, properties and destructuring: any/generic transfer rows `{offset, mode, error, sender, receiver}`; modes `any`, `generic`, `array`, `tuple`, `object`, `spread`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
+| `return_transfer` | returns and expression arrow bodies: transfer record `{mode, error, sender, receiver}` or null; modes `value`, `array`, `promise`, `generic`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `builtin_type(name)`, `builtin_constructor(name)` | standard-library type identity through instance heritage, or constructor value identity through class heritage; names alone do not identify user-defined types |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
 | `property_info` | on static member or index access: `{declared, visibility}` (`public`, `private`, `protected` or null), preserving declaration presence even when its value type is unresolved |
