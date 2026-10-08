@@ -2,6 +2,7 @@
 
 use super::{CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
+use crate::vm::{self, Begin, VExpr, V};
 use std::collections::hash_map::Entry as MapEntry;
 
 /// A `let` attribute: its expression on each layer that defines it.
@@ -13,18 +14,26 @@ pub struct Attr {
 
 pub struct Attributes {
     attrs: Vec<CompiledAttr>,
+    /// Per matcher: how many VM-lowered attributes its records hold.
+    layout: Vec<u16>,
 }
 
 struct CompiledAttr {
     name: String,
     defs: Vec<CExpr>,
+    /// Each definition's typed form, when it lowers to the VM.
+    lowered: Vec<Option<VExpr>>,
     routes: Vec<Route>,
 }
+
+/// A `Route::Defined` that is not in the VM's records.
+const NO_SLOT: u16 = u16::MAX;
 
 #[derive(Clone, Copy)]
 enum Route {
     Missing,
-    Defined(u32),
+    /// The definition's index, and its slot in the matcher's VM record.
+    Defined(u32, u16),
     Forward(u16),
 }
 
@@ -35,7 +44,8 @@ pub(super) enum Entry<'a> {
 
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
-        if attrs.is_empty() { return Self { attrs: Vec::new() }; }
+        if attrs.is_empty() { return Self { attrs: Vec::new(), layout: Vec::new() }; }
+        let mut layout = vec![0u16; grammar.matchers.len()];
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
             let mut chain = Vec::new();
             let mut at = Some(kind as u32);
@@ -50,6 +60,7 @@ impl Attributes {
             by_attr[attr as usize].push((matcher, index, label));
         }
         let attrs = attrs.into_iter().zip(by_attr).map(|(attr, forwards)| {
+            let lowered: Vec<Option<VExpr>> = attr.defs.iter().map(|(_, expr)| vm::lower(expr, &grammar.functions)).collect();
             let mut routes = Vec::new();
             if !attr.defs.is_empty() || !forwards.is_empty() {
                 let mut definitions = vec![u32::MAX; grammar.matchers.len()];
@@ -60,9 +71,17 @@ impl Attributes {
                 for (matcher, index, label) in forwards {
                     forwarding[matcher as usize] = Some((index, label));
                 }
-                routes = ancestors.iter().map(|chain| {
+                routes = ancestors.iter().enumerate().map(|(matcher, chain)| {
                     let definition = chain.iter().map(|&id| definitions[id]).min().unwrap_or(u32::MAX);
-                    if definition != u32::MAX { return Route::Defined(definition); }
+                    if definition != u32::MAX {
+                        let slot = if lowered[definition as usize].is_some() {
+                            layout[matcher] += 1;
+                            layout[matcher] - 1
+                        } else {
+                            NO_SLOT
+                        };
+                        return Route::Defined(definition, slot);
+                    }
                     // Forwards keep declaration order, not nearest-ancestor order.
                     chain.iter().filter_map(|&id| forwarding[id]).min_by_key(|(index, _)| *index)
                         .map_or(Route::Missing, |(_, label)| Route::Forward(label))
@@ -71,10 +90,11 @@ impl Attributes {
             CompiledAttr {
                 name: attr.name,
                 defs: attr.defs.into_iter().map(|(_, expr)| expr).collect(),
+                lowered,
                 routes,
             }
         }).collect();
-        Self { attrs }
+        Self { attrs, layout }
     }
 
     fn route(&self, matcher: u32, attr: u16) -> Route {
@@ -83,7 +103,44 @@ impl Attributes {
     }
 }
 
+impl vm::Host for Ctx<'_> {
+    fn tree(&self) -> &crate::grammar::Tree {
+        self.tree
+    }
+
+    fn grammar(&self) -> &Grammar {
+        self.grammar
+    }
+
+    fn source(&self) -> &str {
+        self.source
+    }
+
+    fn attr(&self, node: u32, attr: u16) -> Option<V> {
+        match self.attrs.route(self.tree.node(node).matcher, attr) {
+            Route::Missing => Some(V::Null),
+            Route::Forward(_) | Route::Defined(_, NO_SLOT) => None,
+            Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
+        }
+    }
+}
+
 impl<'a> Ctx<'a> {
+    /// A VM-lowered attribute from the file's records, computing it there
+    /// first; `None` when the VM gives up (the interpreter answers).
+    fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
+        match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
+            Begin::Ready(v) => Some(v),
+            Begin::GiveUp => None,
+            Begin::Compute(at) => {
+                let lowered = self.attrs.attrs[attr as usize].lowered[index as usize].as_ref().expect("slotted definitions are lowered");
+                let v = vm::eval(self, node, lowered);
+                self.memo.vm.finish(at, v);
+                v
+            }
+        }
+    }
+
     pub(super) fn attr(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
         if self.memo.params.borrow().len() == self.memo.param_base.get() {
             self.attr_unbound(node, attr)
@@ -93,6 +150,8 @@ impl<'a> Ctx<'a> {
     }
 
     fn attr_unbound(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
+        // `ZLINT_VM=verify`: the VM's value, compared with the interpreter's.
+        let mut checked = None;
         let index = match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => return Ok(Value::Null),
             Route::Forward(label) => {
@@ -106,7 +165,17 @@ impl<'a> Ctx<'a> {
                     _ => Value::list(values),
                 });
             }
-            Route::Defined(index) => index as usize,
+            Route::Defined(index, slot) => {
+                if slot != NO_SLOT && vm::mode() != vm::Mode::Off {
+                    if let Some(v) = self.vm_attr(node, attr, index, slot) {
+                        if vm::mode() == vm::Mode::On {
+                            return Ok(v.value());
+                        }
+                        checked = Some(v);
+                    }
+                }
+                index as usize
+            }
         };
         let def = &self.attrs.attrs[attr as usize];
         let key = (node, attr);
@@ -120,6 +189,9 @@ impl<'a> Ctx<'a> {
         let ctx = Ctx { node, options: &[], ..*self };
         match ctx.eval(&def.defs[index]) {
             Ok(value) => {
+                if let Some(v) = checked.filter(|v| !v.same(&value)) {
+                    eprintln!("zlint vm mismatch: {} attribute `{}` on node {node}: vm {v:?}, interpreter {value:?}", self.file, def.name);
+                }
                 self.memo.attributes.borrow_mut().insert(key, Entry::Ready(value.clone()));
                 Ok(value)
             }
@@ -169,7 +241,7 @@ mod tests {
             Attr { name: "fallback".into(), defs: vec![(base, number(3.0))] },
         ], &[(leaf, 0, 0), (leaf, 1, 0)], &g);
         let read = |attr| match plan.route(leaf, attr) {
-            Route::Defined(index) => match &plan.attrs[attr as usize].defs[index as usize] {
+            Route::Defined(index, _) => match &plan.attrs[attr as usize].defs[index as usize] {
                 CExpr::Const(Value::Num(n)) => *n,
                 _ => panic!("number"),
             },

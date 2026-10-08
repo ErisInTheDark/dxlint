@@ -285,6 +285,8 @@ fn project_fact(base: &CExpr, key: Option<&str>) -> Option<CExpr> {
 #[derive(Default)]
 pub struct AttrMemo<'a> {
     attributes: RefCell<FxHashMap<(u32, u16), attributes::Entry<'a>>>,
+    /// VM-lowered attributes' values ([`crate::vm`]).
+    vm: crate::vm::FileVm,
     locals: RefCell<FxHashMap<(u32, u32, u16), Value<'a>>>,
     /// Native fact reads without arguments, per (node, read slot). Whole
     /// records and registered projections share this owner.
