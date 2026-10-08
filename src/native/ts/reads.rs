@@ -55,7 +55,7 @@ impl Dep {
             Dep::IsDir(p, b) => directory_exists(p) == *b,
             Dep::List(p, h) => listing(p).1 == *h,
             Dep::Summary(p, content_hash, f) => content(p).1 == *content_hash || fingerprint(p) == *f,
-            Dep::Globals(p, h) => walk_globals(p).1 == *h,
+            Dep::Globals(p, h) => walk_globals(p, 1).1 == *h,
         }
     }
 }
@@ -247,9 +247,13 @@ pub(crate) fn buffer(path: &Path) -> Option<Arc<str>> {
 
 // ---- reading -----------------------------------------------------------------------
 
+fn text(path: &Path) -> Option<Arc<str>> {
+    buffer(path).or_else(|| std::fs::read_to_string(path).ok().map(Into::into))
+}
+
 /// A file's text and its hash ([`MISSING`] when unreadable).
 fn content(path: &Path) -> (Option<Arc<str>>, u64) {
-    let text = buffer(path).or_else(|| std::fs::read_to_string(path).ok().map(Into::into));
+    let text = text(path);
     let hash = text.as_deref().map_or(MISSING, |t| hash_bytes(t.as_bytes()));
     (text, hash)
 }
@@ -324,19 +328,31 @@ fn declares_globals(path: &Path, text: &str) -> bool {
     script || text.contains("declare global")
 }
 
-fn walk_globals(dir: &Path) -> (Vec<PathBuf>, u64) {
-    let mut found = Vec::new();
-    for entry in ignore::WalkBuilder::new(dir).build().flatten() {
-        let path = entry.path();
+fn walk_globals(dir: &Path, jobs: usize) -> (Vec<PathBuf>, u64) {
+    let declares = |path: &Path| {
         let name = path.to_string_lossy();
         if !(name.ends_with(".ts") || name.ends_with(".tsx")) {
-            continue;
+            return false;
         }
-        let Some(text) = content(path).0 else { continue };
-        if declares_globals(path, &text) {
-            found.push(path.to_path_buf());
-        }
-    }
+        text(path).is_some_and(|text| declares_globals(path, &text))
+    };
+    let mut found = if jobs <= 1 {
+        ignore::WalkBuilder::new(dir).build().flatten()
+            .filter(|entry| declares(entry.path())).map(|entry| entry.into_path()).collect::<Vec<_>>()
+    } else {
+        let found = std::sync::Mutex::new(Vec::new());
+        ignore::WalkBuilder::new(dir).threads(jobs).build_parallel().run(|| {
+            Box::new(|entry| {
+                if let Ok(entry) = entry {
+                    if declares(entry.path()) {
+                        found.lock().expect("global files").push(entry.into_path());
+                    }
+                }
+                ignore::WalkState::Continue
+            })
+        });
+        found.into_inner().expect("global files")
+    };
     let buffers = buffers().read().expect("buffers lock");
     let mut seen: HashSet<PathBuf> = found.iter().cloned().collect();
     for path in buffers.files_under(dir) {
@@ -348,6 +364,7 @@ fn walk_globals(dir: &Path) -> (Vec<PathBuf>, u64) {
             found.push(path);
         }
     }
+    found.sort_unstable();
     let mut h = std::collections::hash_map::DefaultHasher::new();
     found.hash(&mut h);
     let hash = h.finish();
@@ -355,9 +372,9 @@ fn walk_globals(dir: &Path) -> (Vec<PathBuf>, u64) {
 }
 
 /// The TypeScript files below `dir` (gitignore respected) that add to the
-/// global scope, in disk walk order followed by sorted buffer-only paths.
-pub fn global_files(dir: &Path) -> Vec<PathBuf> {
-    let (found, hash) = walk_globals(dir);
+/// global scope, in lexical path order, including unsaved editor buffers.
+pub fn global_files(dir: &Path, jobs: usize) -> Vec<PathBuf> {
+    let (found, hash) = walk_globals(dir, jobs);
     walks().write().expect("walks lock").insert(dir.to_path_buf(), Arc::new(found.iter().cloned().collect()));
     note(Dep::Globals(dir.to_path_buf(), hash));
     found
@@ -372,7 +389,7 @@ pub fn globals_changed(changed: &[PathBuf]) -> Vec<PathBuf> {
         .iter()
         .map(|p| {
             let name = p.to_string_lossy();
-            (p, (name.ends_with(".ts") || name.ends_with(".tsx")) && content(p).0.is_some_and(|t| declares_globals(p, &t)))
+            (p, (name.ends_with(".ts") || name.ends_with(".tsx")) && text(p).is_some_and(|t| declares_globals(p, &t)))
         })
         .collect();
     walks
@@ -385,6 +402,63 @@ pub fn globals_changed(changed: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_module_precedence_orders_disk_and_buffer_files_together() {
+        use super::super::modules::{ModRef, Project};
+        let dir = std::env::current_dir().unwrap().join(format!("target/global-precedence-{}", std::process::id()));
+        let config = dir.join("tsconfig.json");
+        let first = dir.join("a.d.ts");
+        let last = dir.join("z.d.ts");
+        set_buffer(&config, r#"{"compilerOptions":{"lib":[],"types":[]}}"#);
+        set_buffer(&first, r#"declare module "order" { const winner: "first"; }"#);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&last, r#"declare module "order" { const winner: "last"; }"#).unwrap();
+        let resolved = [1, 4].map(|jobs| {
+            let mut project = Project::default();
+            project.set_discovery_jobs(jobs);
+            let from = project.file_id(&dir.join("main.ts"));
+            match project.resolve(from, "order") {
+                Some(ModRef::Ambient(file, _)) => Some(project.path(file)),
+                _ => None,
+            }
+        });
+        std::fs::remove_file(last).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        drop_buffer(&config);
+        drop_buffer(&first);
+        assert_eq!(resolved, [Some(first.clone()), Some(first)]);
+    }
+
+    #[test]
+    fn global_discovery_modes_preserve_membership_reads_and_buffers() {
+        let dir = std::env::current_dir().unwrap().join(format!("target/global-discovery-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        for (name, text) in [
+            (".gitignore", "ignored.d.ts\n"),
+            ("z.d.ts", "declare const Last: number;"),
+            ("a.ts", "export {};"),
+            ("ignored.d.ts", "declare const Ignored: number;"),
+        ] { std::fs::write(dir.join(name), text).unwrap(); }
+        let first = dir.join("a.ts");
+        let virtual_file = dir.join("virtual/global.tsx");
+        set_buffer(&first, "export {}; declare global { interface First {} }");
+        set_buffer(&virtual_file, "export {}; declare global { interface Virtual {} }");
+        let (serial, recorded) = track(|| global_files(&dir, 1));
+        let parallel = global_files(&dir, 4);
+        let same = recorded.deps.iter().all(|dep| dep.holds(|_| 0));
+        set_buffer(&first, "export {};");
+        let changed = recorded.deps.iter().any(|dep| !dep.holds(|_| 0));
+        drop_buffer(&first);
+        drop_buffer(&virtual_file);
+        for name in [".gitignore", "z.d.ts", "a.ts", "ignored.d.ts"] { std::fs::remove_file(dir.join(name)).unwrap(); }
+        std::fs::remove_dir(dir.join(".git")).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
+        assert_eq!(serial, parallel);
+        assert_eq!(serial, [first, virtual_file, dir.join("z.d.ts")]);
+        assert!(same, "parallel discovery must hash membership like serial validation");
+        assert!(changed, "a buffer ceasing to declare globals must invalidate membership");
+    }
 
     #[test]
     fn buffered_directories_merge_with_disk_and_invalidate_reads() {
@@ -402,7 +476,7 @@ mod tests {
             assert!(is_dir(&dir.join("virtual/nested")));
             assert_eq!(list(&dir), ["disk.txt", "virtual"]);
             assert_eq!(list(&dir.join("virtual")), ["nested", "other.ts"]);
-            assert_eq!(global_files(&dir).as_slice(), std::slice::from_ref(&file));
+            assert_eq!(global_files(&dir, 1).as_slice(), std::slice::from_ref(&file));
         });
         assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
         assert!(reads.deps.iter().filter(|dep| matches!(dep, Dep::IsDir(..) | Dep::List(..))).all(|dep| dep.touches(&file)));

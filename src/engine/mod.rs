@@ -300,6 +300,11 @@ impl Linter {
         self.rule_jobs = jobs.max(1);
     }
 
+    /// Budget for the shared, one-time project global discovery.
+    pub fn set_discovery_jobs(&mut self, jobs: usize) {
+        self.project.set_discovery_jobs(jobs);
+    }
+
     /// Collect `--profile` counters from now on.
     pub fn enable_profile(&mut self) {
         self.profile = Some(Profile::new(self.grammar.matchers.len(), self.rules.len()));
@@ -1015,7 +1020,7 @@ mod fix_span_tests {
 
     #[test]
     fn fix_span_only_layer_reads_keep_token_layers_reachable() {
-        let lint = native_linter("in ts_call rule r warn \"change\" fix at last(descendants(ts_comma)) as \";\"");
+        let lint = native_linter("in ts_call rule r warn \"change\" fix at { value descendants(ts_comma); last } as \";\"");
         let reports = lint.lint(Path::new("/root/a.ts"), "f(a,b);");
         assert_eq!(reports.len(), 1);
         assert_eq!(apply_fixes("f(a,b);", &reports), ("f(a;b);".to_owned(), 1));

@@ -205,6 +205,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
             let threads = jobs.min(queue.len().max(1));
             // File and rule workers share one budget, rather than multiplying it.
             linter.set_rule_jobs(jobs / threads);
+            linter.set_discovery_jobs(jobs / threads);
             let linter = &*linter;
             std::thread::scope(|w| {
                 for _ in 0..threads {

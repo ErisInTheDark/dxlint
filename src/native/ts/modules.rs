@@ -114,6 +114,7 @@ struct Known {
 
 #[derive(Default)]
 pub struct Project {
+    discovery_jobs: usize,
     files: RwLock<Files>,
     summaries: RwLock<HashMap<FileId, Known>>,
     configs: Mutex<HashMap<PathBuf, Cached<Option<Arc<Config>>>>>,
@@ -152,6 +153,10 @@ pub struct Stale {
 static GLOBALS_BUILT: AtomicU64 = AtomicU64::new(1);
 
 impl Project {
+    pub fn set_discovery_jobs(&mut self, jobs: usize) {
+        self.discovery_jobs = jobs.max(1);
+    }
+
     pub fn file_id(&self, path: &Path) -> FileId {
         if let Some(&id) = self.files.read().ok().and_then(|f| f.by_path.get(path).copied()).as_ref() {
             return id;
@@ -609,11 +614,16 @@ impl Project {
         }
         // The project's own globals: `declare global` blocks and script files
         // (no imports or exports) in this project and the ones it references.
+        let mut project_files = Vec::new();
         for dir in std::iter::once(&config.dir).chain(&config.references) {
-            for path in reads::global_files(dir) {
-                if seen.insert(path.clone()) {
-                    files.push(path);
-                }
+            // Shared setup uses one file's worker allocation. Rule groups may
+            // briefly overlap it, but other file workers keep their own budget.
+            project_files.extend(reads::global_files(dir, self.discovery_jobs.max(1)));
+        }
+        project_files.sort_unstable();
+        for path in project_files {
+            if seen.insert(path.clone()) {
+                files.push(path);
             }
         }
         let mut g = Globals::default();
