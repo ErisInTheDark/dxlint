@@ -36,3 +36,11 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - with every rule on (`rule *`), std must build without errors (`engine/tests.rs` checks)
 - native code reads the filesystem only through `native/ts/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`). Else `.zlintcache` replays stale results
 - lint output depends only on file text, config tokens and recorded reads
+
+## Scratch
+
+- `scratch/` (gitignored) is agent workspace; `scratch/INDEX.md` lists every entry: owner, purpose, delete-when. Add the row when creating; unlisted entries are deletable
+- Battle-test codebases (`wayward`, `fluff`, `transition` and derived `-z`/`-mut` copies) are permanent
+- Never copy binaries or libraries: pin `target/bin/<id>.exe` + `target/build/<id>/library` by hash
+- Campaigns keep summaries and changed cases, not full raw jsonl or profiles; one dir per task
+- Delete only with user approval; propose a task's scratch cleanup when its work lands
