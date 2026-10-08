@@ -60,4 +60,18 @@ in ts_jsx_expression.expression rule no-unsafe-enum-assignment:jsx {
   when any(contexts, context => enum_context_bad(context))
   warn "The value assigned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
 }
+in ts_call.argument, ts_new.argument, ts_template.expression rule no-unsafe-enum-assignment:arguments {
+  when !(is ts_template.expression) || parent is ts_tagged_template.quasi
+  when unparenthesised_node(node) not (ts_object, ts_array)
+  let contexts type_flow(node, node)
+  when any(contexts, context => context.origin == "argument" && enum_context_bad(context))
+  warn "The argument passed here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
+in ts_return.argument, ts_arrow.body rule no-unsafe-enum-assignment:returns {
+  when unparenthesised_node(node) not (ts_object, ts_array, ts_block)
+  let contexts type_flow(node, node)
+  when any(contexts, context => context.origin == "return" && enum_context_bad(context))
+  report at if is ts_return.argument then parent.node else node
+  warn "The value returned here does not have a shared enum type with the expected enum {enum_names_text(contexts)}."
+}
 }

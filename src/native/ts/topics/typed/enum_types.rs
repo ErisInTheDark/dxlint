@@ -265,6 +265,43 @@ mod tests {
     use crate::native::ts::types::StructProperty;
     use crate::engine::tests::with_native_file;
 
+    #[test]
+    fn enum_argument_contracts_cover_calls_constructors_tags_and_spreads() {
+        let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
+        for calls in [
+            "function take(value: Fruit): void {} take(Fruit.Apple); take(1);",
+            "class Basket { constructor(public value: Fruit) {} } new Basket(Fruit.Apple); new Basket(1);",
+            "interface TemplateStringsArray {} declare function tag(strings: TemplateStringsArray, value: Fruit): string; tag`${Fruit.Apple}`; tag`${1}`;",
+            "function take(...values: [Fruit, Fruit]): void {} take(Fruit.Apple, Fruit.Apple); take(Fruit.Apple, 1);",
+            "function take(value: Fruit): void {} take(...[Fruit.Apple]); take(...[1]);",
+            "function take(...values: Fruit[]): void {} declare const safe: Fruit[]; declare const unsafe: number[]; take(...safe); take(...unsafe);",
+        ] {
+            let source = format!("enum Fruit {{ Apple }} {calls}");
+            assert_eq!(linter.lint(std::path::Path::new("/root/a.ts"), &source).len(), 1, "{calls}");
+        }
+    }
+
+    #[test]
+    fn enum_return_contracts_cover_bodies_arrows_and_async_values() {
+        let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
+        for returns in [
+            "function safe(): Fruit { return Fruit.Apple; } function unsafe(): Fruit { return 1; }",
+            "const safe = (): Fruit => Fruit.Apple; const unsafe = (): Fruit => 1;",
+            "async function safe(): Promise<Fruit> { return Fruit.Apple; } async function unsafe(): Promise<Fruit> { return 1; }",
+            "declare const safeValue: Promise<Fruit>; declare const unsafeValue: Promise<number>; async function safe(): Promise<Fruit> { return safeValue; } async function unsafe(): Promise<Fruit> { return unsafeValue; }",
+        ] {
+            let source = format!("interface Promise<T> {{ then(callback: (value: T) => unknown): unknown }} enum Fruit {{ Apple }} {returns}");
+            assert_eq!(linter.lint(std::path::Path::new("/root/a.ts"), &source).len(), 1, "{returns}");
+        }
+    }
+
+    #[test]
+    fn enum_call_and_return_containers_report_each_unsafe_value_once() {
+        let linter = crate::engine::tests::native_linter("rule no-unsafe-enum-assignment");
+        let source = "enum Fruit { Apple } function take(value: { fruit: Fruit }): void {} take({ fruit: Fruit.Apple }); take({ fruit: 1 }); function safe(): { fruit: Fruit } { return { fruit: Fruit.Apple }; } function unsafe(): { fruit: Fruit } { return { fruit: 1 }; }";
+        assert_eq!(linter.lint(std::path::Path::new("/root/a.ts"), source).len(), 2);
+    }
+
     fn relation_count(value: &Value<'_>) -> usize {
         1 + value.key("children").items().iter().map(relation_count).sum::<usize>()
     }
