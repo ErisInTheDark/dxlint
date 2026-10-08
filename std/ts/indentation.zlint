@@ -11,7 +11,7 @@ group indent_lists ts_call, ts_new, ts_function, ts_arrow, ts_method, ts_array, 
 group indent_attribute_parts ts_import_attribute, ts_import_attribute_comma, ts_import_attribute_comment
 # Closing dotted names are text, not component references; native token children require an overlay.
 in ts_jsx_name layer indent_jsx_names match indent_jsx_name_member dot:/\./ /\s*/ property:/[^\s.:]+/
-in indent_jsx_name_member let indent_jsx_closing containing(ts_jsx_element.closing)
+in indent_jsx_name_member let indent_jsx_closing containing(ts_jsx_closing.name)
 in indent_jsx_name_member let indent_jsx_closing_anchor if position(indent_jsx_closing.offset).js_column == len(indent_jsx_closing.indent) + 1 then indent_jsx_closing else node_at(indent_jsx_closing.token_neighbours.before.start)
 
 fn indent_numeric(mode) = if type_of(mode) == "num" then mode else 1
@@ -31,8 +31,8 @@ fn indent_declaration_level(owner, style, mode) =
   else divide(position(owner.indent_first_item.first_token.start).js_column - 1 - len(owner.indent), if mode == "tab" then 1 else mode)
 fn indent_function_offset(owner, policy, declaration, expression) =
   default(policy, if owner is ts_function && owner.parent is (ts_program, ts_block, ts_export) then declaration else expression)
-fn indent_jsx_token_level(item) = if item is ts_jsx_fragment.token && item.text == "/" && item.space_after.line_break then 1 else 0
-fn indent_native_expected(item, unit) = if item == null then null else if item is (ts_jsx_element.token, ts_jsx_fragment.token) then item.parent.indent indent_steps(unit, indent_jsx_token_level(item)) else item.indent_anchor indent_steps(unit, item.indent_level)
+fn indent_jsx_token_level(item) = if item is ts_jsx_closing.token && item.parent.parent is ts_jsx_fragment && item.text == "/" && item.space_after.line_break then 1 else 0
+fn indent_native_expected(item, unit) = if item == null then null else if item is (ts_jsx_opening.token, ts_jsx_closing.token) then item.parent.parent.indent indent_steps(unit, indent_jsx_token_level(item)) else item.indent_anchor indent_steps(unit, item.indent_level)
 fn indent_attribute_expected(item, unit) =
   if item.offset < item.indent_attribute_container.open.end_offset then indent_native_expected(node_at(item.indent_attribute_container.indent_module_owner.indent_module_tail), unit)
   else indent_native_expected(item.indent_attribute_container.indent_attribute_anchor, unit) indent_steps(unit, if item.indent_attribute_item != null && item.indent_attribute_item.indent_attribute_anchor.offset != item.indent_attribute_item.offset && position(item.indent_attribute_item.indent_attribute_anchor.first_token.start).js_line == position(item.indent_attribute_container.open.offset).js_line then 0 else 1)
@@ -167,7 +167,7 @@ in ts_comment let indent_comment_list containing(indent_lists)
 in ts_switch let indent_switch_open first(filter([] token.node, item => item is ts_open_brace))
 
 in ts_node let indent_reset false
-in ts_token let indent_reset false
+in ts_token let indent_reset if parent is ts_jsx_opening then parent.indent_reset else if parent is (ts_jsx_attribute, ts_jsx_spread_attribute) then parent.parent.indent_reset else false
 in ts_line let indent_checked true
 in indent_calls let indent_arguments_offset null
 in ts_function, ts_arrow, ts_method let indent_parameters_offset null
@@ -250,10 +250,13 @@ in ts_line rule indent {
   indent ts_conditional.token by if flat_ternary_expressions && indent_flat_ternary(parent, containing(ts_statement)) then 0 else 1
   indent ts_conditional_type.consequent, ts_conditional_type.alternate, ts_conditional_type.token by if parent is ts_conditional_type.alternate && position(parent.extends.last_token.end).js_line == position(parent.consequent.first_token.start).js_line then 0 else 1
   indent in ts_jsx_element, ts_jsx_fragment
+  indent in ts_jsx_opening
   indent in ts_jsx_expression, ts_jsx_spread_attribute
-  indent ts_jsx_element.name, ts_jsx_element.property, ts_jsx_element.body, ts_jsx_fragment.body
-  indent ts_jsx_element.closing from token_neighbours.before.start
-  indent ts_jsx_element.token, ts_jsx_fragment.token from parent.offset by indent_jsx_token_level(node)
+  indent ts_jsx_element.body, ts_jsx_fragment.body
+  indent ts_jsx_element.closing, ts_jsx_fragment.closing from parent.offset by 0
+  indent in ts_jsx_fragment.closing from parent.offset by 1
+  indent ts_jsx_closing.name from token_neighbours.before.start
+  indent ts_jsx_opening.token, ts_jsx_closing.token from parent.parent.offset by indent_jsx_token_level(node)
   indent ts_jsx_attribute.token from parent.offset by indent_numeric(assignment_operator)
   indent ts_jsx_attribute.value from token_neighbours.before.start by indent_numeric(assignment_operator)
   indent ts_function_type.parameter, ts_method_signature.parameter, ts_call_signature.parameter

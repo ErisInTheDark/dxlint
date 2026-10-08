@@ -1101,10 +1101,12 @@ impl<'t> Binder<'_, 't> {
             }
             K::Computed => self.walk_fields(id, scope, mode, &[F::Expr]),
             // The opening name is a use (components); the closing one not.
-            K::JsxElement => {
-                self.walk_fields(id, scope, Mode::Value, &[F::Name, F::Property, F::Body]);
+            K::JsxElement | K::JsxFragment => self.walk_fields(id, scope, Mode::Value, &[F::Opening, F::Body]),
+            K::JsxOpening => {
+                self.walk_fields(id, scope, Mode::Value, &[F::Name, F::Property]);
                 self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
             }
+            K::JsxClosing => {}
             _ => {
                 let type_kind = kind as u16 >= K::TypeRef as u16;
                 for (f, c) in s.kids(id).collect::<Vec<_>>() {
@@ -1219,6 +1221,16 @@ mod tests {
     use std::path::Path;
 
     use crate::engine::tests::native_linter;
+
+    #[test]
+    fn jsx_only_reads_opening_component_names_and_attribute_values() {
+        let linter = native_linter("rule no-undef");
+        let source = "const view = <Missing value={alsoMissing}><intrinsic /></Missing>;";
+        let diagnostics = linter.lint(Path::new("/root/a.tsx"), source);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+        assert_eq!(diagnostics.iter().filter(|diagnostic| &source[diagnostic.start..diagnostic.end] == "Missing").count(), 1);
+        assert!(diagnostics.iter().any(|diagnostic| &source[diagnostic.start..diagnostic.end] == "alsoMissing"));
+    }
 
     #[test]
     fn implicit_arguments_resolve_only_in_real_functions_and_wrappers() {

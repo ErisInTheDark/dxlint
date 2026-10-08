@@ -1,6 +1,5 @@
 //! The node kinds of the TypeScript front end, and the fields each kind can
 //! have. Rules see a kind as the layer `ts_<name>` and its fields as fields.
-//! Names follow ESTree where it has one, and are whole words otherwise.
 
 macro_rules! fields {
     ($($v:ident = $s:literal),* $(,)?) => {
@@ -23,7 +22,7 @@ fields! {
     DefaultImport = "default_import", Namespace = "namespace", Imported = "imported", Local = "local",
     Exported = "exported", Quasi = "quasi", Tag = "tag", Constraint = "constraint", Default = "default",
     Check = "check", Optional = "optional", Modifier = "modifier", Decorator = "decorator", Qualifier = "qualifier",
-    Closing = "closing",
+    Opening = "opening", Closing = "closing",
     // The node's own punctuation and keyword tokens (see `tokens::attach_selected`).
     Token = "token",
 }
@@ -140,12 +139,13 @@ kinds! {
     ImportCall = "ts_import_call" [Arg],
     Instantiation = "ts_instantiation" [Expr, TypeArg],
     // ---- JSX
-    // `name`: a component (`Foo`, `a.b`: identifiers and members, which
-    // reference bindings) or a `ts_jsx_name` (`div`, `a-b`, `a:b`), as
-    // eslint-scope sees them; `property`: attributes; `body`: children;
-    // `closing`: the closing tag's name.
-    JsxElement = "ts_jsx_element" [Name, TypeArg, Property, Body, Closing],
-    JsxFragment = "ts_jsx_fragment" [Body],
+    JsxElement = "ts_jsx_element" [Opening, Body, Closing],
+    JsxFragment = "ts_jsx_fragment" [Opening, Body, Closing],
+    // Opening names reference components (`Foo`, `a.b`) or are plain
+    // `ts_jsx_name`s (`div`, `a-b`, `a:b`); `property`: attributes.
+    JsxOpening = "ts_jsx_opening" [Name, TypeArg, Property],
+    // Closing names are plain text, not references. Fragment tags have no name.
+    JsxClosing = "ts_jsx_closing" [Name],
     JsxAttribute = "ts_jsx_attribute" [Name, Value],
     JsxSpreadAttribute = "ts_jsx_spread_attribute" [Arg],
     // `{expression}` as a child or attribute value; `{}` and `{/* c */}`

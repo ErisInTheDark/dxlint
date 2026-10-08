@@ -1,8 +1,5 @@
-//! JSX layout and shape (`std/ts/jsx`): @stylistic's jsx-* rules.
+//! JSX rules over native syntax and ordinary project overrides.
 
-use crate::expr::facts::Fact;
-
-mod metadata;
 #[cfg(test)]
 mod tags;
 #[cfg(test)]
@@ -11,10 +8,6 @@ mod children;
 mod presence;
 #[cfg(test)]
 mod indent;
-
-pub const FACTS: &[Fact] = &[
-    Fact { name: "jsx_syntax", doc: "native JSX elements/fragments: opening and closing tag spans {start, end}, and self_closing", get: |f, n| f.with_file(metadata::syntax, n) },
-];
 
 #[cfg(test)]
 mod tests {

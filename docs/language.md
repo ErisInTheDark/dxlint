@@ -717,8 +717,7 @@ attribute: it stays next to its rule.
 turns its syntax tree into `ts_*` layers: `ts_if` with fields `test`,
 `consequent`, `alternate`; `ts_call` with `callee`, `type_argument`,
 `argument`; `ts_binary`/`ts_logical` with `left`, `operator`, `right`, and so
-on (ESTree names, abbreviations spelled out; `zlint tree file.ts` shows any
-file). Rules on them work like any rule:
+on (`zlint tree file.ts` shows any file). Rules on them work like any rule:
 
 ```zlint
 import .ts
@@ -780,6 +779,40 @@ Group `ts_node` holds every syntax layer (not tokens): `in ts_node let ...`
 gives an attribute to all of them, for walks that may cross any kind.
 `ts_code` is the same without literal text (`ts_string`, `ts_regex`,
 `ts_jsx_text`).
+
+**JSX tags.** `ts_jsx_element` and `ts_jsx_fragment` own `opening`, `body`
+and `closing`. Their `ts_jsx_opening` and `ts_jsx_closing` nodes cover the
+whole tags, including punctuation. Opening tags own `name`,
+`type_argument`, `property` (attributes) and `token`; closing tags own
+`name` and `token`. Fragment tags have no name or attributes; self-closing
+elements have no closing tag. Children stay in the element or fragment's
+`body`, separate from both tag owners.
+
+Project rules can style opening-tag lines without changing child indentation:
+
+```zlint
+import .ts
+rule indent {
+  set mode 2
+  indent in ts_jsx_opening by 3
+}
+```
+
+```tsx
+<Box
+      prop="value"
+>
+  Text
+</Box>
+```
+
+`override in ts_jsx_opening let indent_reset true` instead keeps opening-tag
+lines at their physical indentation. Child text, closing tags and nested
+attribute expressions remain checked. This selects every opening tag,
+including nested elements; use a predicate such as `name == "Box"` to keep
+other opening tags checked. Read tag bounds from `opening.offset`,
+`opening.end_offset`, `closing.offset` and `closing.end_offset`, and tag
+fields from their tag owner rather than the enclosing element.
 
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what

@@ -6,7 +6,6 @@
 use crate::expr::facts::{Fact, FactFields, Link};
 
 pub mod conditions;
-pub mod jsx;
 pub mod layout;
 pub mod relations;
 #[cfg(test)]
@@ -20,7 +19,7 @@ pub mod type_relations;
 pub mod typed;
 
 /// Every family's facts (after the core list in `expr::facts`).
-pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, type_relations::FACTS, scoping::FACTS, suggestions::FACTS, jsx::FACTS, symbols::FACTS];
+pub const FACT_GROUPS: &[&[Fact]] = &[syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS, type_relations::FACTS, scoping::FACTS, suggestions::FACTS, symbols::FACTS];
 
 /// Optional field projections, kept with the fact's topic owner.
 pub const FACT_FIELD_GROUPS: &[&[FactFields]] = &[syntax::FACT_FIELDS];

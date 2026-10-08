@@ -58,14 +58,14 @@ impl NativeFile<'_> {
             return self.contextual_projection(owner, bound);
         }
         if s.is(owner, K::JsxAttribute) && s.field(value) == Some(F::Value) {
-            let Some(element) = s.parent(owner).filter(|&parent| s.is(parent, K::JsxElement)) else { return Ty::Unknown };
-            let Some(component) = s.get(element, F::Name) else { return Ty::Unknown };
+            let Some(opening) = s.parent(owner).filter(|&parent| s.is(parent, K::JsxOpening)) else { return Ty::Unknown };
+            let Some(component) = s.get(opening, F::Name) else { return Ty::Unknown };
             let Some(name) = s.get(owner, F::Name).map(|name| s.text(name)) else { return Ty::Unknown };
             let callee = self.type_of(component);
             let props = if matches!(callee, Ty::Class(_)) {
-                self.ck().member(&self.ck().construct(&callee, &[], self.type_args(element)), "props")
+                self.ck().member(&self.ck().construct(&callee, &[], self.type_args(opening)), "props")
             } else {
-                self.ck().argument_parameters(&callee, &[], self.type_args(element), false)
+                self.ck().argument_parameters(&callee, &[], self.type_args(opening), false)
                     .and_then(|(types, _)| types.into_iter().next()).unwrap_or(Ty::Unknown)
             };
             return self.ck().member(&props, name);

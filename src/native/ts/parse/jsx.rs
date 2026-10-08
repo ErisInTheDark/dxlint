@@ -37,13 +37,18 @@ impl<'s> Parser<'s> {
         let mut kids = Kids::default();
         if self.is(">") {
             self.jsx_gt(true);
+            let opening = self.finish_at(Kind::JsxOpening, start, self.prev_end, Kids::default());
+            kids.add(Field::Opening, opening);
             self.jsx_children(&mut kids)?;
+            let closing_start = self.start();
             self.expect("<")?;
             self.expect("/")?;
             if !self.is(">") {
                 return self.fail("expected `>` closing the fragment");
             }
             self.jsx_gt(in_text);
+            let closing = self.finish_at(Kind::JsxClosing, closing_start, self.prev_end, Kids::default());
+            kids.add(Field::Closing, closing);
             return Ok(self.finish(Kind::JsxFragment, start, kids));
         }
         let name = self.jsx_element_name()?;
@@ -62,10 +67,17 @@ impl<'s> Parser<'s> {
                 return self.fail("expected `>`");
             }
             self.jsx_gt(in_text);
+            let opening = self.finish_at(Kind::JsxOpening, start, self.prev_end, kids);
+            let mut kids = Kids::default();
+            kids.add(Field::Opening, opening);
             return Ok(self.finish(Kind::JsxElement, start, kids));
         }
         self.jsx_gt(true);
+        let opening = self.finish_at(Kind::JsxOpening, start, self.prev_end, kids);
+        let mut kids = Kids::default();
+        kids.add(Field::Opening, opening);
         self.jsx_children(&mut kids)?;
+        let closing_tag_start = self.start();
         self.expect("<")?;
         self.expect("/")?;
         let closing_start = self.start();
@@ -98,11 +110,14 @@ impl<'s> Parser<'s> {
             return self.fail_at(closing_start, &format!("expected corresponding JSX closing tag for `{name_text}`"));
         }
         let closing = self.jsx_name_node(closing_start, end);
-        kids.add(Field::Closing, closing);
+        let mut closing_kids = Kids::default();
+        closing_kids.add(Field::Name, closing);
         if !self.is(">") {
             return self.fail("expected `>`");
         }
         self.jsx_gt(in_text);
+        let closing = self.finish_at(Kind::JsxClosing, closing_tag_start, self.prev_end, closing_kids);
+        kids.add(Field::Closing, closing);
         Ok(self.finish(Kind::JsxElement, start, kids))
     }
 
@@ -274,6 +289,47 @@ impl<'s> Parser<'s> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tag_owners_separate_headers_from_children() {
+        use crate::native::ts::kinds::{FIELD_NAMES, KINDS};
+
+        for (jsx, opening, closing) in [
+            (r#"<a.B x="it's \" {...p} svg:y={1}>don't {v}<C/><></></a.B>"#, r#"<a.B x="it's \" {...p} svg:y={1}>"#, Some("</a.B>")),
+            ("<Box<Type> >text</Box>", "<Box<Type> >", Some("</Box>")),
+            ("<Box<Type<Nested>>>text</Box>", "<Box<Type<Nested>>>", Some("</Box>")),
+            ("<Box a=\">\" b={left > right}>text</Box>", "<Box a=\">\" b={left > right}>", Some("</Box>")),
+            ("<Form . Input>text</Form\n.Input>", "<Form . Input>", Some("</Form\n.Input>")),
+            ("<a:b>text</a : b>", "<a:b>", Some("</a : b>")),
+            ("<Box a={ <Child /> } />", "<Box a={ <Child /> } />", None),
+            ("<><Child /></>", "<>", Some("</>")),
+            ("<></>", "<>", Some("</>")),
+            ("<Box>< /Box>", "<Box>", Some("< /Box>")),
+        ] {
+            let source = format!("const view = {jsx};");
+            let parsed = super::super::super::parse(&source, true).expect("valid JSX");
+            let start = source.find('<').unwrap() as u32;
+            let element = parsed.nodes.iter().find(|node| node.start == start
+                && matches!(KINDS[node.matcher as usize].0, "ts_jsx_element" | "ts_jsx_fragment")).unwrap();
+            let child = |field| element.children.iter().find(|edge| FIELD_NAMES[edge.label as usize] == field)
+                .map(|edge| &parsed.nodes[edge.node as usize]);
+            let header = child("opening").expect("a JSX header has its own owner");
+            assert_eq!(&source[header.start as usize..header.end as usize], opening, "{jsx}");
+            assert_eq!(KINDS[header.matcher as usize].0, "ts_jsx_opening");
+            let tail = child("closing");
+            assert_eq!(tail.map(|node| &source[node.start as usize..node.end as usize]), closing, "{jsx}");
+            if let Some(tail) = tail {
+                assert_eq!(KINDS[tail.matcher as usize].0, "ts_jsx_closing");
+                assert!(header.end <= tail.start);
+            }
+            for edge in &element.children {
+                if FIELD_NAMES[edge.label as usize] == "body" {
+                    let body = &parsed.nodes[edge.node as usize];
+                    assert!(header.end <= body.start && body.end <= tail.map_or(element.end, |node| node.start), "{jsx}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn member_names_may_break_lines_around_their_dots() {
         for src in ["<Form\n.Input />", "<Form.\nInput />", "<Form . Input>x</Form\n.Input>", "<a:b></a : b>"] {

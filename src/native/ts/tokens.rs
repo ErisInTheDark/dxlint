@@ -649,6 +649,44 @@ mod lexical_tests {
     }
 
     #[test]
+    fn jsx_tag_tokens_belong_to_disjoint_tag_owners() {
+        use crate::native::ts::kinds::KINDS;
+
+        let src = "const view = <><Box<Type<Nested>> a=\">\" b={left > right}>raw <Child /></Box></>;";
+        let parsed = super::super::parse(src, true).expect("valid JSX");
+        let mut wanted = [false; ALL_KINDS.len()];
+        for kind in [K::OpenAngle, K::CloseAngle, K::Punctuator] {
+            wanted[kind as usize] = true;
+        }
+        let project = |mask: &[bool; ALL_KINDS.len()]| {
+            let mut copy = Parsed { nodes: parsed.nodes.clone(), root: parsed.root, tokens: None };
+            attach_selected(src, &mut copy, mask);
+            let mut tokens = Vec::new();
+            for owner in &copy.nodes[..parsed.nodes.len()] {
+                for edge in owner.children.iter().filter(|edge| edge.label == F::Token as u16) {
+                    let token = &copy.nodes[edge.node as usize];
+                    if wanted[raw_kind(token).unwrap() as usize] {
+                        tokens.push((token.start, token.end, KINDS[owner.matcher as usize].0));
+                    }
+                }
+            }
+            tokens.sort_unstable();
+            tokens
+        };
+        let all = project(&ALL_TOKENS);
+        assert_eq!(all, project(&wanted));
+        for (start, end, owner) in &all {
+            assert!(!matches!(*owner, "ts_jsx_element" | "ts_jsx_fragment"), "tag token has no tag owner: {}", &src[*start as usize..*end as usize]);
+        }
+        for delimiter in ["<>", "<Box", "<Child", "</Box", "</>"] {
+            let start = src.find(delimiter).unwrap() as u32;
+            let owners: Vec<_> = all.iter().filter(|token| token.0 == start).map(|token| token.2).collect();
+            assert_eq!(owners, [if delimiter.starts_with("</") { "ts_jsx_closing" } else { "ts_jsx_opening" }], "{delimiter}");
+        }
+        assert!(all.windows(2).all(|pair| pair[0].0 != pair[1].0));
+    }
+
+    #[test]
     fn selected_tokens_preserve_their_spans_and_owners() {
         for (src, jsx) in [
             ("const values = [call(left, right), ...other];", false),

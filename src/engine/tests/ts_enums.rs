@@ -66,6 +66,15 @@ fn enum_array_literals_report_each_contextual_element_without_container_duplicat
 }
 
 #[test]
+fn enum_jsx_values_keep_explicit_function_and_class_type_arguments() {
+    let lint = native_linter("import .ts/enums\nrule no-unsafe-enum-assignment");
+    let source = "enum Fruit { Apple } enum Vegetable { Root } declare function Basket<T>(props: { fruit: T }): unknown; declare class Crate<T> { props: { fruit: T }; constructor(props: { fruit: T }); } const safe = <Basket<Fruit> fruit={Fruit.Apple} />; const bad = <Basket<Fruit> fruit={Vegetable.Root} />; const safeClass = <Crate<Fruit> fruit={Fruit.Apple} />; const badClass = <Crate<Fruit> fruit={Vegetable.Root} />;";
+    let diagnostics = lint.lint(Path::new("/root/a.tsx"), source);
+    assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
+    assert!(diagnostics.iter().all(|diagnostic| &source[diagnostic.start..diagnostic.end] == "Vegetable.Root"), "{diagnostics:#?}");
+}
+
+#[test]
 fn enum_jsx_values_use_generic_component_props() {
     let lint = native_linter("import .ts/enums\nrule no-unsafe-enum-assignment");
     let source = "enum Fruit { Apple } declare function Basket<T extends Fruit>(props: { fruit: T }): unknown; const bad = <Basket fruit={1} />; const safe = <Basket fruit={Fruit.Apple} />; enum Vegetable { Root = 'root' } declare function Plant(props: { vegetable: Vegetable }): unknown; const literal = <Plant vegetable=\"root\" />;";

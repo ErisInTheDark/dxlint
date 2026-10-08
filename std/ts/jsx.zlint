@@ -8,7 +8,7 @@ fn jsx_indent(prefix) = len(default(re_find(prefix, "^" jsx_space_regex() "*"), 
 fn jsx_indent_operator(text) = re_test(text, /^[ \t]*[?:]/)
 fn jsx_indent_spaces(text) = len(default(re_find(text, /^ */), ""))
 fn jsx_indent_tabs(text) = len(default(re_find(text, /^\t*/), ""))
-in ts_jsx_element {
+in ts_jsx_opening {
   let jsx_prop_indent_operator jsx_indent_operator(jsx_line_prefix)
   let jsx_prop_indent_first_column position(first([] property.node).offset).js_column - 1
 }
@@ -23,8 +23,8 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-indent-props {
   let base_indent if mode == "tab" then jsx_indent_tabs(parent.jsx_line_prefix) else jsx_indent_spaces(parent.jsx_line_prefix)
   let actual if mode == "tab" then jsx_indent_tabs(jsx_line_prefix) else jsx_indent_spaces(jsx_line_prefix)
   let expected if mode == "first" then parent.jsx_prop_indent_first_column else base_indent + size * (if jsx_prop_indent_extra then 2 else 1)
-  when parent is ts_jsx_element && jsx_trim_space(jsx_line_prefix) == "" && actual != expected
-  report at {start: offset, end: parent.end_offset}
+  when parent is ts_jsx_opening && jsx_trim_space(jsx_line_prefix) == "" && actual != expected
+  report at if is ts_jsx_attribute then name.node else argument.node
   warn "Expected indentation of {expected} {if mode == 'tab' then 'tab' else 'space'} {if expected == 1 then 'character' else 'characters'} but found {actual}."
 }
 in ts_node {
@@ -39,8 +39,8 @@ in ts_node {
   let jsx_child_next_multiline if jsx_child_newline_eligible == true then jsx_child_multiline else if next != null then next.jsx_child_next_multiline else false
 }
 in ts_jsx_element {
-  let jsx_child_inline_name if contains(["a", "abbr", "acronym", "b", "bdo", "big", "button", "cite", "code", "dfn", "em", "i", "img", "input", "kbd", "label", "map", "object", "q", "samp", "script", "select", "small", "span", "strong", "sub", "sup", "textarea", "tt", "var"], name) then name else null
-  let jsx_child_descriptor if !re_test(name, /[.:]/) then name else replace(text, "\n", "")
+  let jsx_child_inline_name if contains(["a", "abbr", "acronym", "b", "bdo", "big", "button", "cite", "code", "dfn", "em", "i", "img", "input", "kbd", "label", "map", "object", "q", "samp", "script", "select", "small", "span", "strong", "sub", "sup", "textarea", "tt", "var"], opening.name) then opening.name else null
+  let jsx_child_descriptor if !re_test(opening.name, /[.:]/) then opening.name else replace(text, "\n", "")
   let jsx_child_newline_eligible true
 }
 in ts_jsx_expression let jsx_child_newline_eligible expression not ts_spread && !starts_with(jsx_trim_space(text), "{{/*")
@@ -63,8 +63,8 @@ in ts_jsx_element, ts_jsx_fragment {
 fn jsx_child_group_contains(row, line) = row.first == line || row.last == line
 in ts_node rule jsx-one-expression-per-line {
   option mode "always" | "single-child" | "single-line" = "always" "same-line child layout"
-  let opening_line position(parent.jsx_syntax.opening.end).js_line
-  let closing_line position(default(parent.jsx_syntax.closing.start, parent.jsx_syntax.opening.end)).js_line
+  let opening_line position(parent.opening.end_offset).js_line
+  let closing_line position(default(parent.closing.offset, parent.opening.end_offset)).js_line
   let first_line jsx_child_first_line
   let last_line jsx_child_last_line
   let first_wrong jsx_child_previous_row != null && jsx_child_group_contains(jsx_child_previous_row, first_line) || first_line == opening_line || first_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, first_line))
@@ -74,7 +74,7 @@ in ts_node rule jsx-one-expression-per-line {
   when parent.jsx_one_expression_per_line_enabled
   when !(mode == "single-child" && parent.jsx_child_single || mode == "single-line" && parent.jsx_child_single_line_allowed)
   when if mode == "single-line" && parent.jsx_child_one_group then single_group_wrong else first_wrong || last_wrong
-  report at {start: offset, end: parent.end_offset}
+  report at node
   warn "`{jsx_child_descriptor}` must be placed on a new line"
 }
 in ts_node rule jsx-newline {
@@ -84,7 +84,7 @@ in ts_node rule jsx-newline {
   let blank re_test(previous.text, "\n" jsx_space_regex() "*\n")
   when is (ts_jsx_element.body, ts_jsx_fragment.body) && previous is ts_jsx_text && previous.jsx_child_preceding_eligible
   when if allowMultilines && multiline then !blank else blank == prevent
-  report at {start: offset, end: parent.end_offset}
+  report at previous.node
   warn if allowMultilines && multiline then "Multiline JSX elements should start in a new line" else if prevent then "JSX element should not start in a new line" else "JSX element should start in a new line"
 }
 in ts_jsx_text rule jsx-child-element-spacing {
@@ -93,7 +93,7 @@ in ts_jsx_text rule jsx-child-element-spacing {
   let preceding after && previous != null
   when (previous != null || next != null) && (previous == null || previous.jsx_child_inline_name != null) && (next == null || next.jsx_child_inline_name != null)
   when preceding || before && next != null
-  report at {start: if preceding then previous.end_offset else next.offset, end: parent.end_offset}
+  report at node
   warn "Ambiguous spacing {if preceding then 'after previous' else 'before next'} element {if preceding then previous.jsx_child_inline_name else next.jsx_child_inline_name}"
 }
 schema jsx_wrap_mode boolean | "ignore" | "parens" | "parens-new-line"
@@ -205,7 +205,7 @@ schema jsx_curly_config {when?: "always" | "never"; allowMultiline?: boolean; sp
   let multiline default(scope_cfg.allowMultiline, default(cfg.allowMultiline, true))
   when parent.jsx_brace_container && context_cfg != false
   when if spacing == "always" then jsx_brace_edge == "" || jsx_break(jsx_brace_edge) && !multiline else (if jsx_break(jsx_brace_edge) then !multiline else jsx_brace_edge != "")
-  report at {start: offset, end: parent.end_offset}
+  report at {start: if jsx_brace_open then end_offset else offset - byte_len(jsx_brace_edge), end: if jsx_brace_open then end_offset + byte_len(jsx_brace_edge) else offset}
   warn if jsx_break(jsx_brace_edge) then "There should be no newline {jsx_brace_direction} '{text}'" else if spacing == "always" then "A space is required {jsx_brace_direction} '{text}'" else "There should be no space {jsx_brace_direction} '{text}'"
 }
 in ts_open_brace rule jsx-curly-spacing:after {
@@ -218,7 +218,7 @@ in ts_close_brace rule jsx-curly-spacing:before {
   default option mode enum(consistent, require, forbid) = consistent "brace newline policy"
   let needs if mode == "require" then true else if mode == "forbid" then false else parent.jsx_brace_left_break
   when jsx_break(jsx_brace_gap) != needs
-  report at {start: offset, end: parent.end_offset}
+  report at if jsx_brace_open then space_after else space_before
   warn "{if needs then 'Expected' else 'Unexpected'} newline {jsx_brace_direction} '{text}'."
 }
 group jsx_curly_newline_singleline ts_open_brace, ts_close_brace
@@ -233,17 +233,17 @@ in jsx_curly_newline_multiline rule jsx-curly-newline:multiline {
 }
 in ts_jsx_attribute let jsx_tag_last_token_start if value is ts_string then value.offset else end_offset
 in ts_jsx_spread_attribute let jsx_tag_last_token_start end_offset
-in ts_jsx_element {
+in ts_jsx_opening {
   let jsx_tag_last_prop last([] property.node)
   let jsx_tag_name_line position(name.offset).js_line
 }
 in ts_open_angle, ts_close_angle, ts_punctuator {
-  let jsx_tag_opening offset >= parent.jsx_syntax.opening.start && offset < parent.jsx_syntax.opening.end
-  let jsx_tag_self_slash parent is ts_jsx_element && parent.jsx_syntax.self_closing && text == "/" && space_after.end == parent.jsx_syntax.opening.end - 1
-  let jsx_tag_kind if parent not ts_jsx_element then null else if is ts_open_angle && offset == parent.jsx_syntax.opening.start then "afterOpening" else if is ts_open_angle && offset == parent.jsx_syntax.closing.start then "closingSlash" else if is ts_punctuator && text == "/" && space_before.start == parent.jsx_syntax.closing.start + 1 then "afterOpening" else if jsx_tag_self_slash then "closingSlash" else if is ts_close_angle && (end_offset == parent.jsx_syntax.opening.end && !parent.jsx_syntax.self_closing || end_offset == parent.jsx_syntax.closing.end) then "beforeClosing" else null
+  let jsx_tag_opening parent is ts_jsx_opening
+  let jsx_tag_self_slash jsx_tag_opening && parent.parent is ts_jsx_element && parent.parent.closing == null && text == "/" && space_after.end == parent.end_offset - 1
+  let jsx_tag_kind if parent not (ts_jsx_opening, ts_jsx_closing) || parent.parent not ts_jsx_element then null else if is ts_open_angle && offset == parent.offset then (if jsx_tag_opening then "afterOpening" else "closingSlash") else if !jsx_tag_opening && is ts_punctuator && text == "/" && space_before.start == parent.offset + 1 then "afterOpening" else if jsx_tag_self_slash then "closingSlash" else if is ts_close_angle && end_offset == parent.end_offset && (!jsx_tag_opening || parent.parent.closing != null) then "beforeClosing" else null
   let jsx_tag_gap_after is ts_open_angle || jsx_tag_kind == "afterOpening" || jsx_tag_self_slash
   let jsx_tag_gap if jsx_tag_gap_after then space_after else space_before
-  let jsx_tag_span if jsx_tag_opening then parent.jsx_syntax.opening else parent.jsx_syntax.closing
+  let jsx_tag_span {start: parent.offset, end: parent.end_offset}
 }
 @macro jsx_tag_spacing_body {
   option closingSlash "always" | "never" | "allow" = "never" "spacing beside the closing slash"
@@ -261,7 +261,7 @@ in ts_open_angle, ts_close_angle, ts_punctuator {
   when if jsx_tag_before_self then jsx_tag_self_slash else jsx_tag_kind != null
   when policy != "allow"
   when if kind == "closingSlash" then spaced != (policy == "always") else if kind == "afterOpening" then spaced != (policy == "always") && !(policy == "allow-multiline" && gap_newline) else if needs_newline then true else if kind == "beforeSelfClosing" then !gap_newline && spaced != (policy != "never") else !start_newline && (if policy == "proportional-always" then jsx_tag_opening && spaced == single else spaced != (policy == "always"))
-  report at {start: if needs_newline || kind == "beforeClosing" then gap.start else offset, end: parent.end_offset}
+  report at {start: gap.start, end: gap.end}
   warn if kind == "closingSlash" then (if jsx_tag_self_slash then (if policy == "always" then "Whitespace is required between `/` and `>`; write `/ >`" else "Whitespace is forbidden between `/` and `>`; write `/>`") else (if policy == "always" then "Whitespace is required between `<` and `/`; write `< /`" else "Whitespace is forbidden between `<` and `/`; write `</`")) else if needs_newline then "A newline is required before closing bracket" else if kind == "afterOpening" then (if policy == "always" then "A space is required after opening bracket" else "A space is forbidden after opening bracket") else if policy == "never" then "A space is forbidden before closing bracket" else if kind == "beforeSelfClosing" then "A space is required before closing bracket" else "Whitespace is required before closing bracket"
 }
 in ts_open_angle, ts_close_angle, ts_punctuator rule jsx-tag-spacing {
@@ -274,7 +274,7 @@ in ts_punctuator rule jsx-tag-spacing:before-self-closing {
 }
 group jsx_paired_brackets ts_close_angle
 group jsx_self_closing_brackets ts_punctuator
-in ts_jsx_element let jsx_closing_bracket_location_enabled true
+in ts_jsx_opening let jsx_closing_bracket_location_enabled true
 @macro jsx_closing_bracket_body {
   default option mode enum(after-props, props-aligned, tag-aligned, line-aligned) = tag-aligned "closing bracket alignment"
   let last_prop parent.jsx_tag_last_prop
@@ -289,24 +289,24 @@ in ts_jsx_element let jsx_closing_bracket_location_enabled true
   let expected_column if fallback then jsx_indent(parent.jsx_line_prefix) + 1 else aligned_column
   when parent.jsx_closing_bracket_location_enabled
   when !(if fallback then expected_column == here.js_column else aligned)
-  report at {start: offset, end: parent.end_offset}
+  report at node
   warn "The closing bracket must be {if placement == 'after-tag' then 'placed after the opening tag' else if placement == 'after-props' then 'placed after the last prop' else if placement == 'props-aligned' then 'aligned with the last prop' else if placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if expected_column != null then ' (expected column ' expected_column (if last_prop != null && last_line == here.js_line then ' on the next line)' else ')') else ''}"
 }
 in jsx_paired_brackets rule jsx-closing-bracket-location:paired {
-  when parent is ts_jsx_element && !parent.jsx_syntax.self_closing && end_offset == parent.jsx_syntax.opening.end
+  when parent is ts_jsx_opening && parent.parent is ts_jsx_element && parent.parent.closing != null && end_offset == parent.end_offset
   @jsx_closing_bracket_body
 }
 in jsx_self_closing_brackets rule jsx-closing-bracket-location:self-closing {
-  when parent is ts_jsx_element && jsx_tag_self_slash
+  when parent is ts_jsx_opening && jsx_tag_self_slash
   @jsx_closing_bracket_body
 }
 in ts_open_angle rule jsx-closing-tag-location {
   option mode "tag-aligned" | "line-aligned" = "tag-aligned" "closing-tag alignment"
   let here position(offset)
-  let expected if mode == "tag-aligned" then position(parent.offset).js_column else jsx_indent(parent.jsx_line_prefix) + 1
+  let expected if mode == "tag-aligned" then position(parent.parent.opening.offset).js_column else jsx_indent(parent.parent.opening.jsx_line_prefix) + 1
   let own_line jsx_trim_space(jsx_line_prefix) == ""
-  when parent is (ts_jsx_element, ts_jsx_fragment) && offset == parent.jsx_syntax.closing.start && position(parent.offset).js_line != here.js_line && here.js_column != expected
-  report at {start: offset, end: parent.end_offset}
+  when parent is ts_jsx_closing && offset == parent.offset && position(parent.parent.opening.offset).js_line != here.js_line && here.js_column != expected
+  report at parent.node
   warn if !own_line then "Closing tag of a multiline JSX expression must be on its own line." else if mode == "tag-aligned" then "Expected closing tag to match indentation of opening." else "Expected closing tag to be aligned with the line containing the opening tag"
 }
 
@@ -314,7 +314,7 @@ fn jsx_items(value) = if type_of(value) == "list" then value else if value == nu
 fn jsx_pascal(name) = re_test(name, /^\p{Uppercase}[\p{Uppercase}\p{Lowercase}0-9]*$/) && re_test(name, /[\p{Lowercase}0-9]/)
 fn jsx_caps(name) = re_test(name, /^[\p{Uppercase}0-9](?:[\p{Uppercase}0-9_]*[\p{Uppercase}0-9])?$/)
 in ts_jsx_element {
-  let jsx_name_spelling jsx_strip_space(name)
+  let jsx_name_spelling jsx_strip_space(opening.name)
   let jsx_intrinsic_name re_test(jsx_name_spelling, /^[a-z]/)
   let jsx_self_closing_enabled jsx_intrinsic_name || !contains(jsx_name_spelling, ":")
 }
@@ -337,7 +337,7 @@ in ts_jsx_element rule jsx-pascal-case {
   warn "Imported JSX component {bad} must be in PascalCase{if allowAllCaps then ' or SCREAMING_SNAKE_CASE' else ''}"
 }
 in ts_jsx_element rule jsx-shorthand-fragment {
-  when contains(["Fragment", "React.Fragment"], jsx_name_spelling) && property == null
+  when contains(["Fragment", "React.Fragment"], jsx_name_spelling) && opening.property == null
   warn "Use shorthand fragment syntax `<>...</>` instead of `<{jsx_name_spelling}>...</{jsx_name_spelling}>`."
 }
 in ts_jsx_attribute rule jsx-shorthand-boolean {
@@ -353,13 +353,14 @@ in ts_jsx_attribute.value rule jsx-quotes {
   let double mode == "prefer-double"
   when is ts_string
   when slice(text, 0, 1) != (if double then '"' else "'") && !jsx_contains_quote(slice(text, 1, len(text) - 1), double)
+  report at node
   warn "Unexpected usage of {if mode == 'prefer-double' then 'singlequote' else 'doublequote'}."
 }
 @macro jsx_equals_spacing_body {
   option mode "always" | "never" = "never" "spacing around equals"
   when parent is ts_jsx_attribute
   when jsx_js_space(if jsx_equals_before then space_before.text else space_after.text) != (mode == "always")
-  report at {start: offset, end: parent.end_offset}
+  report at if jsx_equals_before then space_before else space_after
   warn if mode == "always" then "A space is required {if jsx_equals_before then 'before' else 'after'} '='" else "There should be no space {if jsx_equals_before then 'before' else 'after'} '='"
 }
 in ts_equals rule jsx-equals-spacing:before {
@@ -370,9 +371,8 @@ in ts_equals rule jsx-equals-spacing:after {
   let jsx_equals_before false
   @jsx_equals_spacing_body
 }
-in ts_jsx_element {
-  let jsx_opening_span jsx_syntax.opening
-  let jsx_opening_single !jsx_break(byte_slice(text, 0, jsx_opening_span.end - offset))
+in ts_jsx_opening {
+  let jsx_opening_single !jsx_break(text)
   let jsx_property_count count(property)
   let jsx_first_prop_headline first([] property.jsx_prop_headline) == true
 }
@@ -391,13 +391,13 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-first-prop-new-line {
   let should_wrap mode == "always" || mode == "multiline" && !parent.jsx_opening_single || mode == "multiline-multiprop" && !parent.jsx_opening_single && parent.jsx_property_count > 1 || mode == "multiprop" && parent.jsx_property_count > 1
   let should_inline mode == "never" || mode == "multiprop" && !parent.jsx_opening_single && parent.jsx_property_count <= 1
   when jsx_prop_first && (should_wrap && jsx_prop_headline || should_inline && !jsx_prop_headline)
-  report at {start: offset, end: parent.end_offset}
+  report at if is ts_jsx_attribute then name.node else argument.node
   warn if should_wrap then "Property should be placed on a new line" else "Property should be placed on the same line as the component declaration"
 }
 @macro jsx_max_props_body {
   default option max number(1..) = 1 "maximum props per line"
   when jsx_prop_group_index == max
-  report at {start: offset, end: parent.end_offset}
+  report at if is ts_jsx_attribute then name.node else argument.node
   warn "Prop `{jsx_prop_name}` must be placed on a new line"
 }
 group jsx_max_props_singleline ts_jsx_attribute, ts_jsx_spread_attribute
@@ -413,7 +413,7 @@ in jsx_max_props_multiline rule jsx-max-props-per-line:multiline {
 @macro jsx_props_style_body {
   option max_per_line int(1..) = 1 "maximum props per line when wrapping"
   when if need_wrap then jsx_prop_same && (jsx_prop_first || jsx_prop_run > max_per_line && (jsx_prop_run - 1) % max_per_line == 0) else !jsx_prop_same
-  report at {start: offset, end: parent.end_offset}
+  report at if is ts_jsx_attribute then name.node else argument.node
   warn if need_wrap then "Prop `{jsx_prop_name}` must be placed on a new line" else "Prop `{jsx_prop_name}` should not be placed on a new line"
 }
 group jsx_props_style_singleline ts_jsx_attribute, ts_jsx_spread_attribute

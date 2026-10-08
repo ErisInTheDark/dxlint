@@ -20,6 +20,7 @@ mod ts_collection_methods;
 mod ts_core_rules;
 mod ts_deprecation;
 mod ts_enums;
+mod ts_jsx;
 mod ts_signatures;
 
 const LANG: &str = r#"

@@ -89,14 +89,9 @@ fn arrows_generics_and_casts() {
 }
 
 #[test]
-fn jsx() {
-    // Text is raw (quotes and apostrophes), components are references,
-    // intrinsic and namespaced names and closing names are plain names.
-    assert_eq!(
-        dump_as(r#"<a.B x="it's \" {...p} svg:y={1}>don't {v}<C/><></></a.B>;"#, true),
-        r#"expression_statement(expression=jsx_element(name=member(object=a property=B) property=jsx_attribute(name=x value="it's \") property=jsx_spread_attribute(argument=p) property=jsx_attribute(name=svg:y value=jsx_expression(expression=1)) body=don't  body=jsx_expression(expression=v) body=jsx_element(name=C) body=<></> closing=a.B))"#
-    );
-    assert_eq!(dump_as("<T,>(x: T) => x;", true).split('(').nth(1), Some("expression=arrow"));
+fn jsx_disambiguates_generic_arrows_and_checks_closing_names() {
+    let parsed = parse("<T,>(x: T) => x;", true).unwrap();
+    assert!(parsed.nodes.iter().any(|node| node.matcher == Kind::Arrow as u32));
     assert!(parse("<a></b>;", true).is_err());
 }
 
