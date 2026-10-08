@@ -843,6 +843,17 @@ pub enum Begin {
 }
 
 impl FileVm {
+    pub(crate) fn report_stats(&self, file: &str) {
+        let offsets = self.offsets.borrow();
+        let cells = self.cells.borrow();
+        let nodes = offsets.iter().filter(|&&offset| offset != NO_RECORD).count();
+        let unset = cells.iter().filter(|&&cell| cell == UNSET).count();
+        let gave_up = cells.iter().filter(|&&cell| cell == GAVE_UP).count();
+        let cell_bytes = cells.capacity() * std::mem::size_of::<u64>();
+        let offset_bytes = offsets.capacity() * std::mem::size_of::<u32>();
+        eprintln!("zlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", cells.len());
+    }
+
     fn record(&self, tree: &Tree, layout: &[u16], node: u32) -> usize {
         let mut offsets = self.offsets.borrow_mut();
         if offsets.is_empty() {

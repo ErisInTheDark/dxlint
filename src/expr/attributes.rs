@@ -1,6 +1,6 @@
 //! Compiled attribute dispatch and reads through the file's existing memo.
 
-use super::{CExpr, Ctx, Value};
+use super::{AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
 use crate::vm::{self, Begin, KindSet, VExpr, V};
 use std::collections::hash_map::Entry as MapEntry;
@@ -13,6 +13,7 @@ pub struct Attr {
 }
 
 pub struct Attributes {
+    pub(crate) vm_stats: bool,
     attrs: Vec<CompiledAttr>,
     /// Per matcher: how many fields its VM records hold
     /// ([`Attributes::shape_records`]).
@@ -47,8 +48,8 @@ pub(super) enum Entry<'a> {
 
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
-        if attrs.is_empty() { return Self { attrs: Vec::new(), layout: Vec::new(), vm_blockers: Vec::new() }; }
         let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
+        if attrs.is_empty() { return Self { vm_stats: stats, attrs: Vec::new(), layout: Vec::new(), vm_blockers: Vec::new() }; }
         let mut vm_blockers = Vec::new();
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
             let mut chain = Vec::new();
@@ -99,7 +100,21 @@ impl Attributes {
             }
         }).collect();
         let layout = vec![0; grammar.matchers.len()];
-        Self { attrs, layout, vm_blockers }
+        Self { vm_stats: stats, attrs, layout, vm_blockers }
+    }
+
+    pub(crate) fn report_vm_stats(&self, memo: &AttrMemo<'_>, tree: &crate::grammar::Tree, file: &str) {
+        if !self.vm_stats { return; }
+        let attrs = memo.attributes.borrow();
+        let lowered = attrs.keys().filter(|&&(node, attr)| {
+            matches!(self.route(tree.node(node).matcher, attr), Route::Defined(_, slot) if slot != NO_SLOT)
+        }).count();
+        // Inline payload estimate only: hash-table controls, spare buckets
+        // and shared list/record/string allocations are not included.
+        let entry_bytes = std::mem::size_of::<((u32, u16), Entry<'_>)>();
+        memo.vm.report_stats(file);
+        eprintln!("zlint vm memo: {file} entries={} capacity={} inline_capacity_approx_bytes={} lowered_entries={lowered} lowered_inline_bytes={}",
+            attrs.len(), attrs.capacity(), attrs.capacity() * entry_bytes, lowered * entry_bytes);
     }
 
     /// Lays out each node kind's VM record: exactly the lowered attributes

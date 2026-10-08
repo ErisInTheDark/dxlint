@@ -197,7 +197,7 @@ impl Linter {
     /// Lowers enabled rules' conditions (with the `let`s they read) to the
     /// VM; `ZLINT_VM_STATS` prints how much of the config lowered.
     pub(crate) fn lower_conditions(&mut self) {
-        let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
+        let stats = self.attrs.vm_stats;
         let mut lowered = 0;
         let mut total = 0;
         let mut blockers: crate::fx_hash::FxHashMap<String, usize> = Default::default();
@@ -618,6 +618,7 @@ impl Linter {
                 }
             }
         }
+        self.attrs.report_vm_stats(&memo, tree, run.file);
     }
 
     /// The rule's diagnostics on one node: one, or one per `each` item.
