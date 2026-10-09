@@ -1,0 +1,4 @@
+input.ts:1:11-1:28 prefer-object-spread#0
+input.ts:2:11-2:33 prefer-object-spread#1
+input.ts:3:11-3:54 prefer-object-spread#1
+input.ts:4:1-4:24 prefer-object-spread#0

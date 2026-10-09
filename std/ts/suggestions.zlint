@@ -7,6 +7,7 @@ import .ts/suggestions/curly
 import .ts/suggestions/renames
 import .ts/suggestions/comparisons
 import .ts/suggestions/templates
+import .ts/suggestions/object-spread
 
 define {
 
@@ -58,9 +59,6 @@ in ts_parenthesized forward arithmetic_operator, strict_left_reference_key, stri
 
 in ts_parameter let required_parameter init == null && optional == null && name not ts_rest && !starts_with(text, "...")
 in ts_function, ts_arrow, ts_method let parameter_required [] parameter.required_parameter
-in ts_object let assign_source_accessor any([] property.accessor_kind, k => k == "get" || k == "set")
-in ts_object let assign_source_proto contains([] property.static_name, "__proto__")
-in ts_parenthesized forward assign_source_accessor, assign_source_proto from expression
 
 in ts_computed_key let computed_literal_text if (expression.unwrapped_node.nonempty ?? expression.node) is (ts_string, ts_number) then expression.unwrapped_text.nonempty ?? expression else null
 in ts_method, ts_class_property let member_static contains([] modifier, "static")
@@ -206,13 +204,6 @@ in ts_call rule prefer-spread {
     value unchanged_call_receiver(callee.invoked_receiver, tokens, null_receiver)
   }
   warn "Use the spread operator instead of '.apply()'."
-}
-
-in ts_call rule prefer-object-spread {
-  when global_method_callee == "Object.assign" && ({ value [] argument.unwrapped_node; first; nonempty } ?? first(argument.nodes)) is ts_object
-  when !any(argument.nodes, arg => arg is ts_spread) && !any([] argument.unwrapped_node, arg => arg is ts_spread)
-  when count(argument) == 1 || !any([] argument.assign_source_accessor, a => a == true) && !{ value [] argument.assign_source_proto; slice 1; any (p) p == true }
-  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{ foo: bar }}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
 }
 
 in ts_case rule default-case-last {

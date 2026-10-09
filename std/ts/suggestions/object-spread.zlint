@@ -1,0 +1,94 @@
+# Object.assign policy and source-preserving object spread fixes.
+import .ts/expression-fixes
+
+define {
+
+in ts_object let assign_source_accessor any([] property.accessor_kind, k => k == "get" || k == "set")
+in ts_object let assign_source_proto contains([] property.static_name, "__proto__")
+in ts_parenthesized forward assign_source_accessor, assign_source_proto from expression
+
+fn object_spread_call_open(n) = {
+  value overlapping(ts_open_paren, n.callee.end_offset, n.end_offset)
+  find (token) token.paired_token.end == n.end_offset
+}
+fn object_spread_wrap(n) = n.parent not ts_parenthesized
+  && (if n.parent is ts_assignment then n is ts_assignment.left
+    else n.parent not (ts_declarator, ts_array, ts_return, ts_property) && n not ts_call.argument)
+fn object_spread_argument_edges(n, bare) = {
+  value overlapping(ts_token, n.offset, n.end_offset)
+  filter (token) token is (ts_open_paren, ts_close_paren, ts_open_brace, ts_close_brace)
+    && (token.offset <= bare.offset || token.offset >= bare.end_offset - 1)
+}
+fn object_spread_object_edits(source, n, bare) = {
+  value edges: object_spread_argument_edges(n, bare)
+  value left: first(edges)
+  value right: last(edges)
+  value after: byte_slice(source, left.end_offset, right.offset)
+  value leading_spaces: re_find(after, /^\s*/)
+  value left_end: left.end_offset + byte_len(leading_spaces)
+  value before: byte_slice(source, left_end, right.offset)
+  value trailing_spaces: re_find(before, /\s*$/)
+  value line_comments: overlapping(ts_line_comment, left_end, right.offset)
+  value line: last(line_comments)
+  value keep_newline: line != null && line.end_offset >= right.token_neighbours.before.end
+  value right_start: if keep_newline then right.offset else right.offset - byte_len(trailing_spaces)
+  value inner: {
+    value edges
+    slice 1 -1
+    map (token) { start: token.offset, end: token.end_offset, text: "" }
+  }
+  value close: { value edges; find (token) token.offset == bare.end_offset - 1 }
+  value comma: right.token_neighbours.after
+  value duplicate_comma: comma.text == "," && (count(bare.property) == 0 || close.token_neighbours.before.text == ",")
+  value comma_edits: if duplicate_comma then [{ start: comma.start, end: comma.end, text: "" }] else []
+  value inner
+  concat [
+    { start: left.offset, end: left_end, text: "" },
+    { start: right_start, end: right.end_offset, text: "" }
+  ]
+  concat comma_edits
+}
+fn object_spread_argument_edits(source, n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_object then object_spread_object_edits(source, n, bare)
+    else {
+      value parens: n not ts_parenthesized && bare is (ts_assignment, ts_arrow, ts_conditional)
+      value [
+        { start: n.offset, end: n.offset, text: if parens then "...(" else "..." },
+        { start: n.end_offset, end: n.end_offset, text: if parens then ")" else "" }
+      ]
+    }
+}
+fn object_spread_fix(source, n) = {
+  value open: object_spread_call_open(n)
+  value close: open.paired_token
+  value wrapped: object_spread_wrap(n)
+  value wrappers: [
+    { start: n.offset, end: open.offset, text: "" },
+    { start: open.offset, end: open.end_offset, text: if wrapped then "({{" else "{{" },
+    { start: close.start, end: close.end, text: if wrapped then "}})" else "}}" }
+  ]
+  value edits: {
+    value n.argument.nodes
+    flat_map (argument) object_spread_argument_edits(source, argument)
+    concat wrappers
+  }
+  value replacement: expression_fix_edits(n.text, n.offset, edits)
+  value statement: expression_fix_statement(n)
+  value owners: expression_fix_before_nodes(statement)
+  value semicolon: if !wrapped || statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners)
+  value if open == null || semicolon == null || !expression_fix_retains_comments(n, replacement) then null
+    else (if semicolon then ";" else "") replacement
+}
+
+in ts_call rule prefer-object-spread {
+  let first_argument { value argument.nodes; first; unparenthesised_node }
+  when global_method_callee == "Object.assign" && first_argument is ts_object
+  when !any(argument.nodes, arg => unparenthesised_node(arg) is ts_spread)
+  when count(argument) == 1 || !any([] argument.assign_source_accessor, a => a == true) && !{ value [] argument.assign_source_proto; slice 1; any (p) p == true }
+  let replacement object_spread_fix(source, node)
+  fix at node if replacement != null as expression_fix_edges(node, replacement)
+  warn if count(argument) == 1 then "Use an object literal instead of `Object.assign`. eg: `{{ foo: bar }}`." else "Use an object spread instead of `Object.assign` eg: `{{ ...foo }}`."
+}
+
+}
