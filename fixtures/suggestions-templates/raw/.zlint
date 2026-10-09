@@ -1,0 +1,9 @@
+import .ts/template-fixes
+
+lang raw "*.ts"
+in .raw match quoted /['"][^\r\n]+['"]/ {
+  let raw slice(text, 1, -1)
+  let quote slice(text, 0, 1)
+  rule both warn template_literal_raw(raw, ["'", '"'])
+  rule delimiter warn template_literal_raw(raw, [quote])
+}

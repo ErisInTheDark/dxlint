@@ -1,0 +1,9 @@
+input.ts:1:11-1:28 prefer-template#0
+input.ts:2:11-2:22 prefer-template#0
+input.ts:3:11-3:22 prefer-template#0
+input.ts:4:11-4:26 prefer-template#0
+input.ts:5:11-5:26 prefer-template#0
+input.ts:6:11-6:22 prefer-template#0
+input.ts:7:11-7:24 prefer-template#0
+input.ts:8:11-8:22 prefer-template#0
+input.ts:9:11-9:25 prefer-template#0

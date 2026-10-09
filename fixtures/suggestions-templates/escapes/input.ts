@@ -1,0 +1,9 @@
+const a = '" ${x} `' + name;
+const b = "\"" + name;
+const c = '\"' + name;
+const d = '\\${x}' + name;
+const e = '\uD800' + name;
+const f = '\0' + name;
+const g = '\033' + name;
+const h = '\8' + name;
+const i = '\\033' + name;

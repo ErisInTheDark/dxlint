@@ -1,0 +1,110 @@
+# String concatenation policy and source-preserving template fixes.
+import .ts/expression-fixes
+import .ts/template-fixes
+
+define {
+
+fn concatenation_string(n) = unparenthesised_node(n) is (ts_string, ts_template)
+in ts_binary let additive operator == "+"
+in ts_binary let string_addition additive && (concatenation_string(left.node) || left.string_addition == true || concatenation_string(right.node) || right.string_addition == true)
+in ts_binary let nonstring_addition additive && ((if left.additive == true then left.nonstring_addition == true else !concatenation_string(left.node)) || (if right.additive == true then right.nonstring_addition == true else !concatenation_string(right.node)))
+in ts_binary, ts_parenthesized let inside_addition parent is ts_binary && parent.additive == true || parent is ts_parenthesized && parent.inside_addition == true
+in ts_parenthesized forward additive, string_addition, nonstring_addition from expression
+
+fn concatenation_starts_curly(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_binary then concatenation_starts_curly(bare.left.node)
+    else if bare is ts_template then count(bare.expression) > 0 && first([] bare.quasi.text) == "`${{"
+    else bare not ts_string
+}
+fn concatenation_ends_curly(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_binary then concatenation_starts_curly(bare.right.node)
+    else if bare is ts_template then count(bare.expression) > 0 && last([] bare.quasi.text) == "}}`"
+    else bare not ts_string
+}
+fn concatenation_legacy_escape(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare.additive == true then concatenation_legacy_escape(bare.left.node) || concatenation_legacy_escape(bare.right.node)
+    else bare is ts_string && re_test(bare.text, /(^|[^\\])(?:\\\\)*\\(?:[1-9]|0[0-9])/)
+}
+fn concatenation_gap(source, start, end) = {
+  value overlapping(ts_token, start, end)
+  filter (token) start <= token.offset && token.end_offset <= end
+  pieces: fold ({ text: "", cursor: start }) (state, token) {
+    text: state.text byte_slice(source, state.cursor, token.offset),
+    cursor: token.end_offset
+  }
+  value pieces.text byte_slice(source, pieces.cursor, end)
+}
+fn concatenation_template(source, n, before, after) = {
+  # Unlike trivia around ordinary operands, pure whitespace around an existing
+  # template is outside its value. Only comments need moving into its curly.
+  value prefix: if before != null && re_test(before, /\/[/*]/) then before else ""
+  value suffix: if after != null && re_test(after, /\/[/*]/) then after else ""
+  value if prefix == "" && suffix == "" then n.text else {
+    value first_quasi: first(n.quasi.nodes)
+    value last_quasi: last(n.quasi.nodes)
+    value leading: byte_slice(source, n.offset, first_quasi.end_offset)
+    value middle: byte_slice(source, first_quasi.end_offset, last_quasi.offset)
+    value trailing: byte_slice(source, last_quasi.offset, n.end_offset)
+    value leading prefix middle suffix trailing
+  }
+}
+fn concatenation_text(source, n, before, after) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_string then {
+      value raw: slice(bare.text, 1, -1)
+      value quote: slice(bare.text, 0, 1)
+      value "`" template_literal_raw(raw, [quote]) "`"
+    }
+    else if bare is ts_template then concatenation_template(source, bare, before, after)
+    else if bare.string_addition == true then {
+      value left: unparenthesised_node(bare.left.node)
+      value right: unparenthesised_node(bare.right.node)
+      value leading: concatenation_gap(source, left.end_offset, bare.operator.offset)
+      value trailing: concatenation_gap(source, bare.operator.end_offset, right.offset)
+      value gap: leading trailing
+      value if concatenation_ends_curly(left) then {
+        value left_text: concatenation_text(source, left, before, gap)
+        value right_text: concatenation_text(source, right, null, after)
+        value slice(left_text, 0, -1) slice(right_text, 1)
+      } else if concatenation_starts_curly(right) then {
+        value left_text: concatenation_text(source, left, before, null)
+        value right_text: concatenation_text(source, right, gap, after)
+        value slice(left_text, 0, -1) slice(right_text, 1)
+      } else {
+        value left_text: concatenation_text(source, left, before, null)
+        value right_text: concatenation_text(source, right, after, null)
+        value left_text leading "+" trailing right_text
+      }
+    }
+    else "`${{" (before ?? "") bare.text (after ?? "") "}}`"
+}
+fn concatenation_fix(source, n) = if concatenation_legacy_escape(n) then null else {
+  value statement: expression_fix_statement(n)
+  value owners: expression_fix_before_nodes(statement)
+  value semicolon: if statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners)
+  value replacement: concatenation_text(source, n, null, null)
+  value comments: {
+    value overlapping(ts_comment, n.offset, n.end_offset)
+    filter (comment) n.offset <= comment.offset && comment.end_offset <= n.end_offset
+  }
+  # Comments inside removed operand parentheses have no safe interpolation slot.
+  # Count all source occurrences: another comment or string cannot cover a loss.
+  value retained: all(comments, comment => {
+    value required: split(n.text, comment.text)
+    value pieces: split(replacement, comment.text)
+    value count(pieces) >= count(required)
+  })
+  value if semicolon == null || !retained then null else (if semicolon then ";" else "") replacement
+}
+
+in ts_binary rule prefer-template {
+  when string_addition && nonstring_addition && !inside_addition
+  let replacement concatenation_fix(source, node)
+  fix at node if replacement != null as expression_fix_edges(node, replacement)
+  warn "Unexpected string concatenation."
+}
+
+}
