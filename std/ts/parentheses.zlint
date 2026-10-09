@@ -126,6 +126,7 @@ fn structure_parens_required(source, p, inner, outer) =
   else if outer is ts_class.extends then structure_parens_need(inner is structure_assertion || inner.precedence < 19)
   else if outer is ts_enum_member.init then structure_parens_need(inner.precedence < 1)
   else if p is ts_array_type then structure_parens_need(inner.precedence < 20)
+  else if p is ts_type_operator then structure_parens_need(inner.precedence < p.precedence)
   else if p is (ts_union, ts_intersection) then structure_parens_need(inner.precedence < p.precedence)
   else if outer is (ts_type_assertion.expression, ts_as.expression, ts_satisfies.expression) then structure_parens_need(inner.precedence < 15)
   else if outer is (ts_node.type, ts_node.return_type) then 0 else null

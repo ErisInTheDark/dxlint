@@ -10,6 +10,7 @@ import .ts/type-specifiers
 import .ts/typed/promises
 import .ts/typed/optional-chains
 import .ts/typed/floating-promises
+import .ts/typed/template-expressions
 
 define {
 
@@ -431,50 +432,6 @@ in ts_binary {
 in ts_binary rule no-unnecessary-boolean-literal-compare {
   when re_test(operator, /^[!=]==?$/) && boolean_literal != null && { value other_side_flags.nonempty ?? []; has_only_flags (["boolean", "literal"]) }
   warn if boolean_literal == "true" then "This expression unnecessarily compares a boolean value to a boolean instead of using it directly." else "This expression unnecessarily compares a boolean value to a boolean instead of negating it."
-}
-
-fn template_interpolation_subject(n) = if n is ts_literal_type then n.value.node else unparenthesised_node(n)
-fn template_interpolation_whitespace(n) = if n is ts_string then n.literal_value.type == "string" && re_test(n.literal_value.value, /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/) else n is (ts_template, ts_template_type) && count(n.quasi) == 1 && {
-  value n.quasi
-  first_quasi: first
-  value result: { value n.quasi; first; byte_len } - 1
-  value byte_slice(first_quasi, 1, result)
-  re_test /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/
-}
-fn template_interpolation_literal(n, type_syntax) = n is ts_literal || n is (ts_template, ts_template_type) || (if type_syntax then n is ts_type_keyword && contains(["null", "undefined"], n.text) else n is ts_identifier && contains(["undefined", "Infinity", "NaN"], n.text))
-fn template_interpolation_string(n, single, type_syntax) = single && n.type_is_string_like && (!type_syntax || !n.type_is_parameter && !n.type_has_enum)
-in ts_template let template_interpolation_nodes expression.nodes
-in ts_template_type let template_interpolation_nodes type.nodes
-in ts_template, ts_template_type rule no-unnecessary-template-expression {
-  when parent not ts_tagged_template
-  let single count(template_interpolation_nodes) == 1 && first([] quasi.text) == "`${{" && last([] quasi.text) == "}}`"
-  let comments descendants(ts_comment)
-  let type_syntax is ts_template_type
-  let interpolation_pairs {
-    value quasi.nodes
-    following_quasi: drop 1
-    value quasi.nodes
-    quasi_pairs: zip following_quasi
-    value template_interpolation_nodes
-    zip quasi_pairs
-    map (pair) {
-      expression: { value pair; first; unparenthesised_node },
-      subject: { value pair; first; template_interpolation_subject },
-      previous: { value pair; last; first },
-      following: { value pair; last; last },
-      string_only: {
-        value pair
-        first
-        unparenthesised_node
-        template_interpolation_string single type_syntax
-      }
-    }
-  }
-  each interpolation in interpolation_pairs
-  when !any(comments, comment => comment.offset >= interpolation.previous.end_offset && comment.end_offset <= interpolation.following.offset)
-  when interpolation.string_only || template_interpolation_literal(interpolation.subject, type_syntax) && !(re_test(interpolation.following.text, /^}[\r\n\u2028\u2029]/) && template_interpolation_whitespace(interpolation.subject))
-  report at if interpolation.string_only then {start: interpolation.expression.offset - 2, end: interpolation.expression.end_offset + 1} else {start: interpolation.previous.end_offset - 2, end: interpolation.following.offset + 1}
-  warn "Template literal expression is unnecessary and can be simplified."
 }
 
 # Receivers: what the object of `x.method(...)` is.
