@@ -1,4 +1,5 @@
-//! The built-in library, embedded in the binary. Languages and their rule
+//! The built-in library, embedded unless `ZLINT_LIBRARY` selects a disk library.
+//! Languages and their rule
 //! definitions are imported as `import .ts` (stored as `std/ts`, with its
 //! parts as `std/ts/problems` ...); rulesets that turn rules on are
 //! `import rules:recommended`.
@@ -30,12 +31,17 @@ pub fn short_name(name: &str) -> &str {
 }
 
 /// `ZLINT_LIBRARY=<checkout>`: read `std/` and `rules/` from that directory
-/// instead of the embedded copies, so editing the library needs no rebuild
-/// (development only; the set of modules stays the embedded one). Read once.
-fn from_disk(dir: &str, name: &str) -> Option<&'static str> {
+/// instead of the embedded copies, including the complete module inventory.
+/// Missing disk files never fall back to embedded text. Root, inventory and
+/// successfully read texts are cached for the process.
+fn disk_root() -> Option<&'static std::path::Path> {
     static ROOT: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| std::env::var_os("ZLINT_LIBRARY").map(std::path::PathBuf::from)).as_deref()
+}
+
+fn from_disk(dir: &str, name: &str) -> Option<&'static str> {
     static TEXTS: OnceLock<std::sync::Mutex<HashMap<String, &'static str>>> = OnceLock::new();
-    let root = ROOT.get_or_init(|| std::env::var_os("ZLINT_LIBRARY").map(std::path::PathBuf::from)).as_ref()?;
+    let root = disk_root()?;
     let key = format!("{dir}/{name}");
     let mut texts = TEXTS.get_or_init(Default::default).lock().expect("library lock");
     if let Some(&text) = texts.get(&key) {
@@ -46,33 +52,68 @@ fn from_disk(dir: &str, name: &str) -> Option<&'static str> {
     Some(text)
 }
 
+fn disk_names(dir: &str) -> Vec<&'static str> {
+    fn scan(path: &std::path::Path, prefix: &str, names: &mut Vec<&'static str>) {
+        let Ok(entries) = std::fs::read_dir(path) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
+            let name = format!("{prefix}{name}");
+            if path.is_dir() {
+                scan(&path, &format!("{name}/"), names);
+            } else if let Some(name) = name.strip_suffix(".zlint").filter(|_| path.is_file()) {
+                names.push(name.to_owned().leak());
+            }
+        }
+    }
+    let mut names = Vec::new();
+    if let Some(root) = disk_root() {
+        scan(&root.join(dir), "", &mut names);
+    }
+    names.sort_unstable();
+    names
+}
+
 pub fn get(name: &str) -> Option<&'static str> {
     let name = name.strip_suffix(".zlint").unwrap_or(name);
-    let embedded = FILES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)?;
-    Some(from_disk("std", name).unwrap_or(embedded))
+    if disk_root().is_some() {
+        from_disk("std", name)
+    } else {
+        FILES.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)
+    }
 }
 
 pub fn names() -> impl Iterator<Item = &'static str> {
-    FILES.iter().map(|(n, _)| *n)
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        if disk_root().is_some() { disk_names("std") } else { FILES.iter().map(|(n, _)| *n).collect() }
+    }).iter().copied()
 }
 
 pub fn ruleset(name: &str) -> Option<&'static str> {
-    let embedded = RULESETS.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)?;
-    Some(from_disk("rules", name).unwrap_or(embedded))
+    if disk_root().is_some() {
+        from_disk("rules", name)
+    } else {
+        RULESETS.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)
+    }
 }
 
 pub fn rulesets() -> impl Iterator<Item = &'static str> {
-    RULESETS.iter().map(|(n, _)| *n)
+    static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        if disk_root().is_some() { disk_names("rules") } else { RULESETS.iter().map(|(n, _)| *n).collect() }
+    }).iter().copied()
 }
 
 /// The language whose import defines rule `name` (`std/rust/format` counts
-/// as `rust`), for "add `import .rs`" hints. Found by scanning the embedded
-/// text for `rule <name>`, once.
+/// as `rust`), for "add `import .rs`" hints. Found by scanning the selected
+/// library text for `rule <name>`, once.
 pub fn defining_language(name: &str) -> Option<&'static str> {
     static INDEX: OnceLock<HashMap<String, &'static str>> = OnceLock::new();
     let index = INDEX.get_or_init(|| {
         let mut index = HashMap::new();
-        for (module, text) in FILES {
+        for module in names() {
+            let Some(text) = get(module) else { continue };
             let lang = module.split('/').next().unwrap_or(module);
             for line in text.lines() {
                 let mut words = line.split_whitespace();

@@ -209,10 +209,28 @@ fn worker_limits_preserve_single_file_and_project_diagnostics() {
 #[test]
 fn zlint_library_reads_the_built_in_library_from_disk() {
     // A library dir whose `whitespace` module defines a different rule.
-    let library = project("library-override", &[("std/whitespace.zlint", "in .* layer text match bang /!/ {\n  rule bang warn \"bang\"\n}\n")]);
+    let library = project("library-override", &[
+        ("std/whitespace.zlint", "in .* layer text match bang /!/ {\n  rule bang warn \"bang\"\n}\n"),
+        ("std/test-extra/nested.zlint", "in .* layer text match extra /!/ {\n  rule library-extra warn \"extra\"\n}\n"),
+        ("rules/test-extra/nested.zlint", "rule library-extra\n"),
+    ]);
     let dir = project("library-user", &[(".zlint", "lang t \"*.t\"\nimport .whitespace\n"), ("a.t", "hi!\n")]);
     const CHILD: &str = "ZLINT_CLI_LIBRARY_TEST_CHILD";
     if std::env::var_os(CHILD).is_some() {
+        if std::env::var_os("ZLINT_LIBRARY").is_some() {
+            let names: Vec<_> = crate::config::std_lib::names().collect();
+            assert!(names.contains(&"test-extra/nested"));
+            assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+            assert_eq!(crate::config::std_lib::get("ts"), None);
+            assert_eq!(crate::config::std_lib::ruleset("recommended"), None);
+            assert!(crate::config::std_lib::get("test-extra/nested").is_some());
+            assert!(crate::config::std_lib::rulesets().any(|name| name == "test-extra/nested"));
+            assert!(crate::config::std_lib::ruleset("test-extra/nested").is_some());
+            assert_eq!(crate::config::std_lib::defining_language("library-extra"), Some("test-extra"));
+        } else {
+            assert!(crate::config::std_lib::get("ts").is_some());
+            assert!(!crate::config::std_lib::names().any(|name| name == "test-extra/nested"));
+        }
         print!("{}", stdout(&zlint(&dir, &["--no-cache"])));
         return;
     }
@@ -223,7 +241,9 @@ fn zlint_library_reads_the_built_in_library_from_disk() {
         if let Some(l) = library {
             cmd.env("ZLINT_LIBRARY", l);
         }
-        String::from_utf8_lossy(&cmd.output().expect("run isolated library test").stdout).into_owned()
+        let output = cmd.output().expect("run isolated library test");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).into_owned()
     };
     assert!(run(Some(&library)).contains("[bang]"));
     assert!(!run(None).contains("[bang]"));
