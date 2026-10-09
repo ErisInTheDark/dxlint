@@ -5,6 +5,7 @@
 /// The regex parser: rules needing a pattern's structure read its `Ast`.
 pub(crate) mod parse;
 mod sources;
+mod syntax;
 
 pub use parse::is_mark;
 use parse::{parse, Ast, Kind};

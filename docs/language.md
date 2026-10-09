@@ -1177,6 +1177,7 @@ and `final-newline`.
 | `.ts/suggestions/comparisons` | literal-side comparison policy, range exceptions and source-preserving operand swaps |
 | `.ts/typed/optional-chains` | optional-chain guard selection, return-type safety and atomic fixes, imported by `.ts/typed` |
 | `.ts/typed/readonly-members` | readonly private members and parameter properties, with type-preserving annotation fixes, imported by `.ts/typed` |
+| `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |

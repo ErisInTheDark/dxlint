@@ -525,14 +525,23 @@ const CORE: &[Fact] = &[
         },
     },
     Fact {
-        shape: Shape::Record(&[("flags", Shape::Scalar), ("written", Shape::Scalar), ("offset", Shape::Scalar)]),
+        shape: Shape::Record(&[("source", Shape::Scalar), ("flags", Shape::Scalar), ("written", Shape::Scalar), ("offset", Shape::Scalar)]),
         name: "regex_pattern",
-        doc: "native layers: on a regex site (see `regex_findings`): `{ flags, written, offset }`: its static flags (null when unknown), how the pattern is written (`regex`, `string`, `template` or `computed`) and where",
+        doc: "native layers: on a regex site (see `regex_findings`): `{ source, flags, written, offset }`: its pattern text, static flags (null when unknown), how the pattern is written (`regex`, `string`, `template` or `computed`) and where",
         get: |f, n| {
-            opt(f.regex_site(n), |(flags, written, at)| {
-                Value::record(vec![("flags".into(), opt(flags, Value::from)), ("written".into(), Value::from(written)), ("offset".into(), Value::from(at))])
+            opt(f.regex_site(n), |(source, flags, written, at)| {
+                Value::record(vec![("source".into(), Value::from(source)), ("flags".into(), opt(flags, Value::from)), ("written".into(), Value::from(written)), ("offset".into(), Value::from(at))])
             })
         },
+    },
+    Fact {
+        shape: Shape::List(&Shape::Record(&[
+            ("id", Shape::Scalar), ("parent", Shape::Scalar), ("kind", Shape::Scalar), ("raw", Shape::Scalar),
+            ("character", Shape::Scalar), ("value", Shape::Scalar), ("children", Shape::List(&Shape::Scalar)),
+        ])),
+        name: "regex_syntax",
+        doc: "native regex syntax: parsed pattern nodes as flat id/parent/kind/raw/character/value/children records; children are node ids, character is scalar text (null for lone UTF-16 units), value is the character code; null for invalid syntax or unknown flags",
+        get: |f, n| f.with_file(|file, node| file.regex_syntax(node), n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

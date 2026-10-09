@@ -61,8 +61,8 @@ pub trait Facts {
     fn unreachable_run_end(&self, node: u32) -> Option<usize>;
     /// What the regex rules find in a regex literal or `RegExp(...)` call.
     fn regex_findings(&self, node: u32) -> Option<Vec<RegexFinding>>;
-    /// A regex site's static flags, how its pattern is written, and where.
-    fn regex_site(&self, node: u32) -> Option<(Option<String>, &'static str, usize)>;
+    /// A regex site's source, static flags, how its pattern is written, and where.
+    fn regex_site(&self, node: u32) -> Option<(String, Option<String>, &'static str, usize)>;
     /// no-invalid-regexp's pattern error on a `RegExp(...)` call.
     fn regex_pattern_error(&self, node: u32) -> Option<String>;
     /// On a `RegExp(...)` call: its flags as a string literal (`""` without),
@@ -272,9 +272,9 @@ impl Facts for NativeFile<'_> {
         )
     }
 
-    fn regex_site(&self, node: u32) -> Option<(Option<String>, &'static str, usize)> {
+    fn regex_site(&self, node: u32) -> Option<(String, Option<String>, &'static str, usize)> {
         let site = NativeFile::regex_site(self, node)?;
-        Some((site.flags, site.pattern_kind, self.syntax.tree.node(site.pattern_node).start as usize))
+        Some((site.pattern, site.flags, site.pattern_kind, self.syntax.tree.node(site.pattern_node).start as usize))
     }
 
     fn regex_pattern_error(&self, node: u32) -> Option<String> {

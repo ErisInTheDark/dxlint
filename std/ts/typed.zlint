@@ -12,6 +12,7 @@ import .ts/typed/optional-chains
 import .ts/typed/floating-promises
 import .ts/typed/template-expressions
 import .ts/typed/readonly-members
+import .ts/typed/string-boundaries
 
 define {
 
@@ -443,23 +444,6 @@ in ts_call let is_index_of re_test(callee, /\.\s*indexOf$/) && count(argument) =
 in ts_binary rule prefer-includes {
   when left.is_index_of == true && (re_test(operator, /^!==?$/) && right == "-1" || re_test(operator, /^===?$/) && right == "-1" || operator == ">" && right == "-1" || operator == ">=" && right == "0" || operator == "<" && right == "0")
   warn "Use 'includes()' method instead."
-}
-
-# startsWith / endsWith written the long way, on strings.
-in ts_call {
-  let starts_ends_kind if @receiver_is("string") && re_test(callee, /\.\s*indexOf$/) then "start_index" else if @receiver_is("string") && re_test(callee, /\.\s*charAt$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*(slice|substring)$/) && first([] argument) == "0" then "start" else if @receiver_is("string") && re_test(callee, /\.\s*lastIndexOf$/) then "end_index" else if @receiver_is("string") && re_test(callee, /\.\s*slice$/) && { value [] argument; first; re_test /^-/ } && count(argument) == 1 then "end" else null
-  let regex_starts_test re_test(callee, /^\/\^[\w\s-]+\/\.\s*test$/) && count(argument) == 1 && { value argument.type_flags.nonempty ?? []; contains "string" }
-  let regex_ends_test re_test(callee, /^\/[\w\s-]+\$\/\.\s*test$/) && count(argument) == 1 && { value argument.type_flags.nonempty ?? []; contains "string" }
-}
-in ts_index let starts_ends_kind if { value object.type_flags.nonempty ?? []; contains "string" } && index == "0" then "start" else if { value object.type_flags.nonempty ?? []; contains "string" } && re_test(index, /\.length\s*-\s*1$/) then "end" else null
-in ts_binary rule prefer-string-starts-ends-with {
-  when re_test(operator, /^[!=]==?$/)
-  when left.starts_ends_kind == "start_index" && right == "0" || left.starts_ends_kind == "start" || left.starts_ends_kind == "end_index" && re_test(right, /\.length\s*-/) || left.starts_ends_kind == "end"
-  warn if { value left.starts_ends_kind.nonempty ?? ""; re_test /^end/ } then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
-}
-in ts_call rule prefer-string-starts-ends-with:regex {
-  when regex_starts_test || regex_ends_test
-  warn if regex_ends_test then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
 }
 
 # ---- template interpolation ----------------------------------------------------

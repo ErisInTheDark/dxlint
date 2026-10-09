@@ -1,0 +1,139 @@
+# String prefix/suffix tests and safe replacements.
+import .ts/methods
+import .ts/expression-fixes
+
+define {
+
+fn string_boundary_same(a, b) = a.reference_key != null && a.reference_key == b.reference_key
+fn string_boundary_length_member(n, subject) = {
+  value bare: unparenthesised_node(n)
+  value bare is (ts_member, ts_index) && collection_method(bare, "length") && string_boundary_same(bare.object.node, subject)
+}
+fn string_boundary_length(n, subject) = {
+  value bare: unparenthesised_node(n)
+  value subject.static_string != null && bare.static_number != null && bare.static_number == utf16_len(subject.static_string)
+    || string_boundary_length_member(bare, subject)
+}
+fn string_boundary_tail(n, receiver, needle) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_binary && bare.operator == "-" && string_boundary_length_member(bare.left.node, receiver) && string_boundary_length(bare.right.node, needle)
+}
+fn string_boundary_last_character(n, receiver) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_binary && bare.operator == "-" && string_boundary_length_member(bare.left.node, receiver) && bare.right.static_number == 1
+}
+fn string_boundary_negative_length(n, needle) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_unary && bare.operator == "-" && string_boundary_length(bare.argument.node, needle)
+}
+fn string_boundary_string_part(t) = if t.kind == "union" then len(t.parts) > 0 && all(t.parts, part => string_boundary_string_part(part))
+  else if t.kind == "intersection" then any(t.parts, part => string_boundary_string_part(part)) && !any(t.parts, part => contains(["any", "unknown"], part.kind))
+  else contains(["string", "null", "undefined"], t.kind)
+fn string_boundary_receiver(n, optional) = n.type_is_string_like
+  || optional && string_boundary_string_part(n.collection_type) && { value n.type_flags.nonempty ?? []; contains "string" }
+
+fn string_boundary_access(n) = {
+  value bare: unparenthesised_node(n)
+  value method: if bare is ts_call then unparenthesised_node(bare.callee.node) else bare
+  value if method not (ts_member, ts_index) then null else {
+    receiver: method.object.node,
+    optional: method.optional != null || bare.optional != null,
+    method: if bare is ts_index then "index" else method.static_name.nonempty ?? method.index.static_string,
+    args: if bare is ts_call then bare.argument.nodes else [bare.index.node]
+  }
+}
+fn string_boundary_comparison(n, needle) = {
+  value access: string_boundary_access(n)
+  value arguments: access.args
+  value first: first(arguments)
+  value last: last(arguments)
+  value if access == null || !string_boundary_receiver(access.receiver, access.optional) then null
+  else if access.method == "indexOf" && len(arguments) == 1 && needle.static_number == 0 then {
+    kind: "start", receiver: access.receiver, needle: first, optional: access.optional, safe: true
+  }
+  else if access.method == "lastIndexOf" && len(arguments) == 1 && string_boundary_tail(needle, access.receiver, first) then {
+    kind: "end", receiver: access.receiver, needle: first, optional: access.optional, safe: true
+  }
+  else if contains(["index", "charAt"], access.method) && len(arguments) == 1 && (first.static_number == 0 || string_boundary_last_character(first, access.receiver)) then {
+    kind: if first.static_number == 0 then "start" else "end",
+    receiver: access.receiver, needle: unparenthesised_node(needle), optional: access.optional,
+    safe: needle.static_string != null && utf16_len(needle.static_string) == 1
+  }
+  else if contains(["slice", "substring"], access.method) && len(arguments) == 2 && first.static_number == 0 && string_boundary_length(last, needle) then {
+    kind: "start", receiver: access.receiver, needle: unparenthesised_node(needle), optional: access.optional, safe: true
+  }
+  else if contains(["slice", "substring"], access.method) && (len(arguments) == 1 && (string_boundary_negative_length(first, needle) || string_boundary_tail(first, access.receiver, needle))
+    || len(arguments) == 2 && string_boundary_tail(first, access.receiver, needle) && string_boundary_length_member(last, access.receiver)) then {
+    kind: "end", receiver: access.receiver, needle: unparenthesised_node(needle), optional: access.optional,
+    safe: access.method != "substring" || !string_boundary_negative_length(first, needle)
+  } else null
+}
+
+fn string_boundary_regex(n) = {
+  value pattern: collection_value_node(n)
+  value syntax: pattern.regex_syntax
+  value alternatives: filter(syntax, part => part.kind == "alternative" && part.parent == 0)
+  value alternative: first(alternatives)
+  value terms: filter(syntax, term => term.parent == alternative.id)
+  value from_start: first(terms).kind == "assertion" && first(terms).raw == "^"
+  value from_end: last(terms).kind == "assertion" && last(terms).raw == "$"
+  value characters: if from_start then drop(terms, 1) else slice(terms, 0, -1)
+  value if syntax == null || type_of(pattern.regex_pattern.flags) != "str" || re_test(pattern.regex_pattern.flags, /[gimy]/)
+    || len(alternatives) != 1 || from_start == from_end || len(characters) == 0
+    || !all(characters, term => term.kind == "character" && term.character != null) then null else {
+      kind: if from_start then "start" else "end",
+      text: { value characters; map (term) term.character; join "" }
+    }
+}
+fn string_boundary_quote(text) = '"' {
+  value text
+  re_replace /\\/ "\\\\"
+  re_replace /"/ '\\"'
+  re_replace /\n/ "\\n"
+  re_replace /\r/ "\\r"
+  re_replace /\u{2028}/ "\\u2028"
+  re_replace /\u{2029}/ "\\u2029"
+} '"'
+fn string_boundary_regex_call(n, method_name) = {
+  value bare: unparenthesised_node(n)
+  value method: unparenthesised_node(bare.callee.node)
+  value if bare not ts_call || count(bare.argument) != 1 || !collection_method(method, method_name) then null else {
+    value match: method_name == "match"
+    value receiver: if match then method.object.node else first(bare.argument.nodes)
+    value pattern: if match then first(bare.argument.nodes) else method.object.node
+    value info: string_boundary_regex(pattern)
+    value optional: method.optional != null || bare.optional != null
+    value if info == null || match && !string_boundary_receiver(receiver, optional) then null else {
+      kind: info.kind, receiver: receiver, argument: string_boundary_quote(info.text), optional: optional, safe: true
+    }
+  }
+}
+fn string_boundary_replacement(n, info, negative) = {
+  value receiver: expression_fix_wrap(info.receiver.text, info.receiver.precedence < 19)
+  value result: (if negative then "!" else "") receiver (if info.optional then "?." else ".") (if info.kind == "end" then "endsWith" else "startsWith") "(" (info.argument.nonempty ?? info.needle.text) ")"
+  value if !expression_fix_clean(n) then null else expression_fix_edges(n, result)
+}
+
+in ts_binary rule prefer-string-starts-ends-with {
+  when re_test(operator, /^[!=]==?$/)
+  let comparison string_boundary_comparison(left.node, right.node)
+  let match if right.literal_value.type == "null" then string_boundary_regex_call(left.node, "match") else null
+  let info comparison ?? match
+  let access string_boundary_access(left.node)
+  when info != null
+  report at if match != null then unparenthesised_node(left.node) else node
+  warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
+  let safe info.safe && (match != null || len(operator) == 3 || info.needle.type_is_string_like || info.needle.static_string != null || comparison != null && contains(["indexOf", "lastIndexOf"], access.method))
+  let negative if match != null then starts_with(operator, "=") else starts_with(operator, "!")
+  let replacement if safe then string_boundary_replacement(node, info, negative) else null
+  fix at node if replacement != null as replacement
+}
+in ts_call rule prefer-string-starts-ends-with:regex {
+  let info string_boundary_regex_call(node, "test")
+  when info != null
+  warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
+  let replacement string_boundary_replacement(node, info, false)
+  fix if replacement != null as replacement
+}
+
+}
