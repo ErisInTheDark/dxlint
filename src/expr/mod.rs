@@ -2018,26 +2018,12 @@ impl<'a> Ctx<'a> {
                     }
                     Value::list(values)
                 }
-                Relative::Previous | Relative::Next => match self.sibling(*rel == Relative::Next) {
+                Relative::Previous | Relative::Next => match self.tree.field_sibling(self.node, *rel == Relative::Next) {
                     Some(id) => Ctx { node: id, ..*self }.eval(inner)?,
                     None => Value::Null,
                 },
             },
         })
-    }
-
-    /// The child of this node's parent just before (or after) it, among
-    /// those with the same field.
-    fn sibling(&self, after: bool) -> Option<u32> {
-        let parent = self.tree.parent(self.node)?;
-        let label = self.tree.label(self.node);
-        let same: Vec<u32> = self.tree.node(parent).children.iter().filter(|e| Some(e.label) == label).map(|e| e.node).collect();
-        let at = same.iter().position(|&n| n == self.node)?;
-        if after {
-            same.get(at + 1).copied()
-        } else {
-            at.checked_sub(1).map(|i| same[i])
-        }
     }
 
     /// Evaluates without a node: constants, options and functions only

@@ -26,8 +26,13 @@ struct CompiledAttr {
     name: String,
     defs: Vec<CExpr>,
     /// Each definition's typed form, when it lowers to the VM.
-    lowered: Vec<Option<VExpr>>,
+    lowered: Vec<Option<Lowered>>,
     routes: Vec<Route>,
+}
+
+enum Lowered {
+    Direct(VExpr),
+    Cached(VExpr),
 }
 
 /// A `Route::Defined` without a field in the matcher's VM record.
@@ -65,8 +70,9 @@ impl Attributes {
             by_attr[attr as usize].push((matcher, index, label));
         }
         let attrs = attrs.into_iter().zip(by_attr).map(|(attr, forwards)| {
-            let lowered: Vec<Option<VExpr>> = attr.defs.iter().map(|(_, expr)| match vm::lower(expr, &grammar.functions) {
-                Ok(lowered) => Some(lowered),
+            let lowered: Vec<Option<Lowered>> = attr.defs.iter().map(|(_, expr)| match vm::lower(expr, &grammar.functions) {
+                Ok(lowered) if lowered.is_direct() => Some(Lowered::Direct(lowered)),
+                Ok(lowered) => Some(Lowered::Cached(lowered)),
                 Err(blocker) => {
                     if stats {
                         vm_blockers.push(vm::blocker_name(blocker));
@@ -264,7 +270,7 @@ impl<'e> Needs<'e> {
             }
             match compiled.routes.get(k as usize) {
                 Some(Route::Defined(def, _)) => {
-                    if compiled.lowered[*def as usize].is_some() {
+                    if matches!(compiled.lowered[*def as usize], Some(Lowered::Cached(_))) {
                         self.order[k as usize].push(attr);
                     }
                     match by_def.iter_mut().find(|(d, _)| d == def) {
@@ -360,10 +366,14 @@ impl vm::Host for Ctx<'_> {
         self.source
     }
 
+    fn lines(&self) -> &crate::line_index::LineIndex {
+        self.lines
+    }
+
     fn attr(&self, node: u32, attr: u16) -> Option<V> {
         match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => Some(V::Null),
-            Route::Forward(_) | Route::Defined(_, NO_SLOT) => None,
+            Route::Forward(_) => None,
             Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
         }
     }
@@ -385,11 +395,15 @@ impl<'a> Ctx<'a> {
     /// A VM-lowered attribute from the node's record, computing it there
     /// first; `None` when the VM gives up (the interpreter answers).
     fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
+        let lowered = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
+            Some(Lowered::Direct(body)) => return vm::eval(self, node, body),
+            Some(Lowered::Cached(body)) if slot != NO_SLOT => body,
+            _ => return None,
+        };
         match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
             Begin::Ready(v) => Some(v),
             Begin::GiveUp => None,
             Begin::Compute(at) => {
-                let lowered = self.attrs.attrs[attr as usize].lowered[index as usize].as_ref().expect("record fields are lowered");
                 let v = vm::eval(self, node, lowered);
                 self.memo.vm.finish(at, v);
                 v
@@ -422,7 +436,7 @@ impl<'a> Ctx<'a> {
                 });
             }
             Route::Defined(index, slot) => {
-                if slot != NO_SLOT && vm::mode() != vm::Mode::Off {
+                if vm::mode() != vm::Mode::Off {
                     if let Some(v) = self.vm_attr(node, attr, index, slot) {
                         if vm::mode() == vm::Mode::On {
                             return Ok(v.value(self.tree, self.source));
@@ -511,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn records_hold_exactly_the_attributes_read_on_each_kind() {
+    fn records_hold_only_nontrivial_attributes_read_on_each_kind() {
         let g = grammar();
         let base = g.matcher("base").unwrap();
         let member = g.matcher("member").unwrap();
@@ -525,8 +539,9 @@ mod tests {
         let mut on_leaf = KindSet::empty(g.matchers.len());
         on_leaf.insert(leaf);
         let root = CExpr::Attr(2);
-        assert_eq!(plan.shape_records(&g, vec![(on_leaf, &root)]), 2);
-        assert_eq!(plan.layout[leaf as usize], 2);
+        assert_eq!(plan.shape_records(&g, vec![(on_leaf, &root)]), 1);
+        assert_eq!(plan.layout[leaf as usize], 1);
+        assert!(matches!(plan.route(leaf, 0), Route::Defined(_, NO_SLOT)));
         for m in [base, member, other] {
             assert_eq!(plan.layout[m as usize], 0);
         }

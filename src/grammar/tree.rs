@@ -146,6 +146,22 @@ impl Tree {
         Some(self.label[id as usize]).filter(|&l| l != NO_LABEL)
     }
 
+    /// The adjacent child in the same field, using the first occurrence
+    /// when memoised nodes appear in several child edges.
+    pub fn field_sibling(&self, id: u32, after: bool) -> Option<u32> {
+        let parent = self.parent(id)?;
+        let label = self.label(id)?;
+        let mut same = self.node(parent).children.iter().filter(|edge| edge.label == label);
+        let mut previous = None;
+        while let Some(edge) = same.next() {
+            if edge.node == id {
+                return if after { same.next().map(|edge| edge.node) } else { previous };
+            }
+            previous = Some(edge.node);
+        }
+        None
+    }
+
     /// The node's ordinal within its parent's children of the same field.
     pub fn field_index(&self, id: u32) -> Option<usize> {
         self.field_index_with(id, || {})
@@ -320,6 +336,11 @@ mod tests {
             let expected = tree.parent(id).map(|parent| tree.node(parent).children.iter()
                 .take_while(|edge| edge.node != id).filter(|edge| Some(edge.label) == tree.label(id)).count());
             assert_eq!(tree.field_index(id), expected, "shared node {id}");
+            let siblings: Vec<_> = tree.parent(id).into_iter().flat_map(|parent| tree.node(parent).children.iter())
+                .filter(|edge| Some(edge.label) == tree.label(id)).map(|edge| edge.node).collect();
+            let at = siblings.iter().position(|&node| node == id);
+            assert_eq!(tree.field_sibling(id, false), at.and_then(|at| at.checked_sub(1)).map(|at| siblings[at]));
+            assert_eq!(tree.field_sibling(id, true), at.and_then(|at| siblings.get(at + 1).copied()));
         }
         for count in 0..64 {
             let mut nodes: Vec<_> = (0..count).map(|i| node(i, i + 1, vec![])).collect();

@@ -191,6 +191,8 @@ pub enum VExpr {
     Parent,
     Offset,
     EndOffset,
+    Index,
+    Line,
     /// A field's text: null, or one node's text (several: give up).
     Field(u16),
     /// `inner` evaluated on the node `base` gives (null stays null).
@@ -198,6 +200,7 @@ pub enum VExpr {
     /// `inner` on the single node of a field (none: null).
     OnField(u16, Box<VExpr>),
     OnParent(Box<VExpr>),
+    OnSibling(bool, Box<VExpr>),
     /// A value's kind: its node's matcher, or a kind named by its text.
     IsValue(Box<VExpr>, Box<[u32]>),
     /// The first value when it is a node, else the second.
@@ -232,6 +235,25 @@ pub enum VExpr {
     Fold { of: Box<Seq>, init: Option<Box<VExpr>>, body: Box<VExpr>, slot: u16 },
     /// `min_by`/`max_by` over numeric keys; the first item wins ties.
     Pick { max: bool, of: Box<Seq>, key: Box<VExpr>, bind: Binder },
+}
+
+impl VExpr {
+    /// Small value-only bodies cost less than a second per-node cache.
+    pub(crate) fn is_direct(&self) -> bool {
+        fn cost(e: &VExpr, remaining: &mut u8) -> bool {
+            let Some(left) = remaining.checked_sub(1) else { return false };
+            *remaining = left;
+            match e {
+                VExpr::Const(_) | VExpr::Node | VExpr::Text | VExpr::Parent | VExpr::Offset | VExpr::EndOffset
+                | VExpr::Index | VExpr::Line | VExpr::FieldPresent(_) | VExpr::Is { .. } | VExpr::InField(..) => true,
+                VExpr::Not(a) | VExpr::Neg(a) | VExpr::IsNull(a) | VExpr::NonEmpty(a) => cost(a, remaining),
+                VExpr::Binary(_, a, b) | VExpr::Coalesce(a, b) => cost(a, remaining) && cost(b, remaining),
+                VExpr::If(a, b, c) => cost(a, remaining) && cost(b, remaining) && cost(c, remaining),
+                _ => false,
+            }
+        }
+        cost(self, &mut 8)
+    }
 }
 
 /// Where an item stage's lambda binds its item (and index, if it takes one).
@@ -319,9 +341,12 @@ pub fn blocker_name(e: &CExpr) -> String {
     match e {
         CExpr::Call(f, _) => format!("call {}", f.name),
         CExpr::Builtin(b) => format!("builtin {}", b.name()),
+        CExpr::Const(Value::List(items)) => match items.iter().find(|item| !matches!(item, Value::Null | Value::Bool(_) | Value::Num(_) | Value::Str(_))) {
+            Some(item) => format!("const list of {}", item.type_name()),
+            None => "const list as value".into(),
+        },
         CExpr::Const(v) => format!("const {}", match v {
             Value::Str(_) => "text",
-            Value::List(_) => "list",
             Value::Record(_) => "record",
             _ => "other",
         }),
@@ -397,6 +422,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         CExpr::Relative(Relative::Children, inner) => {
             return Ok(Lowered::Seq(Seq::Nodes { children: true, label: 0, item: boxed(inner)? }));
         }
+        CExpr::Relative(relative, inner) => VExpr::OnSibling(*relative == Relative::Next, boxed(inner)?),
         CExpr::Each(stage) => {
             let arity = u16::from(stage.arity);
             let inner = bind_params(args, stage.depth, arity, bound);
@@ -491,7 +517,7 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         }
         CExpr::Binary(op, a, b) => match op {
             BinOp::And | BinOp::Or | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-            | BinOp::Add | BinOp::Sub | BinOp::Mul => VExpr::Binary(*op, boxed(a)?, boxed(b)?),
+            | BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Rem => VExpr::Binary(*op, boxed(a)?, boxed(b)?),
             _ => return Err(e),
         },
         CExpr::Not(inner) => VExpr::Not(boxed(inner)?),
@@ -531,6 +557,8 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
             Builtin::Parent => VExpr::Parent,
             Builtin::Offset => VExpr::Offset,
             Builtin::EndOffset => VExpr::EndOffset,
+            Builtin::Index => VExpr::Index,
+            Builtin::Line => VExpr::Line,
             _ => return Err(e),
         },
         CExpr::Field(label) => VExpr::Field(*label),
@@ -560,6 +588,7 @@ pub trait Host {
     fn tree(&self) -> &Tree;
     fn grammar(&self) -> &Grammar;
     fn source(&self) -> &str;
+    fn lines(&self) -> &crate::line_index::LineIndex;
     /// An attribute on a node through the VM; `None` gives up on the VM.
     fn attr(&self, node: u32, attr: u16) -> Option<V>;
     /// A native fact read on a node, when its value is one the VM holds.
@@ -756,6 +785,12 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         };
     }
     Some(match e {
+        VExpr::OnSibling(after, inner) => match tree.field_sibling(node, *after) {
+            Some(sibling) => eval!(sibling, inner)?,
+            None => V::Null,
+        },
+        VExpr::Index => tree.field_index(node).map_or(V::Null, |index| V::Num(index as f64)),
+        VExpr::Line => V::Num((h.lines().line_of(tree.node(node).start as usize) + 1) as f64),
         VExpr::Bound(slot) => *f.get(*slot as usize)?,
         VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
         VExpr::ReTest(text, pattern) => {
@@ -907,6 +942,11 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
                 BinOp::Ge => V::Bool(order()?.is_ge()),
                 BinOp::Add => V::Num(a.num(tree, source)? + b.num(tree, source)?),
                 BinOp::Sub => V::Num(a.num(tree, source)? - b.num(tree, source)?),
+                BinOp::Rem => {
+                    let divisor = b.num(tree, source)?;
+                    if divisor == 0.0 { return None; }
+                    V::Num(a.num(tree, source)? % divisor)
+                },
                 BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_))) => {
                     V::Num(a.num(tree, source)? * b.num(tree, source)?)
                 }
@@ -1023,6 +1063,49 @@ mod tests {
     use crate::expr::functions;
 
     #[test]
+    fn position_and_remainder_reads_preserve_boundaries_and_failure() {
+        use crate::grammar::{Edge, Node};
+        struct TestHost {
+            tree: Tree,
+            lines: crate::line_index::LineIndex,
+        }
+        impl Host for TestHost {
+            fn tree(&self) -> &Tree { &self.tree }
+            fn grammar(&self) -> &Grammar { panic!("no grammar queries") }
+            fn source(&self) -> &str { "a\r\nβ\nc" }
+            fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
+            fn attr(&self, _: u32, _: u16) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+        }
+        let leaf = |start, end| Node { matcher: TEXT, start, end, children: vec![] };
+        let host = TestHost { lines: crate::line_index::LineIndex::new("a\r\nβ\nc"), tree: Tree::from_native(vec![
+            leaf(0, 1), leaf(3, 5), leaf(6, 7), leaf(7, 7),
+            Node { matcher: ROOT, start: 0, end: 7, children: vec![
+                Edge { node: 0, label: 7 }, Edge { node: 1, label: 8 },
+                Edge { node: 2, label: 7 }, Edge { node: 3, label: u16::MAX },
+                Edge { node: 0, label: 7 },
+            ] },
+        ], 4) };
+        let run = |node, expression: CExpr| eval(&host, node, &lower(&expression, &[]).expect("lowerable position operation"));
+        for (node, index, line) in [(0, 0.0, 1.0), (1, 0.0, 2.0), (2, 2.0, 3.0)] {
+            assert_eq!(run(node, CExpr::Builtin(Builtin::Index)), Some(V::Num(index)));
+            assert_eq!(run(node, CExpr::Builtin(Builtin::Line)), Some(V::Num(line)));
+        }
+        assert_eq!(run(4, CExpr::Builtin(Builtin::Index)), Some(V::Null));
+        let sibling = |relative| CExpr::Relative(relative, Box::new(CExpr::Builtin(Builtin::Line)));
+        assert_eq!(run(0, sibling(Relative::Previous)), Some(V::Null));
+        assert_eq!(run(0, sibling(Relative::Next)), Some(V::Num(1.0)));
+        assert_eq!(run(2, sibling(Relative::Previous)), Some(V::Num(1.0)));
+        assert_eq!(run(3, sibling(Relative::Next)), Some(V::Null));
+        let remainder = |a, b| CExpr::Binary(BinOp::Rem, Box::new(CExpr::Const(a)), Box::new(CExpr::Const(b)));
+        assert_eq!(run(0, remainder(Value::from("-5"), Value::Num(2.0))), Some(V::Num(-1.0)));
+        assert_eq!(run(0, remainder(Value::Num(1.0), Value::Num(0.0))), None);
+        assert_eq!(run(0, remainder(Value::from("invalid"), Value::Num(2.0))), None);
+        assert_eq!(run(0, CExpr::Binary(BinOp::And, Box::new(CExpr::Const(Value::Bool(false))),
+            Box::new(remainder(Value::Num(1.0), Value::Num(0.0))))), Some(V::Bool(false)));
+    }
+
+    #[test]
     fn only_bodies_the_vm_can_answer_without_building_values_lower() {
         let g: &[UserFn] = &[];
         let num = |n: f64| Box::new(CExpr::Const(Value::Num(n)));
@@ -1074,11 +1157,9 @@ mod tests {
         assert!(lower_condition(&condition, g, &[local]).is_ok(), "a rule let remains lowerable inside a binding");
         for unsupported in [
             stage(Each::SortBy, 0, 1, vec![], CExpr::Param(0)),
-            CExpr::Binary(BinOp::Rem, num(1.0), num(0.0)),
             CExpr::Binary(BinOp::Join, num(1.0), num(2.0)),
             CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2))),
             call("len", vec![CExpr::Builtin(Builtin::Text)]),
-            CExpr::Builtin(Builtin::Line),
         ] {
             assert!(lower(&unsupported, g).is_err(), "{unsupported:?}");
         }
@@ -1096,13 +1177,20 @@ mod tests {
             in ts_node let contribution if boundary then 0 else total
             in ts_assignment let logical contains(["&&=", "||=", "??="], operator)
             in ts_parameter let defaulted init != null
+            in ts_parameter let position index % 2
+            in ts_parameter let position_is_first position == 0
+            in ts_parameter let preceding previous.line
+            in ts_parameter let following next.line
             fn twice(n) = n + n
             in ts_node let doubled twice(total)
             in ts_node let cyclic cyclic
             in ts_identifier let size len(text)
             in ts_function_like, ts_static_block rule probe info "{depth}:{total}:{doubled}"
             in ts_assignment rule assign info "{logical}"
-            in ts_parameter rule param info "{defaulted}"
+            in ts_parameter rule param {
+                when position_is_first || !position_is_first
+                info "{defaulted}:{position}:{line}:{preceding}:{following}"
+            }
             in ts_identifier rule ident info "{size}:{depth}"
             in ts_return rule cycle info "{cyclic}"
             in ts_identifier let named starts_with(text, "b") || text == "c" || parent is ts_assignment
