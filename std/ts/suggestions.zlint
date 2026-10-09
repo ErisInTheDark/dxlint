@@ -5,6 +5,7 @@ import .ts/expressions
 import .ts/suggestions/object-shorthand
 import .ts/suggestions/curly
 import .ts/suggestions/renames
+import .ts/suggestions/comparisons
 
 define {
 
@@ -71,16 +72,8 @@ in ts_property, ts_pattern_property let computed_exception parent is ts_object &
 in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.write_site == null && static_name == "__proto__"
 in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
 
-in ts_unary let signed_numeric_literal operator == "-" && (argument.unwrapped_node.nonempty ?? argument.node) is (ts_number, ts_bigint)
 in ts_template let static_template count(expression) == 0
-in ts_parenthesized forward signed_numeric_literal, static_template, range_terms from expression
-in ts_binary let left_literal (left.unwrapped_node.nonempty ?? left.node) is ts_literal || left.signed_numeric_literal == true || left.static_template == true
-in ts_binary let right_literal (right.unwrapped_node.nonempty ?? right.node) is ts_literal || right.signed_numeric_literal == true || right.static_template == true
-in ts_binary let range_terms if !contains(["<", "<="], operator) then null else { left_key: left.reference_key, right_key: right.reference_key, left_literal: left_literal, right_literal: right_literal, left_value: left.literal_value, right_value: right.literal_value }
-fn yoda_ordered(a_literal, a, b_literal, b) = if !a_literal && !b_literal then false else if !a_literal || !b_literal then true else a != null && b != null && js_compare(a, b) != null && js_compare(a, b) <= 0
-fn yoda_range_pair(a, b, op) = a != null && b != null && (if op == "&&" then a.right_key != null && a.right_key == b.left_key && yoda_ordered(a.left_literal, a.left_value, b.right_literal, b.right_value) else op == "||" && a.left_key != null && a.left_key == b.right_key && yoda_ordered(a.right_literal, a.right_value, b.left_literal, b.left_value))
-in ts_logical let logical_range (parent is ts_parenthesized || is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test)) && yoda_range_pair(left.range_terms, right.range_terms, operator)
-in ts_parenthesized let logical_range parent is ts_logical && parent.logical_range == true
+in ts_parenthesized forward static_template from expression
 
 in ts_node let return_assignment_context if parent is ts_return then { arrow: false, offset: parent.offset } else if is ts_arrow.body then { arrow: true, offset: parent.offset } else if parent is (ts_function, ts_method, ts_arrow, ts_class, ts_block, ts_static_block, ts_expression_statement, ts_variable_declaration, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_switch, ts_throw, ts_with, ts_labeled, ts_try, ts_export) then null else parent.return_assignment_context
 in ts_variable_declaration let async_resource_declaration kind == "await using"
@@ -668,16 +661,6 @@ in ts_assignment rule operator-assignment {
   let shorthand if operator == "=" && right.arithmetic_operator != null && assigned_key != null && (assigned_key == right.strict_left_reference_key || contains(["*", "&", "^", "|"], right.arithmetic_operator) && assigned_key == right.strict_right_reference_key) then right.arithmetic_operator "=" else null
   when if mode == "never" then operator != "=" && !contains(["&&=", "||=", "??="], operator) else shorthand != null
   warn if mode == "never" then "Unexpected operator assignment ({operator}) shorthand." else "Assignment (=) can be replaced with operator assignment ({shorthand})."
-}
-
-in ts_binary rule yoda {
-  option mode ("never" | "always") = "never" "literal comparison side"
-  option exceptRange boolean = false "allow parenthesised ordered range checks"
-  option onlyEquality boolean = false "apply only to equality operators"
-  when contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], operator)
-  when (!onlyEquality || contains(["==", "==="], operator)) && !(exceptRange && parent.logical_range == true)
-  when if mode == "always" then right_literal && !left_literal else left_literal && !right_literal
-  warn "Expected literal to be on the {if mode == 'always' then 'left' else 'right'} side of {operator}."
 }
 
 fn caught_throw_property_kind(parameter, property) =

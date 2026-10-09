@@ -1,0 +1,41 @@
+# Literal-side comparison policy and source-preserving operand swaps.
+import .ts/expression-fixes
+
+define {
+
+fn comparison_literal(n) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_literal || bare is ts_template && count(bare.expression) == 0
+    || bare is ts_unary && bare.operator == "-" && unparenthesised_node(bare.argument.node) is (ts_number, ts_bigint)
+}
+in ts_binary let left_literal comparison_literal(left.node)
+in ts_binary let right_literal comparison_literal(right.node)
+in ts_binary let range_terms if !contains(["<", "<="], operator) then null else { left_key: left.reference_key, right_key: right.reference_key, left_literal: left_literal, right_literal: right_literal, left_value: left.literal_value, right_value: right.literal_value }
+in ts_parenthesized forward range_terms from expression
+fn yoda_ordered(a_literal, a, b_literal, b) = if !a_literal && !b_literal then false else if !a_literal || !b_literal then true else a != null && b != null && js_compare(a, b) != null && js_compare(a, b) <= 0
+fn yoda_range_pair(a, b, op) = a != null && b != null && (if op == "&&" then a.right_key != null && a.right_key == b.left_key && yoda_ordered(a.left_literal, a.left_value, b.right_literal, b.right_value) else op == "||" && a.left_key != null && a.left_key == b.right_key && yoda_ordered(a.right_literal, a.right_value, b.left_literal, b.left_value))
+in ts_logical let logical_range (parent is ts_parenthesized || is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test)) && yoda_range_pair(left.range_terms, right.range_terms, operator)
+in ts_parenthesized let logical_range parent is ts_logical && parent.logical_range == true
+
+fn comparison_fix(source, n) = {
+  value reversed: get({ "<": ">", "<=": ">=", ">": "<", ">=": "<=" }, n.operator) ?? n.operator
+  value right: byte_slice(source, n.right.offset, n.end_offset)
+  value before: byte_slice(source, n.left.end_offset, n.operator.offset)
+  value after: byte_slice(source, n.operator.end_offset, n.right.offset)
+  value left: byte_slice(source, n.offset, n.left.end_offset)
+  value text: right before reversed after left
+  value expression_fix_edges(n, text)
+}
+
+in ts_binary rule yoda {
+  option mode ("never" | "always") = "never" "literal comparison side"
+  option exceptRange boolean = false "allow parenthesised ordered range checks"
+  option onlyEquality boolean = false "apply only to equality operators"
+  when contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], operator)
+  when (!onlyEquality || contains(["==", "==="], operator)) && !(exceptRange && parent.logical_range == true)
+  when if mode == "always" then right_literal && !left_literal else left_literal && !right_literal
+  fix at node as comparison_fix(source, node)
+  warn "Expected literal to be on the {if mode == 'always' then 'left' else 'right'} side of {operator}."
+}
+
+}

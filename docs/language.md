@@ -1168,7 +1168,9 @@ and `final-newline`.
 | `.ts/suggestions/object-shorthand` | object member short/long syntax policy and source-preserving fixes |
 | `.ts/suggestions/curly` | control-body brace policy and statement-safe fixes |
 | `.ts/suggestions/renames` | redundant import, export and destructuring aliases; comment-safe fixes |
+| `.ts/suggestions/comparisons` | literal-side comparison policy, range exceptions and source-preserving operand swaps |
 | `.ts/typed/optional-chains` | optional-chain guard selection, return-type safety and atomic fixes, imported by `.ts/typed` |
+| `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/structure/padding` | statement padding policies and comment-aware blank-line fixes, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
