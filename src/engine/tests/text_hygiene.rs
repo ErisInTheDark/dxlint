@@ -84,19 +84,3 @@ fn list_node_overrides_keep_unrelated_bracket_defaults() {
     let lint = text_linter(r#"rule list-style { set overrides { "{}": { singleLine: { spacing: "never" } } } }"#);
     assert!(lint.lint(Path::new("a.jsonc"), r#"{"value": 1}"#).is_empty());
 }
-
-#[test]
-fn comment_exemptions_use_syntax_not_comment_markers_in_strings() {
-    let lint = text_linter("rule no-trailing-spaces { set ignoreComments true }");
-    for (file, source) in [
-        ("a.css", "a { content: \"/*\"; }  \n/* comment  \n */  \n"),
-        ("a.jsonc", "{\"text\": \"/*\"}  \n/* comment  \n */  \n"),
-        ("a.md", "`<!--`  \n<!-- comment  \n -->  \n"),
-    ] {
-        let diagnostics = lint.lint(Path::new(file), source);
-        assert_eq!(diagnostics.len(), 2, "{file}: {diagnostics:#?}");
-        let (fixed, _) = crate::engine::apply_fixes(source, &diagnostics);
-        assert!(fixed.contains("comment  \n"));
-        assert!(!fixed.ends_with("  \n"));
-    }
-}

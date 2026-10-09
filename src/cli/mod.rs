@@ -1,6 +1,7 @@
 //! Command line interface.
 
 mod eval;
+mod fixtures;
 mod info;
 mod lint;
 mod render;
@@ -152,6 +153,13 @@ pub enum Format {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check on-disk rule scenarios (default: fixtures/)
+    Fixtures {
+        paths: Vec<PathBuf>,
+        /// Replace expected outputs with the current results
+        #[arg(long)]
+        bless: bool,
+    },
     /// Check the configuration without linting anything
     Check,
     /// List rules with their severity, options and messages
@@ -233,6 +241,7 @@ where
     };
     let config = &cli.config;
     match cli.command {
+        Some(Command::Fixtures { paths, bless }) => fixtures::run(&mut output, &paths, bless),
         None => lint::run(&mut output, cli.lint, config, sources.as_ref()),
         Some(Command::Check) => match load(&mut output, config) {
             Ok(Project { config_ok: true, .. }) => {

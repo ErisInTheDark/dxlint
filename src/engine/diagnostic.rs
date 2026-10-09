@@ -15,6 +15,8 @@ pub struct Diagnostic {
     pub rule: String,
     pub severity: Severity,
     pub message: String,
+    /// Source-order message leaf; absent for engine/evaluation failures.
+    pub message_index: Option<usize>,
     pub start: usize,
     pub end: usize,
     /// All edits apply together or not at all.
@@ -25,8 +27,8 @@ pub struct Diagnostic {
 pub const ENGINE_RULE: &str = "zlint";
 
 impl Diagnostic {
-    fn key(&self) -> (usize, usize, &str, &str) {
-        (self.start, self.end, &self.rule, &self.message)
+    fn key(&self) -> (usize, usize, &str, &str, Option<usize>) {
+        (self.start, self.end, &self.rule, &self.message, self.message_index)
     }
 
     /// Sorts by place, and keeps one report per problem: a rule reaching a
@@ -51,7 +53,7 @@ mod tests {
 
     fn at(start: usize, message: &str, fix: Option<&str>) -> Diagnostic {
         let fix = fix.map(|text| vec![Edit { start, end: start + 1, text: text.into() }]);
-        Diagnostic { rule: "r".into(), severity: Severity::Warn, message: message.into(), start, end: start + 1, fix }
+        Diagnostic { rule: "r".into(), severity: Severity::Warn, message: message.into(), message_index: Some(0), start, end: start + 1, fix }
     }
 
     #[test]

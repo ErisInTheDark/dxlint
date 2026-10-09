@@ -24,7 +24,7 @@ use crate::native::ts::reads::{hash_bytes, Dep, Reads};
 
 pub const FILE_NAME: &str = ".zlintcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC1";
+const MAGIC: &[u8; 4] = b"ZLC2";
 
 /// Deps and groups, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -396,6 +396,7 @@ impl Writer<'_> {
         self.str(&d.rule);
         self.out.push(SEVERITIES.iter().position(|s| *s == d.severity).unwrap_or(0) as u8);
         self.str(&d.message);
+        self.var(d.message_index.map_or(0, |index| index as u64 + 1));
         self.var(d.start as u64);
         self.var(d.end as u64);
         match &d.fix {
@@ -530,6 +531,7 @@ impl<'a> Reader<'a> {
         let rule = self.str()?;
         let severity = *SEVERITIES.get(self.u8()? as usize)?;
         let message = self.str()?;
+        let message_index = self.var()?.checked_sub(1).map(|index| index as usize);
         let start = self.var()? as usize;
         let end = self.var()? as usize;
         let fix = match self.var()? {
@@ -540,6 +542,6 @@ impl<'a> Reader<'a> {
                     .collect::<Option<Vec<_>>>()?,
             ),
         };
-        Some(Diagnostic { rule, severity, message, start, end, fix })
+        Some(Diagnostic { rule, severity, message, message_index, start, end, fix })
     }
 }

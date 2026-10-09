@@ -104,6 +104,7 @@ mod tests {
             rule: "r".into(),
             severity: Severity::Warn,
             message: String::new(),
+            message_index: Some(0),
             start,
             end,
             fix: Some(vec![Edit { start, end, text: text.into() }]),

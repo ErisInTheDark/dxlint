@@ -32,6 +32,7 @@ struct JsonDiag<'a> {
     rule: &'a str,
     severity: Severity,
     message: &'a str,
+    message_index: Option<usize>,
     line: usize,
     col: usize,
     end_line: usize,
@@ -72,6 +73,7 @@ impl<'a> JsonDiag<'a> {
             rule: &diagnostic.rule,
             severity: diagnostic.severity,
             message: &diagnostic.message,
+            message_index: diagnostic.message_index,
             line: line + 1,
             col: col + 1,
             end_line: end_line + 1,
@@ -84,6 +86,14 @@ impl<'a> JsonDiag<'a> {
 
 fn display(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).to_string_lossy().replace('\\', "/")
+}
+
+pub(super) fn walker(roots: &[PathBuf], jobs: usize, exclude: &'static [&'static str]) -> WalkBuilder {
+    let mut walker = WalkBuilder::new(&roots[0]);
+    for root in &roots[1..] { walker.add(root); }
+    walker.hidden(false).threads(jobs).filter_entry(move |entry|
+        entry.file_name() != ".git" && !exclude.iter().any(|name| entry.file_name() == *name));
+    walker
 }
 
 fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
@@ -171,11 +181,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
             let mut queue = if let Some(queue) = packed {
                 queue
             } else {
-                let mut walker = WalkBuilder::new(&roots[0]);
-                for root in &roots[1..] {
-                    walker.add(root);
-                }
-                walker.hidden(false).threads(jobs).filter_entry(|entry| entry.file_name() != ".git");
+                let walker = walker(&roots, jobs, &[]);
                 // Walk first, then lint the biggest files first: a big file found
                 // late would otherwise be the tail every other thread waits on.
                 let found: std::sync::Mutex<Vec<(u64, PathBuf)>> = std::sync::Mutex::default();
@@ -319,6 +325,7 @@ mod tests {
             rule: "replace".into(),
             severity: Severity::Warn,
             message: "replace".into(),
+            message_index: Some(0),
             start: 3,
             end: source.len(),
             fix: Some(vec![

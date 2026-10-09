@@ -7,6 +7,7 @@ import .toml
 
 # Examples are deliberately broken; they have their own configs.
 ignore "examples"
+ignore "fixtures"
 
 # Hygiene everywhere. Long lines are a judgement call here, not a rule.
 rule trailing-whitespace

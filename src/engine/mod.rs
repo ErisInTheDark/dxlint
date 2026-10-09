@@ -6,6 +6,7 @@ pub mod diagnostic;
 mod fix;
 mod inspect;
 mod language_options;
+mod message;
 mod profile;
 mod prune;
 mod suppress;
@@ -79,6 +80,7 @@ pub struct Rule {
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
+    message_plan: Option<message::Plan>,
     /// What the selected fix region should look like (`fix ... as expr`).
     fix: Option<CExpr>,
     /// `fix if cond as ...`: without it holding, report without the fix.
@@ -123,12 +125,13 @@ impl Rule {
         let fold = |expr: &mut CExpr| crate::expr::fold::specialise(expr, &options, functions);
         self.locals.iter_mut().chain(&mut self.node_when).chain(&mut self.when).for_each(fold);
         for expr in [
-            &mut self.message, &mut self.fix, &mut self.fix_when, &mut self.fix_at,
+            &mut self.fix, &mut self.fix_when, &mut self.fix_at,
             &mut self.report_at, &mut self.each, &mut self.indent_reset,
         ].into_iter().flatten() {
             fold(expr);
         }
         self.indents.specialise(&options, functions);
+        self.message_plan = self.message.as_mut().map(|expr| message::Plan::new(expr, &options, functions));
     }
 
     /// The message with current option values filled in; holes that need a
@@ -632,7 +635,7 @@ impl Linter {
         let failed = |e: String| {
             let node = ctx.tree.node(ctx.node);
             let message = format!("rule `{}` failed here: {e}", f.name);
-            vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, start: node.start as usize, end: node.end as usize, fix: None }]
+            vec![Diagnostic { rule: f.name.clone(), severity: Severity::Error, message, message_index: None, start: node.start as usize, end: node.end as usize, fix: None }]
         };
         if !f.node_when.is_empty() {
             // Guard lambdas are compiled after the rule's item slot even
@@ -669,6 +672,7 @@ impl Linter {
             rule: f.name.clone(),
             severity: Severity::Error,
             message: format!("rule `{}` failed here: {e}", f.name),
+            message_index: None,
             start,
             end,
             fix: None,
@@ -748,14 +752,14 @@ impl Linter {
             None => (start, end),
         };
         let fix = fix.map(|edit| vec![edit]);
-        let message = match &f.message {
-            Some(m) => match ctx.eval(m) {
-                Ok(v) => v.text().into_owned(),
+        let (message, message_index) = match &f.message {
+            Some(m) => match f.message_plan.as_ref().expect("indexed message").eval(m, ctx) {
+                Ok((v, index)) => (v.text().into_owned(), Some(index)),
                 Err(e) => return Some(failed(e)),
             },
-            None => f.name.clone(),
+            None => (f.name.clone(), Some(0)),
         };
-        Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, start, end, fix })
+        Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, message_index, start, end, fix })
     }
 }
 
@@ -847,7 +851,7 @@ mod option_run_tests {
 }
 
 fn engine_warning(at: usize, message: String) -> Diagnostic {
-    Diagnostic { rule: ENGINE_RULE.into(), severity: Severity::Warn, message, start: at, end: at, fix: None }
+    Diagnostic { rule: ENGINE_RULE.into(), severity: Severity::Warn, message, message_index: None, start: at, end: at, fix: None }
 }
 
 /// The text a fix rewrites: the node, or the whitespace just before or

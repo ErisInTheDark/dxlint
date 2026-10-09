@@ -1,0 +1,11 @@
+import .ts
+rule no-undef
+in ts_identifier rule make_global warn "generated declaration" {
+  files "seed.d.ts"
+  when text == "placeholder"
+  fix as "injected"
+}
+in ts_identifier rule leaked_global warn "generated output became a project global" {
+  files "main.ts"
+  when text == "injected" && contains(type_flags, "number")
+}

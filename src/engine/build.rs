@@ -877,6 +877,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         when_vm: Vec::new(),
         locals,
         message,
+        message_plan: None,
         fix,
         fix_when,
         fix_at,

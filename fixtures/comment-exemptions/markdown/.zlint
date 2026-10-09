@@ -1,0 +1,2 @@
+import .markdown
+rule no-trailing-spaces { set ignoreComments true }
