@@ -400,12 +400,17 @@ in ts_binary rule eqeqeq {
   let right_literal right.literal_value
   let null_check left_literal.type == "null" || right_literal.type == "null"
   let same_literal_type left_literal != null && right_literal != null && left_literal.type == right_literal.type
+  let left_typeof left.structure_typeof.nonempty ?? false
+  let right_typeof right.structure_typeof.nonempty ?? false
   let loose operator == "==" || operator == "!="
   let strict_null (operator == "===" || operator == "!==") && null_check && mode == "always" && null_mode == "never"
-  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || (left.structure_typeof.nonempty ?? false) || (right.structure_typeof.nonempty ?? false)))
+  when strict_null || loose && (!null_check || mode == "always" && null_mode == "always") && (mode != "smart" || !(same_literal_type || left_typeof || right_typeof))
   let expected if strict_null then { value result: len(operator) - 1; value slice(operator, 0, result) } else operator "="
-  report at operator.offset
+  let fixable same_literal_type && left_literal.type != "regex" || loose && (left_typeof && right_literal.type == "string" || right_typeof && left_literal.type == "string")
+  let operator_span { start: operator.offset, end: operator.end_offset }
+  report at operator_span
   warn "Expected '{expected}' and instead saw '{operator}'."
+  fix at operator_span if fixable as expected
 }
 
 fn padding_selector_matches(info, selector) = (if type_of(selector) == "str" then contains(info.tags, selector) else { value selector.selector; re_replace: re_replace /["']/ ""; value contains(info.selectors, re_replace) } && ((selector.lineMode.nonempty ?? "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))

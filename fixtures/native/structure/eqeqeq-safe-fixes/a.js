@@ -1,0 +1,13 @@
+typeof a == 'number';
+'string' != typeof a;
+(typeof a) == 'undefined';
+true == true;
+2 == 3;
+'hello' != 'world';
+`hello` == `world`;
+`hello` != 'world';
+null == null;
+null != null;
+((1) )  ==  (2);
+1n != 2n;
+1 /* keep */ == 2;
