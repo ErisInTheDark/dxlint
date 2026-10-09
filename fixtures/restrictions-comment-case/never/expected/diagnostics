@@ -1,0 +1,5 @@
+input.ts:1:1-1:9 capitalized-comments:line#1
+input.ts:2:1-2:14 capitalized-comments:block#1
+input.ts:3:1-3:8 capitalized-comments:line#1
+input.ts:4:1-4:8 capitalized-comments:line#1
+input.ts:5:1-5:7 capitalized-comments:line#1

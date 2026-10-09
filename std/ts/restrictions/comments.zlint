@@ -1,0 +1,76 @@
+# Comment metadata and inline, warning-term and initial-case policies.
+define {
+
+@macro restriction_directive(x) re_test(x, /^\s*(?:eslint(?:[- ]|$)|globals?\s|exported\s)/)
+in ts_program {
+  let restriction_comment_catalog descendants(ts_comment)
+  let restriction_comment_line_catalog overlapping(ts_line)
+}
+in ts_comment {
+  let restriction_comment_body { value result: if is ts_block_comment then len(text) - 2 else len(text); value slice(text, 2, result) }
+  let restriction_comment_clean replace(restriction_comment_body, "*", "")
+  let restriction_comment_lowercase re_test(restriction_comment_clean, /^\s*\p{Lowercase}/)
+  let restriction_comment_uppercase re_test(restriction_comment_clean, /^\s*\p{Uppercase}/)
+  let restriction_comment_prefix { value js_line_start: position(offset).js_line_start; value byte_slice(source, js_line_start, offset) }
+  let restriction_comment_line_end {
+    value result: position(end_offset).js_line - 1
+    value js_line: position(end_offset).js_line
+    value slice(ts_program.restriction_comment_line_catalog, result, js_line)
+    first
+  }.end_offset
+  let restriction_comment_suffix byte_slice(source, end_offset, restriction_comment_line_end)
+  let restriction_comment_preamble trim(restriction_comment_prefix) != ""
+  let restriction_comment_postamble trim(restriction_comment_suffix) != ""
+  let restriction_comment_empty_jsx parent is ts_jsx_expression && parent.expression == null && (!restriction_comment_preamble || trim(restriction_comment_prefix) == "{{") && (!restriction_comment_postamble || trim(restriction_comment_suffix) == "}}")
+  let restriction_comment_index index_of(ts_program.restriction_comment_catalog, node)
+  let restriction_comment_previous { value ts_program.restriction_comment_catalog; slice (restriction_comment_index - 1) restriction_comment_index; last }
+  let restriction_comment_consecutive restriction_comment_previous != null && { value source; byte_slice restriction_comment_previous.end_offset offset; trim } == ""
+}
+in ts_comment rule no-inline-comments {
+  option ignorePattern regex = "" "comments to ignore"
+  when (restriction_comment_preamble || restriction_comment_postamble) && !restriction_comment_empty_jsx && !@restriction_directive(restriction_comment_body) && !(ignorePattern != "" && re_test(restriction_comment_body, ignorePattern))
+  warn "Unexpected comment inline with code."
+}
+in ts_comment rule no-warning-comments {
+  option terms string[] = ["todo", "fixme", "xxx"] "warning terms"
+  option location "start" | "anywhere" = "start" "where warning terms may occur"
+  option decoration string(1..1)[] = [] "characters ignored before a starting warning"
+  let body { value text; re_replace /^\/[\/*]/ ""; re_replace /\*\/$/ "" }
+  let compact { value body; trim; re_replace /\s+/ " " }
+  let short { value { value compact; re_find /^.{0,40}(?:\s|$)/; nonempty } ?? ""; trim }
+  let display short (if len(compact) > len(short) then "..." else "")
+  when !(@restriction_directive(body) && re_test(body, /\bno-warning-comments\b/))
+  @each term in terms
+  when {
+    value result: "(?i)" (if location == "start" then "^[\\s" { value decoration; join ""; re_escape } "]*" else if re_test(term, /^\w/) then "\\b" else "") re_escape(term) (if re_test(term, /\w$/) then "\\b" else "")
+    value re_test(body, result)
+  }
+  warn "Unexpected '{term}' comment: '{display}'."
+}
+
+fn comment_case_fix(n, body, mode) = {
+  value prefix: re_find(body, /^[^\p{L}]*/)
+  value char: re_find(body, /\p{L}/)
+  value start: n.offset + 2 + byte_len(prefix)
+  value {
+    target: { start: start, end: start + byte_len(char) },
+    text: if mode == "always" then upper(char) else lower(char)
+  }
+}
+in ts_comment let capitalized_comments_checked true
+@macro restriction_capitalized_comment_body {
+  option mode "always" | "never" = "always" "required initial letter case"
+  option ignorePattern regex = "" "starting comment text to ignore"
+  when capitalized_comments_checked
+  when (if mode == "always" then restriction_comment_lowercase else restriction_comment_uppercase)
+    && !re_test(restriction_comment_body, /^\s*(?:eslint|jshint\s+|jslint\s+|istanbul\s+|globals?\s+|exported\s+|jscs)/)
+    && !re_test(restriction_comment_clean, /^\s*[^:/?#\s]+:\/\/[^?#]/)
+    && !(ignorePattern != "" && re_test(restriction_comment_clean, "^\\s*(?:" ignorePattern ")"))
+  let edit comment_case_fix(node, restriction_comment_body, mode)
+  fix at edit.target as edit.text
+  warn if mode == "always" then "Comments should not begin with a lowercase character." else "Comments should not begin with an uppercase character."
+}
+in ts_line_comment rule capitalized-comments:line { @restriction_capitalized_comment_body }
+in ts_block_comment rule capitalized-comments:block { @restriction_capitalized_comment_body }
+
+}

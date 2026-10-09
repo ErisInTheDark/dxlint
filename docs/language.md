@@ -1171,6 +1171,7 @@ and `final-newline`.
 | `.ts/suggestions/object-shorthand` | object member short/long syntax policy and source-preserving fixes |
 | `.ts/suggestions/curly` | control-body brace policy and statement-safe fixes |
 | `.ts/suggestions/renames` | redundant import, export and destructuring aliases; comment-safe fixes |
+| `.ts/restrictions/comments` | shared comment metadata, inline and warning-term policies, and Unicode-safe capitalization fixes, imported by `.ts/restrictions` |
 | `.ts/suggestions/object-spread` | Object.assign eligibility and source-preserving object spread fixes, imported by `.ts/suggestions` |
 | `.ts/suggestions/templates` | string concatenation policies and source-preserving template fixes, imported by `.ts/suggestions` |
 | `.ts/suggestions/comparisons` | literal-side comparison policy, range exceptions and source-preserving operand swaps |
