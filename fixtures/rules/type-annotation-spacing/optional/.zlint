@@ -1,0 +1,2 @@
+import .ts
+rule type-annotation-spacing:* { set overrides { questionMark: { before: true, after: true } } }
