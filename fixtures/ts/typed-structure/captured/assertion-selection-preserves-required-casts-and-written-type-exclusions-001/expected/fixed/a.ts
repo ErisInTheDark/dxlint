@@ -1,0 +1,1 @@
+const literal = 3 as const; let kept = 3 as const; let needed = 3 as 3; declare const n: number; n; n; n; const template = `${n}` as const; n as string;

@@ -1,0 +1,1 @@
+const expression = () => ({}); function body() { return {}; } function partial(value: boolean) { if (value) { return {}; } } declare const declared: () => {}; declare const variable: () => boolean; declare const mixed: (() => {}) | (() => unknown); expression; body; declared; variable; mixed; partial;

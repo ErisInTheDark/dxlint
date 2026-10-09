@@ -1,0 +1,1 @@
+declare const source: { item: { value: string | null }; make(): {}; nullable(): {} | null } | undefined; source?.item; source?.item.value; source?.make(); source?.nullable();

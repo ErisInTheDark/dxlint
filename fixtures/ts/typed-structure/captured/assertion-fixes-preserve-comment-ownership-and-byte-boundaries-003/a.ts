@@ -1,0 +1,1 @@
+const value = <number> /*keep*/ (3 + 5);

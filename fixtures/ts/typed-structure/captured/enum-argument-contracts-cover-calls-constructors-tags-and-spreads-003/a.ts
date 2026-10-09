@@ -1,0 +1,1 @@
+enum Fruit { Apple } interface TemplateStringsArray {} declare function tag(strings: TemplateStringsArray, value: Fruit): string; tag`${Fruit.Apple}`; tag`${1}`;

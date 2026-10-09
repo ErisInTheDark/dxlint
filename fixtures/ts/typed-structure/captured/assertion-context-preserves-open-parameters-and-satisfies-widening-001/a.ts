@@ -1,0 +1,1 @@
+function cast<T extends string>(value: string): T { return value as T; }

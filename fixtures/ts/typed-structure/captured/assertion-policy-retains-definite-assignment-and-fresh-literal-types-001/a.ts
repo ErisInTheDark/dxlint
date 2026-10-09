@@ -1,0 +1,1 @@
+let value: number; value! + 1; type Literal = { value: 'a' }; const literal = { value: 'a' } as Literal;

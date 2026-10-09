@@ -1,0 +1,1 @@
+declare const b: bigint | undefined, t: boolean | undefined, n: number | undefined, s: string | undefined, u: unknown, a: any, o: object | undefined; b || 1n; t || true; n || 1; s || ''; u || 1; a || 1; o || {}; n !== undefined ? n : 1;

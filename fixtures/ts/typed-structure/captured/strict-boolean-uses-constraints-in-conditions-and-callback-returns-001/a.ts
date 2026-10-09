@@ -1,0 +1,1 @@
+function check<T extends number>(value: T) { if (value) {} [1].filter((): T => value); } function safe<T extends boolean>(value: T) { if (value) {} [1].filter((): T => value); }

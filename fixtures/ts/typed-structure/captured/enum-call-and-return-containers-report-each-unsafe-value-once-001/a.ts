@@ -1,0 +1,1 @@
+enum Fruit { Apple } function take(value: { fruit: Fruit }): void {} take({ fruit: Fruit.Apple }); take({ fruit: 1 }); function safe(): { fruit: Fruit } { return { fruit: Fruit.Apple }; } function unsafe(): { fruit: Fruit } { return { fruit: 1 }; }

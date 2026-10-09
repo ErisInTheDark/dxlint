@@ -1,0 +1,1 @@
+declare const a: number; declare const b: number; const fallback = a || b; if ((a || b)) {} !((a)); if (a ?? b) {}

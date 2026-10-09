@@ -1,0 +1,1 @@
+declare let x: number | undefined; x || 1; x ||= 2; x ? x : 3; if (!x) x = 4;

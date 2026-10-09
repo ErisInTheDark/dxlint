@@ -1,0 +1,1 @@
+enum Fruit { Apple } function take<T extends Fruit>(value: T): void {} take(Fruit.Apple); take(1);

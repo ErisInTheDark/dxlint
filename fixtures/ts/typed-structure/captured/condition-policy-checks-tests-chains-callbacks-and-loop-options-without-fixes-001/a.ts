@@ -1,0 +1,1 @@
+declare const object: { item: {} }; if (object) {} if (!object) {} object?.item; [1].filter(() => true); while (true) {}

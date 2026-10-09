@@ -1,0 +1,3 @@
+import .ts
+in ts_expression_statement.expression rule nonnull { when !evaluated_type_domains.nullish && evaluated_type_domains.non_nullish
+warn 'nonnull' }

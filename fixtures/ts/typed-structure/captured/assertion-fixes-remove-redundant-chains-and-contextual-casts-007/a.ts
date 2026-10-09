@@ -1,0 +1,1 @@
+interface T { a: string } declare function fn<U extends T>(args: Pick<U, 'a'>): void; fn<T>({ a: '' as string });

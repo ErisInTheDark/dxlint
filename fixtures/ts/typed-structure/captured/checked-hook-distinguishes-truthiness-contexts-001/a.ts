@@ -1,0 +1,1 @@
+declare const x: number | undefined, y: number | undefined; if (x || 1) {} Boolean(x || 2); (x && y) || 3; x || 4;

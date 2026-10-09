@@ -1,0 +1,1 @@
+interface Wide { name?: string } interface Narrow { name: string } declare const narrow: Narrow; const value = narrow as Wide satisfies Wide;

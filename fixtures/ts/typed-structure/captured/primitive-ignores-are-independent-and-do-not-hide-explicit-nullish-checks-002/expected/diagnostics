@@ -1,0 +1,7 @@
+a.ts:1:162-1:162 prefer-nullish-coalescing#3
+a.ts:1:173-1:173 prefer-nullish-coalescing#3
+a.ts:1:181-1:181 prefer-nullish-coalescing#3
+a.ts:1:190-1:190 prefer-nullish-coalescing#3
+a.ts:1:198-1:198 prefer-nullish-coalescing#3
+a.ts:1:206-1:206 prefer-nullish-coalescing#3
+a.ts:1:213-1:213 prefer-nullish-coalescing#0

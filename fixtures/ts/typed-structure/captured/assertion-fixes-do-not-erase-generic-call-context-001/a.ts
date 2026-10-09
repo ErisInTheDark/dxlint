@@ -1,0 +1,1 @@
+declare function get<T = number>(): T; const value = get() as number;

@@ -1,0 +1,1 @@
+declare const array: { x: { y: { z: object } } }[]; array[42]?.x?.y?.z;

@@ -1,0 +1,1 @@
+interface Generic { method<T>(value: string): void; } declare const broad: { method(value: string): void; extra: string }; const target: Generic = broad as Generic;

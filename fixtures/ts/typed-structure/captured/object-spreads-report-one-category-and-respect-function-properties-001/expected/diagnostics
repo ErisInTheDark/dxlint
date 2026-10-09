@@ -1,0 +1,3 @@
+a.ts:1:151-1:159 no-misused-spread#1
+a.ts:1:165-1:172 no-misused-spread#1
+a.ts:1:252-1:261 no-misused-spread#1

@@ -173,11 +173,8 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::tests::{native_linter, with_native_file};
+    use crate::engine::tests::with_native_file;
     use crate::expr::Value;
-    use std::path::Path;
-
-    const OBJECT: &str = "interface Object { toString(): string; toLocaleString(): string; valueOf(): Object; }";
 
     #[test]
     fn default_structure_does_not_resolve_unrequested_properties() {
@@ -203,52 +200,4 @@ mod tests {
         });
     }
 
-    #[test]
-    fn coercion_routes_respect_string_shadowing_and_tagged_templates() {
-        let linter = native_linter("rule no-base-to-string");
-        let source = format!("{OBJECT} class Plain extends Object {{}} declare const plain: Plain; declare const list: Plain[]; let text = ''; String(plain); '' + plain; text += plain; `${{plain}}`; plain.toString(); plain.toLocaleString(); list.join(); (plain).toString(); tag`${{plain}}`; function f(String: (value: Plain) => string) {{ String(plain); }}");
-        let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), &source);
-        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(spans, ["plain", "plain", "plain", "plain", "plain", "plain", "list", "plain"]);
-    }
-
-    #[test]
-    fn object_coercion_follows_winning_overrides() {
-        let linter = native_linter("rule no-base-to-string");
-        let source = format!("{OBJECT} class Plain extends Object {{}} class Useful extends Object {{ toString(): string {{ return 'useful'; }} }} declare const plain: Plain; declare const useful: Useful; '' + plain; '' + useful;");
-        let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), &source);
-        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(spans, ["plain"]);
-    }
-
-    #[test]
-    fn collection_and_compound_types_preserve_possible_object_coercion() {
-        let linter = native_linter("rule no-base-to-string");
-        let source = format!("{OBJECT} interface Plain extends Object {{}} interface Useful {{ toString(): string; }} declare const mixed: Plain | string; declare const safe: Plain & Useful; declare const tuple: [string, Plain]; declare const array: Plain[]; '' + mixed; '' + safe; tuple.join(); array.join();");
-        let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), &source);
-        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(spans, ["mixed", "tuple", "array"]);
-    }
-
-    #[test]
-    fn ignored_structural_aliases_do_not_ignore_expanded_class_aliases() {
-        let linter = native_linter("rule no-base-to-string { set ignoredTypeNames ['Structural', 'Generic', 'ClassAlias'] }");
-        let source = format!("{OBJECT} class Plain extends Object {{}} class Other extends Object {{}} class Wrapper<T> extends Object {{}} type Structural = Plain | Other; type Generic<T> = Plain | Wrapper<T>; type ClassAlias = Plain; declare const structural: Structural; declare const generic: Generic<number>; declare const expanded: ClassAlias; '' + structural; '' + generic; '' + expanded;");
-        let unfiltered = native_linter("rule no-base-to-string").lint(Path::new("/root/lib.fixture.d.ts"), &source);
-        assert_eq!(unfiltered.len(), 3);
-        let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), &source);
-        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(spans, ["expanded"]);
-    }
-
-    #[test]
-    fn unknown_option_does_not_treat_unresolved_types_as_explicit_unknown() {
-        let source = "declare const unknownValue: unknown; declare const unresolved: Missing; '' + unknownValue; '' + unresolved;";
-        let linter = native_linter("rule no-base-to-string");
-        assert!(linter.lint(Path::new("/root/a.ts"), source).is_empty());
-        let linter = native_linter("rule no-base-to-string { set checkUnknown true }");
-        let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
-        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(spans, ["unknownValue"]);
-    }
 }

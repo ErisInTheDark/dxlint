@@ -1,0 +1,1 @@
+export enum Fruit { Apple } export type Basket = { [P in Fruit]: string };

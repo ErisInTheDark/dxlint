@@ -1,0 +1,1 @@
+const unicode = '🌿'; declare const value: number; value /*keep*/ !;

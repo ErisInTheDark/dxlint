@@ -1,0 +1,1 @@
+declare function foo<T extends unknown>(bar: T): T; const baz: unknown = {}; foo(baz!);

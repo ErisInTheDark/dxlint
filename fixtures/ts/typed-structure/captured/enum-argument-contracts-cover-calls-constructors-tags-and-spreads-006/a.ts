@@ -1,0 +1,1 @@
+enum Fruit { Apple } function take(...values: Fruit[]): void {} declare const safe: Fruit[]; declare const unsafe: number[]; take(...safe); take(...unsafe);

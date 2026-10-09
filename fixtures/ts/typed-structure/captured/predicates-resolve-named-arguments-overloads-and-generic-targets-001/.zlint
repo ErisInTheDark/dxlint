@@ -1,0 +1,4 @@
+import .ts
+in ts_expression_statement.expression rule equivalent { let p predicate_call
+when p.to_target && p.from_target
+warn 'equivalent' }

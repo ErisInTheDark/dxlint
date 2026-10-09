@@ -1,0 +1,1 @@
+interface Promise<T> { then(callback: (value: T) => unknown): unknown } enum Fruit { Apple } declare const safeValue: Promise<Fruit>; declare const unsafeValue: Promise<number>; async function safe(): Promise<Fruit> { return safeValue; } async function unsafe(): Promise<Fruit> { return unsafeValue; }

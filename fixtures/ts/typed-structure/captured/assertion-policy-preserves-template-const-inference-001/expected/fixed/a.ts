@@ -1,0 +1,1 @@
+declare const text: 'foo'; const exact = `${text}-tail` as const; declare const name: string; const broad = `${name}`;

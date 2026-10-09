@@ -1,0 +1,1 @@
+function safe() {} function unsafe() {} type Branded = string & { brand: true }; declare const text: Branded; ({...safe}); ({...unsafe}); [...text];

@@ -1,0 +1,6 @@
+import .ts
+in ts_logical, ts_assignment, ts_conditional, ts_if rule replacement-info {
+            when nullish_coalescing != null
+            warn "candidate"
+        }
+        rule replacement-info

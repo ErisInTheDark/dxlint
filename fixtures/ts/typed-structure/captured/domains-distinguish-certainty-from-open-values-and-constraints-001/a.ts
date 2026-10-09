@@ -1,0 +1,1 @@
+declare const object: {}; declare const number: number; declare const unknown: unknown; declare const any: any; declare const zero: 0x0; declare const union: 0 | {}; declare const branded: number & { brand: true }; object; number; unknown; any; zero; union; branded; function bounded<T extends {}>(value: T) { value; } function open<T>(value: T) { value; }

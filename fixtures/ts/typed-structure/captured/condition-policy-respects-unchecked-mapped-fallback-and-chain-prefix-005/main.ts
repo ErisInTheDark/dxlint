@@ -1,0 +1,1 @@
+type A = { [name in string]?: { [name in string]: { a: 1 } } }; declare const a: A; a.a?.a?.a;

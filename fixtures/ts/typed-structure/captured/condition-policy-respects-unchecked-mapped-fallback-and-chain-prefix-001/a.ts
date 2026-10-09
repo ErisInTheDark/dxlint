@@ -1,0 +1,1 @@
+declare const foo: { key?: { [key: string]: { key: string } } }; foo.key?.someKey?.key;

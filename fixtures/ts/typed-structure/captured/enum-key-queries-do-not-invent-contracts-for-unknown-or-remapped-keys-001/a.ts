@@ -1,0 +1,1 @@
+enum Fruit { Apple } declare const unknown: Missing; unknown[0]; declare const remapped: { [P in Fruit as string]: string }; remapped[0]; declare const plain: { [P in number]: string }; plain[0]; declare const dictionary: { [key: string]: string }; dictionary['apple'];

@@ -1,0 +1,1 @@
+declare const value: boolean | null; declare function predicate(): number; declare function predicate(): string; [1].filter(() => value); [1].some(async () => true); [1].every(predicate);

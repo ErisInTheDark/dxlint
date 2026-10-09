@@ -1,0 +1,1 @@
+declare const annotated: () => void; annotated.value = 1; const inferred = () => {}; inferred.value = 1; ({...annotated}); ({...inferred});

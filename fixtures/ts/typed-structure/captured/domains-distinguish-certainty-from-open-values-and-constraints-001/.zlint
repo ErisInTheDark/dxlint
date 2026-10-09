@@ -1,0 +1,3 @@
+import .ts
+in ts_expression_statement.expression rule certain { when type_domains.truthy && !type_domains.falsy
+warn 'certain' }

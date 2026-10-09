@@ -1,0 +1,1 @@
+declare const value: number; const result = <number>(<any>value);

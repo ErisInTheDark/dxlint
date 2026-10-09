@@ -1,0 +1,4 @@
+import .ts
+import .ts/spreads
+rule no-misused-spread { set allow ['safe'] }
+override in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked !all(node.argument.type_specifier_groups, group => any(group, gate => gate.from == 'file' && gate.name == 'Branded'))

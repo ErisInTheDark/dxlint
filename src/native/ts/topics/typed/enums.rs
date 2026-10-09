@@ -95,23 +95,3 @@ pub(super) fn mixed(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     }
     Value::Null
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    #[test]
-    fn merged_enums_keep_the_first_member_kind_but_invalid_initialisers_stop_analysis() {
-        let linter = native_linter("rule no-mixed-enums");
-        let code = "enum E { A = 'a' } enum E { B = 1 } enum F { A = false, B = 'b' } enum G { A = 'a', B = 2, C = 3 }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 2);
-    }
-
-    #[test]
-    fn namespace_merging_stops_at_private_declarations() {
-        let linter = native_linter("rule no-mixed-enums");
-        let code = "namespace N { export enum E { A = 1 } enum Private { A = 1 } } namespace N { export enum E { B = 'b' } enum Private { B = 'b' } } namespace Outer { namespace Inner { export enum E { A = 1 } } } namespace Outer { namespace Inner { export enum E { B = 'b' } } } { enum BlockE { A = 1 } } { enum BlockE { B = 'b' } }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
-    }
-}

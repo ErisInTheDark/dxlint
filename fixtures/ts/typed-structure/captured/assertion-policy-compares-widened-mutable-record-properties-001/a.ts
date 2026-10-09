@@ -1,0 +1,1 @@
+interface Props { value: number } const record = { value: 3 }; const result = record as Props;

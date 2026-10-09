@@ -1,0 +1,4 @@
+import .ts
+in ts_expression_statement.expression rule constant { let returns callable_return_domains
+when count(returns) > 0 && all(returns, domain => domain.truthy && !domain.falsy)
+warn 'constant' }

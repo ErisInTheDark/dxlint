@@ -1,0 +1,1 @@
+declare const yes: true; declare const no: false; while ((true)) {} while (false) {} while (1) {} while (0) {} while (yes) {} while (no) {} while (2) {} for (; true;) {} do {} while (false);

@@ -1,0 +1,1 @@
+interface Object { toString(): string; toLocaleString(): string; valueOf(): Object; } interface Plain extends Object {} interface Useful { toString(): string; } declare const mixed: Plain | string; declare const safe: Plain & Useful; declare const tuple: [string, Plain]; declare const array: Plain[]; '' + mixed; '' + safe; tuple.join(); array.join();

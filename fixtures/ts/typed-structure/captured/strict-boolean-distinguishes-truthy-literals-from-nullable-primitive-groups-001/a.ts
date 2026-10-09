@@ -1,0 +1,1 @@
+declare const yes: 'yes' | null; declare const maybe: '' | 'yes' | null; declare const one: 1 | null; declare const zero: 0 | 1 | null; declare const truth: true | null; declare const bool: boolean | null; if (yes) {} if (maybe) {} if (one) {} if (zero) {} if (truth) {} if (bool) {}

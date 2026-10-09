@@ -1,0 +1,1 @@
+interface Promise<T> { then(callback: (value: T) => unknown): unknown } enum Fruit { Apple } function safe(): Fruit { return Fruit.Apple; } function unsafe(): Fruit { return 1; }

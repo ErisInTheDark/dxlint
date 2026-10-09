@@ -1,0 +1,3 @@
+a.ts:1:119-1:122 no-unnecessary-condition:loop#2
+a.ts:1:134-1:136 no-unnecessary-condition:loop#1
+a.ts:1:148-1:149 no-unnecessary-condition:loop#2

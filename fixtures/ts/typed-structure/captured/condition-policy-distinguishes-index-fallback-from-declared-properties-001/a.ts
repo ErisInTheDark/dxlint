@@ -1,0 +1,1 @@
+declare const bag: { value: string; [key: string]: string } | null; declare const key: string; bag?.[key]?.trim(); bag?.value?.trim();

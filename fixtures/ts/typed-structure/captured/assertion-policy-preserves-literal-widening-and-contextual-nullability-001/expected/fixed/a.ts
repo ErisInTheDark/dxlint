@@ -1,0 +1,1 @@
+const exact = 3; let narrower = 3 as 3; declare const text: string; text; declare const nullable: string | null; const receiving: string | null = nullable;

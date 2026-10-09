@@ -1,0 +1,1 @@
+declare function assert(value: unknown): asserts value; declare function second(first: unknown, value: unknown): asserts value; declare const a: string | null; declare const b: string | null; declare const args: unknown[]; assert(a || b); second(...args, a);

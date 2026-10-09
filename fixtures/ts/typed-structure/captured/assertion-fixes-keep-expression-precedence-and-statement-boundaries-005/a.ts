@@ -1,0 +1,1 @@
+const value = <number>(3 + 5) * 2;

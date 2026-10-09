@@ -1,0 +1,1 @@
+declare const text: string; declare const list: string[]; declare function call(...xs: string[]): void; [...text]; call(...text); new call(...text); ({...text}); [...list]; ({...list});

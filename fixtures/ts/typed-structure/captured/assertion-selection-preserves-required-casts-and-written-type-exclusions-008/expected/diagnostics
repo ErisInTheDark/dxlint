@@ -1,0 +1,2 @@
+a.ts:1:122-1:124 no-unnecessary-type-assertion:non-null#1
+a.ts:1:17-1:27 no-unnecessary-type-assertion#2

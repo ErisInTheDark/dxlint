@@ -1,0 +1,1 @@
+declare const booleanBrand: boolean & { brand: true }; declare const numberBrand: number & { brand: true }; declare const unknownValue: unknown; declare const unresolvedValue: Missing; declare const unresolvedBrand: Missing & { brand: true }; if (booleanBrand) {} if (numberBrand) {} if (unknownValue) {} if (unresolvedValue) {} if (unresolvedBrand) {}

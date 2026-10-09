@@ -1,0 +1,1 @@
+declare const fixed: [number, number?]; const [required = 1, optional = 1] = fixed; declare const variadic: [number, ...number[]]; const [head = 1, tail = 1] = variadic; declare const middle: [boolean, ...number[], string]; const [flag, present = 0] = middle; declare const objects: { world: string }[]; const [{ world = '' }] = objects;

@@ -1,0 +1,4 @@
+a.ts:1:205-1:205 no-useless-default-assignment#2
+a.ts:1:340-1:340 no-useless-default-assignment#0
+a.ts:1:381-1:381 no-useless-default-assignment#1
+a.ts:1:83-1:83 no-useless-default-assignment#2

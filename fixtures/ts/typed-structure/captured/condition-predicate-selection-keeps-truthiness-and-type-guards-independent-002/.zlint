@@ -1,0 +1,3 @@
+import .ts
+rule no-unnecessary-condition { set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }
+override in ts_call let no_unnecessary_condition_truthiness_assertion_checked true

@@ -1,0 +1,1 @@
+interface Bare { (): void; } interface Useful { (): void; value: number; } declare const bare: Bare; declare const useful: Useful; ({...bare}); ({...useful});

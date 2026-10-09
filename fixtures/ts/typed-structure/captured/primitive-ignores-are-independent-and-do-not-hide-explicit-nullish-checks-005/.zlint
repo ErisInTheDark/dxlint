@@ -1,0 +1,2 @@
+import .ts
+rule prefer-nullish-coalescing { set ignoreString true }

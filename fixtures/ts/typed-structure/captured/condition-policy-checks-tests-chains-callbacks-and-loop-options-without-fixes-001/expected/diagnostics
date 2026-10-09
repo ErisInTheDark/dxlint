@@ -1,0 +1,4 @@
+a.ts:1:41-1:47 no-unnecessary-condition#2
+a.ts:1:56-1:63 no-unnecessary-condition#1
+a.ts:1:74-1:76 no-unnecessary-condition:optional#0
+a.ts:1:99-1:103 no-unnecessary-condition:callback#2

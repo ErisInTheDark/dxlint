@@ -1,0 +1,5 @@
+import .ts
+rule no-unnecessary-condition
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "tsconfig.json"

@@ -1,0 +1,1 @@
+const value = (1 + 1) as any as number;

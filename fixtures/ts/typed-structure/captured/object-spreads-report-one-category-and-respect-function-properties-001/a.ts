@@ -1,0 +1,1 @@
+declare const mixed: (() => void) | number[]; function bare() {} function useful() {} useful.value = 1; const arrow = () => {}; arrow['value'] = 2; ({...mixed}); ({...bare}); ({...useful}); ({...arrow}); function nested() { const useful = () => {}; ({...useful}); }

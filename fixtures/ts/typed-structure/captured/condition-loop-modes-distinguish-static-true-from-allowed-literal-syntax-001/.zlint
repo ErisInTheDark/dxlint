@@ -1,0 +1,3 @@
+import .ts
+rule no-unnecessary-condition { set allowConstantLoopConditions 'never'
+set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true }

@@ -1,0 +1,1 @@
+enum Fruit { Apple } function take(value: Fruit): void {} take(...[Fruit.Apple]); take(...[1]);

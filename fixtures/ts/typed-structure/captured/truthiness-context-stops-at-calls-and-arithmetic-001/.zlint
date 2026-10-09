@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_logical rule replacement {
+                when nullish_coalescing != null && nullish_coalescing.conditional != true
+                error "replacement"
+            }

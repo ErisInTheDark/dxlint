@@ -1,0 +1,1 @@
+enum Fruit { Apple } enum Vegetable { Asparagus = 'asparagus' } class Basket { fruits: { [P in Fruit]: string } = { [Fruit.Apple]: 'apple' }; read() { return this.fruits[0]; } }

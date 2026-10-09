@@ -1,0 +1,1 @@
+function get(dict: { [key: string]: { foo: string } }, key: string) { if (dict[key]) { return dict[key].foo; } }

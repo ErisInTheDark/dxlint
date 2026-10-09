@@ -1,0 +1,1 @@
+interface Object { toString(): string; toLocaleString(): string; valueOf(): Object; } class Plain extends Object {} class Useful extends Object { toString(): string { return 'useful'; } } declare const plain: Plain; declare const useful: Useful; '' + plain; '' + useful;

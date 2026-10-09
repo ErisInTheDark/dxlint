@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_conditional rule replacement {
+                when nullish_coalescing != null
+                error "replacement"
+            }

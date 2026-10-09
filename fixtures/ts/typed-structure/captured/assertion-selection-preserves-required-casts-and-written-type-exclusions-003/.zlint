@@ -1,0 +1,3 @@
+import .ts
+rule no-unnecessary-type-assertion 
+override in ts_as, ts_type_assertion, ts_non_null let no_unnecessary_type_assertion_checked false

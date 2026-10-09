@@ -1,0 +1,1 @@
+enum Fruit { Apple } enum Vegetable { Asparagus = 'asparagus' } declare const value: { fruits: { [P in Fruit]: string } }; value.fruits[Fruit.Apple]; value.fruits[0];

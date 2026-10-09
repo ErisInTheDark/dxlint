@@ -1,0 +1,1 @@
+import { Fruit, Basket } from './keys'; enum Local { Apple } declare const basket: Basket; basket[Fruit.Apple]; basket[Local.Apple]; basket[0];

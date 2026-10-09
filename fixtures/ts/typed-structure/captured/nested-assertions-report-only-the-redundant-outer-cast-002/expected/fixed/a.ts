@@ -1,0 +1,1 @@
+declare function fn(value: number): void; fn(42);

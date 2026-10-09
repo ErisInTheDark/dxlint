@@ -1,0 +1,1 @@
+const literal = 3; declare const numberValue: number; const typed = numberValue as number;

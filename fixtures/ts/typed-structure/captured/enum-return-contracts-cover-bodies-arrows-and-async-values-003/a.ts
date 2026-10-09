@@ -1,0 +1,1 @@
+interface Promise<T> { then(callback: (value: T) => unknown): unknown } enum Fruit { Apple } async function safe(): Promise<Fruit> { return Fruit.Apple; } async function unsafe(): Promise<Fruit> { return 1; }

@@ -1,0 +1,1 @@
+declare let n: number; n || 1; n ||= 2; n ? n : 3; if (!n) n = 4;

@@ -1,0 +1,3 @@
+import .ts
+override in nullish_coalescing_expression let prefer_nullish_coalescing_checked nullish_coalescing.kind == "assignment"
+rule prefer-nullish-coalescing

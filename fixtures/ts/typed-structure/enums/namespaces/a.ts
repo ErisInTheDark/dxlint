@@ -1,0 +1,1 @@
+namespace N { export enum E { A = 1 } enum Private { A = 1 } } namespace N { export enum E { B = 'b' } enum Private { B = 'b' } } namespace Outer { namespace Inner { export enum E { A = 1 } } } namespace Outer { namespace Inner { export enum E { B = 'b' } } } { enum BlockE { A = 1 } } { enum BlockE { B = 'b' } }

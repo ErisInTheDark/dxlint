@@ -1,0 +1,1 @@
+declare const source: string | number; declare const unsafeValue: any; declare const unknownValue: unknown; source as string; source as string | number | boolean; unsafeValue as unknown; unknownValue as any; function cast<T>(value: string) { return value as T; }

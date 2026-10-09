@@ -1,0 +1,1 @@
+enum Fruit { Apple } enum Vegetable { Asparagus = 'asparagus' } declare const value: { [P in Fruit]: string }; function read<K extends number>(key: K) { return value[key]; }

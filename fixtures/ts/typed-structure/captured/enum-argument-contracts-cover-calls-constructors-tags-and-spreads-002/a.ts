@@ -1,0 +1,1 @@
+enum Fruit { Apple } class Basket { constructor(public value: Fruit) {} } new Basket(Fruit.Apple); new Basket(1);

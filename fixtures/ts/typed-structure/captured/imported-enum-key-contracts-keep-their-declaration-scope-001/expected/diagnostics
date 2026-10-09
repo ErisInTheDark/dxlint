@@ -1,0 +1,2 @@
+main.ts:1:120-1:131 no-unsafe-enum-assignment:access#0
+main.ts:1:141-1:142 no-unsafe-enum-assignment:access#0

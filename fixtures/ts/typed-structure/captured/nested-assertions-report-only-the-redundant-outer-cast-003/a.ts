@@ -1,0 +1,1 @@
+interface Props { a: number } const fn = (): Props => ({ a: 1 }) as unknown as Props;

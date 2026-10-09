@@ -1,0 +1,1 @@
+interface Generic { method<T>(value: T): T; } declare const broad: { method(value: any): any; extra: string }; const target: Generic = broad as Generic; declare function echo<T>(value: T): T; const inferred = echo(3) as number;

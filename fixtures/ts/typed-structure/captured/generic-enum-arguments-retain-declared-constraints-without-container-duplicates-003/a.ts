@@ -1,0 +1,1 @@
+enum Fruit { Apple } class Box<T extends { fruit: Fruit }> { constructor(public value: T) {} } new Box({ fruit: Fruit.Apple }); new Box({ fruit: 1 });

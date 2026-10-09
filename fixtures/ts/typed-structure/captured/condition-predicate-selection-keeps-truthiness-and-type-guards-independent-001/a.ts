@@ -1,0 +1,1 @@
+declare function assertTruthy(value: unknown): asserts value; declare function guard(value: unknown): value is string; declare function other(value: unknown): value is string; declare const text: string; declare const unknown: unknown; assertTruthy(true); assertTruthy(unknown); guard(text); other(text); guard(0);

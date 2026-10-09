@@ -1,0 +1,1 @@
+interface Mutable { nested: { value: number } } interface ReadonlyNested { nested: { readonly value: number } } declare const mutable: Mutable; const changed = mutable as ReadonlyNested;
