@@ -1,0 +1,2 @@
+import .ts
+rule lines-around-comment:* { set afterBlockComment true }
