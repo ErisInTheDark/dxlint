@@ -118,7 +118,8 @@ pub trait Facts {
     fn literal_value(&self, node: u32) -> Option<(&'static str, String)>;
 }
 
-pub use super::bind::{MemberUses, HAS_YIELD, USES_ARGUMENTS, USES_THIS};
+pub use super::bind::{HAS_YIELD, USES_ARGUMENTS, USES_THIS};
+pub use super::class_members::MemberUses;
 
 /// A regex finding, located in the file (see the `regex_findings` fact).
 pub struct RegexFinding {
@@ -204,14 +205,7 @@ impl Facts for NativeFile<'_> {
     }
 
     fn member_uses(&self, node: u32) -> Option<MemberUses> {
-        let s = &self.syntax;
-        // Class members are keyed by their declaration; parameter
-        // properties by the parameter.
-        let key = if s.is(node, Kind::Ident) && s.parent(node).is_some_and(|p| s.is(p, Kind::Param)) { s.parent(node)? } else { node };
-        if !matches!(s.kind(key), Some(Kind::ClassProp | Kind::Method | Kind::Param)) {
-            return None;
-        }
-        Some(self.bindings().members.get(&key).copied().unwrap_or_default())
+        super::class_members::member_uses(self, node)
     }
 
     fn function_flags(&self, node: u32) -> Option<u8> {
@@ -250,14 +244,7 @@ impl Facts for NativeFile<'_> {
     }
 
     fn unused_member(&self, node: u32) -> Option<&'static str> {
-        let &(_, private, hash) = self.unused_members().get(&node)?;
-        Some(if hash {
-            "hash"
-        } else if private {
-            "private"
-        } else {
-            "public"
-        })
+        super::class_members::unused_member(self, node)
     }
 
     fn enclosing_function_name(&self, node: u32) -> Option<String> {
@@ -502,7 +489,6 @@ pub struct NativeFile<'t> {
     globals: OnceCell<Globals>,
     reach: OnceCell<(Reach, HashMap<u32, u32>)>,
     supers: OnceCell<Supers>,
-    pub(super) unused_members: OnceCell<HashMap<u32, (String, bool, bool)>>,
     /// Topic modules' per-file results ([`NativeFile::cached`]).
     topic_cache: RefCell<crate::fx_hash::FxHashMap<TypeId, Rc<dyn Any>>>,
     typing: OnceCell<Typing<'t>>,
@@ -522,7 +508,6 @@ impl<'t> NativeFile<'t> {
             globals: OnceCell::new(),
             reach: OnceCell::new(),
             supers: OnceCell::new(),
-            unused_members: OnceCell::new(),
             topic_cache: RefCell::default(),
             typing: OnceCell::new(),
             import_docs: RefCell::new(HashMap::new()),
@@ -702,5 +687,36 @@ impl<'t> NativeFile<'t> {
             at = s.parent(at)?;
         }
         leading_doc(s.src, s.tree.node(at).start as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::with_native_file;
+    use super::{Facts, Field};
+
+    #[test]
+    fn unused_member_queries_do_not_initialise_typed_write_resolution() {
+        for (source, typed) in [
+            ("class A { /*@*/private value = 0; change() { this.value = 1; } }", false),
+            ("class A { /*@*/private value = 0; change(other: A) { other.value = 1; } }", true),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let key = file.syntax.get(nodes[0], Field::Key).expect("member key");
+                assert!(file.typing.get().is_none());
+                for _ in 0..2 {
+                    assert_eq!(file.unused_member(key), Some("private"));
+                    assert!(file.typing.get().is_none(), "{source}");
+                }
+                assert_eq!(file.member_uses(nodes[0]).expect("class property").writes, 1);
+                assert_eq!(file.typing.get().is_some(), typed, "{source}");
+                assert_eq!(file.unused_member(key), Some("private"));
+            });
+        }
+        with_native_file("class A { /*@*/private [Symbol.iterator] = 0; }", |file, nodes| {
+            let key = file.syntax.get(nodes[0], Field::Key).expect("member key");
+            assert_eq!(file.unused_member(key), None);
+            assert!(file.typing.get().is_none());
+        });
     }
 }

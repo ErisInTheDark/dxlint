@@ -174,6 +174,13 @@ impl<'t> NativeFile<'t> {
                 }
             }
             if s.is(n, K::Class) {
+                if env.this.is_none() {
+                    if let Ty::Class(classes) = ck.class_value_at(s.tree.node(n).start, ck.file) {
+                        let args = s.all(n, F::TypeParam).filter_map(|parameter| s.get(parameter, F::Name))
+                            .map(|name| Ty::Param(s.text(name).into())).collect();
+                        env.this = Some(Box::new(Ty::Named(classes, args)));
+                    }
+                }
                 if let Some(i) = ck.summary.decls.iter().position(|decl|
                     decl.kind == DeclKind::Class && decl.start == s.tree.node(n).start && decl.scope.is_some()) {
                     for scope in ck.decl_env(DeclRef { file: ck.file, decl: i as u32 }).namespaces {
@@ -661,6 +668,19 @@ impl<'t> NativeFile<'t> {
                 self.narrow(id, t)
             }
             K::This => self.this_type(id),
+            K::ClassProp => {
+                let Some(class) = s.parent(id).filter(|&parent| s.is(parent, K::Class)) else { return Ty::Unknown };
+                let name = self.symbolic_property_key(id).map(|symbol| format!("[Symbol.{symbol}]"))
+                    .or_else(|| s.get(id, F::Key).filter(|&key| s.is(key, K::PrivateName)).map(|key| s.text(key).to_string()))
+                    .or_else(|| super::statics::property_name(s, id));
+                let Some(name) = name else { return Ty::Unknown };
+                let receiver = if s.has_word(id, F::Modifier, "static") {
+                    ck.class_value_at(s.tree.node(class).start, ck.file)
+                } else {
+                    self.env_at(id).this.map_or(Ty::Unknown, |receiver| *receiver)
+                };
+                ck.member(&receiver, &name)
+            }
             K::MetaProperty => self.new_target_type(id),
             K::Instantiation => self.ck().instantiate(&inner(F::Expr), s.all(id, F::TypeArg).map(|argument| self.annotation(argument)).collect()),
             K::Class if s.parent(id).is_some_and(|parent|
@@ -881,8 +901,14 @@ impl<'t> NativeFile<'t> {
     /// Only direct references to a library Symbol constructor identify symbolic keys.
     pub(super) fn symbolic_property_key(&self, property: u32) -> Option<String> {
         let s = &self.syntax;
-        let key = s.get(property, F::Key).filter(|&key| s.is(key, K::Computed))?;
-        let expression = s.get(key, F::Expr).filter(|&expression| s.is(expression, K::Member))?;
+        let expression = if s.is(property, K::Index) {
+            s.get(property, F::Index)?
+        } else {
+            let key = s.get(property, F::Key).filter(|&key| s.is(key, K::Computed))?;
+            s.get(key, F::Expr)?
+        };
+        let expression = s.unparen(expression);
+        if !s.is(expression, K::Member) { return None }
         let object = s.get(expression, F::Object).filter(|&object| s.is(object, K::Ident) && s.text(object) == "Symbol")?;
         if self.decl_of(object).is_some() { return None }
         let checker = self.ck();
@@ -1241,6 +1267,45 @@ mod tests {
         with_native_file("function f<T extends { item: number }>(value: T) { const result = /*@*/value; }", |file, nodes| {
             assert!(matches!(file.type_of(nodes[0]), super::Ty::Param(_)));
         });
+    }
+
+    #[test]
+    fn lexical_this_annotations_preserve_the_class_member_owner() {
+        for (source, number) in [
+            ("class A { value = 0; method() { const that = {} as this & { extra: string }; const result = /*@*/that.value; } }", true),
+            ("class A { value = 0; method() { function inner() { const that = {} as this; const result = /*@*/that.value; } } }", true),
+            ("class A<T> { value!: T; method() { const that = {} as this; const result = /*@*/that.value; } }", false),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let object = file.syntax.get(nodes[0], super::F::Object).expect("member receiver");
+                let checker = file.ck();
+                let resolution = checker.member_resolution(&file.constrained_type_of(object), "value");
+                assert!(resolution.declarations.iter().any(|declaration|
+                    declaration.owner.is_some_and(|owner|
+                        owner.file == checker.file && &*checker.summary.decls[owner.decl as usize].name == "A")), "{source}");
+                if number {
+                    assert!(file.type_flags(nodes[0]).unwrap_or_default().contains(&"number"), "{source}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn class_property_types_keep_inferred_and_declared_literal_domains() {
+        for (source, domain, literal) in [
+            ("class A { /*@*/private value = 7; }", "number", false),
+            ("declare const hello: 'hello'; class A { /*@*/private value = hello; }", "string", true),
+            ("declare const hello: 'hello' | 10; class A { /*@*/private value = hello; }", "string", true),
+            ("class A { /*@*/private static value = 7; }", "number", false),
+            ("class A { /*@*/#value = 7; }", "number", false),
+            ("class A { /*@*/private value: boolean = true; }", "boolean", false),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let flags = file.type_flags(nodes[0]).unwrap_or_default();
+                assert!(flags.contains(&domain), "{source}: {flags:?}");
+                assert_eq!(flags.contains(&"literal"), literal, "{source}: {flags:?}");
+            });
+        }
     }
 
     #[test]

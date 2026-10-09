@@ -22,11 +22,38 @@ pub(super) fn structure(file: &NativeFile<'_>, node: u32, properties: &[String])
         let retained = specifiers::retained_alias(ck, r, &mut Vec::new())?;
         Some(Value::from(ck.summary_of(retained.file)?.decls[retained.decl as usize].name.to_string()))
     }).collect() } else { Vec::new() };
-    let value = describe(&file.constrained_type_of(node), ck, properties, &fields, aliases, 0);
-    if !requested("property_writes") { return value }
+    let ty = file.constrained_type_of(node);
+    let value = describe(&ty, ck, properties, &fields, aliases, 0);
+    if !requested("property_writes") && !requested("name_bindings") { return value }
     let Value::Record(entries) = value else { unreachable!() };
-    let writes = file.decl_of(file.syntax.unparen(node)).and_then(|decl| file.cached(property_writes).0.get(&decl).cloned()).unwrap_or_default();
-    Value::record(entries.iter().cloned().chain([("property_writes".into(), Value::list(writes))]).collect::<Vec<_>>())
+    let mut entries = entries.iter().cloned().collect::<Vec<_>>();
+    if requested("property_writes") {
+        let writes = file.decl_of(file.syntax.unparen(node)).and_then(|decl| file.cached(property_writes).0.get(&decl).cloned()).unwrap_or_default();
+        entries.push(("property_writes".into(), Value::list(writes)));
+    }
+    if requested("name_bindings") {
+        let bindings = file.bindings();
+        let environment = file.env_at(node);
+        let names = specifiers::named_types(&ty, ck, &mut Vec::new()).into_iter().filter_map(|(declaration, _)| {
+            let summary = ck.summary_of(declaration.file)?;
+            let name = &summary.decls[declaration.decl as usize].name;
+            let visible = bindings.visible(&file.syntax, node, name, false);
+            let kind = visible.and_then(|node| bindings.decls.get(&node)).map_or("unknown", |binding| binding.kind);
+            let same_declaration = if let Some(visible) = visible.filter(|_| kind != "import") {
+                declaration.file == ck.file && file.syntax.parent(visible).is_some_and(|parent|
+                    file.syntax.tree.node(parent).start == summary.decls[declaration.decl as usize].start)
+            } else {
+                ck.type_decls(std::slice::from_ref(name), &environment).contains(&declaration)
+            };
+            Some(Value::record(vec![
+                ("name".into(), Value::from(name.to_string())),
+                ("kind".into(), Value::from(kind)),
+                ("same_declaration".into(), Value::Bool(same_declaration)),
+            ]))
+        }).collect();
+        entries.push(("name_bindings".into(), Value::list(names)));
+    }
+    Value::record(entries)
 }
 
 struct PropertyWrites(HashMap<u32, Vec<Value<'static>>>);
@@ -198,6 +225,26 @@ mod tests {
             assert!(alternatives.iter().any(|part| part.key("kind").loose_eq(&Value::from("undefined"))));
             assert!(alternatives.iter().any(|part| part.key("kind").loose_eq(&Value::from("object"))));
         });
+    }
+
+    #[test]
+    fn named_type_bindings_distinguish_visible_identity_from_shadowing() {
+        for (source, kind, same) in [
+            ("enum E { One } const result = /*@*/E.One;", "enum", true),
+            ("enum E { One } const value = E.One; function f() { const E = 0; const result = /*@*/value; }", "const", false),
+            ("enum E { One } const value = E.One; function f() { type E = number; const result = /*@*/value; }", "type", false),
+            ("enum E { One } const value = E.One; function f() { enum E { Other } const result = /*@*/value; }", "enum", false),
+        ] {
+            with_native_file(source, |file, nodes| {
+                assert!(file.type_flags(nodes[0]).unwrap_or_default().contains(&"enum"), "{source}");
+                let fields = vec![Value::from("name_bindings")];
+                let result = crate::expr::facts::with_args(vec![Value::list(Vec::new()), Value::list(fields)], || super::structure(file, nodes[0], &[]));
+                let bindings = result.key("name_bindings").items();
+                let binding = bindings.iter().find(|binding| binding.key("name").loose_eq(&Value::from("E"))).expect("enum name binding");
+                assert_eq!(binding.key("kind"), Value::from(kind), "{source}");
+                assert_eq!(binding.key("same_declaration"), Value::Bool(same), "{source}");
+            });
+        }
     }
 
 }

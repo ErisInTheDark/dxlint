@@ -11,6 +11,7 @@ import .ts/typed/promises
 import .ts/typed/optional-chains
 import .ts/typed/floating-promises
 import .ts/typed/template-expressions
+import .ts/typed/readonly-members
 
 define {
 
@@ -459,21 +460,6 @@ in ts_binary rule prefer-string-starts-ends-with {
 in ts_call rule prefer-string-starts-ends-with:regex {
   when regex_starts_test || regex_ends_test
   warn if regex_ends_test then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
-}
-
-# Private members never written after construction.
-fn is_private(m) = re_test(m, /\bprivate\b/)
-in ts_class_property rule prefer-readonly {
-  report at key.node
-  when ({ value [] modifier; join " "; is_private } || re_test(key, /^#/)) && !contains([] modifier, "readonly") && !contains([] modifier, "static") && member_writes == 0
-  # Computed keys and decorated members can be written where zlint cannot see.
-  when !re_test(key, /^\[/) && count(decorator) == 0
-  warn "Member '{key}' is never reassigned; mark it as `readonly`."
-}
-in ts_parameter rule prefer-readonly:parameter {
-  report at name.node
-  when member_writes == 0 && { value [] modifier; join " "; is_private } && !contains([] modifier, "readonly")
-  warn "Member '{re_replace(text, /^(?:(?:private|public|protected|readonly|override)\s+)*/, '')}' is never reassigned; mark it as `readonly`."
 }
 
 # ---- template interpolation ----------------------------------------------------

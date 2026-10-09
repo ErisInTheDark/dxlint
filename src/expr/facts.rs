@@ -415,14 +415,20 @@ const CORE: &[Fact] = &[
     Fact {
         shape: Fact::SCALAR.shape,
         name: "member_writes",
-        doc: "native layers: on a class member: writes through `this` (or `x.#name`) outside the constructor (`=`, `+=`, `++`, `delete`, destructuring)",
+        doc: "native layers: on a class member: direct reassignments outside its constructor, resolved by receiver type (`=`, `+=`, `++`, `delete`, destructuring)",
         get: |f, n| opt(f.member_uses(n), |u| Value::from(u.writes as usize)),
     },
     Fact {
         shape: Fact::SCALAR.shape,
         name: "member_constructor_writes",
-        doc: "native layers: on a class member: writes inside the constructor",
+        doc: "native layers: on an instance member: direct reassignments inside its constructor, excluding nested functions",
         get: |f, n| opt(f.member_uses(n), |u| Value::from(u.ctor_writes as usize)),
+    },
+    Fact {
+        shape: Fact::SCALAR.shape,
+        name: "member_constructor_indirect_writes",
+        doc: "native layers: on an instance member: constructor reassignments through a receiver other than direct `this`",
+        get: |f, n| opt(f.member_uses(n), |u| Value::from(u.ctor_indirect_writes as usize)),
     },
     Fact {
         shape: Fact::SCALAR.shape,

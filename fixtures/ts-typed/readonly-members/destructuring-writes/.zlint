@@ -1,0 +1,3 @@
+import .ts
+rule prefer-readonly
+ignore "node_modules/**"

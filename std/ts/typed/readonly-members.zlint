@@ -1,0 +1,49 @@
+# Private member reassignment and fixes that preserve constructor types.
+
+define {
+
+fn readonly_member_key(key) =
+  key is (ts_identifier, ts_private_name, ts_string, ts_number)
+  || key is ts_template && count(key.expression) == 0
+  || key is ts_computed_key && (key.expression is ts_number
+    || key.expression is ts_member && key.expression.object == "Symbol")
+fn readonly_primitive_annotation(flags) = {
+  value names: filter(["string", "number", "boolean", "bigint"], name => contains(flags, name))
+  value if count(names) > 0 then join(names, " | ") else null
+}
+in ts_node let readonly_name_bindings type_structure([], ["name_bindings"])
+fn readonly_initializer_annotation(initializer, flags) = {
+  value type_name: initializer.type
+  value bindings: initializer.readonly_name_bindings.name_bindings
+  value type_parts: split(type_name, ".")
+  value if contains(flags, "any") then "any"
+  else if contains(flags, "enum") then
+    if count(bindings) == 1 && first(bindings).same_declaration
+      && first(bindings).name == last(type_parts)
+    then first(bindings).name else null
+  else readonly_primitive_annotation(flags)
+}
+
+in ts_class_property rule prefer-readonly {
+  when (contains([] modifier, "private") || key is ts_private_name)
+    && !contains([] modifier, "readonly") && !contains([] modifier, "accessor")
+    && readonly_member_key(key.node) && member_writes == 0
+  report at {start: style_head_offset, end: key.end_offset}
+  warn "Member '{key}' is never reassigned; mark it as `readonly`."
+  let flags init.type_flags.nonempty ?? []
+  let preserve_inference type.node == null && init != null && member_constructor_writes > 0
+  let declaration_flags type_flags.nonempty ?? []
+  let needs_annotation preserve_inference && (contains(flags, "enum") || contains(flags, "literal") && !contains(declaration_flags, "literal"))
+  let annotation if needs_annotation then readonly_initializer_annotation(init.node, flags) else null
+  let fixable member_constructor_indirect_writes == 0 && (!preserve_inference || count(flags) > 0 && !contains(flags, "unknown") && (!needs_annotation || annotation != null))
+  fix at key.node if fixable as "readonly " key (if annotation != null then ": " annotation else "")
+}
+
+in ts_parameter rule prefer-readonly:parameter {
+  when contains([] modifier, "private") && !contains([] modifier, "readonly") && member_writes == 0
+  report at {start: style_head_offset, end: name.end_offset}
+  warn "Member '{name}' is never reassigned; mark it as `readonly`."
+  fix at name.node if member_constructor_indirect_writes == 0 as "readonly " name
+}
+
+}

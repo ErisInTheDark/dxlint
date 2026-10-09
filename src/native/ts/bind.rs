@@ -53,9 +53,6 @@ pub struct Bindings {
     /// Declaring identifier -> the kinds of every declaration merged into
     /// its binding (`class` and `interface` of one name).
     pub declaration_kinds: HashMap<u32, Vec<&'static str>>,
-    /// Class member declaration (property, method, parameter property) ->
-    /// accesses through `this` (or `x.#name`) inside its class.
-    pub members: HashMap<u32, MemberUses>,
     /// Function-like node -> what its own body does ([`USES_THIS`], ...).
     /// Arrow functions count toward the function around them.
     pub functions: HashMap<u32, u8>,
@@ -167,15 +164,6 @@ impl Bindings {
     }
 }
 
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct MemberUses {
-    pub reads: u32,
-    /// Writes outside the constructor (`this.x = `, `this.x++`, `delete`).
-    pub writes: u32,
-    /// Writes inside the constructor.
-    pub ctor_writes: u32,
-}
-
 pub const USES_THIS: u8 = 1;
 pub const USES_ARGUMENTS: u8 = 2;
 pub const HAS_YIELD: u8 = 4;
@@ -241,9 +229,6 @@ struct Binder<'s, 't> {
     merged: HashMap<u32, u32>,
     /// What the next declarations are: their kind and declaring node.
     current: (&'static str, u32),
-    /// Class -> its members by name (`x`, `#x`) -> declaring node.
-    class_members: HashMap<u32, HashMap<&'t str, u32>>,
-    members: HashMap<u32, MemberUses>,
     functions: HashMap<u32, u8>,
     write_sites: HashMap<u32, u32>,
     /// The assignment (or update, `for`) whose target is being walked.
@@ -265,8 +250,6 @@ pub fn bind(s: &Syntax, root_function: bool, ecma_version: u16) -> Bindings {
         owners: HashMap::default(),
         merged: HashMap::default(),
         current: ("", 0),
-        class_members: HashMap::default(),
-        members: HashMap::default(),
         functions: HashMap::default(),
         write_sites: HashMap::default(),
         site: 0,
@@ -591,138 +574,6 @@ impl<'t> Binder<'_, 't> {
         }
     }
 
-    /// Registers a class's members: properties, methods and accessors by
-    /// key, and constructor parameter properties.
-    fn class_members(&mut self, class: u32) {
-        let s = self.s;
-        let mut names: HashMap<&'t str, u32> = HashMap::default();
-        for m in s.all(class, F::Member).filter(|&m| matches!(s.kind(m), Some(K::ClassProp | K::Method))) {
-            let Some(k) = s.get(m, F::Key).filter(|&k| matches!(s.kind(k), Some(K::Ident | K::PrivateName))) else { continue };
-            if s.text(k) == "constructor" {
-                for p in s.all(m, F::Param) {
-                    let property = s.all(p, F::Modifier).any(|w| matches!(s.text(w), "private" | "protected" | "public" | "readonly"));
-                    if let Some(n) = s.get(p, F::Name).filter(|&n| property && s.is(n, K::Ident)) {
-                        names.entry(s.text(n)).or_insert(p);
-                    }
-                }
-                continue;
-            }
-            // Getter and setter pairs are one member: the first.
-            names.entry(s.text(k)).or_insert(m);
-        }
-        self.class_members.insert(class, names);
-    }
-
-    /// Whether `class` declares member `name`; with `ts_private`, only a
-    /// `private` one.
-    fn declares(&self, class: u32, name: &str, ts_private: bool) -> bool {
-        self.class_members.get(&class).and_then(|m| m.get(name)).is_some_and(|&d| !ts_private || self.s.all(d, F::Modifier).any(|w| self.s.text(w) == "private"))
-    }
-
-    /// `this.x`, `obj.#x`, or `other.x` for a `private x` of an enclosing
-    /// class (only that class can reach it, so another instance's): a read
-    /// or write of that member.
-    fn member_access(&mut self, id: u32) {
-        let s = self.s;
-        let (Some(object), Some(prop)) = (s.get(id, F::Object), s.get(id, F::Property)) else { return };
-        let name = s.text(prop);
-        let hash = s.is(prop, K::PrivateName);
-        // Resolved by the enclosing class that declares it, not by `this`.
-        let private = !s.is(object, K::This);
-        if private && !hash && !self.enclosing_declares(id, name) {
-            return;
-        }
-        // The class: `this`'s (through arrows), or for `#x` the nearest
-        // enclosing class declaring it.
-        let mut at = s.parent(id);
-        let mut in_ctor = false;
-        let mut owner_fn = None;
-        // A callback inside the constructor runs later: not a constructor
-        // write.
-        let mut crossed_function = false;
-        let class = loop {
-            let Some(n) = at else { return };
-            match s.kind(n) {
-                Some(K::Function) if !private => return,
-                Some(K::Function | K::Arrow) => crossed_function = true,
-                Some(K::Method | K::ClassProp | K::StaticBlock) if owner_fn.is_none() => {
-                    owner_fn = Some(n);
-                    in_ctor = !crossed_function && s.is(n, K::Method) && s.get(n, F::Key).is_some_and(|k| s.text(k) == "constructor");
-                    if let Some(p) = s.parent(n).filter(|&p| s.is(p, K::Class)) {
-                        if !private || self.declares(p, name, !hash) {
-                            break p;
-                        }
-                    } else if !private {
-                        return;
-                    }
-                }
-                Some(K::Class) if private && self.declares(n, name, !hash) => break n,
-                _ => {}
-            }
-            at = s.parent(n);
-        };
-        let Some(&decl) = self.class_members.get(&class).and_then(|m| m.get(name)) else { return };
-        let (read, write) = self.access_kind(id);
-        let uses = self.members.entry(decl).or_default();
-        uses.reads += u32::from(read);
-        if write {
-            if in_ctor {
-                uses.ctor_writes += 1;
-            } else {
-                uses.writes += 1;
-            }
-        }
-    }
-
-    /// Some enclosing class declares a `private` member `name`.
-    fn enclosing_declares(&self, id: u32, name: &str) -> bool {
-        let mut at = self.s.parent(id);
-        while let Some(n) = at {
-            if self.s.is(n, K::Class) && self.declares(n, name, true) {
-                return true;
-            }
-            at = self.s.parent(n);
-        }
-        false
-    }
-
-    /// Whether an expression is read, written, or both where it stands.
-    fn access_kind(&self, id: u32) -> (bool, bool) {
-        let s = self.s;
-        let Some(p) = s.parent(id) else { return (true, false) };
-        let statement = |n: u32| s.parent(n).is_some_and(|g| s.is(g, K::ExprStmt));
-        match s.kind(p) {
-            Some(K::Assign) if s.field(id) == Some(F::Left) => {
-                let compound = s.word(p, F::Op) != Some("=");
-                (compound && !statement(p), true)
-            }
-            Some(K::Update) => (!statement(p), true),
-            Some(K::Unary) if s.word(p, F::Op) == Some("delete") => (false, true),
-            Some(K::Paren | K::NonNull) => self.access_kind(p),
-            // `this.x.y = v` / `this.x[k] = v` modify what `x` holds: as
-            // typescript-eslint's prefer-readonly counts it, a write too.
-            Some(K::Member | K::Index) if s.field(id) == Some(F::Object) => (true, self.access_kind(p).1),
-            // Destructuring targets.
-            Some(K::Array | K::Object | K::Prop | K::Spread | K::AssignPattern) if self.in_pattern(p) => (false, true),
-            Some(K::ForIn | K::ForOf) if s.field(id) == Some(F::Left) => (false, true),
-            _ => (true, false),
-        }
-    }
-
-    /// Inside the target of a destructuring assignment.
-    fn in_pattern(&self, mut id: u32) -> bool {
-        let s = self.s;
-        while let Some(p) = s.parent(id) {
-            match s.kind(p) {
-                Some(K::Array | K::Object | K::Prop | K::Spread | K::AssignPattern) => id = p,
-                Some(K::Assign) => return s.field(id) == Some(F::Left),
-                Some(K::ForIn | K::ForOf) => return s.field(id) == Some(F::Left),
-                _ => return false,
-            }
-        }
-        false
-    }
-
     /// `id` without the parentheses, `!`, `as` and `satisfies` around it.
     fn unwrapped(&self, mut id: u32) -> u32 {
         while matches!(self.s.kind(id), Some(K::Paren | K::NonNull | K::As | K::Satisfies | K::TypeAssertion)) {
@@ -827,7 +678,6 @@ impl<'t> Binder<'_, 't> {
                 self.type_params(id, inner);
                 self.walk_fields(id, inner, Mode::Value, &[F::Extends]);
                 self.walk_fields(id, inner, Mode::Type, &[F::TypeArg, F::Implements]);
-                self.class_members(id);
                 for m in s.all(id, F::Member).collect::<Vec<_>>() {
                     self.walk(m, inner, Mode::Value);
                 }
@@ -985,7 +835,6 @@ impl<'t> Binder<'_, 't> {
                 }
             }
             K::Member => {
-                self.member_access(id);
                 self.walk_fields(id, scope, mode, &[F::Object]);
             }
             K::This => {
@@ -1133,7 +982,7 @@ impl<'t> Binder<'_, 't> {
     }
 
     fn resolve(self) -> Bindings {
-        let Binder { s, scopes, refs, mut decls, owners, merged, members, mut functions, write_sites, merged_kinds, decl_scope, .. } = self;
+        let Binder { s, scopes, refs, mut decls, owners, merged, mut functions, write_sites, merged_kinds, decl_scope, .. } = self;
         let mut out_refs = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
         let mut unresolved = HashSet::default();
         let mut access = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
@@ -1212,7 +1061,7 @@ impl<'t> Binder<'_, 't> {
         }
         let declaration_kinds = merged.iter().map(|(&d, first)| (d, merged_kinds.get(first).cloned().unwrap_or_default())).chain(merged_kinds.clone()).collect();
         let scopes = scopes.into_iter().map(|sc| sc.info).collect();
-        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, members, functions, scopes, decl_scope, ref_scope, merged, index: OnceCell::new() }
+        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, functions, scopes, decl_scope, ref_scope, merged, index: OnceCell::new() }
     }
 }
 
