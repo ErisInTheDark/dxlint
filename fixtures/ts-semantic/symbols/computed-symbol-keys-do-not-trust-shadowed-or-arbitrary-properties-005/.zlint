@@ -1,0 +1,9 @@
+import .ts
+in ts_declarator.init rule known {
+ when is ts_object && !type_opaque
+ warn "resolved"
+}
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+ignore "tsconfig.json"

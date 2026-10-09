@@ -1,0 +1,1 @@
+declare const foo: { run(): number } | null; foo?.run();

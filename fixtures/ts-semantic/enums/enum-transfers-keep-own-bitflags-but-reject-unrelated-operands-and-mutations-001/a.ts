@@ -1,0 +1,1 @@
+enum Flags { Read = 1, Write = 2 } const own: Flags = Flags.Read | Flags.Write; const nested: Flags = Flags.Read | (Flags.Write & Flags.Read); const cast = (Flags.Read | Flags.Write) as Flags; declare let flags: Flags; flags &= ~Flags.Read; flags |= 8; flags += 1; flags++; const asserted = 1 as Flags;

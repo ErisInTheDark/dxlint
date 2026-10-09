@@ -1,0 +1,1 @@
+const object = {}; object.value || (object.value = read());

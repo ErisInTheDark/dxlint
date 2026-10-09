@@ -1,0 +1,1 @@
+readBase()**readExponent();

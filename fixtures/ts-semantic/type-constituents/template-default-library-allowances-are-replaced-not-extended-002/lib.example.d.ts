@@ -1,0 +1,1 @@
+export interface URL { value: number; }

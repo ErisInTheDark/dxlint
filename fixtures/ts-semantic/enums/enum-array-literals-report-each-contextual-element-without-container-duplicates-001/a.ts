@@ -1,0 +1,1 @@
+enum Fruit { Apple } const values: [Fruit, { fruit: Fruit }] = [1, { fruit: 1 }]; const safe: Fruit[] = [Fruit.Apple];

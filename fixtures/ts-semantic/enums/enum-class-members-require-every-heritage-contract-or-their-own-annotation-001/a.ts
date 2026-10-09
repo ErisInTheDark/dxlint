@@ -1,0 +1,1 @@
+enum Fruit { Apple } interface Basket { fruit: Fruit } interface Numeric { fruit: number } class Bad implements Basket { fruit = 1; } class Mixed implements Basket, Numeric { fruit = 1; } class Own implements Numeric { fruit: Fruit = 1; } class Base<T> { fruit!: T; } class Derived extends Base<Fruit> { fruit = 1; }

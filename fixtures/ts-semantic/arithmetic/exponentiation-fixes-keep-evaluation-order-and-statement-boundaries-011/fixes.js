@@ -1,0 +1,1 @@
+Math.pow(base, first ** last);

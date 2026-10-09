@@ -1,0 +1,1 @@
+if (Boolean(a ? b : c) ? d : e) consume();

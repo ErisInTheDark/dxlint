@@ -1,0 +1,1 @@
+value ** Math.pow(base, exponent);

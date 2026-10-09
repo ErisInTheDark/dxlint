@@ -1,0 +1,1 @@
+let object = { get value() { object = other; return false; } }; object.value || (object.value = read());

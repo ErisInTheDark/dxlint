@@ -1,0 +1,1 @@
+export {}; arguments[0]; const f = () => arguments[0];

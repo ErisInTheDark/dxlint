@@ -1,0 +1,1 @@
+declare const foo: any; foo && /*removed guard (((*/ (foo.bar && (foo.bar as any).baz);

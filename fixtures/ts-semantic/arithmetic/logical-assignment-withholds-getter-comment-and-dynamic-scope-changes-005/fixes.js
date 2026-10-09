@@ -1,0 +1,1 @@
+with (object) { value = value || read(); }

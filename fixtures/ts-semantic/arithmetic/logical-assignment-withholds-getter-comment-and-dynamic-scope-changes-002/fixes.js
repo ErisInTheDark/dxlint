@@ -1,0 +1,1 @@
+class Derived extends Base { method() { super.value || (super.value = read()); } }

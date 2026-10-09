@@ -1,0 +1,1 @@
+type arguments = string; const object = { read() { let value: arguments; return 1; } };

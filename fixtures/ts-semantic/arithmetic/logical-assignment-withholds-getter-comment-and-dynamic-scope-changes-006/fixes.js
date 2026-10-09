@@ -1,0 +1,1 @@
+object.deep.value || (object.deep.value = read());

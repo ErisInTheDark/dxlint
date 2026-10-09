@@ -1,0 +1,1 @@
+const object = { method() { return arguments.length; } };

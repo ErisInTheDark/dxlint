@@ -1,0 +1,1 @@
+/** @deprecated */ export const deprecatedVariable = 1; const normalVariable = 1; /** @deprecated */ export { normalVariable };

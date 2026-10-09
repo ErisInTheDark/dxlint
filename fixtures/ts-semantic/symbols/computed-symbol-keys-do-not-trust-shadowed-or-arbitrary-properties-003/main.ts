@@ -1,0 +1,1 @@
+declare function key(): symbol; const value = { [key()]() {} };

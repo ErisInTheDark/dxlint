@@ -1,0 +1,1 @@
+declare const foo: any; foo && foo.bar && foo.bar.baz && foo.bar.baz;

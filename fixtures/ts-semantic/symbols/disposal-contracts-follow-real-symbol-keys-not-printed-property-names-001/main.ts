@@ -1,0 +1,1 @@
+const source = { async [Symbol.dispose]() {} }; const value: Disposable = source;

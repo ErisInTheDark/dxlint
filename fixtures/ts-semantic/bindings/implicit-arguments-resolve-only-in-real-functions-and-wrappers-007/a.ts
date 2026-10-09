@@ -1,0 +1,1 @@
+export {}; arguments.length; const arrow = () => arguments.length;

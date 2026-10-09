@@ -1,0 +1,1 @@
+var f = function () { class A { [this.x]() {} } }.bind(b);

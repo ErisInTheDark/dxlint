@@ -1,0 +1,1 @@
+if (!!/* keep */value) consume();

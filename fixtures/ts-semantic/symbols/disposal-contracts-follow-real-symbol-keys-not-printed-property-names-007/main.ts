@@ -1,0 +1,1 @@
+async function f() { await using value = { async [Symbol.asyncDispose]() {} }; }

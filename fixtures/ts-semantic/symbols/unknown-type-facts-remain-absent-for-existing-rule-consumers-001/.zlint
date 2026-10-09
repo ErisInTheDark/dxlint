@@ -1,0 +1,3 @@
+import .ts
+in ts_identifier rule known { when type != null
+warn 'known' }

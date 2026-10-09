@@ -1,0 +1,1 @@
+({}) || 'unreachable'; false && 'unreachable'; true && 'reachable'; ({}) ?? 'unreachable'; enum E { Zero, One } declare const value: E; value || 'reachable'; 1 || 'unreachable'; 0 ?? 'unreachable';

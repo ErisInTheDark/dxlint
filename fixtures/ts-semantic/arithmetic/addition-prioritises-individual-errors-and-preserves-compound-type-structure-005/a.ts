@@ -1,0 +1,1 @@
+declare const x: {} & { a: number }; x + 's';

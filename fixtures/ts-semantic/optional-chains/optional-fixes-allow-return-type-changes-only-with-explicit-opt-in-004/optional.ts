@@ -1,0 +1,1 @@
+declare const foo: any; foo && typeof foo.bar !== 'undefined';

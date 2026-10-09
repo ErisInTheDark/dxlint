@@ -1,0 +1,1 @@
+declare const foo: any; declare const other: any; foo && (foo.bar && other);

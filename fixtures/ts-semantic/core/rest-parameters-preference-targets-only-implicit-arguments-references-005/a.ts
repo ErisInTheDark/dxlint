@@ -1,0 +1,1 @@
+function f(arguments) { return function () { return arguments[0]; }; }

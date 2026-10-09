@@ -1,0 +1,1 @@
+if (Boolean((left, right))) consume();

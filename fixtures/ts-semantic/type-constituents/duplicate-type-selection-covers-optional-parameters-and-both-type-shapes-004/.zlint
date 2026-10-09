@@ -1,0 +1,3 @@
+import .ts
+rule no-duplicate-type-constituents
+override in duplicate_type_constituent let duplicate_type_constituents_checked !(is ts_union)

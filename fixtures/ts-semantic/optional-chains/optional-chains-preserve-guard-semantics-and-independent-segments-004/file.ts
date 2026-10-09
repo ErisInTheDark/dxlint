@@ -1,0 +1,1 @@
+declare const foo: 0n | { value: number }; foo && foo.value;

@@ -1,0 +1,1 @@
+/** @deprecated */ function f(x: string): void; function f(x: number): void; function f(x: string | number) {} f(1); f('s');

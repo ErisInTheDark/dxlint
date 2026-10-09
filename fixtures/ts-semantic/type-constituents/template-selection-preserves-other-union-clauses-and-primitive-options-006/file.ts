@@ -1,0 +1,1 @@
+interface Custom { value: number; } interface URL { value: number; } declare const custom: Custom; declare const mixed: Custom | boolean; declare const shadow: URL; `${custom}`; `${mixed}`; `${shadow}`; tag`${custom}`;

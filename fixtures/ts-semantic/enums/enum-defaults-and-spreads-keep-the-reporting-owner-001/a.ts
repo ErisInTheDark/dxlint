@@ -1,0 +1,1 @@
+enum Fruit { Apple } class Basket { constructor(private fruit: Fruit = 1) {} } const { fruit = 1 }: { fruit?: Fruit } = {}; declare const numbers: number[]; const fruits: Fruit[] = [Fruit.Apple, ...numbers]; function make<T extends { fruit: Fruit }>() { const value: T = { ...{ fruit: 1 } } as const; }

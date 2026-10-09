@@ -1,0 +1,1 @@
+foo != null && typeof foo.bar !== 'undefined' && foo.bar !== null && foo.bar.baz !== null && typeof foo.bar.baz !== 'undefined';

@@ -1,0 +1,2 @@
+a.ts:1:65-1:66 no-unsafe-enum-assignment:element#0
+a.ts:1:70-1:78 no-unsafe-enum-assignment#2

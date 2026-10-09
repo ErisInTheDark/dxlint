@@ -1,0 +1,1 @@
+interface Consumer { '[Symbol.dispose]'(): void } const value: Consumer = { async '[Symbol.dispose]'() {} };

@@ -1,0 +1,1 @@
+declare const foo: any; async function f() { (await foo).bar && (await foo).bar.baz; }

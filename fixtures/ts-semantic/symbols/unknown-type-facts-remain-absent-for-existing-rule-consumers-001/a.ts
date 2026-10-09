@@ -1,0 +1,1 @@
+declare const narrow: number; declare const broad: unknown; narrow; broad;

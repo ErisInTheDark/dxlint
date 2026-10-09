@@ -1,0 +1,1 @@
+let count = 0; const object = {}; const key = { [Symbol.toPrimitive]() { return count++ ? 'other' : 'value'; } }; object[key] || (object[key] = read());

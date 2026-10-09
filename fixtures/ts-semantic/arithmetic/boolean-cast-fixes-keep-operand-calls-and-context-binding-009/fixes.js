@@ -1,0 +1,1 @@
+if (Boolean(read())) consume();

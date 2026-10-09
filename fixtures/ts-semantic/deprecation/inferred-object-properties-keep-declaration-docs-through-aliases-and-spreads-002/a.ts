@@ -1,0 +1,1 @@
+let a = { /** @deprecated */ ['old']: 1 }; const alias = a; alias.old;

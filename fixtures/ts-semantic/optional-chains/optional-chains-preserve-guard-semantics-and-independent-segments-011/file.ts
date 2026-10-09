@@ -1,0 +1,1 @@
+declare const foo: any; (foo?.bar).value && foo.bar.value.next;

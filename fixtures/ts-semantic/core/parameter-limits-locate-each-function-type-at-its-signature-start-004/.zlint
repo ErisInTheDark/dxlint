@@ -1,0 +1,2 @@
+import .ts
+rule max-params { set max 1 }

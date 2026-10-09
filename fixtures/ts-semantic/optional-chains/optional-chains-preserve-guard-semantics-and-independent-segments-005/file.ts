@@ -1,0 +1,1 @@
+declare const foo: void | (() => void); foo && foo();

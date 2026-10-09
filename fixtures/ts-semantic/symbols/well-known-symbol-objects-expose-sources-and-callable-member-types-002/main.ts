@@ -1,0 +1,1 @@
+interface Consumer { [Symbol.iterator](): void } const value: Consumer = { async [Symbol.iterator]() {} };

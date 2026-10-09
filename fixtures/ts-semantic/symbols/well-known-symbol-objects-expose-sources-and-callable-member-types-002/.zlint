@@ -1,0 +1,15 @@
+import .ts
+
+            in ts_declarator.init rule source-known {
+                when !type_opaque && contains(type_members, "[Symbol.iterator]")
+                warn "resolved source"
+            }
+            in ts_declarator.init rule member-known {
+                each symbol_contract in callable_contracts(parent, node, ["[Symbol.iterator]"])
+                when any(symbol_contract.source, result => result.thenable)
+                warn "resolved callable"
+            }
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+ignore "tsconfig.json"

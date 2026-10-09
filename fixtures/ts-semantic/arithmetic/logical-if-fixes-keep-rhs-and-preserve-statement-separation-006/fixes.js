@@ -1,0 +1,1 @@
+if (object.value === null || object.value === undefined) object.value = read();

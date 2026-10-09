@@ -1,0 +1,1 @@
+const object = {}; if (!object.value) object.value = read();

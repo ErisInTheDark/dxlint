@@ -1,0 +1,1 @@
+export {}; function f() { arguments.length; const arrow = () => { arguments.length; }; arguments[0].value; } const object = { method() { arguments.length; } };

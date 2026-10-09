@@ -1,0 +1,1 @@
+function use(NaN: number, undefined: number) { [1].filter(f).at(NaN); [1].filter(f).at(undefined); }

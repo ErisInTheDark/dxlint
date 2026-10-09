@@ -1,0 +1,1 @@
+[1].filter(f).at(1); [1].filter(f).at(-1); [1].filter(f).at(Infinity); [1].filter(f).at(); [1].filter(f).at(0, 1);

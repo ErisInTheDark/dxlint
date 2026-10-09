@@ -1,0 +1,1 @@
+const a = { /** @deprecated */ old: 1, current: 2 }; a.old; a['old']; a.current;

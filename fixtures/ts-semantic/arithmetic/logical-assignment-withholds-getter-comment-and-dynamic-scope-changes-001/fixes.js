@@ -1,0 +1,1 @@
+object.value || (object.value = read());

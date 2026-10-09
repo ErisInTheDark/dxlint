@@ -1,0 +1,1 @@
+const a = { inner: { /** @deprecated */ old: 1 } }; const alias = a.inner; alias.old;

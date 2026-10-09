@@ -1,0 +1,1 @@
+/** @deprecated */ const old = 1; void { current: old };

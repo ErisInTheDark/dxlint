@@ -1,0 +1,1 @@
+function f() { const arguments = { length: 'value' }; arguments.length; const arrow = () => { arguments.length; }; }

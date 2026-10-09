@@ -1,0 +1,1 @@
+function f(arguments) { return { read: () => { return arguments[0]; } }; }

@@ -1,0 +1,1 @@
+import { URL } from './lib.example'; interface Custom { value: number; } declare const url: URL; declare const custom: Custom; `${url}`; `${custom}`;

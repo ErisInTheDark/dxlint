@@ -1,0 +1,1 @@
+interface RegExp {} declare const regexp: RegExp; regexp + 1;

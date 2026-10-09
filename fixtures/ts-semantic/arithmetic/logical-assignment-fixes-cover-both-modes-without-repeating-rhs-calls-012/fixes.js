@@ -1,0 +1,1 @@
+consume(value || (value = read()));

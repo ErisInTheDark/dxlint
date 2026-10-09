@@ -1,0 +1,7 @@
+import .ts
+rule no-misused-spread 
+override in ts_spread, ts_jsx_spread_attribute let no_misused_spread_checked true
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.es5.d.ts"
+ignore "tsconfig.json"

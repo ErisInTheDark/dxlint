@@ -1,0 +1,1 @@
+function f(Symbol: SymbolConstructor) { using value = { async [Symbol.dispose]() {} }; }

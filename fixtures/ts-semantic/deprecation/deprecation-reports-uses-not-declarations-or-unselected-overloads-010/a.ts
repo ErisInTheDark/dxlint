@@ -1,0 +1,1 @@
+const current = 1; current;

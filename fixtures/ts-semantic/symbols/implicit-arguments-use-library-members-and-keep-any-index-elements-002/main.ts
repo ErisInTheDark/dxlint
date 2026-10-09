@@ -1,0 +1,1 @@
+export {}; type IArguments = { length: string }; function f() { arguments.length; } const object = { method() { arguments.length; } };

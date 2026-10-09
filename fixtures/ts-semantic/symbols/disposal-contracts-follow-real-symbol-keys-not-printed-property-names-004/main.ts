@@ -1,0 +1,1 @@
+const value: Disposable = { async '[Symbol.dispose]'() {} };

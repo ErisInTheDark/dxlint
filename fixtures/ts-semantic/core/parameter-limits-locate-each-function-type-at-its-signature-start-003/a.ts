@@ -1,0 +1,1 @@
+type F = (cb: (a: number, b: number) => number, b: number) => number;

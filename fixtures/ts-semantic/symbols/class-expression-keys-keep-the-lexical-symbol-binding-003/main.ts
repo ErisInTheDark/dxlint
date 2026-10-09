@@ -1,0 +1,1 @@
+function f() { const Symbol = { dispose: 'local' }; using value = new (class { async [Symbol.dispose]() {} })(); }

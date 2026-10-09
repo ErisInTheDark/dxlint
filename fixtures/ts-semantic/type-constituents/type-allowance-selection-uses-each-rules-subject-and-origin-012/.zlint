@@ -1,0 +1,7 @@
+import .ts
+rule prefer-promise-reject-errors 
+override in ts_call let prefer_promise_reject_errors_checked !{ value first([] argument.rejection_reason).groups; all (group) any(group, gate => gate.name == 'Allowed' && gate.from == 'lib') }
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.es5.d.ts"
+ignore "tsconfig.json"

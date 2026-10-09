@@ -1,0 +1,9 @@
+import .ts
+language .js { set sourceType "script"
+set ecmaVersion 5
+set globalReturn true
+}
+rule no-undef
+rule no-use-before-define
+rule no-redeclare
+rule no-implicit-globals

@@ -1,0 +1,7 @@
+import .ts
+in ts_expression_statement.expression rule number-proof { when !contains(type_flags, 'number')
+warn 'not numeric' }
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.es5.d.ts"
+ignore "tsconfig.json"

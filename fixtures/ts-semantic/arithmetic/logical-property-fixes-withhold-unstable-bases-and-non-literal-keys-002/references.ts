@@ -1,0 +1,1 @@
+const object = { get value() { key = 'other'; return false; } }; let key = 'value'; object[key] || (object[key] = read());

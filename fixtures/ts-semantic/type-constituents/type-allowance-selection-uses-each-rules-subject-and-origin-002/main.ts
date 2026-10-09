@@ -1,0 +1,1 @@
+class Allowed { a = 1; } class Other { b = 1; } declare const allowed: Allowed, other: Other; throw allowed; throw other;

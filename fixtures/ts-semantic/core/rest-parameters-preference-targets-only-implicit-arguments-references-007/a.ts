@@ -1,0 +1,1 @@
+const object = { f() { return arguments[0]; } };

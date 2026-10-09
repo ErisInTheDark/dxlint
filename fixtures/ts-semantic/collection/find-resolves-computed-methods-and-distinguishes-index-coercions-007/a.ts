@@ -1,0 +1,1 @@
+[1].filter(f).at(false); [1].filter(f).at(null); [1].filter(f).at(undefined); [1].filter(f).at(NaN);

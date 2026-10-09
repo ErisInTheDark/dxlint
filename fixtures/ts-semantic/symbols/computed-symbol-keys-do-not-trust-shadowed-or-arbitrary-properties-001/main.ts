@@ -1,0 +1,1 @@
+function f(Symbol: SymbolConstructor) { const value = { [Symbol.dispose]() {} }; }

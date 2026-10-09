@@ -1,0 +1,1 @@
+const filter = 'filter'; const zero = -0n; [1][filter](f)[zero];

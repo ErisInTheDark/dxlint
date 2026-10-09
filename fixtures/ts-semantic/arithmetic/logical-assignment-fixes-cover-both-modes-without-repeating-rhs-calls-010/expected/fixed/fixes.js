@@ -1,0 +1,1 @@
+for (const object of objects) { object.value ||= read(); }

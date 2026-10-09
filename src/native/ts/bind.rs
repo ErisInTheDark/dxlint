@@ -1218,42 +1218,6 @@ impl<'t> Binder<'_, 't> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn jsx_only_reads_opening_component_names_and_attribute_values() {
-        let linter = native_linter("rule no-undef");
-        let source = "const view = <Missing value={alsoMissing}><intrinsic /></Missing>;";
-        let diagnostics = linter.lint(Path::new("/root/a.tsx"), source);
-        assert_eq!(diagnostics.len(), 2, "{diagnostics:#?}");
-        assert_eq!(diagnostics.iter().filter(|diagnostic| &source[diagnostic.start..diagnostic.end] == "Missing").count(), 1);
-        assert!(diagnostics.iter().any(|diagnostic| &source[diagnostic.start..diagnostic.end] == "alsoMissing"));
-    }
-
-    #[test]
-    fn implicit_arguments_resolve_only_in_real_functions_and_wrappers() {
-        let linter = native_linter("rule no-undef");
-        for (source, expected) in [
-            ("function f() { return arguments.length; }", 0),
-            ("const f = function arguments() { return arguments.length; };", 0),
-            ("function f() { return () => () => arguments.length; }", 0),
-            ("const object = { method() { return arguments.length; } };", 0),
-            ("class C { method() { return () => arguments.length; } }", 0),
-            ("arguments.length; const arrow = () => arguments.length;", 2),
-            ("export {}; arguments.length; const arrow = () => arguments.length;", 2),
-        ] {
-            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
-            assert_eq!(diagnostics.len(), expected, "{source}: {diagnostics:#?}");
-        }
-        for options in ["set sourceType 'commonjs'", "set sourceType 'script'\nset globalReturn true"] {
-            let linter = native_linter(&format!("language .js {{ {options} }}\nrule no-undef"));
-            let diagnostics = linter.lint(Path::new("/root/a.js"), "arguments.length; const arrow = () => arguments.length;");
-            assert!(diagnostics.is_empty(), "{options}: {diagnostics:#?}");
-        }
-    }
-
     #[test]
     fn explicit_arguments_shadowing_does_not_hide_nested_function_arguments() {
         use crate::native::ts::facts::Facts;
@@ -1311,45 +1275,5 @@ mod tests {
             assert_eq!(name(b.visible(s, marks[2], "T", false)), Some(21));
             assert_eq!(b.visible(s, marks[2], "Math", true), None);
         })
-    }
-
-    #[test]
-    fn computed_class_keys_use_the_outer_this() {
-        let l = native_linter("rule no-extra-bind");
-        let lint = |text: &str| l.lint(Path::new("/root/a.js"), text).len();
-        assert_eq!(lint("var f = function () { class A { [this.x]() {} } }.bind(b);"), 0);
-        assert_eq!(lint("var f = function () { class A { [k] = this.x } }.bind(b);"), 1);
-    }
-
-    #[test]
-    fn legacy_block_functions_resolve_in_the_enclosing_function_scope() {
-        for (edition, undefined, early) in [(3, 0, 1), (5, 0, 1), (2015, 1, 0)] {
-            let linter = native_linter(&format!(
-                "language .js {{ set sourceType \"script\"\nset ecmaVersion {edition}\n}}\nrule no-undef\nrule no-use-before-define"));
-            let diagnostics = linter.lint(Path::new("/root/a.js"), "'use strict'; a(); { function a() {} }");
-            let count = |rule| diagnostics.iter().filter(|diagnostic| diagnostic.rule == rule).count();
-            assert_eq!(count("no-undef"), undefined, "{edition}: {diagnostics:#?}");
-            assert_eq!(count("no-use-before-define"), early, "{edition}: {diagnostics:#?}");
-        }
-    }
-
-    #[test]
-    fn legacy_block_function_bindings_merge_locally_without_escaping_functions() {
-        let linter = native_linter(r#"language .js { set sourceType "script"
-set ecmaVersion 5
-set globalReturn true
-}
-rule no-undef
-rule no-use-before-define
-rule no-redeclare
-rule no-implicit-globals
-"#);
-        let source = "function outer() { a(); { function a() {} } { function a() {} } a(); } a();";
-        let diagnostics = linter.lint(Path::new("/root/a.js"), source);
-        let count = |rule| diagnostics.iter().filter(|diagnostic| diagnostic.rule == rule).count();
-        assert_eq!(count("no-undef"), 1, "{diagnostics:#?}");
-        assert_eq!(count("no-use-before-define"), 1, "{diagnostics:#?}");
-        assert_eq!(count("no-redeclare"), 1, "{diagnostics:#?}");
-        assert_eq!(count("no-implicit-globals"), 0, "{diagnostics:#?}");
     }
 }

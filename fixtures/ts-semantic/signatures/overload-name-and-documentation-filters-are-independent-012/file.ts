@@ -1,0 +1,1 @@
+interface I { /** same */ f(x: string): void; /** same */ f(y: number): void; }

@@ -1,0 +1,1 @@
+declare const foo: { value: number } | null | undefined; foo !== null && foo !== undefined && foo.value;

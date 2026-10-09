@@ -1,0 +1,1 @@
+enum Fruit { Apple } const box: { fruit: Fruit } = { fruit: 1 }; const wrapped: { fruit: Fruit } = ({ fruit: 1 }); const safe: { fruit: Fruit } = { fruit: Fruit.Apple };

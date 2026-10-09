@@ -1,0 +1,1 @@
+const source = { async [Symbol.dispose]() {} }; using value = source;

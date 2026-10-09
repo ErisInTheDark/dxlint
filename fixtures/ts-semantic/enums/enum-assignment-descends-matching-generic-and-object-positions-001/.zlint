@@ -1,0 +1,3 @@
+import .ts
+import .ts/enums
+rule no-unsafe-enum-assignment

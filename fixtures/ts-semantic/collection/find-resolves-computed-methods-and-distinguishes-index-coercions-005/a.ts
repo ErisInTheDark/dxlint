@@ -1,0 +1,1 @@
+const index = 1 - 1; [1].filter(f)[index];

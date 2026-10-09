@@ -1,0 +1,1 @@
+enum Fruit { Apple } enum Vegetable { Carrot } const safe: Fruit = Fruit.Apple; const wide: Fruit | number = 1; declare const uncertain: Missing; const unresolved: Fruit = uncertain; const wrong: Fruit = 1; const other: Fruit = Vegetable.Carrot;

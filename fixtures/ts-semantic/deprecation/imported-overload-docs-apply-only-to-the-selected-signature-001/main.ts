@@ -1,0 +1,1 @@
+import { f } from './defs'; f(1); f('s');

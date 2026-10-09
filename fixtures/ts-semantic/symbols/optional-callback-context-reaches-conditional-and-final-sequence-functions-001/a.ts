@@ -1,0 +1,1 @@
+declare function receive(callback: ((e: any) => void) | undefined): void; declare const flag: boolean; receive(e => {}); receive(flag ? e => {} : e => {}); receive((e => {}, e => {}));

@@ -1,0 +1,3 @@
+import .ts
+in ts_expression_statement.expression rule string-proof { when !contains(type_flags, 'string')
+warn 'not string' }

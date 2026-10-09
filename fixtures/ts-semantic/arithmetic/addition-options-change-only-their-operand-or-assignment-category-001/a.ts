@@ -1,0 +1,1 @@
+declare const x: any; x + 1;

@@ -1,0 +1,1 @@
+const object = { read: (arguments) => { return arguments[0]; } };

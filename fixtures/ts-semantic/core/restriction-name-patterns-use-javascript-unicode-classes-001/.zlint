@@ -1,0 +1,4 @@
+import .ts
+rule no-restricted-imports {
+      set patterns [{group: ["pkg"], importNamePattern: "^\\w+$"}]
+    }

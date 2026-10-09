@@ -1,0 +1,1 @@
+using value = new (class { async [Symbol.dispose]() {} })();

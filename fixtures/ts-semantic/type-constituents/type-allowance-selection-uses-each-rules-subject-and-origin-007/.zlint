@@ -1,0 +1,6 @@
+import .ts
+rule prefer-promise-reject-errors
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.es5.d.ts"
+ignore "tsconfig.json"

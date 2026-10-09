@@ -1,0 +1,1 @@
+import { deprecatedVariable, normalVariable } from './defs'; void { deprecatedVariable }; void { normalVariable };

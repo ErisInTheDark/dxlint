@@ -1,0 +1,1 @@
+class C { field = (foo = bar = 0); [baz = 0] = 0 }

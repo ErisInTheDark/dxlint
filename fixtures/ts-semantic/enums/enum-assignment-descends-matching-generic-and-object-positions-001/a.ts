@@ -1,0 +1,1 @@
+enum Fruit { Apple } interface Box<T> { value: T } declare const numeric: Box<number>; declare const fruit: Box<Fruit>; const safe: Box<Fruit> = fruit; const wrong: Box<Fruit> = numeric; declare const numbers: { nested: { fruit: number } }; const nested: { nested: { fruit: Fruit } } = numbers;

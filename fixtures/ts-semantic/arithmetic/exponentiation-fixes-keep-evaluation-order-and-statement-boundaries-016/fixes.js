@@ -1,0 +1,1 @@
+if (ready) Math.pow(base + other, exponent);

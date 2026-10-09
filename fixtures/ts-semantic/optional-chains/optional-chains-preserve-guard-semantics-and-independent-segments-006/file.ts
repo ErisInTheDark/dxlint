@@ -1,0 +1,1 @@
+declare const foo: { left: number; right: number } | null; foo != null && foo.left === foo.right;

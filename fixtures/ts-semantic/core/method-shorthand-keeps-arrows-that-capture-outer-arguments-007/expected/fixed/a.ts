@@ -1,0 +1,1 @@
+const object = { read() { const arguments = []; return arguments[0]; } };

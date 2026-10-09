@@ -1,0 +1,1 @@
+declare const index: 0; [1].filter(f)[index];

@@ -1,0 +1,2 @@
+import .ts
+rule only-throw-error { set allow ['Allowed', 'Other'] }

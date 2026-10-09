@@ -1,0 +1,1 @@
+foo && foo[key as string] && foo[key as string].value;

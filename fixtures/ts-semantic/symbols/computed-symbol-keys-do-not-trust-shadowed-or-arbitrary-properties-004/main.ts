@@ -1,0 +1,1 @@
+const S = Symbol; const value = { [S.dispose]() {} };

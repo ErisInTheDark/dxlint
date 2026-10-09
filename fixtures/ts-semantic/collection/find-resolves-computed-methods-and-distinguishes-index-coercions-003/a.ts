@@ -1,0 +1,1 @@
+[1].filter(f)[false]; [1].filter(f)[null]; [1].filter(f)['00'];

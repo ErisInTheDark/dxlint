@@ -1,0 +1,1 @@
+(sideEffect(), [1].filter(f))[0];

@@ -1,0 +1,1 @@
+declare const object: { value: unknown }; object.value || (object.value = read());

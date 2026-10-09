@@ -1,0 +1,1 @@
+declare const xs: number[] & string[]; xs.filter(f)[0];

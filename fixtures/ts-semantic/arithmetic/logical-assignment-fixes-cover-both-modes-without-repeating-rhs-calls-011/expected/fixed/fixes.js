@@ -1,0 +1,1 @@
+class Owner { method() { this.value ||= read(); } }

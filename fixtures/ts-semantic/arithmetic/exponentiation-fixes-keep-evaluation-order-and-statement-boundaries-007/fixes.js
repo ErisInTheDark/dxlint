@@ -1,0 +1,1 @@
+Math.pow(async function () {}(), exponent);

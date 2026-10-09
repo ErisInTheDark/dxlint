@@ -1,0 +1,1 @@
+declare const foo: any; declare const other: any; foo?.bar || other?.value;

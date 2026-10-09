@@ -1,0 +1,3 @@
+import .ts
+rule no-deprecated 
+override in ts_node let no_deprecated_checked !any(deprecation_metadata.declarations, declaration => any(declaration.provenance, gate => gate.from == 'lib' && gate.name == 'old'))

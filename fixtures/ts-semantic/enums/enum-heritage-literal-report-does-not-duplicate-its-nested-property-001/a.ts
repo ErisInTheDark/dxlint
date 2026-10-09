@@ -1,0 +1,1 @@
+enum Fruit { Apple } interface HasBox { box: { fruit: Fruit } } class Bad implements HasBox { box: { fruit: Fruit } = { fruit: 1 }; }

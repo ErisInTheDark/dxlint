@@ -1,0 +1,1 @@
+declare const foo: string | null; (foo || {}).toString();

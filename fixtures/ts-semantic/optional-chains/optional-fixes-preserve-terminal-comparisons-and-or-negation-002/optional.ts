@@ -1,0 +1,1 @@
+declare const foo: any; foo == null || foo.bar == null || !foo.bar.baz;

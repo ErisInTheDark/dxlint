@@ -1,0 +1,1 @@
+interface A { /** @deprecated */ old: number } declare const a: A; a.old; a['old'];

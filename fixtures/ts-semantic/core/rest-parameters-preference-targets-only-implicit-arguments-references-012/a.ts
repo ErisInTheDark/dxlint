@@ -1,0 +1,1 @@
+function f() { const arguments = []; return arguments[0]; }

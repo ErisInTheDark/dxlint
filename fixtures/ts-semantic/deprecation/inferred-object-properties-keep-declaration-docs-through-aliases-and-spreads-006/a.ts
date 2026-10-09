@@ -1,0 +1,1 @@
+const a = { /** @deprecated */ old: 1 }; const copy = { ...a, old: 1 }; copy.old;

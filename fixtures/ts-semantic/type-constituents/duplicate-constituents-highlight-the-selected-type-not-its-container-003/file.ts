@@ -1,0 +1,1 @@
+interface Box<T> { value: T; } type U = Box<string> | Box<string>;

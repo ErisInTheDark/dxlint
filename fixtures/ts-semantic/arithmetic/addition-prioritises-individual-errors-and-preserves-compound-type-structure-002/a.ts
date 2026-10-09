@@ -1,0 +1,1 @@
+declare const x: boolean | number; x + 's';

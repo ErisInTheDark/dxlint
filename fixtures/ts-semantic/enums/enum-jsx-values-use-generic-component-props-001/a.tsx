@@ -1,0 +1,1 @@
+enum Fruit { Apple } declare function Basket<T extends Fruit>(props: { fruit: T }): unknown; const bad = <Basket fruit={1} />; const safe = <Basket fruit={Fruit.Apple} />; enum Vegetable { Root = 'root' } declare function Plant(props: { vegetable: Vegetable }): unknown; const literal = <Plant vegetable="root" />;

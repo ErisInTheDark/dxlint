@@ -1,0 +1,1 @@
+declare const xs: number[] & { brand: true }; xs.filter(f)[0];

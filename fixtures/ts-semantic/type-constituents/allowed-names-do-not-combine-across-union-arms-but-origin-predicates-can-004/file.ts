@@ -1,0 +1,1 @@
+class Allowed { a = 1; } class Other { b = 1; } declare const union: Allowed | Other; declare const intersection: Allowed & Other; throw union; throw intersection;

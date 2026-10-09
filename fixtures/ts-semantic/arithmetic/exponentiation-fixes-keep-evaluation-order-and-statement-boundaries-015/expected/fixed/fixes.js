@@ -1,0 +1,2 @@
+previous()
+;(base + other)**exponent;

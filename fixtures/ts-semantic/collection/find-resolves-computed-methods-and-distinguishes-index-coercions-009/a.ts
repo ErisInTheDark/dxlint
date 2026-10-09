@@ -1,0 +1,1 @@
+[1].filter(f).at('1_0'); [1].filter(f).at('inf'); [1].filter(f).at('\u00852');

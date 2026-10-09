@@ -1,0 +1,1 @@
+declare const foo: any; declare const key: string; foo?.[key as string]?.value;

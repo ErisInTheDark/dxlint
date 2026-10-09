@@ -1,0 +1,1 @@
+foo && foo.bar != null && foo.bar.baz !== undefined && foo.bar.baz.buzz;

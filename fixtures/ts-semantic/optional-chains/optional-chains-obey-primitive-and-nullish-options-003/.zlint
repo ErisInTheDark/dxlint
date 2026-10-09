@@ -1,0 +1,2 @@
+import .ts
+rule prefer-optional-chain { set requireNullish true }

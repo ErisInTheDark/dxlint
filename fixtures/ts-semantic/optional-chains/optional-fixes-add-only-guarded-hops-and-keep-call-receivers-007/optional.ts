@@ -1,0 +1,1 @@
+declare const foo: any; foo && foo<string>() && foo<string>().value;

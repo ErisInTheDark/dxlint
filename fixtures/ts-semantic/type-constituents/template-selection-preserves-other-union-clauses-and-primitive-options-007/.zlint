@@ -1,0 +1,3 @@
+import .ts
+rule restrict-template-expressions { set allowBoolean false }
+override in ts_node let restrict_template_expressions_type_checks filter(template_type_checks, clause => !any(clause, gate => gate.name == 'Custom' && gate.from == 'file'))

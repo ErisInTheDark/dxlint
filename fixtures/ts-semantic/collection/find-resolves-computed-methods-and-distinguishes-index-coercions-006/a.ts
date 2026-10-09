@@ -1,0 +1,1 @@
+const index = -0.2; [1].filter(f)[`at`](index);

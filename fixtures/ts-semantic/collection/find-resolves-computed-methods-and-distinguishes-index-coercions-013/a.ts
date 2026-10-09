@@ -1,0 +1,1 @@
+let index = 0; index = 1; [1].filter(f)[index];

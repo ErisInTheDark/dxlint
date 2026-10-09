@@ -1,0 +1,1 @@
+if (Boolean(/* keep */value)) consume();

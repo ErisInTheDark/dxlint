@@ -1,0 +1,1 @@
+const view = <Missing value={alsoMissing}><intrinsic /></Missing>;

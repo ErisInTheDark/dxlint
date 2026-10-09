@@ -1054,6 +1054,8 @@ fn may_be_nullish(ty: &Ty) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::engine::tests::with_native_file;
+
     #[test]
     fn new_target_uses_the_nearest_constructor_or_function_through_arrows() {
         let source = r#"
@@ -1098,133 +1100,6 @@ mod tests {
                     "{expected}: {:?}", file.type_of(expression));
             }
         });
-    }
-
-    fn symbolic_project(name: &str, source: &str, rules: &str) -> Vec<String> {
-        crate::engine::tests::lint_project(name, &[
-            ("tsconfig.json", r#"{"compilerOptions":{"lib":["fixture"],"types":[]}}"#),
-            ("node_modules/typescript/lib/lib.fixture.d.ts", "interface SymbolConstructor { readonly dispose: unique symbol; iterator: symbol; readonly asyncDispose: unique symbol; ordinary: number; for(value: string): symbol } declare const Symbol: SymbolConstructor; interface Promise<T> { then(callback: (value: T) => unknown): unknown } interface Disposable { [Symbol.dispose](): void } interface AsyncDisposable { [Symbol.asyncDispose](): Promise<void> }"),
-            ("main.ts", source),
-        ], "main.ts", rules)
-    }
-
-    #[test]
-    fn well_known_symbol_objects_expose_sources_and_callable_member_types() {
-        let rules = r#"
-            in ts_declarator.init rule source-known {
-                when !type_opaque && contains(type_members, "[Symbol.dispose]")
-                warn "resolved source"
-            }
-            in ts_declarator.init rule member-known {
-                each symbol_contract in callable_contracts(parent, node, ["[Symbol.dispose]"])
-                when any(symbol_contract.source, result => result.thenable)
-                warn "resolved callable"
-            }
-        "#;
-        for (name, source, key) in [
-            ("symbol-member-types", "const value: Disposable = { async [Symbol.dispose]() {} };", "[Symbol.dispose]"),
-            ("primitive-symbol-member-types", "interface Consumer { [Symbol.iterator](): void } const value: Consumer = { async [Symbol.iterator]() {} };", "[Symbol.iterator]"),
-        ] {
-            let messages = symbolic_project(name, source, &rules.replace("[Symbol.dispose]", key));
-            assert_eq!(messages.len(), 2, "{source}: {messages:?}");
-        }
-    }
-
-    #[test]
-    fn computed_symbol_keys_do_not_trust_shadowed_or_arbitrary_properties() {
-        let rules = "in ts_declarator.init rule known {\n when is ts_object && !type_opaque\n warn \"resolved\"\n}";
-        for (name, source) in [
-            ("symbol-shadow", "function f(Symbol: SymbolConstructor) { const value = { [Symbol.dispose]() {} }; }"),
-            ("symbol-unknown-member", "const value = { [Symbol.missing]() {} };"),
-            ("symbol-arbitrary", "declare function key(): symbol; const value = { [key()]() {} };"),
-            ("symbol-alias", "const S = Symbol; const value = { [S.dispose]() {} };"),
-            ("symbol-non-symbol-member", "const value = { [Symbol.ordinary]() {} };"),
-            ("symbol-constructor-method", "const value = { [Symbol.for]() {} };"),
-        ] {
-            assert!(symbolic_project(name, source, rules).is_empty(), "{source}");
-        }
-    }
-
-    #[test]
-    fn class_expression_keys_keep_the_lexical_symbol_binding() {
-        for (name, source, expected) in [
-            ("class-symbol-global", "using value = new (class { async [Symbol.dispose]() {} })();", 1),
-            ("class-symbol-param", "function f(Symbol: SymbolConstructor) { using value = new (class { async [Symbol.dispose]() {} })(); }", 0),
-            ("class-symbol-local", "function f() { const Symbol = { dispose: 'local' }; using value = new (class { async [Symbol.dispose]() {} })(); }", 0),
-        ] {
-            assert_eq!(symbolic_project(name, source, "rule no-misused-promises").len(), expected, "{source}");
-        }
-    }
-
-    #[test]
-    fn printed_symbol_names_keep_property_contracts_without_disposal_contracts() {
-        let source = "interface Consumer { '[Symbol.dispose]'(): void } const value: Consumer = { async '[Symbol.dispose]'() {} };";
-        let counts: Vec<_> = [
-            ("printed-symbol-root", "rule no-misused-promises"),
-            ("printed-symbol-variable", "rule no-misused-promises:void-variables"),
-            ("printed-symbol-property", "rule no-misused-promises:void-properties"),
-        ].into_iter().map(|(name, rules)| symbolic_project(name, source, rules).len()).collect();
-        assert_eq!(counts, vec![1, 0, 1]);
-    }
-
-    #[test]
-    fn disposal_contracts_follow_real_symbol_keys_not_printed_property_names() {
-        let cases = [
-            ("symbol-declared-disposal", "const source = { async [Symbol.dispose]() {} }; const value: Disposable = source;", 1),
-            ("symbol-inline-disposal", "using value = { async [Symbol.dispose]() {} };", 1),
-            ("symbol-bound-disposal", "const source = { async [Symbol.dispose]() {} }; using value = source;", 1),
-            ("symbol-string-disposal", "const value: Disposable = { async '[Symbol.dispose]'() {} };", 0),
-            ("symbol-shadow-disposal", "function f(Symbol: SymbolConstructor) { using value = { async [Symbol.dispose]() {} }; }", 0),
-            ("symbol-sync-disposal", "using value = { [Symbol.dispose]() {} };", 0),
-            ("symbol-awaited-disposal", "async function f() { await using value = { async [Symbol.asyncDispose]() {} }; }", 0),
-        ];
-        let counts: Vec<_> = cases.iter().map(|(name, source, _)| {
-            let messages = symbolic_project(name, source, "rule no-misused-promises");
-            messages.len()
-        }).collect();
-        assert_eq!(counts, cases.iter().map(|(_, _, expected)| *expected).collect::<Vec<_>>(), "{cases:?}");
-    }
-
-    use crate::engine::tests::{native_linter, with_native_file};
-    use std::path::Path;
-
-    #[test]
-    fn implicit_arguments_use_library_members_and_keep_any_index_elements() {
-        let messages = crate::engine::tests::lint_project(
-            "implicit-arguments-types",
-            &[
-                ("tsconfig.json", r#"{"compilerOptions":{"lib":["es5"],"strict":true}}"#),
-                ("node_modules/typescript/lib/lib.es5.d.ts", "interface IArguments { length: number; [index: number]: any; }"),
-                ("main.ts", "export {}; function f() { arguments.length; const arrow = () => { arguments.length; }; arguments[0].value; } const object = { method() { arguments.length; } };"),
-            ],
-            "main.ts",
-            "rule no-undef\nrule no-unsafe-member-access",
-        );
-        assert_eq!(messages.len(), 1, "only the indexed any element is unsafe: {messages:#?}");
-
-        let messages = crate::engine::tests::lint_project(
-            "implicit-arguments-length",
-            &[
-                ("tsconfig.json", r#"{"compilerOptions":{"lib":["es5"],"strict":true}}"#),
-                ("node_modules/typescript/lib/lib.es5.d.ts", "interface IArguments { length: number; [index: number]: any; }"),
-                ("main.ts", "export {}; type IArguments = { length: string }; function f() { arguments.length; } const object = { method() { arguments.length; } };"),
-            ],
-            "main.ts",
-            "in ts_expression_statement.expression rule number-proof { when !contains(type_flags, 'number')\nwarn 'not numeric' }",
-        );
-        assert!(messages.is_empty(), "{messages:#?}");
-    }
-
-    #[test]
-    fn arguments_shadow_types_are_preserved_through_arrows() {
-        for source in [
-            "function f(arguments: { length: string }) { arguments.length; const arrow = () => { arguments.length; }; }",
-            "function f() { const arguments = { length: 'value' }; arguments.length; const arrow = () => { arguments.length; }; }",
-        ] {
-            let linter = native_linter("in ts_expression_statement.expression rule string-proof { when !contains(type_flags, 'string')\nwarn 'not string' }");
-            let diagnostics = linter.lint(Path::new("/root/a.ts"), source);
-            assert!(diagnostics.is_empty(), "{source}: {diagnostics:#?}");
-        }
     }
 
     #[test]
@@ -1369,29 +1244,5 @@ mod tests {
                 assert_eq!(flags.contains(&"null"), null, "{source}: {flags:?}");
             });
         }
-    }
-
-    #[test]
-    fn logical_types_exclude_unreachable_operands_but_keep_enum_fallbacks() {
-        let linter = native_linter("in ts_logical rule reachable-string { when { value (type_flags.nonempty ?? []); contains 'string' }\nwarn 'string result' }");
-        let code = "({}) || 'unreachable'; false && 'unreachable'; true && 'reachable'; ({}) ?? 'unreachable'; enum E { Zero, One } declare const value: E; value || 'reachable'; 1 || 'unreachable'; 0 ?? 'unreachable';";
-        let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
-        assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics[0].start, code.find("true").unwrap());
-        assert_eq!(diagnostics[1].start, code.find("value ||").unwrap());
-    }
-
-    #[test]
-    fn optional_callback_context_reaches_conditional_and_final_sequence_functions() {
-        let linter = native_linter("in ts_parameter.name rule contextual-any { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe parameter' }");
-        let code = "declare function receive(callback: ((e: any) => void) | undefined): void; declare const flag: boolean; receive(e => {}); receive(flag ? e => {} : e => {}); receive((e => {}, e => {}));";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 5);
-    }
-
-    #[test]
-    fn unknown_type_facts_remain_absent_for_existing_rule_consumers() {
-        let linter = native_linter("in ts_identifier rule known { when type != null\nwarn 'known' }");
-        let code = "declare const narrow: number; declare const broad: unknown; narrow; broad;";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 2);
     }
 }

@@ -1,0 +1,1 @@
+/** @deprecated */ const a = { current: 1 }; const copy = { ...a }; copy.current;

@@ -1,0 +1,1 @@
+declare const foo: any; foo?.bar/*keep )))*/ && (foo.bar as any).baz;

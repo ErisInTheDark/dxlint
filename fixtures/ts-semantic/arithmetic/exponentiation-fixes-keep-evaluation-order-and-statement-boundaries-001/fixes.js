@@ -1,0 +1,1 @@
+const power = () => Math.pow({}, exponent);
