@@ -1,0 +1,2 @@
+# Fixture inputs and expectations are byte-exact (line endings are test data).
+fixtures/** -text
