@@ -162,51 +162,6 @@ pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts:
     f(&file, &marks)
 }
 
-pub(crate) struct BufferedProject {
-    pub linter: Linter,
-    dir: PathBuf,
-    files: Vec<PathBuf>,
-}
-
-impl BufferedProject {
-    pub fn path(&self, path: &str) -> PathBuf {
-        self.dir.join(path)
-    }
-}
-
-impl Drop for BufferedProject {
-    fn drop(&mut self) {
-        for path in &self.files {
-            crate::native::ts::reads::drop_buffer(path);
-        }
-    }
-}
-
-/// Isolated editor buffers exercise project resolution without disk fixtures.
-pub(crate) fn buffered_project(name: &str, files: &[(&str, &str)], rules: &str) -> BufferedProject {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("buffered-test-projects").join(format!("{name}-{id}"));
-    let src = format!("import .ts\n{rules}");
-    let built = build(config::load_text("test.zlint", &src, &Disk), dir.clone());
-    assert!(built.errors.is_empty(), "{:#?}", built.errors);
-    let mut project = BufferedProject { linter: built.linter.expect("no errors"), dir, files: Vec::new() };
-    for (path, text) in files {
-        let path = project.path(path);
-        crate::native::ts::reads::set_buffer(&path, text);
-        project.files.push(path);
-    }
-    project
-}
-
-/// Lints `main` in an isolated buffered project, returning the messages.
-pub(crate) fn lint_project(name: &str, files: &[(&str, &str)], main: &str, rules: &str) -> Vec<String> {
-    let project = buffered_project(name, files, rules);
-    let path = project.path(main);
-    let text = crate::native::ts::reads::read(&path).expect("main fixture");
-    project.linter.lint(&path, &text).into_iter().map(|d| d.message).collect()
-}
-
 #[test]
 fn each_tsconfig_sees_its_own_project_globals_whichever_asks_first() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join("test-projects").join("globals-per-config");

@@ -4,7 +4,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 
 ## Commands
 
-- test: `cargo test` (unit tests colocated; `tests/cli.rs`, `tests/lsp.rs` drive the binary)
+- test: `cargo test` (stable Rust owners only: VM, parser, patterns/DFA, cache/reads, type APIs, CLI/LSP; rule behaviour lives in fixtures)
 - rule fixtures: `zlint fixtures [paths...] [--bless]` (default `fixtures/`)
 - self-lint: `cargo run --release --` (uses `.zlint`); must stay clean
 - perf check: `zlint --stats --no-cache <big file>`; compare before/after engine changes
