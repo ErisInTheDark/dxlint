@@ -1,0 +1,1 @@
+class Example { instance = 1; static field = 2; }

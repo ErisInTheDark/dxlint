@@ -1,0 +1,1 @@
+class Example { middle = 1; last = 2; early = 3; }

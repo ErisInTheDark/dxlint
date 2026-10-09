@@ -1,0 +1,1 @@
+if (foo) {bar();} else { const value = 1; }

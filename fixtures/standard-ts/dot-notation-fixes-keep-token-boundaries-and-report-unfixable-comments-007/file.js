@@ -1,0 +1,1 @@
+object[/* keep */ "foo"];

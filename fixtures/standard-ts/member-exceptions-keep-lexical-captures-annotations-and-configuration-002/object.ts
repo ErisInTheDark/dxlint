@@ -1,0 +1,1 @@
+const o = {x: function named() {}, __proto__: value, y: /** @type {number} */ y};

@@ -1,0 +1,1 @@
+type C = { c: number; b: number; high(): void; low: number; };

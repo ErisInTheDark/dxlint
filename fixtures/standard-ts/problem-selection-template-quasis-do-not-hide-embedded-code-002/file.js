@@ -1,0 +1,1 @@
+const value = `raw${`nested ${a +b}`}`;

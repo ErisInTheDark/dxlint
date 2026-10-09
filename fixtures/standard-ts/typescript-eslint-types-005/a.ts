@@ -1,0 +1,1 @@
+import type { X } from 'x'; export let v: X;

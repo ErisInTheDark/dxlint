@@ -1,0 +1,1 @@
+const o = {f: function() { /* keep */ return 1; }};

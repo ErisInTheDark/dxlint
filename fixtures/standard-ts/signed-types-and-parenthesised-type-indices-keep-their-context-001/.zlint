@@ -1,0 +1,3 @@
+import .ts
+rule no-magic-numbers { set ignore [-2] }
+override in ts_number, ts_bigint let no_magic_numbers_checked !(restriction_numeric_full.context.object || restriction_numeric_full.context.radix || restriction_numeric_full.context.jsx || restriction_numeric_full.context.type_index)

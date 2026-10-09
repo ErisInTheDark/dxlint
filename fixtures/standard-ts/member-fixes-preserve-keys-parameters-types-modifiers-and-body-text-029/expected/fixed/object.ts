@@ -1,0 +1,1 @@
+const o = {x() { function inner() { return this; } }};

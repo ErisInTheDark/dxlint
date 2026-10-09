@@ -1,0 +1,3 @@
+import .ts
+override in ts_object_pattern let empty_object_pattern_checked !(parent is ts_parameter && (parent.init == null || re_test(parent.init, /^\{\s*\}$/)))
+rule no-empty-pattern

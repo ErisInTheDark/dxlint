@@ -1,0 +1,1 @@
+do{[1].map(foo);} while (bar)

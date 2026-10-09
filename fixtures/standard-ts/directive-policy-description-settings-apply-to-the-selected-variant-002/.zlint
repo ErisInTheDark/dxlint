@@ -1,0 +1,5 @@
+import .ts
+rule ban-ts-comment
+rule ban-ts-comment:expect-error { set descriptionPattern /^: [A-Z][a-z]+$/ }
+rule ban-ts-comment:ignore { set mode "require-description"
+set minimumDescriptionLength 0 }

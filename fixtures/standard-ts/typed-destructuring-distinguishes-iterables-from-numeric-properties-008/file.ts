@@ -1,0 +1,1 @@
+declare let xs: unknown[] | { 0: unknown }; const x = xs[0]; x = xs[0];

@@ -1,0 +1,4 @@
+import .ts
+rule ban-ts-comment
+rule ban-ts-comment:ignore set allow
+rule ban-ts-comment:check set deny

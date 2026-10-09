@@ -1,0 +1,9 @@
+import .ts
+
+        rule member-ordering:class-declaration
+        override in ts_class_property let member_ordering_rank
+            if static_name == "early" then 0 else if static_name == "middle" then 2 else 4
+        override in ts_class_property let member_ordering_label static_name
+
+@ordering_rule(rank-label-probe, "class-declaration")
+rule rank-label-probe warn frontier.label

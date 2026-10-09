@@ -1,0 +1,2 @@
+import .ts
+rule header:invalid { set license "/* Copyright Example */" }

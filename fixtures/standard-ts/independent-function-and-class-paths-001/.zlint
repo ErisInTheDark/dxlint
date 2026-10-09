@@ -1,0 +1,3 @@
+import .ts
+rule complexity { set max 1 }
+rule complexity:implicit { set max 1 }

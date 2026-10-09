@@ -1,0 +1,1 @@
+function f(o) { for (var k in o) return; } f();

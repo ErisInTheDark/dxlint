@@ -1,0 +1,1 @@
+const o = {*[key]() { yield 1; }};

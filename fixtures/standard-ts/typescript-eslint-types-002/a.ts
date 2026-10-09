@@ -1,0 +1,1 @@
+const B = 0; export type { B };

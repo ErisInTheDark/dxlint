@@ -1,0 +1,1 @@
+var _a = 1, b; f(_a); function f(x) {}

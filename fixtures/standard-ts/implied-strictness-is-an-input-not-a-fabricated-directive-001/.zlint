@@ -1,0 +1,6 @@
+import .ts
+language .js { set sourceType "script"
+          set impliedStrict true
+        }
+in ts_function rule probe { when scoping_strict_code
+warn "strict" }

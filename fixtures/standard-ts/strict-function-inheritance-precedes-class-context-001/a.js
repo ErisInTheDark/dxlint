@@ -1,0 +1,1 @@
+function foo() { 'use strict'; class C { static { function nested() { 'use strict'; } } } }

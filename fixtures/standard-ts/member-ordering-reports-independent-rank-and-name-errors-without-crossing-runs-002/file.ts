@@ -1,0 +1,1 @@
+class C { z: number; high() {} a: number; }

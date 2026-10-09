@@ -1,0 +1,3 @@
+import .ts
+override in problem_irregular_ws let irregular_whitespace_checked { value overlapping(ts_jsx_text); count } == 0
+rule no-irregular-whitespace

@@ -1,0 +1,1 @@
+const o = {x: x, 'y': y};

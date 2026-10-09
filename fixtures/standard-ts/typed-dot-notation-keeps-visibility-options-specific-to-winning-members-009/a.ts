@@ -1,0 +1,1 @@
+class C { constructor(private value: unknown) {} } declare const object: C | undefined; object['value'];

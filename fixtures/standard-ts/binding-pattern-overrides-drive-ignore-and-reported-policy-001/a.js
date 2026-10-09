@@ -1,0 +1,1 @@
+const _empty = 1, custom = 2, _fallback = 3; consume(custom, _fallback);

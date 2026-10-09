@@ -1,0 +1,4 @@
+import .ts
+rule no-unused-vars
+rule no-unused-vars:variables { set ignorePattern "^_" }
+rule no-unused-vars:array-elements { set ignorePattern "" }

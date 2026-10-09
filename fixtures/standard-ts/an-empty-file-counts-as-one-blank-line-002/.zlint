@@ -1,0 +1,4 @@
+import .ts
+rule max-lines { set max 0
+set skipBlankLines true
+}

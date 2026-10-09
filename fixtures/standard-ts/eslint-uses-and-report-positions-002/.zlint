@@ -1,0 +1,3 @@
+import .ts
+rule no-unused-vars
+rule no-unused-vars:globals

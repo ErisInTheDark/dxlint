@@ -1,0 +1,1 @@
+class C { c: number; b: number; high() {} low: number; }

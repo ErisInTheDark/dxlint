@@ -1,0 +1,1 @@
+class Example { static first = 1; second = 2; constructor() {} method() {} }

@@ -1,0 +1,1 @@
+const [forced, checked, _default, _unused] = source; consume(checked, _default);

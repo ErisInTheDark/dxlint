@@ -1,0 +1,1 @@
+declare const object: { value: number }; const value: number = object.value;

@@ -1,0 +1,1 @@
+for (const item of items) {use(item);}

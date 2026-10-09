@@ -1,0 +1,1 @@
+declare let xs: string; const x = xs[0]; x = xs[0];

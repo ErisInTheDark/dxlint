@@ -1,0 +1,1 @@
+!value in object; !value instanceof Type; !value < other; !value === other;

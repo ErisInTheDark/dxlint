@@ -1,0 +1,2 @@
+file.js:1:1-1:1 no-constant-binary-expression#0
+file.js:1:8-1:8 no-constant-binary-expression#3

@@ -1,0 +1,1 @@
+const A = 0; export type T = typeof A;

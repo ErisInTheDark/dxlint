@@ -1,0 +1,1 @@
+declare const object: { [key: string]: unknown }; object['value'];

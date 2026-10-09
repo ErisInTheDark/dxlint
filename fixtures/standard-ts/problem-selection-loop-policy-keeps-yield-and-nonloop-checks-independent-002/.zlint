@@ -1,0 +1,3 @@
+import .ts
+override in ts_while, ts_do_while, ts_for let constant_loop_condition_checked true
+rule no-constant-condition

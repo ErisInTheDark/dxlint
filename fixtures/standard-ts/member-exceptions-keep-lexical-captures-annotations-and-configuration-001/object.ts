@@ -1,0 +1,1 @@
+function owner() { return {x: () => { return this; }, y: () => { return arguments; }, z: () => { return new.target; }}; }

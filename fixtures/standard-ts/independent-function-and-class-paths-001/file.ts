@@ -1,0 +1,1 @@
+function outer() { function inner() { if (x) y(); } class C { field = x || y; static { if (x) y(); } } }

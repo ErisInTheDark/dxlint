@@ -1,0 +1,4 @@
+import .ts
+rule ban-ts-comment
+rule ban-ts-comment:check { set mode "deny" }
+rule ban-ts-comment:expect-error { set mode "deny" }

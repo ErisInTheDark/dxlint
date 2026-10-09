@@ -1,0 +1,3 @@
+a.js:1:13-1:13 no-unused-vars:variables#1
+a.js:1:34-1:34 no-unused-vars:parameters#1
+a.js:1:5-1:5 no-unused-vars:variables#0

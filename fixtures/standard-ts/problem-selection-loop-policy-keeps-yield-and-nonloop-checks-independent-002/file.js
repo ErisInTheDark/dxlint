@@ -1,0 +1,1 @@
+while (true) {} while (1) {} do {} while (true); for (; true;) {} function* g() { while (1) { yield 1; } }

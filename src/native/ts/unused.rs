@@ -692,16 +692,6 @@ pub(super) fn pattern_names(s: &Syntax, pat: u32, out: &mut Vec<u32>) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    fn report(file: &str, rule: &str, text: &str) -> Vec<String> {
-        let l = native_linter(rule);
-        l.lint(Path::new(file), text).into_iter().map(|d| format!("{}@{}", d.message, d.start)).collect()
-    }
-
     #[test]
     fn global_queries_do_not_run_variable_usage_analysis() {
         for text in ["const unused = 1;", "/* global external */ const unused = 1;"] {
@@ -732,80 +722,5 @@ mod tests {
                 assert_eq!(result.vars[&declaration].before_used_param, expected, "{text}");
             });
         }
-    }
-
-    #[test]
-    fn eslint_uses_and_report_positions() {
-        let js = |text: &str| report("/root/a.js", "rule no-unused-vars\nrule no-unused-vars:globals", text);
-        // Self updates are not uses; the report points at the last write.
-        assert_eq!(js("var a = 1; a += 1; a++;"), ["'a' is assigned a value but never used.@19"]);
-        // Reads inside a function that is stored count (it may run later).
-        assert!(js("function f(cb) { cb = g(function () { cb(); }); } f();").is_empty());
-        assert!(js("function f(o) { for (var k in o) return; } f();").is_empty());
-        // "after-used": only parameters after the last used one.
-        assert_eq!(js("function f(a, b, c) { return b; } f();"), ["'c' is defined but never used.@17"]);
-        assert_eq!(js("/* exported x */ var x = 1;"), Vec::<String>::new());
-        assert_eq!(js("/* global g */"), ["'g' is defined but never used.@10"]);
-    }
-
-    #[test]
-    fn options_choose_what_is_ignored() {
-        let rule = "rule no-unused-vars\nrule no-unused-vars:variables {\n  set ignorePattern \"^_\"\n  set reportUsedIgnorePattern true\n}\nrule no-unused-vars:parameters set all";
-        assert_eq!(
-            report("/root/a.js", rule, "var _a = 1, b; f(_a); function f(x) {}"),
-            ["'_a' is marked as ignored but is used. Used vars must not match /^_/u.@4", "'b' is defined but never used. Allowed unused vars must match /^_/u.@12", "'x' is defined but never used.@33"]
-        );
-    }
-
-    #[test]
-    fn arrays_have_independent_patterns_and_report_each_binding_once() {
-        let l = native_linter("rule no-unused-vars\nrule no-unused-vars:variables { set ignorePattern \"^_\" }\nrule no-unused-vars:array-elements { set ignorePattern \"\" }");
-        let source = "const [_value] = source; const _other = 1; function run([_arg]) {} run(source); try {} catch ([_error]) {}";
-        let diagnostics = l.lint(Path::new("/root/a.js"), source);
-        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
-        let offsets: HashSet<_> = diagnostics.iter().map(|d| d.start).collect();
-        let expected: HashSet<_> = ["_value", "_arg", "_error"].map(|name| source.find(name).unwrap()).into_iter().collect();
-        assert_eq!(offsets, expected, "{diagnostics:?}");
-        assert!(diagnostics.iter().all(|d| d.severity != crate::config::ast::Severity::Error), "{diagnostics:?}");
-    }
-
-    #[test]
-    fn ignored_binding_overrides_feed_both_unused_and_used_checks() {
-        let l = native_linter("override in ts_identifier let no_unused_vars_ignored if text == \"forced\" then false else if text == \"checked\" then true else null\nrule no-unused-vars:array-elements { set ignorePattern \"^(forced|_)\"\nset reportUsedIgnorePattern true }");
-        let source = "const [forced, checked, _default, _unused] = source; consume(checked, _default);";
-        let diagnostics = l.lint(Path::new("/root/a.js"), source);
-        assert_eq!(diagnostics.len(), 3, "{diagnostics:?}");
-        let offsets: HashSet<_> = diagnostics.iter().map(|d| d.start).collect();
-        let expected: HashSet<_> = ["forced", "checked", "_default"].map(|name| source.find(name).unwrap()).into_iter().collect();
-        assert_eq!(offsets, expected, "{diagnostics:?}");
-        assert!(diagnostics.iter().all(|d| d.severity != crate::config::ast::Severity::Error), "{diagnostics:?}");
-    }
-
-    #[test]
-    fn binding_pattern_overrides_drive_ignore_and_reported_policy() {
-        let l = native_linter("override in ts_identifier let no_unused_vars_ignored if text == \"_empty\" then \"\" else if text == \"custom\" then \"^custom$\" else null\nrule no-unused-vars:variables { set ignorePattern \"^_\"\nset reportUsedIgnorePattern true }");
-        let source = "const _empty = 1, custom = 2, _fallback = 3; consume(custom, _fallback);";
-        let diagnostics = l.lint(Path::new("/root/a.js"), source);
-        let offsets: HashSet<_> = diagnostics.iter().map(|d| d.start).collect();
-        let expected: HashSet<_> = ["_empty", "custom", "_fallback"].map(|name| source.find(name).unwrap()).into_iter().collect();
-        assert_eq!(offsets, expected, "{diagnostics:?}");
-        let custom = diagnostics.iter().find(|d| d.start == source.find("custom").unwrap()).unwrap();
-        assert!(custom.message.contains("^custom$"), "{custom:?}");
-        assert!(diagnostics.iter().all(|d| d.severity != crate::config::ast::Severity::Error), "{diagnostics:?}");
-    }
-
-    #[test]
-    fn typescript_eslint_types() {
-        let ts = |text: &str| report("/root/a.ts", "rule no-unused-vars", text);
-        assert_eq!(ts("const A = 0; export type T = typeof A;"), ["'A' is assigned a value but only used as a type.@6"]);
-        // A type-only export uses a value only as a type.
-        assert_eq!(ts("const B = 0; export type { B };"), ["'B' is assigned a value but only used as a type.@6"]);
-        assert_eq!(ts("const C = 0; export { type C };"), ["'C' is assigned a value but only used as a type.@6"]);
-        // A type's qualifier is a namespace: the parameter does not hide it.
-        assert!(ts("import * as foo from 'foo'; export function f(foo: foo.Foo) { return foo; }").is_empty());
-        assert!(ts("import type { X } from 'x'; export let v: X;").is_empty());
-        assert!(ts("type F<T> = T extends (x: infer I) => void ? I : never; export const f: F<1> = 1;").is_empty());
-        assert_eq!(ts("interface I { next: I }"), ["'I' is defined but never used.@10"]);
-        assert!(report("/root/a.d.ts", "rule no-unused-vars", "interface I {} declare const v: number;").is_empty());
     }
 }

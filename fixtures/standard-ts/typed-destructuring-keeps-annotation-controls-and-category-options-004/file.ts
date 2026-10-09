@@ -1,0 +1,1 @@
+declare let object: { 0: unknown }; const value = object[0]; value = object[0];

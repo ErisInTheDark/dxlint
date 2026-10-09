@@ -1,0 +1,3 @@
+import .ts
+override in ts_assignment let self_assignment_findings filter(self_assignments, finding => !finding.member)
+rule no-self-assign

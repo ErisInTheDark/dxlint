@@ -1,0 +1,3 @@
+import .ts
+override in ts_binary, ts_logical let constant_relation_checked true
+rule no-constant-binary-expression

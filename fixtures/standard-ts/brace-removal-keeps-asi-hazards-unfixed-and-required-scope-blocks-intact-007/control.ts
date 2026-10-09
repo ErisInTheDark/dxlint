@@ -1,0 +1,1 @@
+if (foo) { var fn = () => {} } else {}

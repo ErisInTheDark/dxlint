@@ -1,0 +1,6 @@
+a.js:1:19-1:19 no-unused-vars:variables#0
+a.js:1:19-1:19 pattern-probe#0 custom:^custom$
+a.js:1:31-1:31 no-unused-vars:variables#0
+a.js:1:31-1:31 pattern-probe#0 _fallback:^_
+a.js:1:7-1:7 no-unused-vars:variables#1
+a.js:1:7-1:7 pattern-probe#0 _empty:

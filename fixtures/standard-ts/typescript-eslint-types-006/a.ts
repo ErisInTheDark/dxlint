@@ -1,0 +1,1 @@
+type F<T> = T extends (x: infer I) => void ? I : never; export const f: F<1> = 1;

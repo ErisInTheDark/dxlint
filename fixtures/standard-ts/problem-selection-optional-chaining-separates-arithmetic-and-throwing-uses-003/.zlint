@@ -1,0 +1,3 @@
+import .ts
+override in optional_chain_user let optional_chain_findings filter(optional_chain_risks, finding => finding.arithmetic)
+rule no-unsafe-optional-chaining

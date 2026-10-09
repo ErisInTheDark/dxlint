@@ -1,0 +1,1 @@
+class Example { z = 1; a = 2; }

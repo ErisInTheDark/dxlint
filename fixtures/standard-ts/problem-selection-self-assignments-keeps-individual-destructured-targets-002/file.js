@@ -1,0 +1,1 @@
+[value, object.value] = [value, object.value];

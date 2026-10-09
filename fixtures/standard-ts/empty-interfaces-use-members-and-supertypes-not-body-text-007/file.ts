@@ -1,0 +1,1 @@
+interface Populated { value: string }

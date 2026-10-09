@@ -1,0 +1,1 @@
+const [_value] = source; const _other = 1; function run([_arg]) {} run(source); try {} catch ([_error]) {}

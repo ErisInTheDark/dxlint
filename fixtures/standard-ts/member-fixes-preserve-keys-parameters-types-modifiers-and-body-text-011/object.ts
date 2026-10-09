@@ -1,0 +1,1 @@
+const o = {['__proto__']: function () {}};

@@ -1,0 +1,1 @@
+interface Empty extends Base<string, number> { /* documentation */ }

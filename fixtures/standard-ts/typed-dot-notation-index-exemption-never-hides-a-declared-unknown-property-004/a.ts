@@ -1,0 +1,1 @@
+declare const object: unknown; object['value'];

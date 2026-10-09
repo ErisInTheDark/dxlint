@@ -1,0 +1,3 @@
+import .ts
+override in regex_site let misleading_character_class_findings { value (regex_findings.nonempty ?? []); filter (finding) finding.check == "misleading_escaped" }
+rule no-misleading-character-class

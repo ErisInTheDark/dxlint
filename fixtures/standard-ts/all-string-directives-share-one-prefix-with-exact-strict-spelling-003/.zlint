@@ -1,0 +1,3 @@
+import .ts
+
+rule strict { set mode "never" }

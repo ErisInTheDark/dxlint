@@ -1,0 +1,1 @@
+'use strict'; if (test) { function nested() {} var local; }

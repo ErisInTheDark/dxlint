@@ -1,0 +1,3 @@
+import .ts
+rule no-duplicate-imports
+group duplicate_imports_checked ts_export

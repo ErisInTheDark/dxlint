@@ -1,0 +1,3 @@
+import .ts
+language .js { set ecmaVersion 3 }
+rule no-unused-expressions { set ignoreDirectives true }

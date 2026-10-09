@@ -1,0 +1,1 @@
+class Base { protected value: number; } class C extends Base {} declare const object: C | undefined; object?.['value'];

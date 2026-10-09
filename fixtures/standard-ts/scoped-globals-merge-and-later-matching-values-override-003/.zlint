@@ -1,0 +1,13 @@
+import .ts
+
+language .js { set globals { app: "readonly", other: "readonly" } }
+language .js {
+  files "scripts/**"
+  ignore "scripts/generated/**"
+  set globals { app: "writable" }
+}
+language .js { files "scripts/private/**"
+  set globals { app: "off" }
+}
+
+rule no-global-assign

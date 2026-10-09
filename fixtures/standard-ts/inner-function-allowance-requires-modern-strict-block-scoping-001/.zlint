@@ -1,0 +1,7 @@
+import .ts
+language .js { set sourceType "script"
+set ecmaVersion 5
+}
+rule no-inner-declarations { set mode "both"
+set blockScopedFunctions "allow"
+}

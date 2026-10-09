@@ -1,0 +1,1 @@
+const o = {f: function(a) { return a; }};

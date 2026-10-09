@@ -1,0 +1,1 @@
+const C = class { c: number; b: number; high() {} low: number; };

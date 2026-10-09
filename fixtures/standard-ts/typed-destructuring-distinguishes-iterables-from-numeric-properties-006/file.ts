@@ -1,0 +1,1 @@
+declare let xs: any; const x = xs[0]; x = xs[0];

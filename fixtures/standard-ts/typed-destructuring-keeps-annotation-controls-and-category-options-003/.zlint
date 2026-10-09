@@ -1,0 +1,2 @@
+import .ts
+rule prefer-destructuring { set options [{ object: true }, { enforceForRenamedProperties: true }] }

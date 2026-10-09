@@ -1,0 +1,3 @@
+import .ts
+rule max-statements { set max 2 }
+rule max-depth { set max 1 }

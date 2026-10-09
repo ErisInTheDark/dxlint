@@ -1,0 +1,1 @@
+interface Example { optional?: number; required: number; unchecked?: number; last?: number; }

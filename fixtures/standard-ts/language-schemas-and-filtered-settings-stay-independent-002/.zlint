@@ -1,0 +1,13 @@
+import .ts
+
+import .json
+language .json {
+  option ecmaVersion boolean = true
+  set ecmaVersion false
+}
+language .js {
+  files "legacy/**"
+  set ecmaVersion 3
+}
+
+rule no-unused-expressions

@@ -1,0 +1,1 @@
+(object?.method)(); object?.value + 1;

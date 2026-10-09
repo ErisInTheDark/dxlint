@@ -1,0 +1,1 @@
+class Example { first = 1; unchecked = 2; second = 3; late = 4; }

@@ -1,0 +1,1 @@
+class Example { method() {} field = 1; }

@@ -1,0 +1,3 @@
+import .ts
+
+rule padding-line-between-statements { set options [{ blankLine: "always", prev: ["return", "expression"], next: "*" }] }

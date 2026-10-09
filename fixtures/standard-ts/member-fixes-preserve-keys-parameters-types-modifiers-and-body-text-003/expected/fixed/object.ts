@@ -1,0 +1,1 @@
+const o = {f(a) { return a; }};

@@ -1,0 +1,1 @@
+const o = {*x() { yield 1; }};

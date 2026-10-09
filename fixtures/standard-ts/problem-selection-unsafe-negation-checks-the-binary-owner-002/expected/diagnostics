@@ -1,0 +1,3 @@
+file.js:1:1-1:7 no-unsafe-negation#0
+file.js:1:19-1:25 no-unsafe-negation#0
+file.js:1:43-1:49 no-unsafe-negation#0

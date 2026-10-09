@@ -1,0 +1,1 @@
+const o = {x({ foo: bar = 1 } = {}) { return bar; }};

@@ -1,0 +1,1 @@
+const o = {x<T>(arg: T): T { return arg; }};

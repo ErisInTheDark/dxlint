@@ -1,0 +1,3 @@
+file.js:1:24-1:25 no-constant-condition:loop#0
+file.js:1:43-1:47 no-constant-condition:loop#0
+file.js:1:57-1:61 no-constant-condition:loop#0

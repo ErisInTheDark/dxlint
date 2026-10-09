@@ -1,0 +1,3 @@
+import .ts
+rule use-isnan
+group use_isnan_searches ts_call

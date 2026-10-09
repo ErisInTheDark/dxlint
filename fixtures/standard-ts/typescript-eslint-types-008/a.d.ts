@@ -1,0 +1,1 @@
+interface I {} declare const v: number;

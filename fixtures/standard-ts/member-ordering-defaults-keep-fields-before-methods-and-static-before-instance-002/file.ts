@@ -1,0 +1,1 @@
+interface Example { method(): void; field: number; }

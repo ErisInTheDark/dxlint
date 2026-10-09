@@ -1,0 +1,2 @@
+import .ts
+rule id-denylist { set names ['with', 'type', 'value'] }

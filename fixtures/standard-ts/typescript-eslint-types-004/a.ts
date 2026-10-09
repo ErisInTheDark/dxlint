@@ -1,0 +1,1 @@
+import * as foo from 'foo'; export function f(foo: foo.Foo) { return foo; }

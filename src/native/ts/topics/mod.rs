@@ -8,8 +8,6 @@ use crate::expr::facts::{Fact, FactFields, Link};
 pub mod conditions;
 pub mod layout;
 pub mod relations;
-#[cfg(test)]
-pub mod restrictions;
 pub mod scoping;
 pub mod structure;
 pub mod suggestions;

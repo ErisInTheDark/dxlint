@@ -1,0 +1,14 @@
+import .ts
+override in ts_identifier let no_unused_vars_ignored if text == "_empty" then "" else if text == "custom" then "^custom$" else null
+rule no-unused-vars:variables { set ignorePattern "^_"
+set reportUsedIgnorePattern true }
+
+in ts_program.binding_declarations rule pattern-probe {
+  @unused_binding_options
+  @unused_binding_checks("variable", false)
+}
+rule pattern-probe {
+  set ignorePattern "^_"
+  set reportUsedIgnorePattern true
+  warn "{text}:{pattern}"
+}

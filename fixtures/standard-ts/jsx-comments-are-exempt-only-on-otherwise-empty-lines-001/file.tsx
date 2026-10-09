@@ -1,0 +1,3 @@
+const view = <div>
+{/* comment */}
+</div>

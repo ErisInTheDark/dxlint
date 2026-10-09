@@ -1,0 +1,1 @@
+const o = {[key]: async bar => { return bar; }};

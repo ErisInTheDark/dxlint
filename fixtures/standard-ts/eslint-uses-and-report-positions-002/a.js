@@ -1,0 +1,1 @@
+function f(cb) { cb = g(function () { cb(); }); } f();
