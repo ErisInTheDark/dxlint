@@ -1,0 +1,50 @@
+# Redundant aliases; retain replacement spelling and comments.
+import .ts/helpers
+
+define {
+
+in ts_identifier let module_name_info { name: identifier_name }
+in ts_string let module_name_info { name: get(literal_value, "value") }
+in ts_parenthesized forward module_name_info, module_default_info from expression
+in ts_assignment_pattern, ts_assignment let module_default_info left.module_name_info
+fn aliases_same(a, b) = a != null && b != null && a.name == b.name
+
+fn rename_fix_allowed(n, replacement) = replacement != null
+  && !(replacement is (ts_assignment_pattern, ts_assignment) && replacement.left is ts_parenthesized)
+  && {
+    value overlapping(ts_comment, n.offset, n.end_offset)
+    all (comment) replacement.offset <= comment.offset && comment.end_offset <= replacement.end_offset
+  }
+
+group useless_rename_import ts_import_specifier
+in useless_rename_import rule no-useless-rename:import {
+  let original_name imported.module_name_info
+  when aliases_same(original_name, local.module_name_info)
+  let replacement local.node
+  fix at node if rename_fix_allowed(node, replacement) as byte_slice(source, offset, imported.offset) replacement.text
+  warn "Import {original_name.name} unnecessarily renamed."
+}
+
+group useless_rename_export ts_export_specifier
+in useless_rename_export rule no-useless-rename:export {
+  let original_name local.module_name_info
+  when aliases_same(original_name, exported.module_name_info)
+  let replacement local.node
+  fix at node if rename_fix_allowed(node, replacement) as byte_slice(source, offset, local.offset) replacement.text
+  warn "Export {original_name.name} unnecessarily renamed."
+}
+
+group useless_rename_destructuring ts_pattern_property, ts_property
+in useless_rename_destructuring rule no-useless-rename:destructuring {
+  let original_name key.module_name_info
+  when is ts_pattern_property || parent.write_site != null
+  when {
+    value default: value.module_default_info.nonempty ?? value.module_name_info
+    value aliases_same(original_name, default)
+  }
+  let replacement unparenthesised_node(value.node)
+  fix at node if rename_fix_allowed(node, replacement) as replacement.text
+  warn "Destructuring assignment {original_name.name} unnecessarily renamed."
+}
+
+}

@@ -4,6 +4,7 @@
 import .ts/expressions
 import .ts/suggestions/object-shorthand
 import .ts/suggestions/curly
+import .ts/suggestions/renames
 
 define {
 
@@ -69,12 +70,6 @@ in ts_method, ts_class_property let member_static contains([] modifier, "static"
 in ts_property, ts_pattern_property let computed_exception parent is ts_object && parent.write_site == null && static_name == "__proto__"
 in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.write_site == null && static_name == "__proto__"
 in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
-
-in ts_identifier let module_name_info { name: identifier_name }
-in ts_string let module_name_info { name: get(literal_value, "value") }
-in ts_parenthesized forward module_name_info, module_default_info from expression
-in ts_assignment_pattern, ts_assignment let module_default_info left.module_name_info
-fn aliases_same(a, b) = a != null && b != null && a.name == b.name
 
 in ts_unary let signed_numeric_literal operator == "-" && (argument.unwrapped_node.nonempty ?? argument.node) is (ts_number, ts_bigint)
 in ts_template let static_template count(expression) == 0
@@ -307,31 +302,6 @@ in ts_string let octal_escape {
 in ts_string rule no-octal-escape {
   when octal_escape != null
   warn "Don't use octal: '{if re_test(octal_escape, /^\\0[89]$/) then '\\0' else octal_escape}'. Use '\\u....' instead."
-}
-
-group useless_rename_import ts_import_specifier
-in useless_rename_import rule no-useless-rename:import {
-  let original_name imported.module_name_info
-  when aliases_same(original_name, local.module_name_info)
-  warn "Import {original_name.name} unnecessarily renamed."
-}
-
-group useless_rename_export ts_export_specifier
-in useless_rename_export rule no-useless-rename:export {
-  let original_name local.module_name_info
-  when aliases_same(original_name, exported.module_name_info)
-  warn "Export {original_name.name} unnecessarily renamed."
-}
-
-group useless_rename_destructuring ts_pattern_property, ts_property
-in useless_rename_destructuring rule no-useless-rename:destructuring {
-  let original_name key.module_name_info
-  when is ts_pattern_property || parent.write_site != null
-  when {
-    value default: value.module_default_info.nonempty ?? value.module_name_info
-    value aliases_same(original_name, default)
-  }
-  warn "Destructuring assignment {original_name.name} unnecessarily renamed."
 }
 
 fn concat_endpoint_next(n, right_side) = if n is ts_parenthesized then n.expression.node else if n is ts_binary && n.operator == "+" then (if right_side then n.right.node else n.left.node) else null
