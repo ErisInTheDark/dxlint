@@ -86,17 +86,8 @@ fn concatenation_fix(source, n) = if concatenation_legacy_escape(n) then null el
   value owners: expression_fix_before_nodes(statement)
   value semicolon: if statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners)
   value replacement: concatenation_text(source, n, null, null)
-  value comments: {
-    value overlapping(ts_comment, n.offset, n.end_offset)
-    filter (comment) n.offset <= comment.offset && comment.end_offset <= n.end_offset
-  }
   # Comments inside removed operand parentheses have no safe interpolation slot.
-  # Count all source occurrences: another comment or string cannot cover a loss.
-  value retained: all(comments, comment => {
-    value required: split(n.text, comment.text)
-    value pieces: split(replacement, comment.text)
-    value count(pieces) >= count(required)
-  })
+  value retained: expression_fix_retains_comments(n, replacement)
   value if semicolon == null || !retained then null else (if semicolon then ";" else "") replacement
 }
 

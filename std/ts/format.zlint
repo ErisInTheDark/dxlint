@@ -5,6 +5,7 @@
 # turned on: `rule semi:always`, `rule quotes:double { set style "double" }`.
 
 import .ts/import-attributes
+import .ts/expression-fixes
 
 define {
 
@@ -81,13 +82,6 @@ fn format_gap_text(gap, spaced, comments) = (if spaced then " " else "") {
   map (comment) comment.text
   join ""
 }
-fn format_gap_result(source, start, result) = result.text byte_slice(source, result.end - start)
-fn format_replace_gaps(source, start, edits) = {
-  value edits
-  result_2: fold ({ end: start, text: "" }) (result, edit) { end: edit.end, text: result.text byte_slice(source, result.end - start, edit.start - start) edit.text }
-  value format_gap_result(source, start, result_2)
-}
-
 in ts_array, ts_array_pattern rule array-bracket-spacing {
   option style "always" | "never" = "never" "spacing inside array brackets"
   option singleValue boolean | null = null "override spacing around a single element"
@@ -113,7 +107,7 @@ in ts_array, ts_array_pattern rule array-bracket-spacing {
   let array_fixed {
     value array_bad
     edits: map (edge) { start: edge.gap.start, end: edge.gap.end, text: format_gap_text(edge.gap, edge.wanted, array_comments) }
-    value format_replace_gaps(text, offset, edits)
+    value expression_fix_edits(text, offset, edits)
   }
   each array_edge in array_bad
   report at array_edge.position
@@ -169,7 +163,7 @@ in ts_tagged_template rule template-tag-spacing warn "Unexpected space between t
   report at tag_gap.start
   fix as {
     value edits: [{ start: tag_gap.start, end: tag_gap.end, text: format_gap_text(tag_gap, false, tag_comments) }]
-    value format_replace_gaps(text, offset, edits)
+    value expression_fix_edits(text, offset, edits)
   }
 }
 in ts_tagged_template rule template-tag-spacing:comment warn "Unexpected space between template tag and template literal." {
@@ -182,7 +176,7 @@ in ts_tagged_template rule template-tag-spacing:missing warn "Missing space betw
   when style == "always" && !tag_gap.spaced
   fix as {
     value edits: [{ start: tag_gap.start, end: tag_gap.end, text: format_gap_text(tag_gap, true, tag_comments) }]
-    value format_replace_gaps(text, offset, edits)
+    value expression_fix_edits(text, offset, edits)
   }
 }
 
@@ -557,7 +551,7 @@ in key_spacing_containers rule key-spacing:aligned-before {
   when spacing_entry.policy.before == 0 || !re_test(spacing_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
   fix as {
     value edits: [format_key_fix(spacing_entry.site, true, spacing_entry.policy.before)]
-    value format_replace_gaps(text, offset, edits)
+    value expression_fix_edits(text, offset, edits)
   }
   @format_key_before_report
 }
@@ -571,7 +565,7 @@ in key_spacing_containers rule key-spacing:aligned-after {
   when spacing_entry.policy.after == 0 || !re_test(spacing_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
   fix as {
     value edits: [format_key_fix(spacing_entry.site, false, spacing_entry.policy.after)]
-    value format_replace_gaps(text, offset, edits)
+    value expression_fix_edits(text, offset, edits)
   }
   @format_key_after_report
 }

@@ -8,6 +8,25 @@ fn expression_fix_clean(n) = !{
   value overlapping(ts_comment, n.offset, n.end_offset)
   any (comment) n.offset <= comment.offset && comment.end_offset <= n.end_offset
 }
+fn expression_fix_edits(source, start, edits) = {
+  value edits
+  sort_by (edit) edit.start
+  result: fold ({ end: start, text: "" }) (state, edit) {
+    end: edit.end,
+    text: state.text byte_slice(source, state.end - start, edit.start - start) edit.text
+  }
+  value result.text byte_slice(source, result.end - start)
+}
+fn expression_fix_retains_comments(n, replacement) = {
+  value overlapping(ts_comment, n.offset, n.end_offset)
+  filter (comment) n.offset <= comment.offset && comment.end_offset <= n.end_offset
+  # Count all source occurrences: another comment or string cannot cover a loss.
+  all (comment) {
+    value required: split(n.text, comment.text)
+    value pieces: split(replacement, comment.text)
+    value count(pieces) >= count(required)
+  }
+}
 fn expression_fix_wrap(text, needed) = if needed then "(" text ")" else text
 fn expression_fix_separator(left, right) = if re_test(left, /[\w$\u{200c}\u{200d}]$/) && re_test(right, /^[\w$\u{200c}\u{200d}]/)
   || ends_with(left, "+") && starts_with(right, "+")
