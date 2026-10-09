@@ -75,7 +75,7 @@ fn layout_padding_bottom_space(gap) = {
   layout_padding_tail_space
 }
 fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
-fn layout_padding_mode(style, blocks, switches, classes, owner) = if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
+fn layout_padding_mode(style, blocks, switches, classes, owner) = if owner.layout_block_module.nonempty ?? false then null else if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
 @macro layout_padding_options {
   option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
   option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
@@ -403,6 +403,7 @@ in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, t
   when !(int32Hint && parent is (ts_binary, ts_logical, ts_assignment, ts_assignment_pattern) && ends_with(parent_text, "|0"))
   when !(space_before.spaced && space_after.spaced)
   warn "Operator '{text}' must be spaced."
+  fix as (if !space_before.spaced then " " else "") text (if !space_after.spaced then " " else "")
 }
 
 in ts_open_brace rule space-before-blocks {
