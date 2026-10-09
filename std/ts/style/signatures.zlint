@@ -1,4 +1,5 @@
 # .ts/style/signatures: internal part of .ts/style.
+import .ts/expression-fixes
 
 define {
 
@@ -34,6 +35,82 @@ in ts_method rule no-misused-new:class {
 }
 
 # ---- functions -----------------------------------------------------------------------
+in ts_function_type let is_function_type kind != "new"
+in ts_property_signature let signature_callable_node type.node
+in ts_method_signature, ts_property_signature let signature_source_key
+  (if contains(modifier, "readonly") then "readonly " else "") key.text (if optional != null then "?" else "")
+in ts_method_signature, ts_property_signature let signature_source_end
+  if contains([";", ","], token_neighbours.after.text) then token_neighbours.after.end else end_offset
+in ts_method_signature, ts_property_signature let signature_source_delimiter
+  if contains([";", ","], token_neighbours.after.text) then token_neighbours.after.text else ""
+group signature_separator ts_semicolon, ts_comma
+in ts_method_signature let signature_source_next {
+  value delimiters: overlapping(signature_separator, end_offset, signature_source_end)
+  value delimiter: first(delimiters)
+  value delimiter.token_neighbours.after.start ?? token_neighbours.after.start
+}
+fn signature_callable_source(source, n) = {
+  value last_type: last(n.type_parameter.nodes)
+  value first_parameter: first(n.parameter.nodes)
+  value from: last_type.end_offset ?? n.key.end_offset ?? n.offset
+  value until: first_parameter.offset ?? n.return_type.offset ?? n.end_offset
+  value opening_tokens: overlapping(ts_open_paren, from, until)
+  value opening: first(opening_tokens)
+  value parameters: if count(n.parameter) == 0 then "()" else byte_slice(source, opening.offset, opening.paired_token.end)
+  value first_type: first(n.type_parameter.nodes)
+  value closing_tokens: if last_type != null then overlapping(ts_close_angle, last_type.end_offset, opening.offset) else []
+  value closing: first(closing_tokens)
+  value type_parameters: if first_type != null then byte_slice(source, first_type.token_neighbours.before.start, closing.end_offset) else ""
+  value { parameters: type_parameters parameters, result: n.return_type.text ?? "any" }
+}
+fn signature_return_has_this(n) = n.return_type != null && {
+  value nodes: walk([n.return_type.node], child => child.children.nodes)
+  value any(nodes, child => child is ts_type_keyword && child.text == "this")
+}
+fn signature_in_namespace(n) = {
+  value ancestors: walk([n], ancestor => ancestor.parent.node)
+  value any(ancestors, ancestor => ancestor is ts_namespace)
+}
+fn signature_property_replacement(source, owner) = {
+  value key: owner.signature_source_key
+  value siblings: owner.parent.member.nodes
+  value methods: filter(siblings, member => member is ts_method_signature && member.kind != "get" && member.kind != "set" && member.signature_source_key == key)
+  value first_method: first(methods)
+  value last_method: last(methods)
+  value end: last_method.signature_source_end
+  value start: first_method.offset
+  value input: byte_slice(source, start, end)
+  value signatures: map(methods, method => signature_callable_source(source, method))
+  value functions: map(signatures, signature => signature.parameters " => " signature.result)
+  value combined: if count(methods) == 1 then first(functions) else { value functions; map (signature) "(" signature ")"; join " & " }
+  value edits: map(methods, method => if method.offset == last_method.offset then { start: method.offset, end: end, text: key ": " combined method.signature_source_delimiter } else { start: method.offset, end: method.signature_source_next, text: "" })
+  value replacement: expression_fix_edits(input, start, edits)
+  value span: { offset: start, end_offset: end, text: input }
+  value if !signature_in_namespace(owner) && !any(methods, method => signature_return_has_this(method)) && expression_fix_retains_comments(span, replacement) then { start: start, end: end, text: replacement } else null
+}
+fn signature_method_replacement(source, owner) = {
+  value callable: signature_callable_source(source, owner.signature_callable_node)
+  value replacement: owner.signature_source_key callable.parameters ": " callable.result owner.signature_source_delimiter
+  value end: owner.signature_source_end
+  value input: byte_slice(source, owner.offset, end)
+  value span: { offset: owner.offset, end_offset: end, text: input }
+  value if !contains(owner.modifier, "readonly") && expression_fix_retains_comments(span, replacement) then { start: owner.offset, end: end, text: replacement } else null
+}
+in ts_method_signature rule method-signature-style {
+  option mode ("method" | "property") = "property" "Preferred method signature notation."
+  when mode == "property" && kind != "get" && kind != "set"
+  warn "Shorthand method signature is forbidden. Use a function property instead."
+  let replacement signature_property_replacement(source, node)
+  fix at { start: replacement.start ?? offset, end: replacement.end ?? offset } if replacement != null as replacement.text
+}
+in ts_property_signature rule method-signature-style:property {
+  option mode ("method" | "property") = "property" "Preferred method signature notation."
+  when mode == "method" && type.is_function_type == true
+  warn "Function property signature is forbidden. Use a method shorthand instead."
+  let replacement signature_method_replacement(source, node)
+  fix at { start: replacement.start ?? offset, end: replacement.end ?? offset } if replacement != null as replacement.text
+}
+
 in ts_parenthesized_type let unified_inner_type type.unified_bare_type
 in ts_parenthesized let unified_inner_type expression.unified_bare_type
 in style_tree_node let unified_bare_type unified_inner_type.nonempty ?? text

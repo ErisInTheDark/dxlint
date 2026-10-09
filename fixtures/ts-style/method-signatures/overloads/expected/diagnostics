@@ -1,0 +1,10 @@
+input.ts:2:3-2:24 method-signature-style#0
+input.ts:3:3-3:37 method-signature-style#0
+input.ts:4:3-4:15 method-signature-style#0
+input.ts:5:3-5:22 method-signature-style#0
+input.ts:6:3-6:16 method-signature-style#0
+input.ts:8:14-8:24 method-signature-style#0
+input.ts:8:26-8:41 method-signature-style#0
+input.ts:8:43-8:62 method-signature-style#0
+input.ts:9:24-9:35 method-signature-style#0
+input.ts:9:37-9:57 method-signature-style#0

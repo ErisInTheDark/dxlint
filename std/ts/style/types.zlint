@@ -232,18 +232,6 @@ in ts_import rule no-import-type-side-effects {
   warn "TypeScript will only remove the inline type specifiers which will leave behind a side effect import at runtime. Convert this to a top-level type qualifier to properly remove the entire import."
 }
 
-in ts_method_signature rule method-signature-style {
-  option mode ("method" | "property") = "property" "Preferred method signature notation."
-  when mode == "property" && kind != "get" && kind != "set"
-  warn "Shorthand method signature is forbidden. Use a function property instead."
-}
-in ts_function_type let is_function_type true
-in ts_property_signature rule method-signature-style:property {
-  option mode ("method" | "property") = "property" "Preferred method signature notation."
-  when mode == "method" && type.is_function_type == true
-  warn "Function property signature is forbidden. Use a method shorthand instead."
-}
-
 in ts_object let assertion_literal_kind "object"
 in ts_array let assertion_literal_kind "array"
 in ts_parenthesized let assertion_literal_kind expression.assertion_literal_kind
