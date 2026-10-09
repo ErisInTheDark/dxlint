@@ -1,0 +1,83 @@
+# Type identity selects redundant components; source tokens own removal.
+
+define {
+
+group duplicate_type_constituent ts_union, ts_intersection
+in duplicate_type_constituent let duplicate_type_constituents_checked true
+in ts_node let constituent_type type_structure([], ["kind"])
+
+fn constituent_wrappers(source, n) = {
+  value parent: n.parent
+  value if parent is ts_parenthesized_type then {
+    value outer: constituent_wrappers(source, parent)
+    value before: byte_slice(source, parent.first_token.end, n.offset)
+    value after: byte_slice(source, n.end_offset, parent.last_token.start)
+    value {node: outer.node, before: outer.before before, after: after outer.after}
+  } else {node: n, before: "", after: ""}
+}
+fn constituent_equivalent(part) = part.previous_syntax ?? part.previous_identity
+fn constituent_optional(part, optional) = {
+  value flags: if optional then part.node.type_flags.nonempty ?? [] else []
+  value optional && contains(flags, "undefined") && part.node.constituent_type.kind == "undefined"
+}
+fn constituent_removed(part, optional) =
+  part.complete && (constituent_equivalent(part) != null || constituent_optional(part, optional))
+fn constituent_hidden(part, parts) =
+  any(parts, other => other.complete && constituent_equivalent(other) != null
+    && other.node.offset <= part.node.offset && other.node.end_offset >= part.node.end_offset
+    && (other.node.offset != part.node.offset || other.node.end_offset != part.node.end_offset))
+fn constituent_replacement(source, part, wrapped, parts, optional) = {
+  value before: wrapped.node.token_neighbours.before
+  value after: wrapped.node.token_neighbours.after
+  value remains: any(parts, other => other.group.offset == part.group.offset
+    && !constituent_removed(other, optional))
+  value if !remains then null
+  else if contains(["|", "&"], before.text) && before.start >= part.group.offset then {
+    value gap: byte_slice(source, before.end, wrapped.node.offset)
+    value {start: before.start, end: wrapped.node.end_offset, text: gap wrapped.before wrapped.after}
+  } else if contains(["|", "&"], after.text) && after.end <= part.group.end_offset then {
+    value gap: byte_slice(source, wrapped.node.end_offset, after.start)
+    value {start: wrapped.node.offset, end: after.end, text: wrapped.before wrapped.after gap}
+  } else null
+}
+fn constituent_candidate(source, part, parts, optional) = {
+  value wrapped: constituent_wrappers(source, part.node)
+  value previous: constituent_equivalent(part)
+  value replacement: constituent_replacement(source, part, wrapped, parts, optional)
+  value {node: part.node, wrapped: wrapped.node, previous: previous, replacement: replacement}
+}
+
+in duplicate_type_constituent {
+  let constituent_root constituent_wrappers(source, node)
+  let constituent_top if is ts_union then constituent_root.node.parent not ts_union
+    else constituent_root.node.parent not ts_intersection
+  let constituent_kind if is ts_union then "Union" else "Intersection"
+  let constituent_parts if constituent_top then type_components.nonempty ?? [] else []
+  let constituent_optional_parameter is ts_union
+    && constituent_root.node.parent is ts_parameter
+    && constituent_root.node.parent.optional != null
+  let constituent_candidates {
+    value selected: filter(constituent_parts, part => constituent_removed(part, constituent_optional_parameter)
+      && !constituent_hidden(part, constituent_parts))
+    value map(selected, part => constituent_candidate(source, part, constituent_parts, constituent_optional_parameter))
+  }
+
+  rule no-duplicate-type-constituents {
+    when duplicate_type_constituents_checked
+    each part in constituent_candidates
+    when part.previous != null
+    report at {start: part.node.offset, end: part.wrapped.end_offset}
+    warn "{constituent_kind} type constituent is duplicated with {part.previous}."
+    fix at part.replacement if part.replacement != null as part.replacement.text
+  }
+  rule no-duplicate-type-constituents:optional {
+    when duplicate_type_constituents_checked && constituent_optional_parameter
+    each part in constituent_candidates
+    when part.previous == null
+    report at {start: part.node.offset, end: part.wrapped.end_offset}
+    warn "Explicit undefined is unnecessary on an optional parameter."
+    fix at part.replacement if part.replacement != null as part.replacement.text
+  }
+}
+
+}

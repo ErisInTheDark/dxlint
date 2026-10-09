@@ -13,6 +13,7 @@ import .ts/typed/floating-promises
 import .ts/typed/template-expressions
 import .ts/typed/readonly-members
 import .ts/typed/string-boundaries
+import .ts/typed/type-constituents
 
 define {
 
@@ -348,24 +349,6 @@ in ts_union, ts_intersection {
     report at redundant_constituent.offset
     warn "{redundant_constituent.primitive} is overridden by the {redundant_constituent.name} in this intersection type."
   }
-}
-
-group duplicate_type_constituent ts_union, ts_intersection
-in duplicate_type_constituent let duplicate_type_constituents_checked true
-in duplicate_type_constituent rule no-duplicate-type-constituents {
-  when duplicate_type_constituents_checked
-  each duplicate_constituent in duplicate_type_constituents.nonempty ?? []
-  when duplicate_constituent.previous != null
-  report at duplicate_constituent.node
-  warn "{duplicate_constituent.kind} type constituent is duplicated with {duplicate_constituent.previous}."
-}
-in duplicate_type_constituent rule no-duplicate-type-constituents:optional {
-  when is ts_union
-  when duplicate_type_constituents_checked
-  each duplicate_constituent in duplicate_type_constituents.nonempty ?? []
-  when duplicate_constituent.previous == null
-  report at duplicate_constituent.node
-  warn "Explicit undefined is unnecessary on an optional parameter."
 }
 
 in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {

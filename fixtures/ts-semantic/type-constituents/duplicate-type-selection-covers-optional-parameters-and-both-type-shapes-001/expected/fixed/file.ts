@@ -1,0 +1,1 @@
+type U = string  ; type I = number  ; function f(value?: number  ) {}

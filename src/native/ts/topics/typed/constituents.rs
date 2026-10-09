@@ -1,6 +1,13 @@
-//! Duplicate union and intersection constituents, preserving first occurrence.
+//! Ordered component relationships within union and intersection types.
 
 use super::*;
+use crate::fx_hash::FxHashMap;
+
+#[derive(Default)]
+struct Relationships<'s> {
+    syntax: FxHashMap<(Option<u16>, Vec<&'s str>), Value<'static>>,
+    types: Vec<(Ty, Value<'static>)>,
+}
 
 pub(super) fn bare(file: &NativeFile<'_>, mut node: u32) -> u32 {
     while file.syntax.is(node, Kind::ParenType) {
@@ -10,50 +17,64 @@ pub(super) fn bare(file: &NativeFile<'_>, mut node: u32) -> u32 {
     node
 }
 
-pub(super) fn duplicates(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+pub(super) fn components(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let s = &file.syntax;
     let Some(kind @ (Kind::Union | Kind::Intersection)) = s.kind(node) else { return Value::Null };
-    let mut parent = s.parent(node);
-    while parent.is_some_and(|n| s.is(n, Kind::ParenType)) {
-        parent = parent.and_then(|n| s.parent(n));
-    }
-    if parent.is_some_and(|n| s.is(n, kind)) { return Value::Null }
-    let optional = kind == Kind::Union && parent.is_some_and(|n| s.is(n, Kind::Param) && s.get(n, Field::Type).is_some_and(|ty| bare(file, ty) == node) && s.get(n, Field::Optional).is_some());
-    let mut seen = Vec::new();
-    let mut findings = Vec::new();
+    let mut seen = Relationships::default();
+    let mut components = Vec::new();
+    let group = Value::Node(node, s.text(node).to_owned().into());
     for part in s.all(node, Field::Type) {
-        check(file, part, kind, optional, &mut seen, &mut findings);
+        collect(file, part, &group, kind, &mut seen, &mut components);
     }
-    Value::list(findings)
+    Value::list(components)
 }
 
-fn check(file: &NativeFile<'_>, node: u32, kind: Kind, optional: bool, seen: &mut Vec<(u32, Ty)>, findings: &mut Vec<Value<'static>>) {
+fn collect<'f>(file: &'f NativeFile<'_>, node: u32, group: &Value<'static>, kind: Kind, seen: &mut Relationships<'f>, components: &mut Vec<Value<'static>>) {
     let node = bare(file, node);
     let s = &file.syntax;
     let ty = file.type_of(node);
-    let previous = seen.iter().find(|(previous, previous_ty)| {
-        s.kind(*previous) == s.kind(node) && file.equal_tokens(*previous, node) || ty.same_identity(previous_ty)
-    });
-    if let Some((previous, _)) = previous {
-        findings.push(finding(file, node, kind, Some(*previous)));
-        return;
+    let syntax = (s.kind(node).map(|kind| kind as u16), file.tokens(s.unparen(node)));
+    let previous_syntax = seen.syntax.get(&syntax).cloned().unwrap_or(Value::Null);
+    let previous_identity = seen.types.iter().find(|(previous, _)| ty.same_identity(previous))
+        .map_or(Value::Null, |(_, node)| node.clone());
+    let complete = !super::unsafe_types::missing_annotation(file, node);
+    let node_link = Value::Node(node, s.text(node).to_owned().into());
+    components.push(Value::record(vec![
+        ("node".into(), node_link.clone()),
+        ("group".into(), group.clone()),
+        ("previous_syntax".into(), previous_syntax),
+        ("previous_identity".into(), previous_identity),
+        ("complete".into(), Value::Bool(complete)),
+    ]));
+    if complete {
+        seen.syntax.entry(syntax).or_insert_with(|| node_link.clone());
+        seen.types.push((ty, node_link.clone()));
     }
-    if super::unsafe_types::missing_annotation(file, node) { return }
-    if optional && matches!(ty, Ty::Undefined) {
-        findings.push(finding(file, node, kind, None));
-    }
-    seen.push((node, ty));
     if s.is(node, kind) {
         for part in s.all(node, Field::Type) {
-            check(file, part, kind, optional, seen, findings);
+            collect(file, part, &node_link, kind, seen, components);
         }
     }
 }
 
-fn finding(file: &NativeFile<'_>, node: u32, kind: Kind, previous: Option<u32>) -> Value<'static> {
-    Value::record(vec![
-        ("node".into(), Value::Node(node, file.syntax.text(node).to_owned().into())),
-        ("kind".into(), Value::from(if kind == Kind::Union { "Union" } else { "Intersection" })),
-        ("previous".into(), previous.map_or(Value::Null, |n| Value::from(file.syntax.text(n).to_string()))),
-    ])
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::with_native_file;
+    use crate::expr::value::Value;
+
+    #[test]
+    fn component_relationships_keep_distinct_nested_and_unresolved_types() {
+        with_native_file("type A = 'a'; type B = 'a'; type T = /*@*/A | B | (A | number) | Missing;", |file, nodes| {
+            let result = super::components(file, nodes[0]);
+            let parts = result.items();
+            let find = |text: &str| parts.iter().find(|part|
+                part.key("node").text() == text).expect("component, not only a finding");
+            assert_eq!(find("A").key("complete"), Value::Bool(true));
+            assert_eq!(find("B").key("previous_syntax"), Value::Null);
+            assert_eq!(find("B").key("previous_identity").text(), "A");
+            assert_eq!(find("number").key("previous_identity"), Value::Null);
+            assert_eq!(find("Missing").key("complete"), Value::Bool(false));
+            assert!(find("number").key("group").text().contains("A | number"));
+        });
+    }
 }

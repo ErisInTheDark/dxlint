@@ -1,6 +1,6 @@
 //! typescript-eslint's type-aware rules (`std/ts/typed`).
 
-use crate::expr::facts::Fact;
+use crate::expr::facts::{Fact, Shape};
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field, Kind};
@@ -255,10 +255,16 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(regexp::exec, n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
-        name: "duplicate_type_constituents",
-        doc: "native unions and intersections: duplicates with first text and optional-parameter undefined",
-        get: |f, n| f.with_file(constituents::duplicates, n),
+        shape: Shape::List(&Shape::Record(&[
+            ("node", Shape::Scalar),
+            ("group", Shape::Scalar),
+            ("previous_syntax", Shape::Scalar),
+            ("previous_identity", Shape::Scalar),
+            ("complete", Shape::Scalar),
+        ])),
+        name: "type_components",
+        doc: "native unions and intersections: same-kind components in source order, their immediate group, prior syntax/type equivalents and whether names resolve",
+        get: |f, n| f.with_file(constituents::components, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

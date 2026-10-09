@@ -1,0 +1,1 @@
+type R = readonly string[] | string[]; type A = 'A'; type T = A  ; type U = string | number  ;

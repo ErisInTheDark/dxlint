@@ -1,0 +1,1 @@
+type U = string | string; type I = number  ; function f(value?: number | undefined) {}

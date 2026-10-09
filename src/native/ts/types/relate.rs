@@ -142,6 +142,7 @@ impl Checker<'_> {
             (Ty::Prim(_) | Ty::Lit(..), Ty::Prim("object")) => Some(false),
             (Ty::Named(..) | Ty::Obj(..) | Ty::Struct(_) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) | Ty::Class(_), Ty::Prim("object")) => Some(true),
             (Ty::Named(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) | Ty::Obj(..) | Ty::Struct(_), Ty::Prim(_) | Ty::Lit(..)) => Some(false),
+            (Ty::Prim(_) | Ty::Lit(..), Ty::Array(_) | Ty::Tuple(_)) => Some(false),
             (Ty::Array(x), Ty::Array(y)) if x.readonly && !y.readonly => Some(false),
             (Ty::Array(x), Ty::Array(y)) => self.assignable(&x.element, &y.element),
             (Ty::Tuple(items), Ty::Array(y)) if items.readonly && !y.readonly => Some(false),
@@ -434,6 +435,32 @@ fn any(answers: impl Iterator<Item = Option<bool>>) -> Option<bool> {
 mod tests {
     use super::*;
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn primitive_values_are_not_array_or_tuple_contracts() {
+        with_native_file("type Empty = /*@*/[];", |file, nodes| {
+            let targets = [Ty::array(Ty::Any), file.type_of(nodes[0])];
+            let checker = &file.typing().checker;
+            for target in targets {
+                for domain in ["number", "string", "boolean", "bigint", "symbol", "object"] {
+                    assert_eq!(checker.assignable(&Ty::Prim(domain), &target), Some(false), "{domain}: {target:?}");
+                }
+                for literal in [Ty::Lit("1".into(), "number"), Ty::Lit("text".into(), "string"), Ty::Lit("true".into(), "boolean"), Ty::Lit("1".into(), "bigint")] {
+                    assert_eq!(checker.assignable(&literal, &target), Some(false), "{literal:?}: {target:?}");
+                }
+                assert_eq!(checker.assignable(&Ty::Any, &target), Some(true));
+                assert_eq!(checker.assignable(&Ty::Never, &target), Some(true));
+                assert_eq!(checker.assignable(&Ty::Unknown, &target), None);
+                assert_eq!(checker.assignable(&Ty::Param("T".into()), &target), None);
+            }
+        });
+        with_native_file("type IsArray<T> = T extends any[] ? true : false; type A = /*@*/IsArray<number>; type B = /*@*/IsArray<string>;", |file, nodes| {
+            let number = file.type_of(nodes[0]);
+            let string = file.type_of(nodes[1]);
+            assert!(matches!(&number, Ty::Lit(value, "boolean") if &**value == "false"), "{number:?}");
+            assert!(number.same_identity(&string), "{number:?}: {string:?}");
+        });
+    }
 
     #[test]
     fn transfer_sender_prefilter_keeps_every_comparable_any_position() {

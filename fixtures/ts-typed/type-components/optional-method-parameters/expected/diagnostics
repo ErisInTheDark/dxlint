@@ -1,0 +1,7 @@
+main.ts:11:18-11:27 no-duplicate-type-constituents:optional#0
+main.ts:18:21-18:30 no-duplicate-type-constituents:optional#0
+main.ts:23:25-23:34 no-duplicate-type-constituents:optional#0
+main.ts:26:26-26:35 no-duplicate-type-constituents:optional#0
+main.ts:29:17-29:26 no-duplicate-type-constituents:optional#0
+main.ts:34:27-34:36 no-duplicate-type-constituents:optional#0
+main.ts:4:18-4:27 no-duplicate-type-constituents:optional#0
