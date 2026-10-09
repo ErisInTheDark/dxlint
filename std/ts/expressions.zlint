@@ -42,6 +42,7 @@ group expression_fix_precedence_owner ts_binary, ts_logical, ts_assignment, ts_c
 fn exponentiation_base_parens(base) = base.precedence <= 14 || base is (ts_unary, ts_await, structure_assertion)
 fn exponentiation_outer_parens(n, base) = n.parent not ts_parenthesized
   && (n is ts_class.extends
+    || n.parent is structure_assertion
     || n is ts_arrow.body && !exponentiation_base_parens(base) && (base is ts_object || base.first_token.text == "{{")
     || n.parent is expression_fix_precedence_owner && n.parent.precedence >= 14
     && !(n is ts_binary.right && n.parent.operator == "**")

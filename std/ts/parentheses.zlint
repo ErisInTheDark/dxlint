@@ -55,6 +55,9 @@ in ts_node let structure_parens_leading_child if is (ts_call, ts_new) then calle
   else if is (structure_binary, ts_assignment) then left.node
   else if is ts_conditional then test.node
   else if is (ts_sequence, ts_as, ts_satisfies, ts_non_null) then first(expression.nodes) else null
+in ts_node let structure_parens_leading_object is ts_object
+  || structure_parens_leading_child != null && structure_parens_leading_child.offset == offset
+  && structure_parens_leading_child not ts_parenthesized && structure_parens_leading_child.structure_parens_leading_object == true
 in ts_node let structure_parens_hazard is (ts_object, ts_function, ts_class)
   || is ts_index && node.object == "let"
   || structure_parens_leading_child != null && structure_parens_leading_child not ts_parenthesized && structure_parens_leading_child.structure_parens_hazard == true
@@ -98,12 +101,12 @@ fn structure_parens_required(source, p, inner, outer) =
   else if p is (ts_call, ts_new, ts_import_call) then structure_parens_need(inner.precedence < 1)
   else if outer is (ts_member.object, ts_index.object) then (if inner is ts_regex then null else {
     value inner is ts_number && p is ts_member && re_test(inner.text, /^[0-9_]+$/) && !re_test(inner.text, /^0[0-7]+$/)
-    || inner is structure_assertion || inner.structure_parens_optional && p.optional == null || inner.precedence < 19
+    || inner.structure_parens_optional && p.optional == null || inner.precedence < 19
     || p.structure_parens_new_receiver != null && inner.structure_parens_has_call
     structure_parens_need
   })
   else if p is structure_member then 0
-  else if p is ts_arrow then (if inner is structure_assertion then null else structure_parens_need(inner is ts_object || inner.precedence < 1))
+  else if p is ts_arrow then (if inner is structure_assertion then null else structure_parens_need(inner.structure_parens_leading_object == true || inner.precedence < 1))
   else if outer is ts_declarator.init then (if inner is ts_regex then null else structure_parens_need(inner.precedence < 1))
   else if p is (ts_return, ts_throw, ts_yield) then (if inner is ts_regex && p is ts_return then null else {
     value { value source; byte_slice p.offset inner.offset; re_test /[\n\r\u{2028}\u{2029}]/ } || p is ts_yield && inner.precedence < 1
@@ -123,7 +126,7 @@ fn structure_parens_required(source, p, inner, outer) =
   else if p is ts_update then structure_parens_need(inner.precedence < 17)
   else if p is (ts_sequence, ts_type_alias, ts_parenthesized_type, ts_template) then 0
   else if outer is ts_tagged_template.tag then structure_parens_need(inner.precedence < 19 || inner.structure_parens_optional)
-  else if outer is ts_class.extends then structure_parens_need(inner is structure_assertion || inner.precedence < 19)
+  else if outer is ts_class.extends then structure_parens_need(inner.precedence < 19)
   else if outer is ts_enum_member.init then structure_parens_need(inner.precedence < 1)
   else if p is ts_array_type then structure_parens_need(inner.precedence < 20)
   else if p is ts_type_operator then structure_parens_need(inner.precedence < p.precedence)

@@ -1,0 +1,4 @@
+import .ts
+rule consistent-type-assertions { set assertionStyle 'angle-bracket' }
+rule consistent-type-assertions:object { set assertionStyle 'angle-bracket'; set mode 'never' }
+rule consistent-type-assertions:array { set assertionStyle 'angle-bracket'; set mode 'never' }

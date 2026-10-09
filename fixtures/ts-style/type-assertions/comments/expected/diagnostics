@@ -1,0 +1,5 @@
+input.ts:1:11-1:57 consistent-type-assertions#1
+input.ts:2:11-2:34 consistent-type-assertions#1
+input.ts:3:11-3:38 consistent-type-assertions#1
+input.ts:4:11-4:50 consistent-type-assertions#1
+input.ts:5:11-5:51 consistent-type-assertions#1

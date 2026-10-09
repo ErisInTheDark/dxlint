@@ -1,0 +1,20 @@
+const α = <Foo>new Generic<int>();
+const b = <A>value;
+const c = <readonly number[]>[1];
+const d = <a | b>'string';
+const e = <A>!'string';
+const f = <A>a + b;
+const g = new (<Foo>Generic<string>)();
+const h = new (<Foo>Generic<string>)('string');
+const i = () => <Foo>{ bar: 5 };
+const j = () => <Foo>bar;
+const k = <Foo>bar<string>`${'baz'}`;
+const l = <const>{ key: 'value' };
+const m = <any>(b, c);
+const n = <any>(() => {});
+const o = <any>function () {};
+const p = <any>(async () => {});
+function* generator() { const q = <any>(yield a); }
+const r = <any>(x <<= y);
+const s = <any>(true ? x : y);
+const t = <string[]>[];

@@ -1,7 +1,60 @@
-# .ts/assertions: type-aware assertion policy.
+# .ts/assertions: assertion syntax, type-aware and non-null policy.
 import .ts/expression-fixes
 
 define {
+
+in ts_type_assertion let assertion_style_operand expression.node
+in ts_type_assertion let assertion_style_type type.text
+fn assertion_style_as(source, n) = {
+  value operand: n.assertion_style_operand
+  value operand_parens: operand.precedence < 10 || operand is ts_instantiation
+  value body: expression_fix_wrap(operand.text, operand_parens) " as " n.assertion_style_type
+  # Describe the replacement, not the unary angle assertion being removed.
+  value shape: {
+    kind: "ts_as", precedence: 10, offset: n.offset,
+    structure_parens_hazard: !operand_parens && operand.structure_parens_hazard,
+    structure_parens_has_in: !operand_parens && operand.structure_parens_has_in,
+    structure_parens_has_call: operand.structure_parens_has_call,
+    structure_parens_optional: false
+  }
+  value required: if n.parent is ts_arrow then 1 else expression_fix_parens(source, n, shape)
+  value replacement: if required == null then null else expression_fix_wrap(body, required > 0)
+  value if replacement != null && expression_fix_retains_comments(n, replacement) then assertion_fix_output(n, replacement) else null
+}
+
+in ts_object let assertion_literal_kind "object"
+in ts_array let assertion_literal_kind "array"
+in ts_parenthesized let assertion_literal_kind expression.assertion_literal_kind
+in ts_as, ts_type_assertion rule consistent-type-assertions {
+  option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
+  when is ts_as && assertionStyle != "as" || is ts_type_assertion && assertionStyle != "angle-bracket"
+  when !(assertionStyle == "never" && type == "const")
+  warn if assertionStyle == "never" then "Do not use any type assertions." else if assertionStyle == "as" then "Use 'as {type}' instead of '<{type}>'." else "Use '<{type}>' instead of 'as {type}'."
+  let edit if assertionStyle == "as" then assertion_style_as(source, node) else null
+  fix at edit.target if edit != null as edit.text
+}
+in ts_template let tagged_substitution parent is ts_tagged_template
+in ts_as, ts_type_assertion, ts_parenthesized let assertion_argument_context if parent is ts_parenthesized then parent.assertion_argument_context else parent is (ts_new, ts_call, ts_throw, ts_assignment_pattern, ts_jsx_expression) || is ts_parameter.init || parent is ts_template && parent.tagged_substitution
+in ts_as, ts_type_assertion {
+  let preferred_assertion_style if is ts_as then "as" else "angle-bracket"
+  let literal_assertion_eligible type != "any" && type != "unknown" && type != "const"
+}
+in ts_as, ts_type_assertion rule consistent-type-assertions:object {
+  option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
+  default option mode ("allow" | "allow-as-parameter" | "never") = "allow" "When literal assertions are allowed."
+  when literal_assertion_eligible && expression.assertion_literal_kind == "object"
+  when assertionStyle == preferred_assertion_style
+  when mode == "never" || mode == "allow-as-parameter" && !assertion_argument_context
+  warn "Always prefer const x: T = {{ ... }}."
+}
+in ts_as, ts_type_assertion rule consistent-type-assertions:array {
+  option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
+  default option mode ("allow" | "allow-as-parameter" | "never") = "allow" "When literal assertions are allowed."
+  when literal_assertion_eligible && expression.assertion_literal_kind == "array"
+  when assertionStyle == preferred_assertion_style
+  when mode == "never" || mode == "allow-as-parameter" && !assertion_argument_context
+  warn "Always prefer const x: T[] = [ ... ]."
+}
 
 fn assertion_outer(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent else null; last }
 fn assertion_literal_preserved(n) = assertion_outer(n).parent is ts_declarator && assertion_outer(n).parent.parent.kind == "const" || assertion_outer(n).parent is ts_class_property && { value [] assertion_outer(n).parent.modifier; contains "readonly" }

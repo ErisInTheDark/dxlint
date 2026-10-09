@@ -232,38 +232,6 @@ in ts_import rule no-import-type-side-effects {
   warn "TypeScript will only remove the inline type specifiers which will leave behind a side effect import at runtime. Convert this to a top-level type qualifier to properly remove the entire import."
 }
 
-in ts_object let assertion_literal_kind "object"
-in ts_array let assertion_literal_kind "array"
-in ts_parenthesized let assertion_literal_kind expression.assertion_literal_kind
-in ts_as, ts_type_assertion rule consistent-type-assertions {
-  option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
-  when is ts_as && assertionStyle != "as" || is ts_type_assertion && assertionStyle != "angle-bracket"
-  when !(assertionStyle == "never" && type == "const")
-  warn if assertionStyle == "never" then "Do not use any type assertions." else if assertionStyle == "as" then "Use 'as {type}' instead of '<{type}>'." else "Use '<{type}>' instead of 'as {type}'."
-}
-in ts_template let tagged_substitution parent is ts_tagged_template
-in ts_as, ts_type_assertion, ts_parenthesized let assertion_argument_context if parent is ts_parenthesized then parent.assertion_argument_context else parent is (ts_new, ts_call, ts_throw, ts_assignment_pattern, ts_jsx_expression) || is ts_parameter.init || parent is ts_template && parent.tagged_substitution
-in ts_as, ts_type_assertion {
-  let preferred_assertion_style if is ts_as then "as" else "angle-bracket"
-  let literal_assertion_eligible type != "any" && type != "unknown" && type != "const"
-}
-in ts_as, ts_type_assertion rule consistent-type-assertions:object {
-  option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
-  default option mode ("allow" | "allow-as-parameter" | "never") = "allow" "When literal assertions are allowed."
-  when literal_assertion_eligible && expression.assertion_literal_kind == "object"
-  when assertionStyle == preferred_assertion_style
-  when mode == "never" || mode == "allow-as-parameter" && !assertion_argument_context
-  warn "Always prefer const x: T = {{ ... }}."
-}
-in ts_as, ts_type_assertion rule consistent-type-assertions:array {
-  option assertionStyle ("as" | "angle-bracket" | "never") = "as" "Preferred assertion syntax."
-  default option mode ("allow" | "allow-as-parameter" | "never") = "allow" "When literal assertions are allowed."
-  when literal_assertion_eligible && expression.assertion_literal_kind == "array"
-  when assertionStyle == preferred_assertion_style
-  when mode == "never" || mode == "allow-as-parameter" && !assertion_argument_context
-  warn "Always prefer const x: T[] = [ ... ]."
-}
-
 fn property_modifiers(xs) = { value ["public", "protected", "private", "readonly"]; filter (m) contains(xs, m); join " " }
 in ts_parameter, ts_class_property let parameter_modifiers property_modifiers([] modifier)
 in ts_parameter, ts_class_property let parameter_properties_checked true
