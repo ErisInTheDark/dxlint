@@ -1,0 +1,6 @@
+a.ts:1:10-1:15 no-whitespace-before-property#0
+a.ts:1:10-1:19 no-whitespace-before-property#0
+a.ts:2:10-2:17 no-whitespace-before-property:computed#0
+a.ts:3:10-3:10 no-whitespace-before-property:import#0
+a.ts:4:10-4:10 no-whitespace-before-property:import#0
+a.ts:4:24-4:29 no-whitespace-before-property#0
