@@ -11,3 +11,7 @@ fn function_warning_site(n) = if n is ts_method then n.key.node
   else if n.parent is (ts_property, ts_class_property) then n.parent.key.node
   else if n is ts_arrow then n.operator.node
   else { start: n.first_token.start, end: n.first_token.end }
+
+define {
+  in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature let member_terminal_token if contains([";", ","], token_neighbours.after.text) then token_neighbours.after else last_token
+}
