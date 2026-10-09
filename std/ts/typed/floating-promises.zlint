@@ -1,0 +1,27 @@
+# Floating promise values and immediate promise elements in arrays or tuples.
+
+define {
+
+in ts_member let chain_handles_rejection object.handles_rejection
+in ts_call let handles_rejection callee ~ /[\s\S]*\.catch/ && count(argument) >= 1 || callee ~ /[\s\S]*\.then/ && count(argument) >= 2 || callee ~ /[\s\S]*\.finally/ && callee.chain_handles_rejection == true
+in ts_expression_statement.expression rule no-floating-promises {
+  when not (ts_assignment, ts_await) && !handles_rejection && { value type_members.nonempty ?? []; contains "then" }
+  warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
+}
+
+fn floating_promise_element(t) =
+  if t.kind == "union" then any(t.parts, part => floating_promise_element(part))
+  else any(t.declarations, declaration => declaration.name == "Promise" && declaration.from == "lib")
+fn floating_promise_array(t) =
+  if t.kind == "union" then any(t.parts, part => floating_promise_array(part))
+  else contains(["array", "tuple"], t.kind) && any(t.parts, part => floating_promise_element(part))
+
+in ts_expression_statement.expression rule no-floating-promises:array {
+  when not (ts_assignment, ts_await) && !(is ts_unary && node.operator == "void")
+  let floating_type type_structure([], ["kind", "parts", "declarations"])
+  when floating_promise_array(floating_type)
+  report at parent.node
+  warn "An array of Promises may be unintentional. Consider handling the promises' fulfillment or rejection with Promise.all or similar, or explicitly marking the expression as ignored with the `void` operator."
+}
+
+}

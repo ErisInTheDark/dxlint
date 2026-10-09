@@ -9,6 +9,7 @@ import .ts/spreads
 import .ts/type-specifiers
 import .ts/typed/promises
 import .ts/typed/optional-chains
+import .ts/typed/floating-promises
 
 define {
 
@@ -380,16 +381,6 @@ in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversi
   when unnecessary_type_conversion != null
   report at unnecessary_type_conversion.offset
   warn "{unnecessary_type_conversion.violation} does not change the type or value of the {unnecessary_type_conversion.type}."
-}
-
-# A promise-valued statement that nothing awaits or handles.
-# `.catch(handler)` and `.then(ok, handler)` handle rejections; `.finally`
-# keeps what the chain before it did.
-in ts_member let chain_handles_rejection object.handles_rejection
-in ts_call let handles_rejection callee ~ /[\s\S]*\.catch/ && count(argument) >= 1 || callee ~ /[\s\S]*\.then/ && count(argument) >= 2 || callee ~ /[\s\S]*\.finally/ && callee.chain_handles_rejection == true
-in ts_expression_statement.expression rule no-floating-promises {
-  when not (ts_assignment, ts_await) && !handles_rejection && @thenable
-  warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
 }
 
 # `await` of something that is not a promise; promise aggregators of arrays

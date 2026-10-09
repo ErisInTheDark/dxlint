@@ -960,11 +960,11 @@ impl<'t> NativeFile<'t> {
                         return ck.value_of(&ck.lookup(&Env::file(ck.file), name));
                     }
                 }
-                let object = s.get(id, F::Object).map_or(Ty::Unknown, |object| self.type_of(object));
+                let object = s.get(id, F::Object).map_or(Ty::Unknown, |object| self.constrained_type_of(object));
                 ck.member(&object, name)
             }
             Some(K::Index) => {
-                let object = s.get(id, F::Object).map_or(Ty::Unknown, |object| self.type_of(object));
+                let object = s.get(id, F::Object).map_or(Ty::Unknown, |object| self.constrained_type_of(object));
                 let index = self.index_key_type(id);
                 ck.indexed_type(&object, &index)
             }
@@ -1221,6 +1221,25 @@ mod tests {
         with_native_file("interface Values { [key: string]: number; named: string } declare const values: Values; const result = /*@*/values['named'];", |file, nodes| {
             let flags = file.type_flags(nodes[0]).unwrap_or_default();
             assert!(flags.contains(&"string") && !flags.contains(&"number"), "{flags:?}");
+        });
+    }
+
+    #[test]
+    fn constrained_receivers_preserve_member_and_index_results() {
+        for (source, undefined) in [
+            ("function f<T extends { item: number }>(value: T) { const result = /*@*/value.item; }", false),
+            ("function f<T extends number[]>(value: T) { const result = /*@*/value[0]; }", false),
+            ("function f<T extends { item: number }>(value: T | undefined) { const result = /*@*/value?.item; }", true),
+            ("function f<T extends number[]>(value: T | undefined) { const result = /*@*/value?.[0]; }", true),
+        ] {
+            with_native_file(source, |file, nodes| {
+                let flags = file.type_flags(nodes[0]).unwrap_or_default();
+                assert!(flags.contains(&"number"), "{source}: {flags:?}");
+                assert_eq!(flags.contains(&"undefined"), undefined, "{source}: {flags:?}");
+            });
+        }
+        with_native_file("function f<T extends { item: number }>(value: T) { const result = /*@*/value; }", |file, nodes| {
+            assert!(matches!(file.type_of(nodes[0]), super::Ty::Param(_)));
         });
     }
 

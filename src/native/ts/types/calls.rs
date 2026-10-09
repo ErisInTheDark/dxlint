@@ -533,6 +533,7 @@ impl Checker<'_> {
                 if let (Some(r), Some(asig)) = (&sig.ret, c.sigs.first()) {
                     let ret = match (&c.ret, &asig.syntax.ret) {
                         (Some(t), _) => t.clone(),
+                        (None, _) if asig.syntax.is_async => self.sig_result(&asig.syntax, &asig.env, &[], Vec::new()),
                         (None, Some(ar)) => self.eval(ar, &asig.env),
                         (None, None) => Ty::Unknown,
                     };
@@ -643,6 +644,47 @@ mod tests {
         let declarations = checker.summary.decls.iter().enumerate().filter(|(_, declaration)| &*declaration.name == name)
             .map(|(decl, _)| DeclRef { file: checker.file, decl: decl as u32 }).collect::<Vec<_>>();
         checker.value_of(&declarations)
+    }
+
+    #[test]
+    fn generic_callback_inference_preserves_async_returns() {
+        let source = r#"
+            declare function infer<T>(callback: () => T): T;
+            infer(async () => {});
+            infer(async (): number => 1);
+            infer(async () => 1);
+            infer(() => 1);
+            infer(() => {});
+        "#;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("callback-inference");
+        let inputs = [
+            ("tsconfig.json", r#"{"compilerOptions":{"lib":["fixture"],"types":[]}}"#),
+            ("node_modules/typescript/lib/lib.fixture.d.ts", "interface Promise<T> { then(callback: (value: T) => unknown): unknown }"),
+            ("main.ts", source),
+        ];
+        struct Buffers(Vec<std::path::PathBuf>);
+        impl Drop for Buffers {
+            fn drop(&mut self) {
+                for path in &self.0 { crate::native::ts::reads::drop_buffer(path); }
+            }
+        }
+        let buffers = Buffers(inputs.iter().map(|(name, _)| dir.join(name)).collect());
+        for ((_, text), path) in inputs.iter().zip(&buffers.0) {
+            crate::native::ts::reads::set_buffer(path, text);
+        }
+        let front = crate::engine::tests::native_front();
+        let parsed = crate::native::ts::parse(source, false).expect("parses");
+        let tree = crate::grammar::Tree::from_native(parsed.nodes, parsed.root);
+        let project = crate::native::ts::modules::Project::default();
+        let path = dir.join("main.ts");
+        let file = NativeFile::new(crate::native::ts::syntax::Syntax::new(&tree, source, &front), &path, &project);
+        let calls = tree.order.iter().copied().filter(|&node| file.syntax.is(node, crate::native::ts::kinds::Kind::Call)).collect::<Vec<_>>();
+        let checker = &file.typing().checker;
+        assert!(checker.is_thenable(&checker.global_named("Promise", vec![Ty::Prim("number")])));
+        for (expression, asynchronous) in calls.into_iter().zip([true, true, true, false, false]) {
+            let result = file.type_of(expression);
+            assert_eq!(checker.is_thenable(&result), asynchronous, "{result:?}");
+        }
     }
 
     #[test]
