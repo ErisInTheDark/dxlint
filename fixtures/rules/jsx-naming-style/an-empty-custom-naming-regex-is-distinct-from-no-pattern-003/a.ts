@@ -1,0 +1,1 @@
+const ordinaryName = 1;

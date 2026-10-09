@@ -1,0 +1,1 @@
+class Skipped {} class Checked {}

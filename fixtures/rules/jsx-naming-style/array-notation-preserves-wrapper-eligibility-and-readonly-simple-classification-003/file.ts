@@ -1,0 +1,1 @@
+type Array<T> = T; type ReadonlyArray<T> = T; type Readonly<T> = T; type A = Array<number>; type B = ReadonlyArray<number>; type C = Readonly<number[]>;

@@ -1,0 +1,1 @@
+class Promoted { constructor(private readonly value: number) {} }

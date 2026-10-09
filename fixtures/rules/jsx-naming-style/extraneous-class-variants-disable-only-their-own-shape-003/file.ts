@@ -1,0 +1,1 @@
+class Empty {} class Constructor { constructor() {} } class Static { static value = 1; } class Inherited extends Base {} class Promoted { constructor(public value: number) {} } class Instance { value = 1; }

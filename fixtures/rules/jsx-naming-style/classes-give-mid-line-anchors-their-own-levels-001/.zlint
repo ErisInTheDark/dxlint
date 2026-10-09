@@ -1,0 +1,3 @@
+import .ts
+in ts_line rule ind info "{indent_level}:{len(indent_anchor)}" { indent in ts_object
+indent in ts_variable_declaration class declarators }

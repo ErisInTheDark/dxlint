@@ -1,0 +1,1 @@
+declare const IS_READY: boolean | null; declare const ready: boolean | undefined; declare const mixed: boolean | string; declare const absent: null;

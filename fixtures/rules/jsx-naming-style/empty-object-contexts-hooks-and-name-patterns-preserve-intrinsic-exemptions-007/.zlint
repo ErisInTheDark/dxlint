@@ -1,0 +1,4 @@
+import .ts
+override in ts_interface let no_empty_object_type_checked name != 'EmptyInterface'
+override in ts_type_literal let no_empty_object_type_checked parent not ts_type_alias
+rule no-empty-object-type

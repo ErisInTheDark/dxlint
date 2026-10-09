@@ -1,0 +1,4 @@
+import .ts
+in ts_line rule ind info "{indent_level}:{indent_anchor}" { indent reset if is ts_assignment then js_re_test('', '[') else false
+indent in ts_call
+indent ts_assignment from "" class assignments }

@@ -1,0 +1,1 @@
+type A = Readonly<number[]>; type B = Readonly<(X | Y)[]>; type C = Readonly<number>; type D = Array<number, string>; type E = ReadonlyArray<number, string>; type F = readonly [number]; type G = NS.Array<number>;

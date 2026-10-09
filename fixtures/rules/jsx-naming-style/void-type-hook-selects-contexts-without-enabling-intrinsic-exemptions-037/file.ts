@@ -1,0 +1,1 @@
+type Allowed = ns.Promise<void>; type Other = Box<void>; function f(this: void) {} let value: void;

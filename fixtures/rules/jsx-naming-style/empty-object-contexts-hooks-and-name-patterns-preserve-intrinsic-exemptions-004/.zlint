@@ -1,0 +1,2 @@
+import .ts
+rule no-empty-object-type { set allowSingleExtends true }

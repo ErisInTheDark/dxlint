@@ -1,0 +1,1 @@
+a.ts:1:1-1:1 custom-naming#0 name `__IS_READY` must have one of the following prefixes: IS_

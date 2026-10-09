@@ -1,0 +1,3 @@
+import .ts
+override in ts_namespace let no_namespace_checked true
+rule no-namespace

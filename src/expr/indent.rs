@@ -3,10 +3,6 @@
 use super::{CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 
-#[cfg(test)]
-#[path = "indent_tests.rs"]
-mod tests;
-
 /// A rule's declarations and target-specific candidates in precedence order.
 pub struct IndentPlan {
     rules: Vec<IndentRule>,
@@ -125,32 +121,6 @@ mod semantic_tests {
 
     use crate::config::ast::Severity;
     use crate::engine::tests::native_linter;
-
-    #[test]
-    fn qualified_candidates_beat_later_plain_targets_and_forward_anchors_fall_back() {
-        let source = "foo(\n  []\n);\n";
-        for (rules, expected) in [
-            ("indent ts_array by 7\nindent ts_call.argument by 3\nindent ts_array by 9", "3"),
-            ("indent ts_array by 2\nindent ts_call.argument, ts_array from offset by 9", "2"),
-        ] {
-            let l = native_linter(&format!("in ts_line rule i info \"{{indent_level}}\" {{ {rules} }}"));
-            let got = l.lint(Path::new("/root/a.ts"), source);
-            assert_eq!(got[1].message, expected);
-            assert!(got.iter().all(|d| d.severity != Severity::Error));
-        }
-    }
-
-    #[test]
-    fn anchor_reads_do_not_evaluate_unused_level_expressions() {
-        let source = "{\n  action();\n}\n";
-        for (value, should_fail) in [("indent_anchor", false), ("indent_level", true)] {
-            let l = native_linter(&format!(
-                "in ts_line rule i info \"{{{value}}}\" {{ indent in ts_block by [] }}"
-            ));
-            let got = l.lint(Path::new("/root/a.ts"), source);
-            assert_eq!(got.iter().any(|d| d.severity == Severity::Error), should_fail);
-        }
-    }
 
     #[test]
     fn hits_do_not_cross_rules_nodes_or_files() {

@@ -1,0 +1,1 @@
+class Instance { value = 1; }

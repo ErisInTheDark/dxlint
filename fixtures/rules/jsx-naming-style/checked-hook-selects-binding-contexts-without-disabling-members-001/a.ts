@@ -1,0 +1,1 @@
+const bad_name = 1; function BadFunction() {} const object = { bad_property: 1 };

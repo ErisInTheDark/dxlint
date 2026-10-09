@@ -1,0 +1,1 @@
+class C { constructor(public a: number, readonly b: number, private readonly c: number, ordinary: number, ...rest: any[]) {} }

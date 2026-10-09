@@ -1,0 +1,1 @@
+class Constructed { constructor() { work(); } }

@@ -1,0 +1,4 @@
+file.ts:1:16-1:23 consistent-type-assertions:object#0
+file.ts:1:39-1:48 consistent-type-assertions:array#0
+file.ts:1:55-1:62 consistent-type-assertions:object#0
+file.ts:1:64-1:73 consistent-type-assertions:array#0

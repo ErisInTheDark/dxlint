@@ -1,0 +1,1 @@
+const x = <Outer><Box / ></Outer>;

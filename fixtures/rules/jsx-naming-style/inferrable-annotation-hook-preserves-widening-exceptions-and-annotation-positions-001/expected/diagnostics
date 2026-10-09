@@ -1,0 +1,4 @@
+file.ts:1:15-1:21 no-inferrable-types#0
+file.ts:1:188-1:194 no-inferrable-types#0
+file.ts:1:227-1:233 no-inferrable-types#0
+file.ts:1:97-1:103 no-inferrable-types#0

@@ -1,0 +1,5 @@
+import .ts
+rule jsx-newline {
+set prevent true
+set allowMultilines true
+}

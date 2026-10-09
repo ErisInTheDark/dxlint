@@ -1,0 +1,1 @@
+class Mixed { constructor() {} static value = 1; }

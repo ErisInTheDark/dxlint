@@ -1,0 +1,3 @@
+a.ts:1:1-2:1 i#0 0
+a.ts:2:1-3:1 i#error rule `i` failed here: expected a number, got a list
+a.ts:3:1-4:1 i#0 0

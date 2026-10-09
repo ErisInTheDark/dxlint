@@ -1,0 +1,3 @@
+import .ts
+override in ts_jsx_attribute, ts_jsx_spread_attribute let jsx_prop_indent_extra false
+rule jsx-indent-props { set mode 2 }

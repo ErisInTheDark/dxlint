@@ -1,0 +1,3 @@
+import .ts
+override in ts_class let no_extraneous_class_checked name == "Checked"
+rule no-extraneous-class

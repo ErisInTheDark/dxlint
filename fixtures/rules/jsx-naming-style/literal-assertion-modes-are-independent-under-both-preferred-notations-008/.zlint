@@ -1,0 +1,4 @@
+import .ts
+rule consistent-type-assertions { set assertionStyle 'as' }
+rule consistent-type-assertions:object set 'never'
+rule consistent-type-assertions:array set 'allow-as-parameter'

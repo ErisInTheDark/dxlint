@@ -1,0 +1,1 @@
+const self = this; const {a} = this; const [b] = this; target = this; ({c} = this); [d] = this; const nested = foo(this); const literal = 'this'; const paren = (this);

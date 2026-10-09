@@ -1,0 +1,1 @@
+let value: { field: number };

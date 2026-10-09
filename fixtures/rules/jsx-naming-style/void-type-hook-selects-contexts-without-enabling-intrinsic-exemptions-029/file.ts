@@ -1,0 +1,1 @@
+type Value = void | never | Promise<void>;

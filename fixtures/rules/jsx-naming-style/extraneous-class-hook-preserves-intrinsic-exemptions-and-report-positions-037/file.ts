@@ -1,0 +1,1 @@
+abstract class Abstract { abstract method(): void; }

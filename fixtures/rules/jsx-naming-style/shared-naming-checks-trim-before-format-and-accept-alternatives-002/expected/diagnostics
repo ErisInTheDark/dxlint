@@ -1,0 +1,1 @@
+a.ts:1:1-1:1 custom-naming#0 name `IS_ready` trimmed as `ready` must match one of the following formats: UPPER_CASE

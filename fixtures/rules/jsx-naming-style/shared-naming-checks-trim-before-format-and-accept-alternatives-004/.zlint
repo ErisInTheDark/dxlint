@@ -1,0 +1,10 @@
+import .ts
+
+            in ts_program rule custom-naming {
+                let failure naming_failure("__IS_READY", false, {
+                    formats: ["UPPER_CASE"], leadingUnderscore: "allow",
+                    trailingUnderscore: "allow", prefix: ["IS_"]
+                })
+                when failure != null
+                warn naming_message("__IS_READY", failure)
+            }

@@ -1,0 +1,2 @@
+import .ts
+in ts_line rule i info "{indent_anchor}" { indent in ts_block by [] }

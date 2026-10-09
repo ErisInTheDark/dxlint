@@ -1,0 +1,4 @@
+import .ts
+in ts_line rule i info "{indent_level}" { indent ts_array by 7
+indent ts_call.argument by 3
+indent ts_array by 9 }

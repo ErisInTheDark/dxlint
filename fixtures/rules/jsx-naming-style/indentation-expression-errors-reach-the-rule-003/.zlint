@@ -1,0 +1,3 @@
+import .ts
+in ts_line rule ind info "{indent_level}:{indent_anchor}" { indent in ts_call
+indent ts_assignment.right from [] }

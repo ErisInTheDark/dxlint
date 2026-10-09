@@ -1,0 +1,4 @@
+a.ts:1:111-1:113 empty-member-names#0 empty member
+a.ts:1:19-1:21 empty-member-names#0 empty member
+a.ts:1:44-1:46 empty-member-names#0 empty member
+a.ts:1:78-1:80 empty-member-names#0 empty member

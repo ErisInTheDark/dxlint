@@ -1,0 +1,1 @@
+const a = {} as any; const b = [] as unknown; const c = {} as const; const d = value as T;

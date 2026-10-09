@@ -1,0 +1,1 @@
+const object = <T>{}; const array = <T[]>[]; take(<T>{}, <T[]>[]);

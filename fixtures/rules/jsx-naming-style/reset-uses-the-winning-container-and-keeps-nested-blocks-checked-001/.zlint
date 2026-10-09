@@ -1,0 +1,4 @@
+import .ts
+in ts_line rule ind info "{indent_level}:{len(indent_anchor)}" { indent reset is ts_class
+indent in ts_class
+indent in ts_method.body }

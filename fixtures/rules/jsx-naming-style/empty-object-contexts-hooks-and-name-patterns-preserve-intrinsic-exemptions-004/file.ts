@@ -1,0 +1,1 @@
+interface EmptyInterface {} interface SingleInterface extends Base {} interface KeepInterface {} interface Multiple extends Base, Other {} interface Nonempty { value: string } type EmptyAlias = {}; type KeepAlias = {}; type Intersection = {} & Marker; let inline: {};

@@ -1,0 +1,1 @@
+a.ts:1:55-1:60 boolean-names#0 name `ready` must have one of the following prefixes: IS_

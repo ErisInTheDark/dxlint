@@ -1,0 +1,3 @@
+import .ts
+override in ts_jsx_opening let indent_reset true
+rule indent { set mode 4 }

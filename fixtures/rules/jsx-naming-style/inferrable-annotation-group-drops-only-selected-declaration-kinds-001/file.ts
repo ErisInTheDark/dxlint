@@ -1,0 +1,1 @@
+let value: number = 1; class C { property: number = 1; } function f(parameter: number = 1) {}

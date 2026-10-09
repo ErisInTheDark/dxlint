@@ -1,0 +1,1 @@
+const example = { '': 1 }; class Example { '' = 1; } interface ExampleType { '': number; } enum ExampleEnum { '' = 1 }

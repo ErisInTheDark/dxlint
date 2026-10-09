@@ -1,0 +1,1 @@
+const { old_name: goodName, plain_name, nested: { bad_name } } = source;

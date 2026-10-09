@@ -1,0 +1,1 @@
+export const ignoredName = 1; const BAD_NAME = 2; const badName = 3; class goodName {}

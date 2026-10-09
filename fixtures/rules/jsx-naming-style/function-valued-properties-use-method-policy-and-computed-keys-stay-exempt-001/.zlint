@@ -1,0 +1,6 @@
+import .ts
+
+        rule naming-convention:class-method { set formats ["PascalCase"] }
+        rule naming-convention:class-property { set formats ["UPPER_CASE"] }
+        rule naming-convention:type-method { set formats ["PascalCase"] }
+        rule naming-convention:type-property { set formats ["UPPER_CASE"] }

@@ -1,0 +1,1 @@
+const x = <Box a="&#39;" b={"text"} />;

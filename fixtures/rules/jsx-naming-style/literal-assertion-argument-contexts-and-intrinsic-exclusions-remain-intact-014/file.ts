@@ -1,0 +1,1 @@
+const a = {} as T; const b = [] as T[]; const c = <T>{}; const d = <T[]>[]; const e = {} as const; const f = <const>[];

@@ -1,0 +1,6 @@
+import .ts
+
+        in naming_name_node rule empty-member-names {
+            when naming_context != null && naming_name == "" && naming_requires_quotes
+            warn "empty member"
+        }
