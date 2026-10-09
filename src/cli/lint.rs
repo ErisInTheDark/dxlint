@@ -171,6 +171,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
     let (tx, rx) = mpsc::channel::<Msg>();
     let fix = args.fix;
     let format = args.format;
+    let mut fired = crate::fx_hash::FxHashMap::<String, u64>::default();
     let mut errors = 0;
     let mut warnings = 0;
     let mut other = 0;
@@ -248,6 +249,9 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
                     bytes += r.text.len();
                     fixed_total += r.fixed;
                     for d in &r.diags {
+                        if args.profile && format == Format::Jsonl && d.message_index.is_some() {
+                            *fired.entry(d.rule.clone()).or_default() += 1;
+                        }
                         match d.severity {
                             Severity::Error => errors += 1,
                             Severity::Warn => warnings += 1,
@@ -290,7 +294,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
     }
     let _ = output.stdout.flush();
     if args.profile {
-        super::info::profile(output, &linter);
+        super::info::profile(output, &linter, format, &fired);
     }
     let cached = cache.as_ref().map_or(0, Cache::hits);
     if let Some(cache) = cache {

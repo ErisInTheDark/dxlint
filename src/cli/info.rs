@@ -247,8 +247,8 @@ fn is_noise(name: &str) -> bool {
     matches!(name, "parentheses" | "brackets" | "braces") || name.ends_with("escape")
 }
 
-/// `--profile`: the most expensive matchers and rules, on stderr.
-pub fn profile(output: &mut Output<'_>, linter: &Linter) {
+/// Human profiling ranks hot paths; JSONL adds every rule's emitted-report count.
+pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, fired: &crate::fx_hash::FxHashMap<String, u64>) {
     use crate::engine::Profile;
     let Some(p) = &linter.profile else { return };
     let ms = |nanos: u64| nanos as f64 / 1e6;
@@ -294,9 +294,22 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter) {
         .filter(|(_, evals, _)| *evals > 0)
         .collect();
     rules.sort_by_key(|r| std::cmp::Reverse(r.0));
-    output.err(format_args!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}"));
-    for (nanos, evals, name) in rules.iter().take(15) {
-        output.err(format_args!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos)));
+    if format == super::Format::Jsonl {
+        for (index, rule) in linter.rules.iter().enumerate() {
+            let row = serde_json::json!({
+                "kind": "rule-profile",
+                "rule": rule.name,
+                "ms": ms(Profile::get(&p.rule_nanos[index])),
+                "evaluated": Profile::get(&p.rule_evals[index]),
+                "fired": fired.get(&rule.name).copied().unwrap_or(0),
+            });
+            output.out(format_args!("{row}"));
+        }
+    } else {
+        output.err(format_args!("\n  {BOLD}rules{BOLD:#} {DIM}by time{DIM:#}"));
+        for (nanos, evals, name) in rules.iter().take(15) {
+            output.err(format_args!("  {:>11.1} ms {evals:>11} nodes  {CYAN}{name}{CYAN:#}", ms(*nanos)));
+        }
     }
     let mut facts: Vec<(u64, u64, &str)> = crate::expr::facts::FACTS
         .iter()

@@ -67,6 +67,29 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 "#;
 
 #[test]
+fn jsonl_profile_counts_emitted_reports_and_includes_unfired_rules() {
+    let dir = project("jsonl-profile", &[
+        (".zlint", "lang t \"*.t\"\nin .t match letter /[a-z]/ {\nrule hit warn \"hit\"\nrule quiet warn \"quiet\" { when false }\n}\n"),
+        ("a.t", "ab"), ("b.t", "cd"),
+    ]);
+    for jobs in ["1", "3"] {
+        let out = zlint(&dir, &["--no-cache", "--profile", "--format", "jsonl", "--jobs", jobs]);
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+        let records: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let profiles: Vec<_> = records.iter().filter(|record| record["kind"] == "rule-profile").collect();
+        assert_eq!(profiles.len(), 2, "every compiled rule has a profile, including unfired rules");
+        for profile in profiles {
+            let emitted = records.iter().filter(|record| record["kind"] != "rule-profile" && record["rule"] == profile["rule"]).count();
+            assert_eq!(profile["fired"].as_u64(), Some(emitted as u64));
+            assert!(profile["evaluated"].as_u64().is_some_and(|count| count >= emitted as u64));
+            assert!(profile["ms"].as_f64().is_some_and(|ms| ms.is_finite() && ms >= 0.0));
+        }
+    }
+    let out = zlint(&dir, &["--no-cache", "--format", "jsonl"]);
+    assert!(stdout(&out).lines().all(|line| serde_json::from_str::<serde_json::Value>(line).unwrap()["kind"] != "rule-profile"));
+}
+
+#[test]
 fn fix_preview_is_one_readonly_pass_for_disk_and_packed_sources() {
     let rules = "lang t \"*.t\"\nin .t match letter /[ab]/ { rule capitalise warn \"lowercase\" fix as upper(text) }\n";
     let files = [(".zlint", rules), ("a.t", "ab"), ("clean.t", "XY"), ("ignored.js", "ab")];
