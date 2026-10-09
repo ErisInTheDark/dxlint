@@ -1,0 +1,4 @@
+import .ts
+rule indent {
+  set mode 2
+}

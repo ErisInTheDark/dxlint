@@ -549,9 +549,9 @@ in key_spacing_containers rule key-spacing:aligned-before {
     format_key_wrong spacing_entry.policy.before spacing_entry.policy.before_mode spacing_entry.site.typed
   }
   when spacing_entry.policy.before == 0 || !re_test(spacing_entry.site.before, /[\n\r\u{2028}\u{2029}]/)
-  fix as {
-    value edits: [format_key_fix(spacing_entry.site, true, spacing_entry.policy.before)]
-    value expression_fix_edits(text, offset, edits)
+  fix at format_key_fix(spacing_entry.site, true, spacing_entry.policy.before) as {
+    value key_fix: format_key_fix(spacing_entry.site, true, spacing_entry.policy.before)
+    value key_fix.text
   }
   @format_key_before_report
 }
@@ -563,9 +563,9 @@ in key_spacing_containers rule key-spacing:aligned-after {
     format_key_wrong spacing_entry.policy.after spacing_entry.policy.after_mode spacing_entry.site.typed
   }
   when spacing_entry.policy.after == 0 || !re_test(spacing_entry.site.after, /[\n\r\u{2028}\u{2029}]/)
-  fix as {
-    value edits: [format_key_fix(spacing_entry.site, false, spacing_entry.policy.after)]
-    value expression_fix_edits(text, offset, edits)
+  fix at format_key_fix(spacing_entry.site, false, spacing_entry.policy.after) as {
+    value key_fix: format_key_fix(spacing_entry.site, false, spacing_entry.policy.after)
+    value key_fix.text
   }
   @format_key_after_report
 }

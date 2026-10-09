@@ -80,13 +80,12 @@ in ts_index rule dot-notation:computed {
   when !allow_index || property.declared == true || !any(object.index_key_types, key_type => key_type.string_like)
   let open index.space_before.start - 1
   let fixable { value overlapping(ts_comment, open, end_offset); count } == 0
-  let prefix byte_slice(text, 0, open - offset)
   let separator if optional != null then "" else if object is ts_number then " ." else "."
   let trailing if space_after.text == "" && next_token is (ts_identifier, ts_keyword, ts_number, ts_boolean, ts_null) then " " else ""
   let quoted if template then "`" name "`" else if literal.type == "string" then "\"" name "\"" else name
   report at key
   warn "[{quoted}] is better written in dot notation."
-  fix if fixable as prefix separator name trailing
+  fix at { start: open, end: end_offset } if fixable as separator name trailing
 }
 
 in ts_member rule dot-notation:keyword {
@@ -94,10 +93,9 @@ in ts_member rule dot-notation:keyword {
   when !allowKeywords && structure_dot_keyword(property.text)
   let dot property.space_before.start - 1
   let fixable !(object is ts_identifier && object.text == "let" && optional == null) && { value overlapping(ts_comment, dot, property.offset); count } == 0
-  let prefix byte_slice(text, 0, dot - offset)
   report at property.node
   warn ".{property} is a syntax error."
-  fix if fixable as prefix (if optional != null then "." else "") "[\"" property "\"]"
+  fix at { start: dot, end: end_offset } if fixable as (if optional != null then "." else "") "[\"" property "\"]"
 }
 
 in ts_conditional let structure_ternary_jsx if parent is ts_conditional then parent.structure_ternary_jsx else parent is ts_jsx_expression
@@ -611,6 +609,8 @@ in structure_comment rule name {
   when !any(targets, target => { value if before then allowedStart else allowedEnd; contains target })
   when !(contains(targets, "Block") && (if before then allowBlockStart else allowBlockEnd) && !(contains(targets, "Class") && (if before then allowClassStart else allowClassEnd) == false))
   warn if before then "Expected line before comment." else "Expected line after comment."
+  let comment_fix_site if before then row.offset else end_offset
+  fix at { start: comment_fix_site, end: comment_fix_site } as "\n"
 }
 }
 @structure_comment_gap(lines-around-comment:before, true)

@@ -433,7 +433,7 @@ in ts_line rule indent {
   let unit_name if mode == "tab" then "tab" else "space"
   let actual if spaces > 0 then "{spaces}{if mode == 'tab' then if spaces == 1 then ' space' else ' spaces' else ''}" else if tabs > 0 then "{tabs}{if mode != 'tab' then if tabs == 1 then ' tab' else ' tabs' else ''}" else "0"
   report at if jsx_text != null then jsx_text.node else { start: offset, end: offset + byte_len(indent) }
-  fix as wanted { value indent; byte_len: byte_len; value byte_slice(text, byte_len) }
+  fix at { start: offset, end: offset + byte_len(indent) } as wanted
   warn "Expected indentation of {len(wanted)} {unit_name}{if len(wanted) == 1 then '' else 's'} but found {actual}."
 }
 
