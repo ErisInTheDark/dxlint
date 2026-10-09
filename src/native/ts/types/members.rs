@@ -426,6 +426,7 @@ impl Checker<'_> {
     fn instance_member<const METADATA: bool, const PROTOTYPE: bool>(&self, sym: &[DeclRef], args: &[Ty], name: &str, receiver: &Ty) -> Resolution {
         let mut sigs: Vec<Arc<Sig>> = Vec::new();
         let mut sig_env: Option<Env> = None;
+        let mut optional = false;
         let mut declarations = Vec::new();
         for &r in sym {
             let Some(s) = self.summary_of(r.file) else { continue };
@@ -446,6 +447,7 @@ impl Checker<'_> {
                     MemberKind::Method => {
                         sigs.extend(m.sigs.iter().cloned());
                         sig_env.get_or_insert_with(|| env.clone());
+                        optional |= m.optional;
                     }
                     MemberKind::Prop => return Resolution { ty: self.prop_type(m, &env), from_index: false, declared: true, declarations, signature_keys: Vec::new() },
                     _ => {}
@@ -453,7 +455,8 @@ impl Checker<'_> {
             }
         }
         if let Some(env) = sig_env {
-            return Resolution { ty: Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env), None))), from_index: false, declared: true, declarations, signature_keys: Vec::new() };
+            let ty = Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env), None)));
+            return Resolution { ty: if optional { ty.or_undefined() } else { ty }, from_index: false, declared: true, declarations, signature_keys: Vec::new() };
         }
         // Inherited.
         let mut unresolved_base = false;
@@ -488,21 +491,25 @@ impl Checker<'_> {
 
     fn member_from<'m, const METADATA: bool>(&self, members: impl Iterator<Item = &'m Member>, name: &str, env: &Env, owner: Option<DeclRef>) -> Option<Resolution> {
         let mut sigs = Vec::new();
+        let mut optional = false;
         let mut declarations = Vec::new();
         for m in members.filter(|m| &*m.name == name) {
             if METADATA && matches!(m.kind, MemberKind::Method | MemberKind::Prop) {
                 declarations.push(MemberDeclaration { owner, member: m.clone(), environment: Some(env.clone()), origin: None });
             }
             match m.kind {
-                MemberKind::Method => sigs.extend(m.sigs.iter().cloned()),
+                MemberKind::Method => {
+                    sigs.extend(m.sigs.iter().cloned());
+                    optional |= m.optional;
+                }
                 MemberKind::Prop => return Some(Resolution { ty: self.prop_type(m, env), from_index: false, declared: true, declarations, signature_keys: Vec::new() }),
                 _ => {}
             }
         }
-        (!sigs.is_empty()).then(|| Resolution {
-            ty: Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env.clone()), None))),
-            from_index: false, declared: true, declarations,
-            signature_keys: Vec::new(),
+        (!sigs.is_empty()).then(|| {
+            let ty = Ty::Fn(Arc::new(Callable::new(sigs, Arc::new(env.clone()), None)));
+            Resolution { ty: if optional { ty.or_undefined() } else { ty },
+                from_index: false, declared: true, declarations, signature_keys: Vec::new() }
         })
     }
 

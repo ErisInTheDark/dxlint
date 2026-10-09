@@ -50,6 +50,37 @@ fn with_library(src: &str, run: impl FnOnce(&Checker<'_>)) {
 }
 
 #[test]
+fn optional_method_lookup_preserves_callable_nullability() {
+    for (source, static_side, optional) in [
+        ("interface Target { f?(): boolean; }", false, true),
+        ("class Target { f?(): boolean { return true; } }", false, true),
+        ("type Target = { f?(): boolean; };", false, true),
+        ("interface Base { f?(): boolean; } interface Target extends Base {}", false, true),
+        ("class Base { f?(): boolean { return true; } } class Target extends Base {}", false, true),
+        ("declare class Target { static f?(): boolean; }", true, true),
+        ("type Target = { f?: () => boolean; };", false, true),
+        ("interface Target { f(): boolean; }", false, false),
+    ] {
+        with_library(source, |checker| {
+            let ty = checker.eval(&TypeSyn::Ref(vec!["Target".into()].into(), Vec::new()), &Env::file(checker.file));
+            let ty = if static_side {
+                let Ty::Named(symbol, _) = ty else { panic!("class instance") };
+                Ty::Class(symbol)
+            } else { ty };
+            let resolution = checker.member_resolution(&ty, "f");
+            let direct = checker.member(&ty, "f");
+            for value in [&resolution.ty, &direct] {
+                let parts = match value { Ty::Union(parts) => parts.as_slice(), _ => std::slice::from_ref(value) };
+                assert_eq!(parts.iter().any(|part| matches!(part, Ty::Undefined)), optional, "{source}: {value:?}");
+                assert!(parts.iter().any(|part| matches!(part, Ty::Fn(_))), "{source}: {value:?}");
+            }
+            assert!(resolution.declared);
+            assert_eq!(resolution.declarations.iter().any(|decl| decl.member.optional), optional, "{source}");
+        });
+    }
+}
+
+#[test]
 fn named_member_queries_do_not_rescan_large_declarations() {
     let count = 64;
     let properties = (0..count).map(|i| format!("p{i}: number; static p{i}: string;")).collect::<String>();

@@ -1,0 +1,1 @@
+declare class Item { readonly description: { repairable?: boolean } | undefined; get asItem(): Item | undefined; } declare const x: Item; if (x?.asItem && x.asItem.description?.repairable === false) {}

@@ -19,6 +19,12 @@ pub(super) fn literal_values(ty: &Ty) -> Value<'static> {
 
 fn collect_literals(ty: &Ty, values: &mut Vec<Value<'static>>) {
     match ty {
+        // Boolean stores the finite `false | true` domain compactly.
+        Ty::Prim("boolean") => {
+            for value in [false, true] {
+                values.push(Value::record(vec![("type".into(), Value::from("boolean")), ("value".into(), Value::Bool(value))]));
+            }
+        }
         Ty::Union(parts) | Ty::Inter(parts) => {
             for part in parts {
                 collect_literals(part, values);
@@ -63,5 +69,22 @@ pub(super) fn has_enum(ty: &Ty, checker: &Checker<'_>) -> bool {
         Ty::Named(symbol, _) => checker.is_enum(symbol),
         Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(|part| has_enum(part, checker)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boolean_domains_keep_both_literal_possibilities() {
+        let values = literal_values(&Ty::Union(vec![Ty::Prim("boolean"), Ty::Undefined]));
+        for possible in [false, true] {
+            assert!(values.items().iter().any(|literal|
+                literal.key("type").text() == "boolean" && literal.key("value") == Value::Bool(possible)));
+        }
+        let narrowed = literal_values(&Ty::Lit("true".into(), "boolean"));
+        assert!(narrowed.items().iter().any(|literal| literal.key("value") == Value::Bool(true)));
+        assert!(narrowed.items().iter().all(|literal| literal.key("value") == Value::Bool(true)));
     }
 }

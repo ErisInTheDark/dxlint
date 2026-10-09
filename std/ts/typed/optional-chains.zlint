@@ -1,6 +1,5 @@
 # Optional-chain selection, guard semantics and atomic edits.
 import .ts/expression-fixes
-import .ts/problems
 
 define {
 
@@ -41,7 +40,7 @@ fn optional_extends(a, b) = { value a; walk (n) if n is ts_non_null then n.expre
   && !optional_same(a, b) && { value b; walk (n) optional_base(n); slice 1; any (n) optional_same(a, n) }
 fn optional_nullish(n) = if n is ts_null then "null" else if n is ts_identifier && n.text == "undefined" then "undefined"
   else if n is ts_string && n.literal_value.value == "undefined" then "typeof" else null
-fn optional_subject(n, value) = if value == "typeof" && n is ts_unary && n.operator == "typeof" && !(n.argument is ts_identifier && n.argument.is_real_global) then n.argument.node
+fn optional_subject(n, value) = if value == "typeof" && n is ts_unary && n.operator == "typeof" && !(n.argument is ts_identifier && n.argument.resolved == "global") then n.argument.node
   else if value != "typeof" then n else null
 fn optional_comparison_kind(value, comparison, op) = if value != "typeof" && starts_with(comparison, "!") != (op == "&&") then "last"
   else if comparison == "==" || comparison == "!=" then "nullish" else if value == "typeof" then "undefined" else value
@@ -93,10 +92,15 @@ fn optional_terminal_allowed(n, comparison, op) = if comparison == (if op == "&&
   else if comparison == (if op == "&&" then "!=" else "==") then { value n.type_flags.nonempty ?? ["unknown"]; all (flag) contains(["null", "undefined", "nullable", "union"], flag) } else false
 fn optional_item(current) = {node: current.node, subject: current.subject, kind: current.kind, yoda: current.yoda,
   terminal: current.terminal, end: current.node.end_offset}
+fn optional_member_based(n) = {
+  value bare: unparenthesised_node(n)
+  value callee: if bare is ts_call then unparenthesised_node(bare.callee.node) else null
+  value bare.in_optional_chain != true && (bare is (ts_member, ts_index) || callee is (ts_member, ts_index))
+}
 fn optional_terminal(state, current, op, opts) = {
   value previous: last(state.items).subject
-  value left: optional_extends(previous, current.node.left.node)
-  value right: optional_extends(previous, current.node.right.node)
+  value left: optional_member_based(current.node.left.node) && optional_extends(previous, current.node.left.node)
+  value right: optional_member_based(current.node.right.node) && optional_extends(previous, current.node.right.node)
   value compared: if right then current.node.right.node else current.node.left.node
   value other: if right then current.node.left.node else current.node.right.node
   value accepted: len(state.items) > 0 && left != right && optional_terminal_allowed(other, current.node.operator, op)
