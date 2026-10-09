@@ -1,0 +1,8 @@
+lang t "*.t"
+in .t match word /[a-z]+/ {
+    rule branch warn if text == "a" then "same" else if text == "b" then "same" else "other"
+    rule fallback warn (if text == "a" then null else "present") ?? "fallback"
+    rule pipeline warn { value text; then (word) if word == "a" then "first" else "second" }
+    rule constant warn if false then "first" else "second"
+    rule failure warn num(text)
+}

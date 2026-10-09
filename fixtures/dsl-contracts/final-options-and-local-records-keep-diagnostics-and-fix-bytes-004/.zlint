@@ -1,0 +1,28 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+                fn runtime(value, owner) = if owner == null then value else value
+                in .t match word /[a-z]+/ {
+                    rule options {
+                        option replacement string = "z"
+                        option enabled boolean = false
+                        let policy { replacement: replacement, enabled: enabled, suffix: trim(" ! ") }
+                        when policy.enabled && text != policy.replacement
+                        fix as policy.replacement
+                        warn "{text} -> {policy.replacement}{policy.suffix}"
+                    }
+                }
+                rule options { set replacement "b" }
+                rule options {
+                    set enabled true
+                    set replacement "c"
+                }

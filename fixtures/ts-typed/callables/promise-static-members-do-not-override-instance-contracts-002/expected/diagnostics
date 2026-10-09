@@ -1,0 +1,3 @@
+main.ts:4:45-4:51 no-misused-promises:void-inherited-methods#0
+main.ts:4:57-4:62 no-misused-promises:void-inherited-methods#0
+main.ts:4:90-4:98 no-misused-promises:void-inherited-methods#0

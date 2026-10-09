@@ -1,0 +1,19 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            match word /[a-z]+/
+            in .t, paren match word
+            in paren, word rule selected {
+                let node if starts_with(text, "(") then { value descendants(word); first } else null
+                when parent is paren && !(parent is word)
+                warn "actual parent selected"
+            }

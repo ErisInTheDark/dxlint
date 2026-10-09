@@ -1,0 +1,1 @@
+function _task(_value: number) { work(); work(); }

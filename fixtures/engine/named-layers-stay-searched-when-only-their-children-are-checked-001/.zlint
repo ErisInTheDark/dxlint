@@ -1,0 +1,17 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t layer lines match line /^[^\n]+/ {
+          match shout /[A-Z]{3,}/ {
+            rule no-shout warn "quiet please"
+          }
+        }

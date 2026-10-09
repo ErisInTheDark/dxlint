@@ -1,0 +1,3 @@
+file.t:1:2-1:4 trailing-ws#0 trailing whitespace
+file.t:2:7-2:9 trailing-ws#0 trailing whitespace
+file.t:3:6-3:7 trailing-ws#0 trailing whitespace

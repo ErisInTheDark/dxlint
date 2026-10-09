@@ -1,0 +1,1 @@
+class C { property: number = 1; }

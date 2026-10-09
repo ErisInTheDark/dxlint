@@ -1,0 +1,7 @@
+import .ts
+
+        define {
+          in ts_block rule pad:top info "{opener.space_after.blank_lines}" { when opener.line != closer.line }
+          in ts_block rule pad:bottom info "{closer.space_before.blank_lines}" { when opener.line != closer.line }
+        }
+        rule pad

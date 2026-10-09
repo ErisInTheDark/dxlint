@@ -1,0 +1,2 @@
+a.js:1:2-1:7 no-implicit-globals:leak#0
+a.js:1:9-1:15 no-implicit-globals:leak#0

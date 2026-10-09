@@ -1,0 +1,3 @@
+import .ts
+rule no-unsafe-argument
+rule no-unsafe-argument:*

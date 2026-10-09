@@ -1,0 +1,28 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        schema word_choice {
+          word: string = "*"  "which word"
+          say: string
+        }
+        in .t match word /[a-z]+/ {
+          rule pick warn "{find_last(config, c => c.word == text || c.word == '*').say}" {
+            option config word_choice[] = [] "what to say about which word"
+            when any(config, c => c.word == text || c.word == "*")
+          }
+        }
+        rule pick {
+          set config [
+            { say: "any" },
+            { word: "ab", say: "ab!" },
+          ]
+        }

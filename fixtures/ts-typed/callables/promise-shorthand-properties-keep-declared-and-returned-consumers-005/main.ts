@@ -1,0 +1,1 @@
+const callback = async () => {}; const make: () => Record<string, () => void> = () => ({ callback });

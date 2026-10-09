@@ -1,0 +1,4 @@
+file.ts:6:1-6:8 t#0 number
+file.ts:7:1-7:10 t#0 string
+file.ts:8:1-8:8 t#0 number
+file.ts:9:1-9:7 t#0 ?

@@ -1,0 +1,24 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            fn fail(value) = { value [value]; fold 0 (state, n) n % 0 }
+            fn identity(value) = value
+            in .t match word /[a-z]+/ {
+                rule failing {
+                    @each item in [7]
+                    warn "{fail(item)}"
+                }
+                rule following {
+                    @each item in [11, 12]
+                    warn "{identity(item)}"
+                }
+            }

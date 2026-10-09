@@ -1,0 +1,3 @@
+import .ts
+in ts_expression_statement.expression rule preserved { when { value (type_flags.nonempty ?? []); contains 'any' } || { value (type_flags.nonempty ?? []); contains 'never' }
+warn 'preserved' }

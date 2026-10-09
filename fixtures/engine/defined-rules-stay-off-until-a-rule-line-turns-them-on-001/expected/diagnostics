@@ -1,0 +1,4 @@
+file.t:1:1-1:3 loud:a#0 a
+file.t:1:1-1:3 loud:b#0 b
+file.t:1:1-1:3 quiet#0 quiet ab
+file.t:1:1-1:3 shy#0 shy ab

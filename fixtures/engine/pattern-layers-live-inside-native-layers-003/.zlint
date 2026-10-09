@@ -1,0 +1,3 @@
+import .ts
+in ts_comment match todo /TODO/
+        in todo rule t warn "todo"

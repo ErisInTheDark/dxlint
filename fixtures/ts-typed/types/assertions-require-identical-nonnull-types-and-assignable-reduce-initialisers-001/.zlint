@@ -1,0 +1,3 @@
+import .ts
+rule non-nullable-type-assertion-style
+rule prefer-reduce-type-parameter

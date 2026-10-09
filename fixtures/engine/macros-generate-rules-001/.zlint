@@ -1,0 +1,19 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        @macro forbid(name, pat, why) {
+          in .t match name pat {
+            rule name error why
+          }
+        }
+        @forbid(dbg, "dbg!", "remove dbg! calls")
+        @forbid(todo_macro, "todo!", "finish this")

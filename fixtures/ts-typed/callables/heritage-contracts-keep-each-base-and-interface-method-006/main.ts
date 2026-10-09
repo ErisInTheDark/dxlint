@@ -1,0 +1,1 @@
+interface A { method(): void } interface B { method(): void } class C implements A, B { async method() {} }

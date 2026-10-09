@@ -1,0 +1,1 @@
+/* global writable: true, readonly: false, disabled: off */ var writable, readonly, disabled;

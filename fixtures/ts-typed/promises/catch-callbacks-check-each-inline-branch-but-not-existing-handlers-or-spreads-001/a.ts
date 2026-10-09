@@ -1,0 +1,1 @@
+interface Like { then(ok: (v: unknown) => void, bad: (e: any) => void): Like; catch(bad: (e: any) => void): Like; } declare const promise: Like; declare const flag: boolean; declare const existing: (e: any) => void; promise.catch(flag ? (e: unknown) => {} : (e: any) => {}); promise.then((e: any) => {}, (e: any) => {}); promise.catch(existing); promise.catch(...[(e: any) => {}]);

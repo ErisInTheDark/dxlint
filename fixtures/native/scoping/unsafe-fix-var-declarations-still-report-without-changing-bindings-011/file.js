@@ -1,0 +1,1 @@
+function f() { for (var x = 0, x = 0; false;) {} }

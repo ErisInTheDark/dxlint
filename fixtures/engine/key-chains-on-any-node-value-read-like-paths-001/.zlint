@@ -1,0 +1,3 @@
+import .ts
+
+        in ts_expression_statement rule s info "{kind_name((expression.node).callee.node)}/{ { value first(expression.nodes).callee.node; kind_name } }/{kind_name(expression.callee.node)}"

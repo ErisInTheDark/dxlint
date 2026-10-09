@@ -1,0 +1,33 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            @macro pass(x) x
+            fn summary(items) = {
+                value original: items
+                map (item, i) { value item; then (value) value + i + count(original) }
+                join ":"
+            }
+            in .t match word /[a-z]+/ {
+                rule nested {
+                    let record { value: 2 }
+                    when record.value == 2
+                      && (if text == "a" then { value [1, 2]; any (item, i) i == 1 } else { value true })
+                    warn {
+                        value "{ { value [1, 2]; summary } }"
+                        then (message) "" { value message } ":" @pass({
+                            value [1, 2];
+                            map (item) item * 2
+                            sum
+                        })
+                    }
+                }
+            }

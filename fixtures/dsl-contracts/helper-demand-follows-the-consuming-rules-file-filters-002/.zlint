@@ -1,0 +1,8 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+
+                in ts_call let boundary opener.text
+                fn boundary_of(n) = n.boundary
+                in ts_call rule shape info "{count(children)}"
+                in ts_call rule boundary info "{boundary_of(node)}" { files "included.ts" }

@@ -1,0 +1,4 @@
+file.ts:1:1-1:5 depth:first#0 0
+file.ts:1:1-1:5 depth:second#0 0
+file.ts:2:7-2:15 depth:first#0 3
+file.ts:2:7-2:15 depth:second#0 3

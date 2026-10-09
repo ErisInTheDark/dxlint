@@ -1,0 +1,1 @@
+const object = { task: async () => { work(); work(); } };

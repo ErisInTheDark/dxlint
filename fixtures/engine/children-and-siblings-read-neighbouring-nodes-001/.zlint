@@ -1,0 +1,5 @@
+import .ts
+
+        in ts_call rule kids info "{ { value children.node; map (c) kind_name(c); join ',' } }"
+        in ts_call.argument rule around info "{ previous.nonempty ?? '-' }<{text}>{ next.nonempty ?? '-' }"
+        in ts_expression_statement rule first info "first" { when previous == null && index == 0 }

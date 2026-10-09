@@ -1,0 +1,22 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            fn identity(value) = value
+            in .t match word /[a-z]+/ {
+                rule folds {
+                @each outer in [10, 20]
+                when { value [1, 2]; fold ([]) (state, n) state map([n], inner => identity(inner + outer)) } != [outer + 1, outer + 2]
+                  || { value null; fold ([outer]) (state, n) state [n] } != [outer]
+                  || { value 3; fold outer (state, n) state + n } != outer + 3
+                warn "fold bindings changed"
+                }
+            }

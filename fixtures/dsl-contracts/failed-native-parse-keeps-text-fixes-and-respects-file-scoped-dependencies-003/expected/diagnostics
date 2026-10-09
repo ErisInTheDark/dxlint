@@ -1,0 +1,4 @@
+included.ts:1:1-2:1 structure#0 0
+included.ts:2:1-2:6 comment#0 comment
+included.ts:2:1-3:1 structure#0 0
+included.ts:3:1-3:16 structure#0 0

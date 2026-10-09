@@ -1,0 +1,14 @@
+import .ts
+in ts_throw rule probe {
+  let caught catch_throw
+  let decision {
+    value parameter: get(caught, "parameter")
+    value caught.arguments
+    slice 1
+    cause: first
+    value caught.arguments
+    leading: slice 0 1
+    value caught_throw_cause_kind(parameter, cause, leading)
+  }
+  warn "{decision}"
+}

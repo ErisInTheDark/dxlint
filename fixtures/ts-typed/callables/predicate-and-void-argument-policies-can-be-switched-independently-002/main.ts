@@ -1,0 +1,1 @@
+const values = [1]; declare function take(callback: () => void): void; values.filter(async () => true); take(async () => {});

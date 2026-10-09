@@ -1,0 +1,1 @@
+type Lowercase<S extends string> = intrinsic; declare const value: Lowercase<'aBc' | 'DEF'>; value;

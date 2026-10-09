@@ -1,0 +1,9 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+
+                in .js match hosted_comment /\/\/[^\n]*/
+              in ts_program match specialised_comment like hosted_comment /\/\/[^\n]*/
+                in hosted_comment rule comment info "comment"
+                in .js layer lines match line /[^\n]+\n?/
+                in line rule text info "text"

@@ -1,0 +1,1 @@
+declare class Take { constructor(cb: () => void) } new Take(async () => {});

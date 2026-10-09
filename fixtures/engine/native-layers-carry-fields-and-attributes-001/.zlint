@@ -1,0 +1,7 @@
+import .ts
+
+        in ts_logical let ops 1 + left.ops + right.ops
+        in ts_parenthesized let ops expression.ops
+        in ts_call let ops sum(argument.ops)
+        in ts_if.test rule complex warn "{ops} in `{text}`" { when ops > 1 }
+        in ts_call.callee rule callee info "{text}"

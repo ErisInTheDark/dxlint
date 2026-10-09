@@ -1,0 +1,4 @@
+a.ts:3:27-3:32 no-unsafe-member-access#1
+a.ts:4:26-4:32 no-unsafe-member-access#1
+a.ts:5:19-5:24 no-unsafe-member-access#1
+a.ts:5:33-5:38 no-unsafe-member-access#1

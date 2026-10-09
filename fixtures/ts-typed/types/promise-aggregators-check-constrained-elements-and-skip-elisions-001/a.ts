@@ -1,0 +1,1 @@
+Promise.all([,]); function f<T extends Promise<unknown>>(x: T[]) { Promise.all(x); } declare const xs: (number | Promise<number>)[]; Promise.all(xs);

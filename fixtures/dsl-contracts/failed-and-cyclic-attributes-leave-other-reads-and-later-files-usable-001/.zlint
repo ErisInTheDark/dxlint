@@ -1,0 +1,15 @@
+import .ts
+
+in ts_identifier let bad byte_slice(text, [])
+in ts_identifier let cyclic cyclic
+in ts_identifier let size len(text)
+in ts_identifier rule first info "{bad}"
+in ts_identifier rule second info "{bad}"
+in ts_identifier rule cycle info "{cyclic}"
+in ts_identifier rule good info "{size}"
+
+in ts_program rule next-input info "advance input" {
+    when text == "a;"
+    report at 0
+    fix as "long;"
+}

@@ -2,10 +2,6 @@ use super::*;
 use crate::native::ts::types::Callable;
 use std::sync::Arc;
 
-#[cfg(test)]
-#[path = "callables/tests.rs"]
-mod tests;
-
 struct Contract {
     origin: &'static str,
     sender: Ty,

@@ -1,0 +1,1 @@
+interface A { get x(): string; set x(v: number); get y(): number; set y(v: number | string); } interface B { get x(): number; set x(v: number); }

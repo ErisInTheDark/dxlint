@@ -1,0 +1,1 @@
+interface Promise<T> {} declare const p: Promise<number>; function inferred(flag: boolean) { return flag ? p : 1; } function explicit(flag: boolean): Promise<number> | number { return flag ? p : 1; } function overloaded(): Promise<number>; function overloaded(flag: boolean): number; function overloaded(flag?: boolean) { return p; }

@@ -1,0 +1,1 @@
+declare const callback: undefined; declare function take(cb: undefined | (() => void)): void; take(callback);

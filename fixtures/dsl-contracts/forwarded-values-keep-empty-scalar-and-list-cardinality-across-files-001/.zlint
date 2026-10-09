@@ -1,0 +1,13 @@
+import .ts
+
+in ts_identifier let size len(text)
+in ts_call forward size from argument
+in ts_parenthesized forward size from expression
+in ts_call rule sizes info "{count([] size)}:{sum([] size)}"
+
+# Fixing changes text on the same path before attributes are read again.
+in ts_program rule next-input info "advance input" {
+    when text == "f(); f(a); f(a, bc);"
+    report at 0
+    fix as "f((long));"
+}

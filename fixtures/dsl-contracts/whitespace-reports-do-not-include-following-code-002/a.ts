@@ -1,0 +1,1 @@
+function task < T > (value: T) { work(); work(); }

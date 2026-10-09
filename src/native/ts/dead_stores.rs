@@ -167,28 +167,3 @@ impl Domain for Stores<'_> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    fn useless(text: &str) -> Vec<usize> {
-        native_linter("rule no-useless-assignment").lint(Path::new("/root/a.js"), text).into_iter().map(|d| d.start).collect()
-    }
-
-    #[test]
-    fn values_no_path_reads() {
-        // Overwritten before any read.
-        assert_eq!(useless("function f() { let a = 1; a = 2; return a; }"), [19]);
-        // Read on one branch is enough; a loop reads the next round's value.
-        assert!(useless("function f(c) { let a = 1; if (c) a = 2; return a; }").is_empty());
-        assert!(useless("function f(n) { let i = 0; while (i < n) { g(i); i = i + 1; } }").is_empty());
-        // The last write of a value read only before it.
-        assert_eq!(useless("function f() { let a = 1; g(a); a = 2; }"), [32]);
-        // eslint's exceptions: read from another function, inside `try`.
-        assert!(useless("function f() { let a = 1; g(() => a); a = 2; }").is_empty());
-        assert!(useless("function f() { let a = 1; try { g(); a = 2; a = 3; } catch {} g(a); }").is_empty());
-    }
-}

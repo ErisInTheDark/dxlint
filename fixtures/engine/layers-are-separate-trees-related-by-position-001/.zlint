@@ -1,0 +1,16 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        group spots comment, str, paren
+        in .t, paren layer marks match bad /BAD/ {
+          rule where warn "{ { value containing(spots); kind_name } }|{kind_name(parent)}|{is layer marks}|{is bad}|{parent is paren}"
+        }

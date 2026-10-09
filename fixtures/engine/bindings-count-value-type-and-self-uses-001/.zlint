@@ -1,0 +1,3 @@
+import .ts
+
+        in ts_identifier rule b info "{text}:{declaration_kind}:{uses}/{value_uses}/{self_uses}/{writes}" { when uses != null }

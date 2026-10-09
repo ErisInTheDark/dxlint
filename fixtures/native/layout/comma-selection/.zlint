@@ -1,0 +1,3 @@
+import .ts
+rule comma-style { set style "last" }
+override in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists && comma_style_field != "type_argument"

@@ -1,0 +1,3 @@
+bom.tsx:1:7-1:11 no-multi-spaces#0
+template.tsx:1:22-1:24 no-multi-spaces#0
+unicode.tsx:1:10-1:12 no-multi-spaces#0

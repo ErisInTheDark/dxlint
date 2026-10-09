@@ -1,0 +1,3 @@
+a.js:1:24-1:24 no-implicit-globals#2
+a.js:1:24-1:24 probe#0 binding
+a.js:1:43-1:43 probe#0 binding

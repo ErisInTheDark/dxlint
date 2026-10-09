@@ -1,0 +1,6 @@
+import .ts
+
+        rule no-underscore-dangle {
+            set allowFunctionParams false
+            set enforceInMethodNames true
+        }

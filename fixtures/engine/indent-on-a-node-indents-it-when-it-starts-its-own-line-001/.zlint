@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match call /\w+\(/ until /\)/
+        in call match arg /[a-z]+/
+        in .t, call layer lines match line /^[ \t]*\S/ {
+          rule ind warn "{indented}/{indent_level}/{indent_closes}" {
+            option depth number = 2
+            indent arg by depth
+          }
+        }

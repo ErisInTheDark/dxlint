@@ -1,0 +1,1 @@
+const value = 1; throw ((value)); throw (value + 1);

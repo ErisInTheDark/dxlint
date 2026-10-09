@@ -1,0 +1,1 @@
+interface Error { message: string; } type Readonly<T> = { readonly [P in keyof T]: T[P] }; declare const good: Readonly<Readonly<Error>>; declare const bad: Readonly<Error | number>; declare const mixed: Readonly<Error & { tag: string }>; throw good; throw bad; throw mixed;

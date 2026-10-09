@@ -1,0 +1,1 @@
+function f() { if (flag) var x = 1; }

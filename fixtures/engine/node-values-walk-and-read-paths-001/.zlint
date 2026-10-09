@@ -1,0 +1,12 @@
+import .ts
+
+        in ts_identifier let sources references.writer.right.nodes
+        in ts_variable_declaration rule w info "{ {
+          value declaration.name.nodes
+          walk (n) n.sources
+          map (n) n.text
+          join ','
+        } }"
+        in ts_call rule p info "{kind_name(node.callee.object.node)}|{node.callee.property}"
+        in ts_bigint rule b info "{literal_value.value}"
+        in ts_string rule j info "{position(offset).line}:{position(offset).js_line}:{position(end_offset).js_column}"

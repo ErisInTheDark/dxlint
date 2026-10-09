@@ -1,0 +1,4 @@
+src/b.ts:5:5-5:22 t#0 Task<string>
+src/b.ts:6:5-6:20 t#0 number
+src/b.ts:7:5-7:22 t#0 never
+src/b.ts:8:5-8:21 t#0 Store<string>

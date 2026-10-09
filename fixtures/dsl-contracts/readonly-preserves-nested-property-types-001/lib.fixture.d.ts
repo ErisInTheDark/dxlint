@@ -1,0 +1,1 @@
+type Readonly<T> = { readonly [P in keyof T]: T[P] }; interface Shape { value: any; safe: number; } declare const wrapped: Readonly<Readonly<Shape>>; wrapped.value; wrapped.safe;

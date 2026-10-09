@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        @macro of(word) filter(@words, w => w.word == word)
+        @macro words [{ word: "ab", at: 1 }, { word: "cd", at: 0 }]
+        in .t match line /[a-z ]+/ {
+          rule pick warn "{w.word}{'\u{21}'}" {
+            each w in @of("ab") @of("cd")
+            report at offset + w.at
+          }
+        }

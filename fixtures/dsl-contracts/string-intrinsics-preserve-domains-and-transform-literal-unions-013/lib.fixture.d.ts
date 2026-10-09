@@ -1,0 +1,1 @@
+type Capitalize<S extends string> = intrinsic; declare const broad: Capitalize<string>; declare const loose: Capitalize<any>; declare const empty: Capitalize<never>; declare const missing: Capitalize<Missing>; broad; loose; empty; missing;

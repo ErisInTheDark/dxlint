@@ -94,37 +94,3 @@ pub(super) fn camelcase(file: &NativeFile, node: u32) -> Value<'static> {
         ("binding".into(), Value::Bool(value_name || globals)),
     ])
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn assignment_patterns_check_values_not_property_keys() {
-        let path = Path::new("/root/a.mjs");
-        let l = native_linter("rule camelcase { set ignoreGlobals true }");
-        assert!(l.lint(path, "/* globals a_global */ ({ snake_key: a_global } = input);").is_empty());
-        assert_eq!(l.lint(path, "({ snake_key: unknown_name } = input);").len(), 1);
-        let l = native_linter("rule camelcase { set ignoreDestructuring true }");
-        assert!(l.lint(path, "var { [{category_id} = query]: categoryId } = query;").is_empty());
-        assert_eq!(l.lint(path, "const object = { snake_key: 1 };").len(), 1);
-    }
-
-    #[test]
-    fn shorthand_defaults_infer_function_names_without_blessing_other_defaults() {
-        let l = native_linter("rule func-names { set mode \"as-needed\" }");
-        let path = Path::new("/root/a.mjs");
-        assert!(l.lint(path, "({ value = function() {} } = input);").is_empty());
-        assert_eq!(l.lint(path, "consume(function() {});").len(), 1);
-    }
-
-    #[test]
-    fn import_option_keys_are_metadata_but_values_and_computed_keys_are_code() {
-        let l = native_linter("rule camelcase");
-        let path = Path::new("/root/a.mjs");
-        assert!(l.lint(path, "import('data', { outer_key: { inner_key: 'json' } });").is_empty());
-        assert_eq!(l.lint(path, "import('data', { outer_key: { [computed_key]: 'json' } });").len(), 1);
-        assert_eq!(l.lint(path, "import('data', { outer_key: { inner_key: local_value } });").len(), 1);
-    }
-}

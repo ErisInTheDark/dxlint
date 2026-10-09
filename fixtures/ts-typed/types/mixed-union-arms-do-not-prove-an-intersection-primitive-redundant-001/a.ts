@@ -1,0 +1,1 @@
+type T = string & ('x' | { a: number });

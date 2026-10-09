@@ -1,0 +1,1 @@
+Promise.reject(); Promise.reject(undefined); new Promise((resolve, reject) => { reject(); reject(undefined); });

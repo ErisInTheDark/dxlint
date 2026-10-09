@@ -1,0 +1,7 @@
+alias.mjs:1:29-1:51 prefer-regex-literals#0
+computed-raw.mjs:1:1-1:33 prefer-regex-literals#0
+flags.mjs:1:1-1:23 prefer-regex-literals#2
+raw.mjs:1:1-1:33 prefer-regex-literals#0
+string.mjs:1:1-1:18 prefer-regex-literals#0
+template.mjs:1:1-1:31 prefer-regex-literals#0
+wrapped.mjs:1:1-1:18 prefer-regex-literals#1

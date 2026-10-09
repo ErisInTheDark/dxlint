@@ -1,0 +1,1 @@
+declare const object: { callback: () => void }; object.callback = async () => {};

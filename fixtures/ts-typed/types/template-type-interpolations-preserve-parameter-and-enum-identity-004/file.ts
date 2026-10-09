@@ -1,0 +1,1 @@
+type Literal = `prefix${1}suffix`;

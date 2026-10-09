@@ -1,0 +1,4 @@
+import .ts
+
+        fn idx(n) = n.index.node
+        in ts_index rule i info "{ { value node; idx; kind_name } }"

@@ -1,0 +1,2 @@
+import .ts
+in ts_call rule r warn "change" fix at { value descendants(ts_comma); last } as ";"

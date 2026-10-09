@@ -1,0 +1,11 @@
+import .ts
+
+            fn identity(value) = value
+            in ts_call rule fields {
+                let owner node
+                let direct argument.nodes
+                let parameter owner.argument.nodes
+                let call identity(node).argument.nodes
+                when direct == parameter && parameter == call
+                warn "{count(direct)}:{direct.offset}"
+            }

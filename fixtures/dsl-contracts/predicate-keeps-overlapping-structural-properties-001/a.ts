@@ -1,0 +1,1 @@
+interface A { a: string; } interface B { b: string; } function isB(value: unknown): value is B { return true; } declare const source: A; if (isB(source)) { source; }

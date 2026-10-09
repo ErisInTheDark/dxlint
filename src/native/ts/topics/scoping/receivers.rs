@@ -118,30 +118,3 @@ fn nullish(file: &NativeFile, node: u32) -> bool {
     s.is(node, K::Null) || s.is(node, K::Ident) && s.text(node) == "undefined"
         || s.is(node, K::Unary) && s.word(node, F::Op) == Some("void")
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn arrows_inherit_receivers_but_nested_functions_do_not() {
-        let l = native_linter("rule no-invalid-this");
-        let path = Path::new("/root/a.mjs");
-        assert_eq!(l.lint(path, "function f() { return () => this; }").len(), 1);
-        assert!(l.lint(path, "const obj = { f() { return () => this; } };").is_empty());
-        assert_eq!(l.lint(path, "const obj = { f() { return function() { return this; }; } };").len(), 1);
-        assert!(l.lint(Path::new("/root/a.js"), "function f() { return this; }").is_empty());
-        assert!(l.lint(path, "const f = function(this: object) { return () => this; };").is_empty());
-        assert_eq!(l.lint(path, "const obj = { [this.key]() {} };").len(), 1);
-    }
-
-    #[test]
-    fn receiver_docs_belong_to_functions_not_calls() {
-        let l = native_linter("rule no-invalid-this");
-        let path = Path::new("/root/a.mjs");
-        assert_eq!(l.lint(path, "/** @this Obj */ foo(function() { return this; });").len(), 1);
-        assert!(l.lint(path, "foo(/** @this Obj */ function() { return this; });").is_empty());
-        assert!(l.lint(path, "function f(Ctor = function() { return this; }) {}").is_empty());
-    }
-}

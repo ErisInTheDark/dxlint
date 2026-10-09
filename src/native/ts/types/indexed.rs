@@ -287,10 +287,8 @@ fn union(parts: Vec<Ty>) -> Ty {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::tests::native_linter;
     use crate::engine::tests::with_native_file;
     use super::{Ty, INDEX_WORK};
-    use std::path::Path;
 
     #[test]
     fn mapped_values_bind_the_selected_key_and_keep_optional_readonly_metadata() {
@@ -362,15 +360,6 @@ mod tests {
             assert_eq!(checker.equivalent(&checker.member(&ty, "first"), &Ty::Prim("number")), Some(true));
             assert_eq!(checker.equivalent(&checker.member(&ty, "second"), &Ty::Prim("string")), Some(true));
         });
-    }
-
-    #[test]
-    fn readonly_dynamic_indexes_keep_source_values_and_key_domains() {
-        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe result' }");
-        let source = "type Readonly<T> = { readonly [P in keyof T]: T[P] }; declare const at: number; declare const key: string; declare const array: Readonly<any[]>; declare const dictionary: Readonly<{ [name: string]: any }>; array[at]; array[key]; dictionary[key];";
-        let diagnostics = linter.lint(Path::new("/root/lib.fixture.d.ts"), source);
-        let spans: Vec<_> = diagnostics.iter().map(|d| &source[d.start..d.end]).collect();
-        assert_eq!(spans, ["array[at]", "dictionary[key]"]);
     }
 
     #[test]

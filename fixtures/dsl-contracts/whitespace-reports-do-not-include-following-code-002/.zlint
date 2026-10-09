@@ -1,0 +1,3 @@
+import .ts
+rule type-generic-spacing
+rule type-generic-spacing:*

@@ -1,0 +1,1 @@
+const object = { filter(callback: () => Promise<boolean>) {} }; object.filter(async () => true);

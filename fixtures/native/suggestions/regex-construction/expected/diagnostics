@@ -1,0 +1,3 @@
+flags.mjs:1:1-1:23 probe#0 flags
+static.mjs:1:1-1:18 probe#0 static
+wrapped.mjs:1:1-1:18 probe#0 wrapped

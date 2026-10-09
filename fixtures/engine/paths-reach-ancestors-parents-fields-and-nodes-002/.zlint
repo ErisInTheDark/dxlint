@@ -1,0 +1,5 @@
+import .ts
+
+        in ts_node let seen true
+        in ts_for_of rule f info "{modifier}:{seen}" { report at { start: right.offset, end: right.end_offset } }
+        in ts_for_of rule g info "g" { report at { start: offset, end: offset + 3 } }

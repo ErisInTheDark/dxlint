@@ -1,0 +1,17 @@
+import .ts
+
+in ts_binary let cycle left.cycle
+in ts_identifier let cycle parent.cycle
+in ts_binary let broken left.broken
+in ts_identifier let broken byte_slice(text, [])
+in ts_binary rule first info "{broken}"
+in ts_binary rule retry info "{broken}"
+in ts_binary rule cyclic info "{cycle}"
+in ts_identifier rule nested_cycle info "{cycle}"
+in ts_identifier rule good info "{len(text)}"
+
+in ts_program rule next-input info "advance input" {
+    when text == "a + long;"
+    report at 0
+    fix as "other + b;"
+}

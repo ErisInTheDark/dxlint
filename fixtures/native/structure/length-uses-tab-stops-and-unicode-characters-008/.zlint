@@ -1,0 +1,2 @@
+import .ts
+rule max-len { set options [3, 0] }

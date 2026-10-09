@@ -1,0 +1,6 @@
+import .ts
+
+        in ts_identifier let size len(text)
+        in ts_identifier let kind_of "id"
+        in ts_parenthesized, ts_non_null forward size from expression
+        in ts_expression_statement rule s info "{expression.size}/{ expression.kind_of.nonempty ?? '-' }"

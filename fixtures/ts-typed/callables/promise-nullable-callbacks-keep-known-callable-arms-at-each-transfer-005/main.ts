@@ -1,0 +1,1 @@
+declare const callback: undefined | (() => Promise<void>); const object: { callback: undefined | (() => void) } = { callback };

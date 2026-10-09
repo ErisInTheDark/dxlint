@@ -1,0 +1,1 @@
+Promise.reject(5); new Promise((resolve, reject) => { reject('bad'); function later() { reject(7); } function shadow(reject) { reject(8); } resolve(9); }); function unrelated(reject) { reject(10); }

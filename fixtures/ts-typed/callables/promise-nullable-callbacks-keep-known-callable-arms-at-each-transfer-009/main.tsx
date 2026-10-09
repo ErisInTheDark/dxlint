@@ -1,0 +1,1 @@
+declare const callback: undefined | (() => Promise<void>); declare function C(props: { callback: undefined | (() => void) }): unknown; const element = <C callback={callback} />;

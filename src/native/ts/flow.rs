@@ -383,23 +383,3 @@ pub(super) fn truthy(t: Ty, sense: bool, ck: &Checker<'_>) -> Ty {
         .collect();
     Ty::union(kept)
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    #[test]
-    fn predicate_keeps_overlapping_structural_properties() {
-        let linter = native_linter("in ts_expression_statement.expression rule overlap { when text == 'source'\nwhen { value (type_members.nonempty ?? []); contains 'a' } && { value (type_members.nonempty ?? []); contains 'b' }\nwarn 'overlap' }");
-        let code = "interface A { a: string; } interface B { b: string; } function isB(value: unknown): value is B { return true; } declare const source: A; if (isB(source)) { source; }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
-    }
-
-    #[test]
-    fn predicate_guards_narrow_only_the_named_argument_and_cancel_after_writes() {
-        let linter = native_linter("in ts_expression_statement.expression rule async-value { when text == 'source'\nwhen { value (type_members.nonempty ?? []); contains '[Symbol.asyncIterator]' }\nwarn 'async iterable' }");
-        let code = "interface Sync { [Symbol.iterator](): unknown; } interface Async { [Symbol.asyncIterator](): unknown; } function isAsync(value: unknown): value is Async { return true; } declare let source: Sync | Async; declare const other: Sync; if (isAsync(source)) { source; } if (!isAsync(source)) { source; } if (isAsync(other)) { source; } if (!isAsync(source)) { source = {} as Async; source; }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 3);
-    }
-}

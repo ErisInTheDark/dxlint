@@ -96,29 +96,3 @@ pub(super) fn array_factory(file: &NativeFile, callee: u32) -> bool {
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn callback_returns_belong_to_their_own_function() {
-        let l = native_linter("rule array-callback-return");
-        let path = Path::new("/root/a.mjs");
-        assert_eq!(l.lint(path, "items.map(() => { function nested() { return 1; } });").len(), 1);
-        assert!(l.lint(path, "items.map(() => { if (flag) return 1; throw Error(); });").is_empty());
-        assert_eq!(l.lint(path, "items.map((() => { return () => {}; })());").len(), 1);
-    }
-
-    #[test]
-    fn arrow_candidates_preserve_arguments_recursion_and_bound_this() {
-        let l = native_linter("rule prefer-arrow-callback");
-        let path = Path::new("/root/a.mjs");
-        assert!(l.lint(path, "consume(function() { return arguments[0]; });").is_empty());
-        assert!(l.lint(path, "consume(function again() { again(); });").is_empty());
-        assert!(l.lint(path, "consume(function() { return this; });").is_empty());
-        assert_eq!(l.lint(path, "consume(function() { return this; }.bind(this));").len(), 1);
-        assert_eq!(l.lint(path, "consume(function(arguments) { return arguments; });").len(), 1);
-    }
-}

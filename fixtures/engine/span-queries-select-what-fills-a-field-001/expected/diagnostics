@@ -1,0 +1,3 @@
+file.t:1:2-1:4 w#0 ab:false
+file.t:1:6-1:12 p#0 1
+file.t:1:8-1:10 w#0 cd:true

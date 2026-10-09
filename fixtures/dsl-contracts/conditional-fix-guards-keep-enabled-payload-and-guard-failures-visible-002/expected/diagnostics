@@ -1,0 +1,1 @@
+guard.t:1:1-1:5 guarded#error rule `guarded` failed here: fix span offsets must be finite integers within the file

@@ -1,0 +1,1 @@
+declare let x: any; ({ x } = { x: 1 } as { x: any }); [{ x }] = [{ x: 1 }] as [{ x: any }];

@@ -86,23 +86,3 @@ fn quote_site(name: String, quoted: bool, numeric: bool, offset: usize, group: b
         ("offset".into(), Value::from(offset)),
     ])
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn redundant_quotes_require_a_valid_identifier() {
-        let lint = native_linter(r#"
-            in ts_property rule quoting {
-                each site in filter(property_quote_sites, s => s.quoted && s.redundant)
-                error "redundant"
-            }
-        "#);
-        let path = Path::new("/root/file.ts");
-        assert!(lint.lint(path, "const value = {'\\u{1f600}': 1};").is_empty());
-        assert_eq!(lint.lint(path, "const value = {'\\u03c0': 1};").len(), 1);
-    }
-}

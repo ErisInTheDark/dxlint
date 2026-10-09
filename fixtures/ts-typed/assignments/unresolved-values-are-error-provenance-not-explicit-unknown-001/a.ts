@@ -1,0 +1,1 @@
+const [x] = spooky; declare const known: unknown; const y = known;

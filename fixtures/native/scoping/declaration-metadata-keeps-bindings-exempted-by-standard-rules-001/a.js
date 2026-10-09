@@ -1,0 +1,1 @@
+/* exported a */ const [a, b] = []; using resource = open();

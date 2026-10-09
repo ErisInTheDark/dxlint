@@ -1,0 +1,1 @@
+type Readonly<T> = { safe: number }; declare const wrapped: Readonly<{ value: any }>; wrapped.value; wrapped.safe;

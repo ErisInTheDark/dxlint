@@ -1,0 +1,1 @@
+/* global first: readonly, second: readonly */ ({ first, value: second } = values);

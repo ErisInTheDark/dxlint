@@ -1,0 +1,2 @@
+main.ts:4:33-4:35 no-misused-promises:void-arguments#0
+main.ts:6:33-6:35 no-misused-promises:void-arguments#0

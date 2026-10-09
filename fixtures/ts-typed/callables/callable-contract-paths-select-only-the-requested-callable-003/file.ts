@@ -1,0 +1,1 @@
+interface Receiver { selected: { callback: () => void }; unrelated: () => void } const value: Receiver = { selected: { callback: () => 1 }, unrelated: () => 2 };

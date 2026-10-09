@@ -1,0 +1,4 @@
+a.ts:1:4-1:8 t#0 ts_line_comment@3
+a.ts:2:11-2:13 e#0 \\n in 'x\\ny'
+a.ts:2:24-2:28 t#0 ts_line_comment@33
+a.ts:2:30-2:34 t#0 ts_line_comment@39

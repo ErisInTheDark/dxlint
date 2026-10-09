@@ -1,0 +1,9 @@
+import .ts
+in ts_comma rule context {
+  when list_owner is ts_call
+  warn "{list_field}:{list_previous.text}"
+}
+in ts_comma rule holes {
+  when list_owner is ts_array
+  warn if list_previous == null then "absent" else list_previous.text
+}

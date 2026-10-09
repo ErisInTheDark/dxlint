@@ -1,0 +1,1 @@
+interface Base { method(): void } interface C extends Base { method(): Promise<void> }

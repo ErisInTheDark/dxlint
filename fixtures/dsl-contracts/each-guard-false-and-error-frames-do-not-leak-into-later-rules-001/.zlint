@@ -1,0 +1,29 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            in .t match word /[a-z]+/ {
+                rule rejected {
+                    each item in byte_slice("x", [])
+                    when any([false], allowed => allowed)
+                    info "{item}"
+                }
+                rule failing {
+                    each item in [1]
+                    when any([true], allowed => byte_slice("x", []))
+                    info "{item}"
+                }
+                rule following {
+                    each item in map([7], number => number)
+                    when any([true], allowed => allowed)
+                    info "{item}"
+                }
+            }

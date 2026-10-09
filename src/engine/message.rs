@@ -59,31 +59,3 @@ impl Plan {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::linter;
-
-    #[test]
-    fn message_branches_keep_source_indexes_and_binding_frames() {
-        let lint = linter(r#"
-            in .t match word /[a-z]+/ {
-                rule branch warn if text == "a" then "same" else if text == "b" then "same" else "other"
-                rule fallback warn (if text == "a" then null else "present") ?? "fallback"
-                rule pipeline warn { value text; then (word) if word == "a" then "first" else "second" }
-                rule constant warn if false then "first" else "second"
-                rule failure warn num(text)
-            }
-        "#);
-        let reports = lint.lint(Path::new("/root/a.t"), "a b c");
-        let indexes = |rule| reports.iter().filter(|d| d.rule == rule)
-            .map(|d| serde_json::to_value(d).unwrap()["message_index"].clone()).collect::<Vec<_>>();
-        assert_eq!(indexes("branch"), vec![0, 1, 2]);
-        assert_eq!(indexes("fallback"), vec![2, 1, 1]);
-        assert_eq!(indexes("pipeline"), vec![0, 1, 1]);
-        assert_eq!(indexes("constant"), vec![1, 1, 1]);
-        assert!(indexes("failure").iter().all(serde_json::Value::is_null));
-    }
-}

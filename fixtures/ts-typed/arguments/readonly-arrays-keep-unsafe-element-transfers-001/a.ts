@@ -1,0 +1,1 @@
+declare const mutable: any[]; declare const immutable: readonly any[]; const first: readonly number[] = mutable; const second: readonly number[] = immutable; function takes(values: readonly number[]) {} takes(mutable); takes(immutable);

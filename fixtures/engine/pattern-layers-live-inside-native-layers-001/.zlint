@@ -1,0 +1,6 @@
+import .ts
+
+        in ts_comment match todo /TODO/
+        in ts_string match esc /\\./
+        in todo rule t info "{kind_name(parent)}@{offset}"
+        in esc rule e info "{text} in {parent.text}"

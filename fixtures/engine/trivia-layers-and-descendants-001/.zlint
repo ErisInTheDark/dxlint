@@ -1,0 +1,4 @@
+import .ts
+
+        in ts_comment rule c info "{kind_name(parent)}:{text}"
+        in ts_line rule l info "{position(offset).js_line}:{trim(text)}:{byte_len(text)}"

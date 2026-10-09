@@ -1,0 +1,1 @@
+const _value = work(() => { work(); work(); });

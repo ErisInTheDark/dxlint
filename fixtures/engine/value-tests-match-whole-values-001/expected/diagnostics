@@ -1,0 +1,2 @@
+file.t:1:4-1:7 not-snake#0 x
+file.t:1:8-1:10 has-digit#0 y

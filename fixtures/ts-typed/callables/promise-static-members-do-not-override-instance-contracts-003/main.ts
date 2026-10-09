@@ -1,0 +1,1 @@
+class Base { field = (): void => {} } class Child extends Base { static field: () => void = async () => {} }

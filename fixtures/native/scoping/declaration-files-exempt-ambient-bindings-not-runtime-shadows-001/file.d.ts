@@ -1,0 +1,1 @@
+/* globals Thing */ declare class Thing {}

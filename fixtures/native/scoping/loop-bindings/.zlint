@@ -1,0 +1,6 @@
+import .ts
+in ts_function, ts_arrow rule probe {
+  let captured scoping_loop_captures
+  when len(captured) == 2 && contains(captured, "first") && contains(captured, "second")
+  warn "bindings"
+}

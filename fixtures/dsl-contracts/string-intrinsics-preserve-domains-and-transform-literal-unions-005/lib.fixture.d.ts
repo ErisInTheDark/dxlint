@@ -1,0 +1,1 @@
+type Capitalize<S extends string> = intrinsic; declare const value: Capitalize<'\u{10428}BC' | '\u{00df}abc'>; value;

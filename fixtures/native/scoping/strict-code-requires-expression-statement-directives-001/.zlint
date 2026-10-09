@@ -1,0 +1,2 @@
+import .ts
+in ts_function rule strict_probe info 'strict' { when scoping_strict_code }

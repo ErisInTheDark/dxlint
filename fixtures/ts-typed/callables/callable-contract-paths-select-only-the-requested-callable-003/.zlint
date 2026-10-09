@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_declarator.init rule selected-contract {
+                when { value callable_contracts(parent, node, ["missing"]); count } == 0
+                warn "selected"
+            }

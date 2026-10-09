@@ -1,0 +1,7 @@
+import .ts
+
+        define {
+          in ts_function let fn_start offset
+          in ts_line rule ind2 info "{indent_level}" { indent in ts_function.body from parent.fn_start }
+        }
+        rule ind2

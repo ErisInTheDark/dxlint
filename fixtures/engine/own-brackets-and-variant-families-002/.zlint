@@ -1,0 +1,7 @@
+import .ts
+
+        define {
+          in ts_block rule pad info "main {n}" { option n int(0..) = 0 "n" }
+          in ts_block rule pad:inner info "inner {n}" { option n int(0..) = 0 "n" }
+        }
+        rule pad { set n 2 }

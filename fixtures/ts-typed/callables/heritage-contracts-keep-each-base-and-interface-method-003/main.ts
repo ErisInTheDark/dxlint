@@ -1,0 +1,1 @@
+class Base { method(): void {} } class C extends Base { async method() {} }

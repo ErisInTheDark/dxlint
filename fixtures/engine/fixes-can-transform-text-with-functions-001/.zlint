@@ -1,0 +1,15 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match def /fn /ws? name:/\w+/
+        match ws /[ \t]+/
+        in def.name rule snake warn "snake case" fix as snake_case(text)

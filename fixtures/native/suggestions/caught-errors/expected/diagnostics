@@ -1,0 +1,5 @@
+aggregate.mjs:1:24-1:24 preserve-caught-error#2
+destructured.mjs:1:8-1:8 preserve-caught-error#0
+incorrect.mjs:1:56-1:56 preserve-caught-error#3
+missing.mjs:1:24-1:24 preserve-caught-error#2
+shadowed.mjs:1:37-1:37 preserve-caught-error#4

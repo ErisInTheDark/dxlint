@@ -1,0 +1,1 @@
+type Uppercase<S> = number; declare const value: Uppercase<string>; value;

@@ -1,0 +1,14 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match call name:/\w+/ :paren
+        in call.paren rule calls warn "{call.name}{text}"

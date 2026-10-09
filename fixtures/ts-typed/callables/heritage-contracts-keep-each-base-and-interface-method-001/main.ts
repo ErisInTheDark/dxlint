@@ -1,0 +1,1 @@
+interface Base { method(): void } class C implements Base { async method() {} }

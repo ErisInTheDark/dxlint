@@ -1,0 +1,8 @@
+import .ts
+
+                fn eager(value) = value
+                in ts_keyword rule normalise {
+                    when text == "if" && space_after != null && !space_after.comments && !space_after.line_break && space_after.text != " "
+                    fix space_after as " "
+                    warn "normalise gap"
+                }

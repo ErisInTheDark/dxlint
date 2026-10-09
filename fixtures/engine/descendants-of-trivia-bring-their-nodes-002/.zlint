@@ -1,0 +1,2 @@
+import .ts
+in ts_line rule o info "{line}:{ { value overlapping(ts_comment); map (c) c.text; join '|' } }:{ { value overlapping(ts_string); count } }"

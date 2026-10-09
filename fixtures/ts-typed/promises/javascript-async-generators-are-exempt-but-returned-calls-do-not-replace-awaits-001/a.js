@@ -1,0 +1,1 @@
+async function* generator() { yield 1; } async function returned() { return Promise.resolve(1); } async function* nested() { async function inner() { return 1; } yield 1; }

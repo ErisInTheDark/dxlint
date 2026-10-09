@@ -1,0 +1,1 @@
+for (const key in (([1, 2]))) { work(); work(); }

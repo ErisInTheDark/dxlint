@@ -260,57 +260,6 @@ pub(super) fn keys_overlap(a: &Ty, b: &Ty) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    const FILTER_TYPES: &str = "type Pick<T, K extends keyof T> = { [P in K]: T[P] }; type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;";
-
-    #[test]
-    fn string_intrinsics_preserve_domains_and_transform_literal_unions() {
-        for (name, input, values) in [
-            ("Uppercase", "'aBc' | 'def'", "'ABC', 'DEF'"),
-            ("Lowercase", "'aBc' | 'DEF'", "'abc', 'def'"),
-            ("Capitalize", "'aBc' | ''", "'ABc', ''"),
-            ("Uncapitalize", "'ABc' | ''", "'aBc', ''"),
-            ("Capitalize", "'\\u{10428}BC' | '\\u{00df}abc'", "'\\u{10428}BC', 'SSabc'"),
-        ] {
-            let lint = native_linter(&format!("in ts_expression_statement.expression rule resolved {{ when count(type_literal_values) == 2 && all(type_literal_values, literal => contains([{values}], literal.value))\nwarn 'resolved' }}"));
-            let code = format!("type {name}<S extends string> = intrinsic; declare const value: {name}<{input}>; value;");
-            assert_eq!(lint.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1, "{code}");
-        }
-        let lint = native_linter("in ts_expression_statement.expression rule resolved { when type_is_string_like\nwarn 'resolved' }");
-        let preserved = native_linter("in ts_expression_statement.expression rule preserved { when { value (type_flags.nonempty ?? []); contains 'any' } || { value (type_flags.nonempty ?? []); contains 'never' }\nwarn 'preserved' }");
-        for name in ["Uppercase", "Lowercase", "Capitalize", "Uncapitalize"] {
-            let code = format!("type {name}<S extends string> = intrinsic; declare const broad: {name}<string>; declare const loose: {name}<any>; declare const empty: {name}<never>; declare const missing: {name}<Missing>; broad; loose; empty; missing;");
-            assert_eq!(lint.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1, "{code}");
-            assert_eq!(preserved.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 2, "{code}");
-            let local = format!("type {name}<S> = number; declare const value: {name}<string>; value;");
-            assert!(lint.lint(Path::new("/root/a.ts"), &local).is_empty());
-        }
-    }
-
-    #[test]
-    fn readonly_preserves_nested_property_types() {
-        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe result' }");
-        let code = "type Readonly<T> = { readonly [P in keyof T]: T[P] }; interface Shape { value: any; safe: number; } declare const wrapped: Readonly<Readonly<Shape>>; wrapped.value; wrapped.safe;";
-        assert_eq!(linter.lint(Path::new("/root/lib.fixture.d.ts"), code).len(), 1);
-        let code = "type Readonly<T> = { safe: number }; declare const wrapped: Readonly<{ value: any }>; wrapped.value; wrapped.safe;";
-        assert!(linter.lint(Path::new("/root/a.ts"), code).is_empty());
-    }
-
-    #[test]
-    fn mapped_key_filters_keep_inherited_generic_properties_and_methods() {
-        let linter = native_linter("in ts_expression_statement.expression rule unsafe-result { when { value (type_flags.nonempty ?? []); contains 'any' }\nwarn 'unsafe result' }");
-        let code = format!("{FILTER_TYPES} interface Base<T> {{ keep: T; drop: T; optional?: number; method(): T; }} interface Shape extends Base<any> {{}} declare const omitted: Omit<Shape, 'drop'>; declare const picked: Pick<Shape, 'keep'>; declare const nullable: Omit<Shape | null, 'keep'>; omitted.keep; omitted.drop; omitted.method(); picked.keep; picked.drop; nullable.drop;");
-        assert_eq!(linter.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 3);
-    }
-
-    #[test]
-    fn mapped_key_filters_preserve_optional_properties_in_assignability() {
-        let linter = native_linter("rule related-getter-setter-pairs");
-        let code = format!("{FILTER_TYPES} interface Shape {{ required: number; optional?: number; }} declare class Optional {{ get value(): {{}}; set value(value: Pick<Shape, 'optional'>); }} declare class Required {{ get value(): {{}}; set value(value: Pick<Shape, 'required'>); }}");
-        assert_eq!(linter.lint(Path::new("/root/lib.fixture.d.ts"), &code).len(), 1);
-    }
 
     #[test]
     fn broad_keys_do_not_require_overridden_literal_properties() {

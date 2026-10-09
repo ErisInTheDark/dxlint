@@ -1,0 +1,1 @@
+var [a, b] = []; function f() {} let l; const c = 1; class C {}

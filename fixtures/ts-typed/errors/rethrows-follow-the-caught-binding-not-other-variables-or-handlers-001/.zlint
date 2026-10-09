@@ -1,0 +1,3 @@
+import .ts
+rule only-throw-error { set allowThrowingAny false
+set allowThrowingUnknown false }

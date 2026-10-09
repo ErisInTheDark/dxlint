@@ -1,0 +1,1 @@
+interface Error { message: string; } interface PromiseConstructor { reject(reason?: any): unknown; } declare const Promise: PromiseConstructor; declare const errors: Error[]; declare const numbers: number[]; Promise.reject(errors[5]); Promise.reject(numbers[5]);

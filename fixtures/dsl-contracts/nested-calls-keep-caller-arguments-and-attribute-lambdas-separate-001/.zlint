@@ -1,0 +1,24 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            fn identity(x) = x
+            fn total(a, b, c, d, e) = a + b + c + d + e
+            fn pair(x) = map([x, x + 1], n => identity(n))
+            in .t match word /[a-z]+/ {
+                let doubled map([2, 3], n => n * 2)
+                rule bindings {
+                    @each outer in [10, 20]
+                    when map([1, 2], inner => { value inner; identity_2: identity; value doubled; doubled_count: count; value pair(inner); first_pair: first; value pair(inner); last_pair: last; value total(outer, identity_2, doubled_count, first_pair, last_pair) })
+                      != [outer + 6, outer + 9]
+                    warn "bindings changed"
+                }
+            }

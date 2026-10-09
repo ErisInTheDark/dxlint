@@ -1,0 +1,1 @@
+{ type Alias = () => number; declare const x: Alias; x(); } declare const y: Alias; y();

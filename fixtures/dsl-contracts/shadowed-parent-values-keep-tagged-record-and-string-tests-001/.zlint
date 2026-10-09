@@ -1,0 +1,21 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+                fn accepts(parent) = parent is word
+                in .t match word /[a-z]+/ {
+                    rule shadows {
+                        option parent string = "word"
+                        when !(parent is word) || !accepts("word") || !accepts({kind: "word"})
+                          || !accepts({node: node, kind: "paren"})
+                        warn "shadowed parent changed"
+                    }
+                }

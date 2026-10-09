@@ -1,0 +1,2 @@
+file.t:1:1-1:2 failing#error rule `failing` failed here: replace: replace: `from` cannot be empty
+file.t:1:1-1:2 lazy#0 safe

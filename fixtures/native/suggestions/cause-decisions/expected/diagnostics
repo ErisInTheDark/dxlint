@@ -1,0 +1,6 @@
+incorrect.mjs:1:24-1:64 probe#0 incorrect
+missing.mjs:1:24-1:52 probe#0 missing
+options.mjs:1:24-1:57 probe#0 unknown
+preserved.mjs:1:24-1:64 probe#0 preserved
+shadowed.mjs:1:37-1:77 probe#0 shadowed
+spread.mjs:1:24-1:76 probe#0 unknown

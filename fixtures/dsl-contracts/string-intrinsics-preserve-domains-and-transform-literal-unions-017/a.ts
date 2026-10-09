@@ -1,0 +1,1 @@
+type Uncapitalize<S> = number; declare const value: Uncapitalize<string>; value;

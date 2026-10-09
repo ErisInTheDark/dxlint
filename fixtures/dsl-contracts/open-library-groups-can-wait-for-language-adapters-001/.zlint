@@ -1,0 +1,6 @@
+lang t "*.t"
+define {
+group items
+in items rule item-rule warn 'item'
+}
+rule *

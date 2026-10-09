@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t {
+          match raw /\bb?r"/ until /"/ {
+            rule raw-str warn "raw"
+          }
+          match word /\b[a-z]+\b/ {
+            rule words warn "word"
+          }
+        }

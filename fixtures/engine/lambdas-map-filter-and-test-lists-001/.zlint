@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match word /[a-z]+/ {
+          rule each info "{ {
+            value text
+            split ''
+            map (c) upper(c)
+            join ''
+          } }|{ { value [1, 2, 3, 4]; filter (n) n % 2 == 0; join ',' } }|{all([1, 2], n => n > 0)}|{find([1, 2, 3], n => n > 5)}|{keys({ a: 1, b: 2 })}"
+        }

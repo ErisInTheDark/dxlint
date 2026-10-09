@@ -1,0 +1,1 @@
+interface Promise<T> {} declare const p: Promise<number>; async function ready(): Promise<number> { return p; } declare function signature(): Promise<number>; class C { get value(): Promise<number> { return p; } constructor() { return p; } }

@@ -290,9 +290,6 @@ impl Tree {
 mod tests {
     use super::*;
     use crate::grammar::Edge;
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
 
     #[test]
     fn shared_nodes_keep_first_parent_labels_and_stable_document_order() {
@@ -366,15 +363,5 @@ mod tests {
             assert_eq!(tree.field_index_with(id, || inspected += 1), Some(id as usize));
         }
         assert!(inspected <= count as usize * 2, "reading {count} siblings inspected {inspected} edges");
-    }
-
-    #[test]
-    fn positions_find_the_child_holding_them_where_children_overlap() {
-        // The export's `default` lies inside its decorated class: the
-        // method's line is still found in the class.
-        let l = native_linter(r#"in ts_line rule ind info "{indent_level}" { indent ts_class.member }"#);
-        let src = "@Bar()\nexport default class Foo {\n  method() {}\n}\n";
-        let levels: Vec<String> = l.lint(Path::new("/root/a.ts"), src).into_iter().map(|d| d.message).collect();
-        assert_eq!(levels, ["0", "0", "1", "0"]);
     }
 }

@@ -1,0 +1,1 @@
+[1].every(async () => true);

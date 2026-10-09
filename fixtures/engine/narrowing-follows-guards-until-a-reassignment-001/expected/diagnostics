@@ -1,0 +1,7 @@
+file.ts:10:3-10:17 t#0 null | Foo
+file.ts:5:12-5:13 t#0 Foo
+file.ts:6:32-6:33 t#0 string
+file.ts:6:44-6:45 t#0 number
+file.ts:8:3-8:4 t#0 Foo
+file.ts:9:12-9:25 t#0 undefined
+file.ts:9:27-9:28 t#0 string | undefined

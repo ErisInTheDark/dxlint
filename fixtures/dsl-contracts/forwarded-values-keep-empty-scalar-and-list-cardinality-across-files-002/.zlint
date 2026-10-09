@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_identifier let size len(text)
+            in ts_call forward size from argument
+            in ts_parenthesized forward size from expression
+            in ts_call rule sizes info "{count([] size)}:{sum([] size)}"

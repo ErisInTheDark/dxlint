@@ -1,0 +1,1 @@
+interface Box<T> { value: T; } interface Ctor { new<T = any>(): Box<T>; } declare const Maker: Ctor; const b: Box<string> = new Maker(); const c: Box<string> = new Maker<any>();

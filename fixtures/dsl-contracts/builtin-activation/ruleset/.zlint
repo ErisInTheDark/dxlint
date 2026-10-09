@@ -1,0 +1,4 @@
+import .ts
+import rules:correctness
+import rules:conventions
+rule no-var off

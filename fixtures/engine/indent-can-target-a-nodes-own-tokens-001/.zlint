@@ -1,0 +1,3 @@
+import .ts
+
+        in ts_line rule ind info "{indent_level}" { indent ts_member.token by 2 }

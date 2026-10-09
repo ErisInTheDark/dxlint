@@ -88,22 +88,3 @@ fn scan(file: &NativeFile) -> Declarations {
     }
     Declarations(entries)
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn grouping_uses_the_declarations_own_scope() {
-        let lint = native_linter("rule one-var");
-        for (source, expected) in [
-            ("var a; if (x) { var b; }", 1),
-            ("let a; if (x) { let b; }", 0),
-            ("var a; function f() { var b; }", 0),
-            ("function f() { var a; if (x) { var b; } }", 1),
-        ] {
-            assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), expected, "{source}");
-        }
-    }
-}

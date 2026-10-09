@@ -1,0 +1,1 @@
+declare function C(props: { onClick: () => void }): unknown; const element = <C onClick={async () => {}} />;

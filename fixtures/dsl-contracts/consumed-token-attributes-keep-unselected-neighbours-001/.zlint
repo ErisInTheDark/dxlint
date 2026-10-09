@@ -1,0 +1,7 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+
+            in ts_comma let preceded_by_open previous is ts_open_paren
+            fn preceded(n) = n.preceded_by_open
+            in ts_comma rule preceded info "{preceded(node)}"

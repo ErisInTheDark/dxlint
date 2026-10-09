@@ -1,0 +1,1 @@
+type Callback = () => void; declare const take: <T extends (...args: unknown[]) => unknown>(fn: T) => T; declare const specialized: typeof take<Callback>; specialized(async () => {});

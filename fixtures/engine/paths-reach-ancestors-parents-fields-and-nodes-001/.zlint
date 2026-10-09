@@ -1,0 +1,7 @@
+import .ts
+
+        in ts_identifier let marked text == "a"
+        in ts_function let fname name
+        fn is_marked(n) = n.marked
+        in ts_call rule c info "{ts_function.offset}|{kind_name(parent)}|{kind_name(callee.object.node)}|{callee.property}|{callee.object.declaration.offset}|{ts_function.fname}|{position(end_offset).line}|{byte_slice(source, offset + 4, end_offset - 1)}|{join(token_texts, ' ')}"
+        in ts_identifier rule r info "{first(references).offset}:{ { value references; first; is_marked } }" { when count(references) > 0 }

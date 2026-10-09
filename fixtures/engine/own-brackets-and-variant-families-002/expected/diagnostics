@@ -1,0 +1,2 @@
+a.ts:1:1-1:4 pad#0 main 2
+a.ts:1:1-1:4 pad:inner#0 inner 2

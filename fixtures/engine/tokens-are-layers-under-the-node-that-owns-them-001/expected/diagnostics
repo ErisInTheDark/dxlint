@@ -1,0 +1,4 @@
+a.ts:1:11-1:12 c#0 ts_array:false/false:ts_comma
+a.ts:1:12-1:13 c#0 ts_array:false/false:ts_number
+a.ts:1:5-1:6 c#0 ts_call:true/false:ts_identifier
+a.ts:2:1-2:7 k#0 return<ts_return

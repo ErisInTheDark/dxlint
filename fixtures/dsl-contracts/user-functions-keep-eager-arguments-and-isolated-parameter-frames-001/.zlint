@@ -1,0 +1,43 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            fn inner(value) = upper(value)
+            fn outer(value) = inner(value) value
+            fn choose(flag, value) = if flag then "fixed" else value
+            fn recurse(value) = recurse(value)
+            in .t match word /[a-z]+/
+            in word let cycle cycle
+            in word {
+                rule constants {
+                    option value string = "x"
+                    when outer(value) == "Aa"
+                    fix as inner(value)
+                    warn choose(true, node)
+                }
+                rule dynamic {
+                    warn choose(false, node)
+                }
+                rule eager {
+                    warn choose(true, 1 % 0)
+                }
+                rule recursive {
+                    warn recurse("x")
+                }
+                rule cyclic_argument {
+                    warn choose(true, cycle)
+                }
+                rule dormant {
+                    warn choose(true, 1 % 0)
+                }
+            }
+            rule constants { set value "a" }
+            rule dormant off

@@ -1,0 +1,5 @@
+import .ts
+
+        in .js match semi_run /;;+/
+        in semi_run rule s info "{kind_name(parent)}"
+        in ts_empty rule e info "empty"

@@ -1,0 +1,1 @@
+declare const bad: { then(): void }; declare const good: { then(cb: () => void): void }; await bad; await good;

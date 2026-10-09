@@ -1,0 +1,7 @@
+import .ts
+rule no-misused-promises
+rule no-misused-promises:conditionals off
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "node_modules/typescript/lib/lib.fixture.d.ts"
+ignore "tsconfig.json"

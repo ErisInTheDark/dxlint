@@ -1,0 +1,22 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        group words word, num
+        in .t, paren match word /[a-z]+/
+        in .t match num /[0-9]+/
+        in word, num let shown text "!"
+        in words rule w warn "{shown}"
+        drop in paren match word
+        drop group words num
+        drop in num let shown
+        ignore "gen/**"
+        drop ignore "gen/**"

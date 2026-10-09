@@ -1,0 +1,15 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t, paren match word /\w+/ {
+          rule w warn "[{parent_indent}|{parent_line}]"
+        }

@@ -1,0 +1,1 @@
+const object = { slot: async function task() { work(); work(); } };

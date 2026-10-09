@@ -1,0 +1,7 @@
+import .ts
+
+            in ts_declarator, ts_property rule provenance {
+                each transfer in (assignment_transfers.nonempty ?? [])
+                when transfer.error == true
+                warn "provenance"
+            }

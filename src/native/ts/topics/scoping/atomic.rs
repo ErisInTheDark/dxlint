@@ -135,19 +135,3 @@ fn assignment_target(s: &Syntax, reference: u32) -> Option<(u32, bool)> {
         child = parent;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn compound_reads_precede_suspension_and_refresh_old_reads() {
-        let l = native_linter("rule require-atomic-updates");
-        let path = Path::new("/root/a.mjs");
-        assert_eq!(l.lint(path, "let count; async function f() { count += await amount; }").len(), 1);
-        assert!(l.lint(path, "let count; async function f() { count += 1; await work(); count -= 1; }").is_empty());
-        assert!(l.lint(path, "async function f() { let count = 0; count += await amount; }").is_empty());
-        assert_eq!(l.lint(path, "async function f(obj) { if (obj.ready) { await work(); obj.ready = false; } }").len(), 1);
-    }
-}

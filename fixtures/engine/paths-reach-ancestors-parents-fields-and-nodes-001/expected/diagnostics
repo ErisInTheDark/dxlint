@@ -1,0 +1,2 @@
+a.ts:1:12-1:13 r#0 18:true
+a.ts:2:3-2:11 c#0 0|ts_expression_statement|ts_identifier|b|11|f|2|'é'|a . b ( 'é' )

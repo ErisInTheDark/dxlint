@@ -1,0 +1,21 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            fn runtime(value) = value
+            match word /[a-z]+/
+            in .t, paren match word
+            in .t match box /</ body:paren />/
+            in .t, paren layer marks match marked /[A-Z]+/
+            group containers paren, box
+            in .t, word, marked rule subjects {
+                warn "{runtime(parent) is containers}/{runtime(parent) is box.body}/{runtime(parent) is layer marks}/{runtime(parent) is .t}"
+            }

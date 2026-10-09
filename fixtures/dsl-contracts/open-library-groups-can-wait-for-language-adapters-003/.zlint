@@ -1,0 +1,9 @@
+lang t "*.t"
+define {
+group items
+in items rule item-rule warn 'item'
+}
+in .t match item /x/
+group items item
+drop group items item
+rule *

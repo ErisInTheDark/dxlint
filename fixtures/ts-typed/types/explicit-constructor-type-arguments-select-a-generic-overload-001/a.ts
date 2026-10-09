@@ -1,0 +1,1 @@
+interface Box<K, V> { key: K; value: V; } interface Ctor { new(): Box<any, any>; new<K, V>(): Box<K, V>; } declare const Maker: Ctor; new Maker<string, number>().key;

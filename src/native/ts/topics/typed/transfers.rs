@@ -86,34 +86,3 @@ pub(super) fn returned(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     }
     Value::Null
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    #[test]
-    fn returned_transfers_distinguish_provenance_and_carrier() {
-        let code = "interface Promise<T> { then(callback: (value: T) => unknown): unknown; } interface Box<T> { value: T; } declare const value: any; declare const array: any[]; declare const promise: Promise<any>; declare const box: Box<any>; function direct(): number { return value; } function missing(): number { return spooky; } function elements(): number[] { return array; } async function awaited(): Promise<number> { return promise; } function generic(): Box<number> { return box; } const arrow: () => number = () => value;";
-        let decisions = native_linter("rule no-unsafe-return\nrule no-unsafe-return:*");
-        assert_eq!(decisions.lint(Path::new("/root/a.ts"), code).len(), 6);
-        for (condition, expected) in [
-            ("return_transfer.mode == \"value\"", 3),
-            ("return_transfer.mode == \"array\"", 1),
-            ("return_transfer.mode == \"promise\"", 1),
-            ("return_transfer.mode == \"generic\"", 1),
-            ("return_transfer.error == true", 1),
-        ] {
-            let probe = native_linter(&format!("in ts_return, ts_arrow.body rule transfer {{\nwhen return_transfer != null && {condition}\nwarn \"transfer\"\n}}"));
-            assert_eq!(probe.lint(Path::new("/root/a.ts"), code).len(), expected, "{condition}");
-        }
-    }
-
-    #[test]
-    fn return_annotations_context_and_async_boundaries_keep_exemptions() {
-        let linter = native_linter("rule no-unsafe-return\nrule no-unsafe-return:*");
-        let code = "interface Promise<T> { then(callback: (value: T) => unknown): unknown; } interface Box<T> { value: T; } declare class Map<K = any, V = any> {} declare const value: any; declare const array: any[]; declare const promise: Promise<any>; declare const box: Box<any>; function explicitAny(): any { return value; } function missing(): unknown { return spooky; } function elements(): unknown[] { return array; } async function awaited(): Promise<unknown> { return promise; } function synchronous(): Promise<number> { return promise; } function same(): Box<any> { return box; } function empty(): Map<string, number> { return new Map(); } const arrow: () => unknown = () => value; function nothing() { return; }";
-        let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
-        assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    }
-}

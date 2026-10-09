@@ -1,0 +1,6 @@
+import .ts
+
+        in ts_call rule c {
+          let entry { callee: callee.node, args: { first: first(argument.nodes) } }
+          info "{entry.callee.end_offset}/{entry.args.first.offset}/{kind_name(entry.args.first.node)}"
+        }

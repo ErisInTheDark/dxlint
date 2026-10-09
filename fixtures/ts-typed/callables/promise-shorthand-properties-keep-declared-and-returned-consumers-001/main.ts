@@ -1,0 +1,1 @@
+const callback = async () => {}; const object: { callback: () => void } = { callback };

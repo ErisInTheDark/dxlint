@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_call.callee rule callable {
+                when { value (type_flags.nonempty ?? []); contains "function" }
+                error "callable"
+            }

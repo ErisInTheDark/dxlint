@@ -1,0 +1,3 @@
+import .ts
+language .js { set ecmaVersion 2017 }
+rule comma-dangle { set style "always" }

@@ -1,0 +1,6 @@
+import .ts
+
+        in ts_line rule ind info "{indent_level}:{len(indent_anchor)}" {
+          indent in ts_array
+          indent ts_call.argument by 2
+        }

@@ -1,0 +1,28 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            fn collected(seed) = {
+                value seed
+                original: then (value) value
+                value [1, 2, 3]
+                picked: filter (item, i) i % 2 == 0
+                sum
+                then (total) [total, count(picked), original]
+            }
+            in .t match word /[a-z]+/ {
+                rule pipeline {
+                    let seed count(text) + 9
+                    let result collected(seed)
+                    when { value result; then (value) first(value) == 4 }
+                    warn "{result}"
+                }
+            }

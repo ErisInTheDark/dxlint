@@ -58,23 +58,3 @@ fn affects_handling(file: &NativeFile<'_>, node: u32, function: u32) -> bool {
             && s.parent(decl).is_some_and(|declarator| s.tree.node(declarator).end < s.tree.node(node).start)
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    #[test]
-    fn error_handling_does_not_leak_across_functions_or_finished_catch_blocks() {
-        let linter = native_linter("rule return-await");
-        let code = "interface Like { then(ok: (value: number) => void): Like; } declare const p: Like; async function work() { try { const inner = async () => p; return p; } catch { return await p; } } async function cleanup() { try { return 1; } catch { return p; } finally {} } async function scalar() { return await 1; }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 4);
-    }
-
-    #[test]
-    fn resource_scope_and_declaration_order_control_required_awaits() {
-        let linter = native_linter("rule return-await");
-        let code = "interface Like { then(ok: (value: number) => void): Like; } declare const p: Like; async function before() { return p; using resource = {}; } async function after() { using resource = {}; return p; } async function finished() { { using resource = {}; } return p; } async function nested() { using resource = {}; const inner = async () => p; return 1; }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
-    }
-}

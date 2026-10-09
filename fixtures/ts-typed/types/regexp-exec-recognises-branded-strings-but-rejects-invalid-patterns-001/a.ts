@@ -1,0 +1,1 @@
+type Safe = string & { brand: void }; function f(s: Safe) { s.match('ok'); } 'x'.match('['); 'x'.match('g');

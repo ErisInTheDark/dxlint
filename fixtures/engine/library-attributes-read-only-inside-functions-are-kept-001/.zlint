@@ -1,0 +1,7 @@
+import .ts
+
+        define {
+          in ts_member let lib_object_node object.node
+        }
+        fn object_named(n) = n.lib_object_node is ts_identifier
+        in ts_member rule m info "{object_named(node)}"

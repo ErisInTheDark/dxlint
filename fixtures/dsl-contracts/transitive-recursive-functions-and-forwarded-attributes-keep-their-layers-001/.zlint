@@ -1,0 +1,9 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+
+            in ts_call let boundary_line opener.ts_open_paren.line
+            in ts_parenthesized forward boundary_line from expression
+            fn boundary_at(n, depth) = if depth == 0 then n.boundary_line else boundary_at(n, depth - 1)
+            fn outer_boundary(n) = boundary_at(n, 2)
+            in ts_parenthesized rule boundary info "{outer_boundary(node)}"

@@ -88,44 +88,4 @@ mod tests {
             assert_eq!(work, 0, "safe transfer queries bound {work} signatures");
         });
     }
-
-    #[test]
-    fn readonly_arrays_keep_unsafe_element_transfers() {
-        let linter = crate::engine::tests::native_linter("rule no-unsafe-assignment:*\nrule no-unsafe-argument");
-        let code = "declare const mutable: any[]; declare const immutable: readonly any[]; const first: readonly number[] = mutable; const second: readonly number[] = immutable; function takes(values: readonly number[]) {} takes(mutable); takes(immutable);";
-        let findings = linter.lint(std::path::Path::new("/root/a.ts"), code);
-        assert_eq!(findings.len(), 2, "{findings:?}");
-    }
-
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    #[test]
-    fn array_spread_provenance_is_distinct_from_explicit_any_arguments() {
-        let linter = native_linter(r#"
-            in ts_call rule provenance {
-                each transfer in (argument_transfers.nonempty ?? [])
-                when transfer.error == true
-                warn "provenance"
-            }
-        "#);
-        let code = "declare function f(value: number, ...rest: number[]): void; declare const errors: Missing[]; f(1 as any); f(...errors);";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 1);
-    }
-
-    #[test]
-    fn rest_parameters_consume_each_tuple_member_without_losing_the_next_argument() {
-        let linter = native_linter("rule no-unsafe-argument\nrule no-unsafe-argument:*");
-        let code = "declare function f(a: string, ...rest: [number, boolean]): void; declare const tuple: [any, any]; f('x', ...tuple); declare function safe(x: unknown): void; safe(1 as any); f(1 as any, 2, false);";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 3);
-    }
-
-    #[test]
-    fn constant_tuple_spreads_consume_safe_members_before_the_unsafe_argument() {
-        let linter = native_linter("rule no-unsafe-argument\nrule no-unsafe-argument:*");
-        let code = "declare function f(a: string, b: number, c: boolean): void; const tuple = ['x', 2] as const; f(...tuple, 1 as any); const unsafeTuple = ['x', 1 as any] as const; f(...unsafeTuple, true);";
-        let diagnostics = linter.lint(Path::new("/root/a.ts"), code);
-        assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics[0].start, code.find("1 as any").unwrap());
-    }
 }

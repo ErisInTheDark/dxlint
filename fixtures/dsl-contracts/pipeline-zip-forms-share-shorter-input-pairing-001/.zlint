@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            in .t match word /[a-z]+/ {
+                rule zip {
+                    let left if text == "a" then [1, 2, 3] else [3]
+                    let paired { value left; zip [9, 8] }
+                    let sums { value left; zip [9, 8] (a, b) a + b }
+                    warn "{count(paired)}:{join(sums, ',')}"
+                }
+            }

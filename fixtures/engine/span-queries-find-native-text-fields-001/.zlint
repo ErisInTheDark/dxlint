@@ -1,0 +1,4 @@
+import .ts
+
+        in ts_template rule t info "{ { value descendants(ts_template.quasi); count } }"
+        in ts_identifier rule i info "{text}:{containing(ts_template.quasi) != null}/{containing(ts_template) != null}"

@@ -86,17 +86,3 @@ fn scan(file: &NativeFile) -> OperandIndents {
     }
     OperandIndents(out)
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn following_operands_use_corrected_indentation() {
-        let lint = native_linter("rule indent-binary-ops");
-        let source = "const value = a +\nb *\nc;";
-        let reports = lint.lint(Path::new("/root/a.ts"), source);
-        assert_eq!(reports.len(), 2);
-    }
-}

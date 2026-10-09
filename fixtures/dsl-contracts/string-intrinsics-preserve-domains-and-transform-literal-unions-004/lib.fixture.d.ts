@@ -1,0 +1,1 @@
+type Uncapitalize<S extends string> = intrinsic; declare const value: Uncapitalize<'ABc' | ''>; value;

@@ -1,0 +1,1 @@
+function f() { var x = consume(() => x); }

@@ -1,0 +1,1 @@
+interface Take { (cb: () => void): void } interface Take { (cb: () => number): void } declare const take: Take; take(async () => {});

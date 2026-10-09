@@ -1,0 +1,1 @@
+type Pick<T, K extends keyof T> = { [P in K]: T[P] }; type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>; interface Shape { required: number; optional?: number; } declare class Optional { get value(): {}; set value(value: Pick<Shape, 'optional'>); } declare class Required { get value(): {}; set value(value: Pick<Shape, 'required'>); }

@@ -1,0 +1,1 @@
+type Uppercase<S extends string> = intrinsic; declare const broad: Uppercase<string>; declare const loose: Uppercase<any>; declare const empty: Uppercase<never>; declare const missing: Uppercase<Missing>; broad; loose; empty; missing;

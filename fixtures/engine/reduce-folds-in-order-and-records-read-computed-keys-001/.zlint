@@ -1,0 +1,15 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match word /[a-z]+/ {
+          rule fold info "{ { value [3, 1, 4]; fold ([]) (seen, n) seen [n + count(seen)]; join ',' } }|{get({ ab: 1 }, text)}|{index_of(['x', text], text)}|{index_of([], 1)}"
+        }

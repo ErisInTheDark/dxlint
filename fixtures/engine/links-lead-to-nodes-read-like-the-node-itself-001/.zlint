@@ -1,0 +1,5 @@
+import .ts
+
+        in ts_identifier rule d info "{declaration.line}:{count(references)}:{declaration is ts_identifier}:{references.line}" {
+          when declaration != null
+        }

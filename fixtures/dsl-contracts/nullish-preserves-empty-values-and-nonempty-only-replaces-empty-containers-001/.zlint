@@ -1,0 +1,28 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            in .t match word /[a-z]+/ {
+                rule fallback {
+                    let empty_text "" ?? "wrong"
+                    let empty_list [] ?? "wrong"
+                    when empty_text == "" && type_of(empty_list) == "list"
+                      && (false ?? num("bad")) == false
+                      && (0 ?? num("bad")) == 0
+                      && { value {} ?? "wrong"; type_of } == "record"
+                      && type_of({}.nonempty) == "null"
+                      && false.nonempty == false && 0.nonempty == 0
+                      && ("".nonempty ?? "yes") == "yes"
+                      && ([].nonempty ?? "yes") == "yes"
+                      && (null ?? "yes") == "yes"
+                    warn "fallback preserved"
+                }
+            }

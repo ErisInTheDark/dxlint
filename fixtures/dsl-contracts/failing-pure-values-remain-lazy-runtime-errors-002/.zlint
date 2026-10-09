@@ -1,0 +1,30 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            in .t match word /[a-z]+/ {
+                rule lazy {
+                    option enabled boolean = false
+                    when !(false && true) && (true || false)
+                      && (if enabled then replace("x", "", "y") else true)
+                      && !(enabled && 1 % 0 == 0)
+                    warn "safe"
+                }
+                rule failing {
+                    option enabled boolean = true
+                    when enabled
+                    warn "{replace('x', '', 'y')}"
+                }
+                rule dormant {
+                    warn "{1 % 0}"
+                }
+            }
+            rule dormant off

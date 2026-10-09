@@ -1,0 +1,53 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+fn f0() = 1
+fn f1() = f0() + f0()
+fn f2() = f1() + f1()
+fn f3() = f2() + f2()
+fn f4() = f3() + f3()
+fn f5() = f4() + f4()
+fn f6() = f5() + f5()
+fn f7() = f6() + f6()
+fn f8() = f7() + f7()
+fn f9() = f8() + f8()
+fn f10() = f9() + f9()
+fn f11() = f10() + f10()
+fn f12() = f11() + f11()
+fn f13() = f12() + f12()
+fn f14() = f13() + f13()
+fn f15() = f14() + f14()
+fn f16() = f15() + f15()
+fn f17() = f16() + f16()
+fn f18() = f17() + f17()
+fn f19() = f18() + f18()
+fn f20() = f19() + f19()
+fn f21() = f20() + f20()
+fn f22() = f21() + f21()
+fn f23() = f22() + f22()
+fn f24() = f23() + f23()
+fn f25() = f24() + f24()
+fn f26() = f25() + f25()
+fn f27() = f26() + f26()
+fn f28() = f27() + f27()
+fn f29() = f28() + f28()
+fn f30() = f29() + f29()
+fn f31() = f30() + f30()
+fn f32() = f31() + f31()
+fn f33() = f32() + f32()
+fn f34() = f33() + f33()
+fn f35() = f34() + f34()
+fn f36() = f35() + f35()
+fn f37() = f36() + f36()
+fn f38() = f37() + f37()
+fn f39() = f38() + f38()
+fn f40() = f39() + f39()
+in .t match word /[a-z]+/ { rule deep { warn f40() } }

@@ -1,0 +1,9 @@
+import .ts
+in ts_identifier rule neighbour {
+  when text == "probe"
+  when starts_with(token_neighbours.before.text, "`left")
+  when { value result: "}} right"; value starts_with(token_neighbours.after.text, result) }
+  when token_neighbours.before.gap == " /* before */ "
+  when token_neighbours.after.gap == " /* after */ "
+  error "neighbour"
+}

@@ -83,38 +83,3 @@ fn terminal_arrow_block(file: &NativeFile<'_>, mut node: u32, end: u32) -> bool 
         node = child;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn loop_body_variables_still_own_their_semicolon() {
-        let lint = native_linter("rule semi");
-        let reports = lint.lint(Path::new("/root/file.ts"), "for (;;) var value = 1");
-        assert_eq!(reports.len(), 1);
-    }
-
-    #[test]
-    fn exported_expressions_keep_continuation_guards() {
-        let lint = native_linter(r#"
-            rule semi {
-                set mode "never"
-                set beforeStatementContinuationChars "never"
-            }
-        "#);
-        let reports = lint.lint(Path::new("/root/file.ts"), "export default value;\n[0].forEach(visit)");
-        assert!(reports.is_empty(), "{reports:?}");
-    }
-
-    #[test]
-    fn class_field_omission_does_not_strip_method_signatures() {
-        let lint = native_linter(r#"
-            rule semi { set omitLastInOneLineClassBody true }
-        "#);
-        let reports = lint.lint(Path::new("/root/file.ts"), "abstract class C { abstract run(): void; }");
-        assert!(reports.is_empty(), "{reports:?}");
-    }
-}

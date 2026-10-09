@@ -1,0 +1,2 @@
+import .ts
+in ts_program rule d info "{ { value descendants(ts_line); count } }/{ { value overlapping(ts_line); count } }/{ { value overlapping(ts_line, 0, 4); count } }/{ { value overlapping(ts_line, 6, 6); count } }"

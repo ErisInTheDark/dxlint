@@ -1,0 +1,6 @@
+lang t "*.t"
+define {
+ in .t match token /X/
+ in token let dormant missing()
+}
+in token rule active warn "x"

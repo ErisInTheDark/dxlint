@@ -1,0 +1,5 @@
+import .ts
+in ts_call rule lists {
+  each site in trailing_comma_sites
+  warn site.kind
+}

@@ -1,0 +1,1 @@
+interface Promise<T> { then(callback: (value: T) => unknown): unknown } async function f(p: Promise<{ key: number }>, b: boolean, a: any) { ({ ...(b ? p : {}) }); }

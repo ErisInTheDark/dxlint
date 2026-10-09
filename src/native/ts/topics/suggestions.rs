@@ -38,36 +38,3 @@ pub const FACTS: &[Fact] = &[
     Fact { name: "object_shorthand_member", doc: "native layers: object member shorthand eligibility, constructor and annotation exceptions, and arrow lexical safety", get: |f, n| f.with_file(objects::shorthand, n) },
     Fact { name: "object_shorthand_consistency", doc: "native layers: mixed shorthand forms or all-redundant long forms in an object literal", get: |f, n| f.with_file(objects::consistency, n) },
 ];
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn self_comparison_compares_tokens_without_changing_literal_contents() {
-        let lint = native_linter("rule no-self-compare");
-        for (source, expected) in [
-            ("'a b' === 'ab';", 0),
-            ("foo /* comment */.bar === foo.bar;", 1),
-            ("(foo) === foo;", 1),
-        ] {
-            assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), expected, "{source}");
-        }
-    }
-
-    #[test]
-    fn redundant_renames_follow_binding_defaults_and_cooked_names() {
-        let lint = native_linter("rule no-useless-rename:destructuring");
-        assert_eq!(lint.lint(Path::new("/root/a.ts"), "let {'foo': foo = 1, bar: baz} = source;").len(), 1);
-        assert_eq!(lint.lint(Path::new("/root/a.ts"), "const value = {foo: foo};").len(), 0);
-    }
-
-    #[test]
-    fn concatenation_checks_adjacent_string_operands() {
-        let lint = native_linter("rule no-useless-concat");
-        assert_eq!(lint.lint(Path::new("/root/a.ts"), "foo + 'a' + 'b';").len(), 1);
-        assert_eq!(lint.lint(Path::new("/root/a.ts"), "'a' + 1 + 'b';").len(), 0);
-    }
-}

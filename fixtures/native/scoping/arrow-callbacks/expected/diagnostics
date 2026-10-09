@@ -1,0 +1,2 @@
+bound.mjs:1:9-1:36 prefer-arrow-callback#0
+parameter.mjs:1:9-1:50 prefer-arrow-callback#0

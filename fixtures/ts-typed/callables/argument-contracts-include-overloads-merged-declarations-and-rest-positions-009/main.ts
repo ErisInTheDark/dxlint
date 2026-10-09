@@ -1,0 +1,1 @@
+declare function take(...callbacks: (() => void)[]): void; take(async () => {});

@@ -1,0 +1,1 @@
+type Callback = () => void; function make() { type Callback = () => Promise<void>; const Base = class { callback: Callback }; class Child extends Base { callback = async () => {}; } }

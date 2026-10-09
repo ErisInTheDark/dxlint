@@ -1,0 +1,8 @@
+import .ts
+in ts_throw rule probe {
+  let caught catch_throw
+  each property in (last(caught.arguments).properties.nonempty ?? [])
+  when property.kind == "ts_spread" || property.name == "cause" && property.value.name == get(caught, "parameter").name && get(property.value, "binding") != { value caught; get "parameter"; get "binding" }
+  report at property.offset
+  warn "binding"
+}

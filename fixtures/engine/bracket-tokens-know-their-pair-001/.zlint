@@ -1,0 +1,2 @@
+import .ts
+in ts_open_brace, ts_close_brace rule p info "{text}{paired_token.text}@{paired_token.start}"

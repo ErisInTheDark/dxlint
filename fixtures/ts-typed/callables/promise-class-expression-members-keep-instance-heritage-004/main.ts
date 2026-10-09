@@ -1,0 +1,1 @@
+const Base = class { method(): void {} }; type Constructor = typeof Base; interface Child extends Constructor { method(): Promise<void> }

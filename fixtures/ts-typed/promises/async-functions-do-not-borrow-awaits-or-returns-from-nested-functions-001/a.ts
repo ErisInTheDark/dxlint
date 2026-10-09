@@ -1,0 +1,1 @@
+interface Like { then(ok: (v: number) => void): Like; } declare const p: Like; async function returned() { return p; } async function outer() { const inner = async () => { await 1; }; return 1; } async function bare() { return; } async function empty() {} async function iterated(xs: any) { for await (const x of xs) {} } async function disposed() { await using x = {}; }

@@ -1,0 +1,1 @@
+abstract class Base { abstract accessor callback: () => void } abstract class Derived extends Base { abstract accessor callback: () => Promise<void> }

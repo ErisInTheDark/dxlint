@@ -1,0 +1,1 @@
+[1].findLast(async () => true);

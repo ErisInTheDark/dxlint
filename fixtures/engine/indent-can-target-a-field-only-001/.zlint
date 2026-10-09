@@ -1,0 +1,16 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match pair /\[/ body:paren /\]/
+        in .t, paren layer lines match line /^[ \t]*\S/ {
+          rule ind warn "[{if indented then indent_anchor else 'none'}]" { indent in pair.body }
+        }

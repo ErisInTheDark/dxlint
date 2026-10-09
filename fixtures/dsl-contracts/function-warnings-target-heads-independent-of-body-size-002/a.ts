@@ -1,0 +1,1 @@
+async function task() { work(); work(); work(); }

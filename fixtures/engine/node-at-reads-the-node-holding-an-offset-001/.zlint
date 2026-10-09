@@ -1,0 +1,3 @@
+import .ts
+
+        in ts_line_comment rule c info "{ { value token_neighbours.after.start; node_at; kind_name } }:{node_at(token_neighbours.after.start).indent_level}" { indent in ts_block }

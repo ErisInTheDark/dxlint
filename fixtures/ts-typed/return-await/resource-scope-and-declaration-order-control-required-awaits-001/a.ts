@@ -1,0 +1,1 @@
+interface Like { then(ok: (value: number) => void): Like; } declare const p: Like; async function before() { return p; using resource = {}; } async function after() { using resource = {}; return p; } async function finished() { { using resource = {}; } return p; } async function nested() { using resource = {}; const inner = async () => p; return 1; }

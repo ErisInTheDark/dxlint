@@ -1,0 +1,1 @@
+const good = 1;

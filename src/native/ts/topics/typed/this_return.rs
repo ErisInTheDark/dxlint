@@ -57,16 +57,3 @@ fn is_this(file: &NativeFile<'_>, node: u32, depth: usize) -> bool {
     let Some(owner) = s.parent(decl).filter(|&owner| s.is(owner, Kind::Declarator) && s.get(owner, Field::Type).is_none()) else { return false };
     s.get(owner, Field::Init).is_some_and(|init| is_this(file, init, depth + 1))
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::tests::native_linter;
-    use std::path::Path;
-
-    #[test]
-    fn nested_returns_do_not_escape_their_function_and_class_returns_block_this() {
-        let linter = native_linter("rule prefer-return-this-type");
-        let code = "class A { a(): A { function nested() { return new A(); } return this; } b(): A { const self = this; return self; } c(): A { if (ok) return new A(); return this; } d(this: A): A { return this; } }";
-        assert_eq!(linter.lint(Path::new("/root/a.ts"), code).len(), 2);
-    }
-}

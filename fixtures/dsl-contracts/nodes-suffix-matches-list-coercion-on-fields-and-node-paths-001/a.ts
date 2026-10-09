@@ -1,0 +1,1 @@
+zero(); one(a); many(b, c);

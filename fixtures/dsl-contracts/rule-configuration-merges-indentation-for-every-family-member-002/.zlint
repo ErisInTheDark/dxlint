@@ -1,0 +1,16 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+in ts_identifier rule depth:first info "{indent_level}" {
+indent in ts_call
+indent reset true
+}
+in ts_identifier rule depth:second info "{indent_level}" {
+indent in ts_call
+indent reset true
+}
+
+rule depth {
+indent in ts_call by 3
+
+}

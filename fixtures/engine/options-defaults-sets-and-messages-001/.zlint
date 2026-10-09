@@ -1,0 +1,19 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t layer lines match line /^[^\n]+/ {
+          rule long-line warn "max {max}" {
+            option max int(0..) = 10 "max chars"
+            when len(text) > max
+          }
+        }
+        rule long-line error { set max 5 }

@@ -1,0 +1,1 @@
+declare const callback: undefined | (() => Promise<void>); function make(): undefined | (() => void) { return callback; }

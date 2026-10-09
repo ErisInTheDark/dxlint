@@ -1,0 +1,3 @@
+a.ts:1:1-1:10 operands#0 5:1
+a.ts:1:1-1:6 direct#0 5
+a.ts:1:9-1:10 direct#0 1

@@ -1,0 +1,3 @@
+import .ts
+language .js { set globals {String: 'off'} }
+rule prefer-regex-literals

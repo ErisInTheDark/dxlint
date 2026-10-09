@@ -1,0 +1,1 @@
+import { Base, take } from './base'; class Child extends Base { async method() {} } declare const specialized: typeof take<() => void>; specialized(async () => {});

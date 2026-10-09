@@ -1,0 +1,1 @@
+type Box<T> = { value: T }; declare const x: Box<string> | null; x as Box<string>; x as Box<number>;

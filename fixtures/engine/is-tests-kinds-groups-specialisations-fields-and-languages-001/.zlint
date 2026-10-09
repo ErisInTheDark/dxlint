@@ -1,0 +1,19 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        match word /[a-z]+/
+        match shout like word /[A-Z]+/
+        group things word, paren
+        in .t, paren match word
+        in .t, paren match shout
+        in .t match pair /\[/ inner:word /\]/
+        in word rule w info "{is word}/{is (paren, shout)}/{not (paren, shout)}/{parent is things}/{is pair.inner}/{is .t}"

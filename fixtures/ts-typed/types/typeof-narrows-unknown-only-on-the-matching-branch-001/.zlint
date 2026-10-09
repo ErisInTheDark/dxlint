@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_identifier rule narrowed {
+                when text == "x" && { value (type_flags.nonempty ?? []); contains "string" }
+                error "narrowed"
+            }

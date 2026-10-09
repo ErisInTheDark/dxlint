@@ -1,0 +1,1 @@
+export = 'other'; 'use strict'; function f() {}

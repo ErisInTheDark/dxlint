@@ -1,0 +1,18 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        fn twice(x) = x * 2
+        fn fact(n) = if n <= 1 then 1 else n * fact(n - 1)
+        fn shout(words) = { value words; map (w) upper(w) "!"; join " " }
+        in .t match word /[a-z]+/ {
+          rule f info "{ { value text; len; twice } }|{fact(4)}|{shout([text, 'x'])}"
+        }

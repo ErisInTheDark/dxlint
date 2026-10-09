@@ -1,0 +1,1 @@
+class Task { _task(_value: number) { work(); work(); } }

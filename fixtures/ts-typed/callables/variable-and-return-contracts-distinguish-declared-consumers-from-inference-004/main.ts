@@ -1,0 +1,1 @@
+let callback: () => void; callback = async () => {};

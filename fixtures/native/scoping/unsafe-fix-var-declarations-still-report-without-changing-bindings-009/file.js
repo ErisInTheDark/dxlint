@@ -1,0 +1,1 @@
+function f() { for (var x = 0; x < 2; x++) { callbacks.push(() => x); } }

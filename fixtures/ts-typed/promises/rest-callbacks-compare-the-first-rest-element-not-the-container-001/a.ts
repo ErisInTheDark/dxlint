@@ -1,0 +1,1 @@
+interface Like { then(ok: (v: unknown) => void, bad: (e: any) => void): Like; catch(bad: (e: any) => void): Like; } declare const promise: Like; promise.catch((...e: unknown[]) => {}); promise.catch((...e: [unknown, any]) => {}); promise.catch((...e: any[]) => {}); promise.catch(({message}: {message: string}) => {});

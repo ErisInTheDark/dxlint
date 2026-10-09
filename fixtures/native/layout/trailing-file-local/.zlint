@@ -1,0 +1,4 @@
+import .ts
+language .js { files "legacy.js"; set ecmaVersion 2016 }
+language .js { files "modern.js"; set ecmaVersion 2025 }
+rule comma-dangle { set style "always" }

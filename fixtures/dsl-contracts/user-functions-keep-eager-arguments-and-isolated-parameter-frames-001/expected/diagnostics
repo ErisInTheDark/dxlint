@@ -1,0 +1,5 @@
+file.t:1:1-1:2 constants#0 fixed
+file.t:1:1-1:2 cyclic_argument#error rule `cyclic_argument` failed here: attribute `cycle` depends on itself
+file.t:1:1-1:2 dynamic#0 a
+file.t:1:1-1:2 eager#error rule `eager` failed here: remainder by zero
+file.t:1:1-1:2 recursive#error rule `recursive` failed here: `recurse` calls itself too deeply

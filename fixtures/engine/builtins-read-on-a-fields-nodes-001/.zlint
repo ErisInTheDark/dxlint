@@ -1,0 +1,2 @@
+import .ts
+in ts_if rule i info "{alternate is ts_if}@{alternate.offset}|{ map(consequent.nodes, c => kind_name(c)) }"

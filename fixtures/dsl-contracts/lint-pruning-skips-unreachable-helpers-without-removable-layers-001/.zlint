@@ -1,0 +1,4 @@
+lang t "*.t"
+fn dormant() = missing()
+in .t match token /X/
+in token rule active warn "x"

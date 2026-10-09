@@ -1,0 +1,4 @@
+import .ts
+in ts_call, ts_new rule probe {
+  warn "{regex_construction_kind([] argument.node)}"
+}

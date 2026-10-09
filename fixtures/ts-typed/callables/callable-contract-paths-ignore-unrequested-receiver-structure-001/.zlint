@@ -1,0 +1,7 @@
+import .ts
+
+        in ts_call.argument rule complete-root {
+            each contract in callable_contracts(parent, node, [])
+            when contract.complete
+            warn "complete"
+        }

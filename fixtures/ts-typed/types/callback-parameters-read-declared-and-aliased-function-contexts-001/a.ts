@@ -1,0 +1,1 @@
+const f: (x: string) => string = x => { x; return x; }; type Fn = (x: string) => void; declare function take(f: Fn): void; take(x => { x; });

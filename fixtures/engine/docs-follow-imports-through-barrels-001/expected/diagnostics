@@ -1,0 +1,2 @@
+main.ts:1:10-1:11 d#0 a: Old.\n@deprecated use b
+main.ts:2:1-2:2 d#0 a: Old.\n@deprecated use b

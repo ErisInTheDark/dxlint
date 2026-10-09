@@ -1,0 +1,5 @@
+import .ts
+in ts_expression_statement.expression rule typed {
+when { value (type_flags.nonempty ?? []); contains "string" }
+info "typed"
+}

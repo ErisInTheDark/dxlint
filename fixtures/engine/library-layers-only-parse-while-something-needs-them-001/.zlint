@@ -1,0 +1,17 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        define {
+          in .t match lib_word /[a-z]+/ { rule lib warn "lib" }
+          in .t match lib_other /[0-9]+/ { rule other warn "other" { when parent is lib_word } }
+        }
+        in .t match mine /[a-z]+/ { rule mine warn "mine" }

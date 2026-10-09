@@ -1,0 +1,4 @@
+import .ts
+
+        in ts_call let paren_line opener.ts_open_paren.line
+        in ts_call rule p info "{paren_line}"

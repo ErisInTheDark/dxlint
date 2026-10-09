@@ -190,8 +190,6 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
 mod tests {
     use super::sites;
     use crate::engine::tests::with_native_file;
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
 
     #[test]
     fn parser_aware_regex_boundaries_keep_the_literal_whole() {
@@ -223,17 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn parser_aware_jsx_boundaries_do_not_treat_attribute_backslashes_as_escapes() {
-        let lint = native_linter("in ts_array rule edge {\neach site in list_layout\nwhen site.mode == \"spacing\" && site.next == \"]\"\nreport at site.offset\nwarn site.prev\n}");
-        for source in [r#"const a = [<X attr="\">text</X>];"#, r#"const a = [<X attr="\">text</X>,];"#] {
-            let reports = lint.lint(Path::new("/root/a.tsx"), source);
-            assert_eq!(reports.len(), 1, "{reports:?}");
-            assert_eq!(reports[0].message, if source.contains(",]") { "," } else { ">" });
-            assert_eq!(reports[0].start, source.rfind(']').unwrap());
-        }
-    }
-
-    #[test]
     fn comment_edges_exclude_internal_whitespace_and_keep_line_breaks() {
         for (source, spaced, broken) in [
             ("const a = [/* inner */x/* tail */];", false, false),
@@ -253,14 +240,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn wrapping_limit_rejects_inline_boundaries_not_wrapped_ones() {
-        let lint = native_linter("rule list-style { set singleLine { maxItems: 1 } }");
-        for (source, count) in [
-            ("const x = [1, 2];", 3),
-            ("const x = [\n 1,\n 2,\n];", 0),
-        ] {
-            assert_eq!(lint.lint(Path::new("/root/a.ts"), source).len(), count, "{source}");
-        }
-    }
 }

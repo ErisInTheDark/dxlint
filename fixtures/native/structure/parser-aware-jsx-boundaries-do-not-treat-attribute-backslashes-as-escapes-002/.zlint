@@ -1,0 +1,7 @@
+import .ts
+in ts_array rule edge {
+each site in list_layout
+when site.mode == "spacing" && site.next == "]"
+report at site.offset
+warn site.prev
+}

@@ -112,19 +112,3 @@ fn invalid_assignment_pattern(file: &NativeFile, host: u32, scope: usize) -> boo
     }
     false
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use crate::engine::tests::native_linter;
-
-    #[test]
-    fn unique_writer_must_be_in_the_declaring_scope_and_declaration_position() {
-        let l = native_linter("rule prefer-const");
-        let path = Path::new("/root/a.mjs");
-        assert_eq!(l.lint(path, "let value; value = 1;").len(), 1);
-        assert!(l.lint(path, "let value; if (flag) value = 1;").is_empty());
-        assert!(l.lint(path, "let value; { value = 1; }").is_empty());
-        assert_eq!(l.lint(path, "let { first, second } = input; second = 2;").len(), 1);
-    }
-}

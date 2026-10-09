@@ -1,0 +1,1 @@
+type Lowercase<S> = number; declare const value: Lowercase<string>; value;

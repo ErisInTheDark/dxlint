@@ -1,0 +1,15 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+
+            in .js layer lines match line /[^\n]+\n?/
+            in ts_program match hosted_comment /\/\/[^\n]*/
+            in hosted_comment rule comment info "comment" { files "included.ts" }
+            in line rule structure info "{ { value overlapping(ts_if); count } }" {
+                files "included.ts"
+                fix as ""
+            }
+            in line rule text info "text" {
+                when contains(text, "broken")
+                fix as replace(text, "broken", "unfinished")
+            }

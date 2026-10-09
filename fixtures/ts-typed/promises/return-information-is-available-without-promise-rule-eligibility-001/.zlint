@@ -1,0 +1,7 @@
+import .ts
+in ts_function, ts_method rule return-info {
+            when function_return_info != null
+            when all(function_return_info.returns, result => any(result.groups, group => contains(group, "Promise")))
+            warn "promise result"
+        }
+        rule return-info

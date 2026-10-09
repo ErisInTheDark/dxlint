@@ -1,0 +1,5 @@
+import .ts
+in ts_return, ts_arrow.body rule transfer {
+when return_transfer != null && return_transfer.mode == "promise"
+warn "transfer"
+}

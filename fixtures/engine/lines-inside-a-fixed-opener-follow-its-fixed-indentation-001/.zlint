@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t, paren layer lines match line /^[ \t]*\S/ {
+          @macro level (if !indented then "" else if indent_closes then indent_anchor else indent_anchor "  ")
+          rule ind warn "indent" {
+            indent in paren
+            when slice(text, 0, -1) != @level
+            fix as @level slice(text, -1)
+          }
+        }

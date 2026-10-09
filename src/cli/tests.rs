@@ -459,24 +459,9 @@ fn configs_are_named_dot_zlint_and_import_each_other() {
 }
 
 #[test]
-fn built_in_rules_are_off_until_turned_on() {
-    let ts = "if (x = 1) {}\nvar y = 1;\n";
-    let lint = |name: &str, config: &str| {
-        let dir = project(name, &[(".zlint", config), ("a.ts", ts)]);
-        let out = zlint(&dir, &["--format", "jsonl"]);
-        let mut rules: Vec<String> = stdout(&out)
-            .lines()
-            .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("json")["rule"].as_str().unwrap_or_default().to_string())
-            .collect();
-        rules.sort();
-        (rules, String::from_utf8_lossy(&out.stderr).into_owned())
-    };
-    assert_eq!(lint("cli-off", "import .ts\n").0, Vec::<String>::new());
-    assert_eq!(lint("cli-one", "import .ts\nrule no-cond-assign\n").0, vec!["no-cond-assign"]);
-    // A ruleset turns on its category; `rule x off` takes one back.
-    let (rules, _) = lint("cli-ruleset", "import .ts\nimport rules:correctness\nimport rules:conventions\nrule no-var off\n");
-    assert!(rules.contains(&"no-cond-assign".to_string()) && !rules.contains(&"no-var".to_string()), "{rules:?}");
-    // A rule of a language not imported says which import brings it.
-    let (_, err) = lint("cli-hint", "import .ts\nrule rs-indent\n");
-    assert!(err.contains("comes with `import .rs`"), "{err}");
+fn foreign_language_rules_explain_the_required_import() {
+    let dir = project("cli-hint", &[(".zlint", "import .ts\nrule rs-indent\n"), ("a.ts", "if (x = 1) {}\nvar y = 1;\n")]);
+    let out = zlint(&dir, &["--format", "jsonl"]);
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(error.contains("comes with `import .rs`"), "{error}");
 }

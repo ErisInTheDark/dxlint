@@ -1,0 +1,7 @@
+import .ts
+
+            fn runtime(value) = value
+            group containers ts_call, ts_if, ts_block
+            in ts_program, ts_identifier, ts_call rule subjects {
+                warn "{parent is containers}/{parent is ts_call.argument}/{parent is .js}"
+            }

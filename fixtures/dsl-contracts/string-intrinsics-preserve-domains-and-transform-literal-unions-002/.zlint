@@ -1,0 +1,3 @@
+import .ts
+in ts_expression_statement.expression rule resolved { when count(type_literal_values) == 2 && all(type_literal_values, literal => contains(['abc', 'def'], literal.value))
+warn 'resolved' }

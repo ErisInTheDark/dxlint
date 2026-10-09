@@ -1,0 +1,1 @@
+const callback = async () => {}; function make(): { callback: () => void } { return { callback }; }

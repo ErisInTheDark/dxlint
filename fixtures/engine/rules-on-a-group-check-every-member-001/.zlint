@@ -1,0 +1,17 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match a /A/
+        in .t match b /B/
+        group ab a
+        group ab b
+        in ab rule letters warn "{text}"

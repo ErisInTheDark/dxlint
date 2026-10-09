@@ -1,0 +1,8 @@
+file.ts:1:1-1:1 next-input#0 advance input
+file.ts:1:1-1:2 good#0 1
+file.ts:1:1-1:2 nested_cycle#error rule `nested_cycle` failed here: attribute `cycle` depends on itself
+file.ts:1:1-1:9 cyclic#error rule `cyclic` failed here: attribute `cycle` depends on itself
+file.ts:1:1-1:9 first#error rule `first` failed here: byte_slice: expected a number, got a list
+file.ts:1:1-1:9 retry#error rule `retry` failed here: byte_slice: expected a number, got a list
+file.ts:1:5-1:9 good#0 4
+file.ts:1:5-1:9 nested_cycle#error rule `nested_cycle` failed here: attribute `cycle` depends on itself

@@ -1,0 +1,2 @@
+type Whitespace = `prefix${''}
+`;

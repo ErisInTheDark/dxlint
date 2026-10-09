@@ -1,0 +1,2 @@
+main.ts:1:158-1:160 no-misused-promises:void-arguments#0
+main.ts:1:71-1:77 no-misused-promises:void-inherited-methods#0

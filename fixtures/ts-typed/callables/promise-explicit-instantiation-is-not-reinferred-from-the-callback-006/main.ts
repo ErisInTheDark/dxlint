@@ -1,0 +1,1 @@
+declare const take: <T extends (...args: unknown[]) => unknown>(fn: T) => T; take(async () => {});

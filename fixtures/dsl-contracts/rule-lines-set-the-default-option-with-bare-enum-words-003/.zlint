@@ -1,0 +1,9 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+define {
+in ts_call rule probe info "{mode}" {
+  default option mode enum(always, never, always-multiline) = never "policy"
+}
+}
+rule probe error set always-multiline

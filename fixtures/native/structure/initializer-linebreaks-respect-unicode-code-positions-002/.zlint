@@ -1,0 +1,2 @@
+import .ts
+rule operator-linebreak { set mode "before" }

@@ -1,0 +1,1 @@
+function f(this: { value: string }) { this.value; } class C { value: string; m() { (() => { this.value; })(); function nested() { this.value; } } }

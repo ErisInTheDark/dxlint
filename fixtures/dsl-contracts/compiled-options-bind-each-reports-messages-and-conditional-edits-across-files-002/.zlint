@@ -1,0 +1,27 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+            in .t match word /[a-z]+/ {
+                rule configured {
+                    option chosen string = "a"
+                    option enabled boolean = false
+                    @each item in [chosen]
+                    when enabled && text == item
+                    report at offset
+                    fix at {start: offset, end: end_offset} if enabled as item chosen
+                    warn "{item}/{trim(chosen)}"
+                }
+            }
+            rule configured {
+                set chosen "b"
+                set enabled true
+            }

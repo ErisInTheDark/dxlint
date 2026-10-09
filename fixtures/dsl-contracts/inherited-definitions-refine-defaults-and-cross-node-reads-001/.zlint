@@ -1,0 +1,12 @@
+import .ts
+
+in ts_node let size 1
+in ts_identifier let size len(text)
+in ts_binary rule operands info "{left.size}:{right.size}"
+in ts_identifier rule direct info "{size}"
+
+in ts_program rule next-input info "advance input" {
+    when text == "a + long;"
+    report at 0
+    fix as "other + b;"
+}

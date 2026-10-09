@@ -1,0 +1,1 @@
+const callback = () => 1; const object: { callback: () => void } = { callback };

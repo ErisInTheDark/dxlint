@@ -1,0 +1,20 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t match blk /\{/ until /\}/
+        in blk match label /[a-z]+:/
+        in .t, blk layer lines match line /^[ \t]*\S/ {
+          rule ind warn "{indent_level}" {
+            indent in blk
+            dedent label
+          }
+        }

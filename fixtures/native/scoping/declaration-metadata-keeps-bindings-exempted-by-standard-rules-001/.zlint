@@ -1,0 +1,10 @@
+import .ts
+
+language .js { set sourceType "script" }
+in ts_variable_declaration rule probe {
+  each d in scoping_global_declarations
+  when (d.exported && d.name == "a") || d.kind == "using"
+  report at d.offset
+  warn "binding"
+}
+rule no-implicit-globals { set lexicalBindings true }

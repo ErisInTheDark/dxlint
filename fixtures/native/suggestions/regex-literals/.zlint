@@ -1,0 +1,2 @@
+import .ts
+rule prefer-regex-literals { set disallowRedundantWrapping true }

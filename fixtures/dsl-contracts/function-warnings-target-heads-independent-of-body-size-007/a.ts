@@ -1,0 +1,1 @@
+class Task { task = async () => { work(); work(); }; }

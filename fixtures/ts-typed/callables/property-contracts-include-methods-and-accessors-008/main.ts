@@ -1,0 +1,1 @@
+class C { callback: () => void = async () => {}; }

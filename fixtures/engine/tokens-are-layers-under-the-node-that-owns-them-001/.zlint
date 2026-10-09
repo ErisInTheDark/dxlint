@@ -1,0 +1,4 @@
+import .ts
+
+        in ts_comma rule c info "{kind_name(parent)}:{space_before.spaced}/{space_after.spaced}:{next_token}" fix space_after as " "
+        in ts_keyword rule k info "{text}<{kind_name(parent)}"

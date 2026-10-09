@@ -1,0 +1,1 @@
+declare function take<T extends () => void>(cb: T): void; take<() => void>(async () => {});

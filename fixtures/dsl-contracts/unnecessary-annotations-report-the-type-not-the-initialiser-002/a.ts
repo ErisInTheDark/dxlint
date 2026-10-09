@@ -1,0 +1,1 @@
+function task(count: number = 12) {}

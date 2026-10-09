@@ -1,0 +1,1 @@
+interface Base { method(): Promise<void> } class C implements Base { async method() {} }

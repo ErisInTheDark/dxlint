@@ -1,0 +1,1 @@
+function f(x) { return x; } f(1); f(1, 2); f();

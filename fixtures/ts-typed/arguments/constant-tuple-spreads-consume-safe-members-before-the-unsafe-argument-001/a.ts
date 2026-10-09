@@ -1,0 +1,1 @@
+declare function f(a: string, b: number, c: boolean): void; const tuple = ['x', 2] as const; f(...tuple, 1 as any); const unsafeTuple = ['x', 1 as any] as const; f(...unsafeTuple, true);

@@ -1,0 +1,6 @@
+import .ts
+in ts_identifier rule d info "{text}: {declaration_doc}" { when imported_from != null && declaration_doc != null }
+
+# Project inputs remain readable, but the original Rust test linted only this main file.
+ignore "a.ts"
+ignore "index.ts"

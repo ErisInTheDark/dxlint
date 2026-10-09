@@ -1,0 +1,1 @@
+interface Promise<T> { then(callback: (value: T) => unknown): unknown } function f(value: { value: number } | Promise<{ other: number }>) { if (value) {} }

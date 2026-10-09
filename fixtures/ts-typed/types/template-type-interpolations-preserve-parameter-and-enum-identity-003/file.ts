@@ -1,0 +1,1 @@
+enum E { A = 'a' } type Enum = `${E.A}`;

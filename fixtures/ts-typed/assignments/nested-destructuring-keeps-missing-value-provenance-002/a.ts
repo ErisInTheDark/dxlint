@@ -1,0 +1,1 @@
+const [[[x]]] = [spooky]; const { x: { y: z } } = { x: spooky };

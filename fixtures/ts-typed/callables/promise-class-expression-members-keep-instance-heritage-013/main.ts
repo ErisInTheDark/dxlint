@@ -1,0 +1,1 @@
+const Base = class { method(): Promise<void> { return null!; } }; class Child extends Base { async method() {} }

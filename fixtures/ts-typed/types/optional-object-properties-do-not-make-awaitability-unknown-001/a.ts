@@ -1,0 +1,1 @@
+declare const value: { a?: number }; await value;

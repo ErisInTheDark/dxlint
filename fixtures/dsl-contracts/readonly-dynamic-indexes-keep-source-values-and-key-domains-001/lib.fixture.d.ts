@@ -1,0 +1,1 @@
+type Readonly<T> = { readonly [P in keyof T]: T[P] }; declare const at: number; declare const key: string; declare const array: Readonly<any[]>; declare const dictionary: Readonly<{ [name: string]: any }>; array[at]; array[key]; dictionary[key];

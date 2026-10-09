@@ -1,0 +1,7 @@
+file.ts:2:1-2:8 c#0 f:import
+file.ts:2:1-2:9 g#0 \n
+file.ts:2:3-2:4 a#0 0:a:true
+file.ts:2:6-2:7 a#0 1:b:true
+file.ts:5:1-5:5 c#0 g:global
+file.ts:5:1-5:6 g#0 \n\n// note\n
+file.ts:5:3-5:4 a#0 0:c:false

@@ -1,0 +1,1 @@
+function f(callback: () => void = async () => {}) {}

@@ -1,0 +1,11 @@
+import .ts
+
+                group mixed ts_declarator, ts_class_property, ts_parameter
+                in ts_identifier let child_start offset
+                in ts_declarator, ts_class_property, ts_parameter rule present info "present" {
+                    when node is ts_parameter
+                    report at name.child_start
+                }
+                in ts_declarator, ts_class_property, ts_parameter rule absent info "absent" {
+                    when node is ts_class_property && name.offset == null
+                }

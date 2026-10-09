@@ -1,0 +1,7 @@
+input.ts:1:14-1:15 context#0 argument:first
+input.ts:1:36-1:37 holes#0 absent
+input.ts:1:37-1:38 holes#0 absent
+input.ts:1:39-1:40 holes#1 a
+input.ts:1:4-1:5 context#0 type_argument:A
+input.ts:1:40-1:41 holes#1 a
+input.ts:1:42-1:43 holes#1 b

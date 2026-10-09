@@ -1,0 +1,1 @@
+type Capitalize<S extends string> = intrinsic; declare const value: Capitalize<'aBc' | ''>; value;

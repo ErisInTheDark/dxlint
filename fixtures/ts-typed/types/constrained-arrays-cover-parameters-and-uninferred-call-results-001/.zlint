@@ -1,0 +1,6 @@
+import .ts
+
+            in ts_unary rule deletion {
+                when operator == "delete" && argument.object_array_type == true
+                error "deletion"
+            }

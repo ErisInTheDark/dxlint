@@ -1,0 +1,1 @@
+declare const x: { a: number }; declare let y: any; x[(y += 1)]; x[(y *= 1)];

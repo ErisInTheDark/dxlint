@@ -1,0 +1,1 @@
+declare function take(cb: (() => void) | (() => Promise<void>)): void; take(async () => {});

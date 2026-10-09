@@ -1,0 +1,4 @@
+file.t:1:1-1:4 where#0 |.t|true|true|false
+file.t:1:8-1:11 where#0 comment|.t|true|true|false
+file.t:2:2-2:5 where#0 paren|.t|true|true|false
+file.t:2:7-2:10 where#0 str|.t|true|true|false

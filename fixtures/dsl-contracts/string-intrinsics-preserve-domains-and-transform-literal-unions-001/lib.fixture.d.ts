@@ -1,0 +1,1 @@
+type Uppercase<S extends string> = intrinsic; declare const value: Uppercase<'aBc' | 'def'>; value;

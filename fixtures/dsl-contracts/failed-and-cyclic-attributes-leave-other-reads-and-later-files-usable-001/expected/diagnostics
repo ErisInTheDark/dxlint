@@ -1,0 +1,5 @@
+a.ts:1:1-1:1 next-input#0 advance input
+a.ts:1:1-1:2 cycle#error rule `cycle` failed here: attribute `cyclic` depends on itself
+a.ts:1:1-1:2 first#error rule `first` failed here: byte_slice: expected a number, got a list
+a.ts:1:1-1:2 good#0 1
+a.ts:1:1-1:2 second#error rule `second` failed here: byte_slice: expected a number, got a list

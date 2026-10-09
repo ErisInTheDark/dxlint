@@ -1,0 +1,3 @@
+import .ts
+rule await-thenable:aggregate
+rule await-thenable:iterable

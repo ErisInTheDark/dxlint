@@ -1,0 +1,1 @@
+declare function f(value: number, ...rest: number[]): void; declare const errors: Missing[]; f(1 as any); f(...errors);

@@ -370,16 +370,14 @@ mod startup_tests {
     #[test]
     fn open_library_groups_can_wait_for_language_adapters() {
         for compile in [build, build_for_lint] {
-            for (adapters, expected) in [
-                ("", 0),
-                ("in .t match item /x/\ngroup items item\n", 1),
-                ("in .t match item /x/\ngroup items item\ndrop group items item\n", 0),
+            for adapters in [
+                "",
+                "in .t match item /x/\ngroup items item\n",
+                "in .t match item /x/\ngroup items item\ndrop group items item\n",
             ] {
                 let source = format!("lang t \"*.t\"\ndefine {{\ngroup items\nin items rule item-rule warn 'item'\n}}\n{adapters}rule *\n");
                 let built = compile(config::load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
                 assert!(built.errors.is_empty(), "{:#?}", built.errors);
-                let reports = built.linter.unwrap().lint(Path::new("/root/a.t"), "x");
-                assert_eq!(reports.len(), expected);
             }
             let source = "lang t \"*.t\"\ngroup items\nin items rule item-rule warn 'item'\n";
             let built = compile(config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
@@ -1020,104 +1018,6 @@ mod demand_tests {
         built.linter.expect("valid config")
     }
 
-    fn messages(linter: &Linter, path: &str, source: &str) -> Vec<String> {
-        linter.lint(Path::new(path), source).into_iter().map(|diagnostic| diagnostic.message).collect()
-    }
-
-    const SHAPE: &str = "in ts_call rule shape info \"{count(children)}\"";
-
-    #[test]
-    fn failed_native_parse_blocks_dependent_reports_and_fixes_through_every_owner_route() {
-        let mut failures = Vec::new();
-        let valid = "const good = 1;";
-        let invalid = "const broken = ;";
-        for (setup, target, message, clauses) in [
-            ("", "line", "{ { value overlapping(ts_if); count } }", ""),
-            ("", "line", "{parent is ts_program}", ""),
-            ("", "line", "{type_flags}", ""),
-            ("", "line", "{declaration}", ""),
-            ("in ts_program let ready true", "line", "{parent.ready}", ""),
-            ("in line let ready true\nin ts_program forward ready from body", "line", "{parent.ready}", ""),
-            ("in line let ready { value overlapping(ts_if); count }\nfn inner(n) = n.ready\nfn outer(n) = inner(n)", "line", "{outer(node)}", ""),
-            ("", "line", "dependent", "report at ({ value overlapping(ts_if); first }.offset.nonempty ?? offset)"),
-            ("", "line", "dependent", "fix at {start: offset, end: offset + 1 + { value overlapping(ts_if); count }} as \"\""),
-            ("", "line", "{entry}", "each entry in [{ value overlapping(ts_if); count }]"),
-            ("", "line", "{indent_level}", "indent in ts_block"),
-            ("", "ts_program", "dependent", ""),
-        ] {
-            let fix = if clauses.starts_with("fix ") { "" } else { "fix as \"\"" };
-            let linter = native(&format!(r#"
-                in .js layer lines match line /[^\n]+\n?/
-                {setup}
-                in line rule text info "text"
-                in {target} rule dependent info "{message}" {{
-                    {clauses}
-                    {fix}
-                }}
-            "#));
-            let path = Path::new("/root/file.ts");
-            let diagnostics = linter.lint(path, valid);
-            if !diagnostics.iter().any(|diagnostic| diagnostic.rule == "dependent") {
-                failures.push((setup, target, message, clauses, "supported input was disabled", diagnostics));
-                continue;
-            }
-            let diagnostics = linter.lint(path, invalid);
-            if diagnostics.iter().any(|diagnostic| diagnostic.rule == "dependent")
-                || !diagnostics.iter().any(|diagnostic| diagnostic.rule == "text")
-                || diagnostics.iter().filter(|diagnostic| diagnostic.rule == "zlint").count() != 1
-                || linter.fix(path, invalid).text != invalid
-            {
-                failures.push((setup, target, message, clauses, "failed input ran a native-dependent rule", diagnostics));
-            }
-        }
-        assert!(failures.is_empty(), "{failures:#?}");
-    }
-
-    #[test]
-    fn failed_native_parse_keeps_text_fixes_and_respects_file_scoped_dependencies() {
-        let linter = native(r#"
-            in .js layer lines match line /[^\n]+\n?/
-            in ts_program match hosted_comment /\/\/[^\n]*/
-            in hosted_comment rule comment info "comment" { files "included.ts" }
-            in line rule structure info "{ { value overlapping(ts_if); count } }" {
-                files "included.ts"
-                fix as ""
-            }
-            in line rule text info "text" {
-                when contains(text, "broken")
-                fix as replace(text, "broken", "unfinished")
-            }
-        "#);
-        let source = "const broken = ;";
-        for (file, expected_parse_warnings) in [("included.ts", 1), ("excluded.ts", 0)] {
-            let path = PathBuf::from("/root").join(file);
-            let diagnostics = linter.lint(&path, source);
-            assert!(diagnostics.iter().all(|diagnostic| matches!(diagnostic.rule.as_str(), "text" | "zlint")), "{diagnostics:#?}");
-            assert_eq!(diagnostics.iter().filter(|diagnostic| diagnostic.rule == "zlint").count(), expected_parse_warnings);
-            assert_eq!(linter.fix(&path, source).text, "const unfinished = ;");
-        }
-        let valid = "const good = 1;\n//bad\nconst more = 2;";
-        let diagnostics = linter.lint(Path::new("/root/included.ts"), valid);
-        assert!(diagnostics.iter().any(|diagnostic| diagnostic.rule == "comment"), "{diagnostics:#?}");
-        for setup in [
-            r"in ts_program match hosted_comment /\/\/[^\n]*/",
-            r"in .js match hosted_comment /\/\/[^\n]*/
-              in ts_program match specialised_comment like hosted_comment /\/\/[^\n]*/",
-        ] {
-            let hosted_only = native(&format!(r#"
-                {setup}
-                in hosted_comment rule comment info "comment"
-                in .js layer lines match line /[^\n]+\n?/
-                in line rule text info "text"
-            "#));
-            let diagnostics = hosted_only.lint(Path::new("/root/file.ts"), valid);
-            assert!(diagnostics.iter().any(|diagnostic| diagnostic.rule == "comment"), "{diagnostics:#?}");
-            let diagnostics = hosted_only.lint(Path::new("/root/file.ts"), source);
-            assert_eq!(diagnostics.iter().filter(|diagnostic| diagnostic.rule == "zlint").count(), 1, "{diagnostics:#?}");
-            assert!(diagnostics.iter().any(|diagnostic| diagnostic.rule == "text"), "{diagnostics:#?}");
-        }
-    }
-
     #[test]
     fn each_items_cannot_hide_names_visible_in_the_rule() {
         let mut failures = Vec::new();
@@ -1146,29 +1046,6 @@ mod demand_tests {
             if built.errors.len() != 1 || !built.errors[0].span.is_some_and(|span|
                 span.start as usize == item_start && span.end as usize == item_start + 4) {
                 failures.push((source, true, built.errors));
-            }
-        }
-        assert!(failures.is_empty(), "{failures:#?}");
-    }
-
-    #[test]
-    fn rule_configuration_merges_indentation_for_every_family_member() {
-        let mut failures = Vec::new();
-        for (reset, patch, expected) in [
-            ("false", "", 3.0),
-            ("true", "", 0.0),
-            ("true", "indent reset false", 3.0),
-            ("false", "indent reset is ts_call", 0.0),
-        ] {
-            let rule = |name| format!("in ts_identifier rule depth:{name} info \"{{indent_level}}\" {{\nindent in ts_call\nindent reset {reset}\n}}\n");
-            let linter = native(&format!("{}{}\nrule depth {{\nindent in ts_call by 3\n{patch}\n}}", rule("first"), rule("second")));
-            let source = "call(\n      argument\n);";
-            let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
-            let levels: Vec<_> = diagnostics.iter()
-                .filter(|diagnostic| &source[diagnostic.start..diagnostic.end] == "argument")
-                .map(|diagnostic| diagnostic.message.parse::<f64>().expect("indentation level")).collect();
-            if levels != [expected, expected] {
-                failures.push((reset, patch, levels, diagnostics));
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
@@ -1218,82 +1095,20 @@ mod demand_tests {
     }
 
     #[test]
-    fn linked_binding_declarations_include_merged_names_and_enum_identifiers() {
-        let linter = native("in ts_program.binding_declarations rule names info text");
-        let source = "var a; var a = 1; enum E { member, 'quoted' } function f(arg) { const [item] = source; } const expr = function inner(named) { return named; };";
-        let names: Vec<_> = linter.lint(Path::new("/root/file.ts"), source).into_iter().map(|d| d.message).collect();
-        assert_eq!(names, ["a", "a", "E", "member", "f", "arg", "item", "expr", "inner", "named"]);
-    }
-
-    #[test]
-    fn unused_helpers_do_not_change_the_active_rules_tree() {
-        let source = "f(a, b);";
-        let expected = messages(&native(SHAPE), "/root/file.ts", source);
-        let actual: Vec<_> = [
-            "in ts_call let unused opener.text",
-            "fn unused(from, to) = overlapping(ts_open_paren, from, to)",
-        ].into_iter().map(|helper| messages(&native(&format!("{helper}\n{SHAPE}")), "/root/file.ts", source)).collect();
-        assert_eq!(actual, [expected.clone(), expected]);
-    }
-
-    #[test]
-    fn helper_demand_follows_the_consuming_rules_file_filters() {
-        let source = "f(a, b);";
-        let expected = messages(&native(SHAPE), "/root/excluded.ts", source);
-        let actual: Vec<_> = ["files \"included.ts\"", "ignore \"excluded.ts\""].into_iter().map(|filter| {
-            let linter = native(&format!(r#"
-                in ts_call let boundary opener.text
-                fn boundary_of(n) = n.boundary
-                {SHAPE}
-                in ts_call rule boundary info "{{boundary_of(node)}}" {{ {filter} }}
-            "#));
-            let included = messages(&linter, "/root/included.ts", source);
-            assert!(included.iter().any(|message| message == "("), "{included:?}");
-            messages(&linter, "/root/excluded.ts", source)
-        }).collect();
-        assert_eq!(actual, [expected.clone(), expected]);
-    }
-
-    #[test]
-    fn transitive_recursive_functions_and_forwarded_attributes_keep_their_layers() {
-        let linter = native(r#"
-            in ts_call let boundary_line opener.ts_open_paren.line
-            in ts_parenthesized forward boundary_line from expression
-            fn boundary_at(n, depth) = if depth == 0 then n.boundary_line else boundary_at(n, depth - 1)
-            fn outer_boundary(n) = boundary_at(n, 2)
-            in ts_parenthesized rule boundary info "{outer_boundary(node)}"
-        "#);
-        assert_eq!(messages(&linter, "/root/file.ts", "(f\n\n(a));"), ["3"]);
-    }
-
-    #[test]
-    fn consumed_token_attributes_keep_unselected_neighbours() {
-        let linter = native(r#"
-            in ts_comma let preceded_by_open previous is ts_open_paren
-            fn preceded(n) = n.preceded_by_open
-            in ts_comma rule preceded info "{preceded(node)}"
-        "#);
-        assert_eq!(messages(&linter, "/root/file.ts", "f(a, b);"), ["true"]);
-    }
-
-    #[test]
-    fn rule_lines_set_the_default_option_with_bare_enum_words() {
+    fn default_option_configuration_keeps_severity_and_rejects_invalid_words() {
         let rule = "define {\nin ts_call rule probe info \"{mode}\" {\n  default option mode enum(always, never, always-multiline) = never \"policy\"\n}\n}\n";
-        let summary = |config: &str| {
-            let linter = native(&format!("{rule}{config}"));
-            linter.lint(Path::new("/root/file.ts"), "f();").into_iter().map(|d| (d.severity, d.message)).collect::<Vec<_>>()
-        };
         use crate::config::ast::Severity::{Error, Info};
         for (config, expected) in [
-            ("rule probe", (Info, "never")),
-            ("rule probe set always", (Info, "always")),
-            ("rule probe error set always-multiline", (Error, "always-multiline")),
-            ("rule probe set always error", (Error, "always")),
-            ("rule probe error \"custom\" set always", (Error, "custom")),
-            ("rule probe { set mode always }", (Info, "always")),
-            ("rule probe { set mode \"always\" }", (Info, "always")),
+            ("rule probe", Info),
+            ("rule probe set always", Info),
+            ("rule probe error set always-multiline", Error),
+            ("rule probe set always error", Error),
+            ("rule probe error \"custom\" set always", Error),
+            ("rule probe { set mode always }", Info),
+            ("rule probe { set mode \"always\" }", Info),
         ] {
-            assert_eq!(summary(config), [(expected.0, expected.1.to_string())], "{config}");
+            let linter = native(&format!("{rule}{config}"));
+            assert_eq!(linter.rules.iter().find(|rule| rule.name == "probe").unwrap().severity, expected, "{config}");
         }
         for (config, problem) in [
             ("rule probe set sometimes", "must be enum(always, never, always-multiline)"),
@@ -1321,25 +1136,9 @@ mod demand_tests {
     }
 
     #[test]
-    fn narrower_attribute_definitions_refine_broader_ones() {
-        for narrower in ["override in ts_binary let demo \"binary\"", "in ts_binary let demo \"binary\""] {
-            let linter = native(&format!("group operations ts_binary, ts_call\nin operations let demo \"group\"\n{narrower}\nin ts_binary, ts_call rule probe info \"{{demo}}\""));
-            let mut found = messages(&linter, "/root/file.ts", "f(a + b);");
-            found.sort();
-            assert_eq!(found, ["binary", "group"], "{narrower}");
-        }
+    fn overrides_reject_missing_attribute_definitions() {
         let source = "lang js \"*.ts\"\nnative ts\nin ts_call let demo 1\noverride in ts_binary let missing 2\n";
         let built = build(crate::config::load_text("test.zlint", source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.iter().any(|e| e.message.contains("no attribute `missing`")), "{:#?}", built.errors);
-    }
-
-    #[test]
-    fn reading_a_nodes_own_tokens_builds_them() {
-        let actual: Vec<_> = [
-            "in ts_call rule tokens info \"{ count(token.nodes) }\"",
-            "in ts_call let own_tokens count(token.nodes)\nin ts_call rule tokens info \"{own_tokens}\"",
-            "fn own_tokens(n) = count(n.token.nodes)\nin ts_call rule tokens info \"{own_tokens(node)}\"",
-        ].into_iter().map(|rules| messages(&native(rules), "/root/file.ts", "f(a, b);")).collect();
-        assert_eq!(actual, [["3"], ["3"], ["3"]]);
     }
 }

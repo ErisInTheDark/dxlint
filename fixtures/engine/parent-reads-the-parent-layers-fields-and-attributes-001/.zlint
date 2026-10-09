@@ -1,0 +1,4 @@
+import .ts
+
+        in ts_call let arity count(argument)
+        in ts_call.argument rule p info "{parent.callee}/{parent.arity}"

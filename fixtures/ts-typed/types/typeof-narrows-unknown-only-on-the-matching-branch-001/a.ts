@@ -1,0 +1,1 @@
+declare const x: unknown; if (typeof x === 'string') { x; } else { x; }

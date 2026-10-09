@@ -1,0 +1,1 @@
+file.t:1:1-1:4 b#error rule `b` failed here: byte_slice: byte_slice: 1..4 is not on character boundaries

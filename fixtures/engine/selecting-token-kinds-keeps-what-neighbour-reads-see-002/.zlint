@@ -1,0 +1,3 @@
+import .ts
+in ts_call rule c info "{count(children)}"
+        in ts_comma rule d info "d"

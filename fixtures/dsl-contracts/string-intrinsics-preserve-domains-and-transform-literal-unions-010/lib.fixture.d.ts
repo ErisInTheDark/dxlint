@@ -1,0 +1,1 @@
+type Lowercase<S extends string> = intrinsic; declare const broad: Lowercase<string>; declare const loose: Lowercase<any>; declare const empty: Lowercase<never>; declare const missing: Lowercase<Missing>; broad; loose; empty; missing;

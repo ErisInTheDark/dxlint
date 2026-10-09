@@ -1,0 +1,1 @@
+function f() { for (var x in obj) {} use(x); }

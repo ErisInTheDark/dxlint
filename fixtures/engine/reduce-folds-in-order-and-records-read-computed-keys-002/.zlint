@@ -1,0 +1,12 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+in .t match word /[a-z0-9]+/ { rule c info "{compare_text('a10', text)}/{compare_text('a10', text, true)}/{compare_text('B', 'a')}/{compare_text('B', 'a', false, true)}" }

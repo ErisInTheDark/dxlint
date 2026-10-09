@@ -1,0 +1,7 @@
+file.ts:1:10-1:11 b#0 A:import:1/0/0/0
+file.ts:1:13-1:14 b#0 B:import:1/0/0/0
+file.ts:1:16-1:17 b#0 C:import:1/1/0/0
+file.ts:2:5-2:6 b#0 x:let:0/0/0/1
+file.ts:3:6-3:7 b#0 T:type:0/0/0/0
+file.ts:4:7-4:8 b#0 f:const:1/1/1/0
+file.ts:5:11-5:12 b#0 D:interface:1/1/0/0

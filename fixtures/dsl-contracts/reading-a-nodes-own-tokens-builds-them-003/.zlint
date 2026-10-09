@@ -1,0 +1,5 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+fn own_tokens(n) = count(n.token.nodes)
+in ts_call rule tokens info "{own_tokens(node)}"

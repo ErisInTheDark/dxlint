@@ -1,0 +1,1 @@
+with (obj) { var x = 1; }

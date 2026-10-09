@@ -1,0 +1,1 @@
+function f() { use(x); var x = 1; }

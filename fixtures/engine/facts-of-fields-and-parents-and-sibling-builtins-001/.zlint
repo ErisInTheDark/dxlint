@@ -1,0 +1,5 @@
+import .ts
+
+        in ts_call rule c info "{callee}:{callee.resolved}"
+        in ts_call.argument rule a info "{index}:{text}:{parent.type_flags == null}"
+        in ts_expression_statement rule g info "{ gap_before.nonempty ?? 'first' }" { when index > 0 }

@@ -1,0 +1,3 @@
+import .ts
+
+        in ts_identifier rule d info "{count(declarations)}:{scope is ts_function}:{writer is ts_assignment}" { when text == "a" }

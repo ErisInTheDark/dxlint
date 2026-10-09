@@ -1,0 +1,16 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        in .t rule header warn "files start with a header" {
+          when !starts_with(text, "// header")
+          fix as "// header\n" text
+        }

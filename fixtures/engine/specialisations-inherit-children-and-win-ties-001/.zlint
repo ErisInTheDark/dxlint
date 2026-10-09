@@ -1,0 +1,22 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        match blk /\{/ until /\}/
+        match obj like blk /(?<==[ \t]*)\{/ until /\}/
+        in .t, blk {
+          match blk
+          match obj
+        }
+        in blk match item /\w+/ {
+          rule items warn "{text} in {kind_name(parent)}"
+        }
+        in blk rule blocks warn "{if before ~ /.*=\s*/ then 'object' else 'block'}"

@@ -287,51 +287,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lint_pruning_skips_unreachable_helpers_without_removable_layers() {
-        for definitions in [
-            "fn dormant() = missing()\nin .t match token /X/",
-            "define {\n in .t match token /X/\n in token let dormant missing()\n}",
-        ] {
-            let source = format!("lang t \"*.t\"\n{definitions}\nin token rule active warn \"x\"\n");
-            let mut loaded = config::load_text("test.zlint", &source, &Disk);
-            assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
-            prune_for_lint(&mut loaded.config, &mut loaded.errors);
-            let built = build(loaded, PathBuf::from("/root"));
-            assert!(built.errors.is_empty(), "{definitions}: {:#?}", built.errors);
-            let diagnostics = built.linter.unwrap().lint(Path::new("/root/test.t"), "X");
-            assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-        }
-    }
-
-    #[test]
-    fn lint_pruning_preserves_indirect_attributes_groups_and_forwards() {
-        let source = r#"
-lang t "*.t"
-define {
-  in .t match leaf /X/
-  in .t match wrapper /</ value:leaf />/
-  group words leaf
-  in words let letter upper(text)
-  in wrapper forward letter from value
-  fn read(n) = n.letter
-  fn accepted(n) = read(n) == "X"
-}
-in wrapper rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }
-"#;
-        let mut loaded = config::load_text("test.zlint", source, &Disk);
-        assert!(loaded.errors.is_empty(), "{:#?}", loaded.errors);
-        prune_for_lint(&mut loaded.config, &mut loaded.errors);
-        let built = build(loaded, PathBuf::from("/root"));
-        assert!(built.errors.is_empty(), "{:#?}", built.errors);
-        let linter = built.linter.unwrap();
-        let path = Path::new("/root/test.t");
-        let diagnostics = linter.lint(path, "<X>");
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:#?}");
-        assert_eq!(diagnostics[0].message, "X");
-        assert_eq!(linter.fix(path, "<X>").text, "<x>");
-    }
-
-    #[test]
     fn lint_pruning_preserves_function_declaration_errors() {
         for definitions in ["fn unused() = 1\nfn unused() = 2", "fn len(x) = 1"] {
             let source = format!("lang t \"*.t\"\n{definitions}\n");

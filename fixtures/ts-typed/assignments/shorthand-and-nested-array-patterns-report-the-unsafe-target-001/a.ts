@@ -1,0 +1,1 @@
+const { x } = { x: 1 } as { x: any }; const [[y]] = [1 as any];

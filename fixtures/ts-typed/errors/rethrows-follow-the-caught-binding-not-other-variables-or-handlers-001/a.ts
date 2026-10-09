@@ -1,0 +1,1 @@
+interface Like { then(ok: (v: unknown) => void, bad: (e: any) => void): Like; catch(bad: (e: any) => void): Like; } declare const promise: Like; try {} catch (caught) { throw caught; const other = 1; throw other; } promise.catch(caught => { throw caught; }); promise.then(caught => { throw caught; });

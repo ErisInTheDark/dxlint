@@ -1,0 +1,4 @@
+file.t:1:11-1:16 blocks#0 block
+file.t:1:13-1:14 items#0 b in blk
+file.t:1:5-1:10 blocks#0 object
+file.t:1:7-1:8 items#0 a in obj

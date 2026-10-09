@@ -1,0 +1,1 @@
+export const Base = class { method(): void {} }; export declare function take<T extends (...args: unknown[]) => unknown>(callback: T): T;

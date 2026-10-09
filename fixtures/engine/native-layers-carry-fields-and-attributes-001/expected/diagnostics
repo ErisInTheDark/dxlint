@@ -1,0 +1,4 @@
+file.ts:1:5-1:16 complex#0 2 in `a && b || c`
+file.ts:2:15-2:16 callee#0 f
+file.ts:3:5-3:22 complex#0 2 in `g(a || b, c && d)`
+file.ts:3:5-3:6 callee#0 g

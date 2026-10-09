@@ -1,0 +1,1 @@
+declare function take(...args: [number, () => void]): void; take(1, async () => {});

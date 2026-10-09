@@ -1,0 +1,1 @@
+const Base = class { method(): void {} }; class Child extends Base { async method() {} }

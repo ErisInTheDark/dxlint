@@ -1,0 +1,7 @@
+lang js "*.ts"
+native ts
+group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
+group operations ts_binary, ts_call
+in operations let demo "group"
+override in ts_binary let demo "binary"
+in ts_binary, ts_call rule probe info "{demo}"

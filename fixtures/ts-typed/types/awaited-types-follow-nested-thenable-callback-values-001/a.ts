@@ -1,0 +1,1 @@
+interface Task<T> { then(cb: (value: T) => void): void; } declare const p: Task<Task<string>>; await p;

@@ -1,0 +1,1 @@
+const task = () => { return value; };

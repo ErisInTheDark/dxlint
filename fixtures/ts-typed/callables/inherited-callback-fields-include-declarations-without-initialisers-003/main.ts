@@ -1,0 +1,1 @@
+interface Base { callback: () => void } interface Derived extends Base { callback: () => Promise<void> }

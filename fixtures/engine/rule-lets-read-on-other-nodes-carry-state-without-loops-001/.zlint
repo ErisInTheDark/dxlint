@@ -1,0 +1,8 @@
+import .ts
+
+        in ts_expression_statement rule order info "{rank}<{frontier}" {
+          option order string[] = ["a", "b", "c"]
+          let rank index_of(order, text)
+          let frontier if previous.frontier == null then rank else max(previous.frontier, rank)
+          when previous.frontier != null && rank < previous.frontier
+        }

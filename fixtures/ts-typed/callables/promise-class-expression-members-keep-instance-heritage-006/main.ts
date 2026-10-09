@@ -1,0 +1,1 @@
+namespace N { export const Base = class { method(): void {} }; } class Child extends N.Base { async method() {} }

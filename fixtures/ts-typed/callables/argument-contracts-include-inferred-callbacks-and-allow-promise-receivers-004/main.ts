@@ -1,0 +1,1 @@
+declare function take(cb: () => void): void; declare const p: Promise<number>; take(() => p);

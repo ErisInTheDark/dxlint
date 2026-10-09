@@ -1,0 +1,1 @@
+const a = [<X attr="\">text</X>];

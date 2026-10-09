@@ -1,0 +1,8 @@
+import .ts
+
+        @macro named(n) (text == n)
+        in ts_identifier rule r info "{entry}" {
+          option names string[] = ["a", "b"]
+          @each entry in names
+          when @named(entry)
+        }

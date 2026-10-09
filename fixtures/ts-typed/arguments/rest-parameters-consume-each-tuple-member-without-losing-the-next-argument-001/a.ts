@@ -1,0 +1,1 @@
+declare function f(a: string, ...rest: [number, boolean]): void; declare const tuple: [any, any]; f('x', ...tuple); declare function safe(x: unknown): void; safe(1 as any); f(1 as any, 2, false);

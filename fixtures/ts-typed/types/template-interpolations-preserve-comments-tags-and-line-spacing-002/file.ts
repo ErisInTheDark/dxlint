@@ -1,0 +1,1 @@
+const value = `before ${1 /* keep */} after`;

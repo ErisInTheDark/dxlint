@@ -1,0 +1,4 @@
+import .ts
+
+        fn grand(n) = kind_name(n.parent.parent)
+        in ts_identifier rule p info "{kind_name(node.parent)}/{grand(node)}/{node.parent.parent is ts_expression_statement}" { when text == "a" }

@@ -1,0 +1,1 @@
+var a; var a = 1; enum E { member, 'quoted' } function f(arg) { const [item] = source; } const expr = function inner(named) { return named; };

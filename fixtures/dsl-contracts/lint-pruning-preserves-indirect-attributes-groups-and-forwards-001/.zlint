@@ -1,0 +1,12 @@
+
+lang t "*.t"
+define {
+  in .t match leaf /X/
+  in .t match wrapper /</ value:leaf />/
+  group words leaf
+  in words let letter upper(text)
+  in wrapper forward letter from value
+  fn read(n) = n.letter
+  fn accepted(n) = read(n) == "X"
+}
+in wrapper rule active warn "{read(node)}" fix as lower(text) { when accepted(node) }

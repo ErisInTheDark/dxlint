@@ -1,0 +1,12 @@
+
+        import .rs
+        import .ts
+        import .py
+        import .c
+        import .zlint
+        import .md
+        import .toml
+        import .rs
+        in rs_code match dbg /\bdbg!/ {
+          rule no-dbg warn "no dbg"
+        }

@@ -1,0 +1,19 @@
+
+lang t "*.t"
+match paren /\(/ until /\)/
+in .t, paren {
+  match paren
+  match str /"/ until /"/ {
+    match escape /\\./
+  }
+  match comment /\/\// until /$/
+}
+
+
+        match word /[a-z]+/
+        match box /<[a-z ]+>/
+        in box match word
+        in .t match pair /\[/ inner:box /\]/
+        in .t match box
+        in word rule w info "{text}:{containing(pair.inner) != null}"
+        in pair rule p info "{ { value descendants(pair.inner); count } }"
