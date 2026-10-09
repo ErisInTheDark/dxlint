@@ -388,51 +388,6 @@ mod tests {
     use crate::engine::tests::native_linter;
 
     #[test]
-    fn optional_chains_report_calls_and_computed_access_once() {
-        let linter = native_linter("rule prefer-optional-chain");
-        for (source, chain) in [
-            ("declare const foo: (() => number) | null; foo && foo();", "foo && foo()"),
-            ("declare const foo: any; declare const key: string; foo && foo[key] && foo[key].value;", "foo && foo[key] && foo[key].value"),
-            ("declare const foo: any; foo.bar! && foo.bar.value;", "foo.bar! && foo.bar.value"),
-        ] {
-            let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
-            let start = source.find(chain).unwrap();
-            assert_eq!(diagnostics.iter().map(|d| (d.start, d.end)).collect::<Vec<_>>(), [(start, start + chain.len())], "{source}");
-        }
-    }
-
-    #[test]
-    fn optional_chains_preserve_guard_semantics_and_independent_segments() {
-        let linter = native_linter("rule prefer-optional-chain");
-        for (source, expected) in [
-            ("declare const foo: false | { value: number }; foo && foo.value;", 0),
-            ("declare const foo: 0 | { value: number }; foo && foo.value;", 0),
-            ("declare const foo: '' | { value: number }; foo && foo.value;", 0),
-            ("declare const foo: 0n | { value: number }; foo && foo.value;", 0),
-            ("declare const foo: void | (() => void); foo && foo();", 0),
-            ("declare const foo: { left: number; right: number } | null; foo != null && foo.left === foo.right;", 0),
-            ("declare const foo: { value: number } | null; foo && foo.value === undefined;", 0),
-            ("declare const foo: { value: number } | null | undefined; foo !== null && foo !== undefined && foo.value;", 1),
-            ("declare const foo: any; declare const bar: any; foo && foo() || bar && bar();", 2),
-            ("declare const foo: any; foo && (foo.bar && foo.bar.value);", 1),
-            ("declare const foo: any; (foo?.bar).value && foo.bar.value.next;", 0),
-            ("declare const foo: any; (foo ?? {}).value;", 1),
-        ] {
-            assert_eq!(linter.lint(Path::new("/root/file.ts"), source).len(), expected, "{source}");
-        }
-    }
-
-    #[test]
-    fn optional_chains_obey_primitive_and_nullish_options() {
-        let source = "declare const foo: string; foo && foo.length;";
-        assert_eq!(native_linter("rule prefer-optional-chain").lint(Path::new("/root/file.ts"), source).len(), 1);
-        for options in ["set checkString false", "set requireNullish true"] {
-            let linter = native_linter(&format!("rule prefer-optional-chain {{ {options} }}"));
-            assert!(linter.lint(Path::new("/root/file.ts"), source).is_empty(), "{options}");
-        }
-    }
-
-    #[test]
     fn template_interpolations_report_each_redundant_value() {
         let linter = native_linter("rule no-unnecessary-template-expression");
         let source = "const value = `before ${1} middle ${true} after`;";

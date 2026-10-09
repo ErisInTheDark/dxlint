@@ -22,6 +22,7 @@ mod ts_deprecation;
 mod ts_enums;
 mod ts_jsx;
 mod ts_signatures;
+mod ts_optional_chains;
 
 const LANG: &str = r#"
 lang t "*.t"

@@ -234,6 +234,41 @@ impl<'t> NativeFile<'t> {
         all
     }
 
+    fn new_target_type(&self, at: u32) -> Ty {
+        if self.tokens(at) != ["new", ".", "target"] {
+            return Ty::Unknown;
+        }
+        let s = &self.syntax;
+        let mut node = s.parent(at);
+        while let Some(n) = node {
+            match s.kind(n) {
+                Some(K::Function) => return self.type_of(n),
+                Some(K::Method) => {
+                    let constructor = !s.has_word(n, F::Modifier, "static")
+                        && s.word(n, F::Kind).is_none()
+                        && s.get(n, F::Key).is_some_and(|key| matches!(s.kind(key), Some(K::Ident | K::String)))
+                        && super::statics::property_name(s, n).as_deref() == Some("constructor");
+                    return s.parent(n).filter(|&class| constructor && s.is(class, K::Class))
+                        .map_or(Ty::Unknown, |class| self.ck().class_value_at(s.tree.node(class).start, self.ck().file));
+                }
+                // Keys and decorators run outside their member's function scope.
+                Some(K::Computed) => {
+                    node = s.parent(n).and_then(|owner| s.parent(owner)).and_then(|container| s.parent(container));
+                    continue;
+                }
+                Some(K::Decorator) => {
+                    node = s.parent(n).and_then(|owner| if s.is(owner, K::Param) { s.parent(owner) } else { Some(owner) })
+                        .and_then(|owner| s.parent(owner));
+                    continue;
+                }
+                Some(K::ClassProp | K::StaticBlock | K::Namespace | K::Enum | K::Program) => return Ty::Unknown,
+                _ => {}
+            }
+            node = s.parent(n);
+        }
+        Ty::Unknown
+    }
+
     fn this_type(&self, at: u32) -> Ty {
         let s = &self.syntax;
         let mut node = s.parent(at);
@@ -626,6 +661,7 @@ impl<'t> NativeFile<'t> {
                 self.narrow(id, t)
             }
             K::This => self.this_type(id),
+            K::MetaProperty => self.new_target_type(id),
             K::Instantiation => self.ck().instantiate(&inner(F::Expr), s.all(id, F::TypeArg).map(|argument| self.annotation(argument)).collect()),
             K::Class if s.parent(id).is_some_and(|parent|
                 !matches!(s.kind(parent), Some(K::Block | K::Program | K::Export))) =>
@@ -1018,6 +1054,34 @@ fn may_be_nullish(ty: &Ty) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_target_uses_the_nearest_constructor_or_function_through_arrows() {
+        let source = r#"
+            class Outer {
+                static marker: string;
+                constructor() {
+                    /*@*/ new.target.marker;
+                    const arrow = () => { /*@*/ new /*keep*/ . target.marker; };
+                    function local(): number {
+                        /*@*/ new.target();
+                        const nested = () => { /*@*/ new.target(); };
+                        return 42;
+                    }
+                }
+            }
+            const Named = class Inner { static marker: number; constructor() { /*@*/ new.target.marker; } };
+            const Anonymous = class { static marker: boolean; constructor() { /*@*/ new.target.marker; } };
+        "#;
+        crate::engine::tests::with_native_file(source, |file, marks| {
+            assert_eq!(marks.len(), 6);
+            for (mark, expected) in marks.iter().zip(["string", "string", "number", "number", "number", "boolean"]) {
+                let expression = file.syntax.get(*mark, super::F::Expr).unwrap();
+                assert!(matches!(file.type_of(expression), super::Ty::Prim(kind) if kind == expected),
+                    "{expected}: {:?}", file.type_of(expression));
+            }
+        });
+    }
+
     #[test]
     fn class_expressions_keep_constructor_static_and_lexical_self_types() {
         let source = r#"
