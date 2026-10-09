@@ -396,7 +396,7 @@ fn indexed_notation_replacement(source, owner, info) = {
     else if owner is ts_type_reference then "{{ [key: {info.key}]: {info.value} }}"
     else if owner not ts_interface then result
     else {
-      value slice(source, owner.offset, owner.indexed_first_member.offset)
+      value byte_slice(source, owner.offset, owner.indexed_first_member.offset)
       re_replace /\s*\{\s*$/ ""
       re_replace /^(declare\s+)?interface\b/ "${{1}}type"
       then (header) "{header} = {result};"

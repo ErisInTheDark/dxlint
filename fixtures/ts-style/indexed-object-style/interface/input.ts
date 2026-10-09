@@ -3,3 +3,4 @@ export interface Generic<A = { value: string }, B = "interface"> { readonly [key
 declare interface Ambient { [key: string]: unknown; }
 interface Inherited extends Base { [key: string]: unknown; }
 export default interface Default { [key: string]: unknown; }
+const note = "😀"; interface Unicode<T = "é"> { [key: string]: T; }
