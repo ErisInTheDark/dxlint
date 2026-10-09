@@ -199,6 +199,10 @@ fn jsx_edge_space(text, opening) = {
   value re_find(text, result)
   nonempty
 } ?? ""
+fn jsx_curly_trim(gap, opening) = {
+  value pattern: if opening then "(^|[\\n\\r\\u{2028}\\u{2029}])" jsx_space_regex() "+" else jsx_space_regex() "+($|[\\n\\r\\u{2028}\\u{2029}])"
+  value re_replace(gap, pattern, "$1")
+}
 in ts_jsx_expression {
   let jsx_brace_container expression not ts_spread
   let jsx_brace_attribute parent is ts_jsx_attribute
@@ -249,6 +253,9 @@ schema jsx_curly_config {when?: "always" | "never"; allowMultiline?: boolean; sp
   when if spacing == "always" then jsx_brace_edge == "" || jsx_break(jsx_brace_edge) && !multiline else (if jsx_break(jsx_brace_edge) then !multiline else jsx_brace_edge != "")
   report at {start: if jsx_brace_open then end_offset else offset - byte_len(jsx_brace_edge), end: if jsx_brace_open then end_offset + byte_len(jsx_brace_edge) else offset}
   warn if jsx_break(jsx_brace_edge) then "There should be no newline {jsx_brace_direction} '{text}'" else if spacing == "always" then "A space is required {jsx_brace_direction} '{text}'" else "There should be no space {jsx_brace_direction} '{text}'"
+  let jsx_fix_gap if jsx_break(jsx_brace_edge) then jsx_brace_gap else jsx_brace_edge
+  let jsx_fix_text if jsx_break(jsx_brace_edge) then jsx_curly_trim(jsx_fix_gap, jsx_brace_open) else ""
+  fix at { start: if jsx_brace_open then end_offset else offset - byte_len(jsx_fix_gap), end: if jsx_brace_open then end_offset + byte_len(jsx_fix_gap) else offset } as (if !jsx_brace_open && spacing == "always" then " " else "") jsx_fix_text (if jsx_brace_open && spacing == "always" then " " else "")
 }
 in ts_open_brace rule jsx-curly-spacing:after {
   @jsx_curly_spacing_body
