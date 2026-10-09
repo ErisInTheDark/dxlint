@@ -3,6 +3,7 @@
 
 import .ts/expressions
 import .ts/suggestions/object-shorthand
+import .ts/suggestions/curly
 
 define {
 
@@ -104,22 +105,6 @@ in ts_member let direct_method_name property
 in ts_member, ts_index let called_method_name static_name
 in ts_parenthesized forward member_receiver_tokens, invoked_receiver, direct_method_name, called_method_name from expression
 fn unchanged_call_receiver(receiver, tokens, null_receiver) = receiver != null && (if receiver.member then receiver.tokens == tokens else null_receiver == true)
-
-@macro suggestion_curly_policy {
-  option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
-  option style ("consistent" | null) = null "consistent braces throughout if chains"
-  let curly_info curly_body
-  when curly_info != null
-  let body_expected if mode == "all" then 1 else if mode == "multi" then curly_info.multi else if mode == "multi-line" then curly_info.multiline else curly_info.nested
-  let chain_required if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent
-  let curly_expected if style == "consistent" && mode != "all" then if chain_required then 1 else 0 else body_expected
-  when curly_expected != -1 && (curly_expected == 1 && !curly_info.block || curly_expected == 0 && curly_info.block)
-  warn "{if curly_expected == 1 then 'Expected' else 'Unnecessary'} {{ after '{curly_info.name}'{if curly_info.condition then ' condition' else ''}."
-}
-in ts_if.consequent rule curly:if { @suggestion_curly_policy }
-in ts_if.alternate rule curly:else { @suggestion_curly_policy }
-in ts_for.body, ts_while.body rule curly:loop { @suggestion_curly_policy }
-in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body { @suggestion_curly_policy }
 
 # The global `eval`, called or referenced (`(0, eval)`, `globalThis.eval`).
 @macro suggestion_eval_policy {

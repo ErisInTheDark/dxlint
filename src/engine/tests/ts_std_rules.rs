@@ -3,6 +3,7 @@ use std::path::Path;
 use super::native_linter;
 
 mod object_shorthand;
+mod curly;
 
 #[test]
 fn typed_dot_notation_keeps_visibility_options_specific_to_winning_members() {

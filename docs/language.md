@@ -1166,6 +1166,8 @@ and `final-newline`.
 | `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
 | `.ts/expression-fixes` | shared precedence, token-boundary and ASI helpers for expression autofixes |
 | `.ts/suggestions/object-shorthand` | object member short/long syntax policy and source-preserving fixes |
+| `.ts/suggestions/curly` | control-body brace policy and statement-safe fixes |
+| `.ts/typed/optional-chains` | optional-chain guard selection, return-type safety and atomic fixes, imported by `.ts/typed` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
 | `.ts/typed/promises` | `no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |

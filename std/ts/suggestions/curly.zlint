@@ -1,0 +1,41 @@
+# Control-body brace policy and statement-safe source rewrites.
+import .ts/expression-fixes
+
+define {
+
+fn curly_fix_allowed(n, block) = if !block then true else {
+  value statement: last(n.body.nodes)
+  value after: n.token_neighbours.after
+  value tail: statement.last_token
+  value after == null || tail.text == ";" || contains([";", "}}"], after.text)
+    || (if tail.text == "++" || tail.text == "--" then false
+      else if tail.text == "}}" && statement is (ts_block, ts_if, ts_for, ts_for_in, ts_for_of, ts_while, ts_switch, ts_try, ts_with, ts_labeled) then true
+      else if after.text == "else" then false
+      else after.line_break && !contains(["(", "[", "+", "-", "++", "--"], after.text)
+        && !starts_with(after.text, "/") && !starts_with(after.text, "`"))
+}
+
+fn curly_replacement(source, n, block) = if !block then "{{" n.text "}}" else {
+  value source
+  interior: byte_slice n.first_token.end n.last_token.start
+  value expression_fix_edges(n, interior)
+}
+
+@macro suggestion_curly_policy {
+  option mode ("all" | "multi" | "multi-line" | "multi-or-nest") = "all" "control body brace policy"
+  option style ("consistent" | null) = null "consistent braces throughout if chains"
+  let curly_info curly_body
+  when curly_info != null
+  let body_expected if mode == "all" then 1 else if mode == "multi" then curly_info.multi else if mode == "multi-line" then curly_info.multiline else curly_info.nested
+  let chain_required if mode == "multi" then curly_info.multi_consistent else if mode == "multi-line" then curly_info.multiline_consistent else curly_info.nested_consistent
+  let curly_expected if style == "consistent" && mode != "all" then if chain_required then 1 else 0 else body_expected
+  when curly_expected != -1 && (curly_expected == 1 && !curly_info.block || curly_expected == 0 && curly_info.block)
+  fix at node if curly_fix_allowed(node, curly_info.block) as curly_replacement(source, node, curly_info.block)
+  warn "{if curly_expected == 1 then 'Expected' else 'Unnecessary'} {{ after '{curly_info.name}'{if curly_info.condition then ' condition' else ''}."
+}
+in ts_if.consequent rule curly:if { @suggestion_curly_policy }
+in ts_if.alternate rule curly:else { @suggestion_curly_policy }
+in ts_for.body, ts_while.body rule curly:loop { @suggestion_curly_policy }
+in ts_for_in.body, ts_for_of.body, ts_do_while.body rule curly:loop-body { @suggestion_curly_policy }
+
+}
