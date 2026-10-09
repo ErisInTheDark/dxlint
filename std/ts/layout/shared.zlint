@@ -1,0 +1,12 @@
+# .ts/layout/shared: cross-topic spacing helpers.
+
+import .ts/helpers
+
+define {
+
+fn layout_comma_space(gap, before_side) = { value result: if before_side then /\s*$/ else /^\s*/; value re_find(gap, result); nonempty } ?? ""
+fn layout_same_line(gap) = !re_test(gap, /[\n\r\u{2028}\u{2029}]/)
+
+@macro layout_comment_pattern "(?:/\\*(?:[^*]|\\*+[^*/])*\\*+/|//[^\\n\\r\\u{{2028}}\\u{{2029}}]*)"
+
+}

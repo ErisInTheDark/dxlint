@@ -1,0 +1,158 @@
+# .ts/layout/types: types layout rules.
+
+import .ts/layout/shared
+
+define {
+
+schema member_separator_options { delimiter?: "semi" | "comma" | "none"; requireLast?: boolean }
+schema member_separator_config { multiline?: member_separator_options; singleline?: member_separator_options }
+fn layout_member_line_end(source, end) = { value byte_slice(source, end); re_test /^(?:[\n\r\u{2028}\u{2029}]|$)/ }
+in ts_interface, ts_type_literal let layout_last_member last(member.node)
+in ts_interface, ts_type_literal let layout_members_single position(opener.ts_open_brace.offset).js_line == position(end_offset).js_line
+in ts_interface, ts_type_literal let layout_last_member_inline position(layout_last_member.member_terminal_token.end).js_line == position(end_offset).js_line
+in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature rule member-delimiter-style {
+  option delimiter "semi" | "comma" | "none" | null = null "default separator for legacy configurations"
+  option multiline member_separator_options = {} "multiline member separators"
+  option singleline member_separator_options = {} "single-line member separators"
+  option overrides { interface?: member_separator_config; typeLiteral?: member_separator_config } = {} "separators by declaration kind"
+  option multilineDetection "brackets" | "last-member" = "brackets" "multiline classification"
+  when parent is (ts_interface, ts_type_literal)
+  let member_single parent.layout_members_single || multilineDetection == "last-member" && parent.layout_last_member_inline
+  let member_override if parent is ts_interface then overrides.interface else overrides.typeLiteral
+  let member_base if member_single then singleline else multiline
+  let member_policy if member_single then member_override.singleline else member_override.multiline
+  let member_delimiter member_policy.delimiter.nonempty ?? member_base.delimiter.nonempty ?? delimiter.nonempty ?? "semi"
+  let member_require_last member_policy.requireLast.nonempty ?? member_base.requireLast.nonempty ?? !member_single
+  let member_last offset == parent.layout_last_member.offset
+  let member_token member_terminal_token
+  let member_actual if member_token.text == ";" then "semi" else if member_token.text == "," then "comma" else "none"
+  when member_actual != (if member_last && !member_require_last then "none" else member_delimiter)
+  let member_remove member_last && !member_require_last || member_delimiter == "none"
+  let member_comment_gap "^(?:\\s*" @layout_comment_pattern ")*\\s*$"
+  let member_comment { value overlapping(ts_comment, member_token.end, parent.end_offset); filter (c) { value byte_slice(source, member_token.end, c.offset); re_test member_comment_gap }; last }
+  let member_remove_safe member_single || layout_member_line_end(source, member_token.end) || member_comment != null && (position(member_comment.end_offset).js_line > position(member_token.end).js_line || layout_member_line_end(source, member_comment.end_offset))
+  fix at { start: if member_actual == "none" then member_token.end else member_token.start, end: member_token.end } if !member_remove || member_remove_safe as (if member_remove then "" else if member_delimiter == "semi" then ";" else ",")
+  report at member_token.end
+  warn if member_last && !member_require_last || member_delimiter == "none" then (if member_actual == "semi" then "Unexpected separator (;)." else "Unexpected separator (,).") else if member_delimiter == "semi" then "Expected a semicolon." else "Expected a comma."
+}
+
+schema annotation_gap_options { before?: boolean; after?: boolean }
+in ts_declarator, ts_parameter, ts_class_property, ts_property_signature, ts_index_signature, ts_tuple_member, ts_mapped_type let layout_annotation_start type.offset
+in ts_function, ts_arrow, ts_method, ts_method_signature, ts_call_signature, ts_function_type let layout_annotation_start return_type.offset
+in ts_declarator let layout_annotation_category "variable"
+in ts_parameter let layout_annotation_category "parameter"
+in ts_class_property, ts_property_signature, ts_index_signature, ts_method_signature, ts_call_signature let layout_annotation_category "property"
+in ts_function, ts_arrow, ts_method let layout_annotation_category "returnType"
+in ts_function_type, ts_tuple_member, ts_mapped_type let layout_annotation_category "colon"
+in ts_colon let layout_annotation_optional token_neighbours.before.text == "?"
+@macro layout_annotation_options {
+  option before boolean = false "space before annotation punctuation"
+  option after boolean = true "space after annotation punctuation"
+  option overrides { colon?: annotation_gap_options; variable?: annotation_gap_options | "ignore"; property?: annotation_gap_options | "ignore"; parameter?: annotation_gap_options | "ignore"; returnType?: annotation_gap_options | "ignore"; questionMark?: annotation_gap_options | "ignore" } = {} "annotation context policies"
+  when parent.layout_annotation_start != null && offset < parent.layout_annotation_start
+  let annotation_category parent.layout_annotation_category
+  let annotation_policy if annotation_category == "variable" then overrides.variable else if annotation_category == "property" then overrides.property else if annotation_category == "parameter" then overrides.parameter else if annotation_category == "returnType" then overrides.returnType else overrides.colon
+  when annotation_policy != "ignore"
+  let annotation_colon_before overrides.colon.before.nonempty ?? before
+  let annotation_colon_after overrides.colon.after.nonempty ?? after
+  let annotation_optional layout_annotation_optional && overrides.questionMark != "ignore"
+  let annotation_label if !annotation_optional then ":" else if starts_with(parent.optional, "+") then "+?:" else if starts_with(parent.optional, "-") then "-?:" else "?:"
+  let annotation_before if annotation_optional then overrides.questionMark.before.nonempty ?? annotation_colon_before else annotation_policy.before.nonempty ?? annotation_colon_before
+  let annotation_after annotation_policy.after.nonempty ?? annotation_colon_after
+}
+in ts_colon rule type-annotation-spacing:before {
+  @layout_annotation_options
+  let annotation_gap if annotation_optional then parent.optional.space_before else space_before
+  when annotation_gap != null && annotation_gap.spaced != annotation_before
+  report at if annotation_optional then parent.optional.offset else offset
+  warn if annotation_before then "Expected a space before the '{annotation_label}'." else "Unexpected space before the '{annotation_label}'."
+  fix at { start: annotation_gap.start, end: if annotation_before then annotation_gap.start else annotation_gap.end } if annotation_before || !annotation_gap.comments as if annotation_before then " " else ""
+}
+in ts_colon rule type-annotation-spacing:after {
+  @layout_annotation_options
+  when space_after.spaced != annotation_after
+  warn if annotation_after then "Expected a space after the '{annotation_label}'." else "Unexpected space after the '{annotation_label}'."
+  fix at { start: end_offset, end: if annotation_after then end_offset else space_after.end } if annotation_after || !space_after.comments as if annotation_after then " " else ""
+}
+in ts_colon rule type-annotation-spacing:between {
+  when layout_annotation_optional
+  @layout_annotation_options
+  when annotation_optional
+  let annotation_inner overrides.questionMark.after.nonempty ?? false
+  when space_before.spaced != annotation_inner
+  warn if annotation_inner then "Expected a space between the '?' and the ':'." else "Unexpected space between the '?' and the ':'."
+  fix at { start: space_before.start, end: if annotation_inner then space_before.start else offset } if annotation_inner || !space_before.comments as if annotation_inner then " " else ""
+}
+
+group layout_generic_owner ts_function, ts_arrow, ts_class, ts_interface, ts_type_alias, ts_method,
+  ts_call, ts_new, ts_tagged_template, ts_type_reference, ts_function_type, ts_method_signature, ts_call_signature
+in layout_generic_owner let layout_generic_parameter_tokens type_parameter.token_neighbours
+in layout_generic_owner let layout_generic_argument_tokens type_argument.token_neighbours
+in layout_generic_owner let layout_generic_parameters { open: first(layout_generic_parameter_tokens).before.start, close: last(layout_generic_parameter_tokens).after.start, closed: last(layout_generic_parameter_tokens).after.text == ">" }
+in layout_generic_owner let layout_generic_arguments { open: first(layout_generic_argument_tokens).before.start, close: last(layout_generic_argument_tokens).after.start, closed: last(layout_generic_argument_tokens).after.text == ">" }
+in ts_open_angle, ts_close_angle let layout_generic_edge parent is layout_generic_owner && (parent.layout_generic_parameters.closed && offset == (if is ts_open_angle then parent.layout_generic_parameters.open else parent.layout_generic_parameters.close) || parent.layout_generic_arguments.closed && offset == (if is ts_open_angle then parent.layout_generic_arguments.open else parent.layout_generic_arguments.close))
+@macro layout_generic_policy {
+  option before boolean = false "space before generic brackets"
+  option after boolean = false "space after generic brackets"
+  when layout_generic_edge
+}
+
+in ts_open_angle rule type-generic-spacing {
+  @layout_generic_policy
+  when parent not (ts_arrow, ts_function_type, ts_call_signature)
+  when parent not (ts_function, ts_class) || parent.name != null
+  when previous_token != null
+  let generic_space layout_comma_space(space_before.text, true)
+  when before != (generic_space != "")
+  report at { start: offset - byte_len(generic_space), end: offset }
+  warn "Generic spaces mismatch"
+}
+in ts_close_angle rule type-generic-spacing:after {
+  @layout_generic_policy
+  when parent is (ts_call, ts_new, ts_tagged_template, ts_call_signature, ts_method_signature, ts_function_type)
+  when next_token != null
+  let generic_space layout_comma_space(space_after.text, false)
+  when after != (generic_space != "")
+  report at { start: end_offset, end: end_offset + byte_len(generic_space) }
+  warn "Generic spaces mismatch"
+}
+in ts_open_angle rule type-generic-spacing:inner-open {
+  @layout_generic_policy
+  when re_test(space_after.text, /\s/) && !re_test(space_after.text, /^[\n\r]/)
+  report at { start: end_offset, end: space_after.end }
+  warn "Generic spaces mismatch"
+}
+in ts_close_angle rule type-generic-spacing:inner-close {
+  @layout_generic_policy
+  when re_test(space_before.text, /\s/) && !re_test(space_before.text, /^[\n\r]/)
+  report at { start: space_before.start, end: offset }
+  warn "Generic spaces mismatch"
+}
+
+# Named tuple members use `name?: Type`.
+in ts_tuple_member let layout_tuple_prefix !name.space_after.comments && (optional == null || !optional.space_after.comments)
+in ts_colon rule type-named-tuple-spacing:optional {
+  when parent is ts_tuple_member && parent.optional != null
+  when parent.layout_tuple_prefix
+  when space_before.spaced
+  report at parent.offset
+  fix space_before as ""
+  warn "Unexpected space between '?' and the ':'."
+}
+in ts_tuple_member.name rule type-named-tuple-spacing:before {
+  when parent.layout_tuple_prefix
+  when space_after.spaced
+  report at parent.offset
+  fix space_after as ""
+  warn "Unexpected space before the ':'."
+}
+in ts_colon rule type-named-tuple-spacing:after {
+  when parent is ts_tuple_member
+  when parent.layout_tuple_prefix
+  when { value space_after.text; re_find /^\s*/; len } != 1
+  report at parent.offset
+  fix space_after as " "
+  warn "Expected a space after the ':'."
+}
+
+}

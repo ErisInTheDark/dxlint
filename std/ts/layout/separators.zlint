@@ -1,0 +1,152 @@
+# .ts/layout/separators: separators layout rules.
+
+import .ts/layout/shared
+import .ts/import-attributes
+
+define {
+
+in ts_function, ts_method, ts_arrow, ts_function_type, ts_method_signature, ts_call_signature, ts_class, ts_interface, ts_type_alias let layout_last_type_parameter_end last(type_parameter.end_offset)
+
+group comma_style_lists ts_variable_declaration, ts_array, ts_array_pattern, ts_object, ts_object_pattern,
+  ts_function, ts_method, ts_arrow, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export,
+  ts_sequence, ts_enum, ts_tuple_type, ts_type_literal, ts_method_signature, ts_call_signature,
+  ts_index_signature, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_tagged_template, ts_import_attributes
+in ts_comma {
+  let comma_style_owner list_owner
+  let comma_style_field list_field
+}
+in ts_import_attribute_comma {
+  let comma_style_owner parent
+  let comma_style_field "attribute"
+}
+in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists
+in ts_comma, ts_import_attribute_comma rule comma-style {
+  option style "last" | "first" = "last" "comma line position"
+  when comma_style_checked
+  when comma_style_owner not (ts_array, ts_array_pattern) || list_previous != null
+  when !(token_neighbours.after.text == "," && token_neighbours.after.line_break)
+  when token_neighbours.before.line_break && token_neighbours.after.line_break || (if style == "last" then token_neighbours.before.line_break else token_neighbours.after.line_break)
+  warn if token_neighbours.before.line_break && token_neighbours.after.line_break then "Bad line breaking before and after ','." else if style == "last" then "',' should be placed last." else "',' should be placed first."
+}
+
+schema trailing_comma_mode "always-multiline" | "always" | "never" | "only-multiline" | "ignore"
+fn layout_dangle_mode(kind, style, policies) = { value policies; get kind; nonempty } ?? style
+fn layout_dangle_enabled(kind, edition) = (kind != "functions" || edition >= 2017) && (kind != "dynamicImports" || edition >= 2025)
+fn layout_dangle_wrong(site, mode) = mode != "ignore" && (if mode == "always" || mode == "always-multiline" && site.multiline then site.trailing != site.allowed else site.trailing && !(mode == "only-multiline" && site.multiline) && !site.tsx_single)
+in ts_import_attributes let layout_attribute_last { value descendants(ts_import_attribute); last }
+in ts_import_attributes let layout_attribute_comma { value descendants(ts_import_attribute_comma); filter (c) c.offset >= layout_attribute_last.end_offset; first }
+in ts_import_attributes let layout_attribute_comma_sites if layout_attribute_last == null then [] else [{
+  kind: "importAttributes",
+  offset: layout_attribute_comma.offset.nonempty ?? layout_attribute_last.end_offset,
+  trailing: layout_attribute_comma != null,
+  multiline: { value layout_attribute_comma.end_offset.nonempty ?? layout_attribute_last.end_offset; position }.js_line != position(close.end_offset).js_line,
+  allowed: true,
+  tsx_single: false
+}]
+in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arrow, ts_method, ts_function_type, ts_call, ts_new, ts_import_call, ts_import, ts_export, ts_enum, ts_tuple_type, ts_class, ts_interface, ts_type_alias, ts_type_reference, ts_method_signature, ts_call_signature, ts_import_attributes rule comma-dangle {
+  option style trailing_comma_mode = "never" "trailing comma policy"
+  option arrays trailing_comma_mode | null = null "array policy"
+  option objects trailing_comma_mode | null = null "object policy"
+  option functions trailing_comma_mode | null = null "parameter and argument policy"
+  option imports trailing_comma_mode | null = null "named import policy"
+  option exports trailing_comma_mode | null = null "named export policy"
+  option importAttributes trailing_comma_mode | null = null "import attribute policy"
+  option dynamicImports trailing_comma_mode | null = null "dynamic import policy"
+  option enums trailing_comma_mode | null = null "enum policy"
+  option generics trailing_comma_mode | null = null "type parameter policy"
+  option tuples trailing_comma_mode | null = null "tuple policy"
+  let dangle_policies {arrays:arrays, objects:objects, functions:functions, imports:imports, exports:exports, importAttributes:importAttributes, dynamicImports:dynamicImports, enums:enums, generics:generics, tuples:tuples, "type-arguments":"never"}
+  each dangle_site in if is ts_import_attributes then layout_attribute_comma_sites else trailing_comma_sites
+  when layout_dangle_enabled(dangle_site.kind, ecma_version)
+  when { value dangle_site.kind; mode: layout_dangle_mode style dangle_policies; value layout_dangle_wrong(dangle_site, mode) }
+  report at dangle_site.offset
+  fix at {start:dangle_site.offset, end:dangle_site.offset + (if dangle_site.trailing then 1 else 0)} as if dangle_site.trailing then "" else ","
+  warn if dangle_site.trailing then "Unexpected trailing comma." else "Missing trailing comma."
+}
+
+in ts_empty, ts_semicolon rule no-extra-semi {
+  when is ts_empty && parent not (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_if, ts_labeled, ts_with)
+    || is ts_semicolon && parent is ts_class
+  warn "Unnecessary semicolon."
+}
+
+group layout_semi_owner ts_break, ts_continue, ts_debugger, ts_do_while, ts_export, ts_export_assignment, ts_expression_statement, ts_import, ts_return, ts_throw, ts_variable_declaration, ts_class_property
+in layout_semi_owner let layout_semi_last parent is ts_do_while || parent is ts_if && parent.alternate != null && end_offset == parent.consequent.end_offset || parent is (ts_program, ts_block, ts_static_block, ts_case, ts_class) && next == null
+in ts_variable_declaration let layout_semi_initializer parent is ts_for && offset == parent.init.offset
+in ts_semicolon let layout_semi_header if parent is ts_for then parent.init != null && (parent.test == null && previous_token not ts_semicolon || offset < parent.test.offset) || parent.test != null && offset >= parent.test.end_offset else parent.layout_semi_initializer.nonempty ?? false
+in ts_semicolon let layout_semi_statement parent is layout_semi_owner && end_offset == parent.end_offset
+in ts_semicolon rule semi-style {
+  option style "last" | "first" = "last" "semicolon line position"
+  when layout_semi_header || layout_semi_statement
+  let semi_at_end style == "last" || layout_semi_header
+  when if semi_at_end then space_before.line_break else !(parent.layout_semi_last.nonempty ?? false) && space_after.line_break
+  warn if semi_at_end then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
+}
+
+@macro layout_semi_spacing_options {
+  option before boolean = false "space before semicolon"
+  option after boolean = true "space after semicolon"
+  when layout_semi_header || layout_semi_statement || parent is (ts_type_alias, ts_function, ts_method) && end_offset == parent.end_offset || parent is (ts_interface, ts_type_literal)
+}
+in ts_semicolon rule semi-spacing:before {
+  @layout_semi_spacing_options
+  let semi_space space_before != null && !space_before.line_break && space_before.spaced
+  when semi_space != before
+  report at if semi_space then space_before.start else offset
+  warn if semi_space then "Unexpected whitespace before semicolon." else "Missing whitespace before semicolon."
+}
+in ts_semicolon rule semi-spacing:after {
+  @layout_semi_spacing_options
+  when previous_token != null && next_token != null
+  when !space_before.line_break && !space_after.line_break && next_token not (ts_close_paren, ts_close_brace)
+  when space_after.spaced != after
+  report at if space_after.spaced then end_offset else offset
+  warn if space_after.spaced then "Unexpected whitespace after semicolon." else "Missing whitespace after semicolon."
+}
+
+in ts_comma rule comma-spacing:before {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  # Cheapest and most selective first: most commas are spaced as wanted.
+  let comma_space layout_comma_space(space_before.text, true)
+  when before != (comma_space != "")
+  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
+  when previous_token != null && previous_token not ts_comma
+  when !(parent is (ts_array, ts_array_pattern) && previous_token is ts_open_bracket)
+  when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
+  fix space_before as if before then " " else ""
+  warn if before then "A space is required before ','." else "There should be no space before ','."
+}
+
+in ts_comma rule comma-spacing:after {
+  option before boolean = false "space before comma"
+  option after boolean = true "space after comma"
+  # Cheapest and most selective first: most commas are spaced as wanted.
+  let comma_space layout_comma_space(space_after.text, false)
+  when after != (comma_space != "")
+  when !re_test(comma_space, /[\n\r\u{2028}\u{2029}]/)
+  when next_token != null
+  when space_after.comments || next_token not (ts_comma, ts_close_paren, ts_close_bracket, ts_close_brace)
+  when !(parent is (ts_array, ts_array_pattern) && previous_token is (ts_open_bracket, ts_comma) && next_token is (ts_comma, ts_close_bracket))
+  when !(parent.layout_last_type_parameter_end != null && space_before.start <= parent.layout_last_type_parameter_end && parent.layout_last_type_parameter_end <= offset)
+  when after || !{ value space_after.text; trim_start; starts_with "//" }
+  fix space_after as if after then " " else ""
+  warn if after then "A space is required after ','." else "There should be no space after ','."
+}
+
+group semicolon_statement ts_expression_statement, ts_variable_declaration, ts_return, ts_throw, ts_break, ts_continue, ts_do_while, ts_import, ts_import_equals, ts_type_alias, ts_class_property, ts_debugger, ts_export_assignment, ts_export, ts_method, ts_function
+in semicolon_statement rule semi {
+  option mode "always" | "never" = "always" "statement semicolon policy"
+  option omitLastInOneLineBlock boolean = false "omit final semicolons in single-line blocks"
+  option omitLastInOneLineClassBody boolean = false "omit final semicolons in single-line class bodies"
+  option beforeStatementContinuationChars "always" | "any" | "never" = "any" "semicolons before continuation characters"
+  let statement_semi statement_semicolon
+  when statement_semi != null
+  let omit_statement_semi omitLastInOneLineBlock && statement_semi.one_line_block || omitLastInOneLineClassBody && statement_semi.one_line_class
+  when if mode == "always" then statement_semi.present == omit_statement_semi else if statement_semi.present then statement_semi.redundant || !statement_semi.class_hazard && !statement_semi.same_line && (!statement_semi.hazard_before || !statement_semi.class_field && beforeStatementContinuationChars == "never" && !statement_semi.hazard_after) else !statement_semi.class_field && beforeStatementContinuationChars == "always" && statement_semi.hazard_before
+  report at statement_semi.offset
+  fix at {start:statement_semi.offset, end:statement_semi.end} as if statement_semi.present then "" else ";"
+  warn if statement_semi.present then "Extra semicolon." else "Missing semicolon."
+}
+
+}

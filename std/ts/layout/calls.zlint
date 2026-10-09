@@ -1,0 +1,73 @@
+# .ts/layout/calls: calls layout rules.
+
+import .ts/layout/shared
+
+define {
+
+in ts_open_paren rule space-before-function-paren {
+  option style "always" | "never" = "always" "spaces before function parameter lists"
+  option named "always" | "never" | "ignore" | null = null "named function policy"
+  option anonymous "always" | "never" | "ignore" | null = null "anonymous function policy"
+  option asyncArrow "always" | "never" | "ignore" | null = null "async arrow policy"
+  option catch "always" | "never" | "ignore" | null = null "catch policy"
+  when parent is (ts_function, ts_method, ts_arrow, ts_try) && previous_token != null
+  let function_named parent is ts_method || parent.name != null
+  when !(parent is ts_function && !function_named && contains(parent.modifier, "*"))
+  when parent not ts_arrow || token_neighbours.before.text == "async"
+  when parent not ts_try || parent.parameter != null
+  let paren_mode if parent is ts_try then catch.nonempty ?? style else if parent is ts_arrow then asyncArrow.nonempty ?? style else if function_named then named.nonempty ?? style else anonymous.nonempty ?? style
+  when paren_mode != "ignore" && !(paren_mode == "always" && !function_named && parent.type_parameter != null)
+  when space_before.spaced != (paren_mode == "always")
+  report at if space_before.spaced then space_before.start else offset
+  warn if space_before.spaced then "Unexpected space before function parentheses." else "Missing space before function parentheses."
+}
+
+
+in ts_call, ts_new let layout_invocation_end { value type_argument.end_offset; last; nonempty } ?? callee.end_offset
+in ts_import_call let layout_invocation_end offset + 6
+in ts_call let layout_invocation_optional optional != null
+in ts_new, ts_import_call let layout_invocation_optional false
+fn layout_invocation_chain(gap, allow_newlines, before, after) = {
+  value joined: if allow_newlines then gap else re_replace(gap, /\r\n|[\n\r\u{2028}\u{2029}]/, " ")
+  value prefix: if before then (if re_test(joined, /^\s/) then joined else " " joined) else trim_start(joined)
+  value if after then (if re_test(prefix, /\s$/) then prefix else prefix " ") else trim_end(prefix)
+}
+in ts_open_paren rule function-call-spacing {
+  option mode "always" | "never" = "never" "spacing before invocation parentheses"
+  option allowNewlines boolean = false "allow line breaks before invocation parentheses"
+  option chain_before boolean = true "space before optional invocation punctuation"
+  option chain_after boolean = true "space after optional invocation punctuation"
+  when parent is (ts_call, ts_new, ts_import_call)
+  when offset >= parent.layout_invocation_end
+  let invocation_optional parent.layout_invocation_optional
+  let invocation_prefix if invocation_optional then parent.optional.space_before else space_before
+  let invocation_spaced invocation_prefix.spaced || space_before.spaced
+  let bad_newline mode == "always" && !allowNewlines && (invocation_prefix.line_break || space_before.line_break)
+  let bad_space if mode == "never" then invocation_spaced
+    else if invocation_optional then invocation_prefix.spaced != chain_before || space_before.spaced != chain_after
+    else !invocation_spaced
+  when bad_newline || bad_space
+  report at invocation_prefix.start
+  warn if bad_newline then "Unexpected newline between function name and paren."
+    else if mode == "never" || invocation_optional && (!chain_before && invocation_prefix.spaced || !chain_after && space_before.spaced) then "Unexpected whitespace between function name and paren."
+    else "Missing space between function name and paren."
+  let invocation_insert mode == "always" && !invocation_optional && !invocation_spaced
+  let invocation_gap byte_slice(source, invocation_prefix.start, offset)
+  let invocation_fix if mode == "never" then (if invocation_optional then "?." else "")
+    else if invocation_optional then layout_invocation_chain(invocation_gap, allowNewlines, chain_before, chain_after) else " "
+  fix at { start: if invocation_insert then offset else invocation_prefix.start, end: offset } if invocation_insert || !(invocation_prefix.comments || space_before.comments) as invocation_fix
+}
+
+# Empty constructor argument lists belong to this new expression, not its callee.
+in ts_new rule new-parens {
+  option style "always" | "never" = "always" "empty constructor parentheses"
+  let constructor_open opener.ts_open_paren.offset
+  let constructor_close closer.ts_close_paren.offset
+  when count(argument) == 0
+  when (constructor_open != null && constructor_close != null && callee.end_offset < end_offset) != (style == "always")
+  report at offset
+  fix as if style == "always" then text "()" else "(" byte_slice(text, 0, constructor_open - offset) byte_slice(text, constructor_open - offset + 1, constructor_close - offset) byte_slice(text, constructor_close - offset + 1) ")"
+  warn if style == "always" then "Missing '()' invoking a constructor." else "Unnecessary '()' invoking a constructor with no arguments."
+}
+
+}

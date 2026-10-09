@@ -1,0 +1,52 @@
+# .ts/layout/literals: literals layout rules.
+
+import .ts/layout/shared
+
+define {
+
+in ts_string let layout_quote_fixed_string is (ts_property.key, ts_pattern_property.key, ts_method.key, ts_class_property.key, ts_method_signature.key, ts_property_signature.key, ts_import.from, ts_export.from, ts_import.namespace, ts_export.namespace, ts_import_specifier.imported, ts_namespace.name, ts_enum_member.name, ts_import_type.argument) || parent is ts_export_specifier
+in ts_literal_type let layout_quote_import_argument parent is ts_import_type && offset == parent.argument.offset
+in ts_call let layout_quote_external_module parent is ts_import_equals && offset == parent.value.offset
+in ts_program let layout_quote_prologue true
+in ts_block let layout_quote_prologue (parent is ts_function || parent is ts_arrow || parent is ts_method) && offset == parent.body.offset
+in ts_expression_statement let layout_quote_directive (parent.layout_quote_prologue.nonempty ?? false) && expression is ts_string && (previous == null || (previous.layout_quote_directive.nonempty ?? false))
+in ts_template let layout_quote_template_feature count(expression) > 0 || is ts_tagged_template.quasi || re_test(text, /(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]/)
+group quoted_literals ts_string, ts_template
+in quoted_literals rule quotes {
+  option style "double" | "single" | "backtick" = "double" "string delimiters"
+  option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
+  option allowTemplateLiterals "never" | "avoidEscape" | "always" = "never" "allow unused template delimiters"
+  let quote_template is ts_template
+  let quote_fixed (layout_quote_fixed_string.nonempty ?? false) || parent is ts_expression_statement && parent.layout_quote_directive || parent is ts_literal_type && (parent.layout_quote_import_argument.nonempty ?? false) || parent is ts_call && (parent.layout_quote_external_module.nonempty ?? false)
+  let quote_delimiter if style == "single" then "'" else if style == "double" then "\"" else "`"
+  let quote_alternate if style == "double" then "'" else "\""
+  when if quote_template then style != "backtick" && allowTemplateLiterals != "always" && !layout_quote_template_feature && !((allowTemplateLiterals == "avoidEscape") && avoidEscape && contains(text, quote_delimiter)) else parent not ts_jsx_attribute && !(style == "backtick" && quote_fixed) && !starts_with(text, quote_delimiter) && !(avoidEscape && starts_with(text, quote_alternate) && contains(text, quote_delimiter))
+  warn "Strings must use {if style == 'single' then 'singlequote' else if style == 'double' then 'doublequote' else 'backtick'}."
+}
+
+in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_object, ts_interface, ts_type_literal, ts_enum, ts_import, ts_export rule quote-props {
+  option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
+  option keywords boolean = false "require quotes on reserved words"
+  option unnecessary boolean = true "report redundant quotes"
+  option numbers boolean = false "require quoted numeric keys"
+  let property_any_quoted any(property_quote_sites, s => s.quoted)
+  let property_necessary any(property_quote_sites, s => s.quoted && !s.redundant || keywords && s.keyword)
+  let property_keyword { value property_quote_sites; filter (s) !s.quoted && s.keyword; last }.name
+  each property_site in filter(property_quote_sites, s => s.group == (style == "consistent" || style == "consistent-as-needed"))
+  when if style == "always" then !property_site.quoted else if style == "as-needed" then (if property_site.quoted then unnecessary && property_site.redundant && !(numbers && property_site.redundant_number) && !(keywords && property_site.keyword) else keywords && property_site.keyword || numbers && property_site.numeric) else if style == "consistent-as-needed" && property_any_quoted && !property_necessary then property_site.quoted else !property_site.quoted && (property_any_quoted || style == "consistent-as-needed" && keywords && property_keyword != null)
+  report at property_site.offset
+  warn if style == "always" then "Unquoted property '{property_site.name}' found." else if style == "as-needed" then (if property_site.quoted then "Unnecessarily quoted property '{property_site.name}' found." else if property_site.keyword then "Unquoted reserved word '{property_site.name}' used as key." else "Unquoted number literal '{property_site.name}' used as key.") else if style == "consistent-as-needed" && !property_necessary then "Properties shouldn't be quoted as all quotes are redundant." else if style == "consistent-as-needed" && keywords && property_keyword != null then "Properties should be quoted as '{property_keyword}' is a reserved word." else "Inconsistently quoted property '{property_site.name}' found."
+}
+
+in ts_number rule no-floating-decimal:leading {
+  when starts_with(text, ".")
+  warn "A leading decimal point can be confused with a dot."
+  fix as (if token_neighbours.before.gap == "" && re_test(token_neighbours.before.text, /[\w$]$/) then " 0" else "0") text
+}
+in ts_number rule no-floating-decimal:trailing {
+  when ends_with(text, ".")
+  warn "A trailing decimal point can be confused with a dot."
+  fix as text "0"
+}
+
+}

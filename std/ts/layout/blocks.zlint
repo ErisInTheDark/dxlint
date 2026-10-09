@@ -1,0 +1,226 @@
+# .ts/layout/blocks: blocks layout rules.
+
+import .ts/layout/shared
+
+define {
+
+@macro layout_block_space_options {
+  option style "always" | "never" = "always" "spaces inside non-empty blocks"
+}
+
+@macro layout_switch_colon_options {
+  option before boolean = false "space before case colon"
+  option after boolean = true "space after case colon"
+}
+
+in ts_block, ts_static_block, ts_switch, ts_enum let layout_block_line_comment { value opener.ts_open_brace.space_after.text; trim_start; starts_with "//" }
+
+in ts_block let layout_block_function parent is (ts_function, ts_arrow, ts_method)
+in ts_block let layout_block_case parent is ts_case
+in ts_block let layout_block_module parent is ts_namespace
+in ts_block let layout_brace_excluded parent is (ts_program, ts_block, ts_case)
+in ts_block let layout_brace_keyword parent is (ts_if, ts_try)
+in ts_block, ts_static_block, ts_switch, ts_class let layout_brace_single opener.ts_open_brace.line == closer.ts_close_brace.line
+
+@macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
+fn layout_padding_attached_start(gap) = { value gap; re_find ("^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"); nonempty } ?? ""
+fn layout_padding_attached_end(gap) = { value gap; re_find ("(?:" @layout_comment_pattern @layout_horizontal_space "*)*$"); nonempty } ?? ""
+fn layout_padding_last_attached(prefix) = {
+  value pattern: "^(?:" @layout_horizontal_space "*(" @layout_comment_pattern "))*$"
+  value re_replace(prefix, pattern, "$1")
+}
+fn layout_padding_last_comment(gap) = { value pattern: "^(?:\\s*(" @layout_comment_pattern "))*\\s*$"; value re_replace(gap, pattern, "$1") }
+fn layout_padding_top_space(gap) = {
+  value gap
+  layout_padding_attached_start
+  len: len
+  value slice(gap, len)
+  layout_comma_space false
+}
+fn layout_padding_tail_space(gap) = {
+  value result: if { value gap; layout_padding_last_comment; starts_with "//" } then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/
+  value re_find(gap, result)
+  nonempty
+} ?? ""
+fn layout_padding_bottom_space(gap) = {
+  value result: len(gap) - { value gap; layout_padding_attached_end; len }
+  value slice(gap, 0, result)
+  layout_padding_tail_space
+}
+fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
+fn layout_padding_reduced(gap) = "\n" { value gap; re_find /[^\n\r\u{2028}\u{2029}]*$/ }
+fn layout_padding_mode(style, blocks, switches, classes, owner) = if owner.layout_block_module.nonempty ?? false then null else if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
+@macro layout_padding_options {
+  option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
+  option blocks "always" | "never" | "start" | "end" | null = null "statement block padding"
+  option switches "always" | "never" | "start" | "end" | null = null "switch padding"
+  option classes "always" | "never" | "start" | "end" | null = null "class padding"
+  option allowSingleLineBlocks boolean = false "allow single-line blocks"
+}
+
+in ts_block, ts_static_block let layout_padding_content body != null
+in ts_switch let layout_padding_content case != null
+in ts_class let layout_padding_content member != null
+in ts_block, ts_static_block, ts_switch, ts_class {
+  let layout_padding_open_prefix layout_padding_attached_start(opener.ts_open_brace.space_after.text)
+  let layout_padding_close_suffix layout_padding_attached_end(closer.ts_close_brace.space_before.text)
+  let layout_padding_single opener.ts_open_brace.line + layout_line_breaks(layout_padding_open_prefix) == closer.ts_close_brace.line - layout_line_breaks(layout_padding_close_suffix)
+}
+
+in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
+  @layout_padding_options
+  when opener.ts_open_brace.offset != null
+  when layout_padding_content
+  let padding_mode layout_padding_mode(style, blocks, switches, classes, node)
+  when padding_mode != null
+  when !(allowSingleLineBlocks && layout_padding_single)
+  let padding_space layout_padding_top_space(opener.ts_open_brace.space_after.text)
+  let padding_padded layout_line_breaks(padding_space) >= 2
+  when padding_padded != (padding_mode == "always" || padding_mode == "start")
+  report at if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - { value layout_padding_open_prefix; layout_padding_last_attached; byte_len }
+  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+  let padding_start opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix)
+  fix at { start: padding_start, end: padding_start + (if padding_padded then byte_len(padding_space) else 0) } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
+}
+
+in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
+  @layout_padding_options
+  when closer.ts_close_brace.offset != null
+  when layout_padding_content
+  let padding_mode layout_padding_mode(style, blocks, switches, classes, node)
+  when padding_mode != null
+  when !(allowSingleLineBlocks && layout_padding_single)
+  let padding_space layout_padding_bottom_space(closer.ts_close_brace.space_before.text)
+  let padding_padded layout_line_breaks(padding_space) >= 2
+  when padding_padded != (padding_mode == "always" || padding_mode == "end")
+  report at closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix) - byte_len(padding_space)
+  warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+  let padding_end closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix)
+  fix at { start: padding_end - (if padding_padded then byte_len(padding_space) else 0), end: padding_end } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
+}
+
+in ts_code match layout_class_line_gap /[\r\n](?:[^\S\r\n]*[\r\n])+/
+in layout_class_line_gap let layout_class_blank re_count(text, /\r\n|[\r\n]/) > 1
+in ts_semicolon let layout_member_before token_neighbours.before
+in ts_semicolon let layout_member_preceding_end {
+  value default: { value overlapping(ts_comment, layout_member_before.end, offset).end_offset; last; nonempty } ?? 0
+  value max(layout_member_before.end, default)
+}
+
+in ts_class.member rule lines-between-class-members {
+  option style "always" | "never" = "always" "blank lines between class members"
+  option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
+  option exceptAfterSingleLine boolean = false "skip after single-line members"
+  option exceptAfterOverload boolean = true "skip overload signatures"
+  let skip_overloads exceptAfterOverload && (count(enforce) == 0 && style == "always" || any(enforce, e => e.blankLine == "always" && e.prev != "field" && e.next != "field"))
+  let member_skipped skip_overloads && is ts_method && ts_method.body == null
+  let member_tail last_token
+  let retained_member if member_skipped then previous.retained_member else {
+    start: offset,
+    kind: if is ts_method then "method" else if is ts_class_property then "field" else "*",
+    tail: member_tail,
+    before_tail: if member_tail is ts_semicolon then { value overlapping(ts_semicolon, offset, end_offset).layout_member_preceding_end; last } else null
+  }
+  let prior_member previous.retained_member
+  when !member_skipped && prior_member != null
+  let gap_moved_semicolon prior_member.tail.text == ";" && position(prior_member.before_tail).line != position(prior_member.tail.start).line && position(prior_member.tail.end).line == position(first_token.start).line
+  let gap_start if gap_moved_semicolon then prior_member.before_tail else prior_member.tail.end
+  let gap_end if gap_moved_semicolon then prior_member.tail.start else first_token.start
+  let gap_padded { value overlapping(layout_class_line_gap, gap_start, gap_end).layout_class_blank; contains true }
+  let gap_mode if count(enforce) == 0 then style else find_last(enforce, e => (e.prev == "*" || e.prev == prior_member.kind) && (e.next == "*" || e.next == retained_member.kind)).blankLine
+  let gap_single_line position(prior_member.start).line == position(gap_start).line
+  when gap_mode == "never" && gap_padded || gap_mode == "always" && !gap_padded && !(exceptAfterSingleLine && gap_single_line)
+  report at { start: gap_start, end: gap_end }
+  warn if gap_padded then "Unexpected blank line between class members." else "Expected blank line between class members."
+}
+
+in ts_open_brace rule space-before-blocks {
+  option style "always" | "never" = "always" "spaces before blocks"
+  option functions "always" | "never" | "off" | null = null "function body policy"
+  option keywords "always" | "never" | "off" | null = null "statement body policy"
+  option classes "always" | "never" | "off" | null = null "class body policy"
+  option modules "always" | "never" | "off" | null = null "module body policy"
+  when parent is (ts_block, ts_switch, ts_class, ts_interface, ts_enum) && previous_token != null
+  let block_class parent is (ts_class, ts_interface, ts_enum)
+  let block_function parent.layout_block_function.nonempty ?? false
+  let block_previous token_neighbours.before.text
+  when block_previous != "=>"
+  when !(contains(["try", "do", "else", "finally", "catch", "static"], block_previous) && !block_class && !block_function)
+  when !(block_previous == ":" && (parent.layout_block_case.nonempty ?? false))
+  when !space_before.line_break
+  let block_mode if block_class then classes.nonempty ?? style else if block_function then functions.nonempty ?? style else if parent.layout_block_module.nonempty ?? false then modules.nonempty ?? style else keywords.nonempty ?? style
+  when block_mode != "off" && space_before.spaced != (block_mode == "always")
+  warn if space_before.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
+}
+
+in ts_open_brace rule block-spacing:after {
+  @layout_block_space_options
+  when parent is (ts_block, ts_static_block, ts_switch, ts_enum)
+  when space_after.comments || next_token not ts_close_brace
+  when !(style == "never" && parent.layout_block_line_comment)
+  let block_space layout_comma_space(space_after.text, false)
+  when layout_same_line(block_space) && (block_space != "") != (style == "always")
+  report at if block_space != "" then end_offset else offset
+  fix space_after as if style == "always" then " " else ""
+  warn if style == "always" then "Requires a space after '{{'." else "Unexpected space(s) after '{{'."
+}
+
+in ts_close_brace rule block-spacing:before {
+  @layout_block_space_options
+  when parent is (ts_block, ts_static_block, ts_switch, ts_enum)
+  when space_before.comments || previous_token not ts_open_brace
+  when !(style == "never" && parent.layout_block_line_comment)
+  let block_space layout_comma_space(space_before.text, true)
+  when layout_same_line(block_space) && (block_space != "") != (style == "always")
+  report at if block_space != "" then offset - byte_len(block_space) else offset
+  fix space_before as if style == "always" then " " else ""
+  warn if style == "always" then "Requires a space before '}}'." else "Unexpected space(s) before '}}'."
+}
+
+in ts_colon rule switch-colon-spacing:before {
+  @layout_switch_colon_options
+  when parent is ts_case && previous_token != null
+  when !space_before.line_break && before != space_before.spaced
+  warn if before then "Expected space(s) before this colon." else "Unexpected space(s) before this colon."
+}
+
+in ts_colon rule switch-colon-spacing:after {
+  @layout_switch_colon_options
+  when parent is ts_case && next_token != null && next_token not ts_close_brace
+  when !space_after.line_break && after != space_after.spaced
+  warn if after then "Expected space(s) after this colon." else "Unexpected space(s) after this colon."
+}
+
+@macro layout_brace_options {
+  option style "1tbs" | "stroustrup" | "allman" = "1tbs" "brace layout"
+  option allowSingleLine boolean = false "allow single-line block bodies"
+  when parent is (ts_block, ts_static_block, ts_switch, ts_class)
+  when !(parent.layout_brace_excluded.nonempty ?? false)
+}
+in ts_open_brace rule brace-style:open {
+  @layout_brace_options
+  when previous_token != null
+  when if style == "allman" then !space_before.line_break && !(allowSingleLine && parent.layout_brace_single) else space_before.line_break
+  warn if style == "allman" then "Opening curly brace appears on the same line as controlling statement." else "Opening curly brace does not appear on the same line as controlling statement."
+}
+in ts_open_brace rule brace-style:body {
+  @layout_brace_options
+  when next_token not ts_close_brace
+  when !space_after.line_break && !(allowSingleLine && parent.layout_brace_single)
+  warn "Statement inside of curly braces should be on next line."
+}
+in ts_close_brace rule brace-style:close {
+  @layout_brace_options
+  when previous_token not ts_open_brace
+  when !space_before.line_break && !(allowSingleLine && parent.layout_brace_single)
+  warn "Closing curly brace should be on the same line as opening curly brace or on the line after the previous block."
+}
+in ts_close_brace rule brace-style:keyword {
+  @layout_brace_options
+  when parent.layout_brace_keyword.nonempty ?? false
+  when contains(["else", "catch", "finally"], token_neighbours.after.text)
+  when space_after.line_break == (style == "1tbs")
+  warn if style == "1tbs" then "Closing curly brace does not appear on the same line as the subsequent block." else "Closing curly brace appears on the same line as the subsequent block."
+}
+
+}

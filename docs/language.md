@@ -1167,6 +1167,14 @@ and `final-newline`.
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
 | `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
 | `.ts/expression-fixes` | shared precedence, token-boundary and ASI helpers for expression autofixes |
+| `.ts/layout/blocks` | block braces, spacing, padding and gaps between class members, imported by `.ts/layout` |
+| `.ts/layout/calls` | declaration/call parentheses, optional call spacing and constructor parentheses, imported by `.ts/layout` |
+| `.ts/layout/expressions` | operator, star, rest/spread and property-access spacing, imported by `.ts/layout` |
+| `.ts/layout/separators` | comma and statement semicolon policies, imported by `.ts/layout` |
+| `.ts/layout/types` | member separators, annotations, generics and named tuples, imported by `.ts/layout` |
+| `.ts/layout/literals` | quotes, property quoting and floating decimal notation, imported by `.ts/layout` |
+| `.ts/layout/text` | comment spacing, repeated whitespace and blank-line limits, imported by `.ts/layout` |
+| `.ts/layout/shared` | shared value-only spacing helpers and comment pattern for the layout topics; no rules |
 | `.ts/template-fixes` | shared raw-escape-preserving template fix helpers |
 | `.ts/suggestions/object-shorthand` | object member short/long syntax policy and source-preserving fixes |
 | `.ts/suggestions/curly` | control-body brace policy and statement-safe fixes |

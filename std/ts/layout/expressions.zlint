@@ -1,0 +1,183 @@
+# .ts/layout/expressions: expressions layout rules.
+
+import .ts/layout/shared
+
+define {
+
+@macro layout_computed_space_options {
+  option style "always" | "never" = "never" "spaces inside computed property brackets"
+}
+group computed_spacing_owners ts_computed_key, ts_index, ts_indexed_access
+in ts_computed_key, ts_index, ts_indexed_access let computed_spacing_enabled true
+
+in ts_method let layout_class_method parent is ts_class
+in ts_computed_key let layout_computed_class parent is ts_class_property || (parent.layout_class_method.nonempty ?? false)
+in ts_rest, ts_spread let layout_spread_property parent is (ts_object, ts_object_pattern)
+
+in ts_function let generator_star_named name != null
+in ts_method let generator_star_shorthand parent is ts_object
+@macro layout_yield_star_options {
+  option mode "before" | "after" | "both" | "neither" = "after" "spacing around yield star"
+  option before boolean | null = null "override space before star"
+  option after boolean | null = null "override space after star"
+}
+@macro layout_generator_star_options {
+  option before boolean = true "space before generator star"
+  option after boolean = false "space after generator star"
+  when text == "*"
+  let star_before_space layout_comma_space(space_before.text, true)
+  let star_after_space layout_comma_space(space_after.text, false)
+  each star_before in [true, false]
+  when if star_before then previous_token != null && (parent not ts_method || offset != token_neighbours.parent_start) else next_token != null
+  when ((if star_before then star_before_space else star_after_space) != "") != (if star_before then before else after)
+  warn if star_before then (if star_before_space != "" then "Unexpected space before *." else "Missing space before *.") else if star_after_space != "" then "Unexpected space after *." else "Missing space after *."
+}
+
+group infix_spacing_owners ts_binary, ts_logical, ts_assignment, ts_union, ts_intersection,
+  ts_conditional, ts_conditional_type, ts_assignment_pattern, ts_declarator, ts_parameter,
+  ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter
+in infix_spacing_owners let infix_spacing_enabled true
+in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule space-infix-ops {
+  option int32Hint boolean = false "allow terminal |0 conversion"
+  let infix_types parent is (ts_union, ts_intersection)
+  when parent is infix_spacing_owners && parent.infix_spacing_enabled
+  when parent is (ts_binary, ts_logical, ts_assignment)
+    || infix_types && contains(["|", "&"], text)
+    || parent is (ts_conditional, ts_conditional_type) && contains(["?", ":"], text)
+    || parent is (ts_assignment_pattern, ts_declarator, ts_parameter, ts_class_property, ts_enum_member, ts_type_alias, ts_type_parameter) && text == "="
+  when !(int32Hint && parent is (ts_binary, ts_logical, ts_assignment, ts_assignment_pattern) && ends_with(parent_text, "|0"))
+  when !(space_before.spaced && space_after.spaced)
+  warn "Operator '{text}' must be spaced."
+  fix as (if !space_before.spaced then " " else "") text (if !space_after.spaced then " " else "")
+}
+
+in ts_parenthesized let layout_property_name expression.layout_property_name.nonempty ?? expression
+in ts_parenthesized_type let layout_property_name type.layout_property_name.nonempty ?? type
+in ts_member let layout_property_name property
+in ts_index, ts_indexed_access let layout_property_name index.layout_property_name.nonempty ?? index
+in ts_qualified_name let layout_property_name right
+in ts_member let layout_property_spaced object.space_after.spaced || property.space_before.spaced
+in ts_qualified_name let layout_property_spaced left.space_after.spaced || right.space_before.spaced
+in ts_member let layout_property_same_line position(object.end_offset).line == position(property.offset).line
+in ts_index let layout_property_same_line position(object.end_offset).line == position(index.offset).line
+fn layout_property_gap_clean(start, end) = { value overlapping(ts_comment, start, end); count } == 0
+in ts_member, ts_qualified_name rule no-whitespace-before-property {
+  when (layout_property_same_line.nonempty ?? true) && layout_property_spaced
+  let property_left if is ts_member then object.node else left.node
+  let property_right if is ts_member then property.node else right.node
+  let property_decimal unparenthesised_node(property_left)
+  let property_fixable layout_property_gap_clean(property_left.end_offset, property_right.offset)
+    && !(is ts_member && node.optional == null && property_decimal is ts_number && re_test(property_decimal.text, /^(?:0|0[0-7]*[89]\d*|[1-9](?:_?\d)*)$/))
+  fix at { start: property_left.end_offset, end: property_right.offset } if property_fixable as if is ts_member && node.optional != null then "?." else "."
+  warn "Unexpected whitespace before property {layout_property_name}."
+}
+in ts_index, ts_indexed_access rule no-whitespace-before-property:computed {
+  when layout_property_same_line.nonempty ?? true
+  when object.space_after.spaced || opener.ts_open_bracket.space_before.spaced
+  let property_fix_end opener.ts_open_bracket.offset
+  fix at { start: object.end_offset, end: property_fix_end } if layout_property_gap_clean(object.end_offset, property_fix_end) as if is ts_index && node.optional != null then "?." else ""
+  warn "Unexpected whitespace before property {layout_property_name}."
+}
+in ts_dot rule no-whitespace-before-property:import {
+  when parent is ts_import_type && parent.qualifier != null
+  when space_before.spaced || space_after.spaced
+  report at parent.offset
+  let property_fix_start token_neighbours.before.end
+  fix at { start: property_fix_start, end: parent.qualifier.offset } if layout_property_gap_clean(property_fix_start, parent.qualifier.offset) as "."
+  warn "Unexpected whitespace before property {parent.qualifier}."
+}
+
+in ts_open_bracket rule computed-property-spacing:after {
+  @layout_computed_space_options
+  when parent is computed_spacing_owners && parent.computed_spacing_enabled
+  let computed_space layout_comma_space(space_after.text, false)
+  when layout_same_line(computed_space) && (computed_space != "") != (style == "always")
+  report at if computed_space != "" then end_offset else offset
+  fix space_after as if style == "always" then " " else ""
+  warn if style == "always" then "A space is required after '['." else "There should be no space after '['."
+}
+
+in ts_close_bracket rule computed-property-spacing:before {
+  @layout_computed_space_options
+  when parent is computed_spacing_owners && parent.computed_spacing_enabled
+  let computed_space layout_comma_space(space_before.text, true)
+  when layout_same_line(computed_space) && (computed_space != "") != (style == "always")
+  report at if computed_space != "" then offset - byte_len(computed_space) else offset
+  fix space_before as if style == "always" then " " else ""
+  warn if style == "always" then "A space is required before ']'." else "There should be no space before ']'."
+}
+
+in ts_yield.operator rule yield-star-spacing:before {
+  @layout_yield_star_options
+  when text == "*" && previous_token != null
+  when space_before.spaced != (before.nonempty ?? mode == "before" || mode == "both")
+  warn if space_before.spaced then "Unexpected space before *." else "Missing space before *."
+}
+
+in ts_yield.operator rule yield-star-spacing:after {
+  @layout_yield_star_options
+  when text == "*" && next_token != null
+  when space_after.spaced != (after.nonempty ?? mode == "after" || mode == "both")
+  warn if space_after.spaced then "Unexpected space after *." else "Missing space after *."
+}
+
+in ts_function.modifier rule generator-star-spacing:named {
+  when parent.generator_star_named
+  @layout_generator_star_options
+}
+in ts_function.modifier rule generator-star-spacing:anonymous {
+  when !parent.generator_star_named
+  @layout_generator_star_options
+}
+in ts_method.modifier rule generator-star-spacing:method {
+  when !parent.generator_star_shorthand
+  @layout_generator_star_options
+}
+in ts_method.modifier rule generator-star-spacing:shorthand {
+  when parent.generator_star_shorthand
+  @layout_generator_star_options
+}
+
+in ts_unary, ts_update let layout_unary_prefix operator.offset == offset
+in ts_new, ts_await, ts_yield let layout_unary_prefix true
+in ts_non_null let layout_unary_prefix false
+in ts_unary, ts_update, ts_await, ts_yield let layout_unary_operand argument.node
+in ts_new let layout_unary_operand callee.node
+in ts_non_null let layout_unary_operand expression.node
+in ts_yield let layout_unary_delegate operator == "*"
+in ts_unary let layout_unary_double_bang operator == "!" && argument is ts_unary && argument.operator == "!"
+in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary-ops {
+  option words boolean = true "spaces after word operators"
+  option nonwords boolean = false "spaces around symbolic unary operators"
+  option overrides { [key: string]: boolean } = {} "spacing by operator"
+  when layout_unary_operand != null && layout_unary_delegate != true
+  let unary_prefix layout_unary_prefix
+  let unary_token if unary_prefix then first_token else last_token
+  let unary_argument if unary_prefix then layout_unary_operand.first_token else layout_unary_operand.last_token
+  let unary_operator unary_token.text
+  let unary_word contains(["typeof", "void", "delete", "new", "await", "yield"], unary_operator)
+  let unary_separated if unary_prefix then unary_token.end != unary_argument.start else unary_argument.end != unary_token.start
+  let unary_joinable unary_argument not (ts_identifier, ts_keyword, ts_this, ts_super, ts_boolean, ts_null, ts_yield, ts_number, ts_bigint)
+  let unary_override if is ts_non_null then "ts-non-null" else unary_operator
+  let wants_space { value overrides; get unary_override; nonempty } ?? { value overrides; get unary_operator; nonempty } ?? if unary_word then words else nonwords
+  when wants_space != unary_separated
+  when !(wants_space && layout_unary_double_bang == true) && !(unary_word && !wants_space && !unary_joinable)
+  warn if unary_word then
+    if wants_space then "Unary word operator '{unary_operator}' must be followed by whitespace." else "Unexpected space after unary word operator '{unary_operator}'."
+    else if wants_space then
+      if unary_prefix then "Unary operator '{unary_operator}' must be followed by whitespace." else "Space is required before unary operator '{unary_operator}'."
+    else if unary_prefix then "Unexpected space after unary operator '{unary_operator}'." else "Unexpected space before unary operator '{unary_operator}'."
+}
+
+in ts_ellipsis rule rest-spread-spacing {
+  option style "always" | "never" = "never" "spacing after rest and spread"
+  when parent is (ts_rest, ts_spread) && next_token != null
+  let spread_space layout_comma_space(space_after.text, false)
+  when (spread_space != "") != (style == "always")
+  let spread_kind (if parent is ts_rest then "rest" else "spread") (if parent.layout_spread_property then " property" else "")
+  report at if style == "always" then offset else end_offset
+  fix space_after as if style == "always" then " " else ""
+  warn if style == "always" then "Expected whitespace after {spread_kind} operator." else "Unexpected whitespace after {spread_kind} operator."
+}
+
+}

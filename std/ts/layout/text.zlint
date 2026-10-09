@@ -1,0 +1,103 @@
+# .ts/layout/text: text layout rules.
+
+import .ts/layout/shared
+
+define {
+
+@macro multiple_space_horizontal "[ \\t\\u{{b}}\\u{{c}}\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
+@macro multiple_space_nonspace "[^ \\t\\u{{b}}\\u{{c}}\\r\\n\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{2028}}\\u{{2029}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
+in ts_code match multiple_space_gap /[ \t\u{b}\u{c}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{feff}]+/
+fn multiple_space_preview_body(body) = if contains(body, "\n") || len(body) > 12 then {
+  value body
+  split "\n"
+  first
+  slice 0 12
+} "..." else body
+fn multiple_space_comment_preview(comment) = (if comment is ts_block_comment then "/*" else "//") {
+  value result: if comment is ts_block_comment then -2 else len(comment.text)
+  value slice(comment.text, 2, result)
+  multiple_space_preview_body
+} (if comment is ts_block_comment then "*/" else "")
+in multiple_space_gap {
+  let multiple_space_right node_at(end_offset)
+  let multiple_space_eol_comment multiple_space_right is ts_comment && {
+    value result: "^" @multiple_space_horizontal "*(?:$|[\\r\\n\\u{{2028}}\\u{{2029}}])"
+    value re_test(multiple_space_right.text_after, result)
+  }
+  let multiple_space_display if multiple_space_right is ts_comment then multiple_space_comment_preview(multiple_space_right) else token_neighbours.after.text
+  let multiple_spaces_checked true
+}
+in multiple_space_gap rule no-multi-spaces {
+  option includeTabs boolean = true "include tabs in repeated whitespace"
+  when multiple_spaces_checked && { value result: if includeTabs then /[ \t]{2}/ else / {2}/; value re_test(text, result) }
+    && {
+      value js_line_start: position(offset).js_line_start
+      value byte_slice(source, js_line_start, offset)
+      re_test @multiple_space_nonspace
+    }
+    && { value pattern: "^" @multiple_space_nonspace; value re_test(text_after, pattern) }
+    && { value overlapping(ts_comment); count } == 0
+  fix as " "
+  warn "Multiple spaces found before '{multiple_space_display}'."
+}
+
+
+@macro layout_comment_policy {
+  option style "always" | "never" = "always" "spacing inside comment delimiters"
+  option exceptions string[] = [] "repeated sequences exempt from spacing"
+  option markers string[] = [] "comment prefix markers"
+  let comment_block is ts_block_comment
+  let comment_body { value result: byte_len(text) - (if comment_block then 2 else 0); value byte_slice(text, 2, result) }
+  let comment_marker_pattern "(?:" { value markers; map (m) re_escape(m); join "|" } (if count(markers) > 0 then "|\\*)" else "\\*)")
+  let comment_exception_pattern if count(exceptions) == 0 then "\\s" else "(?:\\s|(?:" { value exceptions; map (e) "(?:" re_escape(e) ")+"; join "|" } ")(?:$|[\\n\\r\\u{{2028}}\\u{{2029}}]))"
+  let comment_marker { value comment_body; re_find ("^" comment_marker_pattern); nonempty } ?? ""
+  when comment_body != "" && comment_body != "*" && !contains(markers, comment_body)
+  when comment_block || !re_test(comment_body, /^\/\s*<(?:reference|amd-)/)
+}
+fn layout_comment_open_wrong(body, style, marker_pattern, exception_pattern) = if style == "always" then !re_test(body, "^" marker_pattern "?" exception_pattern) else re_test(body, "^" marker_pattern "?[ \\t]+")
+fn layout_comment_open_message(style, exceptions, marker, identifier) = if style == "always" then (if count(exceptions) > 0 then "Expected exception block, space or tab after '{identifier}{marker}' in comment." else "Expected space or tab after '{identifier}{marker}' in comment.") else if marker != "" then "Unexpected space or tab after marker ({marker}) in comment." else "Unexpected space or tab after '{identifier}' in comment."
+in ts_line_comment rule spaced-comment:line {
+  @layout_comment_policy
+  when layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+  warn layout_comment_open_message(style, exceptions, comment_marker, "//")
+}
+in ts_block_comment rule spaced-comment:block {
+  @layout_comment_policy
+  option balanced boolean = false "require matching closing delimiter spacing"
+  each comment_end in [false, true]
+  when !comment_end || balanced
+  when if comment_end then (if style == "always" then !re_test(comment_body, comment_exception_pattern "$") else re_test(comment_body, /[ \t]+$/)) else layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+  warn if !comment_end then layout_comment_open_message(style, exceptions, comment_marker, "/*") else if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment."
+}
+
+
+# Non-BOF runs include the previous line ending: physical boundaries without lookbehind.
+in .js layer layout_blank_lines match layout_blank_run (
+  /\A(?:(?:[^\S\r\n]*[\r\n])+(?:[^\S\r\n]+\z)?|[^\S\r\n]+\z)/
+  or /(?:\r\n[^\S\r\n]*[\r\n]|\n[^\S\r\n]*[\r\n]|\r\r|\r[^\S\r\n]+[\r\n])(?:[^\S\r\n]*[\r\n])*(?:[^\S\r\n]+\z)?/
+  or /(?:\r\n|[\r\n])[^\S\r\n]+\z/
+)
+in layout_blank_run rule no-multiple-empty-lines {
+  option max int(0..) = 2 "maximum consecutive blank lines"
+  option maxEOF int(0..) | null = null "maximum final blank lines"
+  option maxBOF int(0..) | null = null "maximum initial blank lines"
+  let blank_prefix if offset == 0 then 0 else if starts_with(text, "\r\n") then 2 else 1
+  let blank_text byte_slice(text, blank_prefix)
+  let blank_kind if offset == 0 then "bof" else if end_offset == byte_len(source) then "eof" else "middle"
+  let blank_count re_count(blank_text, /\r\n|[\n\r]/) + (if re_test(blank_text, /[\r\n]\z/) then 0 else 1)
+  let blank_limit if blank_kind == "bof" then maxBOF.nonempty ?? max else if blank_kind == "eof" then maxEOF.nonempty ?? max else max
+  when blank_count > blank_limit
+  # Searching the syntax tree costs more than counting, so it comes after.
+  when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
+  # Blank whitespace cannot contain NUL; split after line endings to retain their byte lengths.
+  let blank_parts { value blank_text; re_replace /(\r\n|[\r\n])/ "$1\0"; split "\0" }
+  report at { start: offset + blank_prefix + {
+    value blank_parts
+    slice 0 blank_limit
+    join ""
+    byte_len
+  }, end: end_offset }
+  warn if blank_kind == "bof" then "Too many blank lines at the beginning of file. Max of {blank_limit} allowed." else if blank_kind == "eof" then "Too many blank lines at the end of file. Max of {blank_limit} allowed." else "More than {blank_limit} blank {if blank_limit == 1 then 'line' else 'lines'} not allowed."
+}
+
+}
