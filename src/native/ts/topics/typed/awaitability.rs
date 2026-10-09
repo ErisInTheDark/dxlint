@@ -1,9 +1,5 @@
 use super::*;
 
-#[cfg(test)]
-#[path = "awaitability/tests.rs"]
-mod tests;
-
 pub(super) fn type_awaitability(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let checker = &file.typing().checker;
     let mut thenables = Vec::new();
@@ -56,6 +52,7 @@ fn never(ty: &Ty, ck: &Checker<'_>) -> bool {
 
 fn contains_nonawaitable(ty: &Ty, ck: &Checker<'_>) -> bool {
     match ty {
+        Ty::Never => false,
         Ty::Union(parts) => parts.iter().any(|part| contains_nonawaitable(part, ck)),
         _ => never(ty, ck),
     }

@@ -1,0 +1,32 @@
+declare const empty: never[];
+declare const readonlyEmpty: readonly never[];
+declare const emptyTuple: readonly [];
+declare const iterable: Iterable<never>;
+declare const mixed: (Promise<number> | number)[];
+declare const dynamic: any[];
+declare const uncertain: unknown[];
+declare const unreachable: never;
+async function check(flag: boolean) {
+  await Promise.all([...(flag ? [] : [Promise.resolve(1)])]);
+  await Promise.all([...(flag ? [Promise.resolve(1)] : [])]);
+  await Promise.all(flag ? [] : [Promise.resolve(1)]);
+  await Promise.allSettled([...(flag ? [] : [Promise.resolve(1)])]);
+  await Promise.race([...(flag ? [] : [Promise.resolve(1)])]);
+  await Promise.any([...(flag ? [] : [Promise.resolve(1)])]);
+  await Promise.all([...[]]);
+  await Promise.all([...empty]);
+  await Promise.all(empty);
+  await Promise.all([...readonlyEmpty]);
+  await Promise.all(readonlyEmpty);
+  await Promise.all([...emptyTuple]);
+  await Promise.all([...iterable]);
+  await Promise.all(iterable);
+  await Promise.all([...dynamic]);
+  await Promise.all([...uncertain]);
+  await Promise.all([...(flag ? [] : [1])]);
+  await Promise.all([...(flag ? [Promise.resolve(1)] : [1])]);
+  await Promise.all([...mixed]);
+  await Promise.all([Promise.resolve(1), 1]);
+  await Promise.all([1]);
+  await unreachable;
+}
