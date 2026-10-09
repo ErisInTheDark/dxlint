@@ -10,7 +10,7 @@ use serde::Serialize;
 use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Sources};
 use crate::config::ast::Severity;
 use crate::engine::cache::{self, Cache};
-use crate::engine::{Diagnostic, Edit, Linter};
+use crate::engine::{apply_fixes, Diagnostic, Edit, Linter};
 use crate::line_index::LineIndex;
 use crate::native::ts::reads;
 
@@ -40,6 +40,13 @@ struct JsonDiag<'a> {
     fixable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<JsonFix<'a>>,
+}
+
+#[derive(Serialize)]
+struct JsonFixPreview<'a> {
+    file: &'a str,
+    kind: &'static str,
+    text: String,
 }
 
 #[derive(Serialize)]
@@ -154,7 +161,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
         linter.enable_profile();
     }
     // Profiling measures linting, so it never reads results instead.
-    let cache = (!args.no_cache && !args.profile).then(|| Cache::open(&linter));
+    let cache = (!args.no_cache && !args.profile && !args.fix_preview).then(|| Cache::open(&linter));
     let cwd = output.cwd;
     let roots: Vec<PathBuf> = if args.paths.is_empty() { vec![linter.root.clone()] } else { args.paths.iter().map(|p| cwd.join(p)).collect() };
     let jobs = args.jobs.map_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()), |n| n.get());
@@ -254,6 +261,10 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
                             let lines = LineIndex::new(&r.text);
                             for d in &r.diags {
                                 let json = JsonDiag::new(&name, &r.text, &lines, d);
+                                let _ = writeln!(output.stdout, "{}", serde_json::to_string(&json).unwrap_or_default());
+                            }
+                            if args.fix_preview {
+                                let json = JsonFixPreview { file: &name, kind: "fix-preview", text: apply_fixes(&r.text, &r.diags).0 };
                                 let _ = writeln!(output.stdout, "{}", serde_json::to_string(&json).unwrap_or_default());
                             }
                         }

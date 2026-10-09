@@ -402,6 +402,8 @@ fix at end_offset as ";"
 
 `--format jsonl` retains `fixable` and adds `fix.edits` on fixable diagnostics. Each edit is `{start, end, text}`, using zero-based, half-open UTF-8 byte offsets into the reported file text (not character or UTF-16 offsets). All edits of one diagnostic form one atomic fix; replacements apply to the same original text, not sequentially shifted offsets. Unfixable diagnostics omit `fix`.
 
+`--fix-preview --format jsonl` emits one `{file, kind: "fix-preview", text}` record after each wanted file's original diagnostics, including clean files. The text applies one engine fix pass without relinting, source writes or cache reads/writes. Works with `--sources`; incompatible with `--fix`.
+
 **Body clauses.**
 
 | clause | meaning |

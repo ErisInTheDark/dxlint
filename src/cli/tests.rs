@@ -67,6 +67,53 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 "#;
 
 #[test]
+fn fix_preview_is_one_readonly_pass_for_disk_and_packed_sources() {
+    let rules = "lang t \"*.t\"\nin .t match letter /[ab]/ { rule capitalise warn \"lowercase\" fix as upper(text) }\n";
+    let files = [(".zlint", rules), ("a.t", "ab"), ("clean.t", "XY"), ("ignored.js", "ab")];
+    let dir = project("fix-preview", &files);
+    let packed_dir = project("fix-preview-packed", &[("keep", "unchanged")]);
+    let pack = files.into_iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text }).to_string()).collect::<Vec<_>>().join("\n");
+    for jobs in ["1", "3"] {
+        for packed in [false, true] {
+            let mut args = vec!["--fix-preview", "--format", "jsonl", "--jobs", jobs];
+            if packed {
+                args.extend(["--sources", "-"]);
+            }
+            let out = zlint_input(if packed { &packed_dir } else { &dir }, &args, &pack);
+            assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+            let records: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+            assert_eq!(records.len(), 4, "{records:?}");
+            let diagnostics: Vec<_> = records.iter().filter(|record| record["kind"] != "fix-preview").collect();
+            assert_eq!(diagnostics.len(), 2);
+            assert!(diagnostics.iter().all(|record| record["file"] == "a.t" && record["fixable"] == true));
+            for (file, text) in [("a.t", "Ab"), ("clean.t", "XY")] {
+                let previews: Vec<_> = records.iter().enumerate().filter(|(_, record)| record["file"] == file && record["kind"] == "fix-preview").collect();
+                assert_eq!(previews.len(), 1, "{records:?}");
+                let (index, preview) = previews[0];
+                assert_eq!(preview["text"], text);
+                assert!(records[index + 1..].iter().all(|record| record["file"] != file), "preview precedes diagnostics");
+            }
+            assert_eq!(std::fs::read_to_string(dir.join("a.t")).unwrap(), "ab");
+            assert!(!dir.join(".zlintcache").exists());
+            assert_eq!(std::fs::read_dir(&packed_dir).unwrap().count(), 1);
+            assert!(!crate::native::ts::reads::is_file(&packed_dir.join("a.t")), "invocation leaked buffers");
+        }
+    }
+    for args in [
+        vec!["--fix-preview"],
+        vec!["--fix-preview", "--format", "jsonl", "--fix"],
+    ] {
+        let out = zlint(&dir, &args);
+        assert_eq!(out.code, 2);
+        assert!(out.stdout.is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("a.t")).unwrap(), "ab");
+        assert!(!dir.join(".zlintcache").exists());
+    }
+    std::fs::remove_dir_all(dir).expect("project cleanup");
+    std::fs::remove_dir_all(packed_dir).expect("packed project cleanup");
+}
+
+#[test]
 fn packed_sources_resolve_virtual_projects_without_writing_files() {
     let dir = std::env::temp_dir().join("zlint-cli-tests").join("packed-sources");
     std::fs::create_dir_all(&dir).expect("empty project directory");

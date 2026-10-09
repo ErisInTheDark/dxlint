@@ -129,6 +129,9 @@ pub struct LintArgs {
     /// Apply fixes in place
     #[arg(long)]
     pub fix: bool,
+    /// Emit one read-only fix pass per file (requires --format jsonl; excludes --fix)
+    #[arg(long)]
+    pub fix_preview: bool,
     /// Output format
     #[arg(long, value_enum, default_value_t = Format::Human)]
     pub format: Format,
@@ -217,6 +220,11 @@ where
             return error.exit_code() as u8;
         }
     };
+    if cli.lint.fix_preview && (cli.lint.format != Format::Jsonl || cli.lint.fix) {
+        let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+        render::error(&mut output, "--fix-preview requires --format jsonl and cannot be combined with --fix");
+        return 2;
+    }
     // Clap global arguments cannot reference root-only conflict IDs.
     if cli.lint.sources.is_some() && (!cli.lint.paths.is_empty() || cli.lint.fix) {
         let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };

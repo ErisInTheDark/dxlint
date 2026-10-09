@@ -15,23 +15,23 @@ pub struct Fixed {
     pub remaining: Vec<Diagnostic>,
 }
 
-/// Applies as many fixes as possible without overlaps; returns the new text
-/// and how many fixes were used.
+/// Applies fixes in covering-range order; touching ranges and gaps within
+/// atomic fixes are reserved for the next pass.
 pub fn apply_fixes(text: &str, diags: &[Diagnostic]) -> (String, usize) {
-    let mut fixes: Vec<&Vec<Edit>> = diags.iter().filter_map(|d| d.fix.as_ref()).filter(|f| !f.is_empty()).collect();
-    fixes.sort_by_key(|f| f.iter().map(|e| e.start).min());
+    let mut fixes: Vec<_> = diags.iter().filter_map(|d| d.fix.as_ref()).filter(|f| !f.is_empty()).map(|fix| {
+        let range = fix.iter().fold((usize::MAX, 0), |(start, end), edit| (start.min(edit.start), end.max(edit.end)));
+        (range, fix)
+    }).collect();
+    fixes.sort_by_key(|(range, _)| *range);
     let mut chosen: Vec<&Edit> = Vec::new();
-    let mut taken: Vec<(usize, usize)> = Vec::new();
+    let mut last_end = None;
     let mut applied = 0;
-    for fix in fixes {
-        let overlaps = fix.iter().any(|e| taken.iter().any(|&t| conflicts((e.start, e.end), t)));
-        if overlaps {
+    for ((start, end), fix) in fixes {
+        if last_end.is_some_and(|previous| previous >= start) {
             continue;
         }
-        for e in fix {
-            taken.push((e.start, e.end));
-            chosen.push(e);
-        }
+        chosen.extend(fix.iter());
+        last_end = Some(end);
         applied += 1;
     }
     chosen.sort_by_key(|e| (e.start, e.end));
@@ -68,12 +68,6 @@ pub fn minimal_edit(source: &str, start: usize, end: usize, want: &str) -> Edit 
         end: end - suffix,
         text: want_rest[..want_rest.len() - suffix].to_string(),
     }
-}
-
-/// Ranges conflict when they share any byte, or when an insertion sits at
-/// the same start as another edit (their order would be ambiguous).
-fn conflicts((s1, e1): (usize, usize), (s2, e2): (usize, usize)) -> bool {
-    s1.max(s2) < e1.min(e2) || (s1 == s2 && (s1 == e1 || s2 == e2)) || (s1 == e1 && s2 < s1 && s1 < e2) || (s2 == e2 && s1 < s2 && s2 < e1)
 }
 
 impl Linter {
@@ -125,6 +119,30 @@ mod tests {
     #[test]
     fn overlapping_fixes_wait_for_the_next_pass() {
         let (out, n) = apply_fixes("abcdef", &[fix(0, 4, "X"), fix(2, 3, "Y"), fix(4, 6, "Z")]);
-        assert_eq!((out.as_str(), n), ("XZ", 2));
+        assert_eq!((out.as_str(), n), ("Xef", 1));
+    }
+
+    #[test]
+    fn an_atomic_fix_reserves_the_gaps_between_its_edits() {
+        let mut grouped = fix(5, 6, "F");
+        if let Some(edits) = &mut grouped.fix {
+            edits.push(Edit { start: 0, end: 1, text: "A".into() });
+        }
+        let (out, n) = apply_fixes("abcdefgh", &[grouped, fix(2, 3, "C"), fix(7, 8, "H")]);
+        assert_eq!((out.as_str(), n), ("AbcdeFgH", 2));
+    }
+
+    #[test]
+    fn the_shorter_covering_range_wins_at_the_same_start() {
+        let (out, n) = apply_fixes("abc", &[fix(0, 2, "X"), fix(0, 1, "Y")]);
+        assert_eq!((out.as_str(), n), ("Ybc", 1));
+    }
+
+    #[test]
+    fn insertions_conflict_at_boundaries_but_can_start_a_file() {
+        let (out, n) = apply_fixes("abc", &[fix(0, 1, "X"), fix(1, 1, "!")]);
+        assert_eq!((out.as_str(), n), ("Xbc", 1));
+        let (out, n) = apply_fixes("abc", &[fix(0, 1, "X"), fix(0, 0, "!")]);
+        assert_eq!((out.as_str(), n), ("!abc", 1));
     }
 }
