@@ -1,0 +1,16 @@
+input.ts:10:3-10:38 consistent-generic-constructors#0
+input.ts:11:15-11:48 consistent-generic-constructors#0
+input.ts:13:12-13:38 consistent-generic-constructors#0
+input.ts:13:40-13:68 consistent-generic-constructors#0
+input.ts:13:70-13:98 consistent-generic-constructors#0
+input.ts:14:22-14:48 consistent-generic-constructors#0
+input.ts:15:16-15:86 consistent-generic-constructors#0
+input.ts:15:55-15:81 consistent-generic-constructors#0
+input.ts:1:7-1:33 consistent-generic-constructors#0
+input.ts:2:7-2:43 consistent-generic-constructors#0
+input.ts:3:7-3:52 consistent-generic-constructors#0
+input.ts:4:7-4:36 consistent-generic-constructors#0
+input.ts:5:25-5:48 consistent-generic-constructors#0
+input.ts:7:3-7:39 consistent-generic-constructors#0
+input.ts:8:3-8:36 consistent-generic-constructors#0
+input.ts:9:3-9:38 consistent-generic-constructors#0

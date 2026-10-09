@@ -35,9 +35,35 @@ in inferrable_annotation rule no-inferrable-types {
 }
 
 # `const x: Map<K, V> = new Map()`: the arguments belong on the constructor.
-in ts_new let constructor_arguments if callee is ts_identifier then { name: callee, count: count(type_argument) } else null
+in ts_new let constructor_arguments if callee is ts_identifier then { name: callee, callee: callee.node, count: count(type_argument), node: node } else null
 in ts_parenthesized forward constructor_arguments from expression
-in ts_type_reference let annotation_arguments if name is ts_identifier then { name: name, count: count(type_argument), typed_array: contains(["Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray"], name) && name.reference_kind == null } else null
+in ts_type_reference let annotation_arguments if name is ts_identifier then { name: name, count: count(type_argument), node: node, typed_array: contains(["Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray"], name) && name.reference_kind == null } else null
+in ts_new, ts_type_reference let style_generic_span {
+  value first_argument: first(type_argument.nodes)
+  value last_argument: last(type_argument.nodes)
+  value closing_tokens: overlapping(ts_close_angle, last_argument.end_offset, end_offset)
+  value closing: first(closing_tokens)
+  value { start: first_argument.token_neighbours.before.start, end: closing.end_offset }
+}
+fn generic_constructor_replacement(source, owner, construction, annotation, mode) = if mode == "constructor" then {
+  value colon: annotation.node.token_neighbours.before
+  value generics: annotation.node.style_generic_span
+  value comments: overlapping(ts_comment, colon.start, generics.start)
+  value unsafe_comments: filter(comments, c => starts_with(c, "//"))
+  value relocated_comments: join(comments, "")
+  value arguments: byte_slice(source, generics.start, generics.end)
+  value between: byte_slice(source, annotation.node.end_offset, construction.callee.end_offset)
+  value missing_parens: construction.node.end_offset == construction.callee.end_offset
+  value if colon.text == ":" && count(unsafe_comments) == 0 then { start: colon.start, end: construction.callee.end_offset, text: between relocated_comments arguments (if missing_parens then "()" else "") } else null
+} else {
+  value binding: if owner is ts_class_property then owner.key.node else owner.name.node
+  value marker: binding.token_neighbours.after
+  value start: if contains(["?", "!"], marker.text) then marker.end else binding.end_offset
+  value generics: construction.node.style_generic_span
+  value arguments: byte_slice(source, generics.start, generics.end)
+  value between: byte_slice(source, start, generics.start)
+  value { start: start, end: generics.end, text: ": " construction.name arguments between }
+}
 in ts_declarator, ts_class_property, ts_parameter rule consistent-generic-constructors {
   option mode ("constructor" | "type-annotation") = "constructor" "Preferred location for generic arguments."
   when not ts_parameter || parent is (ts_function, ts_method)
@@ -46,7 +72,9 @@ in ts_declarator, ts_class_property, ts_parameter rule consistent-generic-constr
   when construction != null
   when mode != "constructor" || compiler_options.isolatedDeclarations != true
   when if mode == "constructor" then annotation != null && annotation.name == construction.name && !annotation.typed_array && annotation.count > 0 && construction.count == 0 else type == null && construction.count > 0
+  let replacement generic_constructor_replacement(source, node, construction, annotation, mode)
   warn if mode == "constructor" then "The generic type arguments should be specified as part of the constructor type arguments." else "The generic type arguments should be specified as part of the type annotation."
+  fix at { start: replacement.start ?? offset, end: replacement.end ?? offset } if replacement != null as replacement.text
 }
 
 }
