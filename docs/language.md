@@ -1174,6 +1174,7 @@ and `final-newline`.
 | `.ts/restrictions/comments` | shared comment metadata, inline and warning-term policies, and Unicode-safe capitalization fixes, imported by `.ts/restrictions` |
 | `.ts/suggestions/object-spread` | Object.assign eligibility and source-preserving object spread fixes, imported by `.ts/suggestions` |
 | `.ts/suggestions/templates` | string concatenation policies and source-preserving template fixes, imported by `.ts/suggestions` |
+| `.ts/suggestions/computed-keys` | unnecessary computed literal keys and comment-preserving, token-safe fixes, imported by `.ts/suggestions` |
 | `.ts/suggestions/comparisons` | literal-side comparison policy, range exceptions and source-preserving operand swaps |
 | `.ts/typed/optional-chains` | optional-chain guard selection, return-type safety and atomic fixes, imported by `.ts/typed` |
 | `.ts/typed/readonly-members` | readonly private members and parameter properties, with type-preserving annotation fixes, imported by `.ts/typed` |

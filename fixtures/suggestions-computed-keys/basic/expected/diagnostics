@@ -1,0 +1,6 @@
+input.ts:1:13-1:21 no-useless-computed-key#0
+input.ts:2:13-2:19 no-useless-computed-key#0
+input.ts:3:13-3:27 no-useless-computed-key#0
+input.ts:4:13-4:26 no-useless-computed-key#0
+input.ts:5:9-5:21 no-useless-computed-key#0
+input.ts:6:13-6:34 no-useless-computed-key#0

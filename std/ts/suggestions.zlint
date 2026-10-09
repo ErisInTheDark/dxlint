@@ -8,6 +8,7 @@ import .ts/suggestions/renames
 import .ts/suggestions/comparisons
 import .ts/suggestions/templates
 import .ts/suggestions/object-spread
+import .ts/suggestions/computed-keys
 
 define {
 
@@ -59,12 +60,6 @@ in ts_parenthesized forward arithmetic_operator, strict_left_reference_key, stri
 
 in ts_parameter let required_parameter init == null && optional == null && name not ts_rest && !starts_with(text, "...")
 in ts_function, ts_arrow, ts_method let parameter_required [] parameter.required_parameter
-
-in ts_computed_key let computed_literal_text if (expression.unwrapped_node.nonempty ?? expression.node) is (ts_string, ts_number) then expression.unwrapped_text.nonempty ?? expression else null
-in ts_method, ts_class_property let member_static contains([] modifier, "static")
-in ts_property, ts_pattern_property let computed_exception parent is ts_object && parent.write_site == null && static_name == "__proto__"
-in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.write_site == null && static_name == "__proto__"
-in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
 
 in ts_template let static_template count(expression) == 0
 in ts_parenthesized forward static_template from expression
@@ -345,13 +340,6 @@ in ts_method, ts_method_signature rule grouped-accessor-pairs {
   when group_info != null && (group_info.gap || mode == "getBeforeSet" && !group_info.getter_first || mode == "setBeforeGet" && group_info.getter_first)
   report at accessor_pair.offset
   warn if group_info.gap then "Accessor pair {group_info.former} and {accessor_pair.name} should be grouped." else "Expected {accessor_pair.name} to be before {group_info.former}."
-}
-
-in ts_property, ts_pattern_property, ts_method, ts_class_property rule no-useless-computed-key {
-  option enforceForClassMembers boolean = true "check class member keys"
-  let computed_text key.computed_literal_text
-  when computed_text != null && !computed_exception && (parent not ts_class || enforceForClassMembers)
-  warn "Unnecessarily computed property [{computed_text}] found."
 }
 
 in ts_unary, ts_binary, ts_assignment, ts_template rule no-implicit-coercion {
