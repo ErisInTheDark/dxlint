@@ -877,6 +877,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         when_vm: Vec::new(),
         locals,
         message,
+        message_file: def.message.as_ref().map_or(def.name.span.file, |message| message.span.file),
         message_plan: None,
         fix,
         fix_when,

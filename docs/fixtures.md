@@ -10,7 +10,7 @@ input.ts:1:1-1:4 rule-name#0
 
 Lines/columns are 1-based, end positions exclusive, matching JSON output. Message indexes are 0-based source-order leaves: `if` branches, `??` alternatives and a pipeline's final value. Other expressions (including map results) have one leaf. Engine/evaluation failures use `#error`. Changing message wording does not change its identity.
 
-Rules defined in the scenario's own `.zlint` also include rendered message text after the identity; backslashes, CR and newlines escape as `\\`, `\r`, `\n`. Library rules remain index-only.
+Messages written in the scenario's own `.zlint`, including library-rule overrides, also include rendered text after the identity; backslashes, CR and newlines escape as `\\`, `\r`, `\n`. Library default messages remain index-only. Without an explicit message, the rule name's source owns its fallback.
 
 `expected/fixed/<relpath>` contains complete fixpoint text only for changed inputs; absence means unchanged. Inputs are never rewritten. A `.zlintcache` marker additionally checks cold/warm diagnostics agree; the runner restores its original bytes.
 

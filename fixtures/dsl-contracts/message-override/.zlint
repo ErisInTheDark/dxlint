@@ -1,0 +1,3 @@
+import .ts
+rule no-var warn "local:{text}"
+rule no-cond-assign

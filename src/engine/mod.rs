@@ -26,7 +26,7 @@ pub use fix::{apply_fixes, Fixed};
 pub use profile::Profile;
 
 use crate::config::ast::{FixTarget, Report, Severity};
-use crate::config::source::{SourceMap, Span};
+use crate::config::source::{FileId, SourceMap, Span};
 use crate::expr::{Attributes, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
@@ -80,6 +80,8 @@ pub struct Rule {
     /// `let` values, by slot.
     locals: Vec<CExpr>,
     message: Option<CExpr>,
+    /// Explicit message source, or the rule name's source for its fallback.
+    pub(crate) message_file: FileId,
     message_plan: Option<message::Plan>,
     /// What the selected fix region should look like (`fix ... as expr`).
     fix: Option<CExpr>,

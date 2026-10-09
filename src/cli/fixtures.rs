@@ -50,7 +50,7 @@ fn reports(name: &str, text: &str, diagnostics: &[crate::engine::Diagnostic], lo
 
 fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool) -> Result<Actual, String> {
     let local: BTreeSet<_> = linter.rules.iter().filter(|rule|
-        linter.sources.get(rule.span.file).path.as_deref() == Some(linter.root.join(".zlint").as_path()))
+        linter.sources.get(rule.message_file).path.as_deref() == Some(linter.root.join(".zlint").as_path()))
         .map(|rule| rule.name.as_str()).collect();
     let mut actual = Actual::default();
     for file in files {
