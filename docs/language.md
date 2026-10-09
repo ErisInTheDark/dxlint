@@ -1167,6 +1167,7 @@ and `final-newline`.
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
 | `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
 | `.ts/expression-fixes` | shared precedence, token-boundary and ASI helpers for expression autofixes |
+| `.ts/template-fixes` | shared raw-escape-preserving template fix helpers |
 | `.ts/suggestions/object-shorthand` | object member short/long syntax policy and source-preserving fixes |
 | `.ts/suggestions/curly` | control-body brace policy and statement-safe fixes |
 | `.ts/suggestions/renames` | redundant import, export and destructuring aliases; comment-safe fixes |

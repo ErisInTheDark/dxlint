@@ -1,0 +1,22 @@
+# Source-preserving string escapes for template fixes.
+define {
+
+fn template_literal_raw(raw, unescape_quotes) = {
+  value split(raw, "")
+  cooked: fold ({ text: "", escape: false, dollar: false }) (state, char) if state.escape then {
+    text: state.text (if contains(unescape_quotes, char) then "" else "\\") char,
+    escape: false,
+    dollar: false
+  } else if char == "\\" then {
+    text: state.text (if state.dollar then "$" else ""),
+    escape: true,
+    dollar: false
+  } else {
+    text: state.text (if state.dollar then (if char == "{{" then "\\$" else "$") else "") (if char == "$" then "" else if char == "`" then "\\`" else char),
+    escape: false,
+    dollar: char == "$"
+  }
+  value cooked.text (if cooked.dollar then "$" else "") (if cooked.escape then "\\" else "")
+}
+
+}
