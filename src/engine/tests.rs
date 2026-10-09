@@ -9,8 +9,6 @@ use crate::config::{self, ast::Severity};
 
 mod text_hygiene;
 
-/// Behaviour of std's TypeScript rules that spans several owners.
-mod ts_std_rules;
 mod ts_naming;
 mod ts_type_constituents;
 mod ts_style_types;
