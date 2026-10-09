@@ -75,6 +75,7 @@ fn layout_padding_bottom_space(gap) = {
   layout_padding_tail_space
 }
 fn layout_line_breaks(gap) = re_count(gap, /\r\n|[\n\r\u{2028}\u{2029}]/)
+fn layout_padding_reduced(gap) = "\n" { value gap; re_find /[^\n\r\u{2028}\u{2029}]*$/ }
 fn layout_padding_mode(style, blocks, switches, classes, owner) = if owner.layout_block_module.nonempty ?? false then null else if style != null then style else if blocks == null && switches == null && classes == null then "always" else if owner is ts_class then classes else if owner is ts_switch then switches else blocks
 @macro layout_padding_options {
   option style "always" | "never" | "start" | "end" | null = null "padding at block boundaries"
@@ -337,6 +338,8 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:top {
   when padding_padded != (padding_mode == "always" || padding_mode == "start")
   report at if layout_padding_open_prefix == "" then opener.ts_open_brace.offset else opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix) - { value layout_padding_open_prefix; layout_padding_last_attached; byte_len }
   warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+  let padding_start opener.ts_open_brace.end_offset + byte_len(layout_padding_open_prefix)
+  fix at { start: padding_start, end: padding_start + (if padding_padded then byte_len(padding_space) else 0) } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
 }
 
 in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
@@ -351,6 +354,8 @@ in ts_block, ts_static_block, ts_switch, ts_class rule padded-blocks:bottom {
   when padding_padded != (padding_mode == "always" || padding_mode == "end")
   report at closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix) - byte_len(padding_space)
   warn if padding_padded then "Block must not be padded by blank lines." else "Block must be padded by blank lines."
+  let padding_end closer.ts_close_brace.offset - byte_len(layout_padding_close_suffix)
+  fix at { start: padding_end - (if padding_padded then byte_len(padding_space) else 0), end: padding_end } as if padding_padded then layout_padding_reduced(padding_space) else "\n"
 }
 
 in ts_code match layout_class_line_gap /[\r\n](?:[^\S\r\n]*[\r\n])+/
