@@ -1,0 +1,7 @@
+import .ts
+rule member-delimiter-style {
+  set multilineDetection "last-member"
+  set singleline { delimiter: "comma", requireLast: true }
+  set multiline { delimiter: "semi", requireLast: false }
+  set overrides { typeLiteral: { multiline: { delimiter: "comma", requireLast: false } } }
+}

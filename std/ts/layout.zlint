@@ -189,6 +189,7 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
 
 schema member_separator_options { delimiter?: "semi" | "comma" | "none"; requireLast?: boolean }
 schema member_separator_config { multiline?: member_separator_options; singleline?: member_separator_options }
+fn layout_member_line_end(source, end) = { value byte_slice(source, end); re_test /^(?:[\n\r\u{2028}\u{2029}]|$)/ }
 in ts_interface, ts_type_literal let layout_last_member last(member.node)
 in ts_interface, ts_type_literal let layout_members_single position(opener.ts_open_brace.offset).js_line == position(end_offset).js_line
 in ts_interface, ts_type_literal let layout_last_member_inline position(layout_last_member.member_terminal_token.end).js_line == position(end_offset).js_line
@@ -209,6 +210,11 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
   let member_token member_terminal_token
   let member_actual if member_token.text == ";" then "semi" else if member_token.text == "," then "comma" else "none"
   when member_actual != (if member_last && !member_require_last then "none" else member_delimiter)
+  let member_remove member_last && !member_require_last || member_delimiter == "none"
+  let member_comment_gap "^(?:\\s*" @layout_comment_pattern ")*\\s*$"
+  let member_comment { value overlapping(ts_comment, member_token.end, parent.end_offset); filter (c) { value byte_slice(source, member_token.end, c.offset); re_test member_comment_gap }; last }
+  let member_remove_safe member_single || layout_member_line_end(source, member_token.end) || member_comment != null && (position(member_comment.end_offset).js_line > position(member_token.end).js_line || layout_member_line_end(source, member_comment.end_offset))
+  fix at { start: if member_actual == "none" then member_token.end else member_token.start, end: member_token.end } if !member_remove || member_remove_safe as (if member_remove then "" else if member_delimiter == "semi" then ";" else ",")
   report at member_token.end
   warn if member_last && !member_require_last || member_delimiter == "none" then (if member_actual == "semi" then "Unexpected separator (;)." else "Unexpected separator (,).") else if member_delimiter == "semi" then "Expected a semicolon." else "Expected a comma."
 }
