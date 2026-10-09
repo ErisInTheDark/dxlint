@@ -1,0 +1,6 @@
+input.ts:1:15-1:28 array-type:mutable#0
+input.ts:3:14-3:33 array-type:mutable#0
+input.ts:5:16-5:29 array-type:mutable#0
+input.ts:6:18-6:38 array-type:mutable#0
+input.ts:7:23-7:44 array-type:readonly#0
+input.ts:8:22-8:50 array-type:readonly#0

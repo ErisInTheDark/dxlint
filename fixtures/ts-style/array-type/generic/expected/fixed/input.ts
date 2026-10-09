@@ -1,0 +1,10 @@
+type Scalar = Array<number>;
+type Union = Array<string | number>;
+type Intersection = Array<string & number>;
+type Callback = Array<(value: number) => number>;
+type Constructor = Array<new (...args: Array<any>) => void>;
+type Conditional<T> = Array<T extends string ? string : number>;
+type Inferred<T> = T extends Array<infer E> ? E : T;
+type Tuple = Array<[number, string]>;
+type ReadonlyScalar = ReadonlyArray<number>;
+type ReadonlyUnion = ReadonlyArray<string | number>;

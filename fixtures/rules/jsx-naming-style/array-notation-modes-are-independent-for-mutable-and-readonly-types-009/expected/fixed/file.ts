@@ -1,0 +1,1 @@
+type MA = number[]; type MB = number[]; type MC = Array<A | B>; type MD = Array<A | B>; type RA = readonly number[]; type RB = readonly number[]; type RC = ReadonlyArray<A | B>; type RD = ReadonlyArray<A | B>;

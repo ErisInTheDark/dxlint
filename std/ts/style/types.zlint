@@ -29,34 +29,52 @@ in ts_array_type {
   let is_array_type true
   let array_element_simple type.is_simple_type == true
   let array_element_text type
+  let array_element_node type.node
 }
+in ts_type_reference let array_element_node first([] type_argument.node)
+in ts_node let array_type_unwrapped if is ts_parenthesized_type then type.array_type_unwrapped else node
 in ts_type_reference let array_type_notation
   if re_test(name, /^(Array|ReadonlyArray|Readonly)$/) && count(type_argument) == 1 && name.reference_kind == null
     && (name != "Readonly" || first([] type_argument.is_array_type) == true)
-  then { readonly: name != "Array", named: true, wrapper: name, simple: first([] type_argument.is_simple_type) == true, shown: if first([] type_argument.is_simple_type) == true then first([] type_argument) else "T", suffix: if name == "Readonly" then "" else "[]" }
+  then { readonly: name != "Array", named: true, wrapper: name, element: array_element_node, simple: first([] type_argument.is_simple_type) == true, shown: if first([] type_argument.is_simple_type) == true then first([] type_argument) else "T", suffix: if name == "Readonly" then "" else "[]" }
   else null
 in ts_array_type let array_type_notation
   if parent is ts_type_operator && parent.operator == "readonly" then null
-  else { readonly: false, named: false, wrapper: "Array", simple: type.is_simple_type == true, shown: if type.is_simple_type == true then type else "T", suffix: "[]" }
+  else { readonly: false, named: false, wrapper: "Array", element: array_element_node, simple: type.is_simple_type == true, shown: if type.is_simple_type == true then type else "T", suffix: "[]" }
 in ts_type_operator let array_type_notation
   if operator == "readonly" && type.is_array_type == true
-  then { readonly: true, named: false, wrapper: "ReadonlyArray", simple: type.array_element_simple == true, shown: if type.array_element_simple then type.array_element_text else "T", suffix: "[]" }
+  then { readonly: true, named: false, wrapper: "ReadonlyArray", element: type.array_element_node, simple: type.array_element_simple == true, shown: if type.array_element_simple then type.array_element_text else "T", suffix: "[]" }
   else null
 fn array_notation_forbidden(notation, mode) = if notation.named then mode != "generic" && (mode != "array-simple" || notation.simple) else mode == "generic" || mode == "array-simple" && !notation.simple
 fn array_notation_warning(notation, mode) =
   if notation.named then "Array type using '{notation.wrapper}<{notation.shown}>' is forbidden{if mode == 'array-simple' then ' for simple types' else ''}. Use '{if notation.readonly then 'readonly ' else ''}{notation.shown}{notation.suffix}' instead."
   else "Array type using '{if notation.readonly then 'readonly ' else ''}{notation.shown}[]' is forbidden{if mode == 'array-simple' then ' for non-simple types' else ''}. Use '{notation.wrapper}<{notation.shown}>' instead."
+fn array_notation_replacement(owner, notation) = {
+  value element: if notation.named then notation.element else notation.element.array_type_unwrapped
+  value comments: overlapping(ts_comment, owner.offset, owner.end_offset)
+  value safe: all(comments, comment => element.offset <= comment.offset && comment.end_offset <= element.end_offset)
+  value postfix: if element.precedence < 20 || element is ts_infer then "({element})" else "{element}"
+  value replacement: if !notation.named then "{notation.wrapper}<{element}>"
+    else "{if notation.readonly then 'readonly ' else ''}{if notation.wrapper == 'Readonly' then element else postfix}{notation.suffix}"
+  value if !safe then null
+    else if notation.named && notation.readonly && owner.parent is ts_array_type then "({replacement})"
+    else replacement
+}
 in ts_type_reference, ts_array_type rule array-type:mutable {
   default option mode ("array" | "array-simple" | "generic") = "array" "Mutable array notation."
   when array_type_notation != null && !array_type_notation.readonly
   when array_notation_forbidden(array_type_notation, mode)
   warn array_notation_warning(array_type_notation, mode)
+  let replacement array_notation_replacement(node, array_type_notation)
+  fix if replacement != null as replacement
 }
 in ts_type_reference, ts_type_operator rule array-type:readonly {
   default option mode ("array" | "array-simple" | "generic") = "array" "Readonly array notation."
   when array_type_notation != null && array_type_notation.readonly
   when array_notation_forbidden(array_type_notation, mode)
   warn array_notation_warning(array_type_notation, mode)
+  let replacement array_notation_replacement(node, array_type_notation)
+  fix if replacement != null as replacement
 }
 
 # The global wrapper types (not local types of those names).

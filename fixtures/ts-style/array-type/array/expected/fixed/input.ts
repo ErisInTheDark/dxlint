@@ -1,0 +1,11 @@
+type Scalar = number[];
+type Union = (string | number)[];
+type Intersection = (string & number)[];
+type Callback = ((value: number) => number)[];
+type Constructor = (new (...args: any[]) => void)[];
+type Conditional<T> = (T extends string ? string : number)[];
+type Inferred<T> = T extends (infer E)[] ? E : T;
+type Qualified = library.Value[];
+type ReadonlyScalar = readonly number[];
+type ReadonlyCallback = readonly ((value: number) => number)[];
+type ReadonlyWrapper = readonly string[];

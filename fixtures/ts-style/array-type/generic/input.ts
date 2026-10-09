@@ -1,0 +1,10 @@
+type Scalar = number[];
+type Union = (string | number)[];
+type Intersection = (string & number)[];
+type Callback = ((value: number) => number)[];
+type Constructor = (new (...args: any[]) => void)[];
+type Conditional<T> = (T extends string ? string : number)[];
+type Inferred<T> = T extends (infer E)[] ? E : T;
+type Tuple = [number, string][];
+type ReadonlyScalar = readonly number[];
+type ReadonlyUnion = readonly (string | number)[];
