@@ -1,0 +1,9 @@
+type Plain = { [key in string]: number };
+type Frozen = { readonly [key in string]: number };
+type Added = { +readonly [key in string]: number };
+type Optional = { [key in PropertyKey]?: string };
+type AddedOptional = { [key in PropertyKey]+?: string };
+type RequiredFrozen = { readonly [key in PropertyKey]-?: string };
+type RemovedReadonly = { -readonly [key in string]: number };
+type Missing = { [key in string]; };
+type Parenthesized = { [key in (keyof Options)]: unknown };

@@ -1,0 +1,9 @@
+type Plain = Record<string, number>;
+type Frozen = Readonly<Record<string, number>>;
+type Added = Readonly<Record<string, number>>;
+type Optional = Partial<Record<PropertyKey, string>>;
+type AddedOptional = Partial<Record<PropertyKey, string>>;
+type RequiredFrozen = Readonly<Required<Record<PropertyKey, string>>>;
+type RemovedReadonly = { -readonly [key in string]: number };
+type Missing = Record<string, any>;
+type Parenthesized = Record<keyof Options, unknown>;

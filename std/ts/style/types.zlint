@@ -32,7 +32,7 @@ in ts_array_type {
   let array_element_node type.node
 }
 in ts_type_reference let array_element_node first([] type_argument.node)
-in ts_node let array_type_unwrapped if is ts_parenthesized_type then type.array_type_unwrapped else node
+in ts_node let style_type_unwrapped if is ts_parenthesized_type then type.style_type_unwrapped else node
 in ts_type_reference let array_type_notation
   if re_test(name, /^(Array|ReadonlyArray|Readonly)$/) && count(type_argument) == 1 && name.reference_kind == null
     && (name != "Readonly" || first([] type_argument.is_array_type) == true)
@@ -50,7 +50,7 @@ fn array_notation_warning(notation, mode) =
   if notation.named then "Array type using '{notation.wrapper}<{notation.shown}>' is forbidden{if mode == 'array-simple' then ' for simple types' else ''}. Use '{if notation.readonly then 'readonly ' else ''}{notation.shown}{notation.suffix}' instead."
   else "Array type using '{if notation.readonly then 'readonly ' else ''}{notation.shown}[]' is forbidden{if mode == 'array-simple' then ' for non-simple types' else ''}. Use '{notation.wrapper}<{notation.shown}>' instead."
 fn array_notation_replacement(owner, notation) = {
-  value element: if notation.named then notation.element else notation.element.array_type_unwrapped
+  value element: if notation.named then notation.element else notation.element.style_type_unwrapped
   value comments: overlapping(ts_comment, owner.offset, owner.end_offset)
   value safe: all(comments, comment => element.offset <= comment.offset && comment.end_offset <= element.end_offset)
   value postfix: if element.precedence < 20 || element is ts_infer then "({element})" else "{element}"
@@ -365,25 +365,70 @@ in ts_type_literal, ts_interface, ts_mapped_type let indexed_record_eligible rec
   value ids: if is ts_mapped_type then parent.indexed_type_refs else indexed_type_refs
   value type_reaches(indexed_type_graph, ids, indexed_type_scope)
 }
+in ts_parameter let indexed_parameter_type type.node
+in ts_index_signature let indexed_conversion {
+  key: first([] parameter.indexed_parameter_type), value: type.node,
+  readonly: contains([] modifier, "readonly"), optional: null
+}
+in ts_type_literal, ts_interface let indexed_conversion first([] member.indexed_conversion)
+in ts_type_literal, ts_interface let indexed_first_member first([] member.node)
+in ts_mapped_type let indexed_conversion {
+  key: type_parameter.constraint.style_type_unwrapped, value: type.node,
+  readonly: contains([] modifier, "readonly") || contains([] modifier, "+readonly"), optional: optional
+}
+in ts_type_reference let indexed_conversion {
+  key: first([] type_argument.node), value: last([] type_argument.node), readonly: false, optional: null
+}
+fn indexed_notation_replacement(source, owner, info) = {
+  value comments: overlapping(ts_comment, owner.offset, owner.end_offset)
+  value safe: all(comments, comment =>
+    info.key.offset <= comment.offset && comment.end_offset <= info.key.end_offset
+    || info.value != null && info.value.offset <= comment.offset && comment.end_offset <= info.value.end_offset)
+  value record: "Record<{info.key}, {info.value ?? 'any'}>"
+  value optional: if info.optional == "-?" then "Required<{record}>"
+    else if info.optional != null then "Partial<{record}>" else record
+  value result: if info.readonly then "Readonly<{optional}>" else optional
+  value if !safe || info.key == null
+    || owner is ts_interface && (owner.extends != null || owner.parent is ts_export && owner.parent.kind == "default")
+    || owner is ts_type_reference && (owner.name.reference_kind != null
+      || !(info.key is ts_type_keyword && contains(["string", "number", "symbol"], info.key.text)))
+    || owner is ts_mapped_type && (owner.name != null || contains([] owner.modifier, "-readonly")) then null
+    else if owner is ts_type_reference then "{{ [key: {info.key}]: {info.value} }}"
+    else if owner not ts_interface then result
+    else {
+      value slice(source, owner.offset, owner.indexed_first_member.offset)
+      re_replace /\s*\{\s*$/ ""
+      re_replace /^(declare\s+)?interface\b/ "${{1}}type"
+      then (header) "{header} = {result};"
+    }
+}
 in ts_type_literal rule consistent-indexed-object-style {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
+  let replacement indexed_notation_replacement(source, node, indexed_conversion)
+  fix if replacement != null as replacement
 }
 in ts_interface rule consistent-indexed-object-style:interface {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
+  let replacement indexed_notation_replacement(source, node, indexed_conversion)
+  fix if replacement != null as replacement
 }
 in ts_mapped_type rule consistent-indexed-object-style:mapped {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "record" && indexed_record_eligible
   warn "A record is preferred over an index signature."
+  let replacement indexed_notation_replacement(source, node, indexed_conversion)
+  fix if replacement != null as replacement
 }
 in ts_type_reference rule consistent-indexed-object-style:record {
   option mode ("record" | "index-signature") = "record" "Preferred indexed object notation."
   when mode == "index-signature" && name == "Record" && count(type_argument) == 2
   warn "An index signature is preferred over a record."
+  let replacement indexed_notation_replacement(source, node, indexed_conversion)
+  fix if replacement != null as replacement
 }
 
 in ts_type_literal let is_type_literal true
