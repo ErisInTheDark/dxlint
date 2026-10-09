@@ -10,17 +10,7 @@ use crate::config::{self, ast::Severity};
 mod text_hygiene;
 
 mod ts_naming;
-mod ts_type_constituents;
-mod ts_style_types;
-mod ts_style_classes;
-mod ts_arithmetic;
-mod ts_collection_methods;
 mod ts_core_rules;
-mod ts_deprecation;
-mod ts_enums;
-mod ts_jsx;
-mod ts_signatures;
-mod ts_optional_chains;
 
 const LANG: &str = r#"
 lang t "*.t"
