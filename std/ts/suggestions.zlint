@@ -2,6 +2,7 @@
 # practice, not likely bugs) on the native TypeScript layers.
 
 import .ts/expressions
+import .ts/suggestions/object-shorthand
 
 define {
 
@@ -415,33 +416,6 @@ in ts_method, ts_method_signature rule grouped-accessor-pairs {
   when group_info != null && (group_info.gap || mode == "getBeforeSet" && !group_info.getter_first || mode == "setBeforeGet" && group_info.getter_first)
   report at accessor_pair.offset
   warn if group_info.gap then "Accessor pair {group_info.former} and {accessor_pair.name} should be grouped." else "Expected {accessor_pair.name} to be before {group_info.former}."
-}
-
-in ts_property, ts_method rule object-shorthand {
-  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
-  option avoidQuotes boolean = false "keep string-literal keys in long form"
-  option ignoreConstructors boolean = false "ignore capitalised method names"
-  option methodsIgnorePattern string = "" "method names to ignore"
-  option avoidExplicitReturnArrows boolean = false "prefer methods to block-bodied arrows without lexical captures"
-  let shorthand_info object_shorthand_member
-  when shorthand_info != null && !shorthand_info.proto
-  let needs_longform shorthand_info.concise && (mode == "never" || shorthand_info.method && avoidQuotes && shorthand_info.quoted)
-  let needs_method !shorthand_info.concise && (mode == "always" || mode == "methods") && (shorthand_info.function || avoidExplicitReturnArrows && shorthand_info.arrow) && !(ignoreConstructors && shorthand_info.constructor) && !(avoidQuotes && shorthand_info.quoted) && !(methodsIgnorePattern != "" && shorthand_info.name != null && re_test(shorthand_info.name, methodsIgnorePattern))
-  let needs_property !shorthand_info.concise && (mode == "always" || mode == "properties") && !shorthand_info.computed && shorthand_info.redundant && !shorthand_info.function && !shorthand_info.annotated && !(avoidQuotes && shorthand_info.quoted)
-  when needs_longform || needs_method || needs_property
-  warn if needs_longform then
-    if shorthand_info.method then
-      if mode == "never" then "Expected longform method syntax." else "Expected longform method syntax for string literal keys."
-    else "Expected longform property syntax."
-  else if needs_method then "Expected method shorthand."
-  else "Expected property shorthand."
-}
-
-in ts_object rule object-shorthand:consistent {
-  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
-  when mode == "consistent" || mode == "consistent-as-needed"
-  when object_shorthand_consistency == "mixed" || mode == "consistent-as-needed" && object_shorthand_consistency == "redundant"
-  warn if object_shorthand_consistency == "mixed" then "Unexpected mix of shorthand and non-shorthand properties." else "Expected shorthand for all properties."
 }
 
 in ts_property, ts_pattern_property, ts_method, ts_class_property rule no-useless-computed-key {

@@ -1,0 +1,99 @@
+# Object member policy and source-preserving short/long syntax conversions.
+
+define {
+
+fn shorthand_modifiers(n) =
+  (if contains(n.modifier, "async") then "async " else "") (if contains(n.modifier, "*") then "*" else "")
+
+fn shorthand_parameter_open(n) = {
+  value type_end: last(n.type_parameter.nodes)
+  value first_parameter: first(n.parameter.nodes)
+  value start: type_end.end_offset ?? n.offset
+  value end: first_parameter.offset ?? n.body.offset
+  value overlapping(ts_open_paren, start, end)
+  find (token) token.paired_token.end <= n.body.offset
+}
+
+fn shorthand_header_token(n, open) = if count(n.type_parameter) == 0 then open else {
+  value first_type: first(n.type_parameter.nodes)
+  value overlapping(ts_open_angle, n.offset, first_type.offset)
+  first
+}
+
+fn shorthand_callable_tail(source, n) = {
+  value open: shorthand_parameter_open(n)
+  value first_parameter: first(n.parameter.nodes)
+  value header_token: shorthand_header_token(n, open)
+  value start: header_token.offset
+  value if n is ts_arrow then {
+    value header: if open != null then byte_slice(source, start, n.operator.offset)
+      else "(" first_parameter.text ")" byte_slice(source, first_parameter.end_offset, n.operator.offset)
+    value header
+    trim_end
+    then (parameters) parameters " " n.body.text
+  } else (header_token.token_neighbours.before.gap ?? "") byte_slice(source, start, n.end_offset)
+}
+
+fn shorthand_span_retains(comment, start, end) =
+  start != null && start <= comment.offset && comment.end_offset <= end
+
+fn shorthand_fix_allowed(n, info, longform, method) = {
+  value comments: overlapping(ts_comment, n.offset, n.end_offset)
+  value if longform then !info.method || all(comments, comment => n.key.offset <= comment.offset)
+  else if !method then count(comments) == 0
+  else {
+    value callable: n.value.unwrapped_node ?? n.value.node
+    value open: shorthand_parameter_open(callable)
+    value first_parameter: first(callable.parameter.nodes)
+    value header_token: shorthand_header_token(callable, open)
+    value start: header_token.offset ?? first_parameter.offset
+    value comments
+    all (comment) shorthand_span_retains(comment, n.key.offset, n.key.end_offset)
+      || (if callable is ts_arrow then
+        shorthand_span_retains(comment, start, callable.operator.offset)
+          || shorthand_span_retains(comment, callable.body.offset, callable.body.end_offset)
+        else shorthand_span_retains(comment, start, callable.end_offset))
+  }
+}
+
+fn shorthand_member_fix(source, n, info, longform, method) =
+  if longform then
+    if info.method then {
+      value suffix: byte_slice(source, n.key.end_offset, n.end_offset)
+      value n.key.text ": " (if contains(n.modifier, "async") then "async " else "") "function" (if contains(n.modifier, "*") then "*" else "") suffix
+    } else n.text ": " n.text
+  else if method then {
+    value callable: n.value.unwrapped_node ?? n.value.node
+    value tail: shorthand_callable_tail(source, callable)
+    value shorthand_modifiers(callable) n.key.text tail
+  } else n.value.text
+
+in ts_property, ts_method rule object-shorthand {
+  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
+  option avoidQuotes boolean = false "keep string-literal keys in long form"
+  option ignoreConstructors boolean = false "ignore capitalised method names"
+  option methodsIgnorePattern string = "" "method names to ignore"
+  option avoidExplicitReturnArrows boolean = false "prefer methods to block-bodied arrows without lexical captures"
+  let shorthand_info object_shorthand_member
+  when shorthand_info != null && !shorthand_info.proto
+  let needs_longform shorthand_info.concise && (mode == "never" || shorthand_info.method && avoidQuotes && shorthand_info.quoted)
+  let needs_method !shorthand_info.concise && (mode == "always" || mode == "methods") && (shorthand_info.function || avoidExplicitReturnArrows && shorthand_info.arrow) && !(ignoreConstructors && shorthand_info.constructor) && !(avoidQuotes && shorthand_info.quoted) && !(methodsIgnorePattern != "" && shorthand_info.name != null && re_test(shorthand_info.name, methodsIgnorePattern))
+  let needs_property !shorthand_info.concise && (mode == "always" || mode == "properties") && !shorthand_info.computed && shorthand_info.redundant && !shorthand_info.function && !shorthand_info.annotated && !(avoidQuotes && shorthand_info.quoted)
+  when needs_longform || needs_method || needs_property
+  fix at node if shorthand_fix_allowed(node, shorthand_info, needs_longform, needs_method) as shorthand_member_fix(source, node, shorthand_info, needs_longform, needs_method)
+  warn if needs_longform then
+    if shorthand_info.method then
+      if mode == "never" then "Expected longform method syntax." else "Expected longform method syntax for string literal keys."
+    else "Expected longform property syntax."
+  else if needs_method then "Expected method shorthand."
+  else "Expected property shorthand."
+}
+
+in ts_object rule object-shorthand:consistent {
+  option mode ("always" | "never" | "methods" | "properties" | "consistent" | "consistent-as-needed") = "always" "object shorthand policy"
+  when mode == "consistent" || mode == "consistent-as-needed"
+  when object_shorthand_consistency == "mixed" || mode == "consistent-as-needed" && object_shorthand_consistency == "redundant"
+  warn if object_shorthand_consistency == "mixed" then "Unexpected mix of shorthand and non-shorthand properties." else "Expected shorthand for all properties."
+}
+
+}
