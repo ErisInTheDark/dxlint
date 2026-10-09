@@ -1,11 +1,14 @@
 //! Generic syntax, tokens and gaps; policy lives in .zlint.
 
-use crate::expr::{facts::{Fact, FactFields}, Value};
+use crate::expr::{facts::{Fact, FactFields, Shape}, Value};
 use crate::native::ts::{facts::NativeFile, kinds, tokens};
 
 pub const FACTS: &[Fact] = &[
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::Record(&[
+            ("text", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar), ("spaced", Shape::Scalar),
+            ("line_break", Shape::Scalar), ("blank_lines", Shape::Scalar), ("blank_gaps", Shape::Scalar), ("comments", Shape::Scalar),
+        ]),
         name: "space_before",
         doc: "native layers: the gap between the token before this node and the node: `{ text, start, end, spaced, line_break, blank_lines, blank_gaps, comments }` (byte boundaries; `spaced`: whitespace outside comments; `blank_lines`: physical blank lines; `blank_gaps`: blank lines between tokens/comments, excluding comment interiors); null at the start of the file",
         get: |f, n| f.with_file(|file, n| gap_around(file, n, true), n),

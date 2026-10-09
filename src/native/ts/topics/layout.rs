@@ -1,6 +1,6 @@
 //! @stylistic spacing, punctuation and line breaks: lexical neighbours.
 
-use crate::expr::facts::{Fact, Link};
+use crate::expr::facts::{Fact, Link, Shape};
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::lexer::Token;
@@ -14,7 +14,12 @@ mod quotes;
 
 pub const FACTS: &[Fact] = &[
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::Record(&[
+            ("present", Shape::Scalar), ("offset", Shape::Scalar), ("end", Shape::Scalar),
+            ("redundant", Shape::Scalar), ("same_line", Shape::Scalar), ("hazard_before", Shape::Scalar),
+            ("hazard_after", Shape::Scalar), ("class_hazard", Shape::Scalar), ("class_field", Shape::Scalar),
+            ("one_line_block", Shape::Scalar), ("one_line_class", Shape::Scalar),
+        ]),
         name: "statement_semicolon",
         doc: "native semicolon-owning statements: {present,offset,end,redundant,same_line,hazard_before,hazard_after,class_hazard,class_field,one_line_block,one_line_class}; null for declarations owned elsewhere and for-header variables",
         get: |f, n| f.with_file(punctuation::statement_semicolon, n),
@@ -32,7 +37,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(quotes::property_quote_sites, n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::Record(&[
+            ("before", TOKEN_EDGE), ("after", TOKEN_EDGE), ("parent_start", Shape::Scalar),
+        ]),
         name: "token_neighbours",
         doc: "native layers: adjacent tokens as before/after records {text,start,end,gap,spaced,same_line,line_break}; gap retains comments, spaced counts whitespace outside comments, line_break includes comment line breaks; parent_start is the parent's byte offset",
         get: |f, n| f.with_file(token_neighbours, n),
@@ -44,6 +51,11 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),
     },
 ];
+
+const TOKEN_EDGE: Shape = Shape::Record(&[
+    ("text", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar), ("gap", Shape::Scalar),
+    ("spaced", Shape::Scalar), ("same_line", Shape::Scalar), ("line_break", Shape::Scalar),
+]);
 
 pub const LINKS: &[Link] = &[
     Link {

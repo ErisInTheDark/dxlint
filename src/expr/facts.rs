@@ -25,7 +25,7 @@ pub struct Fact {
 #[derive(Clone, Copy)]
 pub enum Shape {
     Scalar,
-    Record(&'static [&'static str]),
+    Record(&'static [(&'static str, Shape)]),
     List(&'static Shape),
 }
 
@@ -238,13 +238,13 @@ const CORE: &[Fact] = &[
         get: |f, n| opt(f.global_value(n), Value::from),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::List(&Shape::Scalar),
         name: "declaration_kinds",
         doc: "native layers: on a declaring identifier: the kinds of every declaration merged with it (`class` and `interface` of one name: `[\"class\", \"interface\"]`)",
         get: |f, n| opt(f.declaration_kinds(n), words),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::Record(&[("type", Shape::Scalar), ("value", Shape::Scalar)]),
         name: "literal_value",
         doc: "native layers: on a literal (also `-1`, `+1`, parenthesised): `{ type, value }` with the JavaScript type (`string`, `number`, `bigint`, `boolean`, `null`, `regex`) and the value as text (`-0` for negative zero); null otherwise",
         get: |f, n| opt(f.literal_value(n), |(t, v)| Value::record(vec![("type".into(), Value::from(t)), ("value".into(), Value::from(v))])),
@@ -275,9 +275,12 @@ const CORE: &[Fact] = &[
     },
     Fact {
         shape: Shape::Record(&[
-            "used", "exported", "silent", "def", "array_element", "array_target", "setter",
-            "before_used_param", "rest_sibling", "static_block", "using", "global", "action",
-            "only_type", "offset", "ignored_offset",
+            ("used", Shape::Scalar), ("exported", Shape::Scalar), ("silent", Shape::Scalar),
+            ("def", Shape::Scalar), ("array_element", Shape::Scalar), ("array_target", Shape::Scalar),
+            ("setter", Shape::Scalar), ("before_used_param", Shape::Scalar), ("rest_sibling", Shape::Scalar),
+            ("static_block", Shape::Scalar), ("using", Shape::Scalar), ("global", Shape::Scalar),
+            ("action", Shape::Scalar), ("only_type", Shape::Scalar), ("offset", Shape::Scalar),
+            ("ignored_offset", Shape::Scalar),
         ]),
         name: "unused_var",
         doc: "native layers: on a variable's first declaring identifier, no-unused-vars' view of it (eslint's in `.js`, typescript-eslint's in `.ts`): `used`, `exported`, `silent` (never reported), `def` (`variable`, `parameter`, `catch`: which ignore pattern applies), `array_element`, `array_target`, `setter`, `before_used_param` (\"after-used\" keeps it), `rest_sibling`, `static_block`, `using`, `global` (script top level), `action` (`defined` or `assigned a value`), `only_type`, `offset` (where to report) and `ignored_offset` (where \"marked as ignored but is used\" points); null elsewhere",
@@ -314,7 +317,7 @@ const CORE: &[Fact] = &[
         get: |f, n| opt(f.unexpected_multiline(n), |(at, kind)| Value::record(vec![("offset".into(), Value::from(at)), ("kind".into(), Value::from(kind))])),
     },
     Fact {
-        shape: Shape::List(&Shape::Record(&["offset", "arithmetic"])),
+        shape: Shape::List(&Shape::Record(&[("offset", Shape::Scalar), ("arithmetic", Shape::Scalar)])),
         name: "optional_chain_risks",
         doc: "native layers: the optional chains whose short-circuit `undefined` this node would trip on (eslint's no-unsafe-optional-chaining: called, destructured, spread, `in`, `extends`, `for of`...; also through `&&`, `||`, `??`, `?:`, `await`), as records `{ offset, arithmetic }` (`arithmetic` for `+`, `-`, `*`, ... that make `NaN`)",
         get: |f, n| {
@@ -327,7 +330,7 @@ const CORE: &[Fact] = &[
         },
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::List(&Shape::Record(&[("offset", Shape::Scalar), ("name", Shape::Scalar), ("member", Shape::Scalar)])),
         name: "self_assignments",
         doc: "native layers: on an assignment (`=`, `&&=`, `||=`, `??=`): what it assigns to itself, also inside destructuring (`[a, b] = [a, b]`), as records `{ offset, name, member }` (`member` for `a.b = a.b`)",
         get: |f, n| {
@@ -361,7 +364,7 @@ const CORE: &[Fact] = &[
         get: |f, n| opt(f.wrong_direction(n), Value::Bool),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::Record(&[("kind", Shape::Scalar), ("offset", Shape::Scalar), ("detail", Shape::Scalar)]),
         name: "constant_comparison",
         doc: "native layers: on a binary or logical expression: what eslint's no-constant-binary-expression finds, `{ kind, offset, detail }`: `constantShortCircuit` (detail `truthiness` / `nullishness`), `constantBinaryOperand` (detail: the other side, `left` / `right`), `alwaysNew`, `bothAlwaysNew`, at the operand it blames; null when nothing is constant",
         get: |f, n| {
@@ -497,7 +500,10 @@ const CORE: &[Fact] = &[
         get: |f, n| opt(f.unreachable_run_end(n), Value::from),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::List(&Shape::Record(&[
+            ("check", Shape::Scalar), ("kind", Shape::Scalar), ("data", Shape::List(&Shape::Scalar)),
+            ("offset", Shape::Scalar), ("end", Shape::Scalar),
+        ])),
         name: "regex_findings",
         doc: "native layers: on a regex literal, or a call of the global `RegExp` (aliases too) with a pattern known statically: what eslint's regex rules find, as records `{ check, kind, data, offset, end }`. `check`: `empty_class` (literals), `control` (data: `\\x1f, \\x1e`), `spaces` (kind: how many), `backref` (kind: `nested`, `forward`, `backward`, `disjunctive`, `intoNegativeLookaround`; data: backreference, group, ` and another group`), `misleading` (kind: `surrogatePairWithoutUFlag`, `surrogatePair`, `combiningClass`, `emojiModifier`, `regionalIndicatorSymbol`, `zwj`) and `misleading_escaped` (what remains with escapes allowed). `offset`/`end`: where it is written, or the pattern argument when the pattern is computed",
         get: |f, n| {
@@ -519,7 +525,7 @@ const CORE: &[Fact] = &[
         },
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::Record(&[("flags", Shape::Scalar), ("written", Shape::Scalar), ("offset", Shape::Scalar)]),
         name: "regex_pattern",
         doc: "native layers: on a regex site (see `regex_findings`): `{ flags, written, offset }`: its static flags (null when unknown), how the pattern is written (`regex`, `string`, `template` or `computed`) and where",
         get: |f, n| {
@@ -579,7 +585,7 @@ const CORE: &[Fact] = &[
         get: |f, n| f.with_file(|file, n| edge_token(file, n, true), n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::List(&Shape::Scalar),
         name: "token_texts",
         doc: "native layers: the node's code tokens' texts, in order (comments and spacing dropped); equal lists mean the same tokens",
         get: |f, n| f.with_file(|file, n| Value::list(file.tokens(n).into_iter().map(|t| Value::from(t.to_string())).collect()), n),

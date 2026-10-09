@@ -181,7 +181,9 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(empty_types::generated, n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: crate::expr::facts::Shape::Record(&[
+            ("name", crate::expr::facts::Shape::Scalar), ("offset", crate::expr::facts::Shape::Scalar),
+        ]),
         name: "missing_await",
         doc: "native async functions: no own await, awaited loop/using, thenable return or async yield",
         get: |f, n| f.with_file(promises::missing_await, n),
