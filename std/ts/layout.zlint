@@ -2,6 +2,7 @@
 # native TypeScript layers and token facts.
 
 import .ts/import-attributes
+import .ts/helpers
 
 define {
 
@@ -187,10 +188,9 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
 
 schema member_separator_options { delimiter?: "semi" | "comma" | "none"; requireLast?: boolean }
 schema member_separator_config { multiline?: member_separator_options; singleline?: member_separator_options }
-in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature let layout_member_token if contains([";", ","], token_neighbours.after.text) then token_neighbours.after else last_token
 in ts_interface, ts_type_literal let layout_last_member last(member.node)
 in ts_interface, ts_type_literal let layout_members_single position(opener.ts_open_brace.offset).js_line == position(end_offset).js_line
-in ts_interface, ts_type_literal let layout_last_member_inline position(layout_last_member.layout_member_token.end).js_line == position(end_offset).js_line
+in ts_interface, ts_type_literal let layout_last_member_inline position(layout_last_member.member_terminal_token.end).js_line == position(end_offset).js_line
 in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature rule member-delimiter-style {
   option delimiter "semi" | "comma" | "none" | null = null "default separator for legacy configurations"
   option multiline member_separator_options = {} "multiline member separators"
@@ -205,7 +205,7 @@ in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signa
   let member_delimiter member_policy.delimiter.nonempty ?? member_base.delimiter.nonempty ?? delimiter.nonempty ?? "semi"
   let member_require_last member_policy.requireLast.nonempty ?? member_base.requireLast.nonempty ?? !member_single
   let member_last offset == parent.layout_last_member.offset
-  let member_token layout_member_token
+  let member_token member_terminal_token
   let member_actual if member_token.text == ";" then "semi" else if member_token.text == "," then "comma" else "none"
   when member_actual != (if member_last && !member_require_last then "none" else member_delimiter)
   report at member_token.end
