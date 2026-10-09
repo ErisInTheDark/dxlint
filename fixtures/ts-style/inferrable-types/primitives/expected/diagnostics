@@ -1,0 +1,11 @@
+input.ts:10:17-10:23 no-inferrable-types#0
+input.ts:11:33-11:39 no-inferrable-types#0
+input.ts:1:16-1:22 no-inferrable-types#0
+input.ts:2:15-2:21 no-inferrable-types#0
+input.ts:3:16-3:23 no-inferrable-types#0
+input.ts:4:15-4:21 no-inferrable-types#0
+input.ts:5:15-5:21 no-inferrable-types#0
+input.ts:6:17-6:21 no-inferrable-types#0
+input.ts:7:16-7:22 no-inferrable-types#0
+input.ts:8:20-8:26 no-inferrable-types#0
+input.ts:9:15-9:24 no-inferrable-types#0

@@ -1,0 +1,4 @@
+input.ts:1:26-1:32 no-inferrable-types#0
+input.ts:2:27-2:33 no-inferrable-types#0
+input.ts:3:14-3:20 no-inferrable-types#0
+input.ts:4:30-4:36 no-inferrable-types#0

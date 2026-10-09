@@ -1,0 +1,1 @@
+let variable = 1; let inferred = 1; let other: number = f(); class C { public property = 1; readonly wide: number = 1; optional?: number = 1; constructor(public promoted: number = 1) {} } function f(parameter: number = 1) {}

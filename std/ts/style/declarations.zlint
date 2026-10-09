@@ -28,6 +28,10 @@ in inferrable_annotation rule no-inferrable-types {
   when no_inferrable_types_checked
   report at type.node
   warn "Type {inferred_annotation} trivially inferred from a {inferred_annotation} literal, remove type annotation."
+  let annotation_colon type.token_neighbours.before
+  let annotation_start if is ts_parameter && node.optional != null then node.optional.offset else annotation_colon.start
+  let annotation_comments overlapping(ts_comment, annotation_start, type.end_offset)
+  fix at { start: annotation_start, end: type.end_offset } if annotation_colon.text == ":" && count(annotation_comments) == 0 as ""
 }
 
 # `const x: Map<K, V> = new Map()`: the arguments belong on the constructor.

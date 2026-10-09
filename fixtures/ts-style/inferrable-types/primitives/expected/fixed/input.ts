@@ -1,0 +1,11 @@
+const integer = -10;
+const bigint = -BigInt?.(10);
+const boolean = !0;
+const string = `text`;
+const symbol = Symbol?.('a');
+const nullable = null;
+const pattern = /a/;
+const constructed = new RegExp('a');
+const absent = void value;
+const infinity = +Infinity;
+const before = "😀"; const café = 1;
