@@ -18,4 +18,6 @@ Every run replaces ignored `actual/diagnostics` and `actual/fixed/`, prints scen
 
 `actual/fixed-diagnostics` records reports from re-linting fixpoint text. Compare it by adding optional `expected/fixed-diagnostics` (an empty file asserts clean); bless updates it only when present. Lint targets follow the CLI's git/config ignores; project stubs remain available on disk.
 
+`actual/fix-preview/<relpath>` records one fix pass over original diagnostics for files with fixes. Optional `expected/fix-preview/<relpath>` compares that first pass, exposing conflicts hidden by the final fixpoint. Bless updates all preview files when the expected directory already exists; otherwise it adds only previews differing from fixpoint text.
+
 Keep `fixtures/.ignore`: its `expected/` and `actual/` exclusions also prevent generated TypeScript declarations becoming project globals. For roots outside `fixtures/`, provide equivalent `.ignore` entries.

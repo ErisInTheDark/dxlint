@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use super::{load_from_with, Output};
 use crate::config::source::Disk;
 use crate::engine::cache::{Cache, FILE_NAME};
-use crate::engine::Linter;
+use crate::engine::{apply_fixes, Linter};
 use crate::line_index::LineIndex;
 
 #[derive(Default, PartialEq, Eq)]
@@ -15,6 +15,7 @@ struct Actual {
     diagnostics: Vec<String>,
     fixed_diagnostics: Vec<String>,
     fixed: BTreeMap<PathBuf, String>,
+    fix_preview: BTreeMap<PathBuf, String>,
     /// Warm replay must preserve messages and atomic edits too.
     identity: Vec<Vec<u8>>,
 }
@@ -72,6 +73,9 @@ fn collect(linter: &Linter, files: &[PathBuf], cache: Option<&Cache>, warm: bool
         };
         actual.identity.push(serde_json::to_vec(&diagnostics).map_err(|e| e.to_string())?);
         actual.diagnostics.extend(reports(&name, &text, &diagnostics, &local));
+        if diagnostics.iter().any(|diagnostic| diagnostic.fix.is_some()) {
+            actual.fix_preview.insert(relative.to_path_buf(), apply_fixes(&text, &diagnostics).0);
+        }
         let fixed = linter.fix(file, &text);
         let remaining = linter.lint(file, &fixed.text);
         actual.fixed_diagnostics.extend(reports(&name, &fixed.text, &remaining, &local));
@@ -96,32 +100,42 @@ fn clear_owned(path: &Path) -> Result<(), String> {
     }
 }
 
-fn write_actual(root: &Path, actual: &Actual, bless: bool) -> Result<(), String> {
-    let actual_dir = root.join("actual");
-    clear_owned(&actual_dir)?;
-    fs::create_dir_all(actual_dir.join("fixed")).map_err(|e| e.to_string())?;
-    fs::write(actual_dir.join("diagnostics"), diagnostic_text(&actual.diagnostics)).map_err(|e| e.to_string())?;
-    fs::write(actual_dir.join("fixed-diagnostics"), diagnostic_text(&actual.fixed_diagnostics)).map_err(|e| e.to_string())?;
-    for (relative, text) in &actual.fixed {
-        let file = actual_dir.join("fixed").join(relative);
+fn write_outputs(root: &Path, files: &BTreeMap<PathBuf, String>) -> Result<(), String> {
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    for (relative, text) in files {
+        let file = root.join(relative);
         fs::create_dir_all(file.parent().expect("output parent")).map_err(|e| e.to_string())?;
         fs::write(file, text).map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+fn write_actual(root: &Path, actual: &Actual, bless: bool) -> Result<(), String> {
+    let actual_dir = root.join("actual");
+    clear_owned(&actual_dir)?;
+    write_outputs(&actual_dir.join("fixed"), &actual.fixed)?;
+    write_outputs(&actual_dir.join("fix-preview"), &actual.fix_preview)?;
+    fs::write(actual_dir.join("diagnostics"), diagnostic_text(&actual.diagnostics)).map_err(|e| e.to_string())?;
+    fs::write(actual_dir.join("fixed-diagnostics"), diagnostic_text(&actual.fixed_diagnostics)).map_err(|e| e.to_string())?;
     if bless {
         let expected = root.join("expected");
         if fs::symlink_metadata(&expected).is_ok_and(|meta| meta.file_type().is_symlink()) {
             return Err("refusing symlink expected directory".into());
         }
         clear_owned(&expected.join("fixed"))?;
-        fs::create_dir_all(expected.join("fixed")).map_err(|e| e.to_string())?;
+        write_outputs(&expected.join("fixed"), &actual.fixed)?;
         fs::copy(actual_dir.join("diagnostics"), expected.join("diagnostics")).map_err(|e| e.to_string())?;
         if expected.join("fixed-diagnostics").is_file() {
             fs::copy(actual_dir.join("fixed-diagnostics"), expected.join("fixed-diagnostics")).map_err(|e| e.to_string())?;
         }
-        for relative in actual.fixed.keys() {
-            let file = expected.join("fixed").join(relative);
-            fs::create_dir_all(file.parent().expect("output parent")).map_err(|e| e.to_string())?;
-            fs::copy(actual_dir.join("fixed").join(relative), file).map_err(|e| e.to_string())?;
+        let preview_dir = expected.join("fix-preview");
+        let opted_in = preview_dir.is_dir();
+        let previews: BTreeMap<_, _> = actual.fix_preview.iter().filter(|(relative, text)|
+            opted_in || actual.fixed.get(*relative) != Some(*text))
+            .map(|(relative, text)| (relative.clone(), text.clone())).collect();
+        clear_owned(&preview_dir)?;
+        if opted_in || !previews.is_empty() {
+            write_outputs(&preview_dir, &previews)?;
         }
     }
     Ok(())
@@ -204,6 +218,17 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
                 _ => {}
             }
         }
+        let preview_root = expected.join("fix-preview");
+        let mut previews = BTreeMap::new();
+        fixed_outputs(&preview_root, &preview_root, &mut previews)?;
+        for (relative, expected) in previews {
+            match actual.fix_preview.get(&relative) {
+                Some(actual) if expected != *actual =>
+                    differences.push(format!("fix-preview/{}:\n{}", relative.display(), difference(&expected, actual))),
+                None => differences.push(format!("fix-preview/{}: expected fix, input has no fixes", relative.display())),
+                _ => {}
+            }
+        }
         Ok(differences)
     })();
     if let Some(bytes) = original_cache { fs::write(marker, bytes).map_err(|e| format!("restore cache marker: {e}"))?; }
@@ -268,17 +293,37 @@ mod tests {
         assert_eq!(fs::read_to_string(project.0.join("input.t")).unwrap(), "a");
         assert_eq!(fs::read_to_string(project.0.join(FILE_NAME)).unwrap(), "cache marker");
         assert_eq!(fs::read_to_string(project.0.join("expected/fixed/input.t")).unwrap(), "b");
+        assert_eq!(fs::read_to_string(project.0.join("actual/fix-preview/input.t")).unwrap(), "b");
+        assert!(!project.0.join("expected/fix-preview").exists(), "bless added redundant preview expectations");
         let diagnostics = fs::read_to_string(project.0.join("expected/diagnostics")).unwrap();
         assert!(diagnostics.ends_with("probe#0 a\\nvalue\n"));
         assert!(fs::read_to_string(project.0.join("expected/fixed-diagnostics")).unwrap().ends_with("probe#1 b\n"));
         fs::write(project.0.join("actual/fixed/stale.t"), "stale").unwrap();
         assert!(scenario(&mut output, &project.0, false).unwrap().is_empty());
         assert!(!project.0.join("actual/fixed/stale.t").exists());
+        fs::create_dir(project.0.join("expected/fix-preview")).unwrap();
+        fs::write(project.0.join("expected/fix-preview/input.t"), "wrong").unwrap();
+        assert!(!scenario(&mut output, &project.0, false).unwrap().is_empty(), "preview mismatch was ignored");
+        fs::write(project.0.join("expected/fix-preview/stale.t"), "stale").unwrap();
+        assert!(scenario(&mut output, &project.0, true).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(project.0.join("expected/fix-preview/input.t")).unwrap(), "b");
+        assert!(!project.0.join("expected/fix-preview/stale.t").exists());
         fs::write(project.0.join("input.t"), "c").unwrap();
         assert!(scenario(&mut output, &project.0, true).unwrap().is_empty());
         assert!(!project.0.join("actual/fixed/input.t").exists());
         assert!(!project.0.join("expected/fixed/input.t").exists());
+        assert!(!project.0.join("actual/fix-preview/input.t").exists());
+        assert!(!project.0.join("expected/fix-preview/input.t").exists());
         assert_eq!(fs::read_to_string(project.0.join(FILE_NAME)).unwrap(), "cache marker");
+        fs::remove_dir(project.0.join("expected/fix-preview")).unwrap();
+        let actual = Actual {
+            fixed: BTreeMap::from([(PathBuf::from("input.t"), "c".into()), (PathBuf::from("same.t"), "z".into())]),
+            fix_preview: BTreeMap::from([(PathBuf::from("input.t"), "b".into()), (PathBuf::from("same.t"), "z".into())]),
+            ..Actual::default()
+        };
+        write_actual(&project.0, &actual, true).unwrap();
+        assert_eq!(fs::read_to_string(project.0.join("expected/fix-preview/input.t")).unwrap(), "b");
+        assert!(!project.0.join("expected/fix-preview/same.t").exists(), "bless added an unrelated redundant preview");
     }
 
     #[test]
