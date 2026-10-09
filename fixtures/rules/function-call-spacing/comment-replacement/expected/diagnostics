@@ -1,0 +1,3 @@
+a.ts:1:2-1:2 function-call-spacing#1
+a.ts:2:2-2:2 function-call-spacing#1
+a.ts:3:2-3:2 function-call-spacing#1
