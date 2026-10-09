@@ -7,6 +7,7 @@ use crate::native::ts::types::{Checker, Ty};
 
 pub const FACTS: &[Fact] = &[
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "type_relations",
         doc: "native expressions: operand, annotation and contextual type identity, shape and assignability; null when unresolved",
         get: |f, n| f.with_file(relations, n),

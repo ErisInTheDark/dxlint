@@ -7,26 +7,31 @@ use crate::native::ts::types::{LiteralValue, Ty, ValueDomains};
 
 pub const FACTS: &[Fact] = &[
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "access_resolution",
         doc: "native members and indexes: index-signature origin, optional declaration and evaluated value domains",
         get: |f, n| f.with_file(access_resolution, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "type_domains",
         doc: "native expressions: constrained value domains, type kind and union/intersection constituent domains",
         get: |f, n| f.with_file(domains, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "evaluated_type_domains",
         doc: "native expressions: value domains before optional-chain short-circuiting, retaining intrinsic member and return nullability",
         get: |f, n| f.with_file(evaluated_domains, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "predicate_call",
         doc: "native calls: asserted argument, assertion kind, target union and bidirectional assignability of a resolved predicate",
         get: |f, n| f.with_file(predicate, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "callable_return_domains",
         doc: "native expressions: constrained domains of every callable return, including locally inferred function bodies",
         get: |f, n| f.with_file(callable_returns, n),

@@ -14,26 +14,31 @@ mod quotes;
 
 pub const FACTS: &[Fact] = &[
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "statement_semicolon",
         doc: "native semicolon-owning statements: {present,offset,end,redundant,same_line,hazard_before,hazard_after,class_hazard,class_field,one_line_block,one_line_class}; null for declarations owned elsewhere and for-header variables",
         get: |f, n| f.with_file(punctuation::statement_semicolon, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "list_field",
         doc: "native comma: field of its containing syntax list (argument, parameter, type_argument, type_parameter, element, property, member, specifier, declaration, expression, extends, implements); null outside parser lists",
         get: |f, n| f.with_file(lists::list_field, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "property_quote_sites",
         doc: "native properties/signatures/enums and object/interface/type/enum groups: {group,quoted,numeric,redundant,redundant_number,keyword,name,offset}; computed keys, methods and shorthand object properties exempt",
         get: |f, n| f.with_file(quotes::property_quote_sites, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "token_neighbours",
         doc: "native layers: adjacent tokens as before/after records {text,start,end,gap,spaced,same_line,line_break}; gap retains comments, spaced counts whitespace outside comments, line_break includes comment line breaks; parent_start is the parent's byte offset",
         get: |f, n| f.with_file(token_neighbours, n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "trailing_comma_sites",
         doc: "native list owners: {kind,offset,trailing,multiline,allowed,tsx_single}; offset is comma or insertion point, multiline compares last item/comma with closing token",
         get: |f, n| f.with_file(lists::trailing_comma_sites, n),

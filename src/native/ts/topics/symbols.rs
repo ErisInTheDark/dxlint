@@ -10,7 +10,7 @@ use super::super::summary::{DeclKind, MemberKind};
 use super::super::types::{Checker, Ty};
 use super::typed::specifiers::file_gate;
 
-pub const FACTS: &[Fact] = &[Fact {
+pub const FACTS: &[Fact] = &[Fact { shape: Fact::SCALAR.shape,
     name: "symbol_metadata",
     doc: "native layers: resolved declaration and alias docs, kinds and provenance, plus the selected call signature",
     get: |f, n| f.with_file(metadata, n),

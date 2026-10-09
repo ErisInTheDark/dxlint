@@ -5,21 +5,25 @@ use crate::native::ts::{facts::NativeFile, kinds, tokens};
 
 pub const FACTS: &[Fact] = &[
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "space_before",
         doc: "native layers: the gap between the token before this node and the node: `{ text, start, end, spaced, line_break, blank_lines, blank_gaps, comments }` (byte boundaries; `spaced`: whitespace outside comments; `blank_lines`: physical blank lines; `blank_gaps`: blank lines between tokens/comments, excluding comment interiors); null at the start of the file",
         get: |f, n| f.with_file(|file, n| gap_around(file, n, true), n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "space_after",
         doc: "native layers: the gap between the node and the token after it, as `space_before`; null at the end of the file",
         get: |f, n| f.with_file(|file, n| gap_around(file, n, false), n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "previous_token",
         doc: "native layers: the layer of the token before this node (`ts_comma`, `ts_open_paren`, `ts_keyword`...; for a name or literal, the layer of its node), for `is` and `not`",
         get: |f, n| f.with_file(|file, n| neighbour(file, n, true), n),
     },
     Fact {
+        shape: Fact::SCALAR.shape,
         name: "next_token",
         doc: "native layers: the layer of the token after this node, as `previous_token`",
         get: |f, n| f.with_file(|file, n| neighbour(file, n, false), n),
