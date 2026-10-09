@@ -1,0 +1,4 @@
+a.js:1:8-1:16 one-var#0
+a.js:2:9-2:17 one-var#0
+a.js:4:12-4:20 one-var#0
+a.js:5:22-5:30 one-var#0

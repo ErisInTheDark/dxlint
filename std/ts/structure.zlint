@@ -3,6 +3,7 @@
 
 import .ts/parentheses
 import .ts/structure/padding
+import .ts/expression-fixes
 
 define {
 
@@ -133,6 +134,49 @@ in ts_parenthesized let structure_single_conditional expression is ts_conditiona
 @structure_mixed_operator_rule(no-mixed-operators:child, structure_operator_offset)
 @structure_mixed_operator_rule(no-mixed-operators:parent, parent.structure_operator_offset)
 
+fn structure_declaration_issue(message, fix) = if message == null then null else { message: message, fix: fix }
+fn structure_declaration_fix(source, edits) = if count(edits) == 0 then null else {
+  value start: first(edits).start
+  value end: last(edits).end
+  value region: byte_slice(source, start, end)
+  value { start: start, end: end, text: expression_fix_edits(region, start, edits) }
+}
+fn structure_declaration_join(n, source) = {
+  value before: n.kind.token_neighbours.before
+  value first: n.kind.first_token
+  value last: n.kind.last_token
+  value edits: [
+    { start: if before.text == ";" then before.start else before.end, end: before.end, text: "," },
+    { start: first.start, end: first.end, text: "" },
+    if first.start != last.start then { start: last.start, end: last.end, text: "" } else null,
+  ]
+  value edits
+  compact
+  ordered: sort_by (edit) edit.start
+  value structure_declaration_fix(source, ordered)
+}
+fn structure_declaration_split_edit(declarator, source, kind, exported) = {
+  value comma: declarator.token_neighbours.after
+  value next: declarator.next.offset
+  value comments: overlapping(ts_comment, comma.end, next)
+  value after: first(comments).offset ?? next
+  value prefix: (if exported then "export " else "") kind
+  value separated: position(after).js_line > position(comma.end).js_line || count(comments) > 0
+  value {
+    start: comma.start,
+    end: if after != comma.end && separated then next else comma.end,
+    text: if after == comma.end then "; " prefix " "
+      else if separated then ";" byte_slice(source, comma.end, next) prefix " "
+      else "; " prefix,
+  }
+}
+fn structure_declaration_split(declarations, kind, exported, source) = {
+  value declarations
+  filter (declarator) declarator.token_neighbours.after.text == ","
+  edits: map (declarator) structure_declaration_split_edit(declarator, source, kind, exported)
+  value structure_declaration_fix(source, edits)
+}
+
 in ts_variable_declaration rule one-var {
   option options ("always" | "never" | "consecutive" | { separateRequires?: boolean; var?: "always" | "never" | "consecutive"; let?: "always" | "never" | "consecutive"; const?: "always" | "never" | "consecutive"; using?: "always" | "never" | "consecutive"; awaitUsing?: "always" | "never" | "consecutive"; initialized?: "always" | "never" | "consecutive"; uninitialized?: "always" | "never" | "consecutive" })[] = [] "declaration grouping policy"
   let info declaration_groups
@@ -153,18 +197,23 @@ in ts_variable_declaration rule one-var {
   let consecutive previous_counts != null && !((counts.requires + previous_counts.requires > 0) && (total + previous_counts.initialized + previous_counts.uninitialized > counts.requires + previous_counts.requires))
   let consecutive_message if !consecutive then null else if init_mode == "consecutive" && uninit_mode == "consecutive" then "Combine this with the previous '" kind "' statement." else if init_mode == "consecutive" && counts.initialized > 0 && previous_counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else if uninit_mode == "consecutive" && counts.uninitialized > 0 && previous_counts.uninitialized > 0 then "Combine this with the previous '" kind "' statement with uninitialized variables." else null
   let split_message if total < 2 || info.for_init then null else if init_mode == "never" && uninit_mode == "never" then "Split '" kind "' declarations into multiple statements." else if init_mode == "never" && counts.initialized > 0 then "Split initialized '" kind "' declarations into multiple statements." else if uninit_mode == "never" && counts.uninitialized > 0 then "Split uninitialized '" kind "' declarations into multiple statements." else null
+  let join_fix if previous_counts != null then structure_declaration_join(node, source) else null
+  let split_parent if parent is ts_export then parent.parent.node else parent.node
+  let declaration_exported parent is ts_export
+  let split_fix if split_message != null && split_parent is (ts_program, ts_block, ts_case, ts_static_block) then structure_declaration_split(declaration.nodes, kind, declaration_exported, source) else null
   each issue in {
     value [
-    if init_mode == "always" && settings.separateRequires && counts.requires > 0 && counts.requires < total then "Split requires to be separated into a single block." else null,
-    consecutive_message,
-    if always_failed && both_always then "Combine this with the previous '" kind "' statement." else null,
-    if always_failed && !both_always && init_mode == "always" && counts.initialized > 0 then "Combine this with the previous '" kind "' statement with initialized variables." else null,
-    if always_failed && !both_always && uninit_mode == "always" && counts.uninitialized > 0 && !info.for_binding then "Combine this with the previous '" kind "' statement with uninitialized variables." else null,
-    split_message
+    if init_mode == "always" && settings.separateRequires && counts.requires > 0 && counts.requires < total then { message: "Split requires to be separated into a single block.", fix: null } else null,
+    structure_declaration_issue(consecutive_message, join_fix),
+    if always_failed && both_always then { message: "Combine this with the previous '" kind "' statement.", fix: join_fix } else null,
+    if always_failed && !both_always && init_mode == "always" && counts.initialized > 0 then { message: "Combine this with the previous '" kind "' statement with initialized variables.", fix: join_fix } else null,
+    if always_failed && !both_always && uninit_mode == "always" && counts.uninitialized > 0 && !info.for_binding then { message: "Combine this with the previous '" kind "' statement with uninitialized variables.", fix: join_fix } else null,
+    structure_declaration_issue(split_message, split_fix)
   ]
     compact
   }
-  warn "{issue}"
+  fix at issue.fix if issue.fix != null as issue.fix.text
+  warn "{issue.message}"
 }
 
 group structure_template ts_template, ts_template_type

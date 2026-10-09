@@ -1,0 +1,2 @@
+import .ts
+rule one-var { set options [{ initialized: "never", uninitialized: "consecutive" }] }
