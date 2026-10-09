@@ -433,6 +433,24 @@ in ts_program rule indent-binary-ops {
   warn "Expected indentation of " len(info.expected) " " (if mode == "tab" then "tab" else "space") (if len(info.expected) == 1 then "" else "s")
 }
 
+fn structure_operator_gap(gap, keep) = if keep || trim(gap) != "" then gap else re_replace(gap, /\r\n|[\n\r\u{2028}\u{2029}]/, "")
+fn structure_operator_fix(before, after, next, policy, operator, before_comment, after_comment) =
+  if before.line_break != after.line_break && policy != "none" && before.comments && after.comments then null
+  else {
+    value start: if policy == "after" && before_comment is ts_block_comment then before_comment.end_offset else before.start
+    value end: if policy == "before" && after_comment is ts_block_comment then after_comment.offset else after.end
+    value before_text: byte_slice(before.text, start - before.start)
+    value after_text: byte_slice(after.text, 0, end - after.start)
+    value swap: before.line_break != after.line_break && policy != "none"
+    value left: if swap then after_text else structure_operator_gap(before_text, policy == "before")
+    value right: if swap then before_text else structure_operator_gap(after_text, policy == "after")
+    value if left == before_text && right == after_text then null else {
+      start: start,
+      end: end,
+      text: left operator right (if right == "" && contains(["+", "-"], operator) && next.text == operator then " " else ""),
+    }
+  }
+
 in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, ts_question, ts_colon, ts_punctuator rule operator-linebreak {
   option mode "before" | "after" | "none" | null = null "operator side of a line break"
   option overrides { [key: string]: "before" | "after" | "none" | "ignore" } = {} "operator-specific placement"
@@ -445,6 +463,10 @@ in ts_binary.operator, ts_logical.operator, ts_assignment.operator, ts_equals, t
   let policy if placement != "ignore" && parent is ts_type_alias && re_test(next_text, /^[|&]/) then "after" else placement
   when policy != "ignore" && (space_before.line_break || space_after.line_break)
   when space_before.line_break && space_after.line_break || policy == "before" && !space_before.line_break || policy == "after" && !space_after.line_break || policy == "none"
+  let operator_before_comment { value overlapping(ts_comment, space_before.start, offset); last }
+  let operator_after_comment { value overlapping(ts_comment, end_offset, space_after.end); first }
+  let operator_fix structure_operator_fix(space_before, space_after, token_neighbours.after, policy, text, operator_before_comment, operator_after_comment)
+  fix at operator_fix if operator_fix != null as operator_fix.text
   warn if space_before.line_break && space_after.line_break then "Bad line breaking before and after '{text}'." else if policy == "before" then "'{text}' should be placed at the beginning of the line." else if policy == "after" then "'{text}' should be placed at the end of the line." else "There should be no line break before or after '{text}'."
 }
 

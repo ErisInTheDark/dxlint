@@ -1,0 +1,5 @@
+a.js:10:3-10:4 operator-linebreak#1
+a.js:1:14-1:15 operator-linebreak#1
+a.js:3:3-3:4 operator-linebreak#1
+a.js:5:14-5:15 operator-linebreak#1
+a.js:8:1-8:2 operator-linebreak#0
