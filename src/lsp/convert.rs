@@ -39,7 +39,7 @@ pub fn diagnostic(text: &str, lines: &LineIndex, d: &Diagnostic) -> Value {
         "message": d.message,
     });
     if let Some(fix) = &d.fix {
-        v["data"] = json!({ "fix": text_edits(text, lines, fix) });
+        v["data"] = json!({ "fix": text_edits(text, lines, &fix.edits) });
     }
     v
 }

@@ -10,6 +10,19 @@ pub struct Edit {
     pub text: String,
 }
 
+/// A rewrite reserves its declared range even when its edits are smaller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fix {
+    pub range: std::ops::Range<usize>,
+    pub edits: Vec<Edit>,
+}
+
+impl Serialize for Fix {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.edits.serialize(serializer)
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Diagnostic {
     pub rule: String,
@@ -20,7 +33,7 @@ pub struct Diagnostic {
     pub start: usize,
     pub end: usize,
     /// All edits apply together or not at all.
-    pub fix: Option<Vec<Edit>>,
+    pub fix: Option<Fix>,
 }
 
 /// Rule name for problems the engine itself reports.
@@ -52,7 +65,7 @@ mod tests {
     use super::*;
 
     fn at(start: usize, message: &str, fix: Option<&str>) -> Diagnostic {
-        let fix = fix.map(|text| vec![Edit { start, end: start + 1, text: text.into() }]);
+        let fix = fix.map(|text| Fix { range: start..start + 1, edits: vec![Edit { start, end: start + 1, text: text.into() }] });
         Diagnostic { rule: "r".into(), severity: Severity::Warn, message: message.into(), message_index: Some(0), start, end: start + 1, fix }
     }
 
@@ -60,7 +73,7 @@ mod tests {
     fn only_identical_reports_merge() {
         let mut diags = vec![at(3, "a", Some("x")), at(0, "a", None), at(3, "a", Some("y")), at(3, "a", Some("x")), at(3, "b", Some("x"))];
         Diagnostic::dedup(&mut diags);
-        let kept: Vec<_> = diags.iter().map(|d| (d.start, d.message.as_str(), d.fix.as_ref().map(|f| f[0].text.as_str()))).collect();
+        let kept: Vec<_> = diags.iter().map(|d| (d.start, d.message.as_str(), d.fix.as_ref().map(|f| f.edits[0].text.as_str()))).collect();
         // Same place and message but another fix is another problem (one
         // per line of a JSX text, say); the same fix again is not.
         assert_eq!(kept, vec![(0, "a", None), (3, "a", Some("x")), (3, "a", Some("y")), (3, "b", Some("x"))]);

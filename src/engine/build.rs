@@ -1072,7 +1072,7 @@ mod demand_tests {
             assert_eq!(diagnostic.start, diagnostic.end);
             let name = if diagnostic.start == starts[0] { "value" } else { "later" };
             assert!(source[diagnostic.start..].starts_with(name));
-            assert_eq!(diagnostic.fix.as_deref(), Some(&[super::super::Edit {
+            assert_eq!(diagnostic.fix.as_ref().map(|fix| fix.edits.as_slice()), Some(&[super::super::Edit {
                 start: diagnostic.start, end: diagnostic.start + name.len(), text: "renamed".into(),
             }][..]));
         }

@@ -15,23 +15,20 @@ pub struct Fixed {
     pub remaining: Vec<Diagnostic>,
 }
 
-/// Applies fixes in covering-range order; touching ranges and gaps within
+/// Applies fixes in declared-range order; touching ranges and gaps within
 /// atomic fixes are reserved for the next pass.
 pub fn apply_fixes(text: &str, diags: &[Diagnostic]) -> (String, usize) {
-    let mut fixes: Vec<_> = diags.iter().filter_map(|d| d.fix.as_ref()).filter(|f| !f.is_empty()).map(|fix| {
-        let range = fix.iter().fold((usize::MAX, 0), |(start, end), edit| (start.min(edit.start), end.max(edit.end)));
-        (range, fix)
-    }).collect();
-    fixes.sort_by_key(|(range, _)| *range);
+    let mut fixes: Vec<_> = diags.iter().filter_map(|d| d.fix.as_ref()).filter(|f| !f.edits.is_empty()).collect();
+    fixes.sort_by_key(|fix| (fix.range.start, fix.range.end));
     let mut chosen: Vec<&Edit> = Vec::new();
     let mut last_end = None;
     let mut applied = 0;
-    for ((start, end), fix) in fixes {
-        if last_end.is_some_and(|previous| previous >= start) {
+    for fix in fixes {
+        if last_end.is_some_and(|previous| previous >= fix.range.start) {
             continue;
         }
-        chosen.extend(fix.iter());
-        last_end = Some(end);
+        chosen.extend(fix.edits.iter());
+        last_end = Some(fix.range.end);
         applied += 1;
     }
     chosen.sort_by_key(|e| (e.start, e.end));
@@ -92,6 +89,7 @@ impl Linter {
 mod tests {
     use super::*;
     use crate::config::ast::Severity;
+    use crate::engine::diagnostic::Fix;
 
     fn fix(start: usize, end: usize, text: &str) -> Diagnostic {
         Diagnostic {
@@ -101,8 +99,21 @@ mod tests {
             message_index: Some(0),
             start,
             end,
-            fix: Some(vec![Edit { start, end, text: text.into() }]),
+            fix: Some(Fix { range: start..end, edits: vec![Edit { start, end, text: text.into() }] }),
         }
+    }
+
+    #[test]
+    fn declared_rewrite_range_wins_over_a_nested_minimal_edit() {
+        let linter = crate::engine::tests::linter(r#"
+            in .t match outer /a/ inner:/b/ /c/ {
+                rule outer warn "outer" fix as "abX"
+            }
+            in outer.inner rule inner warn "inner" fix as "B"
+        "#);
+        let diagnostics = linter.lint(Path::new("/root/file.t"), "abc");
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(apply_fixes("abc", &diagnostics), ("abX".into(), 1));
     }
 
     #[test]
@@ -125,8 +136,9 @@ mod tests {
     #[test]
     fn an_atomic_fix_reserves_the_gaps_between_its_edits() {
         let mut grouped = fix(5, 6, "F");
-        if let Some(edits) = &mut grouped.fix {
-            edits.push(Edit { start: 0, end: 1, text: "A".into() });
+        if let Some(fix) = &mut grouped.fix {
+            fix.range.start = 0;
+            fix.edits.push(Edit { start: 0, end: 1, text: "A".into() });
         }
         let (out, n) = apply_fixes("abcdefgh", &[grouped, fix(2, 3, "C"), fix(7, 8, "H")]);
         assert_eq!((out.as_str(), n), ("AbcdeFgH", 2));

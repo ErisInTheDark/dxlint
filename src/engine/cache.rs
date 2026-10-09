@@ -18,13 +18,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use super::{Diagnostic, Edit, Linter};
+use super::{Diagnostic, Edit, Fix, Linter};
 use crate::config::ast::Severity;
 use crate::native::ts::reads::{hash_bytes, Dep, Reads};
 
 pub const FILE_NAME: &str = ".zlintcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC2";
+const MAGIC: &[u8; 4] = b"ZLC3";
 
 /// Deps and groups, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -401,9 +401,11 @@ impl Writer<'_> {
         self.var(d.end as u64);
         match &d.fix {
             None => self.var(0),
-            Some(edits) => {
-                self.var(edits.len() as u64 + 1);
-                for e in edits {
+            Some(fix) => {
+                self.var(fix.edits.len() as u64 + 1);
+                self.var(fix.range.start as u64);
+                self.var(fix.range.end as u64);
+                for e in &fix.edits {
                     self.var(e.start as u64);
                     self.var(e.end as u64);
                     self.str(&e.text);
@@ -536,12 +538,38 @@ impl<'a> Reader<'a> {
         let end = self.var()? as usize;
         let fix = match self.var()? {
             0 => None,
-            n => Some(
-                (1..n)
+            n => {
+                let range = self.var()? as usize..self.var()? as usize;
+                let edits = (1..n)
                     .map(|_| Some(Edit { start: self.var()? as usize, end: self.var()? as usize, text: self.str()? }))
-                    .collect::<Option<Vec<_>>>()?,
-            ),
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Fix { range, edits })
+            }
         };
         Some(Diagnostic { rule, severity, message, message_index, start, end, fix })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cached_fixes_keep_declared_range_priority() {
+        let root = Path::new("/root");
+        let linter = crate::engine::tests::linter(r#"
+            in .t match outer /a/ inner:/b/ /c/ {
+                rule outer warn "outer" fix as "abX"
+            }
+            in outer.inner rule inner warn "inner" fix as "B"
+        "#);
+        let diagnostics = linter.lint(&root.join("file.t"), "abc");
+        let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
+        for diagnostic in &diagnostics {
+            writer.diag(diagnostic);
+        }
+        let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
+        let cached: Vec<_> = (0..diagnostics.len()).map(|_| reader.diag().expect("cached diagnostic")).collect();
+        assert_eq!(crate::engine::apply_fixes("abc", &cached), ("abX".into(), 1));
     }
 }

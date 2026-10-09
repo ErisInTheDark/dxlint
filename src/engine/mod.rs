@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use build::{build, build_for_lint, Built};
-pub use diagnostic::{Diagnostic, Edit, ENGINE_RULE};
+pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
 pub use profile::Profile;
 
@@ -596,7 +596,7 @@ impl Linter {
                     };
                     let started = self.profile.as_ref().map(|_| std::time::Instant::now());
                     for d in self.apply_each(&self.rules[fi], &ctx) {
-                        if let Some([edit]) = d.fix.as_deref() {
+                        if let Some([edit]) = d.fix.as_ref().map(|fix| fix.edits.as_slice()) {
                             record_reindent(&mut reindented[fi].borrow_mut(), run.text, run.lines, edit);
                         }
                         out.push(d);
@@ -705,14 +705,14 @@ impl Linter {
                     if want == ctx.source[from..to] {
                         return None;
                     }
-                    Some(fix::minimal_edit(ctx.source, from, to, &want))
+                    Some(Fix { range: from..to, edits: vec![fix::minimal_edit(ctx.source, from, to, &want)] })
                 }
                 Err(e) => return Some(failed(e)),
             },
             _ => None,
         };
         let (start, end) = match (f.report, &fix) {
-            (Report::Change, Some(edit)) => (edit.start, edit.end),
+            (Report::Change, Some(fix)) => (fix.edits[0].start, fix.edits[0].end),
             (Report::End, _) => (end, end),
             _ => (start, end),
         };
@@ -751,7 +751,6 @@ impl Linter {
             }
             None => (start, end),
         };
-        let fix = fix.map(|edit| vec![edit]);
         let (message, message_index) = match &f.message {
             Some(m) => match f.message_plan.as_ref().expect("indexed message").eval(m, ctx) {
                 Ok((v, index)) => (v.text().into_owned(), Some(index)),

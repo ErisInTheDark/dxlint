@@ -86,7 +86,7 @@ impl<'a> JsonDiag<'a> {
             end_line: end_line + 1,
             end_col: end_col + 1,
             fixable: diagnostic.fix.is_some(),
-            fix: diagnostic.fix.as_deref().map(|edits| JsonFix { edits }),
+            fix: diagnostic.fix.as_ref().map(|fix| JsonFix { edits: &fix.edits }),
         }
     }
 }
@@ -327,7 +327,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::Edit;
+    use crate::engine::{Edit, Fix};
 
     #[test]
     fn json_preserves_every_edit_of_an_atomic_fix() {
@@ -339,10 +339,10 @@ mod tests {
             message_index: Some(0),
             start: 3,
             end: source.len(),
-            fix: Some(vec![
+            fix: Some(Fix { range: 0..source.len(), edits: vec![
                 Edit { start: 0, end: 2, text: "E".into() },
                 Edit { start: 4, end: 4, text: "!".into() },
-            ]),
+            ] }),
         };
         let json = serde_json::to_value(JsonDiag::new("test", source, &LineIndex::new(source), &diagnostic)).unwrap();
         let edits = json["fix"]["edits"].as_array().expect("fix edits");
