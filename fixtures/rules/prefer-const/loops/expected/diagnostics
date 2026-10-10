@@ -1,0 +1,5 @@
+file.js:1:10-1:10 prefer-const#0
+file.js:2:10-2:10 prefer-const#0
+file.js:3:11-3:11 prefer-const#0
+file.js:3:14-3:14 prefer-const#0
+file.js:6:24-6:24 prefer-const#0

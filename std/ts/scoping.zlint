@@ -126,6 +126,25 @@ in ts_arrow rule array-callback-return:concise {
   warn "{callback.method}() expects no useless return value from {callback.name}."
 }
 
+fn scoping_const_declaration(n) = {
+  value n
+  walk (current) if current is ts_variable_declaration then null else current.parent.node
+  last
+}
+in ts_variable_declaration let scoping_const_fix {
+  value owner: node
+  value bindings: {
+    value declaration.nodes
+    flat_map (item) overlapping(ts_identifier, item.name.offset, item.name.end_offset)
+    filter (item) item.declaration.node == item && item.declaration_kind == "let" && scoping_const_declaration(item) == owner
+  }
+  value {
+    eligible: kind == "let" && count(bindings) > 0
+      && (is (ts_for_in.left, ts_for_of.left) || all(declaration.nodes, item => item.init != null))
+      && all(bindings, item => item.scoping_const_binding != null && item.scoping_const_binding.all),
+    before: any(bindings, item => item.scoping_const_binding.before)
+  }
+}
 in ts_program.binding_declarations rule prefer-const {
   option destructuring "any" | "all" = "any"
   option ignoreReadBeforeAssign boolean = false
@@ -134,6 +153,10 @@ in ts_program.binding_declarations rule prefer-const {
   when destructuring != "all" || binding.all && !(ignoreReadBeforeAssign && binding.all_before)
   report at binding.offset
   warn "'{text}' is never reassigned. Use 'const' instead."
+  let variable scoping_const_declaration(node)
+  # Reserve the declaration so another first-pass edit cannot invalidate const.
+  fix at variable if variable.scoping_const_fix.eligible && !(ignoreReadBeforeAssign && variable.scoping_const_fix.before) as
+    byte_slice(variable.text, 0, variable.kind.offset - variable.offset) "const" byte_slice(variable.text, variable.kind.end_offset - variable.offset)
 }
 
 in ts_function rule func-names {
