@@ -73,6 +73,11 @@ in ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_function, ts_arr
 in ts_empty, ts_semicolon rule no-extra-semi {
   when is ts_empty && parent not (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while, ts_if, ts_labeled, ts_with)
     || is ts_semicolon && parent is ts_class
+  let semi_directive next is ts_expression_statement && next.expression is ts_string
+    && (parent is ts_program || parent is ts_block && parent.parent is (ts_function, ts_arrow, ts_method))
+  let semi_fix_start token_neighbours.before.start.nonempty ?? offset
+  let semi_fix_end token_neighbours.after.end.nonempty ?? end_offset
+  fix at { start: semi_fix_start, end: semi_fix_end } if !semi_directive as byte_slice(source, semi_fix_start, offset) byte_slice(source, end_offset, semi_fix_end)
   warn "Unnecessary semicolon."
 }
 
@@ -86,6 +91,9 @@ in ts_semicolon rule semi-style {
   when layout_semi_header || layout_semi_statement
   let semi_at_end style == "last" || layout_semi_header
   when if semi_at_end then space_before.line_break else !(parent.layout_semi_last.nonempty ?? false) && space_after.line_break
+  let semi_fix_start token_neighbours.before.end.nonempty ?? offset
+  let semi_fix_end token_neighbours.after.start.nonempty ?? end_offset
+  fix at { start: semi_fix_start, end: semi_fix_end } if { value overlapping(ts_comment, semi_fix_start, semi_fix_end); count } == 0 as if semi_at_end then ";\n" else "\n;"
   warn if semi_at_end then "Expected this semicolon to be at the end of the previous line." else "Expected this semicolon to be at the beginning of the next line."
 }
 
