@@ -1,0 +1,3 @@
+import .ts
+rule jsx-props-style:singleline { set max 1 }
+rule jsx-props-style:multiline
