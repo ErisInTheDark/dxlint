@@ -1,0 +1,5 @@
+import .ts
+rule generator-star-spacing
+rule generator-star-spacing:anonymous { set before false; set after true }
+rule generator-star-spacing:method { set before true; set after true }
+rule generator-star-spacing:shorthand { set before false; set after false }

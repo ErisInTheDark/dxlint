@@ -30,6 +30,7 @@ in ts_method let generator_star_shorthand parent is ts_object
   each star_before in [true, false]
   when if star_before then previous_token != null && (parent not ts_method || offset != token_neighbours.parent_start) else next_token != null
   when ((if star_before then star_before_space else star_after_space) != "") != (if star_before then before else after)
+  fix at { start: if star_before then offset - byte_len(star_before_space) else end_offset, end: if star_before then offset else end_offset + byte_len(star_after_space) } as if (if star_before then before else after) then " " else ""
   warn if star_before then (if star_before_space != "" then "Unexpected space before *." else "Missing space before *.") else if star_after_space != "" then "Unexpected space after *." else "Missing space after *."
 }
 

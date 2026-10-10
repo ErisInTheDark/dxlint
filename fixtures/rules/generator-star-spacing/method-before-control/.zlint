@@ -1,0 +1,2 @@
+import .ts
+rule generator-star-spacing { set before true; set after true }

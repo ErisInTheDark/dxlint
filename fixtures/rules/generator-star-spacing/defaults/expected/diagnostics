@@ -1,0 +1,7 @@
+a.ts:1:9-1:10 generator-star-spacing:named#1
+a.ts:2:19-2:20 generator-star-spacing:anonymous#1
+a.ts:2:19-2:20 generator-star-spacing:anonymous#2
+a.ts:3:17-3:18 generator-star-spacing:method#1
+a.ts:3:17-3:18 generator-star-spacing:method#2
+a.ts:3:26-3:27 generator-star-spacing:method#2
+a.ts:4:13-4:14 generator-star-spacing:shorthand#2
