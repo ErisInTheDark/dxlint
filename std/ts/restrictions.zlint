@@ -570,8 +570,9 @@ in ts_export_specifier {
 }
 in ts_class let restriction_name_declaration parent is (ts_program, ts_block, ts_export)
 in ts_member let restriction_name_mutation parent not ts_update && !(parent is ts_unary && parent.operator == "delete")
+in ts_identifier let restriction_identifier_name text
+in ts_private_name let restriction_identifier_name re_replace(text, /^#*/, "")
 in ts_identifier, ts_private_name {
-  let restriction_identifier_name re_replace(text, /^#*/, "")
   let restriction_name_external contains(["readonly", "writable"], global)
   let restriction_name_attributes is ts_property.key && parent.restriction_import_options_key == true
   let restriction_name_pattern parent.restriction_name_pattern == true
