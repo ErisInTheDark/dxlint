@@ -12,6 +12,7 @@ use super::summary::{sig, type_syn, DeclKind, Sig, TParam, TypeSyn};
 use super::types::{Callable, Checker, Env, ResolvedPredicate, StructProperty, Ty};
 
 mod contextual;
+mod bindings;
 mod literals;
 
 fn prim_flag(p: &str) -> &'static str {
@@ -358,36 +359,9 @@ impl<'t> NativeFile<'t> {
                 Ty::Unknown
             }
             "var" | "let" | "const" | "using" => {
-                if !s.is(owner, K::Declarator) {
-                    return Ty::Unknown;
-                }
-                if let Some(t) = s.get(owner, F::Type) {
-                    return self.annotation(t);
-                }
-                match s.get(owner, F::Init) {
-                    // `let x = []` evolves with what is pushed into it.
-                    Some(init) if s.is(init, K::Array) && s.all(init, F::Element).next().is_none() => Ty::Unknown,
-                    Some(init) => {
-                        let t = self.type_of(init);
-                        if kind == "const" {
-                            t
-                        } else {
-                            t.widen()
-                        }
-                    }
-                    None => Ty::Unknown,
-                }
+                self.binding_type(decl, kind)
             }
-            "parameter" => {
-                if !s.is(owner, K::Param) {
-                    return Ty::Unknown;
-                }
-                if let Some(t) = s.get(owner, F::Type) {
-                    let t = self.annotation(t);
-                    return if s.get(owner, F::Optional).is_some() { t.or_undefined() } else { t };
-                }
-                self.contextual_param(owner)
-            }
+            "parameter" => self.binding_type(decl, kind),
             _ => Ty::Unknown,
         }
     }
@@ -744,6 +718,8 @@ impl<'t> NativeFile<'t> {
                 result
             }
             K::Await => ck.awaited(&inner(F::Arg)),
+            K::ImportCall => super::summary::import_specifier(s, id)
+                .map_or(Ty::Unknown, |specifier| ck.import_type(&specifier, &self.env_at(id))),
             K::Conditional => {
                 let (a, b) = (inner(F::Consequent), inner(F::Alternate));
                 if a.is_unknown() || b.is_unknown() {

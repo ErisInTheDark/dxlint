@@ -1,0 +1,6 @@
+import .ts
+in ts_call.argument rule binding-type {
+  when contains(type_flags, "number") && { value type_flags.nonempty ?? []; has_only_flags(["number", "union", "literal"]) }
+  warn "number binding"
+}
+rule binding-type

@@ -1,0 +1,6 @@
+a.ts:10:10-10:16 binding-type#0 number binding
+a.ts:12:10-12:18 binding-type#0 number binding
+a.ts:14:10-14:22 binding-type#0 number binding
+a.ts:16:10-16:25 binding-type#0 number binding
+a.ts:5:10-5:17 binding-type#0 number binding
+a.ts:7:10-7:16 binding-type#0 number binding

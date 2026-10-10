@@ -173,6 +173,7 @@ pub enum Init {
     Binary(Box<str>, Box<Init>, Box<Init>),
     Member(Box<Init>, Box<str>),
     Await(Box<Init>),
+    Import(Box<str>),
     Path(Box<[Box<str>]>),
     /// A widened primitive initializer domain or an explicit asserted type.
     Type(TypeSyn),
@@ -586,6 +587,17 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
     }
 }
 
+/// Dynamic imports only resolve source-stated string specifiers.
+pub(super) fn import_specifier(v: &impl View, id: u32) -> Option<String> {
+    let mut argument = v.get(id, F::Arg)?;
+    while v.is(argument, K::Paren) { argument = v.get(argument, F::Expr)?; }
+    match v.kind(argument) {
+        Some(K::String) => super::regex::cook(v.text(argument)),
+        Some(K::Template) if v.all(argument, F::Expr).is_empty() => super::regex::cook(v.text(argument)),
+        _ => None,
+    }
+}
+
 fn init(v: &impl View, id: u32) -> Init {
     let targs = |n| v.all(n, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect::<Vec<_>>();
     let arguments = |n| v.all(n, F::Arg).into_iter().map(|argument| {
@@ -627,6 +639,7 @@ fn init(v: &impl View, id: u32) -> Init {
         }
         Some(K::Paren | K::NonNull | K::Satisfies) => v.get(id, F::Expr).map_or(Init::Other, |e| init(v, e)),
         Some(K::Await) => v.get(id, F::Arg).map_or(Init::Other, |e| Init::Await(Box::new(init(v, e)))),
+        Some(K::ImportCall) => import_specifier(v, id).map_or(Init::Other, |specifier| Init::Import(specifier.into())),
         Some(K::As | K::TypeAssertion) => {
             v.get(id, F::Type).map_or(Init::Other, |t| Init::Type(type_syn(v, t)))
         }

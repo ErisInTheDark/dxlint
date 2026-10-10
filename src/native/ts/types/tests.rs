@@ -26,6 +26,126 @@ fn reference(name: &str, args: Vec<Ty>, checker: &Checker<'_>) -> Ty {
 }
 
 #[test]
+fn annotated_bindings_share_their_type_query_owner() {
+    let mut failures = Vec::new();
+    for annotation in ["{ m(): number }", "() => number", "{ m(): void }", "{ value: number }", "Alias"] {
+        let source = format!("type Alias = {{ m(): number }}; declare const value: {annotation}; type Query = /*@*/typeof value; void /*@*/value;");
+        crate::engine::tests::with_native_file(&source, |file, nodes| {
+            let query = file.type_of(nodes[0]);
+            let value = file.type_of(nodes[1]);
+            if query.is_opaque() || !query.same_identity(&value) { failures.push((annotation, query, value)); }
+        });
+    }
+    assert!(failures.is_empty(), "binding/query owners differ: {failures:?}");
+}
+
+#[test]
+fn binding_patterns_project_values_without_inventing_rest_or_computed_keys() {
+    let mut failures = Vec::new();
+    for (source, expected) in [
+        ("declare const input: { value: number }; const { value } = input; void /*@*/value;", Some("number")),
+        ("declare const input: { outer: { value: string } }; const { outer: { value: renamed } } = input; void /*@*/renamed;", Some("string")),
+        ("declare const input: [number, string]; const [, second] = input; void /*@*/second;", Some("string")),
+        ("declare const input: { value?: number }; const { value = 0 } = input; void /*@*/value;", Some("number")),
+        ("declare const input: { value?: number }; const { value: renamed = 0 } = input; void /*@*/renamed;", Some("number")),
+        ("declare const input: { value: string }; const { value = 0 } = input; void /*@*/value;", Some("string")),
+        ("declare const input: { value: number }; const { ['value']: renamed } = input; void /*@*/renamed;", Some("number")),
+        ("function f({ value }: { value: string }) { void /*@*/value; }", Some("string")),
+        ("const f: (input: { value: number }) => void = ({ value }) => { void /*@*/value; };", Some("number")),
+        ("declare const input: { value: number }; const { ...rest } = input; void /*@*/rest;", None),
+        ("declare const input: { value: number }; declare const key: string; const { [key]: value } = input; void /*@*/value;", None),
+        ("declare const input: unknown; const { value = 0 } = input; void /*@*/value;", None),
+        ("const input = []; void /*@*/input;", None),
+    ] {
+        crate::engine::tests::with_native_file(source, |file, nodes| {
+            let ty = file.type_of(nodes[0]);
+            let correct = expected.map_or_else(|| ty.is_opaque(), |kind| file.typing().checker.equivalent(&ty, &Ty::Prim(kind)) == Some(true));
+            if !correct { failures.push((source, ty)); }
+        });
+    }
+    assert!(failures.is_empty(), "binding projections lost: {failures:?}");
+    crate::engine::tests::with_native_file("declare const input: { value: null | undefined }; const { value = 0 } = input; void /*@*/value;", |file, nodes| {
+        let ty = file.type_of(nodes[0]);
+        assert_eq!(file.typing().checker.equivalent(&ty, &Ty::union(vec![Ty::Null, Ty::Lit("0".into(), "number")])), Some(true), "{ty:?}");
+    });
+}
+
+#[test]
+fn dynamic_import_values_and_imported_initializers_share_module_types() {
+    use crate::native::ts::{facts::NativeFile, kinds::Kind, syntax::Syntax};
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/dynamic-import-owner");
+    let source = "import { Loader } from './loader'; const direct = await import('./value'); const template = await import(`./value`); const escaped = await import('./\\x76alue'); const parenthesised = await import(('./value')); const { value: renamed } = await import('./value'); const indirect = new Loader().pending; const unsupported = import(name); void direct; void template; void escaped; void parenthesised; void renamed; void indirect; void unsupported;";
+    let inputs = [
+        ("tsconfig.json", r#"{"compilerOptions":{"lib":["fixture"],"types":[]}}"#),
+        ("node_modules/typescript/lib/lib.fixture.d.ts", "interface Promise<T> { then(callback: (value: T) => unknown): unknown }"),
+        ("main.ts", source),
+        ("value.ts", "export const value: number = 1;"),
+        ("loader.ts", "export class Loader { pending = import('./value'); }"),
+    ];
+    let buffers: Vec<_> = inputs.iter().map(|(name, text)| {
+        let path = dir.join(name);
+        reads::set_buffer(&path, text);
+        Buffer(path)
+    }).collect();
+    let front = crate::engine::tests::native_front();
+    let parsed = crate::native::ts::parse(source, false).unwrap();
+    let tree = crate::grammar::Tree::from_native(parsed.nodes, parsed.root);
+    let project = Project::default();
+    let path = dir.join("main.ts");
+    let file = NativeFile::new(Syntax::new(&tree, source, &front), &path, &project);
+    let checker = &file.typing().checker;
+    let mut failures = Vec::new();
+    for node in tree.order.iter().copied().filter(|&node| file.syntax.is(node, Kind::Ident) && file.syntax.parent(node).is_some_and(|owner| file.syntax.is(owner, Kind::Unary))) {
+        let text = file.syntax.text(node);
+        let value = file.type_of(node);
+        let ty = match text {
+            "renamed" => value,
+            "indirect" => checker.member(&checker.awaited(&value), "value"),
+            "unsupported" => { assert!(value.is_opaque(), "{value:?}"); continue; }
+            _ => checker.member(&value, "value"),
+        };
+        if checker.equivalent(&ty, &Ty::Prim("number")) != Some(true) { failures.push((text, ty)); }
+    }
+    assert!(failures.is_empty(), "dynamic module domains lost: {failures:?}");
+    drop(buffers);
+}
+
+#[test]
+fn ambient_dynamic_imports_respect_synthetic_default_policy_and_real_exports() {
+    let mut failures = Vec::new();
+    for (policy, enabled) in [("", true), (",\"allowSyntheticDefaultImports\":true", true), (",\"allowSyntheticDefaultImports\":false", false)] {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("target/dynamic-import-interop-{}", policy.len()));
+        let config = format!("{{\"compilerOptions\":{{\"lib\":[\"fixture\"],\"types\":[]{policy}}}}}");
+        let inputs = [
+            ("tsconfig.json", config.as_str()),
+            ("node_modules/typescript/lib/lib.fixture.d.ts", "interface Promise<T> { then(callback: (value: T) => unknown): unknown } declare module 'ambient' { export const value: number; } declare module 'actual' { const actual: { value: string }; export default actual; } declare module 'marked' { export const __esModule: true; export const value: number; } declare module 'assigned' { const assigned: { value: boolean }; export=assigned; }"),
+            ("value.ts", "export const value: number = 1;"),
+        ];
+        let _buffers: Vec<_> = inputs.iter().map(|(name, text)| {
+            let path = dir.join(name);
+            reads::set_buffer(&path, text);
+            Buffer(path)
+        }).collect();
+        let source = "export {};";
+        let project = Project::default();
+        let parsed = crate::native::ts::parse(source, false).unwrap();
+        let (id, summary) = project.summary_for(&dir.join("main.ts"), source, &Raw { src: source, nodes: &parsed.nodes }, parsed.root);
+        let checker = Checker::new(&project, id, summary);
+        let env = Env::file(id);
+        for (specifier, expected) in [("ambient", enabled.then_some("number")), ("actual", Some("string")), ("assigned", Some("boolean")), ("marked", None), ("./value", None)] {
+            let module = checker.awaited(&checker.import_type(specifier, &env));
+            if specifier == "ambient" {
+                assert_eq!(checker.equivalent(&checker.member(&module, "value"), &Ty::Prim("number")), Some(true));
+            }
+            let default = checker.member(&module, "default");
+            let correct = expected.map_or_else(|| default.is_opaque(), |kind| checker.equivalent(&checker.member(&default, "value"), &Ty::Prim(kind)) == Some(true));
+            if !correct { failures.push((policy, specifier, default)); }
+        }
+    }
+    assert!(failures.is_empty(), "dynamic default export policy lost: {failures:?}");
+}
+
+#[test]
 fn import_aliases_preserve_namespace_and_generic_class_types() {
     let source = "namespace N { export class Box<T> { value: T; } } import Space = N; import Box = N.Box; type Direct = /*@*/N.Box<number>; type Through = /*@*/Space.Box<number>; type Alias = /*@*/Box<number>;";
     crate::engine::tests::with_native_file(source, |file, nodes| {

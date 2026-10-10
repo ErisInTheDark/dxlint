@@ -4,6 +4,22 @@ use super::{Checker, Env, Member, Ty};
 use crate::native::ts::summary::Init;
 
 impl Checker<'_> {
+    pub(crate) fn import_type(&self, specifier: &str, env: &Env) -> Ty {
+        let Some(module) = self.project.resolve(env.file, specifier) else { return Ty::Unknown };
+        let namespace = Ty::Module(super::ModRefKey(module));
+        // Ambient CommonJS declarations may expose their namespace as a
+        // synthetic default. TypeScript 6 enables this unless explicitly off.
+        let namespace = if matches!(module, crate::native::ts::modules::ModRef::Ambient(..))
+            && self.project.compiler_flag(env.file, "allowSyntheticDefaultImports").unwrap_or(true)
+            && self.project.export(module, "default").is_empty()
+            && self.project.export(module, "__esModule").is_empty() {
+                Ty::Inter(vec![namespace.clone(), Ty::Struct(vec![super::StructProperty {
+                    name: "default".into(), ty: namespace, origin: None,
+                }].into())])
+            } else { namespace };
+        self.global_named("Promise", vec![namespace])
+    }
+
     pub(crate) fn binary_type(&self, op: Option<&str>, left: impl FnOnce() -> Ty, right: impl FnOnce() -> Ty) -> Ty {
         match op {
             Some("==" | "!=" | "===" | "!==" | "<" | ">" | "<=" | ">=" | "instanceof" | "in") => Ty::Prim("boolean"),
@@ -51,6 +67,7 @@ impl Checker<'_> {
                 let t = self.init_type(inner, env);
                 self.awaited(&t)
             }
+            Init::Import(specifier) => self.import_type(specifier, env),
             Init::Path(path) if path.first().is_some_and(|p| &**p == "this") => {
                 let t = env.this.as_deref().cloned().unwrap_or(Ty::Unknown);
                 path[1..].iter().fold(t, |t, seg| self.member(&t, seg))

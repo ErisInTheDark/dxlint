@@ -156,7 +156,7 @@ impl NativeFile<'_> {
         self.arguments_at(value, true, bound).map_or(Ty::Unknown, |pairs| Ty::union(pairs.into_iter().map(|(_, receiver)| receiver).collect()))
     }
 
-    fn expected_type(&self, node: u32, bound: bool) -> Ty {
+    pub(super) fn expected_type(&self, node: u32, bound: bool) -> Ty {
         if bound { self.constrained_type_of(node) } else { self.type_of(node) }
     }
 
@@ -188,26 +188,6 @@ impl NativeFile<'_> {
             Some(Some(index)) => self.contextual_element(&target, index + offset),
             Some(None) => self.ck().indexed_type(&target, &Ty::Prim("number")),
             None => Ty::Unknown,
-        }
-    }
-
-    fn pattern_type(&self, node: u32, bound: bool) -> Ty {
-        let s = &self.syntax;
-        if let Some(annotation) = s.get(node, F::Type) { return self.expected_type(annotation, bound) }
-        let Some(owner) = s.parent(node) else { return Ty::Unknown };
-        match (s.kind(owner), s.field(node)) {
-            (Some(K::Declarator | K::Param), Some(F::Name)) =>
-                s.get(owner, F::Type).map_or(Ty::Unknown, |annotation| self.expected_type(annotation, bound)),
-            (Some(K::AssignPattern), Some(F::Left)) => self.pattern_type(owner, bound),
-            (Some(K::PatternProp), Some(F::Value)) => {
-                let Some(pattern) = s.parent(owner) else { return Ty::Unknown };
-                super::super::statics::property_name(s, owner).map_or(Ty::Unknown, |name| self.ck().member(&self.pattern_type(pattern, bound), &name))
-            }
-            (Some(K::ArrayPattern), Some(F::Element)) => {
-                let index = s.all(owner, F::Element).position(|element| element == node).unwrap_or(0);
-                self.contextual_element(&self.pattern_type(owner, bound), index)
-            }
-            _ => Ty::Unknown,
         }
     }
 
@@ -388,7 +368,7 @@ impl NativeFile<'_> {
         })
     }
 
-    fn contextual_element(&self, ty: &Ty, index: usize) -> Ty {
+    pub(super) fn contextual_element(&self, ty: &Ty, index: usize) -> Ty {
         match ty {
             Ty::Tuple(tuple) => tuple.at(index),
             Ty::Union(parts) | Ty::Inter(parts) => Ty::union(parts.iter().map(|part| self.contextual_element(part, index)).collect()),

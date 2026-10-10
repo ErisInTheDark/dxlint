@@ -1,0 +1,12 @@
+declare function take<T>(value: T): void;
+declare const method: { m(): number };
+take<typeof method>(method);
+declare const callback: () => number;
+take<typeof callback>(callback);
+type Alias = { m(): number };
+declare const alias: Alias;
+take<typeof alias>(alias);
+declare const field: { value: number };
+take<typeof field>(field);
+declare const voidMethod: { m(): void };
+take<typeof voidMethod>(voidMethod);
