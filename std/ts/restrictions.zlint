@@ -133,6 +133,7 @@ in ts_identifier {
 }
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
   @restriction_import_options
+  when len(paths) > 0
   @restriction_import_info
   @each entry in paths
   when info != null && entry.name == info.source && entry.importNames == null && entry.allowImportNames == null && !(entry.allowTypeImports && info.all_type)
@@ -140,6 +141,7 @@ in ts_import, ts_export, ts_import_equals rule no-restricted-imports {
 }
 in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:names {
   @restriction_import_options
+  when len(paths) > 0
   @restriction_import_info
   when info.item && info != null
   @each entry in paths
@@ -149,6 +151,7 @@ in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export
 }
 in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
   @restriction_import_options
+  when len(patterns) > 0
   @restriction_import_info
   when info != null
   @each entry in patterns
@@ -157,6 +160,7 @@ in ts_import, ts_export, ts_import_equals rule no-restricted-imports:patterns {
 }
 in ts_import_specifier, ts_import.default_import, ts_import.namespace, ts_export_specifier, ts_export rule no-restricted-imports:pattern-names {
   @restriction_import_options
+  when len(patterns) > 0
   @restriction_import_info
   when info.item && info != null
   @each entry in patterns
