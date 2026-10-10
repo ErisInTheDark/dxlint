@@ -1,0 +1,11 @@
+(/foo/).test(value);
+(/foo/ig).test(value);
+(/[/\\]/u).source;
+(/foo/)["source"];
+(/foo/)?.test(value);
+/* before */ (/foo/) /* after */ .test(value);
+(/foo/).test(value);
+((/foo/))["source"];
+(/foo/ /* keep */).test(value);
+/foo/;
+obj[/foo/];

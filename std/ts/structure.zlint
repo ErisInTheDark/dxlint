@@ -529,7 +529,8 @@ in ts_program rule unicode-bom {
 }
 
 in ts_regex rule wrap-regex {
-  when is ts_member.object
+  when is (ts_member.object, ts_index.object)
+  fix as "(" text ")"
   warn "Wrap the regexp literal in parens to disambiguate the slash."
 }
 
