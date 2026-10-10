@@ -347,6 +347,14 @@ in ts_jsx_opening let jsx_closing_bracket_location_enabled true
   let expected_column if fallback then jsx_indent(parent.jsx_line_prefix) + 1 else aligned_column
   when parent.jsx_closing_bracket_location_enabled
   when !(if fallback then expected_column == here.js_column else aligned)
+  let anchor if last_prop != null then last_prop.end_offset else parent.name.end_offset
+  let trailing_comment { value overlapping(ts_comment, anchor, offset); last }
+  let same_line contains(["after-tag", "after-props"], placement)
+  let indent_prefix if placement == "props-aligned" then last_prop.jsx_line_prefix else parent.jsx_line_prefix
+  let indentation { value pattern: "^" jsx_space_regex() "*"; value re_find(indent_prefix, pattern) } ?? ""
+  let padding if expected_column != null then expected_column - 1 - utf16_len(indentation) else 0
+  let closing_text if is ts_punctuator then "/>" else ">"
+  fix at {start: if !same_line && trailing_comment != null then trailing_comment.end_offset else anchor, end: parent.end_offset} if !(placement == "after-tag" && parent.type_argument != null) as if same_line then "{if placement == 'after-tag' then ' ' else ''}{closing_text}" else "\n{indentation}{if padding > 1 then repeat(' ', padding) else ''}{closing_text}"
   report at node
   warn "The closing bracket must be {if placement == 'after-tag' then 'placed after the opening tag' else if placement == 'after-props' then 'placed after the last prop' else if placement == 'props-aligned' then 'aligned with the last prop' else if placement == 'tag-aligned' then 'aligned with the opening tag' else 'aligned with the line containing the opening tag'}{if expected_column != null then ' (expected column ' expected_column (if last_prop != null && last_line == here.js_line then ' on the next line)' else ')') else ''}"
 }

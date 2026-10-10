@@ -1,0 +1,2 @@
+import .ts
+rule jsx-closing-bracket-location
