@@ -88,6 +88,15 @@ in ts_node rule jsx-one-expression-per-line {
   when parent.jsx_one_expression_per_line_enabled
   when !(mode == "single-child" && parent.jsx_child_single || mode == "single-line" && parent.jsx_child_single_line_allowed)
   when if mode == "single-line" && parent.jsx_child_one_group then single_group_wrong else first_wrong || last_wrong
+  let single_group mode == "single-line" && parent.jsx_child_one_group
+  let leading if single_group then index == first(parent.jsx_child_rows).index && first_line == opening_line else jsx_child_previous_row != null && (jsx_child_group_contains(jsx_child_previous_row, first_line) || jsx_child_group_contains(jsx_child_previous_row, last_line)) || first_line == opening_line || last_line == opening_line
+  let trailing if single_group then index == last(parent.jsx_child_rows).index && last_line == closing_line else first_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, first_line)) || last_line == closing_line && !(jsx_child_next_row != null && jsx_child_group_contains(jsx_child_next_row, last_line))
+  let leading_space starts_with(text, " ") || previous is ts_jsx_text && ends_with(previous.text, " ")
+  let trailing_space ends_with(text, " ") || next is ts_jsx_text && starts_with(next.text, " ")
+  let space_expression "{{' '}}"
+  let leading_text if leading_space && leading then "\n{space_expression}" else ""
+  let trailing_text if trailing_space && trailing then "{space_expression}\n" else ""
+  fix at {start: if single_group && !leading then end_offset else offset, end: if single_group && !trailing then offset else end_offset} as if single_group then "{if leading then '\n' else ''}{if leading && trailing then text else ''}{if trailing then '\n' else ''}" else "{leading_text}{if leading then '\n' else ''}{re_replace(text, /(^ +| +$)/, '')}{if trailing then '\n' else ''}{trailing_text}"
   report at node
   warn "`{jsx_child_descriptor}` must be placed on a new line"
 }
