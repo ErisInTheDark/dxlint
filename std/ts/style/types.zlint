@@ -82,6 +82,7 @@ in ts_type_reference, ts_type_operator rule array-type:readonly {
 in ts_type_reference rule no-wrapper-object-types {
   when re_test(name, /^(String|Number|Boolean|Object|Symbol|BigInt)$/) && parent not ts_template_type && name.reference_kind == null
   warn "Prefer using the primitive `{lower(name)}` as a type name, rather than the upper-cased `{name}`."
+  fix at name.node if !(is ts_class.implements || is ts_interface.extends) as lower(name)
 }
 
 in ts_non_null rule no-non-null-assertion {

@@ -1,0 +1,5 @@
+input.ts:1:20-1:26 no-wrapper-object-types#0
+input.ts:2:21-2:27 no-wrapper-object-types#0
+input.ts:2:37-2:43 no-wrapper-object-types#0
+input.ts:3:24-3:30 no-wrapper-object-types#0
+input.ts:4:25-4:32 no-wrapper-object-types#0
