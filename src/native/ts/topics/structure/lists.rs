@@ -10,6 +10,15 @@ struct Edge<'a> {
     text: &'a str,
 }
 
+#[derive(Clone, Copy)]
+struct Pair<'a> {
+    before: Edge<'a>,
+    after: Edge<'a>,
+    spaced: bool,
+    broken: bool,
+    comments: bool,
+}
+
 struct Edges<'a> {
     source: &'a str,
     tokens: &'a Lexed,
@@ -53,21 +62,22 @@ impl<'a> Edges<'a> {
         }
     }
 
-    fn pair(&self, before: &Edge, after: &Edge) -> Value<'static> {
+    fn pair(&self, before: &Edge<'a>, after: &Edge<'a>) -> Pair<'a> {
         let mut at = before.end;
         let mut spaced = false;
-        for comment in self.comments(before.end, after.start) {
+        let comments = self.comments(before.end, after.start);
+        for comment in comments {
             spaced |= self.source[at..comment.start as usize].chars().any(char::is_whitespace);
             at = comment.end as usize;
         }
         spaced |= self.source[at..after.start].chars().any(char::is_whitespace);
-        Value::record(vec![
-            ("offset".into(), Value::from(before.end)),
-            ("prev".into(), Value::text_copy(before.text)),
-            ("next".into(), Value::text_copy(after.text)),
-            ("spaced".into(), Value::Bool(spaced)),
-            ("broken".into(), Value::Bool(broken(&self.source[before.end..after.start]))),
-        ])
+        Pair {
+            before: *before,
+            after: *after,
+            spaced,
+            broken: broken(&self.source[before.end..after.start]),
+            comments: !comments.is_empty(),
+        }
     }
 }
 
@@ -141,30 +151,32 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
         let mut spacing = vec![edges.pair(&left, &first_edge)];
         if first_edge.start != right.start { spacing.push(edges.pair(&last_edge, &right)); }
         let mut wrapping = Vec::new();
-        let after_open = edges.first(left.end, first_item_start, false).or_else(|| {
-            items.first().and_then(|&item| edges.first(s.tree.node(s.unparen(item)).start as usize, s.tree.node(item).end as usize, false))
-        }).unwrap_or(right);
-        wrapping.push(edges.pair(&left, &after_open));
-        let mut previous = left.end;
-        let mut previous_edge = left;
-        for (index, &item) in items.iter().enumerate() {
-            let inner = s.unparen(item);
-            let item_node = s.tree.node(inner);
-            let Some(first_token) = edges.first(item_node.start as usize, item_node.end as usize, false) else { previous = s.tree.node(item).end as usize; continue };
-            if index != 0 || after_open.start != first_token.start {
-                let before = edges.code(previous, first_token.start).iter().rev().map(|token| edges.token(token)).find(|token| token.text != "(").unwrap_or(previous_edge);
-                wrapping.push(edges.pair(&before, &first_token));
+        if items.is_empty() {
+            wrapping.extend_from_slice(&spacing);
+        } else {
+            let after_open = edges.first(left.end, first_item_start, false).or_else(|| {
+                items.first().and_then(|&item| edges.first(s.tree.node(s.unparen(item)).start as usize, s.tree.node(item).end as usize, false))
+            }).unwrap_or(right);
+            wrapping.push(edges.pair(&left, &after_open));
+            let mut previous = left.end;
+            let mut previous_edge = left;
+            for (index, &item) in items.iter().enumerate() {
+                let inner = s.unparen(item);
+                let item_node = s.tree.node(inner);
+                let Some(first_token) = edges.first(item_node.start as usize, item_node.end as usize, false) else { previous = s.tree.node(item).end as usize; continue };
+                if index != 0 || after_open.start != first_token.start {
+                    let before = edges.code(previous, first_token.start).iter().rev().map(|token| edges.token(token)).find(|token| token.text != "(").unwrap_or(previous_edge);
+                    wrapping.push(edges.pair(&before, &first_token));
+                }
+                previous = s.tree.node(item).end as usize;
+                if let Some(edge) = edges.last(s.tree.node(item).start as usize, previous, false) { previous_edge = edge; }
             }
-            previous = s.tree.node(item).end as usize;
-            if let Some(edge) = edges.last(s.tree.node(item).start as usize, previous, false) { previous_edge = edge; }
+            let last_plain = edges.last(last.unwrap_or(left.end), right.start, false).or_else(|| {
+                items.last().and_then(|&item| edges.last(s.tree.node(item).start as usize, s.tree.node(item).end as usize, false))
+            }).unwrap_or(left);
+            wrapping.push(edges.pair(&last_plain, &right));
         }
-        let last_plain = edges.last(last.unwrap_or(left.end), right.start, false).or_else(|| {
-            items.last().and_then(|&item| edges.last(s.tree.node(item).start as usize, s.tree.node(item).end as usize, false))
-        }).unwrap_or(left);
-        wrapping.push(edges.pair(&last_plain, &right));
-        let empty_wrapping = if first_edge.start == right.start { vec![edges.pair(&left, &right)] }
-            else { vec![edges.pair(&left, &first_edge), edges.pair(&last_edge, &right)] };
-        let common = vec![
+        let common = [
             ("kind".into(), Value::from(kind)),
             ("brackets".into(), Value::from(brackets)),
             ("count".into(), Value::from(items.len())),
@@ -173,11 +185,19 @@ pub(super) fn sites(file: &NativeFile, node: u32) -> Value<'static> {
             ("first_broken".into(), Value::Bool(first.is_some_and(|at| broken(&s.src[left.end..at])))),
             ("empty_comments".into(), Value::Bool(first_edge.start != right.start)),
         ];
-        for (mode, pairs) in [("spacing", spacing), ("wrapping", wrapping), ("empty_wrapping", empty_wrapping)] {
+        for (mode, pairs) in [("spacing", spacing), (if items.is_empty() { "empty_wrapping" } else { "wrapping" }, wrapping)] {
             for pair in pairs {
-                let Value::Record(fields) = pair else { continue };
-                let mut fields = fields.to_vec();
-                fields.extend(common.clone());
+                let mut fields = Vec::with_capacity(common.len() + 8);
+                fields.extend([
+                    ("offset".into(), Value::from(pair.before.end)),
+                    ("end".into(), Value::from(pair.after.start)),
+                    ("comments".into(), Value::Bool(pair.comments)),
+                    ("prev".into(), Value::text_copy(pair.before.text)),
+                    ("next".into(), Value::text_copy(pair.after.text)),
+                    ("spaced".into(), Value::Bool(pair.spaced)),
+                    ("broken".into(), Value::Bool(pair.broken)),
+                ]);
+                fields.extend(common.iter().cloned());
                 fields.push(("mode".into(), Value::from(mode)));
                 out.push(Value::record(fields));
             }

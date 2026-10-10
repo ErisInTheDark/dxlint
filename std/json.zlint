@@ -65,7 +65,8 @@ define {
     kind: context.kind, brackets: context.brackets, count: context.count,
     single: context.single, node_single: context.single,
     first_broken: context.first_broken, empty_comments: context.empty_comments,
-    mode: mode, offset: before.end, prev: before.text, next: after.text,
+    mode: mode, offset: before.end, end: after.start, prev: before.text, next: after.text,
+    comments: any(comments, comment => comment.offset >= before.end && comment.end_offset <= after.start),
     spaced: {
       value source
       parts: json_gap_parts before.end after.start comments
@@ -109,18 +110,17 @@ define {
       after: last
       value json_layout_site(source, json_layout_context, "spacing", before, after, json_layout_comments)
     })
-    map(json_wrapping_pairs, pair => {
+    (if json_layout_context.count > 0 then map(json_wrapping_pairs, pair => {
       value pair
       before_2: first
       value pair
       after_2: last
       value json_layout_site(source, json_layout_context, "wrapping", before_2, after_2, json_layout_comments)
-    })
-    map(json_spacing_pairs, pair => {
+    }) else map(json_spacing_pairs, pair => {
       value pair
       before_3: first
       value pair
       after_3: last
       value json_layout_site(source, json_layout_context, "empty_wrapping", before_3, after_3, json_layout_comments)
-    }))
+    })))
 }

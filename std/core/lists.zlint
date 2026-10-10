@@ -14,6 +14,17 @@ fn core_list_violation(info, by_node, by_bracket, empty, single, multi) =
       && (if info.node_single then info.count > (by_node.singleLine.maxItems.nonempty ?? by_bracket.singleLine.maxItems.nonempty ?? single.maxItems.nonempty ?? 1000000000)
         else info.count >= (by_node.multiLine.minItems.nonempty ?? by_bracket.multiLine.minItems.nonempty ?? multi.minItems.nonempty ?? 0) && info.first_broken) != info.broken)
 
+fn core_list_fix_text(info, empty, overrides) =
+  if info.mode == "spacing" then (if info.spaced then "" else " ")
+  else if !info.broken then "\n"
+  else if info.mode == "empty_wrapping" then {
+    value by_node: { value overrides; get info.kind }
+    value by_bracket: { value overrides; get info.brackets }
+    value if (by_node.empty.nonempty ?? by_bracket.empty.nonempty ?? empty) == "always" then " " else ""
+  }
+  else if info.count != 1 && (info.kind == "TSInterfaceBody" || info.kind == "TSTypeLiteral") && !re_test(info.prev, /[,;]$/) then ","
+  else ""
+
 group core_list
   in core_list rule list-style {
     option empty "ignore" | "always" | "never" = "ignore" "empty bracket spacing"
@@ -29,6 +40,10 @@ group core_list
       value core_list_violation(info, by_node, by_bracket, empty, singleLine, multiLine)
     }
     report at info.offset
+    fix at {
+      start: if info.mode == "wrapping" && !info.broken then info.end else info.offset,
+      end: if info.mode == "spacing" && !info.spaced then info.offset else info.end,
+    } if !info.comments as core_list_fix_text(info, empty, overrides)
     warn (if info.mode == "spacing" then (if !info.spaced then "Should have space between '" else "Should not have space(s) between '") else (if !info.broken then "Should have line break between '" else "Should not have line break(s) between '")) info.prev "' and '" info.next "'"
   }
 }

@@ -1,0 +1,13 @@
+input.jsonc:1:2-1:2 list-style#0
+input.jsonc:2:3-2:3 list-style#0
+input.jsonc:3:2-3:2 list-style#0
+input.ts:11:35-11:35 list-style#0
+input.ts:13:17-13:17 list-style#0
+input.ts:14:2-14:2 list-style#0
+input.ts:1:16-1:16 list-style#0
+input.ts:2:3-2:3 list-style#0
+input.ts:3:2-3:2 list-style#0
+input.ts:5:18-5:18 list-style#0
+input.ts:6:13-6:13 list-style#0
+input.ts:7:2-7:2 list-style#0
+input.ts:9:28-9:28 list-style#0

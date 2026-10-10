@@ -15,7 +15,8 @@ pub const FACTS: &[Fact] = &[
     Fact { shape: Fact::SCALAR.shape, name: "bom", doc: "native ts_program: source starts with a Unicode BOM", get: |f, n| f.with_file(bom, n) },
     Fact { shape: Fact::SCALAR.shape, name: "declaration_groups", doc: "native variable declarations: counts, previous statement and preceding groups in the owning scope", get: |f, n| f.with_file(declarations::groups, n) },
     Fact { shape: Shape::List(&Shape::Record(&[
-        ("offset", Shape::Scalar), ("prev", Shape::Scalar), ("next", Shape::Scalar),
+        ("offset", Shape::Scalar), ("end", Shape::Scalar), ("comments", Shape::Scalar),
+        ("prev", Shape::Scalar), ("next", Shape::Scalar),
         ("spaced", Shape::Scalar), ("broken", Shape::Scalar), ("kind", Shape::Scalar),
         ("brackets", Shape::Scalar), ("count", Shape::Scalar), ("single", Shape::Scalar),
         ("node_single", Shape::Scalar), ("first_broken", Shape::Scalar),

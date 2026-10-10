@@ -1,0 +1,17 @@
+input.jsonc:1:2-1:2 list-style#0
+input.jsonc:1:4-1:4 list-style#0
+input.jsonc:1:6-1:6 list-style#0
+input.ts:1:16-1:16 list-style#0
+input.ts:1:18-1:18 list-style#0
+input.ts:1:20-1:20 list-style#0
+input.ts:2:17-2:17 list-style#0
+input.ts:2:24-2:24 list-style#0
+input.ts:2:33-2:33 list-style#0
+input.ts:4:13-4:13 list-style#0
+input.ts:4:15-4:15 list-style#0
+input.ts:5:17-5:17 list-style#0
+input.ts:5:18-5:18 list-style#0
+input.ts:5:20-5:20 list-style#0
+input.ts:5:22-5:22 list-style#0
+input.ts:5:24-5:24 list-style#0
+input.ts:5:26-5:26 list-style#0
