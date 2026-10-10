@@ -533,9 +533,10 @@ in ts_regex rule wrap-regex {
 
 in ts_declarator rule one-var-declaration-per-line {
   option mode "initializations" | "always" = "initializations"
-  when previous_sibling != null && !contains(previous_gap, "\n")
+  when previous_sibling != null && !re_test(previous_gap, /[\n\r\u{2028}\u{2029}]/)
   when !parent.structure_loop_declaration
   when mode == "always" || init != null || previous.init != null
+  fix at { start: offset, end: offset } as "\n"
   warn "Expected variable declaration to be on a new line."
 }
 

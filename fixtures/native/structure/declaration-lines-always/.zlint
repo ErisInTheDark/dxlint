@@ -1,0 +1,2 @@
+import .ts
+rule one-var-declaration-per-line { set mode "always" }
