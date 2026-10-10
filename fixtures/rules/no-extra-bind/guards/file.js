@@ -1,0 +1,11 @@
+var call = function() {}.bind(factory());
+var getter = function() {}.bind(object.value);
+var arrow = function() {}.bind(() => {});
+var object = function() {}.bind({});
+var template = function() {}.bind(`text`);
+var negative = function() {}.bind(-1);
+var argumentComment = function() {}.bind(/* keep */ receiver);
+var propertyComment = function() {}./* keep */bind(receiver);
+var wrapperComment = (function() {}.bind /* keep */)(receiver);
+var extra = function() {}.bind(receiver, 1);
+var spread = function() {}.bind(...values);

@@ -1,0 +1,9 @@
+file.js:1:26-1:26 no-extra-bind#0
+file.js:2:28-2:28 no-extra-bind#0
+file.js:3:27-3:27 no-extra-bind#0
+file.js:4:28-4:28 no-extra-bind#0
+file.js:5:30-5:30 no-extra-bind#0
+file.js:6:30-6:30 no-extra-bind#0
+file.js:7:37-7:37 no-extra-bind#0
+file.js:8:47-8:47 no-extra-bind#0
+file.js:9:37-9:37 no-extra-bind#0

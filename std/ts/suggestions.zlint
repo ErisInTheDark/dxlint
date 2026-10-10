@@ -97,10 +97,31 @@ in ts_identifier rule no-eval { @suggestion_eval_policy }
 in ts_member, ts_index rule no-eval:member { @suggestion_eval_policy }
 
 # `.bind(x)` on a function that never uses `this` (or on an arrow).
+fn suggestion_bind_fix(n) = {
+  value wrapped_callee: n.callee.node
+  value member: unparenthesised_node(wrapped_callee)
+  value receiver: member.object.node
+  value property_start: receiver.token_neighbours.after
+  value argument_start: wrapped_callee.token_neighbours.after
+  value argument: first(n.argument.nodes)
+  value bare_argument: unparenthesised_node(argument)
+  value region: {offset: property_start.start, end_offset: n.end_offset}
+  value edits: [
+    {start: property_start.start, end: member.end_offset, text: ""},
+    {start: argument_start.start, end: n.end_offset, text: ""}
+  ]
+  value suffix: byte_slice(n.text, property_start.start - n.offset)
+  value if property_start == null || argument_start == null
+    || bare_argument not (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex, ts_identifier, ts_this, ts_function)
+    || !expression_fix_clean(region) then null
+    else {start: property_start.start, end: n.end_offset, text: expression_fix_edits(suffix, property_start.start, edits)}
+}
 in ts_call rule no-extra-bind {
   when count(argument) == 1 && first(argument.nodes) not ts_spread && callee.bind_target != null
   report at callee.bind_target
   warn "The function binding is unnecessary."
+  let replacement suggestion_bind_fix(node)
+  fix at replacement ?? node if replacement != null as replacement.text
 }
 
 in ts_new rule no-new-wrappers {
