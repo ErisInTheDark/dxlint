@@ -1,6 +1,17 @@
 # .ts/style/imports: internal part of .ts/style.
+import .ts/expression-fixes
 
 define {
+
+in ts_export let empty_module_export declaration == null && expression == null && from == null && namespace == null && count(specifier) == 0 && { value result: "{{"; value contains(text, result) }
+in ts_export let module_item !empty_module_export
+in ts_import, ts_import_equals, ts_export_assignment let module_item true
+in ts_program let has_module_item any([] body.module_item, x => x == true)
+in ts_export rule no-useless-empty-export {
+  when !re_test(file, /\.d\.[cm]?ts$/) && empty_module_export && parent.has_module_item
+  warn "Empty export does nothing and can be removed."
+  fix at node if expression_fix_retains_comments(node, "") as ""
+}
 
 # ---- consistent-type-imports ------------------------------------------------
 # Every imported binding is unused, used only as a type (type positions,
