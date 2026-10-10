@@ -150,6 +150,7 @@ in ts_open_brace rule space-before-blocks {
   when !space_before.line_break
   let block_mode if block_class then classes.nonempty ?? style else if block_function then functions.nonempty ?? style else if parent.layout_block_module.nonempty ?? false then modules.nonempty ?? style else keywords.nonempty ?? style
   when block_mode != "off" && space_before.spaced != (block_mode == "always")
+  fix at { start: if block_mode == "always" then offset else token_neighbours.before.end, end: offset } if block_mode == "always" || !space_before.comments as if block_mode == "always" then " " else ""
   warn if space_before.spaced then "Unexpected space before opening brace." else "Missing space before opening brace."
 }
 
