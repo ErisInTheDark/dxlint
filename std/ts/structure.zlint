@@ -845,9 +845,10 @@ in ts_if.consequent, ts_if.alternate, ts_while.body, ts_do_while.body, ts_for.bo
     value (if kind == "if" then overrides.if else if kind == "else" then overrides.else else if kind == "while" then overrides.while else if kind == "do" then overrides.do else overrides.for)
     nonempty
   } ?? mode
-  let broken re_test(parent_before, /\n[ \t]*$/)
+  let broken space_before.line_break
   when not ts_block && !(kind == "else" && is ts_if)
   when style != "any" && (style == "beside" && broken || style == "below" && !broken)
+  fix at { start: if style == "below" then offset else space_before.start, end: offset } if style == "below" || !space_before.comments as if style == "below" then "\n" else " "
   warn if style == "beside" then "Expected no linebreak before this statement." else "Expected a linebreak before this statement."
 }
 

@@ -1,0 +1,5 @@
+a.js:2:3-2:9 nonblock-statement-body-position#0
+a.js:4:3-4:9 nonblock-statement-body-position#0
+a.js:6:4-6:10 nonblock-statement-body-position#0
+a.js:7:25-7:32 nonblock-statement-body-position#1
+a.js:9:3-9:32 nonblock-statement-body-position#0

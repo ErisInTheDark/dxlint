@@ -1,0 +1,5 @@
+import .ts
+rule nonblock-statement-body-position {
+  set mode "any"
+  set overrides { if: "below", else: "beside", while: "below" }
+}
