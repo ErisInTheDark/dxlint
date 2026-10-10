@@ -23,30 +23,60 @@ in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body 
 # `declare global { var x }` is the only way to declare a global.
 in ts_namespace let format_global_namespace kind == "global"
 in ts_node let format_global_scope (format_global_namespace.nonempty ?? false) || (parent.format_global_scope.nonempty ?? false)
-in ts_program let format_lexical_body source_type != "script" || source_environment.root_function
-in ts_block let format_lexical_body parent is ts_function_like
+in ts_program let format_script_global source_type == "script" && !source_environment.root_function
 # Dynamic names and escaped identifiers prevent a binding-preservation proof.
-in ts_program, ts_block let format_lexical_dynamic
+in ts_program, ts_function_like, ts_static_block let format_lexical_dynamic
   { value descendants(ts_with); count } > 0
   || {
     value descendants(ts_call)
     any (call) call.callee.structure_unwrapped is ts_identifier && call.callee.structure_unwrapped.text == "eval"
   }
   || { value descendants(ts_identifier); any (identifier) contains(identifier.text, "\\") }
-fn format_lexical_binding(declarator) =
+fn format_lexical_container(n) = {
+  value n.parent.node
+  walk (current) if current is (ts_program, ts_block, ts_for, ts_for_in, ts_for_of) then null else current.parent.node
+  last
+}
+fn format_lexical_loop(n) = {
+  value n.parent.node
+  walk (current) if current is (ts_program, ts_function_like, ts_static_block) then null else current.parent.node
+  any (current) current is (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while)
+}
+fn format_lexical_catch(declarator) = {
+  value declarator.parent.node
+  walk (current) if current is (ts_program, ts_function_like, ts_static_block) then null else current.parent.node
+  any (current) current is ts_try && current.parameter.nonempty
+    && declarator.offset >= current.handler.offset && declarator.end_offset <= current.handler.end_offset
+    && {
+      value overlapping(ts_identifier, current.parameter.offset, current.parameter.end_offset)
+      any (identifier) identifier.identifier_name == declarator.name.identifier_name
+    }
+}
+fn format_lexical_binding(declarator, container) =
   declarator.name is ts_identifier
   && !contains(["let", "arguments"], declarator.name.text)
+  && declarator.name.ambient != true
   && count(declarator.name.declarations) == 1
-  && all(declarator.name.references, reference => reference.scoping_definition_use != null && !reference.scoping_definition_use.before && !reference.scoping_definition_use.separate)
-in ts_variable_declaration let format_lexical_bindings count(declaration) > 0 && all(declaration.nodes, declarator => format_lexical_binding(declarator))
+  && declarator.name.scope.format_script_global != true
+  && !declarator.name.scope.format_lexical_dynamic
+  && !format_lexical_catch(declarator)
+  && all(declarator.name.references, reference => reference.scoping_definition_use != null
+    && !reference.scoping_definition_use.before && !reference.scoping_definition_use.separate
+    && reference.offset >= container.offset && reference.end_offset <= container.end_offset)
+in ts_variable_declaration let format_lexical_bindings {
+  value container: format_lexical_container(node)
+  value count(declaration) > 0 && all(declaration.nodes, declarator => format_lexical_binding(declarator, container))
+}
+in ts_variable_declaration let format_lexical_initialized all(declaration.nodes, declarator => count(declarator.init.nodes) > 0)
 in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or const instead." {
   when text == "var"
   when ts_namespace.format_global_scope != true
   let owner parent.node
   let body if owner.parent is ts_export then owner.parent.parent.node else owner.parent.node
-  let fixable ecma_version >= 2015 && body.format_lexical_body == true
+  let fixable ecma_version >= 2015
+    && (body is (ts_program, ts_block) || owner is (ts_for.init, ts_for_in.left, ts_for_of.left))
     && !contains(owner.modifier, "declare")
-    && !body.format_lexical_dynamic
+    && (!format_lexical_loop(owner) || owner is (ts_for_in.left, ts_for_of.left) || owner.format_lexical_initialized)
     && owner.format_lexical_bindings
   fix if fixable as "let"
 }

@@ -1,0 +1,17 @@
+a.js:10:26-10:29 no-var#0
+a.js:10:41-10:44 no-var#0
+a.js:11:45-11:48 no-var#0
+a.js:12:28-12:31 no-var#0
+a.js:13:39-13:42 no-var#0
+a.js:14:54-14:57 no-var#0
+a.js:15:24-15:27 no-var#0
+a.js:16:40-16:43 no-var#0
+a.js:1:1-1:4 no-var#0
+a.js:2:3-2:6 no-var#0
+a.js:3:24-3:27 no-var#0
+a.js:4:40-4:43 no-var#0
+a.js:5:47-5:50 no-var#0
+a.js:6:66-6:69 no-var#0
+a.js:7:48-7:51 no-var#0
+a.js:8:34-8:37 no-var#0
+a.js:9:21-9:24 no-var#0
