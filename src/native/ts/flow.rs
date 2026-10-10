@@ -305,14 +305,8 @@ impl NativeFile<'_> {
     /// Members of `t` for which `pred` is `want`; `any` and unknowns stay.
     fn keep(&self, t: Ty, pred: impl Fn(&Ty) -> bool, want: bool) -> Ty {
         match t {
-            Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) => t,
-            Ty::Union(items) => {
-                if items.iter().any(|m| matches!(m, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_))) {
-                    return Ty::Union(items);
-                }
-                Ty::union(items.into_iter().filter(|m| pred(m) == want).collect())
-            }
-            Ty::Inter(_) => t,
+            t if guard_opaque(&t) => t,
+            Ty::Union(items) => Ty::union(items.into_iter().filter(|m| guard_opaque(m) || pred(m) == want).collect()),
             t if pred(&t) == want => t,
             _ => Ty::Never,
         }
@@ -360,26 +354,95 @@ fn predicate(t: Ty, target: &Ty, sense: bool, ck: &Checker<'_>) -> Ty {
     }
 }
 
+fn guard_opaque(t: &Ty) -> bool {
+    matches!(t, Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_))
+}
+
 /// `t` where it tested truthy (`sense`) or falsy.
 pub(super) fn truthy(t: Ty, sense: bool, ck: &Checker<'_>) -> Ty {
     let items = match t {
         Ty::Union(items) => items,
-        Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_) => return t,
+        t if guard_opaque(&t) => return t,
         t => vec![t],
     };
-    if items.iter().any(|m| matches!(m, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) | Ty::Inter(_))) {
-        return Ty::Union(items);
-    }
     let kept = items
         .into_iter()
-        .filter_map(|m| match (ck.literal_falsy(&m), sense) {
-            // Truthy: drop what is always falsy.
-            (Some(true), true) => None,
-            (Some(false), false) => None,
-            (None, false) if matches!(m, Ty::Prim("boolean")) => Some(Ty::Lit("false".into(), "boolean")),
-            (None, true) if matches!(m, Ty::Prim("boolean")) => Some(Ty::Lit("true".into(), "boolean")),
-            _ => Some(m),
+        .filter_map(|m| {
+            if guard_opaque(&m) { return Some(m) }
+            match (ck.literal_falsy(&m), sense) {
+                // Truthy: drop what is always falsy.
+                (Some(true), true) => None,
+                (Some(false), false) => None,
+                (None, false) if matches!(m, Ty::Prim("boolean")) => Some(Ty::Lit("false".into(), "boolean")),
+                (None, true) if matches!(m, Ty::Prim("boolean")) => Some(Ty::Lit("true".into(), "boolean")),
+                _ => Some(m),
+            }
         })
         .collect();
     Ty::union(kept)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn known_union_arms_narrow_without_resolving_opaque_members() {
+        with_native_file("", |file, _| {
+            let ck = &file.typing().checker;
+            let opaque = [
+                Ty::Param("T".into()), Ty::Unknown, Ty::IntrinsicUnknown,
+                Ty::Inter(vec![Ty::Param("T".into()), Ty::Prim("object")]),
+            ];
+            for member in opaque {
+                let nullable = Ty::Union(vec![member.clone(), Ty::Null]);
+                let known_non_null = Ty::union(vec![member.clone()]);
+                let positive = truthy(nullable.clone(), true, ck);
+                let negative = truthy(nullable.clone(), false, ck);
+                let compared = file.keep(nullable, |part| matches!(part, Ty::Null), false);
+                if known_non_null.is_unknown() {
+                    assert!(positive.is_unknown() && compared.is_unknown());
+                    assert!(!matches!(negative, Ty::Never | Ty::Null));
+                } else {
+                    assert!(positive.same_identity(&known_non_null));
+                    assert!(negative.same_identity(&Ty::union(vec![member, Ty::Null])));
+                    assert!(compared.same_identity(&known_non_null));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn generic_guards_refine_known_null_arms_on_each_guard_route() {
+        let source = r#"
+            function truth<T>(x: T | null) { if (x) { void /*@*/x; } }
+            function early<T>(x: T | null) { if (!x) return; void /*@*/x; }
+            function equal<T>(x: T | null) { if (x !== null) { void /*@*/x; } }
+            function exit<T>(x: T | null) { if (x === null) return; void /*@*/x; }
+            function falsy<T>(x: T | null) { if (!x) { void /*@*/x; } }
+        "#;
+        with_native_file(source, |file, marks| {
+            let parameter = Ty::Param("T".into());
+            for &mark in &marks[..4] {
+                assert!(file.type_of(mark).same_identity(&parameter));
+            }
+            assert!(file.type_of(marks[4]).same_identity(&Ty::union(vec![parameter, Ty::Null])));
+        });
+    }
+
+    #[test]
+    fn guard_refinement_does_not_cross_writes_functions_or_other_references() {
+        let source = r#"
+            function written<T>(x: T | null) { if (!x) return; x = null; void /*@*/x; }
+            function nested<T>(x: T | null) { if (!x) return; const child = () => /*@*/x; }
+            function other<T>(x: T | null, y: T | null) { if (!y) return; void /*@*/x; }
+        "#;
+        with_native_file(source, |file, marks| {
+            let nullable = Ty::union(vec![Ty::Param("T".into()), Ty::Null]);
+            for &mark in marks {
+                assert!(file.type_of(mark).same_identity(&nullable));
+            }
+        });
+    }
 }
