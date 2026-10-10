@@ -409,6 +409,11 @@ in ts_case let restriction_case_branch test != null
 in ts_block let restriction_local_statements count(body)
 in ts_function_like, ts_static_block let max_nested_callbacks_counted restriction_call_argument
 in ts_class let max_classes_counted true
+in ts_program let restriction_classes {
+  value descendants(ts_class)
+  filter (item) item.max_classes_counted == true
+  count
+}
 fn restriction_statement_total(local_count, child_totals) = (local_count.nonempty ?? 0) + sum(child_totals)
 fn restriction_branch_total(branch, extra, child_totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(child_totals)
 in ts_node {
@@ -427,7 +432,6 @@ in ts_node {
   let restriction_constructor_argument if parent is ts_parenthesized then parent.restriction_constructor_argument else is (ts_call.argument, ts_new.argument)
   let restriction_iife if parent is ts_parenthesized then parent.restriction_iife else is ts_call.callee
   let restriction_callbacks (parent.restriction_callbacks.nonempty ?? 0) + (if max_nested_callbacks_counted == true then 1 else 0)
-  let restriction_classes (if max_classes_counted == true then 1 else 0) + sum(children.restriction_classes)
 }
 group restriction_parameter_function ts_function, ts_arrow, ts_method, ts_function_type
 in ts_parameter {
