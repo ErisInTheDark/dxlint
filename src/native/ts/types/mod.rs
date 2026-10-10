@@ -7,6 +7,7 @@
 //! `relate` (assignability) and `print` extend the same `Checker`.
 
 mod calls;
+mod expressions;
 mod arguments;
 mod domains;
 mod members;
@@ -804,52 +805,4 @@ impl<'p> Checker<'p> {
         }
     }
 
-    /// The type of a simple initializer written in `env`.
-    fn init_type(&self, init: &super::summary::Init, env: &Env) -> Ty {
-        use super::summary::Init;
-        match init {
-            Init::Class(start) => self.class_value_at(*start, env.file),
-            Init::Instantiate(value, args) => self.instantiate(&self.init_type(value, env), args.iter().map(|argument| self.eval(argument, env)).collect()),
-            Init::New(path, targs) => {
-                let targs = targs.iter().map(|t| self.eval(t, env)).collect::<Vec<_>>();
-                let class = self.value_path(path, env);
-                self.construct(&class, &[], targs)
-            }
-            Init::Call(callee, targs) => {
-                let targs = targs.iter().map(|t| self.eval(t, env)).collect::<Vec<_>>();
-                let f = self.init_type(callee, env);
-                self.call(&f, &[], targs)
-            }
-            Init::Member(object, name) => {
-                let o = self.init_type(object, env);
-                self.member(&o, name)
-            }
-            Init::Await(inner) => {
-                let t = self.init_type(inner, env);
-                self.awaited(&t)
-            }
-            Init::Path(path) if path.first().is_some_and(|p| &**p == "this") => {
-                let t = env.this.as_deref().cloned().unwrap_or(Ty::Unknown);
-                path[1..].iter().fold(t, |t, seg| self.member(&t, seg))
-            }
-            Init::Path(path) => self.value_path(path, env),
-            Init::Type(t) => self.eval(t, env).widen(),
-            Init::Literal(t) => self.eval(t, env),
-            Init::Other => Ty::Unknown,
-        }
-    }
-
-    /// A property's type: its annotation, else its initializer's.
-    fn prop_type(&self, m: &Member, env: &Env) -> Ty {
-        let t = match (&m.ty, &m.init) {
-            (Some(t), _) => self.eval(t, env),
-            (None, Some(i)) => self.init_type(i, env),
-            (None, None) => Ty::Unknown,
-        };
-        if m.optional {
-            t.or_undefined()
-        } else {
-            t
-        }
-    }
 }

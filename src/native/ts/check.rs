@@ -799,24 +799,7 @@ impl<'t> NativeFile<'t> {
                 _ => Ty::Unknown,
             },
             K::Update => Ty::Prim("number"),
-            K::Binary => match s.word(id, F::Op) {
-                Some("==" | "!=" | "===" | "!==" | "<" | ">" | "<=" | ">=" | "instanceof" | "in") => Ty::Prim("boolean"),
-                Some("+") => {
-                    let (a, b) = (inner(F::Left).widen(), inner(F::Right).widen());
-                    let belongs = |ty: &Ty, kind| !matches!(ty, Ty::Any | Ty::Never) && ck.assignable(ty, &Ty::Prim(kind)) == Some(true);
-                    if belongs(&a, "string") || belongs(&b, "string") {
-                        Ty::Prim("string")
-                    } else if belongs(&a, "number") && belongs(&b, "number") {
-                        Ty::Prim("number")
-                    } else if belongs(&a, "bigint") && belongs(&b, "bigint") {
-                        Ty::Prim("bigint")
-                    } else {
-                        Ty::Unknown
-                    }
-                }
-                Some(op) => if op != ">>>" && matches!(inner(F::Left).widen(), Ty::Prim("bigint")) && matches!(inner(F::Right).widen(), Ty::Prim("bigint")) { Ty::Prim("bigint") } else { Ty::Prim("number") },
-                None => Ty::Unknown,
-            },
+            K::Binary => ck.binary_type(s.word(id, F::Op), || inner(F::Left), || inner(F::Right)),
             K::Array => {
                 let items: Vec<Ty> = s.all(id, F::Element).collect::<Vec<_>>().into_iter().map(|e| self.type_of(e).widen()).collect();
                 if self.bindings().write_sites.contains_key(&id) || self.destructuring_receiver(id).is_some_and(|receiver| matches!(s.kind(receiver), Some(K::ArrayPattern | K::Array))) {

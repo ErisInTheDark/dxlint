@@ -26,6 +26,52 @@ fn reference(name: &str, args: Vec<Ty>, checker: &Checker<'_>) -> Ty {
 }
 
 #[test]
+fn imported_class_initializers_preserve_their_value_domains() {
+    let mut failures = Vec::new();
+    for (name, source, path) in [
+        ("object", "export class C { options = { delay: 13 }; }", vec!["options", "delay"]),
+        ("static object", "export class C { static defaults = { delay: 13 }; options = C.defaults; }", vec!["options", "delay"]),
+        ("generic call", "declare function clone<T>(value: T): T; declare const input: { delay: number }; export class C { options = clone(input); }", vec!["options", "delay"]),
+        ("generic constructor", "declare const input: { delay: number }; class Box<T> { value: T; constructor(value: T) { this.value = value; } } export class C { options = new Box(input); }", vec!["options", "value", "delay"]),
+        ("arithmetic", "export class C { delay = 200 / 4; }", vec!["delay"]),
+        ("combined", "const divisor = 4; const defaultDelay = 200 / divisor; declare function clone<T>(value: T): T; export class C { static defaults = { delay: defaultDelay }; options = clone(C.defaults); }", vec!["options", "delay"]),
+        ("annotated control", "export class C { options: { delay: number } = { delay: 13 }; }", vec!["options", "delay"]),
+        ("primitive control", "export class C { delay = 13; }", vec!["delay"]),
+    ] {
+        with_import("import { C } from './base';", source, |checker, _| {
+            let value = path.iter().fold(reference("C", Vec::new(), checker), |ty, name| checker.member(&ty, name));
+            if checker.equivalent(&value.clone().widen(), &Ty::Prim("number")) != Some(true) {
+                failures.push((name, value));
+            }
+        });
+    }
+    assert!(failures.is_empty(), "initializer domains lost: {failures:?}");
+}
+
+#[test]
+fn mutable_initializer_locations_widen_fresh_literals_not_contracts() {
+    let source = "const ready = true; const chained = ready; const fixed: true = true; declare function returnsTrue(): true; namespace N { export const ready = true; } export class C { options = { ready, chained, fixed, call: returnsTrue(), asserted: ready as true, namespaced: N.ready }; mutable = ready; readonly immutable = ready; fixedAlias = fixed; }";
+    let mut failures = Vec::new();
+    with_import("import { C } from './base';", source, |checker, _| {
+        let object = checker.member(&reference("C", Vec::new(), checker), "options");
+        for (field, expected) in [
+            ("ready", Ty::Prim("boolean")), ("chained", Ty::Prim("boolean")), ("namespaced", Ty::Prim("boolean")),
+            ("fixed", Ty::Lit("true".into(), "boolean")), ("call", Ty::Lit("true".into(), "boolean")), ("asserted", Ty::Lit("true".into(), "boolean")),
+        ] {
+            let value = checker.member(&object, field);
+            if checker.equivalent(&value, &expected) != Some(true) { failures.push((field, value)); }
+        }
+        for (field, expected) in [
+            ("mutable", Ty::Prim("boolean")), ("immutable", Ty::Lit("true".into(), "boolean")), ("fixedAlias", Ty::Lit("true".into(), "boolean")),
+        ] {
+            let value = checker.member(&reference("C", Vec::new(), checker), field);
+            if checker.equivalent(&value, &expected) != Some(true) { failures.push((field, value)); }
+        }
+    });
+    assert!(failures.is_empty(), "literal contracts changed: {failures:?}");
+}
+
+#[test]
 fn inherited_member_queries_share_bindings_without_sharing_evaluation() {
     let count = 64;
     let fields = (0..count).map(|i| format!("p{i}: T;")).collect::<String>();

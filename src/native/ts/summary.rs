@@ -156,18 +156,25 @@ pub struct Member {
     pub init: Option<Init>,
 }
 
+#[derive(Debug, Clone, PartialEq, Hash)]
+pub struct Invocation {
+    pub type_args: Vec<TypeSyn>,
+    pub args: Vec<Init>,
+}
+
 /// An initializer's shape, enough to type it from another file: `new`,
 /// calls and member chains over names, annotations and literals.
 #[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Init {
     Class(u32),
     Instantiate(Box<Init>, Vec<TypeSyn>),
-    New(Box<[Box<str>]>, Vec<TypeSyn>),
-    Call(Box<Init>, Vec<TypeSyn>),
+    New(Box<[Box<str>]>, Arc<Invocation>),
+    Call(Box<Init>, Arc<Invocation>),
+    Binary(Box<str>, Box<Init>, Box<Init>),
     Member(Box<Init>, Box<str>),
     Await(Box<Init>),
     Path(Box<[Box<str>]>),
-    /// A type the value widens to (`let x = 0`).
+    /// A widened primitive initializer domain or an explicit asserted type.
     Type(TypeSyn),
     /// A literal type kept as is (`const x = 0`).
     Literal(TypeSyn),
@@ -463,6 +470,13 @@ pub fn sig(v: &impl View, id: u32) -> Sig {
 }
 
 fn key_name(v: &impl View, key: u32) -> Box<str> {
+    static_key_name(v, key).unwrap_or_else(|| match v.kind(key) {
+        Some(K::String) => v.text(key).trim_matches(|c| c == '"' || c == '\'').into(),
+        _ => v.text(key).into(),
+    })
+}
+
+fn static_key_name(v: &impl View, key: u32) -> Option<Box<str>> {
     let mut literal = match v.kind(key) {
         Some(K::Computed) => v.get(key, F::Expr).unwrap_or(key),
         _ => key,
@@ -473,33 +487,30 @@ fn key_name(v: &impl View, key: u32) -> Box<str> {
     }
     match v.kind(literal) {
         Some(K::String) => {
-            if let Some(name) = super::regex::cook(v.text(literal)) { return name.into() }
+            if let Some(name) = super::regex::cook(v.text(literal)) { return Some(name.into()) }
         }
         Some(K::Template) if v.all(literal, F::Expr).is_empty() => {
-            if let Some(name) = super::regex::cook(v.text(literal)) { return name.into() }
+            if let Some(name) = super::regex::cook(v.text(literal)) { return Some(name.into()) }
         }
         Some(K::Number) => {
-            if let Some(number) = super::statics::number(v.text(literal)) { return crate::expr::value::js_number_text(number).into() }
+            if let Some(number) = super::statics::number(v.text(literal)) { return Some(crate::expr::value::js_number_text(number).into()) }
         }
         Some(K::Unary) => {
             if let (Some(op), Some(value)) = (v.get(literal, F::Op), v.get(literal, F::Arg).filter(|&arg| v.is(arg, K::Number))) {
                 if let Some(number) = super::statics::number(v.text(value)) {
                     match v.text(op) {
-                        "+" => return crate::expr::value::js_number_text(number).into(),
-                        "-" => return crate::expr::value::js_number_text(-number).into(),
+                        "+" => return Some(crate::expr::value::js_number_text(number).into()),
+                        "-" => return Some(crate::expr::value::js_number_text(-number).into()),
                         _ => {}
                     }
                 }
             }
         }
-        Some(K::Bool | K::Null) => return v.text(literal).into(),
-        Some(K::Ident) if literal == key => return super::statics::identifier_name(v.text(key)).into(),
+        Some(K::Bool | K::Null) => return Some(v.text(literal).into()),
+        Some(K::Ident) if literal == key => return Some(super::statics::identifier_name(v.text(key)).into()),
         _ => {}
     }
-    match v.kind(key) {
-        Some(K::String) => v.text(key).trim_matches(|c| c == '"' || c == '\'').into(),
-        _ => v.text(key).into(),
-    }
+    None
 }
 
 /// A class member or type member.
@@ -541,12 +552,14 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
                 _ => named(MemberKind::Method, None, vec![s]),
             }
         }
-        K::ClassProp | K::PropSig => {
+        K::ClassProp | K::PropSig | K::Prop => {
             // A property holding a function type is called like a method.
             let ty = v.get(id, F::Type).map(|t| type_syn(v, t));
             let mut m = named(MemberKind::Prop, ty.clone(), Vec::new())?;
             if ty.is_none() {
-                m.init = v.get(id, F::Init).map(|i| init(v, i));
+                m.init = if v.is(id, K::Prop) {
+                    v.get(id, F::Value).or_else(|| v.get(id, F::Key)).map(|i| init(v, i))
+                } else { v.get(id, F::Init).map(|i| init(v, i)) };
             }
             Some(m)
         }
@@ -575,11 +588,32 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
 
 fn init(v: &impl View, id: u32) -> Init {
     let targs = |n| v.all(n, F::TypeArg).into_iter().map(|t| type_syn(v, t)).collect::<Vec<_>>();
+    let arguments = |n| v.all(n, F::Arg).into_iter().map(|argument| {
+        if matches!(v.kind(argument), Some(K::Number | K::String | K::Bool | K::BigInt | K::Null)) {
+            Init::Literal(TypeSyn::Lit(v.text(argument).into()))
+        } else { init(v, argument) }
+    }).collect::<Vec<_>>();
+    let invocation = |n| Arc::new(Invocation { type_args: targs(n), args: arguments(n) });
     match v.kind(id) {
         Some(K::Class) => Init::Class(v.start(id)),
         Some(K::Instantiation) => v.get(id, F::Expr).map_or(Init::Other, |expression| Init::Instantiate(Box::new(init(v, expression)), targs(id))),
-        Some(K::New) => v.get(id, F::Callee).map_or(Init::Other, |c| Init::New(path_of(v, c).into(), targs(id))),
-        Some(K::Call) => v.get(id, F::Callee).map_or(Init::Other, |c| Init::Call(Box::new(init(v, c)), targs(id))),
+        Some(K::New) => v.get(id, F::Callee).map_or(Init::Other, |c| Init::New(path_of(v, c).into(), invocation(id))),
+        Some(K::Call) => v.get(id, F::Callee).map_or(Init::Other, |c| Init::Call(Box::new(init(v, c)), invocation(id))),
+        Some(K::Binary) => match (v.get(id, F::Op), v.get(id, F::Left), v.get(id, F::Right)) {
+            (Some(op), Some(left), Some(right)) => Init::Binary(v.text(op).into(), Box::new(init(v, left)), Box::new(init(v, right))),
+            _ => Init::Other,
+        },
+        Some(K::Object) => {
+            let mut members: Vec<Member> = Vec::new();
+            for property in v.all(id, F::Property) {
+                let Some(key) = v.get(property, F::Key) else { return Init::Other };
+                if static_key_name(v, key).is_none() { return Init::Other }
+                let Some(current) = member(v, property) else { return Init::Other };
+                members.retain(|previous| previous.name != current.name);
+                members.push(current);
+            }
+            Init::Type(TypeSyn::Obj(Arc::new(members)))
+        },
         Some(K::Ident | K::This) => Init::Path(path_of(v, id).into()),
         Some(K::Member) => {
             let path = path_of(v, id);
@@ -598,6 +632,7 @@ fn init(v: &impl View, id: u32) -> Init {
         }
         Some(K::String | K::Template) => Init::Type(TypeSyn::Kw("string".into())),
         Some(K::Number) => Init::Type(TypeSyn::Kw("number".into())),
+        Some(K::BigInt) => Init::Type(TypeSyn::Kw("bigint".into())),
         Some(K::Bool) => Init::Type(TypeSyn::Kw("boolean".into())),
         Some(K::Arrow | K::Function) => Init::Type(TypeSyn::Fn(Arc::new(sig(v, id)))),
         _ => Init::Other,
