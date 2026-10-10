@@ -4,6 +4,7 @@
 # operator bans.
 
 import .ts/restrictions/comments
+import .ts/helpers
 
 define {
 
@@ -296,6 +297,24 @@ in duplicate_imports_checked rule no-duplicate-imports:exports {
   @restriction_duplicate_import_body
 }
 
+in ts_variable_declaration let restriction_sort_bindings {
+  value declaration.nodes
+  filter (item) item.name is ts_identifier
+}
+fn restriction_sorted_variables(bindings, insensitive) = {
+  value ordered: {
+    value bindings
+    sort_by (item) if insensitive then lower(item.name) else item.name.text
+  }
+  value final_binding: last(bindings)
+  value bindings
+  zip ordered (original, replacement) {
+    value replacement.text (if original != final_binding then
+      byte_slice(original.parent.text, original.end_offset - original.parent.offset, original.next.offset - original.parent.offset)
+      else "")
+  }
+  join ""
+}
 in ts_declarator rule sort-vars {
   option ignoreCase boolean = false "ignore letter case"
   let simple_name name is ts_identifier
@@ -303,6 +322,15 @@ in ts_declarator rule sort-vars {
   when simple_name && previous.greatest != null && compare_text(name, previous.greatest, false, ignoreCase) < 0
   report at name.node
   warn "Variables within the same declaration block should be sorted alphabetically."
+  let bindings parent.restriction_sort_bindings
+  let first_binding first(bindings)
+  let last_binding last(bindings)
+  # Crossing a destructuring initializer can change reads and evaluation order.
+  fix at {start: first_binding.offset, end: last_binding.end_offset} if {
+    value bindings
+    all (item, i) (item.init == null || unparenthesised_node(item.init.node) is (ts_string, ts_number, ts_boolean, ts_null, ts_bigint, ts_regex))
+      && item.index == first_binding.index + i
+  } as restriction_sorted_variables(bindings, ignoreCase)
 }
 in ts_identifier let restriction_sort_key_name text
 in ts_computed_key let restriction_sort_key_name if expression is ts_identifier then expression else null
