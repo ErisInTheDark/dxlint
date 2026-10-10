@@ -2,15 +2,36 @@
 
 define {
 
-in ts_member let chain_handles_rejection object.handles_rejection
-in ts_call let handles_rejection callee ~ /[\s\S]*\.catch/ && count(argument) >= 1 || callee ~ /[\s\S]*\.then/ && count(argument) >= 2 || callee ~ /[\s\S]*\.finally/ && callee.chain_handles_rejection == true
+in ts_node let floating_promise_type type_structure([], ["kind", "parts", "declarations", "callable"])
+fn floating_rejection_handler(n) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value handler: if callee.static_name == "catch" then first(n.argument.nodes)
+    else if callee.static_name == "then" then { value n.argument.nodes; slice 1 2; first } else null
+  value handler != null && handler.floating_promise_type.callable
+}
+fn floating_promise_leaves(n) = {
+  value unparenthesised_node(n)
+  walk (current) if current is ts_parenthesized then current.expression.node
+    else if current is ts_sequence then current.expression.nodes
+    else if current is ts_logical then [current.left.node, current.right.node]
+    else if current is ts_conditional then [current.consequent.node, current.alternate.node]
+    else if current is ts_call && current.callee.node.static_name == "finally" then current.callee.node.object.node else null
+  filter (part) part not (ts_parenthesized, ts_sequence, ts_logical, ts_conditional)
+    && !(part is ts_call && part.callee.node.static_name == "finally")
+}
+fn floating_unhandled_promise(n) = {
+  value floating_promise_leaves(n)
+  any (part) part not (ts_assignment, ts_await)
+    && floating_promise_element(part.floating_promise_type)
+    && !(part is ts_call && floating_rejection_handler(part))
+}
 in ts_expression_statement.expression rule no-floating-promises {
-  when not (ts_assignment, ts_await) && !handles_rejection && { value type_members.nonempty ?? []; contains "then" }
+  when floating_unhandled_promise(node)
   warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
 }
 
 fn floating_promise_element(t) =
-  if t.kind == "union" then any(t.parts, part => floating_promise_element(part))
+  if contains(["union", "intersection"], t.kind) then any(t.parts, part => floating_promise_element(part))
   else any(t.declarations, declaration => declaration.name == "Promise" && declaration.from == "lib")
 fn floating_promise_array(t) =
   if t.kind == "union" then any(t.parts, part => floating_promise_array(part))

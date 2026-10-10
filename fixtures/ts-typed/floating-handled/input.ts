@@ -1,0 +1,22 @@
+declare const condition: boolean;
+declare function promise(): Promise<number>;
+declare function custom(): PromiseLike<number>;
+Promise.resolve().catch(() => {});
+condition ? Promise.resolve().catch(() => {}) : null;
+(Promise.resolve().catch(() => {}), 123);
+Promise.resolve().catch(() => {}) || Promise.resolve().then(() => {}, () => {});
+custom();
+condition ? promise() : null;
+(Promise.resolve().catch(() => {}), promise());
+Promise.resolve().catch(() => {}) || promise();
+Promise.resolve().catch(123 as any);
+Promise.resolve().then(() => {});
+Promise.resolve().catch(() => {}).finally(() => {});
+Promise.resolve().finally(() => {});
+interface MyThenable { then(ok: () => void, fail: () => void): MyThenable; }
+declare function myThenable(): MyThenable;
+myThenable();
+declare const intersection: Promise<number> & number;
+intersection;
+intersection.finally(() => {});
+({}) as Promise<number> & { tag?: string };

@@ -1,0 +1,9 @@
+input.ts:10:1-10:47 no-floating-promises#0
+input.ts:11:1-11:47 no-floating-promises#0
+input.ts:12:1-12:36 no-floating-promises#0
+input.ts:13:1-13:33 no-floating-promises#0
+input.ts:15:1-15:36 no-floating-promises#0
+input.ts:20:1-20:13 no-floating-promises#0
+input.ts:21:1-21:31 no-floating-promises#0
+input.ts:22:1-22:43 no-floating-promises#0
+input.ts:9:1-9:29 no-floating-promises#0
