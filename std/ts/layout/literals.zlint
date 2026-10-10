@@ -12,6 +12,11 @@ in ts_block let layout_quote_prologue (parent is ts_function || parent is ts_arr
 in ts_expression_statement let layout_quote_directive (parent.layout_quote_prologue.nonempty ?? false) && expression is ts_string && (previous == null || (previous.layout_quote_directive.nonempty ?? false))
 in ts_template let layout_quote_template_feature count(expression) > 0 || is ts_tagged_template.quasi || re_test(text, /(^|[^\\])(\\\\)*[\n\r\u{2028}\u{2029}]/)
 group quoted_literals ts_string, ts_template
+in ts_string, ts_template layer layout_quote_text match layout_quote_piece /\\(?:\$\{|\r\n?|\n|.)|["'`]|\$\{|\r\n?|\n|[^\\"'`$\r\n]+|\$/
+fn layout_quote_piece_text(piece, old, target) =
+  if starts_with(piece, "\\") && (slice(piece, 1) == old || old == "`" && slice(piece, 1) == "${{") then slice(piece, 1)
+  else if piece == target || target == "`" && piece == "${{" then "\\" piece
+  else piece
 in quoted_literals rule quotes {
   option style "double" | "single" | "backtick" = "double" "string delimiters"
   option avoidEscape boolean = false "allow alternate quotes to avoid escapes"
@@ -21,6 +26,15 @@ in quoted_literals rule quotes {
   let quote_delimiter if style == "single" then "'" else if style == "double" then "\"" else "`"
   let quote_alternate if style == "double" then "'" else "\""
   when if quote_template then style != "backtick" && allowTemplateLiterals != "always" && !layout_quote_template_feature && !((allowTemplateLiterals == "avoidEscape") && avoidEscape && contains(text, quote_delimiter)) else parent not ts_jsx_attribute && !(style == "backtick" && quote_fixed) && !starts_with(text, quote_delimiter) && !(avoidEscape && starts_with(text, quote_alternate) && contains(text, quote_delimiter))
+  let quote_old slice(text, 0, 1)
+  let quote_parts {
+    value overlapping(layout_quote_piece, offset, end_offset)
+    filter (piece) piece.offset > offset && piece.end_offset < end_offset
+    unique_by (piece) {start: piece.offset, end: piece.end_offset}
+    map (piece) layout_quote_piece_text(piece.text, quote_old, quote_delimiter)
+    join
+  }
+  fix at {start: offset, end: end_offset} if !(style == "backtick" && re_test(text, /(^|[^\\])(\\\\)*\\(?:[1-9]|0[0-9])/)) && !(quote_template && parent is ts_expression_statement && parent.parent.layout_quote_prologue == true) as "{quote_delimiter}{quote_parts}{quote_delimiter}"
   warn "Strings must use {if style == 'single' then 'singlequote' else if style == 'double' then 'doublequote' else 'backtick'}."
 }
 
