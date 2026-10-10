@@ -1,4 +1,4 @@
-//! Lexical environments retained only for class-expression summaries.
+//! Lexical environments retained for nested class summaries.
 
 use super::{Builder, DeclKind, Scope, TypeSyn, type_syn};
 use super::super::kinds::{Field as F, Kind as K};

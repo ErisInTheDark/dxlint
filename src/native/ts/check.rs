@@ -184,7 +184,7 @@ impl<'t> NativeFile<'t> {
                     }
                 }
                 if let Some(i) = ck.summary.decls.iter().position(|decl|
-                    decl.kind == DeclKind::Class && decl.start == s.tree.node(n).start && decl.scope.is_some()) {
+                    decl.kind == DeclKind::Class && decl.start == s.tree.node(n).start) {
                     for scope in ck.decl_env(DeclRef { file: ck.file, decl: i as u32 }).namespaces {
                         if !namespaces.contains(&scope) { namespaces.push(scope) }
                     }
@@ -351,6 +351,9 @@ impl<'t> NativeFile<'t> {
                 let found = self.summary_decls(name, owner);
                 if !found.is_empty() {
                     return ck.value_of(&found);
+                }
+                if kind == "class" {
+                    return ck.class_value_at(s.tree.node(owner).start, ck.file);
                 }
                 if kind == "function" {
                     let sig = Arc::new(sig(&self.syntax, owner));
@@ -1035,6 +1038,81 @@ mod tests {
                 let expression = file.syntax.get(*mark, super::F::Expr).unwrap();
                 assert!(matches!(file.type_of(expression), super::Ty::Prim(kind) if kind == expected),
                     "{expected}: {:?}", file.type_of(expression));
+            }
+        });
+    }
+
+    #[test]
+    fn local_class_constructor_and_instance_contracts_share_identity() {
+        for expression in ["", "const unrelated = class {};"] {
+            let source = format!(r#"
+                class Local {{ marker: string }}
+                function f() {{
+                    class Local {{ marker: number; self(): Local {{ return this; }} static marker: boolean }}
+                    const constructor = /*@*/Local;
+                    const instance = /*@*/new Local();
+                    const returned = /*@*/new Local().self();
+                    const field = /*@*/new Local().self().marker;
+                    const staticField = /*@*/Local.marker;
+                    {expression}
+                }}
+                const outer = /*@*/new Local().marker;
+            "#);
+            with_native_file(&source, |file, nodes| {
+                assert!(matches!(file.type_of(nodes[0]), super::Ty::Class(_)), "local constructor unresolved");
+                let instance = file.type_of(nodes[1]);
+                assert!(!instance.is_opaque(), "local instance unresolved");
+                assert!(instance.same_identity(&file.type_of(nodes[2])), "self return changed the class owner");
+                for (&node, expected) in nodes[3..].iter().zip(["number", "boolean", "string"]) {
+                    assert!(matches!(file.type_of(node), super::Ty::Prim(kind) if kind == expected),
+                        "{expression}: expected {expected}, got {:?}", file.type_of(node));
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn local_class_block_shadowing_does_not_leak() {
+        let source = r#"
+            function f() {
+                class C { marker: number }
+                {
+                    class C { marker: boolean }
+                    const inner = /*@*/new C().marker;
+                }
+                const outer = /*@*/new C().marker;
+            }
+            const missing = /*@*/new C().marker;
+        "#;
+        with_native_file(source, |file, nodes| {
+            for (&node, expected) in nodes[..2].iter().zip(["boolean", "number"]) {
+                assert!(matches!(file.type_of(node), super::Ty::Prim(kind) if kind == expected),
+                    "expected {expected}, got {:?}", file.type_of(node));
+            }
+            assert!(!matches!(file.type_of(nodes[2]), super::Ty::Prim("number" | "boolean")),
+                "a missing global acquired local class members: {:?}", file.type_of(nodes[2]));
+        });
+    }
+
+    #[test]
+    fn local_class_body_annotations_keep_outer_lexical_types() {
+        let source = r#"
+            type Value = string;
+            function f() {
+                type Value = number;
+                class C {
+                    method(value: Value): Value {
+                        const reflected = /*@*/value;
+                        return value;
+                    }
+                }
+                const returned = /*@*/new C().method(1);
+            }
+        "#;
+        with_native_file(source, |file, nodes| {
+            for &node in nodes {
+                assert!(matches!(file.type_of(node), super::Ty::Prim("number")),
+                    "local class annotation used the wrong scope: {:?}", file.type_of(node));
             }
         });
     }

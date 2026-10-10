@@ -191,7 +191,7 @@ pub enum DeclKind {
     Var,
     Enum,
     Namespace,
-    /// Hidden lexical environment captured by a class expression.
+    /// Hidden lexical environment captured by a nested class.
     Lexical,
     /// `import { name } from "from"` (`default`, or `*` for namespaces).
     Import { from: Box<str>, name: Box<str> },
@@ -773,7 +773,7 @@ impl<V: View> Builder<'_, V> {
         decl
     }
 
-    fn class_expressions(&mut self, root: u32, ambient: bool) {
+    fn nested_classes(&mut self, root: u32, ambient: bool) {
         let v = self.v;
         let mut pending = vec![(root, false)];
         let mut ancestors = Vec::new();
@@ -784,18 +784,20 @@ impl<V: View> Builder<'_, V> {
             }
             let Some(kind) = v.kind(node) else { continue };
             if kind as u16 >= K::TypeRef as u16 || matches!(kind, K::TypeKeyword | K::Namespace) { continue }
-            if kind == K::Class && ancestors.last().and_then(|&parent| v.kind(parent)).is_some_and(|kind| !matches!(kind, K::Block | K::Program | K::Export))
-                && !self.out.decls.iter().any(|decl| decl.kind == DeclKind::Class && decl.start == v.start(node)) {
+            if kind == K::Class && !self.out.decls.iter().any(|decl| decl.kind == DeclKind::Class && decl.start == v.start(node)) {
                 let parent = self.lexical_ancestors(&ancestors, ambient);
-                let name = v.get(node, F::Name).map(|name| v.text(name));
-                let mut decl = self.class_decl(node, name.unwrap_or("<class>"), ambient);
-                let mut scope = Scope::default();
-                if let Some(name) = name {
-                    scope.names.insert(name.into(), vec![self.out.decls.len() as u32]);
+                // A lexical frame may already have registered this class declaration.
+                if !self.out.decls.iter().any(|decl| decl.kind == DeclKind::Class && decl.start == v.start(node)) {
+                    let name = v.get(node, F::Name).map(|name| v.text(name));
+                    let mut decl = self.class_decl(node, name.unwrap_or("<class>"), ambient);
+                    let mut scope = Scope::default();
+                    if let Some(name) = name {
+                        scope.names.insert(name.into(), vec![self.out.decls.len() as u32]);
+                    }
+                    decl.scope = Some(scope);
+                    decl.parent = parent;
+                    self.out.decls.push(decl);
                 }
-                decl.scope = Some(scope);
-                decl.parent = parent;
-                self.out.decls.push(decl);
             }
             ancestors.push(node);
             pending.push((node, true));
@@ -1107,7 +1109,7 @@ impl<V: View> Builder<'_, V> {
             }
             _ => {}
         }
-        if !self.lexical && !(v.is(s, K::Export) && v.get(s, F::Decl).is_some()) { self.class_expressions(s, ambient); }
+        if !self.lexical && !(v.is(s, K::Export) && v.get(s, F::Decl).is_some()) { self.nested_classes(s, ambient); }
         ids
     }
 }
