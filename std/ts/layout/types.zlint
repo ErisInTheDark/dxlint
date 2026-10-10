@@ -105,6 +105,7 @@ in ts_open_angle rule type-generic-spacing {
   let generic_space layout_comma_space(space_before.text, true)
   when before != (generic_space != "")
   report at { start: offset - byte_len(generic_space), end: offset }
+  fix at { start: offset - byte_len(generic_space), end: offset } as if before then " " else ""
   warn "Generic spaces mismatch"
 }
 in ts_close_angle rule type-generic-spacing:after {
@@ -114,18 +115,21 @@ in ts_close_angle rule type-generic-spacing:after {
   let generic_space layout_comma_space(space_after.text, false)
   when after != (generic_space != "")
   report at { start: end_offset, end: end_offset + byte_len(generic_space) }
+  fix at { start: end_offset, end: end_offset + byte_len(generic_space) } as if after then " " else ""
   warn "Generic spaces mismatch"
 }
 in ts_open_angle rule type-generic-spacing:inner-open {
   @layout_generic_policy
   when re_test(space_after.text, /\s/) && !re_test(space_after.text, /^[\n\r]/)
   report at { start: end_offset, end: space_after.end }
+  fix at { start: end_offset, end: space_after.end } if !space_after.comments as ""
   warn "Generic spaces mismatch"
 }
 in ts_close_angle rule type-generic-spacing:inner-close {
   @layout_generic_policy
   when re_test(space_before.text, /\s/) && !re_test(space_before.text, /^[\n\r]/)
   report at { start: space_before.start, end: offset }
+  fix at { start: space_before.start, end: offset } if !space_before.comments as ""
   warn "Generic spaces mismatch"
 }
 
