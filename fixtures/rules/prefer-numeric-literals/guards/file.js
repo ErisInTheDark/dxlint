@@ -1,0 +1,10 @@
+parseInt("1_1", 2);
+parseInt("1112", 2);
+parseInt(" 11", 2);
+parseInt("-11", 2);
+parseInt("", 2);
+parseInt("FFz", 16);
+parseInt("0xFF", 16);
+parseInt("11", /* keep */ 2);
+parseInt(/* keep */ "11", 2);
+parseInt("11", 2 /* keep */);

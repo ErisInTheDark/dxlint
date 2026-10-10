@@ -1,0 +1,10 @@
+file.js:1:11-1:24 no-unneeded-ternary:default-assignment#0
+file.js:2:11-2:34 no-unneeded-ternary:default-assignment#0
+file.js:3:11-3:28 no-unneeded-ternary:default-assignment#0
+file.js:4:11-4:25 no-unneeded-ternary:default-assignment#0
+file.js:5:11-5:25 no-unneeded-ternary:default-assignment#0
+file.js:6:11-6:24 no-unneeded-ternary:default-assignment#0
+file.js:7:11-7:25 no-unneeded-ternary:default-assignment#0
+file.js:8:24-8:39 no-unneeded-ternary:default-assignment#0
+file.js:9:11-9:35 no-unneeded-ternary:default-assignment#0
+file.js:9:19-9:35 no-unneeded-ternary#0

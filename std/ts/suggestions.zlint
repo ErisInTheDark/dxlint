@@ -273,6 +273,12 @@ in ts_call rule prefer-numeric-literals {
   when first([] argument.literal_value).type == "string"
   when { value argument; last_argument: last; value contains(["2", "8", "16"], last_argument) }
   warn "Use {if last(argument) == '2' then 'binary' else if last(argument) == '8' then 'octal' else 'hexadecimal'} literals instead of {parse_int_name}()."
+  let literal first(argument.nodes)
+  let base last(argument)
+  let digits literal.literal_value.value
+  let valid_digits if base == "2" then /\A[01]+\z/ else if base == "8" then /\A[0-7]+\z/ else /\A[0-9a-fA-F]+\z/
+  let replacement (if base == "2" then "0b" else if base == "8" then "0o" else "0x") digits
+  fix if (literal is ts_string || literal is ts_template && count(literal.expression) == 0) && re_test(digits, valid_digits) && expression_fix_clean(node) as expression_fix_edges(node, replacement)
 }
 
 in ts_string let octal_escape {
@@ -298,17 +304,41 @@ in ts_binary rule no-useless-concat {
   warn "Unexpected string concatenation of literals."
 }
 
+fn ternary_fix_inverse(operand) = {
+  value bare: unparenthesised_node(operand)
+  value inverse: if bare is ts_binary then get({ "==": "!=", "!=": "==", "===": "!==", "!==": "===" }, bare.operator) else null
+  value if inverse != null then byte_slice(bare.text, 0, bare.operator.offset - bare.offset) inverse byte_slice(bare.text, bare.operator.end_offset - bare.offset)
+    else "!" expression_fix_wrap(operand.text, bare.precedence < 15)
+}
+fn ternary_fix_boolean(n, consequent, alternate) = {
+  value operand: n.test.node
+  value bare: unparenthesised_node(operand)
+  value if consequent == alternate then if bare is ts_identifier then consequent else null
+    else if alternate == "true" then ternary_fix_inverse(operand)
+    else if bare is ts_binary && contains(["==", "===", "!=", "!==", ">", ">=", "<", "<=", "in", "instanceof"], bare.operator)
+      || bare is ts_unary && bare.operator == "!" then operand.text
+    else "!" ternary_fix_inverse(operand)
+}
+
 in ts_conditional rule no-unneeded-ternary {
   let consequent_value consequent.literal_value
   let alternate_value alternate.literal_value
   when consequent_value.type == "boolean" && alternate_value.type == "boolean"
   warn "Unnecessary use of boolean literals in conditional expression."
+  let replacement ternary_fix_boolean(node, consequent_value.value, alternate_value.value)
+  fix if replacement != null && expression_fix_retains_comments(node, replacement)
+    && unparenthesised_node(consequent.node) is ts_boolean && unparenthesised_node(alternate.node) is ts_boolean as expression_fix_edges(node, replacement)
 }
 
 in ts_conditional rule no-unneeded-ternary:default-assignment {
   option defaultAssignment boolean = true "allow conditional expressions used as default assignments"
   when !defaultAssignment && (test.unwrapped_node.nonempty ?? test.node) is ts_identifier && (consequent.unwrapped_node.nonempty ?? consequent.node) is ts_identifier && (test.unwrapped_text.nonempty ?? test) == (consequent.unwrapped_text.nonempty ?? consequent)
   warn "Unnecessary use of conditional expression for default assignment."
+  let operand alternate.node
+  let bare unparenthesised_node(operand)
+  let grouped operand not ts_parenthesized && (bare.precedence < 4 || bare is (ts_as, ts_satisfies, ts_type_assertion) || bare is ts_logical && bare.operator == "??")
+  let replacement test " || " expression_fix_wrap(operand.text, grouped)
+  fix if expression_fix_retains_comments(node, replacement) as expression_fix_edges(node, replacement)
 }
 
 in ts_member, ts_index rule no-console {
@@ -672,6 +702,8 @@ in ts_program, ts_function, ts_arrow, ts_method rule strict {
 in ts_call rule prefer-object-has-own {
   when own_property_call
   warn "Use 'Object.hasOwn()' instead of 'Object.prototype.hasOwnProperty.call()'."
+  let target unparenthesised_node(callee.node)
+  fix at target if expression_fix_clean(target) as expression_fix_edges(target, "Object.hasOwn")
 }
 
 in ts_labeled rule no-label-var {
