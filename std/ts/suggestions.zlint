@@ -623,6 +623,7 @@ in ts_regex, ts_call, ts_new rule prefer-named-capture-group {
 
 in ts_regex rule no-div-regex {
   when re_test(text, "^/=")
+  fix at { start: offset + 1, end: offset + 2 } as "[=]"
   warn "A regular expression literal can be confused with '/='."
 }
 
