@@ -414,8 +414,18 @@ in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
   warn "Unsafe usage of {if is ts_return then 'ReturnStatement' else if is ts_throw then 'ThrowStatement' else if is ts_break then 'BreakStatement' else 'ContinueStatement'}."
 }
 
+fn problem_label_context(n) = { value n; walk (current) if current is ts_labeled then current.parent else null; last }
 in ts_labeled.label rule no-unused-labels {
   when !{ value result: "\\b(?:break|continue)\\s+" re_escape(text) "\\b"; value re_test(parent.body, result) }
+  let label_body parent.body.node
+  let label_context problem_label_context(parent.parent)
+  let label_expression unparenthesised_node(label_body.expression.node)
+  let label_directive label_body is ts_expression_statement
+    && (label_expression is ts_string || label_expression is ts_template && count(label_expression.expression) == 0)
+    && (label_context is ts_program || label_context is ts_block && label_context.parent is ts_function_like)
+  let label_previous parent.token_neighbours.before
+  let label_asi label_previous != null && !contains([":", ";", "{{"], label_previous.text) && re_test(label_body.text, /^[\[(+\-\/`]/)
+  fix at { start: offset, end: label_body.offset } if !space_after.comments && !label_body.space_before.comments && !label_directive && !label_asi as ""
   warn "'{text}:' is defined but never used."
 }
 

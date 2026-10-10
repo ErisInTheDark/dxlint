@@ -1,0 +1,6 @@
+a.js:1:1-1:7 no-unused-labels#0
+a.js:2:1-2:6 no-unused-labels#0
+a.js:2:8-2:13 no-unused-labels#0
+a.js:4:1-4:5 no-unused-labels#0
+a.js:5:14-5:18 no-unused-labels#0
+a.js:6:1-6:7 no-unused-labels#0
