@@ -46,14 +46,14 @@ in ts_declarator, ts_assignment rule prefer-destructuring {
   let settings first(options)
   when structure_destructure_enabled(settings, structure_destructure_role, category)
   when array_index || renamed || structure_destructure_left is ts_identifier && (access is ts_member && structure_destructure_left.text == key.text || access is ts_index && key is ts_string && structure_destructure_left.text == value.value)
-  let receiver access.object.node
+  let receiver access.object.structure_unwrapped
   let fixable is ts_declarator && !structure_destructure_annotated && structure_destructure_left is ts_identifier && access is ts_member && structure_destructure_left.text == key.text
     && !{
       value overlapping(ts_comment)
       any (comment) comment.offset < receiver.offset || comment.end_offset > receiver.end_offset
     }
   warn "Use {category} destructuring."
-  fix if fixable as "{{" key.text "}} = " receiver.text
+  fix if fixable as "{{" key.text "}} = " expression_fix_wrap(receiver.text, receiver.precedence < 1)
 }
 
 fn structure_dot_keyword(name) = contains(["abstract", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "debugger", "default", "delete", "do", "double", "else", "enum", "export", "extends", "false", "final", "finally", "float", "for", "function", "goto", "if", "implements", "import", "in", "instanceof", "int", "interface", "long", "native", "new", "null", "package", "private", "protected", "public", "return", "short", "static", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "true", "try", "typeof", "var", "void", "volatile", "while", "with"], name)
