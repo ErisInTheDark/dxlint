@@ -27,7 +27,7 @@ pub const FACTS: &[Fact] = &[
     Fact { shape: Shape::Record(&[("offset", Shape::Scalar), ("before", Shape::Scalar), ("all", Shape::Scalar), ("all_before", Shape::Scalar)]), name: "scoping_const_binding", doc: "on a let declaration: unique-writer position, early reads and destructuring group eligibility", get: |f, n| f.with_file(constness::binding, n) },
     Fact { shape: Fact::SCALAR.shape, name: "scoping_atomic_update", doc: "on an assignment: shared bindings written using a pre-suspension read", get: |f, n| f.with_file(atomic::updates, n) },
     Fact { shape: Shape::Record(&[("valid", Shape::Scalar), ("constructor", Shape::Scalar)]), name: "scoping_this_context", doc: "on this: validity of its lexical receiver, with capitalised constructor exception", get: |f, n| f.with_file(receivers::context, n) },
-    Fact { shape: Fact::SCALAR.shape, name: "scoping_loop_captures", doc: "on a function: ordered unique mutable binding names whose captured values can vary across loop iterations", get: |f, n| f.with_file(loops::captures, n) },
+    Fact { shape: Shape::List(&Shape::Scalar), name: "scoping_loop_captures", doc: "on a function: ordered unique mutable binding names whose captured values can vary across loop iterations", get: |f, n| f.with_file(loops::captures, n) },
     Fact { shape: Shape::Record(&[("grouped", Shape::Scalar), ("independent", Shape::Scalar)]), name: "scoping_unmodified_condition", doc: "on a condition reference: unmodified with grouped or independent conditional branches", get: |f, n| f.with_file(loops::unmodified_condition, n) },
     Fact { shape: Shape::Record(&[
         ("method", Shape::Scalar), ("foreach", Shape::Scalar), ("name", Shape::Scalar),

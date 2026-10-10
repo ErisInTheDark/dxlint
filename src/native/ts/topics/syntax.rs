@@ -3,18 +3,20 @@
 use crate::expr::{facts::{Fact, FactFields, Shape}, Value};
 use crate::native::ts::{facts::NativeFile, kinds, tokens};
 
+const GAP: Shape = Shape::Record(&[
+    ("text", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar), ("spaced", Shape::Scalar),
+    ("line_break", Shape::Scalar), ("blank_lines", Shape::Scalar), ("blank_gaps", Shape::Scalar), ("comments", Shape::Scalar),
+]);
+
 pub const FACTS: &[Fact] = &[
     Fact {
-        shape: Shape::Record(&[
-            ("text", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar), ("spaced", Shape::Scalar),
-            ("line_break", Shape::Scalar), ("blank_lines", Shape::Scalar), ("blank_gaps", Shape::Scalar), ("comments", Shape::Scalar),
-        ]),
+        shape: GAP,
         name: "space_before",
         doc: "native layers: the gap between the token before this node and the node: `{ text, start, end, spaced, line_break, blank_lines, blank_gaps, comments }` (byte boundaries; `spaced`: whitespace outside comments; `blank_lines`: physical blank lines; `blank_gaps`: blank lines between tokens/comments, excluding comment interiors); null at the start of the file",
         get: |f, n| f.with_file(|file, n| gap_around(file, n, true), n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: GAP,
         name: "space_after",
         doc: "native layers: the gap between the node and the token after it, as `space_before`; null at the end of the file",
         get: |f, n| f.with_file(|file, n| gap_around(file, n, false), n),
