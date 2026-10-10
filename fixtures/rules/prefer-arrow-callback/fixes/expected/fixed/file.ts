@@ -1,0 +1,11 @@
+const café = "λ"; foo((a: string): string => { return a; }); foo(() => {});
+foo(nativeCb || (() => {}));
+foo(bar ? () => {} : () => {});
+foo(() => { this; });
+foo(bar || (() => { this; }));
+foo((() => {}).bind(obj));
+foo((() => {}).bind(this, somethingElse));
+foo?.(() => { return this; });
+foo(async (a = call(1), [b] = []) => { return a; });
+foo(() => { (function() { this; }); });
+foo(() => { bar(() => {}); });

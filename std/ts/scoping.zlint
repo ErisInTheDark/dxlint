@@ -3,6 +3,7 @@
 # on the native TypeScript layers and bindings.
 
 import .ts/naming
+import .ts/expression-fixes
 
 define {
 
@@ -35,6 +36,40 @@ in ts_node let arrow_callback_receiver
 in ts_node let arrow_callback_barrier
   if is (ts_function, ts_method) then false
   else is ts_super || is ts_meta_property && starts_with(text, "new") || any(children.arrow_callback_barrier, b => b == true)
+fn arrow_callback_fix(source, n, lexical) = {
+  value parameters: n.parameter.nodes
+  value names: [] n.parameter.name
+  value distinct: unique(names)
+  value duplicates: count(distinct) != count(names)
+  value unsafe: n.uses_this && !lexical || duplicates || first(names) == "this" || count(n.type_parameter) != 0
+  value wrapped: {
+    value n
+    walk (current) if current.parent is ts_parenthesized then current.parent.node else null
+    last
+  }
+  value member: wrapped.parent.node
+  value bound: if lexical && member is ts_member && member.property == "bind"
+    && member.parent is ts_call && member.parent.arrow_bind_lexical then member.parent.node else null
+  value target: bound ?? n
+  value function_tokens: overlapping(ts_keyword, n.offset, n.body.offset)
+  value keyword: { value function_tokens; find (token) token.text == "function" }
+  value opening_from: n.name.end_offset ?? keyword.end_offset
+  value opening_until: first(parameters).offset ?? n.body.offset
+  value opening_tokens: overlapping(ts_open_paren, opening_from, opening_until)
+  value opening: first(opening_tokens)
+  value before_body: n.body.node.token_neighbours.before
+  value comments: overlapping(ts_comment, keyword.end_offset, opening.offset)
+  value prefix: if count(comments) == 0 then [{ start: keyword.offset, end: opening.offset, text: "" }]
+    else ([{ start: keyword.offset, end: keyword.end_offset, text: "" }] (if n.name != null then [{ start: n.name.offset, end: n.name.end_offset, text: "" }] else []))
+  value edits: prefix [{ start: before_body.end, end: before_body.end, text: " =>" }] (if bound != null then [{ start: wrapped.end_offset, end: bound.end_offset, text: "" }] else [])
+  value replacement: expression_fix_edits(target.text, target.offset, edits)
+  value shape: { kind: "ts_arrow", precedence: if bound != null && wrapped is ts_parenthesized then 20 else 1 }
+  value parens: expression_fix_parens(source, target, shape)
+  value async_break: contains([] n.modifier, "async") && { value source; byte_slice keyword.offset opening.offset; re_test /[\n\r\u{2028}\u{2029}]/ }
+  value if unsafe || lexical && bound == null || keyword == null || opening == null || before_body == null
+    || async_break || parens == null || !expression_fix_retains_comments(target, replacement) then null
+    else { start: target.offset, end: target.end_offset, text: expression_fix_wrap(replacement, parens > 0) }
+}
 in ts_function rule prefer-arrow-callback {
   option allowNamedFunctions boolean = false
   option allowUnboundThis boolean = true
@@ -45,6 +80,8 @@ in ts_function rule prefer-arrow-callback {
   when !allowUnboundThis || !uses_this || callback
   when !any(children.arrow_callback_barrier, b => b == true)
   warn "Unexpected function expression."
+  let edit arrow_callback_fix(source, node, callback)
+  fix at (edit ?? { start: offset, end: end_offset }) if edit != null as edit.text
 }
 
 in ts_identifier rule no-unmodified-loop-condition {
