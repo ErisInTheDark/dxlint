@@ -812,6 +812,7 @@ in ts_call rule newline-per-chained-call {
   option ignoreChainWithDepth number = 2 "allow chains up to this depth"
   let info callee.structure_chain_info
   when info != null && info.depth > ignoreChainWithDepth && !re_test(info.gap, /[\n\r\u{2028}\u{2029}]/)
+  fix at { start: info.offset, end: info.offset } as "\n"
   report at info.offset
   let first_line { value info.property; re_find /^[^\n\r\u{2028}\u{2029}]*/; nonempty } ?? ""
   let prefix if info.optional then (if info.computed then "?.[" else "?.") else (if info.computed then "[" else ".")
