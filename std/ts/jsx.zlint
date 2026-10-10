@@ -188,6 +188,47 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
 fn jsx_presence_whitespace(value) = value != "" && jsx_trim_space(value) == ""
 fn jsx_presence_edge(value) = { value result: "^" jsx_space_regex() "|" jsx_space_regex() "$"; value re_test(value, result) }
 fn jsx_presence_entities(value) = re_replace(value, /&[a-zA-Z0-9#]+;/, "")
+fn jsx_presence_quote(raw) = {
+  value escaped: {
+    value raw
+    re_replace /\\/ "\\\\"
+    re_replace /"/ "\\\""
+    re_replace /\u{8}/ "\\b"
+    re_replace /\u{c}/ "\\f"
+    re_replace /\n/ "\\n"
+    re_replace /\r/ "\\r"
+    re_replace /\t/ "\\t"
+  }
+  value "\"" escaped "\""
+}
+fn jsx_presence_content(raw) = { value end: byte_len(raw) - 1; value byte_slice(raw, 1, end) }
+fn jsx_presence_wrap(raw) = if raw == "" then "" else "{{" jsx_presence_quote(raw) "}}"
+in ts_jsx_text layer jsx_presence_lines match jsx_presence_line /[^\n]+|\n/
+in jsx_presence_line layer jsx_presence_entities match jsx_presence_entity /&[a-zA-Z0-9#]+;/
+fn jsx_presence_line_fix(line) = if jsx_trim_space(line.text) == "" then line.text else {
+  value prefix: jsx_edge_space(line.text, true)
+  value start: line.offset + byte_len(prefix)
+  value overlapping(jsx_presence_entity, start, line.end_offset)
+  filter (entity) start <= entity.offset && entity.end_offset <= line.end_offset
+  unique_by (entity) entity.offset
+  sort_by (entity) entity.offset
+  result: fold ({ end: start, text: prefix }) (state, entity) {
+    end: entity.end_offset,
+    text: state.text { value byte_slice(line.text, state.end - line.offset, entity.offset - line.offset); jsx_presence_wrap } entity.text
+  }
+  value result.text { value byte_slice(line.text, result.end - line.offset); jsx_presence_wrap }
+}
+fn jsx_presence_text_fix(n) = if !jsx_break(n.text) then jsx_presence_wrap(n.text) else {
+  value overlapping(jsx_presence_line, n.offset, n.end_offset)
+  filter (line) n.offset <= line.offset && line.end_offset <= n.end_offset
+  unique_by (line) line.offset
+  sort_by (line) line.offset
+  map (line) jsx_presence_line_fix(line)
+  join
+}
+fn jsx_presence_remove(inner, attribute) = if inner is (ts_jsx_element, ts_jsx_fragment) then inner.text
+  else if attribute then "\"" jsx_presence_content(inner.text) "\""
+  else inner.literal_value.value
 in ts_parenthesized let jsx_presence_inner expression.jsx_presence_inner.nonempty ?? expression.node
 in ts_jsx_expression {
   let jsx_presence_expression_inner expression.jsx_presence_inner.nonempty ?? expression.node
@@ -220,6 +261,10 @@ in ts_jsx_expression, ts_jsx_text, ts_string, ts_jsx_element, ts_jsx_fragment ru
   when expression_node || element_value || is (ts_string, ts_jsx_text)
   when if element_value then (if expression_node then propElementValues == "never" else propElementValues != "ignore") else if expression_node then selected == "never" && unnecessary else selected == "always" && missing
   warn if expression_node then "Curly braces are unnecessary here." else "Need to wrap this literal in a JSX expression."
+  let replacement if expression_node then jsx_presence_remove(inner, attribute) else if element_value then "{{" text "}}" else if attribute then { value jsx_presence_content(text); jsx_presence_wrap } else jsx_presence_text_fix(node)
+  # Entities must remain JSX, not literal entity spellings inside a JS string.
+  let safe_literal !re_test(text, /[\u{0}-\u{7}\u{b}\u{e}-\u{1f}]/) && (expression_node || element_value || (jsx_presence_entities(text) == text || child && jsx_break(text)) && !(attribute && jsx_break(text)))
+  fix if safe_literal && !(element_value && !expression_node && propElementValues != "always") && expression_fix_retains_comments(node, replacement) as replacement
 }
 
 fn jsx_space_regex() = /[\t\n\u{b}\u{c}\r \u{a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]/
