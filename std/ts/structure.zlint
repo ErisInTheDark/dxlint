@@ -269,7 +269,7 @@ in ts_line rule max-len {
   when !settings.ignorePattern || !re_test(measured, settings.ignorePattern)
   let parts { value measured; split "\t"; map (part) utf16_len(part) }
   let length { value extra: utf16_len(measured) - len(measured); value expanded_line_length(parts, extra, tab_width) }
-  let comment_applies structure_full_comment && comment_limit > 0
+  let comment_applies comment_limit > 0 && structure_full_comment
   let limit if comment_applies then comment_limit else code_limit
   when length > limit
   report at { start: offset, end: offset + byte_len(measured) }
