@@ -154,6 +154,16 @@ fn structure_boundary_space(left, right) =
   || left == "/" && re_test(right, /[a-zA-Z0-9_$/*]/)
   || re_test(left right, /^(?:\+\+|--|\*\*|&&|\|\||\?\?|\?\.|<<|>>|<=|>=|==|!=|=>|[+\-*%&|^]=)$/)
 
+fn structure_parens_comment(pair, source) = {
+  value start: (pair.space_before).start.nonempty ?? 0
+  value overlapping(ts_comment, start, pair.offset + 1)
+  find_last (c) c.end_offset <= pair.offset && { value source; byte_slice c.end_offset pair.offset; trim } == ""
+}
+fn structure_parens_cast(pair, source) = {
+  value comment: structure_parens_comment(pair, source)
+  value comment is ts_block_comment && contains(comment.structure_comment_body, "@type")
+}
+
 in structure_parens rule no-extra-parens {
   option conditionalAssign boolean = true "enforce assignments in conditions"
   option ternaryOperandBinaryExpressions boolean = true "enforce binary ternary operands"
@@ -184,11 +194,7 @@ in structure_parens rule no-extra-parens {
     || owner is ts_update && { value source; byte_slice inner.end_offset owner.end_offset; re_test /[\n\r]/ }
     || owner is ts_await && inner is ts_non_null
   when structure_parens_count > (if protected && required < 1 then 1 else required)
-  let comment {
-    value default: (outer.space_before).start.nonempty ?? 0
-    value overlapping(ts_comment, default, outer.offset + 1)
-    find_last (c) c.end_offset <= outer.offset && { value source; byte_slice c.end_offset outer.offset; trim } == ""
-  }
+  let comment structure_parens_comment(outer, source)
   let typed_inner {
     value overlapping(ts_block_comment, outer.offset, inner.offset)
     any (c) c.offset > outer.offset && c.end_offset <= inner.offset && contains(c.structure_comment_body, "@type")
@@ -206,21 +212,27 @@ in structure_parens rule no-extra-parens {
   when owner not ts_spread || inner not no_extra_parens_spread_allowed
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
   warn "Unnecessary parentheses around expression."
-  let body byte_slice(source, offset + 1, end_offset - 1)
+  let pair if typed_inner then {
+    value node
+    walk (pair) if pair.parent is structure_parens then pair.parent.node else null
+    find (pair) !structure_parens_cast(pair, source)
+  } else node
+  let body byte_slice(source, pair.offset + 1, pair.end_offset - 1)
   let before if {
     value 0
-    max: max (offset - 1)
-    value overlapping(ts_block_comment, max, offset)
-    any (c) c.end_offset == offset
-  } then "" else byte_char(source, offset, true)
-  let after byte_char(source, end_offset)
-  let first byte_char(source, offset + 1)
-  let last byte_char(source, end_offset - 1, true)
-  let fixable byte_char(source, offset) == "(" && byte_char(source, end_offset, true) == ")"
+    max: max (pair.offset - 1)
+    value overlapping(ts_block_comment, max, pair.offset)
+    any (c) c.end_offset == pair.offset
+  } then "" else byte_char(source, pair.offset, true)
+  let after byte_char(source, pair.end_offset)
+  let first byte_char(source, pair.offset + 1)
+  let last byte_char(source, pair.end_offset - 1, true)
+  let directive owner is ts_expression_statement && (owner.parent is ts_program
+    || owner.parent is ts_block && owner.parent.parent is (ts_function, ts_arrow, ts_method))
+  let fixable pair != null && byte_char(source, pair.offset) == "(" && byte_char(source, pair.end_offset, true) == ")"
     && !structure_boundary_uncertain(before, first) && !structure_boundary_uncertain(last, after)
-    && !(structure_parens_count == 1 && owner is ts_expression_statement && inner is ts_string) && !typed_inner
-  let octal_member inner is ts_number && re_test(inner.text, /^0[0-7]+$/) && re_test(last, /[0-7]/) && after == "."
-  fix if fixable as (if structure_boundary_space(before, first) then " " else "") body (if structure_boundary_space(last, after) || octal_member then " " else "")
+    && !(structure_parens_count == 1 && directive && inner is ts_string)
+  fix at { start: pair.offset, end: pair.end_offset } if fixable as (if structure_boundary_space(before, first) then " " else "") body (if structure_boundary_space(last, after) then " " else "")
 }
 
 }

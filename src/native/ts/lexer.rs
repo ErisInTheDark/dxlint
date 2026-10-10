@@ -223,11 +223,12 @@ impl<'s> Lexer<'s> {
                 }
             };
             digits(self);
-            if self.pos < b.len() && b[self.pos] == b'.' {
+            let legacy_octal = b[start] == b'0' && self.pos > start + 1 && b[start..self.pos].iter().all(|c| matches!(c, b'0'..=b'7'));
+            if !legacy_octal && self.pos < b.len() && b[self.pos] == b'.' {
                 self.pos += 1;
                 digits(self);
             }
-            if self.pos < b.len() && matches!(b[self.pos], b'e' | b'E') {
+            if !legacy_octal && self.pos < b.len() && matches!(b[self.pos], b'e' | b'E') {
                 let save = self.pos;
                 self.pos += 1;
                 if self.pos < b.len() && matches!(b[self.pos], b'+' | b'-') {
@@ -350,6 +351,32 @@ impl<'s> Lexer<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_octal_numbers_leave_decimal_suffixes_to_following_tokens() {
+        for (source, number, following) in [
+            ("0123.a", "0123", "."),
+            ("00.1", "00", ".1"),
+            ("077e1", "077", "e1"),
+            ("077E+1", "077", "E"),
+            ("0.1", "0.1", ""),
+            ("08.1", "08.1", ""),
+            ("09e1", "09e1", ""),
+            ("123.", "123.", ""),
+            (".123", ".123", ""),
+            ("0_123.4", "0_123.4", ""),
+            ("0x123.a", "0x123", "."),
+            ("0o123.a", "0o123", "."),
+            ("0b101.a", "0b101", "."),
+        ] {
+            let mut lexer = Lexer::new(source);
+            let token = lexer.next_token();
+            assert_eq!(token.tok, Tok::Num);
+            assert_eq!(&source[token.start as usize..token.end as usize], number, "{source}");
+            let token = lexer.next_token();
+            assert_eq!(&source[token.start as usize..token.end as usize], following, "{source}");
+        }
+    }
 
     #[test]
     fn hashbangs_allow_a_leading_bom_and_keep_source_offsets() {

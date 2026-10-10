@@ -1,0 +1,1 @@
+if (/** @type {A} */ (/** @type {B} */ (/** @type {C} */(expr)))) {}
