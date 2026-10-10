@@ -22,10 +22,10 @@ in ts_import_attribute_comma {
 in ts_comma, ts_import_attribute_comma let comma_style_checked comma_style_owner is comma_style_lists
 in ts_comma, ts_import_attribute_comma rule comma-style {
   option style "last" | "first" = "last" "comma line position"
+  when if style == "last" then token_neighbours.before.line_break else token_neighbours.after.line_break
   when comma_style_checked
   when comma_style_owner not (ts_array, ts_array_pattern) || list_previous != null
   when !(token_neighbours.after.text == "," && token_neighbours.after.line_break)
-  when token_neighbours.before.line_break && token_neighbours.after.line_break || (if style == "last" then token_neighbours.before.line_break else token_neighbours.after.line_break)
   let comma_comments overlapping(ts_comment, token_neighbours.before.end, token_neighbours.after.start)
   let comma_after_comment { value comma_comments; filter (comment) comment.offset >= end_offset; first }
   let comma_placement if token_neighbours.before.line_break && token_neighbours.after.line_break && !(comma_after_comment is ts_block_comment && position(comma_after_comment.offset).js_line == position(offset).js_line) then "between" else style
