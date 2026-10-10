@@ -1,0 +1,8 @@
+a.js:1:11-1:11 multiline-ternary#1
+a.js:1:18-1:18 multiline-ternary#1
+a.js:2:11-2:11 multiline-ternary#1
+a.js:2:20-2:20 multiline-ternary#1
+a.js:3:11-3:11 multiline-ternary#1
+a.js:3:18-3:18 multiline-ternary#1
+a.js:3:18-3:18 multiline-ternary#1
+a.js:3:26-3:26 multiline-ternary#1

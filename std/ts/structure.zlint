@@ -135,7 +135,7 @@ in ts_parenthesized let structure_single_conditional expression is ts_conditiona
 @structure_mixed_operator_rule(no-mixed-operators:parent, parent.structure_operator_offset)
 
 fn structure_declaration_issue(message, fix) = if message == null then null else { message: message, fix: fix }
-fn structure_declaration_fix(source, edits) = if count(edits) == 0 then null else {
+fn structure_fix_edits(source, edits) = if count(edits) == 0 then null else {
   value start: first(edits).start
   value end: last(edits).end
   value region: byte_slice(source, start, end)
@@ -153,7 +153,7 @@ fn structure_declaration_join(n, source) = {
   value edits
   compact
   ordered: sort_by (edit) edit.start
-  value structure_declaration_fix(source, ordered)
+  value structure_fix_edits(source, ordered)
 }
 fn structure_declaration_split_edit(declarator, source, kind, exported) = {
   value comma: declarator.token_neighbours.after
@@ -174,7 +174,7 @@ fn structure_declaration_split(declarations, kind, exported, source) = {
   value declarations
   filter (declarator) declarator.token_neighbours.after.text == ","
   edits: map (declarator) structure_declaration_split_edit(declarator, source, kind, exported)
-  value structure_declaration_fix(source, edits)
+  value structure_fix_edits(source, edits)
 }
 
 in ts_variable_declaration rule one-var {
@@ -482,6 +482,15 @@ in ts_question, ts_colon rule multiline-ternary {
   let broken space_before.line_break || space_after.line_break
   when mode == "never" && broken || mode != "never" && !broken
   let operands if text == "?" then "test and consequent" else "consequent and alternate"
+  let ternary_edits {
+    value [
+      if mode != "never" || space_before.line_break then { start: space_before.start, end: offset, text: if mode == "never" then "" else "\n" } else null,
+      if mode == "never" && space_after.line_break then { start: end_offset, end: space_after.end, text: "" } else null,
+    ]
+    compact
+  }
+  let ternary_fix structure_fix_edits(source, ternary_edits)
+  fix at ternary_fix if expression_fix_clean(parent.node) as ternary_fix.text
   report at if text == "?" then parent.structure_test_offset else parent.structure_consequent_offset
   warn if mode == "never" then "Unexpected newline between {operands} of ternary expression." else "Expected newline between {operands} of ternary expression."
 }
