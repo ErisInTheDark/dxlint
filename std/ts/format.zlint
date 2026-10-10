@@ -119,6 +119,11 @@ in ts_dot, ts_punctuator, ts_member.optional rule dot-location {
   when text == "." || text == "?."
   when parent is (ts_member, ts_qualified_name, ts_import_type, ts_meta_property, ts_jsx_name)
   when if style == "object" then space_before.line_break else space_after.line_break
+  let dot_number_space text == "." && re_test(token_neighbours.before.text, /^(?:0|0[0-7]*[89]\d*|[1-9](?:_?\d)*)$/)
+  fix at {
+    start: if style == "object" then space_before.start else offset,
+    end: if style == "object" then end_offset else space_after.end,
+  } as if style == "object" then (if dot_number_space then " " else "") text space_before.text else space_after.text text
   warn if style == "object" then "Expected dot to be on same line as object." else "Expected dot to be on same line as property."
 }
 

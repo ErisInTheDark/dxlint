@@ -1,0 +1,2 @@
+import .ts
+rule dot-location { set style "object" }
