@@ -4,23 +4,36 @@ import .ts/expression-fixes
 define {
 
 # ---- type syntax -------------------------------------------------------------------
-fn type_restriction_matches(names, name) = any(names, n => re_replace(n, /\s+/, "") == name)
+schema restricted_type_policy boolean | string | null | { message?: string; fixWith?: string; suggest?: string[] }
+fn type_restriction_policy(types, name) = {
+  value key: { value keys(types); filter (key) re_replace(key, /\s+/, "") == name; last }
+  value policy: get(types, key)
+  value if type_of(policy) == "null" || policy == false then null else {
+    message: if type_of(policy) == "str" then policy else policy.message ?? "",
+    replacement: policy.fixWith.nonempty
+  }
+}
+fn type_restriction_warning(name, policy) = "Don't use `" name "` as a type." (if policy.message != "" then " " policy.message else "")
+@macro restricted_type_check {
+  default option types { [key: string]: restricted_type_policy } = {} "Restricted types and their message/replacement policies."
+  let restricted_policy type_restriction_policy(types, restricted_name)
+  when restricted_policy != null
+  warn type_restriction_warning(restricted_name, restricted_policy)
+  let replacement restricted_policy.replacement
+  fix at node if replacement != null && expression_fix_retains_comments(node, replacement) as replacement
+}
 in ts_type_reference let restricted_type_shape count(type_argument) > 0
 in ts_type_keyword let restricted_type_shape contains(["bigint", "boolean", "never", "null", "number", "object", "string", "symbol", "undefined", "unknown", "void"], text)
 in ts_tuple_type let restricted_type_shape count(element) == 0
 in ts_type_literal let restricted_type_shape count(member) == 0
 in ts_type_reference, ts_type_keyword, ts_tuple_type, ts_type_literal rule no-restricted-types {
-  default option names string[] = [] "Restricted type names."
   when restricted_type_shape
   let restricted_name re_replace(text, /\s+/, "")
-  when type_restriction_matches(names, restricted_name)
-  warn "Don't use `{restricted_name}` as a type."
+  @restricted_type_check
 }
 in ts_type_reference.name rule no-restricted-types:name {
-  default option names string[] = [] "Restricted type names."
   let restricted_name re_replace(text, /\s+/, "")
-  when type_restriction_matches(names, restricted_name)
-  warn "Don't use `{restricted_name}` as a type."
+  @restricted_type_check
 }
 
 # Array syntax supplies one notation value; mutable and readonly policies are independent.

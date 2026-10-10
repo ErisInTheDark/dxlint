@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-types set [" NS.Banned "]
+rule no-restricted-types { set types { " NS.Banned ": true } }

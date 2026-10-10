@@ -1,2 +1,2 @@
 import .ts
-rule no-restricted-types set ["{{field:number}}"]
+rule no-restricted-types { set types { "{field:number}": true } }
