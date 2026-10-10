@@ -598,8 +598,11 @@ in regex_site rule no-misleading-character-class {
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.
 in regex_site rule no-regex-spaces {
+  let spaces_argument if is (ts_call, ts_new) then { value argument.nodes; first; unparenthesised_node } else null
+  let spaces_fixable is ts_regex || regex_pattern.source == slice(spaces_argument.text, 1, -1)
   each f in @findings_of("spaces")
   when is ts_regex || regex_pattern.written == "string" && type_of(regex_flags) == "str"
+  fix at { start: f.offset, end: f.end } if spaces_fixable as " {{{f.kind}}}"
   warn "Spaces are hard to count. Use {{{f.kind}}}."
 }
 
