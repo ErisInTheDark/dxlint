@@ -125,10 +125,24 @@ fn signature_in_namespace(n) = {
   value ancestors: walk([n], ancestor => ancestor.parent.node)
   value any(ancestors, ancestor => ancestor is ts_namespace)
 }
+in ts_interface, ts_type_literal let signature_method_groups {
+  value member.nodes
+  filter (member) member is ts_method_signature && member.kind != "get" && member.kind != "set"
+  group_by (member) member.signature_source_key
+}
+in ts_method_signature let signature_method_group {
+  value key: signature_source_key
+  value parent.signature_method_groups
+  find (group) group.key == key
+  then (group) group.items
+}
+in ts_method_signature let signature_property_edit {
+  value representative: first(signature_method_group)
+  value if representative == node then signature_property_replacement(source, node) else representative.signature_property_edit
+}
 fn signature_property_replacement(source, owner) = {
   value key: owner.signature_source_key
-  value siblings: owner.parent.member.nodes
-  value methods: filter(siblings, member => member is ts_method_signature && member.kind != "get" && member.kind != "set" && member.signature_source_key == key)
+  value methods: owner.signature_method_group
   value first_method: first(methods)
   value last_method: last(methods)
   value end: last_method.signature_source_end
@@ -154,7 +168,7 @@ in ts_method_signature rule method-signature-style {
   option mode ("method" | "property") = "property" "Preferred method signature notation."
   when mode == "property" && kind != "get" && kind != "set"
   warn "Shorthand method signature is forbidden. Use a function property instead."
-  let replacement signature_property_replacement(source, node)
+  let replacement signature_property_edit
   fix at { start: replacement.start ?? offset, end: replacement.end ?? offset } if replacement != null as replacement.text
 }
 in ts_property_signature rule method-signature-style:property {
