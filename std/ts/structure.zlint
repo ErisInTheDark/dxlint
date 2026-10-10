@@ -522,6 +522,7 @@ in ts_line rule no-mixed-spaces-and-tabs {
 in ts_program rule unicode-bom {
   option mode "always" | "never" = "never"
   when mode == "always" && !bom || mode == "never" && bom
+  fix at { start: 0, end: if mode == "never" then 3 else 0 } as if mode == "always" then "\u{feff}" else ""
   report at 0
   warn if mode == "always" then "Expected Unicode BOM (Byte Order Mark)." else "Unexpected Unicode BOM (Byte Order Mark)."
 }

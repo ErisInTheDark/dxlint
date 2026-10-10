@@ -91,7 +91,7 @@ fn js_space(c: char) -> bool {
 impl<'s> Lexer<'s> {
     pub fn new(src: &'s str) -> Self {
         let mut lx = Lexer { src, pos: 0, broken: None };
-        if src.starts_with("#!") {
+        if src.strip_prefix('\u{feff}').unwrap_or(src).starts_with("#!") {
             lx.pos = src.find('\n').unwrap_or(src.len());
         }
         lx
@@ -348,6 +348,25 @@ impl<'s> Lexer<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hashbangs_allow_a_leading_bom_and_keep_source_offsets() {
+        for prefix in ["", "\u{feff}"] {
+            let src = format!("{prefix}#!/usr/bin/env node\nvalue");
+            let mut lexer = Lexer::new(&src);
+            let token = lexer.next_token();
+            assert_eq!(token.tok, Tok::Ident);
+            assert_eq!(&src[token.start as usize..token.end as usize], "value");
+            assert!(token.nl);
+            assert_eq!(lexer.next_token().tok, Tok::Eof);
+            assert_eq!(Lexer::new(&format!("{prefix}#!/usr/bin/env node")).next_token().tok, Tok::Eof);
+        }
+        for prefix in [" ", "\u{feff} ", "\u{feff}\u{feff}"] {
+            let src = format!("{prefix}#!/usr/bin/env node\nvalue");
+            let token = Lexer::new(&src).next_token();
+            assert_ne!(&src[token.start as usize..token.end as usize], "value");
+        }
+    }
 
     #[test]
     fn line_comments_leave_following_tokens_on_a_new_line() {
