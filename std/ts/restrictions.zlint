@@ -619,6 +619,7 @@ schema restriction_global {name: string; message?: string}
   option globals restriction_global[] = [] "restricted globals"
   option checkGlobalObject boolean = false "check global-object properties"
   option globalObjects string[] = [] "additional global-object names"
+  when len(globals) > 0
 }
 in ts_identifier rule no-restricted-globals {
   @restriction_global_options
@@ -663,6 +664,7 @@ in ts_object_pattern, ts_object {
 }
 @macro restriction_property_body {
   option options restriction_property[] = [] "restricted object properties"
+  when len(options) > 0
   let matched restriction_property_match(object_name, property_name, options)
   when type_of(property_name) == "str" && matched != null
   warn (if matched.object != null then "'{object_name}.{property_name}' is restricted from being used." (if matched.allowProperties != null then " Only these properties are allowed: {join(matched.allowProperties, ', ')}." else "") else "'{property_name}' is restricted from being used." (if matched.allowObjects != null then " Property '{property_name}' is only allowed on these objects: {join(matched.allowObjects, ', ')}." else "")) (if matched.message != null && matched.message != "" then " " matched.message else "")
