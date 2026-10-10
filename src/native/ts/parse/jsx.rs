@@ -3,7 +3,7 @@
 //! the token after a `>` or `}` that opens text is never lexed.
 
 use super::super::kinds::{Field, Kind};
-use super::super::lexer::Tok;
+use super::super::lexer::{Tok, js_space};
 use super::{Kids, PResult, Parser};
 
 impl<'s> Parser<'s> {
@@ -89,8 +89,9 @@ impl<'s> Parser<'s> {
         // Spacing (line breaks too) may surround the `.` / `:`.
         let b = self.src.as_bytes();
         let skip = |mut at: usize| {
-            while b.get(at).is_some_and(u8::is_ascii_whitespace) {
-                at += 1;
+            for ch in src[at..].chars() {
+                if !ch.is_ascii_whitespace() && !js_space(ch) { break; }
+                at += ch.len_utf8();
             }
             at
         };
@@ -98,14 +99,15 @@ impl<'s> Parser<'s> {
         loop {
             end = self.lx.jsx_name_end(end);
             let dot = skip(end);
+            if !matches!(b.get(dot), Some(b'.' | b':')) { break; }
             let next = skip(dot + 1);
-            if matches!(b.get(dot), Some(b'.' | b':')) && b.get(next).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
+            if b.get(next).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'_' | b'$')) {
                 end = next;
             } else {
                 break;
             }
         }
-        let bare = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let bare = |s: &str| s.chars().filter(|c| !c.is_ascii_whitespace() && !js_space(*c)).collect::<String>();
         if bare(&src[closing_start as usize..end]) != bare(name_text) {
             return self.fail_at(closing_start, &format!("expected corresponding JSX closing tag for `{name_text}`"));
         }
@@ -257,8 +259,9 @@ impl<'s> Parser<'s> {
     fn jsx_attribute_value(&mut self) -> PResult<u32> {
         let b = self.src.as_bytes();
         let mut at = self.tok.end as usize;
-        while at < b.len() && b[at].is_ascii_whitespace() {
-            at += 1;
+        for ch in self.src[at..].chars() {
+            if !ch.is_ascii_whitespace() && !js_space(ch) { break; }
+            at += ch.len_utf8();
         }
         if let Some(&quote) = b.get(at).filter(|&&c| c == b'"' || c == b'\'') {
             let Some(close) = memchr::memchr(quote, &b[at + 1..]) else {
@@ -289,6 +292,45 @@ impl<'s> Parser<'s> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn javascript_spaces_separate_jsx_names_and_values() {
+        use crate::native::ts::kinds::{FIELD_NAMES, KINDS};
+
+        for gap in ['\u{a0}', '\u{2003}', '\u{feff}', '\u{2028}', '\u{2029}'] {
+            let source = format!("const view = <C a{gap}b c/>;");
+            let parsed = super::super::super::parse(&source, true).expect("JS whitespace is valid in JSX headers");
+            let opening = parsed.nodes.iter().find(|node| KINDS.get(node.matcher as usize).is_some_and(|kind| kind.0 == "ts_jsx_opening")).expect("opening tag");
+            let properties = opening.children.iter().filter(|edge| FIELD_NAMES[edge.label as usize] == "property")
+                .map(|edge| &parsed.nodes[edge.node as usize]).collect::<Vec<_>>();
+            assert_eq!(properties.len(), 3, "each prop is separate for {gap:?}");
+            let names = properties.iter().map(|prop| {
+                let name = prop.children.iter().find(|edge| FIELD_NAMES[edge.label as usize] == "name").expect("prop name");
+                let name = &parsed.nodes[name.node as usize];
+                &source[name.start as usize..name.end as usize]
+            }).collect::<Vec<_>>();
+            assert_eq!(names, ["a", "b", "c"], "whitespace never enters a name");
+            let source = format!("const view = <C c={gap}\"三\"/>;");
+            let parsed = super::super::super::parse(&source, true).expect("JS whitespace before a JSX string");
+            let value = parsed.nodes.iter().find(|node| KINDS.get(node.matcher as usize).is_some_and(|kind| kind.0 == "ts_string")).expect("string value");
+            assert_eq!(KINDS[value.matcher as usize].0, "ts_string");
+            assert_eq!(&source[value.start as usize..value.end as usize], "\"三\"");
+        }
+    }
+
+    #[test]
+    fn closing_jsx_names_use_javascript_spaces() {
+        for gap in ['\u{a0}', '\u{2003}', '\u{feff}', '\u{2028}', '\u{2029}'] {
+            let source = format!("const view = <A . B></A{gap}.{gap}B>;");
+            super::super::super::parse(&source, true).expect("closing member name ignores JS whitespace");
+        }
+        for name in ["三", "aria-label", "a\u{85}b"] {
+            let source = format!("const view = <{name}></{name}>;");
+            super::super::super::parse(&source, true).expect("non-JS spaces and Unicode names remain name characters");
+        }
+        assert!(super::super::super::parse("const view = <a\u{85}b></ab>;", true).is_err(), "non-JS space cannot disappear from a name");
+        assert!(super::super::super::parse("const view = <C></C", true).is_err(), "unfinished closing name is a parse error");
+    }
+
     #[test]
     fn tag_owners_separate_headers_from_children() {
         use crate::native::ts::kinds::{FIELD_NAMES, KINDS};

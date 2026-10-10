@@ -84,7 +84,7 @@ fn ident_part(b: u8) -> bool {
 
 /// Non-ASCII characters that are whitespace or line breaks to JavaScript,
 /// never part of a name (`f ()` is `f`, a line break, `()`).
-fn js_space(c: char) -> bool {
+pub(super) fn js_space(c: char) -> bool {
     matches!(c, '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
 }
 
@@ -300,7 +300,9 @@ impl<'s> Lexer<'s> {
         let b = self.bytes();
         let mut end = from;
         while end < b.len() && (ident_part(b[end]) || b[end] == b'-') {
-            end += 1;
+            let ch = if b[end] >= 0x80 { self.src[end..].chars().next() } else { None };
+            if ch.is_some_and(js_space) { break; }
+            end += ch.map_or(1, char::len_utf8);
         }
         end
     }
