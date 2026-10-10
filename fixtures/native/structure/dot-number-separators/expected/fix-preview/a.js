@@ -1,0 +1,14 @@
+5 .prop;
+5_000 .prop;
+08 .prop;
+01.prop;
+01234567.prop;
+5.000_000.prop;
+0b1010_1010.prop;
+0xFF.prop;
+0o77.prop;
+5e1.prop;
+5n.prop;
+(5) .prop;
+0?.prop;
+1[/* keep */ "prop"];

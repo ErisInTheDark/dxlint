@@ -81,7 +81,8 @@ in ts_index rule dot-notation:computed {
   when !allow_index || property.declared == true || !any(object.index_key_types, key_type => key_type.string_like)
   let open index.space_before.start - 1
   let fixable { value overlapping(ts_comment, open, end_offset); count } == 0
-  let separator if optional != null then "" else if object is ts_number then " ." else "."
+  let receiver object.structure_unwrapped
+  let separator if optional != null then "" else if receiver is ts_number && re_test(receiver.text, /^(?:0|0[0-7]*[89]\d*|[1-9](?:_?\d)*)$/) then " ." else "."
   let trailing if space_after.text == "" && next_token is (ts_identifier, ts_keyword, ts_number, ts_boolean, ts_null) then " " else ""
   let quoted if template then "`" name "`" else if literal.type == "string" then "\"" name "\"" else name
   report at key

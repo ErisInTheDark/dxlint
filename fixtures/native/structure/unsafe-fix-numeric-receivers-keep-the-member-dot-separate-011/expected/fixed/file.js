@@ -1,1 +1,1 @@
-0xff .prop;
+0xff.prop;

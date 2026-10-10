@@ -1,1 +1,1 @@
-1e3 .prop;
+1e3.prop;
