@@ -415,8 +415,17 @@ in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
 }
 
 fn problem_label_context(n) = { value n; walk (current) if current is ts_labeled then current.parent else null; last }
+group problem_label_jump ts_break, ts_continue
+fn problem_jump_label(jump) = {
+  value jump.parent
+  walk (current) if current is (ts_function_like, ts_static_block) then null else current.parent
+  filter (current) current is ts_labeled && current.label.identifier_name == jump.label.identifier_name
+  first
+}
+in problem_label_jump let problem_label_target if label != null then problem_jump_label(node) else null
+in ts_labeled let problem_label_used { value descendants(problem_label_jump); any (jump) jump.problem_label_target.offset == offset }
 in ts_labeled.label rule no-unused-labels {
-  when !{ value result: "\\b(?:break|continue)\\s+" re_escape(text) "\\b"; value re_test(parent.body, result) }
+  when !parent.problem_label_used
   let label_body parent.body.node
   let label_context problem_label_context(parent.parent)
   let label_expression unparenthesised_node(label_body.expression.node)
