@@ -697,6 +697,7 @@ in ts_export rule no-restricted-exports:direct {
 }
 in ts_identifier rule no-restricted-exports:declarations {
   @restriction_export_options
+  when len(restrictedNamedExports) > 0 || restrictedNamedExportsPattern != ""
   let export_name text
   when (exported && declaration_kind != null || is ts_declarator.name && parent.restriction_exported_declaration) && ts_export != null && ts_export.kind != "default"
   when restriction_export_forbidden(export_name, restrictedNamedExports, restrictedNamedExportsPattern)
