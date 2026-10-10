@@ -1,0 +1,1 @@
+consume((arguments) => { return arguments; });
