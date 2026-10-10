@@ -422,7 +422,7 @@ fn restriction_statement_total(local_count, child_totals) = (local_count.nonempt
 fn restriction_branch_total(branch, extra, child_totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(child_totals)
 in ts_node {
   let restriction_metric_boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
-  let restriction_flow_branch is restriction_flow_control || restriction_parameter_branch == true || restriction_catch_branch == true || restriction_assignment_branch == true || restriction_optional_branch == true
+  let restriction_flow_branch is restriction_flow_control || (if is ts_parameter then restriction_parameter_branch == true else if is ts_try then restriction_catch_branch == true else if is ts_assignment then restriction_assignment_branch == true else if is (ts_member, ts_index, ts_call) then restriction_optional_branch == true else false)
   let restriction_subtree_statements restriction_statement_total(restriction_local_statements, children.restriction_statement_contribution)
   let restriction_statement_contribution if restriction_metric_boundary then 0 else restriction_statement_total(restriction_local_statements, children.restriction_statement_contribution)
   let restriction_subtree_classic restriction_branch_total(restriction_flow_branch, restriction_case_branch, children.restriction_classic_contribution)
