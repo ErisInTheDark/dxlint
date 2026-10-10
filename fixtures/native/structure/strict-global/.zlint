@@ -1,0 +1,3 @@
+import .ts
+language .js { set sourceType "script" }
+rule strict { set mode "global" }

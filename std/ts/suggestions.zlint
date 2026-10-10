@@ -715,19 +715,30 @@ fn strict_enclosing_function_directive(n) =
     walk (current) current.parent.node
     any (current) current is (ts_function, ts_arrow, ts_method) && count(current.directive_scope.directives) > 0
   }
-fn strict_directive_message(n, scope, mode, directive) =
+fn strict_directive_kind(n, scope, mode, directive) =
   if n not ts_program && !scope.simple_parameters then
-    if directive == first(scope.directives) then "'use strict' directive inside a function with non-simple parameter list throws a syntax error since ES2016." else "Multiple 'use strict' directives."
-  else if mode == "never" then "Strict mode is not permitted."
-  else if mode == "module" then "'use strict' is unnecessary inside of modules."
-  else if mode == "implied" then "'use strict' is unnecessary when implied strict mode is enabled."
+    if directive == first(scope.directives) then "non-simple" else "multiple"
+  else if mode == "never" then "never"
+  else if mode == "module" then "module"
+  else if mode == "implied" then "implied"
   else if n is ts_program then
-    if mode == "function" then "Use the function form of 'use strict'." else if directive == first(scope.directives) then null else "Multiple 'use strict' directives."
-  else if mode == "global" then "Use the global form of 'use strict'."
-  else if directive != first(scope.directives) then "Multiple 'use strict' directives."
-  else if strict_enclosing_function_directive(n) then "Unnecessary 'use strict' directive."
-  else if scope.class_body then "'use strict' is unnecessary inside of classes."
+    if mode == "function" then "function" else if directive == first(scope.directives) then null else "multiple"
+  else if mode == "global" then "global"
+  else if directive != first(scope.directives) then "multiple"
+  else if strict_enclosing_function_directive(n) then "unnecessary"
+  else if scope.class_body then "class"
   else null
+fn strict_directive_message(kind) = get({
+  "non-simple": "'use strict' directive inside a function with non-simple parameter list throws a syntax error since ES2016.",
+  multiple: "Multiple 'use strict' directives.",
+  never: "Strict mode is not permitted.",
+  module: "'use strict' is unnecessary inside of modules.",
+  implied: "'use strict' is unnecessary when implied strict mode is enabled.",
+  function: "Use the function form of 'use strict'.",
+  global: "Use the global form of 'use strict'.",
+  unnecessary: "Unnecessary 'use strict' directive.",
+  class: "'use strict' is unnecessary inside of classes."
+}, kind)
 fn strict_missing(n, scope, mode) =
   if count(scope.directives) != 0 then []
   else if n is ts_program && mode == "global" && count(n.body.node) > 0 then [{ offset: first(n.body.node).offset, message: "Use the global form of 'use strict'." }]
@@ -743,13 +754,19 @@ in ts_program, ts_function, ts_arrow, ts_method rule strict {
   let strict_findings {
     value initial_findings: strict_missing(node, strict_scope, strict_mode)
     value strict_scope.directives
-    fold initial_findings (findings, directive) findings [{
-      offset: directive.offset,
-      message: strict_directive_message(node, strict_scope, strict_mode, directive)
-    }]
+    fold initial_findings (findings, directive) {
+      value kind: strict_directive_kind(node, strict_scope, strict_mode, directive)
+      value findings [{
+        offset: directive.offset,
+        directive: directive,
+        kind: kind,
+        message: strict_directive_message(kind)
+      }]
+    }
   }
   each strict_finding in filter(strict_findings, finding => finding.message != null)
   report at strict_finding.offset
+  fix at strict_finding.directive if contains(["multiple", "unnecessary", "module", "implied", "class"], strict_finding.kind) && expression_fix_clean(strict_finding.directive) as ""
   warn strict_finding.message
 }
 
