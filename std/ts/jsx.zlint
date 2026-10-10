@@ -525,6 +525,7 @@ in ts_jsx_element rule jsx-shorthand-fragment {
 in ts_jsx_attribute rule jsx-shorthand-boolean {
   when value is ts_jsx_expression && value.jsx_boolean_true == true
   warn "Omit the value for boolean attributes."
+  fix at { start: name.end_offset, end: end_offset } if expression_fix_clean(node) && (next == null || next.offset > end_offset) as ""
 }
 in ts_boolean let jsx_boolean_true text == "true"
 in ts_parenthesized let jsx_boolean_true expression.jsx_boolean_true == true
@@ -540,6 +541,10 @@ in ts_jsx_attribute.value rule jsx-quotes {
   when slice(text, 0, 1) != (if double then '"' else "'") && !{ value result: len(text) - 1; value slice(text, 1, result); jsx_contains_quote double }
   report at node
   warn "Unexpected usage of {if mode == 'prefer-double' then 'singlequote' else 'doublequote'}."
+  let quote if double then '"' else "'"
+  let body_end byte_len(text) - 1
+  let body byte_slice(text, 1, body_end)
+  fix at node as quote body quote
 }
 @macro jsx_equals_spacing_body {
   option mode "always" | "never" = "never" "spacing around equals"
