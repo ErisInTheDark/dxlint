@@ -685,12 +685,48 @@ in unreachable_loop rule no-unreachable-loop {
   warn "Invalid loop. Its body allows only one iteration."
 }
 
+fn assignment_fix_reference(n) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_identifier
+    || bare is (ts_member, ts_index) && bare.optional == null
+    && bare.object is (ts_identifier, ts_this)
+    && (bare is ts_member || unparenthesised_node(bare.index.node) is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null, ts_regex))
+}
+fn assignment_fix_rank(operator) = get({
+  "|": 6, "^": 7, "&": 8, "<<": 11, ">>": 11, ">>>": 11,
+  "+": 12, "-": 12, "*": 13, "/": 13, "%": 13, "**": 14
+}, operator)
+fn assignment_fix_text(source, n, mode, shorthand) = {
+  value binary: unparenthesised_node(n.right.node)
+  value before: byte_slice(source, n.offset, n.operator.offset)
+  value if !assignment_fix_reference(n.left.node) then null
+    else if mode == "always" then {
+      value if binary not ts_binary || n.left.reference_key_strict != binary.left.reference_key_strict
+        || !assignment_fix_reference(binary.left.node)
+        || !expression_fix_clean({ offset: n.operator.end_offset, end_offset: binary.operator.offset }) then null
+      else before shorthand byte_slice(source, binary.operator.end_offset, binary.end_offset)
+    }
+    else {
+      value operator: slice(n.operator, 0, -1)
+      value if !expression_fix_clean({ offset: n.offset, end_offset: n.operator.offset }) then null
+      else {
+        value leading: byte_slice(source, n.operator.end_offset, n.right.offset)
+        value needed: n.right not ts_parenthesized && n.right.precedence <= assignment_fix_rank(operator)
+        value following: byte_slice(source, n.operator.end_offset, n.end_offset)
+        value right: if needed then leading expression_fix_wrap(n.right.text, true)
+          else expression_fix_separator(operator, following) following
+        value before "= " before operator right
+      }
+    }
+}
 in ts_assignment rule operator-assignment {
   option mode ("always" | "never") = "always" "compound arithmetic assignment policy"
   let assigned_key left.reference_key_strict
   let shorthand if operator == "=" && right.arithmetic_operator != null && assigned_key != null && (assigned_key == right.strict_left_reference_key || contains(["*", "&", "^", "|"], right.arithmetic_operator) && assigned_key == right.strict_right_reference_key) then right.arithmetic_operator "=" else null
   when if mode == "never" then operator != "=" && !contains(["&&=", "||=", "??="], operator) else shorthand != null
   warn if mode == "never" then "Unexpected operator assignment ({operator}) shorthand." else "Assignment (=) can be replaced with operator assignment ({shorthand})."
+  let replacement assignment_fix_text(source, node, mode, shorthand)
+  fix if replacement != null && expression_fix_retains_comments(node, replacement) as replacement
 }
 
 fn caught_throw_property_kind(parameter, property) =
