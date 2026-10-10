@@ -21,7 +21,6 @@ mod constituents;
 mod regexp;
 mod redundant;
 mod this_return;
-mod nullish;
 mod transfers;
 mod assignments;
 mod arguments;
@@ -369,12 +368,6 @@ pub const FACTS: &[Fact] = &[
         name: "void_argument_kind",
         doc: "on a void unary expression: the effective argument is a call, assignment or other expression",
         get: |f, n| f.with_file(void_argument_kind, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "nullish_coalescing",
-        doc: "on logical, assignment, conditional and if nodes: nullish replacement and truthiness context",
-        get: |f, n| f.with_file(nullish::finding, n),
     },
 ];
 

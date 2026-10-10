@@ -72,19 +72,21 @@ impl NativeFile<'_> {
         fn normalise(file: &NativeFile<'_>, value: u32, ty: Ty) -> Ty {
             match ty {
                 Ty::Union(parts) => Ty::union(parts.into_iter().map(|part| normalise(file, value, part)).collect()),
-                Ty::Lit(_, primitive) => {
+                Ty::Lit(..) | Ty::EnumMember(_) => {
                     let context = file.contextual_type_of(value);
-                    fn literal_context(ty: &Ty, primitive: &str, parameter: bool) -> bool {
-                        match ty {
-                            Ty::Lit(_, kind) => *kind == primitive,
-                            Ty::Prim("boolean") => primitive == "boolean",
-                            Ty::Prim(kind) => parameter && *kind == primitive,
-                            Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(|part| literal_context(part, primitive, parameter)),
+                    fn literal_context(context: &Ty, literal: &Ty, parameter: bool) -> bool {
+                        match (context, literal) {
+                            (Ty::Union(parts) | Ty::Inter(parts), _) => parts.iter().any(|part| literal_context(part, literal, parameter)),
+                            (Ty::Named(symbols, _), Ty::EnumMember(member)) => *symbols == member.symbols,
+                            (Ty::EnumMember(context), Ty::EnumMember(member)) => context.symbols == member.symbols,
+                            (Ty::Lit(_, kind), Ty::Lit(_, primitive)) => kind == primitive,
+                            (Ty::Prim("boolean"), Ty::Lit(_, primitive)) => *primitive == "boolean",
+                            (Ty::Prim(kind), Ty::Lit(_, primitive)) => parameter && kind == primitive,
                             _ => false,
                         }
                     }
-                    if literal_context(&context, primitive, false)
-                        || literal_context(&file.contextual_constraint_of(value), primitive, matches!(context, Ty::Param(_)))
+                    if literal_context(&context, &ty, false)
+                        || literal_context(&file.contextual_constraint_of(value), &ty, matches!(context, Ty::Param(_)))
                         || !file.fresh_literal_source(value, &ty, MAX_DEPTH) {
                         ty
                     } else { ty.literal_base() }
@@ -155,6 +157,7 @@ impl NativeFile<'_> {
         match ty {
             Ty::Union(parts) => parts.iter().any(|part| self.literal_branch_matches(part, target)),
             Ty::Lit(..) => self.ck().equivalent(ty, target) == Some(true),
+            Ty::EnumMember(_) => ty.same_identity(target),
             _ => false,
         }
     }

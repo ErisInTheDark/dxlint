@@ -1,3 +1,3 @@
 import .ts
-override in nullish_coalescing_expression let prefer_nullish_coalescing_checked nullish_coalescing.kind == "ternary"
-rule prefer-nullish-coalescing
+drop group nullish_coalescing_expression ts_logical, ts_assignment, ts_if
+rule prefer-nullish-coalescing { set ignoreConditionalTests false }

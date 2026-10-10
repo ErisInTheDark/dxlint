@@ -1,0 +1,7 @@
+import .ts
+rule prefer-nullish-coalescing {
+  set ignoreBooleanCoercion true
+  set ignoreMixedLogicalExpressions true
+  set ignoreTernaryTests true
+  set ignoreIfStatements true
+}

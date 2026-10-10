@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::super::modules::{DeclRef, FileId};
 use super::super::summary::{DeclKind, Member, MemberKind, Sig, TypeSyn, Visibility};
-use super::{Callable, Checker, Env, PropertyOrigin, Sym, Ty, MAX_DEPTH};
+use super::{Callable, Checker, Env, PropertyOrigin, Ty, MAX_DEPTH};
 
 #[cfg(test)]
 thread_local! {
@@ -113,15 +113,10 @@ impl Checker<'_> {
     /// Primitive backing a specific enum member, without erasing enum identity in `member`.
     pub fn enum_member_base(&self, ty: &Ty, name: &str) -> Option<Ty> {
         let sym = match ty { Ty::Ns(sym) | Ty::Named(sym, _) => sym, _ => return None };
-        for &decl in sym.iter() {
-            let summary = self.summary_of(decl.file)?;
-            let owner = &summary.decls[decl.decl as usize];
-            if owner.kind != DeclKind::Enum { continue }
-            if let Some(member) = owner.members.iter().find(|member| &*member.name == name) {
-                return Some(member.ty.as_ref().map_or(Ty::Prim("number"), |ty| self.eval(ty, &self.decl_env(decl))));
-            }
+        match self.enum_member_type(sym, name) {
+            Ty::EnumMember(member) => Some(member.base.clone()),
+            _ => None,
         }
-        None
     }
 
     pub fn is_lib_decl(&self, decl: DeclRef) -> bool {
@@ -222,6 +217,7 @@ impl Checker<'_> {
     /// The interface primitives and arrays get their members from.
     pub fn apparent(&self, t: &Ty) -> Ty {
         match t {
+            Ty::EnumMember(member) => self.apparent(&member.base),
             Ty::Prim("object") => self.global_named("Object", vec![]),
             Ty::Prim("string") | Ty::Lit(_, "string") => self.global_named("String", vec![]),
             Ty::Prim("number") | Ty::Lit(_, "number") => self.global_named("Number", vec![]),
@@ -363,8 +359,7 @@ impl Checker<'_> {
             }
             Ty::Ns(sym) => {
                 if self.is_enum(sym) {
-                    let enum_sym: Sym = sym.iter().copied().filter(|&r| self.kind_of(r) == Some(DeclKind::Enum)).collect();
-                    return Resolution::typed(Ty::Named(enum_sym, Vec::new()));
+                    return Resolution::typed(self.enum_member_type(sym, name));
                 }
                 let found = self.namespace_member(sym, name);
                 if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found), None) }
@@ -373,6 +368,7 @@ impl Checker<'_> {
                 let found = self.module_member(m.0, name);
                 if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found), None) }
             }
+            Ty::EnumMember(member) => self.member_inner::<METADATA>(&member.base, name, receiver),
             Ty::Prim(_) | Ty::Lit(..) | Ty::Array(_) | Ty::Tuple(_) | Ty::Fn(_) => {
                 let apparent = self.apparent(t);
                 if apparent.is_opaque() {
@@ -534,6 +530,7 @@ impl Checker<'_> {
             // Named types repeat a lot (and their heritage is deep): the
             // project remembers their member names.
             // An enum value has its primitive's members, not the enum's.
+            Ty::EnumMember(member) => self.member_names(&member.base, out),
             Ty::Named(sym, _) if self.is_enum(sym) => {
                 let prim = Ty::Prim(if self.is_string_enum(sym) { "string" } else { "number" });
                 self.member_names(&prim, out);

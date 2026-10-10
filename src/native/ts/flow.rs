@@ -316,6 +316,7 @@ impl NativeFile<'_> {
     fn typeof_kind(&self, t: &Ty) -> Option<&'static str> {
         let ck = &self.typing().checker;
         Some(match t {
+            Ty::EnumMember(member) => return self.typeof_kind(&member.base),
             Ty::Prim("string") | Ty::Lit(_, "string") => "string",
             Ty::Prim("number") | Ty::Lit(_, "number") => "number",
             Ty::Prim("boolean") | Ty::Lit(_, "boolean") => "boolean",

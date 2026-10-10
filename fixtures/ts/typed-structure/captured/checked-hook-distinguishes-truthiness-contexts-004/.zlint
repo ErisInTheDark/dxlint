@@ -1,3 +1,2 @@
 import .ts
-override in nullish_coalescing_expression let prefer_nullish_coalescing_checked !nullish_coalescing.mixed && !nullish_coalescing.conditional
-rule prefer-nullish-coalescing
+rule prefer-nullish-coalescing { set ignoreMixedLogicalExpressions true }

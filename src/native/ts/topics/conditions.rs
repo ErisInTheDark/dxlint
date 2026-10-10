@@ -15,7 +15,7 @@ pub const FACTS: &[Fact] = &[
     Fact {
         shape: Fact::SCALAR.shape,
         name: "type_domains",
-        doc: "native expressions: constrained value domains, type kind and union/intersection constituent domains",
+        doc: "native expressions: value domains, type kind and union/intersection constituents; optional constrained argument defaults to true",
         get: |f, n| f.with_file(domains, n),
     },
     Fact {
@@ -48,7 +48,9 @@ fn access_resolution(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 }
 
 fn domains(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    domain_record(file, &file.constrained_type_of(node))
+    let args = crate::expr::facts::args();
+    let ty = if matches!(args.first(), Some(Value::Bool(false))) { file.type_of(node) } else { file.constrained_type_of(node) };
+    domain_record(file, &ty)
 }
 
 fn domain_record(file: &NativeFile<'_>, ty: &Ty) -> Value<'static> {
@@ -74,6 +76,11 @@ fn describe_domain(file: &NativeFile<'_>, ty: &Ty, depth: usize) -> Value<'stati
     };
     let mut flags = Vec::new();
     file.flags_of(ty, &mut flags);
+    let primitive = match shape {
+        Ty::Prim(primitive) | Ty::Lit(_, primitive) => Some(*primitive),
+        Ty::EnumMember(member) => member.primitive(),
+        _ => None,
+    };
     let literal = checker.literal_value(ty).map_or(Value::Null, |literal| {
         let (kind, value) = match literal {
             LiteralValue::String(value) => ("string", Value::from(value)),
@@ -94,6 +101,7 @@ fn describe_domain(file: &NativeFile<'_>, ty: &Ty, depth: usize) -> Value<'stati
         ("non_nullish".into(), Value::Bool(non_nullish)),
         ("opaque".into(), Value::Bool(opaque)),
         ("flags".into(), Value::list(flags.into_iter().map(Value::from).collect())),
+        ("primitive".into(), primitive.map_or(Value::Null, Value::from)),
         ("literal".into(), literal),
     ])
 }
@@ -131,6 +139,18 @@ fn callable_returns(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 #[cfg(test)]
 mod tests {
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn type_domains_can_keep_open_types_without_applying_constraints() {
+        let source = "function f<T extends number>(value: T) { const result = /*@*/value; } declare const concrete: string; const result = /*@*/concrete;";
+        with_native_file(source, |file, nodes| {
+            let raw = |node| crate::expr::facts::with_args(vec![crate::expr::Value::Bool(false)], || super::domains(file, node));
+            let default = super::domains(file, nodes[0]);
+            assert_eq!(default.key("kind"), crate::expr::Value::from("number"));
+            assert_eq!(raw(nodes[0]).key("kind"), crate::expr::Value::from("parameter"), "raw domains must retain the open type");
+            assert!(raw(nodes[1]).loose_eq(&super::domains(file, nodes[1])), "a concrete type must not depend on the constraint switch");
+        });
+    }
 
     #[test]
     fn intersection_domains_respect_primitive_and_literal_constraints() {

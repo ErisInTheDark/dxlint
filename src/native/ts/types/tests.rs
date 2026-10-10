@@ -26,6 +26,18 @@ fn reference(name: &str, args: Vec<Ty>, checker: &Checker<'_>) -> Ty {
 }
 
 #[test]
+fn import_aliases_preserve_namespace_and_generic_class_types() {
+    let source = "namespace N { export class Box<T> { value: T; } } import Space = N; import Box = N.Box; type Direct = /*@*/N.Box<number>; type Through = /*@*/Space.Box<number>; type Alias = /*@*/Box<number>;";
+    crate::engine::tests::with_native_file(source, |file, nodes| {
+        let types: Vec<_> = nodes.iter().map(|&node| file.type_of(node)).collect();
+        for ty in &types[1..] {
+            assert!(!ty.is_opaque() && ty.same_identity(&types[0]), "import alias lost its class type: {ty:?}");
+            assert!(file.typing().checker.member(ty, "value").same_identity(&Ty::Prim("number")), "import alias lost type arguments");
+        }
+    });
+}
+
+#[test]
 fn imported_class_initializers_preserve_their_value_domains() {
     let mut failures = Vec::new();
     for (name, source, path) in [

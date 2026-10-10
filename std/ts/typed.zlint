@@ -15,6 +15,7 @@ import .ts/typed/readonly-members
 import .ts/typed/string-boundaries
 import .ts/typed/type-constituents
 import .ts/typed/return-await
+import .ts/typed/nullish-coalescing
 
 define {
 
@@ -526,24 +527,6 @@ in ts_index.index rule no-unsafe-member-access:key {
   when unsafe_member_key.kind != null && (!allowOptionalChaining || parent.optional == null)
   report at unsafe_member_key.offset
   warn if unsafe_member_key.kind == "error" then "The type of computed name [{unsafe_member_key.text}] cannot be resolved." else "Computed name [{unsafe_member_key.text}] resolves to an `any` value."
-}
-
-group nullish_coalescing_expression ts_logical, ts_assignment, ts_conditional, ts_if
-in nullish_coalescing_expression let prefer_nullish_coalescing_checked !nullish_coalescing.truthiness || !nullish_coalescing.conditional
-in nullish_coalescing_expression rule prefer-nullish-coalescing {
-  option ignoreBigint boolean = false "Ignore bigint truthiness"
-  option ignoreBoolean boolean = false "Ignore boolean truthiness"
-  option ignoreNumber boolean = false "Ignore number truthiness"
-  option ignoreString boolean = false "Ignore string truthiness"
-  option ignoreUnknown boolean = false "Ignore unknown truthiness"
-  let replacement nullish_coalescing
-  let nullish_flags replacement.flags
-  when replacement != null
-  when !replacement.truthiness || replacement.unknown || { value nullish_flags.nonempty ?? []; contains "nullable" }
-  when prefer_nullish_coalescing_checked
-  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || { value nullish_flags.nonempty ?? []; contains "bigint" } && ignoreBigint || { value nullish_flags.nonempty ?? []; contains "boolean" } && ignoreBoolean || { value nullish_flags.nonempty ?? []; contains "number" } && ignoreNumber || { value nullish_flags.nonempty ?? []; contains "string" } && ignoreString)
-  report at replacement.offset
-  warn if replacement.kind == "ternary" then "Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read." else if replacement.kind == "if" then "Prefer using nullish coalescing operator (`??=`) instead of an assignment expression, as it is simpler to read." else if replacement.kind == "assignment" then "Prefer using nullish coalescing operator (`??=`) instead of a logical assignment (`||=`), as it is a safer operator." else "Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator."
 }
 
 }

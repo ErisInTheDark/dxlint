@@ -59,6 +59,12 @@ fn clauses(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Option<Clauses> {
     if depth > 64 { return None }
     let single = |name| vec![vec![option(name)]];
     let out = match ty {
+        Ty::EnumMember(member) => {
+            let mut out = single(member.primitive()?);
+            let gates = named_gates(&member.enum_type(), ck, &mut Vec::new());
+            for clause in &mut out { clause.extend(gates.clone()); }
+            out
+        }
         Ty::Union(parts) => {
             let mut out = Vec::new();
             for part in parts {

@@ -96,13 +96,18 @@ fn parts(ty: &Ty) -> &[Ty] {
 }
 
 fn enum_ids(checker: &Checker<'_>, ty: &Ty) -> Vec<Value<'static>> {
-    let Ty::Named(symbol, _) = ty else { return Vec::new() };
+    let symbol = match ty {
+        Ty::Named(symbol, _) => symbol,
+        Ty::EnumMember(member) => &member.symbols,
+        _ => return Vec::new(),
+    };
     if !checker.is_enum(symbol) { return Vec::new() }
     symbol.iter().map(|decl| Value::from(format!("{}:{}", decl.file.0, decl.decl))).collect()
 }
 
 fn domains(checker: &Checker<'_>, ty: &Ty) -> Vec<Value<'static>> {
     match ty {
+        Ty::EnumMember(member) => domains(checker, &member.base),
         Ty::Prim(domain) | Ty::Lit(_, domain) => vec![Value::from(*domain)],
         Ty::Named(symbol, _) if checker.is_enum(symbol) => {
             checker.enum_domains(symbol).into_iter().map(Value::from).collect()
@@ -197,7 +202,12 @@ fn enum_names(checker: &Checker<'_>, ty: &Ty, path: &mut Vec<Ty>, out: &mut Vec<
     if !query.visit() { return }
     if path.len() >= 64 { query.remaining = 0; return }
     if path.iter().any(|seen| seen.same_identity(ty)) { return }
-    if let Ty::Named(symbol, _) = ty {
+    let symbol = match ty {
+        Ty::Named(symbol, _) => Some(symbol),
+        Ty::EnumMember(member) => Some(&member.symbols),
+        _ => None,
+    };
+    if let Some(symbol) = symbol {
         if checker.is_enum(symbol) {
             for decl in symbol.iter() {
                 if let Some(summary) = checker.summary_of(decl.file) {

@@ -176,6 +176,9 @@ impl<const STORED: bool> Comparison<STORED> {
                 _ => a == b,
             } },
             (Ty::Param(a), Ty::Param(b)) => return a == b,
+            (Ty::EnumMember(a), Ty::EnumMember(b)) => return a.symbols == b.symbols
+                && if STORED { a.key == b.key && self.same(&a.base, &b.base, depth + 1) }
+                else { a.key == b.key || matches!((&a.base, &b.base), (Ty::Lit(..), Ty::Lit(..))) && self.same(&a.base, &b.base, depth + 1) },
             (Ty::Named(a, aa), Ty::Named(b, ba)) if a != b || aa.is_empty() || ba.is_empty() =>
                 return a == b && aa.is_empty() && ba.is_empty(),
             (Ty::Obj(a, ae), Ty::Obj(b, be)) => return Arc::ptr_eq(a, b) && self.environment(ae, be, depth + 1),

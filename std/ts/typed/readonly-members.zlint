@@ -19,7 +19,7 @@ fn readonly_initializer_annotation(initializer, flags) = {
   value if contains(flags, "any") then "any"
   else if contains(flags, "enum") then
     if count(bindings) == 1 && first(bindings).same_declaration
-      && first(bindings).name == last(type_parts)
+      && (initializer.type_domains.kind == "enum_member" || first(bindings).name == last(type_parts))
     then first(bindings).name else null
   else readonly_primitive_annotation(flags)
 }

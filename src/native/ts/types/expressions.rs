@@ -67,7 +67,7 @@ impl Checker<'_> {
             (Some(t), _) => self.eval(t, env),
             (None, Some(i)) => {
                 let value = self.init_type(i, env);
-                if m.readonly != Some(true) && matches!(value, Ty::Lit(..))
+                if m.readonly != Some(true) && matches!(value, Ty::Lit(..) | Ty::EnumMember(_))
                     && matches!(i, Init::Path(path) if self.fresh_literal_binding(path, env)) {
                     value.widen()
                 } else { value }
@@ -108,6 +108,8 @@ impl Checker<'_> {
             };
             for (index, name) in tail.iter().enumerate() {
                 refs = self.follow(match object {
+                    Ty::Ns(ref symbols) if self.is_enum(symbols) && index + 1 == tail.len() =>
+                        return matches!(self.enum_member_type(symbols, name), Ty::EnumMember(_)),
                     Ty::Ns(symbols) => self.namespace_member(&symbols, name),
                     Ty::Module(module) => self.module_member(module.0, name),
                     _ if index + 1 == tail.len() => {

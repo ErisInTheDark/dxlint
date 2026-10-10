@@ -11,6 +11,7 @@ impl Checker<'_> {
         if depth >= 32 { return Ty::Unknown }
         if let Some(source) = self.readonly_source(ty) { return self.iteration_element_at(source, depth + 1) }
         match ty {
+            Ty::EnumMember(member) => self.iteration_element_at(&member.base, depth + 1),
             Ty::Any => Ty::Any,
             Ty::Array(array) => (*array.element).clone(),
             Ty::Tuple(_) => self.indexed_type(ty, &Ty::Prim("number")),
@@ -50,6 +51,7 @@ impl Checker<'_> {
 
     pub fn iterable_type(&self, ty: &Ty) -> Option<bool> {
         match ty {
+            Ty::EnumMember(member) => self.iterable_type(&member.base),
             Ty::Any | Ty::Unknown | Ty::Param(_) => None,
             Ty::Array(_) | Ty::Tuple(_) | Ty::Prim("string") | Ty::Lit(_, "string") => Some(true),
             Ty::Union(parts) | Ty::Inter(parts) => {

@@ -32,6 +32,7 @@ pub(super) fn named_gates(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) ->
 }
 
 pub(super) fn named_types(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) -> Vec<(DeclRef, Ty)> {
+    if let Ty::EnumMember(member) = ty { return named_types(&member.enum_type(), ck, seen) }
     let Ty::Named(sym, args) = ty else { return Vec::new() };
     let mut gates = Vec::new();
     for &r in sym.iter() {
@@ -50,6 +51,7 @@ pub(super) fn named_types(ty: &Ty, ck: &Checker<'_>, seen: &mut Vec<DeclRef>) ->
 fn candidates(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Value<'static>> {
     if depth >= 64 { return Vec::new() }
     match ty {
+        Ty::EnumMember(member) => member.symbols.iter().map(|&decl| named_gate(ck, decl)).collect(),
         Ty::Named(sym, _) | Ty::Class(sym) => sym.iter().map(|&decl| named_gate(ck, decl)).collect(),
         Ty::Inter(parts) => parts.iter().flat_map(|part| candidates(part, ck, depth + 1)).collect(),
         Ty::Prim(name) | Ty::Lit(_, name) => vec![Value::record(vec![("name".into(), Value::from(*name)), ("from".into(), Value::from("lib"))])],

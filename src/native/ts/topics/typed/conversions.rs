@@ -56,6 +56,7 @@ pub(super) fn finding(file: &NativeFile<'_>, node: u32) -> Value<'static> {
 
 fn matches_type(ty: &Ty, primitive: &str, ck: &Checker<'_>) -> bool {
     match ty {
+        Ty::EnumMember(member) => matches_type(&member.base, primitive, ck),
         Ty::Prim(name) | Ty::Lit(_, name) => *name == primitive,
         Ty::Named(sym, _) if ck.is_enum(sym) => primitive == "number" && !ck.is_string_enum(sym) || primitive == "string" && ck.is_string_enum(sym),
         Ty::Union(parts) => !parts.is_empty() && parts.iter().all(|part| matches_type(part, primitive, ck)),
@@ -65,6 +66,7 @@ fn matches_type(ty: &Ty, primitive: &str, ck: &Checker<'_>) -> bool {
 
 fn integers(ty: &Ty) -> bool {
     match ty {
+        Ty::EnumMember(member) => integers(&member.base),
         Ty::Lit(text, "number") => crate::native::ts::statics::number(text).is_some_and(|number| number.fract() == 0.0),
         Ty::Union(parts) => !parts.is_empty() && parts.iter().all(integers),
         _ => false,
@@ -73,6 +75,7 @@ fn integers(ty: &Ty) -> bool {
 
 fn has_enum(ty: &Ty, ck: &Checker<'_>) -> bool {
     match ty {
+        Ty::EnumMember(_) => true,
         Ty::Named(sym, _) => ck.is_enum(sym),
         Ty::Union(parts) => parts.iter().any(|part| has_enum(part, ck)),
         _ => false,

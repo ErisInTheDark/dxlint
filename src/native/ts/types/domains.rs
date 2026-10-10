@@ -56,6 +56,7 @@ impl Checker<'_> {
     pub fn literal_value(&self, ty: &Ty) -> Option<LiteralValue> {
         if let Some(source) = self.readonly_source(ty) { return self.literal_value(source) }
         Some(match ty {
+            Ty::EnumMember(member) => return self.literal_value(&member.base),
             Ty::Lit(value, "string") => LiteralValue::String(super::super::regex::cook(value)?),
             Ty::Lit(value, "number") => LiteralValue::Number(literal_number(value)?),
             Ty::Lit(value, "boolean") if &**value == "true" || &**value == "false" => LiteralValue::Boolean(&**value == "true"),
@@ -70,6 +71,7 @@ impl Checker<'_> {
         if let Some(source) = self.readonly_source(ty) { return self.literal_falsy(source) }
         if let Some(value) = self.literal_value(ty) { return value.falsy() }
         match ty {
+            Ty::EnumMember(member) => self.literal_falsy(&member.base),
             Ty::Void => Some(true),
             Ty::Prim("string" | "number" | "boolean" | "bigint") => None,
             Ty::Named(symbols, _) if self.is_enum(symbols) => None,
@@ -118,6 +120,7 @@ impl Checker<'_> {
     fn primitive_domains(&self, ty: &Ty) -> u8 {
         if let Some(source) = self.readonly_source(ty) { return self.primitive_domains(source) }
         match ty {
+            Ty::EnumMember(member) => self.primitive_domains(&member.base),
             Ty::Prim(name) | Ty::Lit(_, name) => primitive_domain(name),
             Ty::Null => 32,
             Ty::Undefined | Ty::Void => 64,
@@ -131,6 +134,7 @@ impl Checker<'_> {
     fn restricts_falsy(&self, ty: &Ty) -> bool {
         if let Some(source) = self.readonly_source(ty) { return self.restricts_falsy(source) }
         match ty {
+            Ty::EnumMember(_) => true,
             Ty::Prim("string" | "number" | "boolean" | "bigint" | "symbol") | Ty::Lit(..) | Ty::Null | Ty::Undefined | Ty::Void | Ty::Never => true,
             Ty::Named(symbols, _) => self.is_enum(symbols),
             Ty::Union(parts) => parts.iter().all(|part| self.restricts_falsy(part)),

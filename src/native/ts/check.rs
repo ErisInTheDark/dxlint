@@ -626,6 +626,10 @@ impl<'t> NativeFile<'t> {
                 add(prim_flag(p));
                 add("literal");
             }
+            Ty::EnumMember(member) => {
+                add("enum");
+                self.flags_of(&member.base, out);
+            }
             Ty::Named(sym, _) if ck.is_enum(sym) => {
                 add("enum");
                 add(if ck.is_string_enum(sym) { "string" } else { "number" });

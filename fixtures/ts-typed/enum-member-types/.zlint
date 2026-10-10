@@ -1,0 +1,3 @@
+import .ts
+rule no-unnecessary-condition
+rule no-unnecessary-type-assertion

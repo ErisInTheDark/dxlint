@@ -639,6 +639,17 @@ fn init(v: &impl View, id: u32) -> Init {
     }
 }
 
+fn enum_init(v: &impl View, id: u32) -> Init {
+    let number = match v.kind(id) {
+        Some(K::String) => return Init::Literal(TypeSyn::Lit(v.text(id).into())),
+        Some(K::Number) => super::statics::number(v.text(id)),
+        Some(K::Unary) if v.get(id, F::Op).is_some_and(|op| v.text(op) == "-") =>
+            v.get(id, F::Arg).filter(|&arg| v.is(arg, K::Number)).and_then(|arg| super::statics::number(v.text(arg))).map(|number| -number),
+        _ => return init(v, id),
+    };
+    number.map_or(Init::Other, |number| Init::Literal(TypeSyn::Lit(crate::expr::value::js_number_text(number).into())))
+}
+
 struct Builder<'v, V: View> {
     v: &'v V,
     out: FileSummary,
@@ -868,7 +879,7 @@ impl<V: View> Builder<'_, V> {
                             ty,
                             index_key: None,
                             sigs: Vec::new(),
-                            init: None,
+                            init: v.get(m, F::Init).map(|initializer| enum_init(v, initializer)),
                         })
                     })
                     .collect();

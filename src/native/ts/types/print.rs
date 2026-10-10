@@ -27,6 +27,7 @@ impl Checker<'_> {
             Ty::Prim(p) => (*p).into(),
             Ty::Lit(text, "string") => super::super::regex::cook(text).and_then(|text| serde_json::to_string(&text).ok()).unwrap_or_else(|| text.to_string()),
             Ty::Lit(text, _) => text.to_string(),
+            Ty::EnumMember(member) => format!("{}.{}", self.qualified_name(&member.symbols), member.key),
             Ty::Named(sym, args) => {
                 let name = self.qualified_name(sym);
                 if args.is_empty() {

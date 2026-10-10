@@ -1,0 +1,141 @@
+# Nullish replacements, stable references and selection policy.
+define {
+
+group nullish_coalescing_expression ts_logical, ts_assignment, ts_conditional, ts_if
+in ts_node let nullish_type_domains type_domains(false)
+
+fn nullish_reference_chain(n) = {
+  value unparenthesised_node(n)
+  walk (current) if current is (ts_member, ts_index) then unparenthesised_node(current.object.node) else null
+}
+fn nullish_reference_parts(chain) = {
+  value chain
+  map (part) if part is (ts_identifier, ts_this, ts_super) then { kind: "root", value: part.text }
+    else if part.static_name != null then { kind: "static", value: part.static_name }
+    else { kind: "computed", value: part.index.token_texts }
+}
+fn nullish_same_reference(a, b) = {
+  value chain_a: nullish_reference_chain(a)
+  value chain_b: nullish_reference_chain(b)
+  value { value chain_a; all (part) part is (ts_identifier, ts_this, ts_super, ts_index) || part is ts_member && part.static_name != null }
+    && { value chain_b; all (part) part is (ts_identifier, ts_this, ts_super, ts_index) || part is ts_member && part.static_name != null }
+    && nullish_reference_parts(chain_a) == nullish_reference_parts(chain_b)
+}
+fn nullish_unknown(n) = {
+  value domain: n.nullish_type_domains
+  value n.type_opaque || domain.kind == "any" && contains(domain.flags, "any") || domain.kind == "unknown" && n.type_flags == null
+}
+fn nullish_comparison(n) = if n is ts_binary && contains(["==", "===", "!=", "!=="], n.operator)
+  then { operator: n.operator, operands: [unparenthesised_node(n.left.node), unparenthesised_node(n.right.node)] } else null
+fn nullish_comparisons(n) = {
+  value direct: nullish_comparison(n)
+  value if direct != null then direct else if n is ts_logical && contains(["&&", "||"], n.operator) then {
+    value a: { value n.left.node; unparenthesised_node; nullish_comparison }
+    value b: { value n.right.node; unparenthesised_node; nullish_comparison }
+    value if a == null || b == null
+      || { value a.operands; all (part) logical_nullish(part) != null }
+      || { value b.operands; all (part) logical_nullish(part) != null } then null
+      else if n.operator == "||" && contains(["==", "==="], a.operator) && contains(["==", "==="], b.operator)
+        then { operator: if a.operator == "==" || b.operator == "==" then "==" else "===", operands: a.operands b.operands }
+      else if n.operator == "&&" && contains(["!=", "!=="], a.operator) && contains(["!=", "!=="], b.operator)
+        then { operator: if a.operator == "!=" || b.operator == "!=" then "!=" else "!==", operands: a.operands b.operands }
+      else null
+  } else null
+}
+fn nullish_replacement(test, branch) = {
+  value comparison: nullish_comparisons(test)
+  value if comparison == null then {
+    value subject: if test is ts_unary && test.operator == "!" then unparenthesised_node(test.argument.node) else test
+    value if nullish_same_reference(subject, branch) then { subject: subject, truthiness: true } else null
+  } else {
+    value subject: { value comparison.operands; find (part) logical_nullish(part) == null }
+    value checks_null: { value comparison.operands; any (part) logical_nullish(part) == false }
+    value checks_undefined: { value comparison.operands; any (part) logical_nullish(part) == true }
+    value flags: subject.type_flags ?? []
+    value uncovered: if checks_null then "undefined" else "null"
+    value if subject == null || !(checks_null || checks_undefined)
+      || !{ value comparison.operands; all (part) logical_nullish(part) != null || nullish_same_reference(part, branch) }
+      then null
+      else if checks_null && checks_undefined || contains(["==", "!="], comparison.operator)
+        then { subject: subject, truthiness: false }
+      else if nullish_unknown(subject) || contains(flags, uncovered)
+        then null else { subject: subject, truthiness: false }
+  }
+}
+fn nullish_subject(n) = if n is ts_logical && n.operator == "||" || n is ts_assignment && n.operator == "||="
+  then { subject: n.left.node, truthiness: true, kind: if n is ts_assignment then "assignment" else "logical" }
+  else if n is ts_conditional then {
+    value test: unparenthesised_node(n.test.node)
+    value branch: if contains(["!", "==", "===", "||"], test.operator) then n.alternate.node else n.consequent.node
+    value replacement: nullish_replacement(test, branch)
+    value if replacement == null then null else { subject: replacement.subject, truthiness: replacement.truthiness, kind: "ternary" }
+  } else if n is ts_if && n.alternate == null then {
+    value body: logical_if_body(n)
+    value assignment: unparenthesised_node(body.expression.node)
+    value test: unparenthesised_node(n.test.node)
+    value replacement: if body is ts_expression_statement && assignment is ts_assignment && contains(["=", "||=", "??="], assignment.operator)
+      && contains(["!", "==", "===", "||"], test.operator) then nullish_replacement(test, assignment.left.node) else null
+    value if replacement == null then null else { subject: replacement.subject, truthiness: replacement.truthiness, kind: "if" }
+  } else null
+fn nullish_context_chain(n, boolean) = {
+  value n
+  walk (current) if current.parent is ts_parenthesized || current.parent is ts_logical
+    || current.parent is ts_conditional && current.parent.test.node != current
+    || current.parent is ts_sequence && last(current.parent.expression.nodes) == current
+    || !boolean && current.parent is ts_unary && current.parent.operator == "!"
+    then current.parent.node else null
+}
+fn nullish_context(n, boolean) = {
+  value chain: nullish_context_chain(n, boolean)
+  value outer: last(chain)
+  value if boolean then outer.parent is ts_call && outer.parent.global_callee == "Boolean"
+    && (n not ts_conditional || { value chain; any (part) part != n && part not ts_parenthesized })
+    else outer.parent is (ts_conditional, ts_if, ts_while, ts_do_while, ts_for) && outer.parent.test.node == outer
+}
+fn nullish_mixed(n) = {
+  value n
+  walk (current) if current is ts_parenthesized then [current.expression.node, current.parent.node]
+    else if current is ts_logical && current.operator == "||" then [current.parent.node, current.left.node, current.right.node] else null
+  any (part) part is ts_logical && part.operator == "&&"
+}
+fn nullish_information(n) = {
+  value replacement: nullish_subject(n)
+  value if replacement == null then null else {
+    value domain: replacement.subject.nullish_type_domains
+    value {
+    kind: replacement.kind,
+    flags: if replacement.subject.type_flags == null then [] else domain.flags,
+    truthiness: replacement.truthiness,
+    unknown: nullish_unknown(replacement.subject),
+    conditional: nullish_context(n, false),
+    boolean: nullish_context(n, true),
+    mixed: replacement.kind == "logical" && nullish_mixed(n),
+    offset: if contains(["logical", "assignment"], replacement.kind) then n.operator.offset else n.offset
+    }
+  }
+}
+
+in nullish_coalescing_expression let nullish_coalescing nullish_information(node)
+in nullish_coalescing_expression rule prefer-nullish-coalescing {
+  option ignoreConditionalTests boolean = true "Ignore truthiness in conditional tests"
+  option ignoreBooleanCoercion boolean = false "Ignore truthiness passed to Boolean"
+  option ignoreMixedLogicalExpressions boolean = false "Ignore mixed logical expressions"
+  option ignoreTernaryTests boolean = false "Ignore ternary replacements"
+  option ignoreIfStatements boolean = false "Ignore conditional assignments"
+  option ignoreBigint boolean = false "Ignore bigint truthiness"
+  option ignoreBoolean boolean = false "Ignore boolean truthiness"
+  option ignoreNumber boolean = false "Ignore number truthiness"
+  option ignoreString boolean = false "Ignore string truthiness"
+  option ignoreUnknown boolean = false "Ignore unknown truthiness"
+  let replacement nullish_coalescing
+  let nullish_flags replacement.flags
+  when replacement != null
+  when !replacement.truthiness || replacement.unknown || contains(nullish_flags, "nullable")
+  when !(ignoreTernaryTests && replacement.kind == "ternary" || ignoreIfStatements && replacement.kind == "if")
+  when !replacement.truthiness || !(ignoreConditionalTests && replacement.conditional || ignoreBooleanCoercion && replacement.boolean || ignoreMixedLogicalExpressions && replacement.mixed)
+  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || contains(nullish_flags, "bigint") && ignoreBigint || contains(nullish_flags, "boolean") && ignoreBoolean || contains(nullish_flags, "number") && ignoreNumber || contains(nullish_flags, "string") && ignoreString)
+  report at replacement.offset
+  warn if replacement.kind == "ternary" then "Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read." else if replacement.kind == "if" then "Prefer using nullish coalescing operator (`??=`) instead of an assignment expression, as it is simpler to read." else if replacement.kind == "assignment" then "Prefer using nullish coalescing operator (`??=`) instead of a logical assignment (`||=`), as it is a safer operator." else "Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator."
+}
+
+}

@@ -10,6 +10,7 @@ mod calls;
 mod expressions;
 mod arguments;
 mod domains;
+mod enums;
 mod members;
 mod indexed;
 mod iterability;
@@ -29,6 +30,7 @@ use super::reads::Cached;
 use super::summary::{DeclKind, Member, Sig, Summary, TParam, TupleElement, TypeSyn};
 
 pub use domains::{LiteralValue, ValueDomains};
+pub use enums::EnumMember;
 pub use calls::ResolvedPredicate;
 pub use arguments::Parameters;
 pub use members::Resolution;
@@ -71,6 +73,8 @@ pub enum Ty {
     Lit(Box<str>, &'static str),
     /// A class instance, interface or enum type, with type arguments.
     Named(Sym, Vec<Ty>),
+    /// A specific enum value, retaining its nominal owner and primitive backing.
+    EnumMember(Arc<EnumMember>),
     Union(Vec<Ty>),
     Inter(Vec<Ty>),
     Array(Array),
@@ -225,6 +229,7 @@ impl Ty {
             Ty::Undefined => "undefined",
             Ty::Null => "null",
             Ty::Prim(name) | Ty::Lit(_, name) => name,
+            Ty::EnumMember(_) => "enum_member",
             Ty::Param(_) => "parameter",
             Ty::Union(_) => "union",
             Ty::Inter(_) => "intersection",
@@ -327,20 +332,22 @@ impl Ty {
         }
     }
 
-    /// Literal types widened to their primitives (`let x = 0`).
+    /// Literal types widened to their primitives or owning enums.
     pub fn widen(self) -> Ty {
         match self {
             Ty::Lit(_, p) => Ty::Prim(p),
+            Ty::EnumMember(member) => member.enum_type(),
             Ty::Union(items) => Ty::union(items.into_iter().map(Ty::widen).collect()),
             Ty::Struct(props) => Ty::Struct(props.iter().map(|property| StructProperty { name: property.name.clone(), ty: property.ty.clone().widen(), origin: property.origin }).collect()),
             t => t,
         }
     }
 
-    /// Literal primitives without widening the members of a container.
+    /// Literal bases without widening the members of a container.
     pub fn literal_base(self) -> Ty {
         match self {
             Ty::Lit(_, primitive) => Ty::Prim(primitive),
+            Ty::EnumMember(member) => member.enum_type(),
             Ty::Union(parts) => Ty::union(parts.into_iter().map(Ty::literal_base).collect()),
             other => other,
         }
@@ -475,6 +482,13 @@ impl<'p> Checker<'p> {
                             out.extend(self.follow(found));
                             self.depth.set(self.depth.get() - 1);
                         }
+                    }
+                }
+                DeclKind::ImportAlias(path) => {
+                    if self.depth.get() < MAX_DEPTH {
+                        self.depth.set(self.depth.get() + 1);
+                        out.extend(self.path_decls(path, &self.decl_env(r)));
+                        self.depth.set(self.depth.get() - 1);
                     }
                 }
                 _ => out.push(r),
@@ -655,18 +669,30 @@ impl<'p> Checker<'p> {
     fn resolve_type_decls(&self, path: &[Box<str>], env: &Env) -> Vec<DeclRef> {
         #[cfg(test)]
         BINDING_WORK.with(|work| work.set(work.get() + 1));
+        self.path_decls(path, env).into_iter()
+            .filter(|&r| matches!(self.kind_of(r), Some(DeclKind::Class | DeclKind::Interface | DeclKind::Alias | DeclKind::Enum)))
+            .collect()
+    }
+
+    fn path_decls(&self, path: &[Box<str>], env: &Env) -> Vec<DeclRef> {
         let Some((first, rest)) = path.split_first() else { return Vec::new() };
         let mut sym = self.follow(self.lookup(env, first));
         for seg in rest {
             sym = self.namespace_member(&sym, seg);
         }
-        sym.into_iter()
-            .filter(|&r| matches!(self.kind_of(r), Some(DeclKind::Class | DeclKind::Interface | DeclKind::Alias | DeclKind::Enum)))
-            .collect()
+        sym
     }
 
     /// A type name (`A.B`) with type arguments.
     fn named_type(&self, path: &[Box<str>], args: Vec<Ty>, env: &Env) -> Ty {
+        if args.is_empty() && path.len() > 1 {
+            let symbols = self.type_decls(&path[..path.len() - 1], env);
+            if self.is_enum(&symbols) {
+                if let member @ Ty::EnumMember(_) = self.enum_member_type(&symbols, &path[path.len() - 1]) {
+                    return member;
+                }
+            }
+        }
         let types = self.type_decls(path, env);
         let Some(&first_decl) = types.first() else { return Ty::Unknown };
         if let Some(ty) = self.utility_type(&types, &args, env) {

@@ -60,6 +60,7 @@ impl Checker<'_> {
 
     fn key_domains_overlap(&self, index: &Ty, key: &Ty) -> bool {
         let domain = |ty: &Ty| match ty {
+            Ty::EnumMember(member) => member.base.clone(),
             Ty::Named(symbols, _) if self.is_enum(symbols) =>
                 Ty::union(self.enum_domains(symbols).into_iter().map(Ty::Prim).collect()),
             ty => ty.clone(),
@@ -207,6 +208,7 @@ impl Checker<'_> {
                 let found: Vec<_> = parts.iter().filter_map(|part| self.index_signature::<METADATA, KEYS>(part, index, receiver)).collect();
                 (!found.is_empty()).then(|| Resolution::merge(found, intersection))
             }
+            Ty::EnumMember(member) => self.index_signature::<METADATA, KEYS>(&member.base, index, receiver),
             Ty::Prim(_) | Ty::Lit(..) => {
                 let apparent = self.apparent(object);
                 if matches!(apparent, Ty::Named(..)) {
@@ -259,6 +261,7 @@ impl Checker<'_> {
 
 fn literal_key(index: &Ty) -> Option<String> {
     match index {
+        Ty::EnumMember(member) => literal_key(&member.base),
         Ty::Lit(value, "string") => super::super::regex::cook(value),
         Ty::Lit(value, "number") => super::super::statics::number(value).map(crate::expr::value::js_number_text),
         _ => None,

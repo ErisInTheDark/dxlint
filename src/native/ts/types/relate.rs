@@ -131,6 +131,24 @@ impl Checker<'_> {
             (_, Ty::Never) => Some(false),
             (Ty::Undefined, Ty::Undefined | Ty::Void) | (Ty::Null, Ty::Null) | (Ty::Void, Ty::Void) => Some(true),
             (Ty::Undefined | Ty::Null | Ty::Void, _) | (_, Ty::Undefined | Ty::Null | Ty::Void) => Some(false),
+            (Ty::EnumMember(a), Ty::EnumMember(b)) => {
+                if a.symbols != b.symbols { return Some(false) }
+                match (&a.base, &b.base) {
+                    (Ty::Lit(..), Ty::Lit(..)) => Some(a.base.same_identity(&b.base)),
+                    _ => None,
+                }
+            }
+            (Ty::EnumMember(member), Ty::Named(symbols, args)) if self.is_enum(symbols) => Some(member.symbols == *symbols && args.is_empty()),
+            (Ty::EnumMember(member), _) => self.assignable(&member.base, b),
+            (Ty::Prim("number"), Ty::EnumMember(member)) => Some(member.primitive() == Some("number")),
+            (Ty::Lit(_, "number"), Ty::EnumMember(member)) => match &member.base {
+                Ty::Lit(..) => self.assignable(a, &member.base),
+                Ty::Prim("number") => None,
+                _ => Some(false),
+            },
+            (Ty::Named(symbols, _), Ty::EnumMember(member)) if self.is_enum(symbols) =>
+                if *symbols == member.symbols { None } else { Some(false) },
+            (_, Ty::EnumMember(_)) => Some(false),
             (Ty::Named(sym, _), Ty::Prim(p) | Ty::Lit(_, p)) if self.is_enum(sym) => {
                 let string = self.is_string_enum(sym);
                 Some(matches!(b, Ty::Prim(_)) && (*p == "number" && !string || *p == "string" && string))

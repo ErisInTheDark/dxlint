@@ -896,7 +896,7 @@ is wrong, messages) is written in the rule.
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
-| `type_domains` | constrained truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal; `kind` matches `type_structure`, `parts` retains union/intersection constituent domains |
+| `type_domains(constrained?)` | truthy, falsy, nullish and non-nullish possibilities, flags, opacity and scalar literal; constraints apply by default (`true`); `type_domains(false)` retains open types. Default `kind` matches `type_structure`; `parts` retains union/intersection constituent domains; `primitive` names the primitive backing of a primitive, literal or enum member |
 | `evaluated_type_domains` | the same domains before optional-chain short-circuiting, preserving intrinsic member and return nullability |
 | `access_resolution` | native member/index lookup: `from_index` signature origin, `optional` declaration and `evaluated` value domains before optional-chain short-circuiting |
 | `callable_return_domains` | domains of every callable return, including local inferred bodies and in-scope parameter bounds |
@@ -1189,6 +1189,7 @@ and `final-newline`.
 | `.ts/typed/readonly-members` | readonly private members and parameter properties, with type-preserving annotation fixes, imported by `.ts/typed` |
 | `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/return-await` | returned-await policy and source-preserving fixes, imported by `.ts/typed` |
+| `.ts/typed/nullish-coalescing` | stable nullish replacements, primitive exclusions and context selection, imported by `.ts/typed`; diagnostic-only |
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |

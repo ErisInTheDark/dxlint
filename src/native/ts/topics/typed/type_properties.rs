@@ -19,6 +19,7 @@ pub(super) fn literal_values(ty: &Ty) -> Value<'static> {
 
 fn collect_literals(ty: &Ty, values: &mut Vec<Value<'static>>) {
     match ty {
+        Ty::EnumMember(member) => collect_literals(&member.base, values),
         // Boolean stores the finite `false | true` domain compactly.
         Ty::Prim("boolean") => {
             for value in [false, true] {
@@ -48,6 +49,7 @@ fn collect_literals(ty: &Ty, values: &mut Vec<Value<'static>>) {
 
 pub(super) fn string_like(ty: &Ty, checker: &Checker<'_>) -> bool {
     match ty {
+        Ty::EnumMember(member) => string_like(&member.base, checker),
         Ty::Prim("string") | Ty::Lit(_, "string") => true,
         Ty::Named(symbol, _) => checker.is_enum(symbol) && checker.is_string_enum(symbol),
         Ty::Union(parts) => !parts.is_empty() && parts.iter().all(|part| string_like(part, checker)),
@@ -66,6 +68,7 @@ fn indeterminate(ty: &Ty) -> bool {
 
 pub(super) fn has_enum(ty: &Ty, checker: &Checker<'_>) -> bool {
     match ty {
+        Ty::EnumMember(_) => true,
         Ty::Named(symbol, _) => checker.is_enum(symbol),
         Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(|part| has_enum(part, checker)),
         _ => false,
