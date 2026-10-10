@@ -7,9 +7,9 @@ in ts_function, ts_call let structure_iife_wrapped parent is ts_parenthesized
   || is ts_switch.discriminant
   || is ts_with.object
   || is (ts_call.argument, ts_new.argument, ts_import_call.argument) && parent.structure_argument_count == 1 && next_token is ts_close_paren
-in ts_function let structure_iife_callee { direct: true, prototype: false, wrapped: structure_iife_wrapped }
+in ts_function let structure_iife_callee { direct: true, prototype: false, wrapped: structure_iife_wrapped, node: node }
 in ts_parenthesized let structure_iife_callee expression.structure_iife_callee
-in ts_member, ts_index let structure_iife_callee if (object.structure_iife_callee).direct && contains(["call", "apply"], static_name) then { direct: false, prototype: true, wrapped: (object.structure_iife_callee).wrapped } else null
+in ts_member, ts_index let structure_iife_callee if (object.structure_iife_callee).direct && contains(["call", "apply"], static_name) then { direct: false, prototype: true, wrapped: (object.structure_iife_callee).wrapped, node: (object.structure_iife_callee).node } else null
 
 in ts_call rule wrap-iife {
   option mode "outside" | "inside" | "any" = "outside"
@@ -17,6 +17,17 @@ in ts_call rule wrap-iife {
   let info callee.structure_iife_callee
   when info != null && (functionPrototypeMethods || !info.prototype)
   when !structure_iife_wrapped && !info.wrapped || mode == "inside" && !info.wrapped || mode == "outside" && !structure_iife_wrapped
+  let target if mode == "inside" then info.node else node
+  let closing if mode == "inside" then token_neighbours.after else info.node.token_neighbours.after
+  let edit if !structure_iife_wrapped && !info.wrapped then { start: target.offset, end: target.end_offset, text: "(" target.text ")" }
+  else if mode == "inside" then (
+    if parent is ts_parenthesized && parent not ts_new.callee then
+      { start: info.node.end_offset, end: closing.end, text: ")" byte_slice(source, info.node.end_offset, closing.start) }
+    else { start: info.node.offset, end: info.node.end_offset, text: "(" info.node.text ")" }
+  ) else {
+    start: closing.start, end: end_offset, text: byte_slice(source, closing.end, end_offset) ")"
+  }
+  fix at edit as edit.text
   warn if !structure_iife_wrapped && !info.wrapped then "Wrap an immediate function invocation in parentheses." else if mode == "inside" then "Wrap only the function expression in parens." else "Move the invocation into the parens that contain the function."
 }
 

@@ -1,0 +1,5 @@
+import .ts
+rule wrap-iife {
+  set mode "any"
+  set functionPrototypeMethods true
+}
