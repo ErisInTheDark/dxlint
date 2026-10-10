@@ -1,6 +1,7 @@
 # .ts/layout/calls: calls layout rules.
 
 import .ts/layout/shared
+import .ts/format
 
 define {
 
@@ -20,6 +21,11 @@ in ts_open_paren rule space-before-function-paren {
   when space_before.spaced != (paren_mode == "always")
   report at if space_before.spaced then space_before.start else offset
   warn if space_before.spaced then "Unexpected space before function parentheses." else "Missing space before function parentheses."
+  let paren_gap { start: token_neighbours.before.end, end: offset }
+  let paren_comments { value overlapping(ts_comment, paren_gap.start, paren_gap.end); filter (comment) paren_gap.start <= comment.offset && comment.end_offset <= paren_gap.end }
+  let paren_fixed format_gap_text(paren_gap, paren_mode == "always", paren_comments)
+  let original { offset: paren_gap.start, end_offset: paren_gap.end, text: byte_slice(source, paren_gap.start, paren_gap.end) }
+  fix at paren_gap if !any(paren_comments, comment => starts_with(comment.text, "//")) && expression_fix_retains_comments(original, paren_fixed) as paren_fixed
 }
 
 
