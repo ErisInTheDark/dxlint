@@ -1,0 +1,6 @@
+import .ts
+rule multiline-comment-style {
+  set mode "separate-lines"
+  set checkJSDoc true
+  set checkExclamation true
+}

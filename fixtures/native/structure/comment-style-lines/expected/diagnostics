@@ -1,0 +1,3 @@
+a.js:2:3-5:6 multiline-comment-style:shape#1
+a.js:6:3-7:15 multiline-comment-style:shape#1
+a.js:8:3-11:6 multiline-comment-style:shape#1

@@ -317,6 +317,78 @@ in ts_block_comment let structure_block_padded all(structure_block_middle, row =
 in ts_block_comment let structure_block_jsdoc starts_with(structure_block_first, "*") && { value structure_block_first; slice 1; trim } == "" && structure_block_padded && trim(structure_block_last) == ""
 in ts_block_comment let structure_block_exclamation starts_with(structure_block_first, "!") && { value structure_block_first; slice 1; trim } == "" && structure_block_padded && trim(structure_block_last) == ""
 
+fn structure_comment_indent(n, source) = byte_slice(source, n.structure_first_row.offset, n.offset)
+fn structure_comment_split(body) = { value body; re_replace /\r\n|[\n\r\u{2028}\u{2029}]/ "\n"; split "\n" }
+fn structure_comment_starred(lines) = { value lines; first; trim } == "" && { value lines; last; trim } == ""
+  && { value lines; slice 1 -1; all (line) re_test(line, /^\s*\*/) }
+fn structure_comment_starred_lines(lines) = {
+  value lines
+  slice 1 -1
+  rows: map (line) re_replace(line, /^\s*$/, "")
+  value padded: all(rows, line => { value line; re_replace /^\s*\*/ ""; then (body) trim(body) == "" || starts_with(body, " ") })
+  value rows
+  map (line) if padded then re_replace(line, /^\s*\* ?/, "") else re_replace(line, /^\s*\*/, "")
+}
+fn structure_comment_bare_line(line) = {
+  value content: if trim(line) == "" then "" else line
+  value { prefix: re_find(content, /^\s*\*?\s*/), content: re_replace(content, /^\s*\*?\s*/, "") }
+}
+fn structure_comment_bare_lines(lines, indent) = {
+  value lines
+  rows: map (line) structure_comment_bare_line(line)
+  value width: len(indent) + 3
+  value rows
+  slice 1
+  filter (row) row.content != ""
+  map (row) width - len(row.prefix)
+  widest: max
+  value adjustment: max(widest, 0)
+  value rows
+  map (row) if len(row.prefix) > width then {
+    value begin: width - adjustment - len(row.prefix)
+    value slice(row.prefix, begin) row.content
+  } else row.content
+}
+fn structure_comment_block_lines(n, indent) = {
+  value lines: structure_comment_split(n.structure_comment_body)
+  value if structure_comment_starred(lines) then structure_comment_starred_lines(lines) else structure_comment_bare_lines(lines, indent)
+}
+fn structure_comment_group_lines(group) = {
+  value group
+  lines: map (comment) comment.structure_comment_body
+  value padded: all(lines, line => trim(line) == "" || starts_with(line, " "))
+  value lines
+  map (line) if padded then re_replace(line, /^ /, "") else line
+}
+fn structure_comment_format(lines, indent, mode) = {
+  value separator: "\n" indent (if mode == "bare-block" then "   " else "")
+  value if mode == "starred-block" then {
+    value lines
+    map (line) indent " * " line
+    body: join "\n"
+    value "/*\n" body "\n" indent " */"
+  } else if mode == "bare-block" then "/* " join(lines, separator) " */"
+  else { value lines; map (line) "// " line; join separator }
+}
+in ts_block_comment let structure_style_reference {
+  value comment: node
+  value overlapping(ts_line)
+  filter (line) { value if line.offset == comment.structure_first_row.offset then comment.structure_block_first else if line.offset == comment.structure_last_row.offset then comment.structure_block_last else line.structure_line_content; trim } != ""
+  first
+}
+fn structure_comment_alignment(row, comment, source) = {
+  value reference: comment.structure_style_reference
+  value starred: re_test(row.structure_line_content, /^\s*\*/)
+  value leading: re_find(row.structure_line_content, /^\s*\*?/)
+  value original_prefix: re_find(reference.structure_line_content, /^\s*(?:\/?\*)?\s*/)
+  value padding: if contains(original_prefix, "*") then re_replace(original_prefix, /^\s*\/?\*/, "") else ""
+  value prefix_size: len(original_prefix)
+  value extra: slice(leading, prefix_size)
+  value missing: (if trim(row.structure_line_content) != "" && !re_test(reference.structure_line_content, /^\s*\/?\*\s/) then " " else "") extra padding
+  value prefix: structure_comment_indent(comment, source) " *"
+  value { start: row.offset, end: row.offset + byte_len(leading), text: prefix (if starred then "" else missing) }
+}
+
 in ts_block_comment rule multiline-comment-style:shape {
   @structure_comment_style_options
   when structure_style_eligible && structure_multiline
@@ -326,6 +398,10 @@ in ts_block_comment rule multiline-comment-style:shape {
     else mode == "separate-lines"
       && { value source; byte_slice end_offset structure_last_row.structure_line_end; trim } == ""
       && (checkJSDoc || !structure_block_jsdoc) && (checkExclamation || !structure_block_exclamation)
+  let style_indent structure_comment_indent(node, source)
+  let style_lines structure_comment_block_lines(node, style_indent)
+  let converted_lines if mode == "separate-lines" && (structure_block_jsdoc || structure_block_exclamation) then { value style_lines; slice 1 -1 } else style_lines
+  fix as structure_comment_format(converted_lines, style_indent, mode)
   warn if mode == "bare-block" then "Expected a block comment without padding stars." else "Expected multiple line comments instead of a block comment."
 }
 
@@ -336,6 +412,11 @@ in ts_block_comment rule multiline-comment-style:open {
     value if starts_with(structure_block_first, "*") || starts_with(structure_block_first, "!") then slice(structure_block_first, 1) else structure_block_first
     trim
   } != ""
+  let style_indent structure_comment_indent(node, source)
+  let opening_body if starts_with(structure_block_first, "*") || starts_with(structure_block_first, "!") then slice(structure_block_first, 1) else structure_block_first
+  let opening_space re_find(opening_body, /^\s*/)
+  let opening_end offset + (if opening_body != structure_block_first then 3 else 2)
+  fix at { start: opening_end, end: opening_end } as "\n" style_indent " *" (if opening_space == "" then " " else "")
   report at offset
   warn "Expected a linebreak after '/*'."
 }
@@ -343,6 +424,8 @@ in ts_block_comment rule multiline-comment-style:open {
 in ts_block_comment rule multiline-comment-style:close {
   @structure_comment_style_options
   when mode == "starred-block" && structure_style_eligible && structure_multiline && trim(structure_block_last) != ""
+  let style_indent structure_comment_indent(node, source)
+  fix at { start: end_offset - 2, end: end_offset } as "\n" style_indent " */"
   report at { start: end_offset - 2, end: end_offset }
   warn "Expected a linebreak before '*/'."
 }
@@ -358,6 +441,8 @@ in ts_line rule multiline-comment-style:alignment {
   when comment != null
   let prefix byte_slice(source, comment.structure_first_row.offset, comment.offset) " *"
   when !starts_with(text, prefix)
+  let alignment_fix structure_comment_alignment(node, comment, source)
+  fix at alignment_fix as alignment_fix.text
   report at offset
   warn if { value text; trim_start; starts_with "*" } then "Expected this line to be aligned with the start of the comment." else "Expected a '*' at the start of this line."
 }
@@ -380,6 +465,11 @@ in ts_line_comment let structure_group_unsafe contains(structure_comment_body, "
 in ts_line_comment rule multiline-comment-style:consecutive {
   @structure_comment_style_options
   when mode != "separate-lines" && structure_style_eligible && !structure_joins_previous && structure_joins_next && !structure_group_unsafe
+  let style_group { value node; walk (comment) if comment.structure_joins_next then comment.structure_next_comment.node else null }
+  let style_lines structure_comment_group_lines(style_group)
+  let style_indent structure_comment_indent(node, source)
+  let style_end last(style_group).end_offset
+  fix at { start: offset, end: style_end } if mode != "starred-block" || !any(style_lines, line => starts_with(line, "/")) as structure_comment_format(style_lines, style_indent, mode)
   warn "Expected a block comment instead of consecutive line comments."
 }
 
