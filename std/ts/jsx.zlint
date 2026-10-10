@@ -32,6 +32,7 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-indent-props {
   let expected if mode == "first" then parent.jsx_prop_indent_first_column else base_indent + size * (if jsx_prop_indent_extra then 2 else 1)
   when parent is ts_jsx_opening && jsx_trim_space(jsx_line_prefix) == "" && actual != expected
   report at if is ts_jsx_attribute then name.node else argument.node
+  fix at { start: offset - byte_len(jsx_line_prefix), end: offset } if expected >= 0 as { value if mode == "tab" then "\t" else " "; repeat expected }
   warn "Expected indentation of {expected} {if mode == 'tab' then 'tab' else 'space'} {if expected == 1 then 'character' else 'characters'} but found {actual}."
 }
 in ts_node {
@@ -540,6 +541,7 @@ in ts_jsx_attribute, ts_jsx_spread_attribute {
   let jsx_prop_first previous == null
   let jsx_prop_run if jsx_prop_same then 1 + (previous.jsx_prop_run.nonempty ?? 0) else 1
   let jsx_prop_group_index if jsx_prop_same && !jsx_prop_first then 1 + previous.jsx_prop_group_index else 0
+  let jsx_prop_group_start if jsx_prop_same && !jsx_prop_first then previous.jsx_prop_group_start else offset
 }
 in ts_jsx_attribute let jsx_prop_name jsx_strip_space(name)
 in ts_parenthesized let jsx_unparenthesized_text expression.jsx_unparenthesized_text.nonempty ?? expression
@@ -555,7 +557,12 @@ in ts_jsx_attribute, ts_jsx_spread_attribute rule jsx-first-prop-new-line {
 @macro jsx_max_props_body {
   default option max number(1..) = 1 "maximum props per line"
   when jsx_prop_group_index == max
+  let group_start jsx_prop_group_start
+  let props { value parent.property.nodes; filter (prop) prop.jsx_prop_group_start == group_start }
+  let fixable { value props; filter (prop) prop.jsx_prop_group_index > 0 && jsx_trim_space(prop.space_before.text) != ""; count } == 0
+  let fixed { value props; map (prop) (if prop.jsx_prop_group_index == 0 then "" else if prop.jsx_prop_group_index % max == 0 then "\n" else " ") prop.text; join "" }
   report at if is ts_jsx_attribute then name.node else argument.node
+  fix at { start: first(props).offset, end: last(props).end_offset } if fixable as fixed
   warn "Prop `{jsx_prop_name}` must be placed on a new line"
 }
 group jsx_max_props_singleline ts_jsx_attribute, ts_jsx_spread_attribute

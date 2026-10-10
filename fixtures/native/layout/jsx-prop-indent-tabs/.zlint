@@ -1,0 +1,2 @@
+import .ts
+rule jsx-indent-props { set mode "tab" }
