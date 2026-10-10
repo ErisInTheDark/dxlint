@@ -103,6 +103,20 @@ in ts_node rule jsx-one-expression-per-line {
   report at node
   warn "`{jsx_child_descriptor}` must be placed on a new line"
 }
+fn jsx_newline_text(text, remove) = {
+  value separator: if remove then "\n\n" else "\n"
+  value parts: split(text, separator)
+  value result: {
+    value parts
+    fold ({ index: 0, text: "" }) (state, part) {
+      index: state.index + 1,
+      text: state.text (if state.index == 0 then "" else if remove then {
+        value if state.index == len(parts) - 1 || contains(part, "\n") then "\n" else "\n\n"
+      } else if state.index == len(parts) - 1 then "\n\n" else "\n") part
+    }
+  }
+  value result.text
+}
 in ts_node rule jsx-newline {
   option prevent boolean = false "prevent blank lines between children"
   option allowMultilines boolean = false "keep blank lines around multiline children"
@@ -112,6 +126,9 @@ in ts_node rule jsx-newline {
   when if allowMultilines && multiline then !blank else blank == prevent
   report at previous.node
   warn if allowMultilines && multiline then "Multiline JSX elements should start in a new line" else if prevent then "JSX element should not start in a new line" else "JSX element should start in a new line"
+  let remove prevent && !(allowMultilines && multiline)
+  let fixed jsx_newline_text(previous.text, remove)
+  fix at previous.node if fixed != previous.text as fixed
 }
 in ts_jsx_text rule jsx-child-element-spacing {
   let after { value result: "^" jsx_space_regex() "*\n"; value re_test(text, result) } && jsx_trim_space(text) != ""
@@ -477,6 +494,7 @@ in jsx_self_closing_elements rule jsx-self-closing-comp {
   let empty len(content) == 0 || len(content) == 1 && { value body.node; jsx_items; first } is ts_jsx_text && { value content; first; contains "\n" } && { value content; first; jsx_strip_space } == "" && !{ value content; first; re_test /\u{a0}/ }
   when closing != null && empty && jsx_self_closing_enabled
   warn "Empty components are self-closing"
+  fix at { start: opening.end_offset - 1, end: closing.end_offset } as " />"
 }
 in ts_jsx_element rule jsx-pascal-case {
   option allowAllCaps boolean = false "allow screaming snake case"
