@@ -1,0 +1,6 @@
+import .ts
+rule yield-star-spacing {
+  set mode "both"
+  set before false
+  set after false
+}

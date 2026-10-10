@@ -114,6 +114,8 @@ in ts_yield.operator rule yield-star-spacing:before {
   @layout_yield_star_options
   when text == "*" && previous_token != null
   when space_before.spaced != (before.nonempty ?? mode == "before" || mode == "both")
+  let required before.nonempty ?? mode == "before" || mode == "both"
+  fix at { start: if required then offset else space_before.start, end: offset } if required || !space_before.comments as if required then " " else ""
   warn if space_before.spaced then "Unexpected space before *." else "Missing space before *."
 }
 
@@ -121,6 +123,8 @@ in ts_yield.operator rule yield-star-spacing:after {
   @layout_yield_star_options
   when text == "*" && next_token != null
   when space_after.spaced != (after.nonempty ?? mode == "after" || mode == "both")
+  let required after.nonempty ?? mode == "after" || mode == "both"
+  fix at { start: end_offset, end: if required then end_offset else space_after.end } if required || !space_after.comments as if required then " " else ""
   warn if space_after.spaced then "Unexpected space after *." else "Missing space after *."
 }
 
