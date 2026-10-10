@@ -1,5 +1,5 @@
 const x = <Outer><Box
   a
                  >
- </Box>
+                 </Box>
           </Outer>;

@@ -1,0 +1,2 @@
+import .ts
+rule jsx-function-call-newline { set mode "always" }

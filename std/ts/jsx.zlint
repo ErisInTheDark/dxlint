@@ -202,6 +202,7 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
   when jsx_call_argument && (mode == "always" || jsx_break(text))
   when !space_before.line_break || next_token not ts_comma && !space_after.line_break
   warn "Missing line break around JSX"
+  fix at node as (if !space_before.line_break then "\n" else "") text (if next_token not ts_comma && !space_after.line_break then "\n" else "")
 }
 fn jsx_presence_whitespace(value) = value != "" && jsx_trim_space(value) == ""
 fn jsx_presence_edge(value) = { value result: "^" jsx_space_regex() "|" jsx_space_regex() "$"; value re_test(value, result) }
@@ -478,6 +479,8 @@ in ts_open_angle rule jsx-closing-tag-location {
   when parent is ts_jsx_closing && offset == parent.offset && position(parent.parent.opening.offset).js_line != here.js_line && here.js_column != expected
   report at parent.node
   warn if !own_line then "Closing tag of a multiline JSX expression must be on its own line." else if mode == "tag-aligned" then "Expected closing tag to match indentation of opening." else "Expected closing tag to be aligned with the line containing the opening tag"
+  let indentation expected - 1
+  fix at { start: if own_line then offset - byte_len(jsx_line_prefix) else offset, end: offset } as (if own_line then "" else "\n") repeat(" ", indentation)
 }
 
 fn jsx_items(value) = if type_of(value) == "list" then value else if value == null then [] else [value]
