@@ -23,8 +23,8 @@ in ts_block let layout_brace_keyword parent is (ts_if, ts_try)
 in ts_block, ts_static_block, ts_switch, ts_class let layout_brace_single opener.ts_open_brace.line == closer.ts_close_brace.line
 
 @macro layout_horizontal_space "[^\\S\\n\\r\\u{{2028}}\\u{{2029}}]"
-fn layout_padding_attached_start(gap) = { value gap; re_find ("^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"); nonempty } ?? ""
-fn layout_padding_attached_end(gap) = { value gap; re_find ("(?:" @layout_comment_pattern @layout_horizontal_space "*)*$"); nonempty } ?? ""
+fn layout_padding_attached_start(gap) = if !contains(gap, "/") then "" else { value gap; re_find ("^(?:" @layout_horizontal_space "*" @layout_comment_pattern ")*"); nonempty } ?? ""
+fn layout_padding_attached_end(gap) = if !contains(gap, "/") then "" else { value gap; re_find ("(?:" @layout_comment_pattern @layout_horizontal_space "*)*$"); nonempty } ?? ""
 fn layout_padding_last_attached(prefix) = {
   value pattern: "^(?:" @layout_horizontal_space "*(" @layout_comment_pattern "))*$"
   value re_replace(prefix, pattern, "$1")
@@ -38,7 +38,7 @@ fn layout_padding_top_space(gap) = {
   layout_comma_space false
 }
 fn layout_padding_tail_space(gap) = {
-  value result: if { value gap; layout_padding_last_comment; starts_with "//" } then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/
+  value result: if contains(gap, "//") && { value gap; layout_padding_last_comment; starts_with "//" } then /(?:\r\n|[\n\r\u{2028}\u{2029}])\s*$/ else /\s*$/
   value re_find(gap, result)
   nonempty
 } ?? ""
