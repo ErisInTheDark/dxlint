@@ -41,10 +41,11 @@ define {
     fix as ""
   }
 
-  in core_line match core_line_break /\r\n|[\n\u{2028}\u{2029}]/
+  in core_line match core_line_break /\r\n|[\n\r\u{2028}\u{2029}]/
   in core_line_break rule linebreak-style {
     option mode "unix" | "windows" = "unix"
     when mode == "unix" && text != "\n" || mode == "windows" && text != "\r\n"
+    fix as if mode == "unix" then "\n" else "\r\n"
     warn if mode == "unix" then "Expected linebreaks to be 'LF' but found 'CRLF'." else "Expected linebreaks to be 'CRLF' but found 'LF'."
   }
 }
