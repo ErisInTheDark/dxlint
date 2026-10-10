@@ -1,4 +1,5 @@
 # .ts/style/types: internal part of .ts/style.
+import .ts/expression-fixes
 
 define {
 
@@ -390,15 +391,68 @@ in ts_type_reference rule consistent-indexed-object-style:record {
 in ts_type_literal let is_type_literal true
 in ts_parenthesized_type let is_type_literal type.is_type_literal == true
 in ts_type_alias let aliases_type_literal type.is_type_literal == true
+in ts_type_alias let type_definition_annotation type.node
+in ts_type_alias let type_definition_literal type.style_type_unwrapped
+in ts_type_alias, ts_interface let type_definition_keyword name.node.token_neighbours.before
+in ts_interface let type_definition_name name.text
+in ts_interface let type_definition_name_end name.end_offset
+in ts_interface let type_definition_heritage [] extends.text
+fn type_definition_edit(source, start, end, edits) = {
+  value original: byte_slice(source, start, end)
+  value replacement: expression_fix_edits(original, start, edits)
+  value span: { offset: start, end_offset: end, text: original }
+  value if expression_fix_retains_comments(span, replacement) then { start: start, end: end, text: replacement } else null
+}
+fn type_definition_interface(source, n) = {
+  value keyword: n.type_definition_keyword
+  value literal: n.type_definition_literal
+  value equals_tokens: overlapping(ts_equals, n.type_definition_name_end ?? n.offset, n.type_definition_annotation.offset)
+  value equals: last(equals_tokens)
+  value comments: overlapping(ts_comment, equals.token_neighbours.before.end, equals.offset)
+  value comment_end: last(comments).end_offset ?? 0
+  value before_equals: max(equals.token_neighbours.before.end, comment_end)
+  value edits: [
+    { start: keyword.start, end: keyword.end, text: "interface" },
+    { start: before_equals, end: literal.offset, text: " " },
+    { start: literal.end_offset, end: n.end_offset, text: "" }
+  ]
+  value if literal == null || equals == null then null else type_definition_edit(source, keyword.start, n.end_offset, edits)
+}
+fn type_definition_type(source, n) = {
+  value ancestors: walk([n], ancestor => ancestor.parent.node)
+  value global_augmentation: any(ancestors, ancestor =>
+    ancestor is ts_namespace && ancestor.kind == "global" && contains(ancestor.modifier, "declare"))
+  value close_tokens: overlapping(ts_close_brace, n.last_token.start, n.last_token.end)
+  value close: last(close_tokens)
+  value open: close.paired_token
+  value last_parameter: last(n.type_parameter.nodes)
+  value angle_tokens: if last_parameter != null then overlapping(ts_close_angle, last_parameter.end_offset, open.start) else []
+  value header_end: first(angle_tokens).end_offset ?? n.type_definition_name_end
+  value keyword: n.type_definition_keyword
+  value default_export: n.parent is ts_export && n.parent.kind == "default"
+  value start: if default_export then n.parent.offset else keyword.start
+  value heritage: { value n.type_definition_heritage; map (base) " & " base; join "" }
+  value suffix: heritage (if default_export then "\nexport default " n.type_definition_name else "")
+  value edits: (if default_export then [{ start: start, end: n.offset, text: "" }] else []) [
+    { start: keyword.start, end: keyword.end, text: "type" },
+    { start: header_end, end: open.start, text: " = " },
+    { start: close.end_offset, end: close.end_offset, text: suffix }
+  ]
+  value if global_augmentation || open == null || header_end == null then null else type_definition_edit(source, start, close.end_offset, edits)
+}
 in ts_type_alias.name rule consistent-type-definitions {
   option mode ("interface" | "type") = "interface" "Preferred object type definition."
   when mode == "interface" && parent.aliases_type_literal
   warn "Use an `interface` instead of a `type`."
+  let edit type_definition_interface(source, parent.node)
+  fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
 in ts_interface.name rule consistent-type-definitions:interface {
   option mode ("interface" | "type") = "interface" "Preferred object type definition."
   when mode == "type"
   warn "Use a `type` instead of an `interface`."
+  let edit type_definition_type(source, parent.node)
+  fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
 
 # Only a call signature: a function type says it better.

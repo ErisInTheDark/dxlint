@@ -1,0 +1,7 @@
+input.ts:1:11-1:12 consistent-type-definitions:interface#0
+input.ts:1:38-1:39 consistent-type-definitions:interface#0
+input.ts:2:11-2:12 consistent-type-definitions:interface#0
+input.ts:3:18-3:19 consistent-type-definitions:interface#0
+input.ts:4:26-4:27 consistent-type-definitions:interface#0
+input.ts:5:27-5:32 consistent-type-definitions:interface#0
+input.ts:6:20-6:25 consistent-type-definitions:interface#0
