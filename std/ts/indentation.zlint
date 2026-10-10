@@ -360,7 +360,7 @@ in ts_line rule indent {
   when semicolon == null || !semicolon.indent_tail_unchecked
   let jsx_member { value overlapping(indent_jsx_name_member, first_offset, first_offset + 1); first }
   let list_item indent_first_list_item(first_nodes, first_offset)
-  let list_mode {
+  let list_mode if list_item == null then 1 else {
     value list_item.parent
     variable: indent_variable_mode variable_declarator variable_declarator_var variable_declarator_let variable_declarator_const variable_declarator_using
     value indent_list_mode(list_item, call_expression, function_declaration_parameters, function_expression_parameters, array_expression, object_expression, import_declaration, variable)
@@ -419,7 +419,7 @@ in ts_line rule indent {
   }
   let aligned_anchor if aligned_first == null then "" else if aligned_quasi != null then indent_expected(aligned_quasi, unit) else if position(aligned_first.first_token.start).js_line == position(aligned_first.parent.offset).js_line then list_item.parent_indent else indent_expected(aligned_first, unit)
   let aligned_column if aligned_quasi == null then len(aligned_first.indent) else position(aligned_quasi.offset).js_column - 1
-  let comment_wanted indent_comment_wanted(comment_policy, after_wanted, unit, switch_case)
+  let comment_wanted if comment_policy == null then null else indent_comment_wanted(comment_policy, after_wanted, unit, switch_case)
   let attribute_node indent_attribute_node(first_offset)
   # Raw JSX text uses the tag line's actual indentation, not virtual code-token offsets.
   let wanted if jsx_text != null then jsx_text.parent.indent unit else if jsx_member != null then indent_expected(jsx_member.indent_jsx_closing_anchor, unit) { value member_expression; levels: indent_numeric; value indent_steps(unit, levels) } else if type_of(comment_wanted) != "null" then comment_wanted else if attribute_node != null then indent_expected(attribute_node, unit) else if aligned_first != null then aligned_anchor {
