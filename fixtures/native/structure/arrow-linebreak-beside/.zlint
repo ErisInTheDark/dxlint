@@ -1,0 +1,2 @@
+import .ts
+rule implicit-arrow-linebreak

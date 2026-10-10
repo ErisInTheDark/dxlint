@@ -825,8 +825,9 @@ in ts_call rule newline-per-chained-call {
 in ts_arrow.body rule implicit-arrow-linebreak {
   option mode "beside" | "below" = "beside"
   when not ts_block
-  let broken re_test(parent_before, /=>[\s\S]*\n/)
+  let broken space_before.line_break
   when mode == "beside" && broken || mode == "below" && !broken
+  fix at { start: if mode == "below" then offset else space_before.start, end: offset } if mode == "below" || !space_before.comments as if mode == "below" then "\n" else " "
   warn if mode == "beside" then "Expected no linebreak before this expression." else "Expected a linebreak before this expression."
 }
 
