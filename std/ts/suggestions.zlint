@@ -464,6 +464,7 @@ in ts_switch rule default-case {
 in ts_break, ts_continue rule no-extra-label {
   when label != null && label == get(parent.nearest_break_target, "label")
   report at label.offset
+  fix at { start: first_token.end, end: label.end_offset } if !label.node.space_before.comments as ""
   warn "This label '{label}' is unnecessary."
 }
 
