@@ -3,13 +3,17 @@
 define {
 
 fn member_display_name(name, key) = if name != "" && key is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null) && !re_test(name, /^[\p{Alphabetic}_$][\p{Alphabetic}\p{Number}_$]*$/) then '"' name '"' else name
-fn public_modifier_offset(xs, positions, head) = if contains(xs, "public") then {
-  value xs
-  index_of: index_of "public"
-  value result: index_of(xs, "public") + 1
-  value slice(positions, index_of, result)
-  first
-} else head
+in ts_method, ts_class_property, ts_parameter let style_public_modifier {
+  value modifier.nodes
+  find (token) token.text == "public"
+}
+in ts_method, ts_class_property, ts_parameter let style_public_range {
+  value keyword: style_public_modifier
+  value next: keyword.token_neighbours.after.start
+  value comments: overlapping(ts_comment, keyword.end_offset, next)
+  value end: first(comments).offset ?? next
+  value if keyword != null then { start: keyword.offset, end: end } else null
+}
 in ts_decorator let after_decorator space_after.end
 in ts_computed_key {
   let member_key_node expression.node
@@ -25,7 +29,7 @@ in ts_parameter let style_member_name member_display_name(name, name.node)
 in ts_method, ts_class_property let style_key_offset key.member_key_offset.nonempty ?? key.offset
 in ts_parameter let style_key_offset name.offset
 in ts_method, ts_class_property, ts_parameter let style_head_offset { value [] decorator.after_decorator; last; nonempty } ?? offset
-in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, public: public_modifier_offset([] modifier, [] modifier.offset, style_head_offset), key: style_key_offset }
+in ts_method, ts_class_property, ts_parameter let style_member { name: style_member_name, head: style_head_offset, public: style_public_modifier.offset ?? style_head_offset, key: style_key_offset }
 in ts_method let class_constructor parent is ts_class && key is (ts_identifier, ts_string) && static_name == "constructor" && !contains([] modifier, "static") && kind != "get" && kind != "set"
 in ts_class_property rule explicit-member-accessibility:property {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
@@ -36,6 +40,8 @@ in ts_class_property rule explicit-member-accessibility:property {
   when !re_test(key, /^#/) && (check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public"))
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on class property {shape.name}."
+  let edit if check == "no-public" then style_public_range else null
+  fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
 }
 in ts_method rule explicit-member-accessibility:method {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
@@ -50,6 +56,8 @@ in ts_method rule explicit-member-accessibility:method {
   when check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on {if kind == 'get' then 'get property accessor' else if kind == 'set' then 'set property accessor' else 'method definition'} {shape.name}."
+  let edit if check == "no-public" then style_public_range else null
+  fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
 }
 in ts_parameter rule explicit-member-accessibility:parameter {
   option accessibility ("explicit" | "no-public" | "off") = "explicit" "Required accessibility."
@@ -61,6 +69,8 @@ in ts_parameter rule explicit-member-accessibility:parameter {
   when check == "explicit" && !{ value @modifiers; has_accessibility } || check == "no-public" && contains([] modifier, "public")
   report at if check == "no-public" then shape.public else shape.head
   warn "{if check == 'no-public' then 'Public' else 'Missing'} accessibility modifier on parameter property {shape.name}."
+  let edit if check == "no-public" then style_public_range else null
+  fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as ""
 }
 
 # Getters that return a literal: a readonly field says it better.
