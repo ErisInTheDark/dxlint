@@ -157,9 +157,11 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(|file, node| file.static_string(node).map_or(Value::Null, Value::from), n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: Shape::List(&Shape::Record(&[
+            ("expression", Shape::Scalar), ("offset", Shape::Scalar), ("awaited", Shape::Scalar), ("certainty", Shape::Scalar), ("handling", Shape::Scalar),
+        ])),
         name: "returned_awaitables",
-        doc: "native async functions: returned branch certainty and error/resource handling context",
+        doc: "native async functions: returned expression nodes, offsets, awaited state, branch certainty and error/resource handling context",
         get: |f, n| f.with_file(return_await::findings, n),
     },
     Fact {

@@ -1,0 +1,1 @@
+interface Like { then(ok: (value: number) => void): Like; } declare const p: Like; async function work() { try { const inner = async () => p; return p; } catch { return p; } } async function cleanup() { try { return 1; } catch { return p; } finally {} } async function scalar() { return 1; }

@@ -24,6 +24,7 @@ pub(super) fn findings(file: &NativeFile<'_>, function: u32) -> Value<'static> {
         let ty = file.constrained_type_of(argument);
         let certainty = if uncertain(&ty) { "may" } else if ck.is_thenable(&ty) { "always" } else { "never" };
         out.push(Value::record(vec![
+            ("expression".into(), Value::Node(node, s.text(node).to_owned().into())),
             ("offset".into(), Value::from(s.tree.node(node).start as usize)),
             ("awaited".into(), Value::Bool(awaited)),
             ("certainty".into(), Value::from(certainty)),

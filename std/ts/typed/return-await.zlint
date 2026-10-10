@@ -1,0 +1,44 @@
+# Returned-await policy and source-preserving fixes.
+import .ts/expression-fixes
+
+define {
+
+fn return_await_remove(source, n) = {
+  value argument: n.argument.node
+  value operand: unparenthesised_node(argument)
+  value prefix: { value byte_slice(source, n.offset, argument.offset); re_replace /^await[\s\u{FEFF}]*/ "" }
+  value parens: if argument is ts_parenthesized || n.parent is ts_return then 0 else expression_fix_parens(source, n, operand)
+  value if parens == null then null else {
+    # Return must see an opening paren before a retained multiline comment.
+    value replacement: if n.parent is ts_return && re_test(prefix, /[\r\n\u{2028}\u{2029}]/) then "(" prefix argument.text ")"
+      else prefix expression_fix_wrap(argument.text, parens > 0)
+    value expression_fix_edges(n, replacement)
+  }
+}
+fn return_await_add(n) = {
+  value parens: n.precedence < 15 || n is structure_assertion
+  value replacement: "await " expression_fix_wrap(n.text, parens)
+  value expression_fix_edges(n, replacement)
+}
+fn return_await_selected(result, mode) = result.certainty == "never" && result.awaited || result.certainty == "always"
+  && (if mode == "always" || mode != "never" && result.handling then !result.awaited else if mode == "error-handling-correctness-only" then false else result.awaited)
+
+in ts_function, ts_arrow, ts_method rule return-await {
+  option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
+  let results {
+    value returned_awaitables
+    filter (result) return_await_selected(result, mode)
+    map (result) {
+      data: result,
+      # Promise awaits change rejection handling; keep those reports manual.
+      replacement: if result.certainty == "always" && result.handling then null
+        else if result.awaited then return_await_remove(source, result.expression) else return_await_add(result.expression)
+    }
+  }
+  each result in results
+  report at result.data.offset
+  warn if result.data.certainty == "never" then "Returning an awaited value that is not a promise is not allowed." else if result.data.awaited then "Returning an awaited promise is not allowed in this context." else "Returning an awaited promise is required in this context."
+  fix at result.data.expression if result.replacement != null as result.replacement
+}
+
+}

@@ -1,0 +1,16 @@
+a.ts:10:31-10:31 return-await#0
+a.ts:11:39-11:39 return-await#0
+a.ts:11:56-11:56 return-await#0
+a.ts:13:10-13:10 return-await#0
+a.ts:17:10-17:10 return-await#0
+a.ts:21:10-21:10 return-await#0
+a.ts:25:16-25:16 return-await#2
+a.ts:25:44-25:44 return-await#1
+a.ts:28:16-28:16 return-await#2
+a.ts:32:10-32:10 return-await#2
+a.ts:36:29-36:29 return-await#1
+a.ts:5:37-5:37 return-await#0
+a.ts:6:28-6:28 return-await#0
+a.ts:7:28-7:28 return-await#0
+a.ts:8:29-8:29 return-await#0
+a.ts:9:28-9:28 return-await#0

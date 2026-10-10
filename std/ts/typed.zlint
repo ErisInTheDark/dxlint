@@ -14,6 +14,7 @@ import .ts/typed/template-expressions
 import .ts/typed/readonly-members
 import .ts/typed/string-boundaries
 import .ts/typed/type-constituents
+import .ts/typed/return-await
 
 define {
 
@@ -460,14 +461,6 @@ in ts_parenthesized let array_literal_object expression.array_literal_object
 in ts_unary rule no-array-delete {
   when operator == "delete" && (argument.array_literal_object == true || argument.object_array_type == true)
   warn "Using the `delete` operator with an array expression is unsafe."
-}
-
-in ts_function, ts_arrow, ts_method rule return-await {
-  option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
-  each result in returned_awaitables
-  when result.certainty == "never" && result.awaited || result.certainty == "always" && (if mode == "always" || mode != "never" && result.handling then !result.awaited else if mode == "error-handling-correctness-only" then false else result.awaited)
-  report at result.offset
-  warn if result.certainty == "never" then "Returning an awaited value that is not a promise is not allowed." else if result.awaited then "Returning an awaited promise is not allowed in this context." else "Returning an awaited promise is required in this context."
 }
 
 in ts_assignment_pattern, ts_parameter rule no-useless-default-assignment {

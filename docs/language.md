@@ -1188,6 +1188,7 @@ and `final-newline`.
 | `.ts/typed/type-constituents` | duplicate union and intersection constituents by type identity, with token-safe removal fixes, imported by `.ts/typed` |
 | `.ts/typed/readonly-members` | readonly private members and parameter properties, with type-preserving annotation fixes, imported by `.ts/typed` |
 | `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |
+| `.ts/typed/return-await` | returned-await policy and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |

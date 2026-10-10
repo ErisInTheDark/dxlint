@@ -1,0 +1,3 @@
+a.ts:5:16-5:16 return-await#1
+a.ts:5:50-5:50 return-await#1
+a.ts:7:28-7:28 return-await#1
