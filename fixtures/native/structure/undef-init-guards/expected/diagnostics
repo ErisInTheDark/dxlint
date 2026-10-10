@@ -1,0 +1,9 @@
+a.js:13:27-13:47 no-undef-init#0
+a.js:1:5-1:22 no-undef-init#0
+a.js:2:5-2:24 no-undef-init#0
+a.js:3:5-3:25 no-undef-init#0
+a.js:4:5-4:24 no-undef-init#0
+a.js:5:5-5:28 no-undef-init#0
+a.js:6:5-7:12 no-undef-init#0
+a.js:8:5-8:26 no-undef-init#0
+a.js:9:5-10:10 no-undef-init#0

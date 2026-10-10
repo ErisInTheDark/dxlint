@@ -158,6 +158,8 @@ in ts_throw rule no-throw-literal {
 
 in ts_declarator rule no-undef-init {
   when init == "undefined" && init.resolved == "global" && re_test(ts_variable_declaration.kind, /^(var|let)$/)
+  let undef_initializer { offset: type.end_offset ?? name.end_offset, end_offset: init.end_offset }
+  fix at { start: undef_initializer.offset, end: undef_initializer.end_offset } if ts_variable_declaration.kind == "let" && name is ts_identifier && expression_fix_clean(undef_initializer) as ""
   warn "It's not necessary to initialize '{name}' to undefined."
 }
 
