@@ -455,18 +455,6 @@ in ts_interface.name rule consistent-type-definitions:interface {
   fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
 
-# Only a call signature: a function type says it better.
-in style_tree_node let function_this_offset if is ts_type_literal then null else if is ts_type_keyword && text == "this" then offset else { value children.function_this_offset; compact; first }
-in ts_type_reference let function_base name == "Function"
-in ts_interface let function_type_container { name: name, kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
-in ts_type_literal let function_type_container { name: "", kind: "Type literal", eligible: count(member) == 1, this: null }
-in ts_call_signature rule prefer-function-type {
-  let container parent.function_type_container
-  when return_type != null && container.eligible == true
-  report at container.this.nonempty ?? offset
-  warn if container.this != null then "`this` refers to the function type '" container.name "', did you intend to use a generic `this` parameter like `<Self>(this: Self, ...) => Self` instead?" else container.kind " only has a call signature, you should use a function type instead."
-}
-
 in ts_namespace rule prefer-namespace-keyword {
   when kind == "module" && { value name; re_replace /\..*$/ ""; is_identifier }
   warn "Use 'namespace' instead of 'module' to declare custom TypeScript modules."

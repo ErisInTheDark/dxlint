@@ -39,7 +39,7 @@ in ts_function_type let is_function_type kind != "new"
 in ts_property_signature let signature_callable_node type.node
 in ts_method_signature, ts_property_signature let signature_source_key
   (if contains(modifier, "readonly") then "readonly " else "") key.text (if optional != null then "?" else "")
-in ts_method_signature, ts_property_signature let signature_source_end
+in ts_method_signature, ts_property_signature, ts_call_signature let signature_source_end
   if contains([";", ","], token_neighbours.after.text) then token_neighbours.after.end else end_offset
 in ts_method_signature, ts_property_signature let signature_source_delimiter
   if contains([";", ","], token_neighbours.after.text) then token_neighbours.after.text else ""
@@ -61,7 +61,61 @@ fn signature_callable_source(source, n) = {
   value closing_tokens: if last_type != null then overlapping(ts_close_angle, last_type.end_offset, opening.offset) else []
   value closing: first(closing_tokens)
   value type_parameters: if first_type != null then byte_slice(source, first_type.token_neighbours.before.start, closing.end_offset) else ""
-  value { parameters: type_parameters parameters, result: n.return_type.text ?? "any" }
+  value { parameters: type_parameters parameters, result: n.return_type.text ?? "any", return_colon: n.signature_return_colon }
+}
+in ts_call_signature let signature_return_colon return_type.node.token_neighbours.before
+
+# Only a call signature: a function type says it better.
+in style_tree_node let function_this_offset if is ts_type_literal then null else if is ts_type_keyword && text == "this" then offset else { value children.function_this_offset; compact; first }
+in ts_type_reference let function_base name == "Function"
+in ts_interface let function_type_container { name: name, kind: "Interface", eligible: count(member) == 1 && (count(extends) == 0 || count(extends) == 1 && (first([] extends) == "Function" || first([] extends.function_base) == true)), this: function_this_offset }
+in ts_type_literal let function_type_container { name: "", kind: "Type literal", eligible: count(member) == 1, this: null }
+in ts_interface let function_type_header_end {
+  value last_parameter: last(type_parameter.nodes)
+  value first_member: first(member.nodes)
+  value angle_tokens: if last_parameter != null then overlapping(ts_close_angle, last_parameter.end_offset, first_member.offset) else []
+  value first(angle_tokens).end_offset ?? name.end_offset
+}
+in ts_interface let function_type_name_start name.offset
+fn function_type_comments(n) = {
+  value before: overlapping(ts_comment, n.token_neighbours.before.end, n.offset)
+  value after: overlapping(ts_comment, n.signature_source_end, n.parent.end_offset)
+  value before after
+}
+fn function_type_comment_prefix(comment, member, exported) = comment.text (if exported || starts_with(comment.text, "//") || position(comment.offset).js_line != position(member.offset).js_line then "\n" else " ")
+fn function_type_fix(source, n, info) = {
+  value owner: n.parent.node
+  value exported: owner.parent is ts_export
+  value colon: signature_callable_source(source, n).return_colon
+  value raw: byte_slice(source, n.offset, colon.start) " =>" byte_slice(source, colon.end, n.end_offset)
+  value comments: function_type_comments(n)
+  value exported_comments: exported && count(comments) > 0
+  value body: if owner is ts_interface then {
+    value name: byte_slice(source, owner.function_type_name_start, owner.function_type_header_end)
+    value ending: if n.token_neighbours.after.text == ";" then ";" else ""
+    value "type " name " = " raw ending
+  } else {
+    value shape: { kind: "ts_function_type", precedence: 3 }
+    value required: expression_fix_parens(source, owner, shape)
+    value if required == null then null else expression_fix_wrap(raw, required > 0)
+  }
+  value replacement: if exported_comments then {
+    value prefix: { value comments; map (comment) function_type_comment_prefix(comment, n, true); join "" }
+    value prefix byte_slice(source, owner.parent.offset, owner.offset) body
+  } else { value comments; fold (body) (text, comment) function_type_comment_prefix(comment, n, false) text }
+  value start: if exported_comments then owner.parent.offset else owner.offset
+  value span: { offset: start, end_offset: owner.end_offset, text: byte_slice(source, start, owner.end_offset) }
+  value if info.this != null || exported && owner.parent.kind == "default" || body == null
+    || !expression_fix_retains_comments(span, replacement) then null
+    else { start: start, end: owner.end_offset, text: replacement }
+}
+in ts_call_signature rule prefer-function-type {
+  let container parent.function_type_container
+  when return_type != null && container.eligible == true
+  report at container.this.nonempty ?? offset
+  warn if container.this != null then "`this` refers to the function type '" container.name "', did you intend to use a generic `this` parameter like `<Self>(this: Self, ...) => Self` instead?" else container.kind " only has a call signature, you should use a function type instead."
+  let edit function_type_fix(source, node, container)
+  fix at { start: edit.start ?? offset, end: edit.end ?? offset } if edit != null as edit.text
 }
 fn signature_return_has_this(n) = n.return_type != null && {
   value nodes: walk([n.return_type.node], child => child.children.nodes)

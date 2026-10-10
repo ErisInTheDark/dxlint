@@ -1,0 +1,5 @@
+input.ts:10:15-10:15 prefer-function-type#1
+input.ts:11:15-11:15 prefer-function-type#1
+input.ts:3:3-3:3 prefer-function-type#1
+input.ts:7:3-7:3 prefer-function-type#1
+input.ts:9:23-9:23 prefer-function-type#1
