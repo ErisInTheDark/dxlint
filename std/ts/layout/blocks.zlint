@@ -107,6 +107,49 @@ in ts_semicolon let layout_member_preceding_end {
   value max(layout_member_before.end, default)
 }
 
+group layout_member_gap_token ts_token, ts_comment
+fn layout_member_line_run(parts, start, lines) = {
+  value result: {
+    value parts
+    fold ({ end: start, active: true }) (state, part) {
+      end: if state.active && position(part.start).line - position(state.end).line <= lines then part.end else state.end,
+      active: state.active && position(part.start).line - position(state.end).line <= lines
+    }
+  }
+  value result.end
+}
+fn layout_member_gap_fix(source, start, end, padded) = {
+  value parts: {
+    value overlapping(layout_member_gap_token, start, end)
+    filter (token) token.offset >= start && token.end_offset <= end
+    sort_by (token) token.offset
+    map (token) { start: token.offset, end: token.end_offset }
+  }
+  value checked: {
+    value parts
+    fold ({ end: start, clean: true }) (state, part) {
+      end: part.end,
+      clean: state.clean && { value source; byte_slice state.end part.start; re_test /^\s*$/ }
+    }
+  }
+  value clean: checked.clean && { value source; byte_slice checked.end end; re_test /^\s*$/ }
+  value before: layout_member_line_run(parts, start, 1)
+  value reversed: {
+    value parts
+    reverse
+    fold ({ start: end, active: true }) (state, part) {
+      start: if state.active && position(state.start).line - position(part.end).line <= 1 then part.start else state.start,
+      active: state.active && position(state.start).line - position(part.end).line <= 1
+    }
+  }
+  value after: reversed.start
+  value between: any(parts, part => part.start >= before && part.end <= after)
+  value insertion: layout_member_line_run(parts, start, 0)
+  value gap: if before < after then byte_slice(source, before, after) else ""
+  value if !clean || between || padded && (before >= after || !re_test(gap, /^\s*$/)) then null
+    else if padded then { start: before, end: after, text: "\n" }
+    else { start: insertion, end: insertion, text: "\n" }
+}
 in ts_class.member rule lines-between-class-members {
   option style "always" | "never" = "always" "blank lines between class members"
   option enforce { blankLine: "always" | "never"; prev: "method" | "field" | "*"; next: "method" | "field" | "*" }[] = [] "policy by neighbouring member kinds"
@@ -132,6 +175,8 @@ in ts_class.member rule lines-between-class-members {
   when gap_mode == "never" && gap_padded || gap_mode == "always" && !gap_padded && !(exceptAfterSingleLine && gap_single_line)
   report at { start: gap_start, end: gap_end }
   warn if gap_padded then "Unexpected blank line between class members." else "Expected blank line between class members."
+  let edit layout_member_gap_fix(source, gap_start, gap_end, gap_padded)
+  fix at (edit ?? { start: gap_start, end: gap_end }) if edit != null as edit.text
 }
 
 in ts_open_brace rule space-before-blocks {
