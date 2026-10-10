@@ -9,9 +9,10 @@ use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
 use super::modules::{DeclRef, ModuleAt};
 use super::summary::{sig, type_syn, DeclKind, Sig, TParam, TypeSyn};
-use super::types::{Callable, Checker, Env, PropertyOrigin, ResolvedPredicate, StructProperty, Ty};
+use super::types::{Callable, Checker, Env, ResolvedPredicate, StructProperty, Ty};
 
 mod contextual;
+mod literals;
 
 fn prim_flag(p: &str) -> &'static str {
     match p {
@@ -526,12 +527,12 @@ impl<'t> NativeFile<'t> {
                 }
                 if let Some(TypeSyn::Ref(path, _)) = named {
                     if !inferred.iter().any(|(n, _)| *n == path[0]) {
-                        inferred.push((path[0].clone(), self.type_of(a).widen()));
+                        inferred.push((path[0].clone(), self.type_of(a).literal_base()));
                     }
                 }
             }
         }
-        params.iter().map(|p| inferred.iter().find(|(n, _)| *n == p.name).map_or(Ty::Unknown, |(_, t)| t.clone().widen())).collect()
+        params.iter().map(|p| inferred.iter().find(|(n, _)| *n == p.name).map_or(Ty::Unknown, |(_, t)| t.clone().literal_base())).collect()
     }
 
     /// For a node with type arguments: each type parameter's default and
@@ -800,27 +801,7 @@ impl<'t> NativeFile<'t> {
             },
             K::Update => Ty::Prim("number"),
             K::Binary => ck.binary_type(s.word(id, F::Op), || inner(F::Left), || inner(F::Right)),
-            K::Array => {
-                let items: Vec<Ty> = s.all(id, F::Element).collect::<Vec<_>>().into_iter().map(|e| self.type_of(e).widen()).collect();
-                if self.bindings().write_sites.contains_key(&id) || self.destructuring_receiver(id).is_some_and(|receiver| matches!(s.kind(receiver), Some(K::ArrayPattern | K::Array))) {
-                    return Ty::Tuple(items.into_iter().collect());
-                }
-                if items.is_empty() {
-                    return Ty::array(Ty::Never);
-                }
-                if items.iter().any(Ty::is_opaque) {
-                    Ty::Unknown
-                } else {
-                    let mut unique: Vec<Ty> = Vec::new();
-                    for t in items {
-                        let printed = ck.print(&t);
-                        if !unique.iter().any(|u| ck.print(u) == printed) {
-                            unique.push(t);
-                        }
-                    }
-                    Ty::array(if unique.len() == 1 { unique.pop().expect("one") } else { Ty::Union(unique) })
-                }
-            }
+            K::Array => self.array_literal(id),
             K::Regex => ck.global_named("RegExp", Vec::new()),
             K::Object => self.object_literal(id),
             K::Arrow | K::Function | K::Method => {
@@ -846,39 +827,6 @@ impl<'t> NativeFile<'t> {
             }
             _ => Ty::Unknown,
         }
-    }
-
-    /// Object properties compose in source order; uncertain spreads stay unknown.
-    fn object_literal(&self, id: u32) -> Ty {
-        let s = &self.syntax;
-        let mut props: Vec<StructProperty> = Vec::new();
-        for p in s.all(id, F::Property).collect::<Vec<_>>() {
-            if s.is(p, K::Spread) {
-                let source = s.get(p, F::Arg).map_or(Ty::Unknown, |arg| self.type_of(arg));
-                if matches!(source, Ty::Any) { return Ty::Any }
-                let Some(spread) = self.object_spread_properties(&source) else { return Ty::Unknown };
-                for property in spread {
-                    props.retain(|previous| previous.name != property.name);
-                    props.push(property);
-                }
-                continue;
-            }
-            let Some(key) = s.get(p, F::Key) else { return Ty::Unknown };
-            let Some(name) = self.property_key_name(p) else { return Ty::Unknown };
-            let name = name.into_boxed_str();
-            let t = match s.kind(p) {
-                Some(K::Prop) => s.get(p, F::Value).map_or_else(|| self.type_of(key), |v| self.type_of(v)),
-                Some(K::Method) => match s.word(p, F::Kind) {
-                    Some("get") => s.get(p, F::ReturnType).map_or_else(|| self.own_return(&sig(s, p), self.ck().file).unwrap_or(Ty::Unknown), |annotation| self.type_of(annotation)),
-                    Some("set") => s.all(p, F::Param).next().and_then(|param| s.get(param, F::Name)).map_or(Ty::Unknown, |name| self.type_of(name)),
-                    _ => self.type_of(p),
-                },
-                _ => Ty::Unknown,
-            };
-            props.retain(|property| property.name != name);
-            props.push(StructProperty { name, ty: t, origin: Some(PropertyOrigin { file: self.ck().file, node: p }) });
-        }
-        Ty::Struct(props.into())
     }
 
     /// Only direct references to a library Symbol constructor identify symbolic keys.

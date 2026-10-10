@@ -394,7 +394,16 @@ impl Checker<'_> {
     /// Declared parameter contracts, before inferring from the values being checked.
     /// Callback contexts keep parameters open; transfer contexts use their upper bounds.
     pub fn argument_context_parameters(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>, construct: bool, bound: bool) -> Option<(Vec<Ty>, bool)> {
-        let (sig, env) = self.signature_for(callee, args, construct)?;
+        let (sig, env) = self.signature_for(callee, args, construct).or_else(|| {
+            let signatures = self.signatures(callee, construct)?;
+            let signature = self.pick_matching(&signatures, args, targs.len(), true, |left, right| {
+                let (left, left_rest) = self.context_parameter_types(&left.syntax, (*left.env).clone(), targs.clone(), bound);
+                let (right, right_rest) = self.context_parameter_types(&right.syntax, (*right.env).clone(), targs.clone(), bound);
+                left_rest == right_rest && left.len() == right.len()
+                    && left.iter().zip(&right).all(|(left, right)| self.equivalent(left, right) == Some(true))
+            })?;
+            Some((signature.syntax.clone(), signature.env.clone()))
+        })?;
         let mut env = (*env).clone();
         let signature_args = if let (Ty::Class(symbol), true) = (callee, construct) {
             let reference = *symbol.first()?;
@@ -402,8 +411,12 @@ impl Checker<'_> {
             self.context_parameters(&summary.decls[reference.decl as usize].type_params, targs, bound, &mut env);
             Vec::new()
         } else { targs };
-        self.context_parameters(&sig.type_params, signature_args, bound, &mut env);
-        Some((sig.params.iter().map(|param| param.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect(), sig.params.last().is_some_and(|param| param.rest)))
+        Some(self.context_parameter_types(&sig, env, signature_args, bound))
+    }
+
+    fn context_parameter_types(&self, sig: &Sig, mut env: Env, arguments: Vec<Ty>, bound: bool) -> (Vec<Ty>, bool) {
+        self.context_parameters(&sig.type_params, arguments, bound, &mut env);
+        (sig.params.iter().map(|param| param.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect(), sig.params.last().is_some_and(|param| param.rest))
     }
 
     fn context_parameters(&self, parameters: &[TParam], arguments: Vec<Ty>, bound: bool, env: &mut Env) {

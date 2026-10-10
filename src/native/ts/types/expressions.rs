@@ -77,18 +77,51 @@ impl Checker<'_> {
         if m.optional { t.or_undefined() } else { t }
     }
 
-    fn fresh_literal_binding(&self, path: &[Box<str>], env: &Env) -> bool {
+    pub(crate) fn fresh_literal_member(&self, member: &Member, env: &Env) -> bool {
+        member.ty.is_none() && member.init.as_ref().is_some_and(|init| self.fresh_literal_init(init, env, super::MAX_DEPTH))
+    }
+
+    fn fresh_literal_init(&self, init: &Init, env: &Env, remaining: u32) -> bool {
+        match init {
+            Init::Literal(_) => true,
+            Init::Path(path) if remaining > 0 => self.fresh_literal_path(path, env, remaining - 1),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn fresh_literal_binding(&self, path: &[Box<str>], env: &Env) -> bool {
+        self.fresh_literal_path(path, env, super::MAX_DEPTH)
+    }
+
+    fn fresh_literal_path(&self, path: &[Box<str>], env: &Env, remaining: u32) -> bool {
         let mut path = path.to_vec();
         let mut env = env.clone();
-        for _ in 0..super::MAX_DEPTH {
+        for depth in 0..remaining {
             let Some((head, tail)) = path.split_first() else { return false };
             let mut refs = self.follow(self.lookup(&env, head));
-            for name in tail {
-                refs = self.follow(match self.value_of(&refs) {
+            let mut object = if tail.is_empty() {
+                Ty::Unknown
+            } else if &**head == "this" {
+                env.this.as_deref().cloned().unwrap_or(Ty::Unknown)
+            } else {
+                self.value_of(&refs)
+            };
+            for (index, name) in tail.iter().enumerate() {
+                refs = self.follow(match object {
                     Ty::Ns(symbols) => self.namespace_member(&symbols, name),
                     Ty::Module(module) => self.module_member(module.0, name),
-                    _ => return false,
+                    _ if index + 1 == tail.len() => {
+                        let members = self.member_resolution(&object, name).declarations;
+                        return !members.is_empty() && members.iter().all(|declaration| declaration.member.ty.is_none()
+                            && declaration.environment.as_ref().is_some_and(|env| declaration.member.init.as_ref()
+                                .is_some_and(|init| self.fresh_literal_init(init, env, remaining - depth - 1))));
+                    }
+                    _ => {
+                        object = self.member(&object, name);
+                        continue;
+                    }
                 });
+                object = self.value_of(&refs);
             }
             let Some(&binding) = refs.first() else { return false };
             let Some(summary) = self.summary_of(binding.file) else { return false };

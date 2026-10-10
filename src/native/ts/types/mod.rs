@@ -336,6 +336,15 @@ impl Ty {
             t => t,
         }
     }
+
+    /// Literal primitives without widening the members of a container.
+    pub fn literal_base(self) -> Ty {
+        match self {
+            Ty::Lit(_, primitive) => Ty::Prim(primitive),
+            Ty::Union(parts) => Ty::union(parts.into_iter().map(Ty::literal_base).collect()),
+            other => other,
+        }
+    }
 }
 
 /// Evaluates types for one linted file. Caches live as long as the file's
