@@ -1,6 +1,8 @@
 # .ts/jsx: @stylistic's JSX rules (spacing, wrapping, props, closing tags),
 # on the native `ts_jsx_*` layers.
 
+import .ts/expression-fixes
+
 define {
 
 in ts_node, ts_open_angle, ts_close_angle, ts_punctuator let jsx_line_prefix { value js_line_start: position(offset).js_line_start; value byte_slice(source, js_line_start, offset) }
@@ -129,6 +131,31 @@ in ts_parenthesized, ts_jsx_element, ts_jsx_fragment, ts_conditional {
   let jsx_wrap_fallback if parent is ts_parenthesized then parent.jsx_wrap_fallback else if parent is ts_conditional then parent.jsx_wrap_context else null
   let jsx_call_argument if parent is ts_parenthesized then parent.jsx_call_argument else is (ts_call.argument, ts_new.argument)
 }
+fn jsx_wrap_edit(source, n, selected, parenthesized, opening, closing) = {
+  value newline: selected == "parens-new-line"
+  value before: n.token_neighbours.before
+  value after: n.token_neighbours.after
+  value if parenthesized then {
+    start: n.offset, end: n.end_offset,
+    text: (if opening then "\n" else "") n.text (if closing then "\n" else "")
+  } else if !newline then { start: n.offset, end: n.end_offset, text: "(" n.text ")" }
+  else if before != null && position(before.end).js_line < position(n.offset).js_line then {
+    value comments: { value source; byte_slice before.end n.offset; trim }
+    value tab: starts_with(n.jsx_line_prefix, "\t")
+    value unit: if tab then "\t" else " "
+    value column: position(n.offset).js_column - 1
+    value tail_size: column - (if tab then 1 else 2)
+    value tail_column: max(0, tail_size)
+    value indent: repeat(unit, column)
+    value tail_indent: repeat(unit, tail_column)
+    value leading: trim(before.text) (if contains(["{{", "["], before.text) then "" else " ")
+    value {
+      start: before.start,
+      end: if after != null && contains([";", "}}"], after.text) then after.start else n.end_offset,
+      text: leading "(\n" indent comments (if comments != "" then "\n" indent else "") n.text "\n" tail_indent ")"
+    }
+  } else { start: n.offset, end: n.end_offset, text: "(\n" n.text "\n)" }
+}
 in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
   option declaration jsx_wrap_mode = "parens" "variable initializer wrapping"
   option assignment jsx_wrap_mode = "parens" "assignment wrapping"
@@ -148,6 +175,9 @@ in ts_jsx_element, ts_jsx_fragment rule jsx-wrap-multilines {
   when jsx_break(text) && jsx_wrap_active(selected)
   when !parenthesized || selected == "parens-new-line" && (!space_before.line_break || !space_after.line_break)
   warn if !parenthesized then "Missing parentheses around multilines JSX" else "Parentheses around JSX should be on separate lines"
+  let edit jsx_wrap_edit(source, node, selected, parenthesized, !space_before.line_break, !space_after.line_break)
+  let original { offset: edit.start, end_offset: edit.end, text: byte_slice(source, edit.start, edit.end) }
+  fix at edit if expression_fix_retains_comments(original, edit.text) as edit.text
 }
 in ts_jsx_element, ts_jsx_fragment rule jsx-function-call-newline {
   option mode "always" | "multiline" = "multiline" "call argument linebreak policy"
