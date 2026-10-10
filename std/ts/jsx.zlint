@@ -396,6 +396,12 @@ in ts_open_angle, ts_close_angle, ts_punctuator {
   when if kind == "closingSlash" then spaced != (policy == "always") else if kind == "afterOpening" then spaced != (policy == "always") && !(policy == "allow-multiline" && gap_newline) else if needs_newline then true else if kind == "beforeSelfClosing" then !gap_newline && spaced != (policy != "never") else !start_newline && (if policy == "proportional-always" then jsx_tag_opening && spaced == single else spaced != (policy == "always"))
   report at {start: gap.start, end: gap.end}
   warn if kind == "closingSlash" then (if jsx_tag_self_slash then (if policy == "always" then "Whitespace is required between `/` and `>`; write `/ >`" else "Whitespace is forbidden between `/` and `>`; write `/>`") else (if policy == "always" then "Whitespace is required between `<` and `/`; write `< /`" else "Whitespace is forbidden between `<` and `/`; write `</`")) else if needs_newline then "A newline is required before closing bracket" else if kind == "afterOpening" then (if policy == "always" then "A space is required after opening bracket" else "A space is forbidden after opening bracket") else if policy == "never" then "A space is forbidden before closing bracket" else if kind == "beforeSelfClosing" then "A space is required before closing bracket" else "Whitespace is required before closing bracket"
+  # Single-line proportional closing gaps must shrink, not grow on every pass.
+  let remove_gap policy == "never" || policy == "allow-multiline" || policy == "proportional-always" && kind == "beforeClosing" && single
+  let edit { start: if remove_gap then gap.start else gap.end, end: gap.end }
+  let replacement if remove_gap then "" else if needs_newline then "\n" else " "
+  let original { offset: edit.start, end_offset: edit.end, text: byte_slice(source, edit.start, edit.end) }
+  fix at edit if expression_fix_retains_comments(original, replacement) as replacement
 }
 in ts_open_angle, ts_close_angle, ts_punctuator rule jsx-tag-spacing {
   let jsx_tag_before_self false

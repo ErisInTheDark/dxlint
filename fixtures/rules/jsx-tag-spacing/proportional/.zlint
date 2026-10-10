@@ -1,0 +1,2 @@
+import .ts
+rule jsx-tag-spacing { set beforeSelfClosing "proportional-always"; set beforeClosing "proportional-always" }

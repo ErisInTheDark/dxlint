@@ -1,0 +1,2 @@
+import .ts
+rule jsx-tag-spacing { set closingSlash "allow"; set beforeSelfClosing "allow"; set afterOpening "allow-multiline"; set beforeClosing "never" }
