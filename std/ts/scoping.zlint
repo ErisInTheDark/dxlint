@@ -243,9 +243,16 @@ in ts_statement, ts_case let scoping_return_tail
   else if parent is (ts_block, ts_case) then
     !next.scoping_following_meaningful && (parent not ts_case || parent.scoping_case_exit) && parent.scoping_return_tail
   else parent.scoping_return_tail
+in ts_node let scoping_return_fix_owner
+  if parent is (ts_function_like, ts_program) then parent.node
+  else parent.scoping_return_fix_owner
 in ts_return rule no-useless-return {
   when argument == null && !contains(["unreachable", "unreachable_run"], code_path) && scoping_return_tail
   warn "Unnecessary return statement."
+  let owner scoping_return_fix_owner
+  # Reserve control-flow owner so overlapping edits wait for the next pass.
+  fix at owner if parent is (ts_block, ts_case, ts_program, ts_static_block) && expression_fix_clean(node) as
+    byte_slice(owner.text, 0, offset - owner.offset) byte_slice(owner.text, end_offset - owner.offset)
 }
 
 in ts_program, ts_function, ts_arrow, ts_method rule consistent-return {
