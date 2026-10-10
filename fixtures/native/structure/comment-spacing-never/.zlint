@@ -1,0 +1,6 @@
+import .ts
+rule spaced-comment {
+  set style "never"
+  set markers ["!", "λ"]
+  set balanced true
+}

@@ -56,17 +56,29 @@ in multiple_space_gap rule no-multi-spaces {
 }
 fn layout_comment_open_wrong(body, style, marker_pattern, exception_pattern) = if style == "always" then !re_test(body, "^" marker_pattern "?" exception_pattern) else re_test(body, "^" marker_pattern "?[ \\t]+")
 fn layout_comment_open_message(style, exceptions, marker, identifier) = if style == "always" then (if count(exceptions) > 0 then "Expected exception block, space or tab after '{identifier}{marker}' in comment." else "Expected space or tab after '{identifier}{marker}' in comment.") else if marker != "" then "Unexpected space or tab after marker ({marker}) in comment." else "Unexpected space or tab after '{identifier}' in comment."
+fn layout_comment_open_fix(n, body, style, marker) = {
+  value marker_size: byte_len(marker)
+  value start: n.offset + 2 + marker_size
+  value spaces: if style == "never" then { value byte_slice(body, marker_size); re_find /^[ \t]+/ } ?? "" else ""
+  value { start: start, end: start + byte_len(spaces) }
+}
 in ts_line_comment rule spaced-comment:line {
   @layout_comment_policy
   when layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+  let comment_fix layout_comment_open_fix(node, comment_body, style, comment_marker)
+  fix at comment_fix as if style == "always" then " " else ""
   warn layout_comment_open_message(style, exceptions, comment_marker, "//")
 }
 in ts_block_comment rule spaced-comment:block {
   @layout_comment_policy
   option balanced boolean = false "require matching closing delimiter spacing"
+  let opening_fix layout_comment_open_fix(node, comment_body, style, comment_marker)
+  let closing_spaces if style == "never" then re_find(comment_body, /[ \t]+$/) ?? "" else ""
+  let closing_fix { start: end_offset - 2 - byte_len(closing_spaces), end: end_offset - 2 }
   each comment_end in [false, true]
   when !comment_end || balanced
   when if comment_end then (if style == "always" then !re_test(comment_body, comment_exception_pattern "$") else re_test(comment_body, /[ \t]+$/)) else layout_comment_open_wrong(comment_body, style, comment_marker_pattern, comment_exception_pattern)
+  fix at (if comment_end then closing_fix else opening_fix) as if style == "always" then " " else ""
   warn if !comment_end then layout_comment_open_message(style, exceptions, comment_marker, "/*") else if style == "always" then "Expected space or tab before '*/' in comment." else "Unexpected space or tab before '*/' in comment."
 }
 
@@ -91,6 +103,8 @@ in layout_blank_run rule no-multiple-empty-lines {
   when containing(ts_template.quasi) == null && containing(ts_template_type.quasi) == null
   # Blank whitespace cannot contain NUL; split after line endings to retain their byte lengths.
   let blank_parts { value blank_text; re_replace /(\r\n|[\r\n])/ "$1\0"; split "\0" }
+  let blank_remove { value blank_parts; slice 0 (blank_count - blank_limit); join ""; byte_len }
+  fix at { start: offset + blank_prefix, end: offset + blank_prefix + blank_remove } as ""
   report at { start: offset + blank_prefix + {
     value blank_parts
     slice 0 blank_limit

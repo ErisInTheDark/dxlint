@@ -1,0 +1,6 @@
+import .ts
+rule no-multiple-empty-lines {
+  set max 0
+  set maxBOF 0
+  set maxEOF 0
+}

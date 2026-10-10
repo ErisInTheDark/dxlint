@@ -1,0 +1,6 @@
+import .ts
+rule spaced-comment {
+  set markers ["!", "λ"]
+  set exceptions ["="]
+  set balanced true
+}
