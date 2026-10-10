@@ -564,7 +564,12 @@ in ts_binary rule eqeqeq {
   fix at operator_span if fixable as expected
 }
 
-fn operand_cached_indent(records, row, fallback) = { value { value records; filter (prior) prior.right_line == row; last }.expected; nonempty } ?? fallback
+fn operand_cached_indent(records, row, fallback) = { value records; filter (prior) prior.right_line == row; last }.expected ?? fallback
+fn operand_assignment(token) = contains(["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "|=", "^=", "&=", "&&=", "||=", "??="], token)
+fn operand_add(info) =
+  contains(["break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "finally", "for", "function", "if", "import", "in", "let", "new", "return", "super", "switch", "throw", "try", "var", "void", "while", "with"], info.first)
+  || info.type_keyword || contains([":", "[", "(", "<"], info.last) || operand_assignment(info.last)
+  || contains(["[", "(", "{{", "=>", ":"], info.before) || operand_assignment(info.before)
 
 in ts_program rule indent-binary-ops {
   option mode number | "tab" = 2 "indent width or tabs"
@@ -572,16 +577,26 @@ in ts_program rule indent-binary-ops {
   let unit if mode == "tab" then "\t" else " "
   let measurements {
     value binary_operand_indents
-    fold ([]) (state, info) state [{
-      offset: info.offset,
-      right_line: info.right_line,
-      actual: operand_cached_indent(state, info.right_line, info.right),
-      expected: if info.adjust > 0 then (operand_cached_indent(state, info.left_line, info.left) repeat(unit, width)) else if info.adjust < 0 then { value state; operand_cached_indent info.left_line info.left; slice width } else operand_cached_indent(state, info.left_line, info.left),
-    }]
+    sort_by (info) info.right_line
+    fold ([]) (state, info) {
+      value closes_more: info.last == ")" && info.parens < 0
+      value chain: closes_more && contains([".", "?."], info.first)
+      value add: operand_add(info)
+      value subtract: closes_more && !contains(["]", ")", "}}"], info.first) && !chain
+      value left: if chain then operand_cached_indent(state, info.root_line, info.root) else operand_cached_indent(state, info.left_line, info.left)
+      value state [{
+        offset: info.offset,
+        end: info.offset + byte_len(info.right),
+        right_line: info.right_line,
+        actual: operand_cached_indent(state, info.right_line, info.right),
+        expected: if add && !subtract then left repeat(unit, width) else if subtract && !add then { value left; slice width } else left,
+      }]
+    }
   }
   each info in measurements
   when info.actual != info.expected
   report at info.offset
+  fix at { start: info.offset, end: info.end } as info.expected
   warn "Expected indentation of " len(info.expected) " " (if mode == "tab" then "tab" else "space") (if len(info.expected) == 1 then "" else "s")
 }
 

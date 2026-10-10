@@ -30,7 +30,6 @@ fn scan(file: &NativeFile) -> OperandIndents {
         let end = starts.get(row + 1).copied().unwrap_or(s.src.len());
         s.src[starts[row]..end].chars().take_while(|ch| ch.is_whitespace() && !matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')).collect::<String>()
     };
-    let assignments = ["=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "|=", "^=", "&=", "&&=", "||=", "??="];
     let mut out = Vec::new();
     let mut stack = vec![s.root()];
     while let Some(node) = stack.pop() {
@@ -43,13 +42,19 @@ fn scan(file: &NativeFile) -> OperandIndents {
         };
         let bounds = s.tree.node(node);
         if line(bounds.start as usize) == line(bounds.end as usize) { continue }
-        for right in rights {
+        let type_members = s.is(node, K::Union) || s.is(node, K::Intersection);
+        for (member, right) in rights.into_iter().enumerate() {
             let start = s.tree.node(s.unparen(right)).start as usize;
             let mut right_index = tokens.partition_point(|&(at, _)| at < start);
             if right_index == 0 || right_index >= tokens.len() { continue }
-            while right_index > 1 && text(right_index - 1) == "(" { right_index -= 1; }
+            let mut climbed = false;
+            while right_index > 1 && text(right_index - 1) == "(" {
+                right_index -= 1;
+                climbed = true;
+            }
             let operator = s.get(node, F::Op).map_or(right_index - 1, |op| tokens.partition_point(|&(at, _)| at < s.tree.node(op).start as usize));
-            if operator == 0 || tokens[operator].0 <= bounds.start as usize { continue }
+            // A first type member can follow a delimiter outside the union/intersection span.
+            if operator == 0 || (tokens[operator].0 <= bounds.start as usize && !(type_members && member == 0 && !climbed)) { continue }
             let left_row = line(tokens[operator - 1].0);
             let right_row = line(tokens[right_index].0);
             if left_row == right_row { continue }
@@ -57,30 +62,32 @@ fn scan(file: &NativeFile) -> OperandIndents {
             let last = tokens.partition_point(|&(at, _)| line(at) <= left_row).saturating_sub(1);
             let first_text = text(first);
             let last_text = text(last);
-            let closes_more = last_text == ")" && tokens[first..=last].iter().map(|&(at, end)| match &s.src[at..end] { "(" => 1_i32, ")" => -1, _ => 0 }).sum::<i32>() < 0;
-            let chain = closes_more && matches!(first_text, "." | "?.");
-            let keyword = matches!(first_text, "break" | "case" | "catch" | "class" | "const" | "continue" | "debugger" | "default" | "delete" | "do" | "else" | "export" | "extends" | "finally" | "for" | "function" | "if" | "import" | "in" | "let" | "new" | "return" | "super" | "switch" | "throw" | "try" | "var" | "void" | "while" | "with");
-            let type_alias = first_text == "type" && {
+            let parens = tokens[first..=last].iter().map(|&(at, end)| match &s.src[at..end] { "(" => 1_i32, ")" => -1, _ => 0 }).sum::<i32>();
+            let type_keyword = first_text == "type" && {
                 let mut current = node;
                 let mut found = false;
                 while let Some(parent) = s.parent(current) {
-                    if s.is(parent, K::TypeAlias) { found = true; break }
+                    if s.is(parent, K::TypeAlias) && s.tree.node(parent).start as usize == tokens[first].0 { found = true; break }
                     current = parent;
                 }
                 found
             };
             let before = tokens.partition_point(|&(at, _)| at < bounds.start as usize).checked_sub(1);
-            let add = keyword || type_alias || matches!(last_text, ":" | "[" | "(" | "<") || assignments.contains(&last_text)
-                || before.is_some_and(|index| line(tokens[index].0) == left_row
-                    && (matches!(text(index), "[" | "(" | "{" | "=>" | ":") || assignments.contains(&text(index))));
-            let subtract = closes_more && !matches!(first_text, "]" | ")" | "}") && !chain;
+            let before_text = before.filter(|&index| line(tokens[index].0) == left_row).map_or("", text);
+            let root_row = line(bounds.start as usize);
             out.push(Value::record(vec![
                 ("offset".into(), Value::from(starts[right_row])),
-                ("left_line".into(), Value::from(if chain { line(bounds.start as usize) } else { left_row })),
+                ("left_line".into(), Value::from(left_row)),
                 ("right_line".into(), Value::from(right_row)),
-                ("left".into(), Value::from(indent(if chain { line(bounds.start as usize) } else { left_row }))),
+                ("root_line".into(), Value::from(root_row)),
+                ("left".into(), Value::from(indent(left_row))),
                 ("right".into(), Value::from(indent(right_row))),
-                ("adjust".into(), Value::Num(if add && !subtract { 1.0 } else if subtract && !add { -1.0 } else { 0.0 })),
+                ("root".into(), Value::from(indent(root_row))),
+                ("first".into(), Value::text_copy(first_text)),
+                ("last".into(), Value::text_copy(last_text)),
+                ("before".into(), Value::text_copy(before_text)),
+                ("parens".into(), Value::Num(parens as f64)),
+                ("type_keyword".into(), Value::Bool(type_keyword)),
             ]));
         }
     }
