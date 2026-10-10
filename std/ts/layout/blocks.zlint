@@ -227,6 +227,7 @@ in ts_colon rule switch-colon-spacing:before {
   @layout_switch_colon_options
   when parent is ts_case && previous_token != null
   when !space_before.line_break && before != space_before.spaced
+  fix at { start: space_before.start, end: if before then space_before.start else offset } if !space_before.comments as if before then " " else ""
   warn if before then "Expected space(s) before this colon." else "Unexpected space(s) before this colon."
 }
 
@@ -234,6 +235,7 @@ in ts_colon rule switch-colon-spacing:after {
   @layout_switch_colon_options
   when parent is ts_case && next_token != null && next_token not ts_close_brace
   when !space_after.line_break && after != space_after.spaced
+  fix at { start: end_offset, end: if after then end_offset else space_after.end } if !space_after.comments as if after then " " else ""
   warn if after then "Expected space(s) after this colon." else "Unexpected space(s) after this colon."
 }
 
