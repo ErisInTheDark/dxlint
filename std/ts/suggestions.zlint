@@ -206,10 +206,21 @@ in ts_case rule default-case-last {
   warn "Default clause should be the last clause."
 }
 
+fn array_constructor_fix(source, n) = {
+  value open: {
+    value overlapping(ts_open_paren, n.callee.end_offset, n.end_offset)
+    find (token) token.paired_token.end == n.end_offset
+  }
+  value arguments: if open != null then byte_slice(source, open.end_offset, open.paired_token.start) else ""
+  value replacement: "[" arguments "]"
+  value if open == null && count(n.argument) > 0 || !expression_fix_retains_comments(n, replacement) then null else replacement
+}
 in ts_call, ts_new rule no-array-constructor {
   when global_callee == "Array" && count(type_argument) == 0
   when count(argument) != 1 || { value argument; first; re_test /^\.\.\./ }
   warn "The array literal notation [] is preferable."
+  let replacement array_constructor_fix(source, node)
+  fix at node if replacement != null as replacement
 }
 
 in ts_call, ts_new rule no-object-constructor {
