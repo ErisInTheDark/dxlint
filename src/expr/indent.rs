@@ -1,6 +1,7 @@
 //! Compiled indentation declarations and per-invocation anchor queries.
 
 use super::{CExpr, Ctx, Value};
+use crate::vm::VExpr;
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 
 /// A rule's declarations and target-specific candidates in precedence order.
@@ -8,12 +9,16 @@ pub struct IndentPlan {
     rules: Vec<IndentRule>,
     plain: Vec<Vec<usize>>,
     fields: Vec<Vec<(u16, Vec<usize>)>>,
+    /// Each rule line's `from` and `by`, lowered to the VM.
+    lowered: Vec<(Option<VExpr>, Option<VExpr>)>,
+    /// The rule's `indent reset`, lowered.
+    reset: Option<VExpr>,
 }
 
 static EMPTY: IndentPlan = IndentPlan::EMPTY;
 
 impl IndentPlan {
-    pub const EMPTY: Self = Self { rules: Vec::new(), plain: Vec::new(), fields: Vec::new() };
+    pub const EMPTY: Self = Self { rules: Vec::new(), plain: Vec::new(), fields: Vec::new(), lowered: Vec::new(), reset: None };
 
     pub fn new(rules: Vec<IndentRule>, grammar: &Grammar) -> Self {
         if rules.is_empty() {
@@ -23,6 +28,8 @@ impl IndentPlan {
             plain: vec![Vec::new(); grammar.matchers.len()],
             fields: vec![Vec::new(); grammar.matchers.len()],
             rules,
+            lowered: Vec::new(),
+            reset: None,
         };
         for (i, rule) in plan.rules.iter().enumerate() {
             for &(target, field) in &rule.targets {
@@ -61,6 +68,18 @@ impl IndentPlan {
                 super::fold::specialise(expr, options, functions);
             }
         }
+    }
+
+    /// Rule line `i`'s lowered `by`.
+    pub(super) fn lowered_by(&self, i: usize) -> Option<&VExpr> {
+        self.lowered.get(i).and_then(|l| l.1.as_ref())
+    }
+
+    /// Lowers `from`, `by` and the rule's `reset` (after specialisation).
+    pub(crate) fn lower(&mut self, reset: Option<&CExpr>, functions: &[crate::grammar::UserFn], values: &mut crate::vm::Values) {
+        let mut lower = |e: &Option<CExpr>| e.as_ref().map(|e| crate::vm::lower(e, functions, values));
+        self.lowered = self.rules.iter().map(|rule| (lower(&rule.from), lower(&rule.by))).collect();
+        self.reset = reset.map(|e| crate::vm::lower(e, functions, values));
     }
 
     fn candidates(&self, tree: &Tree, node: u32, inside: bool, own: bool) -> Candidates<'_> {
@@ -305,9 +324,24 @@ impl<'a> Ctx<'a> {
         Ok(None)
     }
 
+    /// An indent expression's value on `on.node`, through the VM when on (an
+    /// error falls back to the interpreter, which reports it).
+    pub(super) fn indent_eval(on: &Ctx<'a>, e: &CExpr, lowered: Option<&VExpr>) -> Result<Value<'a>, String> {
+        if crate::vm::mode() == crate::vm::Mode::On {
+            if let Some(v) = lowered.and_then(|vm| crate::vm::eval(on, on.node, vm)) {
+                return Ok(v.value(on, on.source));
+            }
+            crate::vm::note_fallback("indent");
+        }
+        on.eval(e)
+    }
+
     fn indent_reset_at(&self, node: u32) -> Result<bool, String> {
         match self.indent_reset {
-            Some(reset) => Ok(Ctx { node, indents: &EMPTY, indent_reset: None, locals: None, ..*self }.eval(reset)?.truthy()),
+            Some(reset) => {
+                let on = Ctx { node, indents: &EMPTY, indent_reset: None, locals: None, ..*self };
+                Ok(Self::indent_eval(&on, reset, self.indents.reset.as_ref())?.truthy())
+            }
             None => Ok(false),
         }
     }
@@ -319,7 +353,7 @@ impl<'a> Ctx<'a> {
     /// itself; null means the default.
     fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> Result<AnchorAt, String> {
         let from = match self.indents[i].from.as_ref() {
-            Some(from) => match (Ctx { node: id, indents: &EMPTY, indent_reset: None, ..*self }).eval(from)? {
+            Some(from) => match Self::indent_eval(&Ctx { node: id, indents: &EMPTY, indent_reset: None, ..*self }, from, self.indents.lowered.get(i).and_then(|l| l.0.as_ref()))? {
                 Value::Node(n, _) => Some(AnchorAt::Offset(self.tree.node(n).start as usize)),
                 Value::Null => None,
                 Value::Str(text) => Some(AnchorAt::Text(text.to_string())),
@@ -378,7 +412,7 @@ impl<'a> Ctx<'a> {
                 }
                 let levels = match (&rule.by, counts) {
                     (_, false) => 0.0,
-                    (Some(by), true) => Ctx { node: id, ..*self }.eval(by)?.num()?,
+                    (Some(by), true) => Self::indent_eval(&Ctx { node: id, ..*self }, by, self.indents.lowered.get(i).and_then(|l| l.1.as_ref()))?.num()?,
                     (None, true) => 1.0,
                 };
                 let levels = if rule.dedent { -levels } else { levels };

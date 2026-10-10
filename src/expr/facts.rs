@@ -33,6 +33,9 @@ impl Fact {
     pub const SCALAR: Self = Self { name: "", doc: "", get: |_, _| Value::Null, shape: Shape::Scalar };
 }
 
+/// A code token record (`first_token`, `last_token`, `paired_token`).
+const TOKEN: Shape = Shape::Record(&[("text", Shape::Scalar), ("kind", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar)]);
+
 /// Optional projections of a record-or-null fact. `None` asks whether the
 /// fact is present; field reads must agree with the eager record.
 pub struct FactFields {
@@ -576,19 +579,19 @@ const CORE: &[Fact] = &[
         }, n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: TOKEN,
         name: "paired_token",
         doc: "native layers: on a node starting with a `(`, `[` or `{` token (a bracket token node), or ending with `)`, `]` or `}`: the matching bracket, as `first_token`",
         get: |f, n| f.with_file(paired_token, n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: TOKEN,
         name: "first_token",
         doc: "native layers: the node's first code token: `{text, kind, start, end}`; `is` tests its kind (`first_token is ts_identifier`)",
         get: |f, n| f.with_file(|file, n| edge_token(file, n, false), n),
     },
     Fact {
-        shape: Fact::SCALAR.shape,
+        shape: TOKEN,
         name: "last_token",
         doc: "native layers: the node's last code token, as `first_token`",
         get: |f, n| f.with_file(|file, n| edge_token(file, n, true), n),

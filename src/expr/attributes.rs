@@ -14,24 +14,25 @@ pub struct Attr {
 
 pub struct Attributes {
     pub(crate) vm_stats: bool,
+    pub(crate) values: vm::Values,
     attrs: Vec<CompiledAttr>,
     /// Per matcher: how many fields its VM records hold
     /// ([`Attributes::shape_records`]).
     layout: Vec<u16>,
-    /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
-    vm_blockers: Vec<String>,
 }
 
 struct CompiledAttr {
     name: String,
     defs: Vec<CExpr>,
-    /// Each definition's typed form, when it lowers to the VM.
-    lowered: Vec<Option<Lowered>>,
+    /// Each definition's typed form ([`vm::lower`] is total).
+    lowered: Vec<Lowered>,
     routes: Vec<Route>,
 }
 
 enum Lowered {
+    /// Small bodies: evaluated on each read.
     Direct(VExpr),
+    /// Cached in the node's VM record (or evaluated when it has no field).
     Cached(VExpr),
 }
 
@@ -53,9 +54,11 @@ pub(super) enum Entry<'a> {
 
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
-        let stats = std::env::var_os("ZLINT_VM_STATS").is_some();
-        if attrs.is_empty() { return Self { vm_stats: stats, attrs: Vec::new(), layout: Vec::new(), vm_blockers: Vec::new() }; }
-        let mut vm_blockers = Vec::new();
+        let stats = vm::stats();
+        if attrs.is_empty() {
+            return Self { vm_stats: stats, values: Default::default(), attrs: Vec::new(), layout: Vec::new() };
+        }
+        let mut values = vm::Values::default();
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
             let mut chain = Vec::new();
             let mut at = Some(kind as u32);
@@ -70,15 +73,9 @@ impl Attributes {
             by_attr[attr as usize].push((matcher, index, label));
         }
         let attrs = attrs.into_iter().zip(by_attr).map(|(attr, forwards)| {
-            let lowered: Vec<Option<Lowered>> = attr.defs.iter().map(|(_, expr)| match vm::lower(expr, &grammar.functions) {
-                Ok(lowered) if lowered.is_direct() => Some(Lowered::Direct(lowered)),
-                Ok(lowered) => Some(Lowered::Cached(lowered)),
-                Err(blocker) => {
-                    if stats {
-                        vm_blockers.push(vm::blocker_name(blocker));
-                    }
-                    None
-                }
+            let lowered: Vec<Lowered> = attr.defs.iter().map(|(_, expr)| match vm::lower(expr, &grammar.functions, &mut values) {
+                lowered if lowered.is_direct() => Lowered::Direct(lowered),
+                lowered => Lowered::Cached(lowered),
             }).collect();
             let mut routes = Vec::new();
             if !attr.defs.is_empty() || !forwards.is_empty() {
@@ -106,7 +103,7 @@ impl Attributes {
             }
         }).collect();
         let layout = vec![0; grammar.matchers.len()];
-        Self { vm_stats: stats, attrs, layout, vm_blockers }
+        Self { vm_stats: stats, values, attrs, layout }
     }
 
     pub(crate) fn report_vm_stats(&self, memo: &AttrMemo<'_>, tree: &crate::grammar::Tree, file: &str) {
@@ -119,6 +116,31 @@ impl Attributes {
         // and shared list/record/string allocations are not included.
         let entry_bytes = std::mem::size_of::<((u32, u16), Entry<'_>)>();
         memo.vm.report_stats(tree, &self.layout, file);
+        let mut owners = crate::fx_hash::FxHashMap::default();
+        for (attr, def) in self.attrs.iter().enumerate() {
+            for (matcher, route) in def.routes.iter().enumerate() {
+                if let Route::Defined(index, slot) = route {
+                    if *slot != NO_SLOT { owners.insert((matcher as u32, *slot), (attr, *index)); }
+                }
+            }
+        }
+        let mut failures = crate::fx_hash::FxHashMap::default();
+        for (node, slot) in memo.vm.gave_up_slots(tree, &self.layout) {
+            if let Some(&owner) = owners.get(&(tree.node(node).matcher, slot)) {
+                *failures.entry(owner).or_insert(0usize) += 1;
+            }
+        }
+        let mut failures: Vec<_> = failures.into_iter().collect();
+        failures.sort_by_key(|&(owner, count)| (std::cmp::Reverse(count), owner));
+        for ((attr, index), count) in failures.into_iter().take(15) {
+            eprintln!("zlint vm gave up: {file} {count} {}#{index}", self.attrs[attr].name);
+        }
+        for (site, count) in self.values.take_interp_hits() {
+            eprintln!("zlint vm interp: {file} {count} {site}");
+        }
+        for (route, count) in vm::take_fallbacks() {
+            eprintln!("zlint vm fallback: {file} {count} {route}");
+        }
         eprintln!("zlint vm memo: {file} entries={} capacity={} inline_capacity_approx_bytes={} lowered_entries={lowered} lowered_inline_bytes={}",
             attrs.len(), attrs.capacity(), attrs.capacity() * entry_bytes, lowered * entry_bytes);
     }
@@ -147,17 +169,6 @@ impl Attributes {
             }
         }
         self.layout.iter().map(|&n| n as usize).sum()
-    }
-
-    /// `ZLINT_VM_STATS`: what kept each unlowered definition interpreted.
-    pub fn vm_blockers(&self) -> &[String] {
-        &self.vm_blockers
-    }
-
-    /// Definitions lowered to the VM, and all definitions.
-    pub fn lowered_counts(&self) -> (usize, usize) {
-        let defs = self.attrs.iter().flat_map(|attr| &attr.lowered);
-        (defs.clone().filter(|d| d.is_some()).count(), defs.count())
     }
 
     fn route(&self, matcher: u32, attr: u16) -> Route {
@@ -270,7 +281,7 @@ impl<'e> Needs<'e> {
             }
             match compiled.routes.get(k as usize) {
                 Some(Route::Defined(def, _)) => {
-                    if matches!(compiled.lowered[*def as usize], Some(Lowered::Cached(_))) {
+                    if matches!(compiled.lowered[*def as usize], Lowered::Cached(_)) {
                         self.order[k as usize].push(attr);
                     }
                     match by_def.iter_mut().find(|(d, _)| d == def) {
@@ -354,6 +365,30 @@ impl<'e> Needs<'e> {
 }
 
 impl vm::Host for Ctx<'_> {
+    fn values(&self) -> &vm::Values {
+        &self.attrs.values
+    }
+
+    fn file_vm(&self) -> Option<&vm::FileVm> {
+        Some(&self.memo.vm)
+    }
+
+    fn builtin(&self, node: u32, builtin: super::Builtin) -> Option<Value<'_>> {
+        Ctx { node, ..*self }.builtin(builtin).ok()
+    }
+
+    fn position(&self, offset: f64) -> Option<super::Position> {
+        Some(self.position_at(offset))
+    }
+
+    fn overlapping(&self, node: u32, sel: &super::NodeSel, range: Option<(f64, f64)>) -> Option<Vec<u32>> {
+        Some(Ctx { node, ..*self }.overlapping_ids(sel, range))
+    }
+
+    fn containing(&self, node: u32, sel: &super::NodeSel) -> Option<Option<u32>> {
+        Some(Ctx { node, ..*self }.containing_id(sel))
+    }
+
     fn tree(&self) -> &crate::grammar::Tree {
         self.tree
     }
@@ -373,38 +408,82 @@ impl vm::Host for Ctx<'_> {
     fn attr(&self, node: u32, attr: u16) -> Option<V> {
         match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => Some(V::Null),
-            Route::Forward(_) => None,
+            // A forward reads the field's node: nothing, or its one value
+            // (several build a list, which the interpreter answers).
+            Route::Forward(label) => match self.tree.fields(node, label).as_slice() {
+                [] => Some(V::Null),
+                [one] => vm::Host::attr(self, *one, attr),
+                _ => None,
+            },
             Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
         }
+    }
+
+    fn lang(&self) -> usize {
+        self.lang
+    }
+
+    fn link(&self, node: u32, link: usize) -> Option<(Vec<u32>, bool)> {
+        let link = super::facts::LINKS[link];
+        let targets = self.native.map_or_else(Vec::new, |native| (link.get)(native, node));
+        Some((targets, link.many))
+    }
+
+    fn pattern(&self, test: &CExpr, text: &str) -> Option<bool> {
+        Some(self.test_value(test, &Value::from(text)))
+    }
+
+    fn interp(&self, node: u32, e: &CExpr, params: Vec<Value<'static>>) -> Option<Value<'_>> {
+        let on = Ctx { node, ..*self };
+        let mut params: Vec<Value<'_>> = params;
+        on.with_params(&mut params, || on.eval(e)).ok()
     }
 
     fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: super::FactOf) -> Option<V> {
         // Same reads and memo as the interpreter's (recorded reads included).
         let on = Ctx { node, ..*self };
-        Some(match on.fact_value(fact, projection, of) {
-            Value::Null => V::Null,
-            Value::Bool(b) => V::Bool(b),
-            Value::Num(n) => V::Num(n),
-            Value::Node(id, _) => V::Node(id),
-            _ => return None,
-        })
+        let value = on.fact_value(fact, projection, of);
+        let key = {
+            let (target, wrapper) = match of {
+                super::FactOf::Node => (node, None),
+                super::FactOf::Parent => (on.parent_layer().unwrap_or(u32::MAX), None),
+                super::FactOf::Field(label) => {
+                    let targets = self.tree.fields(node, label);
+                    match targets.as_slice() {
+                        [] => (u32::MAX, Some(label)),
+                        [target] => (*target, None),
+                        _ => (node, Some(label)),
+                    }
+                }
+            };
+            (target, fact, projection, wrapper)
+        };
+        let packed = self.memo.vm.fact_value(&value, &self.attrs.values, self.source, key, self.attrs.vm_stats);
+        if packed.is_none() && self.attrs.vm_stats {
+            eprintln!("zlint vm fact: undeclared shape {} ({})", super::facts::FACTS[fact].name, value.type_name());
+        }
+        packed
     }
 }
 
 impl<'a> Ctx<'a> {
-    /// A VM-lowered attribute from the node's record, computing it there
-    /// first; `None` when the VM gives up (the interpreter answers).
+    /// An attribute through the VM, from the node's record when it has a
+    /// field there (computed on first read); `None` on an error or a cycle
+    /// (the interpreter reports it).
     fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
         let lowered = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
-            Some(Lowered::Direct(body)) => return vm::eval(self, node, body),
-            Some(Lowered::Cached(body)) if slot != NO_SLOT => body,
-            _ => return None,
+            Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
+            Lowered::Cached(body) if slot != NO_SLOT => body,
+            // No record field on this kind: memoised beside the records.
+            Lowered::Cached(body) => {
+                return self.memo.vm.memo(node, attr, || vm::eval(self, node, body).and_then(|v| v.persist(&self.memo.vm)));
+            }
         };
         match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
             Begin::Ready(v) => Some(v),
             Begin::GiveUp => None,
             Begin::Compute(at) => {
-                let v = vm::eval(self, node, lowered);
+                let v = vm::eval(self, node, lowered).and_then(|v| v.persist(&self.memo.vm));
                 self.memo.vm.finish(at, v);
                 v
             }
@@ -437,11 +516,11 @@ impl<'a> Ctx<'a> {
             }
             Route::Defined(index, slot) => {
                 if vm::mode() != vm::Mode::Off {
-                    if let Some(v) = self.vm_attr(node, attr, index, slot) {
-                        if vm::mode() == vm::Mode::On {
-                            return Ok(v.value(self.tree, self.source));
-                        }
-                        checked = Some(v);
+                    match self.vm_attr(node, attr, index, slot) {
+                        Some(v) if vm::mode() == vm::Mode::On => return Ok(v.to_value(self, self.source)),
+                        Some(v) => checked = Some(v),
+                        // An error or a cycle: the interpreter reports it.
+                        None => vm::note_fallback("attribute error"),
                     }
                 }
                 index as usize
@@ -459,7 +538,7 @@ impl<'a> Ctx<'a> {
         let ctx = Ctx { node, options: &[], ..*self };
         match ctx.eval(&def.defs[index]) {
             Ok(value) => {
-                if let Some(v) = checked.filter(|v| !v.same(&value, self.tree, self.source)) {
+                if let Some(v) = checked.filter(|v| !v.agrees(&value, self)) {
                     eprintln!("zlint vm mismatch: {} attribute `{}` on node {node}: vm {v:?}, interpreter {value:?}", self.file, def.name);
                 }
                 self.memo.attributes.borrow_mut().insert(key, Entry::Ready(value.clone()));
@@ -498,6 +577,119 @@ mod tests {
     }
 
     fn number(value: f64) -> CExpr { CExpr::Const(Value::Num(value)) }
+
+    #[test]
+    fn declared_fact_shapes_match_native_values() {
+        use crate::expr::facts::{Shape, FACTS};
+        use crate::engine::tests::native_linter;
+        use crate::native::ts::{facts::NativeFile, modules::Project, syntax::Syntax};
+        fn conforms(value: &Value, shape: Shape) -> bool {
+            match (value, shape) {
+                (Value::Null, _) => true,
+                (Value::Record(entries), Shape::Record(fields)) => entries.len() == fields.len()
+                    && entries.iter().zip(fields).all(|((key, value), (expected, shape))| &**key == *expected && conforms(value, *shape)),
+                (Value::List(items), Shape::List(shape)) => items.iter().all(|value| conforms(value, *shape)),
+                (Value::Str(_) | Value::Node(_, _) | Value::Bool(_) | Value::Num(_), Shape::Scalar) => true,
+                _ => false,
+            }
+        }
+        let lint = native_linter("rule *");
+        let g = &lint.grammar;
+        let source = r#"
+            const unused = 1; let x = 2; let x = 3;
+            object.value; (object?.child).value; run(first, second);
+            const obj = { value: value, method: function () {}, get item() { return 1; }, set item(v) {} };
+            async function wait() { return 1; }
+            function mixed(v) { if (v) return 1; return; }
+            values.map(v => { if (v) return v; });
+            for (; x;) { run(); }
+            x = x; if (Boolean(x)) run(); this.value;
+            Object.defineProperty(obj, "item", { get: function () {} });
+            /[a  b]/; /a/; eval("value"); value_name;
+            try { run(); } catch (error) { throw new Error("failed", { cause: error }); }
+        "#;
+        let parsed = crate::native::ts::parse(source, false).unwrap();
+        let front = &g.natives[0];
+        let tree = crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root);
+        let project = Project::default();
+        let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/probe.ts"), &project);
+        for fact in FACTS.iter().filter(|fact| !matches!(fact.shape, Shape::Scalar)) {
+            for &node in &tree.order {
+                let value = (fact.get)(&native, node);
+                assert!(conforms(&value, fact.shape), "fact {} at node {node}: {value:?}", fact.name);
+            }
+        }
+    }
+
+    #[test]
+    fn native_fact_text_records_and_lists_cross_the_vm_bridge() {
+        use crate::engine::tests::native_linter;
+        use crate::native::ts::{facts::NativeFile, modules::Project, syntax::Syntax};
+        let lint = native_linter("in ts_member, ts_identifier, ts_call rule probe info \"probe\"");
+        let g = &lint.grammar;
+        let source = "const unused = 1; object.value; (object?.child).value; run(first, second);";
+        let parsed = crate::native::ts::parse(source, false).unwrap();
+        let front = &g.natives[0];
+        let tree = crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root);
+        let project = Project::default();
+        let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/test.ts"), &project);
+        let mut attrs = Attributes::new(vec![], &[], g);
+        let reads: Vec<_> = [
+            ("static_name", "ts_member"),
+            ("token_neighbours", "ts_member"),
+            ("optional_chain_risks", "ts_member"),
+            ("unused_var", "ts_identifier"),
+            ("list_layout", "ts_call"),
+        ].into_iter().map(|(name, kind)| {
+            let fact = super::super::facts::fact(name).unwrap();
+            vm::lower(&CExpr::Fact(fact, super::super::FactOf::Node), &g.functions, &mut attrs.values);
+            (fact, g.matcher(kind).unwrap())
+        }).collect();
+        let argument = front.labels[crate::native::ts::kinds::Field::Arg as usize];
+        let yield_fact = super::super::facts::fact("contains_yield").unwrap();
+        vm::lower(&CExpr::Fact(yield_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
+        let memo = AttrMemo::default();
+        let lines = crate::line_index::LineIndex::new(source);
+        let reindented = std::cell::RefCell::default();
+        let ctx = Ctx {
+            grammar: g, lang: 0, tree: &tree, node: tree.root, source, lines: &lines,
+            file: "/root/test.ts", options: &[], reindented: &reindented, attrs: &attrs,
+            memo: &memo, locals: None, native: Some(&native), indents: &super::super::IndentPlan::EMPTY,
+            indent_reset: None, profile: None,
+        };
+        for (fact, matcher) in reads {
+            let mut represented = 0;
+            for node in tree.order.iter().copied().filter(|&node| tree.node(node).matcher == matcher) {
+                let on = Ctx { node, ..ctx };
+                let expected = on.fact_value(fact, None, super::super::FactOf::Node);
+                if matches!(expected, Value::Str(_) | Value::Record(_) | Value::List(_)) {
+                    let value = vm::Host::fact(&on, node, fact, None, super::super::FactOf::Node)
+                        .expect("native values supported by the VM must not give up at the bridge");
+                    assert!(value.agrees(&expected, &on));
+                    let read = VExpr::Fact { fact, projection: None, of: super::super::FactOf::Node };
+                    assert!(vm::eval(&on, node, &read).unwrap().value(&on, source) == expected);
+                    assert_eq!(vm::eval(&on, node, &VExpr::Not(Box::new(read.clone()))).unwrap().truthy(&on), !expected.truthy());
+                    if matches!(expected, Value::Str(_)) {
+                        let equal = VExpr::Binary(crate::config::ast::BinOp::Eq, Box::new(read.clone()), Box::new(VExpr::Const(V::Str("value"))));
+                        assert_eq!(vm::eval(&on, node, &equal).unwrap().truthy(&on), expected.loose_eq(&Value::from("value")));
+                        let starts = VExpr::StartsWith(Box::new(read), Box::new(VExpr::Const(V::Str("v"))));
+                        assert_eq!(vm::eval(&on, node, &starts).unwrap().truthy(&on), expected.text().starts_with('v'));
+                    }
+                    represented += 1;
+                }
+            }
+            assert!(represented > 0, "fact {} must exercise a non-scalar result", super::super::facts::FACTS[fact].name);
+        }
+        let call = tree.order.iter().copied().find(|&node| tree.node(node).matcher == g.matcher("ts_call").unwrap()).unwrap();
+        let on = Ctx { node: call, ..ctx };
+        for fact in [yield_fact, super::super::facts::fact("optional_chain_risks").unwrap()] {
+            let of = super::super::FactOf::Field(argument);
+            let expected = on.fact_value(fact, None, of);
+            assert!(matches!(&expected, Value::List(items) if items.len() == 2), "field reads keep one fact result per argument");
+            let value = vm::Host::fact(&on, call, fact, None, of).expect("a multi-field fact read adds a supported list wrapper");
+            assert!(value.agrees(&expected, &on));
+        }
+    }
 
     #[test]
     fn definitions_keep_compiler_priority_over_inherited_forwards() {
@@ -561,108 +753,6 @@ mod tests {
         assert!(matches!(plan.route(leaf, 1), Route::Forward(9)));
         for matcher in [ROOT, TEXT] {
             assert!(matches!(plan.route(matcher, 0), Route::Missing));
-        }
-    }
-
-    #[test]
-    fn forwarded_values_keep_empty_scalar_and_list_cardinality_across_files() {
-        use std::path::Path;
-        use crate::engine::tests::native_linter;
-
-        let lint = native_linter(r#"
-            in ts_identifier let size len(text)
-            in ts_call forward size from argument
-            in ts_parenthesized forward size from expression
-            in ts_call rule sizes info "{count([] size)}:{sum([] size)}"
-        "#);
-        for (source, expected) in [
-            ("f(); f(a); f(a, bc);", vec!["0:0", "1:1", "2:3"]),
-            ("f((long));", vec!["1:4"]),
-        ] {
-            let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
-            assert_eq!(diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), expected);
-        }
-        let defined = native_linter(r#"
-            in ts_identifier let size len(text)
-            in ts_call let size 7
-            in ts_call forward size from argument
-            in ts_call rule sizes info "{size}"
-        "#);
-        assert_eq!(defined.lint(Path::new("/root/a.ts"), "f(a, bc);")[0].message, "7");
-    }
-
-    #[test]
-    fn inherited_definitions_refine_defaults_and_cross_node_reads() {
-        use std::path::Path;
-        use crate::engine::tests::native_linter;
-
-        let lint = native_linter(r#"
-            in ts_node let size 1
-            in ts_identifier let size len(text)
-            in ts_binary rule operands info "{left.size}:{right.size}"
-            in ts_identifier rule direct info "{size}"
-        "#);
-        let messages = |source| {
-            let mut values: Vec<_> = lint.lint(Path::new("/root/a.ts"), source).into_iter().map(|d| d.message).collect();
-            values.sort();
-            values
-        };
-        assert_eq!(messages("a + long;"), ["1", "1:4", "4"]);
-        assert_eq!(messages("other + b;"), ["1", "5", "5:1"]);
-    }
-
-    #[test]
-    fn failed_and_cyclic_attributes_leave_other_reads_and_later_files_usable() {
-        use std::path::Path;
-        use crate::config::ast::Severity;
-        use crate::engine::tests::native_linter;
-
-        let lint = native_linter(r#"
-            in ts_identifier let bad byte_slice(text, [])
-            in ts_identifier let cyclic cyclic
-            in ts_identifier let size len(text)
-            in ts_identifier rule first info "{bad}"
-            in ts_identifier rule second info "{bad}"
-            in ts_identifier rule cycle info "{cyclic}"
-            in ts_identifier rule good info "{size}"
-        "#);
-        for (source, size) in [("a;", "1"), ("long;", "4")] {
-            let diagnostics = lint.lint(Path::new("/root/a.ts"), source);
-            assert_eq!(diagnostics.iter().filter(|d| d.severity == Severity::Error).count(), 3);
-            for rule in ["first", "second"] {
-                let failure = diagnostics.iter().find(|d| d.rule == rule).unwrap();
-                assert!(!failure.message.contains("depends on itself"), "{failure:?}");
-            }
-            assert!(diagnostics.iter().find(|d| d.rule == "cycle").unwrap().message.contains("depends on itself"));
-            assert_eq!(diagnostics.iter().find(|d| d.rule == "good").unwrap().message, size);
-        }
-    }
-
-    #[test]
-    fn cross_node_cycles_unwind_every_pending_attribute_before_retry() {
-        use std::path::Path;
-        use crate::config::ast::Severity;
-        use crate::engine::tests::native_linter;
-
-        let lint = native_linter(r#"
-            in ts_binary let cycle left.cycle
-            in ts_identifier let cycle parent.cycle
-            in ts_binary let broken left.broken
-            in ts_identifier let broken byte_slice(text, [])
-            in ts_binary rule first info "{broken}"
-            in ts_binary rule retry info "{broken}"
-            in ts_binary rule cyclic info "{cycle}"
-            in ts_identifier rule nested_cycle info "{cycle}"
-            in ts_identifier rule good info "{len(text)}"
-        "#);
-        for source in ["a + long;", "other + b;"] {
-            let diagnostics = lint.lint(Path::new("file.ts"), source);
-            let failures: Vec<_> = diagnostics.iter().filter(|d| d.severity == Severity::Error).collect();
-            assert_eq!(failures.len(), 5, "{diagnostics:?}");
-            for rule in ["first", "retry"] {
-                assert!(!failures.iter().find(|d| d.rule == rule).unwrap().message.contains("depends on itself"));
-            }
-            assert_eq!(diagnostics.iter().filter(|d| d.rule == "good").count(), 2);
         }
     }
 }

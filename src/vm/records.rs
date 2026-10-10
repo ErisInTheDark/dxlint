@@ -26,8 +26,11 @@ const GAVE_UP: u64 = 5;
 const NODE_TAG: u64 = 1 << 32;
 const NODE_TEXT_TAG: u64 = 2 << 32;
 const STR_TAG: u64 = 3 << 32;
+const LIST_TAG: u64 = 4 << 32;
+const RECORD_TAG: u64 = 5 << 32;
+const FILE_TEXT_TAG: u64 = 6 << 32;
 
-fn encode(v: V) -> u64 {
+pub(super) fn encode(v: V) -> u64 {
     match v {
         V::Null => NULL,
         V::Bool(false) => FALSE,
@@ -36,6 +39,9 @@ fn encode(v: V) -> u64 {
         V::Node(id) => NODE_TAG | u64::from(id),
         V::NodeText(id) => NODE_TEXT_TAG | u64::from(id),
         V::Str(s) => STR_TAG | u64::from(intern(s).1),
+        V::List(handle) => LIST_TAG | u64::from(handle.bits()),
+        V::Record(shape, handle) => RECORD_TAG | (u64::from(shape) << 35) | u64::from(handle.bits()),
+        V::Text(handle) => FILE_TEXT_TAG | u64::from(handle),
     }
 }
 
@@ -51,7 +57,19 @@ fn decode(cell: u64) -> Cell {
         _ if cell >> 32 == NODE_TAG >> 32 => Cell::Ready(V::Node(payload)),
         _ if cell >> 32 == NODE_TEXT_TAG >> 32 => Cell::Ready(V::NodeText(payload)),
         _ if cell >> 32 == STR_TAG >> 32 => Cell::Ready(V::Str(interned(payload))),
+        _ if cell >> 32 == LIST_TAG >> 32 => Cell::Ready(V::List(super::values::Handle::from_bits(payload))),
+        _ if cell >> 32 == FILE_TEXT_TAG >> 32 => Cell::Ready(V::Text(payload)),
+        _ if (cell >> 32) & 7 == RECORD_TAG >> 32 && cell >> 51 == 0 => {
+            Cell::Ready(V::Record((cell >> 35) as u16, super::values::Handle::from_bits(payload)))
+        }
         bits => Cell::Ready(V::Num(f64::from_bits(!bits))),
+    }
+}
+
+pub(super) fn stored(cell: u64) -> V {
+    match decode(cell) {
+        Cell::Ready(value) => value,
+        _ => unreachable!("arena payload must contain a value"),
     }
 }
 
@@ -60,6 +78,24 @@ fn decode(cell: u64) -> Cell {
 #[derive(Default)]
 pub struct FileVm {
     storage: RefCell<Storage>,
+    pub(super) values: RefCell<super::values::Arena>,
+    packed_facts: RefCell<crate::fx_hash::FxHashMap<FactPackKey, V>>,
+    /// [`FileVm::keep`]'s packed attributes (`None`: no packed form).
+    kept: RefCell<crate::fx_hash::FxHashMap<(u32, u16), Option<V>>>,
+    /// Buffers of finished rule runs ([`super::Session`]), reused.
+    pub(crate) spare: RefCell<Vec<super::Spare>>,
+    fact_packs: RefCell<crate::fx_hash::FxHashMap<FactPackKey, FactPackStats>>,
+}
+
+// Whole-node reads use their target node. Projections and multi-field wrappers
+// stay distinct, because their first-read payload sizes need not agree.
+pub(crate) type FactPackKey = (u32, usize, Option<usize>, Option<u16>);
+
+#[derive(Default)]
+struct FactPackStats {
+    calls: usize,
+    bytes: usize,
+    first_bytes: usize,
 }
 
 #[derive(Default)]
@@ -123,7 +159,67 @@ pub enum Begin {
 }
 
 impl FileVm {
+    /// An attribute on a node kind without a record field for it: computed
+    /// once per (node, attribute) by `compute` (persisted to the file arena).
+    /// A read while it is being computed (a cycle) or after it failed is
+    /// `None`, which the interpreter reports.
+    pub(crate) fn memo(&self, node: u32, attr: u16, compute: impl FnOnce() -> Option<V>) -> Option<V> {
+        if let Some(&kept) = self.kept.borrow().get(&(node, attr)) { return kept; }
+        self.kept.borrow_mut().insert((node, attr), None);
+        let kept = compute();
+        self.kept.borrow_mut().insert((node, attr), kept);
+        kept
+    }
+
+    pub(crate) fn fact_value(&self, value: &crate::expr::Value, config: &super::Values, source: &str, key: FactPackKey, measure: bool) -> Option<V> {
+        if let Some(value) = self.packed_facts.borrow().get(&key) { return Some(*value); }
+        let mut arena = self.values.borrow_mut();
+        let before = measure.then(|| arena.used_bytes());
+        let result = config.fact_value(value, key.1, key.2.is_some(), key.3.is_some() && key.2.is_none(), &mut arena, source);
+        if let Some(value @ (V::List(_) | V::Record(..) | V::Text(_))) = result {
+            self.packed_facts.borrow_mut().insert(key, value);
+        }
+        if let Some(before) = before {
+            let bytes = arena.used_bytes() - before;
+            let mut packs = self.fact_packs.borrow_mut();
+            let stats = packs.entry(key).or_default();
+            if stats.calls == 0 { stats.first_bytes = bytes; }
+            stats.calls += 1;
+            stats.bytes += bytes;
+        }
+        result
+    }
+
+    pub(crate) fn gave_up_slots(&self, tree: &Tree, layout: &[u16]) -> Vec<(u32, u16)> {
+        let storage = self.storage.borrow();
+        let mut slots = Vec::new();
+        for (node, &offset) in storage.offsets.iter().enumerate() {
+            if offset == NO_RECORD { continue; }
+            let width = layout[tree.node(node as u32).matcher as usize];
+            for slot in 0..width {
+                let block = storage.blocks.get(offset as usize + slot as usize / BLOCK);
+                if block != NO_RECORD && storage.cells.get(block as usize + slot as usize % BLOCK) == GAVE_UP {
+                    slots.push((node as u32, slot));
+                }
+            }
+        }
+        slots
+    }
+
     pub(crate) fn report_stats(&self, tree: &Tree, layout: &[u16], file: &str) {
+        let packs = self.fact_packs.borrow();
+        for kind in ["full", "projection", "wrapper", "missing"] {
+            let selected: Vec<_> = packs.iter().filter(|((node, _, projection, field), _)| match kind {
+                "missing" => *node == u32::MAX,
+                "wrapper" => *node != u32::MAX && field.is_some(),
+                "projection" => *node != u32::MAX && field.is_none() && projection.is_some(),
+                _ => *node != u32::MAX && field.is_none() && projection.is_none(),
+            }).collect();
+            let calls: usize = selected.iter().map(|(_, stats)| stats.calls).sum();
+            let bytes: usize = selected.iter().map(|(_, stats)| stats.bytes).sum();
+            let first_bytes: usize = selected.iter().map(|(_, stats)| stats.first_bytes).sum();
+            eprintln!("zlint vm fact packs: {file} kind={kind} calls={calls} distinct={} bytes={bytes} distinct_bytes={first_bytes}", selected.len());
+        }
         let storage = self.storage.borrow();
         let nodes = storage.offsets.iter().filter(|&&offset| offset != NO_RECORD).count();
         let unset = storage.cells.iter().filter(|&&cell| cell == UNSET).count();
@@ -132,7 +228,9 @@ impl FileVm {
         let directory_bytes = storage.blocks.bytes();
         let pointer_bytes = storage.cells.pointer_bytes() + storage.blocks.pointer_bytes();
         let offset_bytes = storage.offsets.capacity() * std::mem::size_of::<u32>();
-        eprintln!("zlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} directory_bytes={directory_bytes} pointer_bytes={pointer_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", storage.cells.len);
+        let values_bytes = self.values.borrow().bytes();
+        let texts_bytes = self.values.borrow().text_bytes();
+        eprintln!("zlint vm memory: {file} cells_bytes={cell_bytes} offsets_bytes={offset_bytes} directory_bytes={directory_bytes} pointer_bytes={pointer_bytes} values_bytes={values_bytes} texts_bytes={texts_bytes} slots={} unset={unset} gave_up={gave_up} record_nodes={nodes}", storage.cells.len);
         for size in [4, 8, 16] {
             let mut directory = 0;
             let mut touched = 0;
@@ -204,6 +302,41 @@ mod tests {
     }
 
     #[test]
+    fn allocating_fact_queries_share_payload_without_caching_free_results() {
+        use crate::expr::{facts, Value};
+        let fact = facts::fact("declaration_kinds").expect("list fact");
+        let mut config = super::super::Values::default();
+        config.register_fact(fact).expect("declared shape");
+        let vm = FileVm::default();
+        let value = Value::list(vec![Value::from("owned text")]);
+        let key = (7, fact, None, None);
+        assert!(vm.fact_value(&value, &config, "", key, true).is_some());
+        let bytes = vm.values.borrow().used_bytes();
+        assert!(vm.fact_value(&value, &config, "", key, true).is_some());
+        assert_eq!(vm.values.borrow().used_bytes(), bytes, "repeat must share its packed payload");
+        let distinct = (8, fact, None, None);
+        assert!(vm.fact_value(&value, &config, "", distinct, true).is_some());
+        assert!(vm.values.borrow().used_bytes() > bytes, "different node is a separate query");
+        let projected = (7, fact, Some(0), None);
+        assert!(matches!(vm.fact_value(&Value::from("projected"), &config, "", projected, false), Some(V::Text(_))));
+        let wrapper = (7, fact, None, Some(3));
+        let wrapped = Value::list(vec![value.clone()]);
+        assert!(vm.fact_value(&wrapped, &config, "", wrapper, false).is_some(), "field wrapper retains its own list shape");
+        // A value the fact never declared still packs (as it comes), as its
+        // own query rather than the first fact's result.
+        let another = (7, facts::fact("literal_value").expect("record fact"), None, None);
+        let bytes = vm.values.borrow().used_bytes();
+        assert!(vm.fact_value(&value, &config, "", another, false).is_some(), "an undeclared shape still packs");
+        assert!(vm.values.borrow().used_bytes() > bytes, "different fact must not reuse the first result");
+        let cached = vm.packed_facts.borrow().len();
+        for value in [Value::Null, Value::Bool(true), Value::Num(3.0)] {
+            let free = (20, fact, None, None);
+            assert!(vm.fact_value(&value, &config, "", free, false).is_some());
+        }
+        assert_eq!(vm.packed_facts.borrow().len(), cached, "free results must not grow a second fact memo");
+    }
+
+    #[test]
     fn sparse_reads_do_not_allocate_a_whole_wide_record() {
         let tree = tree([0]);
         let vm = FileVm::default();
@@ -249,6 +382,9 @@ mod tests {
         for v in [
             V::Null, V::Bool(false), V::Bool(true), V::Num(0.0), V::Num(-0.0), V::Num(1.5), V::Num(f64::INFINITY),
             V::Num(f64::NEG_INFINITY), V::Num(-1e300), V::Node(0), V::Node(u32::MAX), V::NodeText(7), V::Str(intern("a").0), V::Str(intern("").0),
+            V::List(super::super::values::Handle::from_bits(0x8000_0000)),
+            V::Record(u16::MAX, super::super::values::Handle::from_bits(0xbfff_ffff)),
+            V::Text(u32::MAX),
         ] {
             match (decode(encode(v)), v) {
                 (Cell::Ready(V::Num(back)), V::Num(n)) => assert_eq!(back.to_bits(), n.to_bits(), "{v:?}"),

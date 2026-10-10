@@ -1,20 +1,21 @@
-//! Typed VM, milestone 1: attribute definitions whose bodies use a small,
-//! infallible subset of the rule language are lowered at config load into
-//! typed expressions over null / bool / number, then evaluated lazily per
-//! node into a per-file record buffer: each node kind has its own record
-//! layout of its lowered attributes, one buffer per file. Anything outside
-//! the subset (or depending on something outside it) stays interpreted.
+//! Typed expressions lowered at config load, with packed per-file
+//! attribute cells. Records and lists use config constants or evaluation
+//! scratch; only attribute escapes become persistent file payloads.
+//! Unsupported expressions and runtime failures stay interpreted.
 //!
 //! `ZLINT_VM=0` disables it; `ZLINT_VM=verify` evaluates both ways and
 //! prints mismatches to stderr.
 
 use crate::config::ast::BinOp;
-use crate::expr::{facts, Builtin, CExpr, Each, FactOf, IsTest, Relative, Value};
+use crate::expr::functions::Function;
+use crate::expr::{facts, Builtin, CExpr, Each, FactOf, IsTest, NodeSel, Position, Relative, Value};
 use crate::grammar::{Grammar, Tree, UserFn, ROOT, TEXT};
 use std::sync::OnceLock;
 
 mod records;
+mod values;
 pub use records::{Begin, FileVm};
+pub use values::Config as Values;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -27,6 +28,32 @@ pub enum Mode {
 thread_local! {
     /// Tests compare modes within one process.
     static FORCED: std::cell::Cell<Option<Mode>> = const { std::cell::Cell::new(None) };
+}
+
+thread_local! {
+    /// `ZLINT_VM_STATS`: interpreter evaluations in VM mode, by route.
+    static FALLBACKS: std::cell::RefCell<std::collections::HashMap<String, u64>> = Default::default();
+}
+
+/// Counts an interpreter evaluation made while the VM is on (stats only).
+/// The VM is total when these only come from errors.
+pub fn note_fallback(route: &str) {
+    if stats() || cfg!(test) {
+        FALLBACKS.with(|m| {
+            let mut m = m.borrow_mut();
+            match m.get_mut(route) {
+                Some(count) => *count += 1,
+                None => { m.insert(route.to_string(), 1); }
+            }
+        });
+    }
+}
+
+/// Fallback counts since the last call, most first.
+pub fn take_fallbacks() -> Vec<(String, u64)> {
+    let mut rows: Vec<_> = FALLBACKS.with(|m| m.borrow_mut().drain().collect());
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    rows
 }
 
 pub fn mode() -> Mode {
@@ -42,8 +69,7 @@ pub fn mode() -> Mode {
     })
 }
 
-/// A VM value: what the subset can produce. Text is never built: it is a
-/// node's source text or an interned config constant.
+/// A VM value. Config text is interned; native text belongs to the file.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum V {
     Null,
@@ -55,6 +81,11 @@ pub enum V {
     NodeText(u32),
     /// A config text constant.
     Str(&'static str),
+    /// Text in a VM text pool: the file's, or evaluation scratch
+    /// ([`values::SCRATCH_TEXT`]). Source substrings stay borrows.
+    Text(u32),
+    List(values::Handle),
+    Record(u16, values::Handle),
 }
 
 /// Text constants from configs, interned for the process: configs repeat
@@ -88,6 +119,20 @@ fn interned(i: u32) -> &'static str {
 }
 
 impl V {
+    pub fn to_value<'s>(self, h: &impl Host, source: &'s str) -> Value<'s> {
+        match self {
+            V::List(_) | V::Record(..) | V::Text(_) => with_view(h, &values::Arena::default(), |view| view.value(self, h.tree(), source)),
+            scalar => scalar.value(h.tree(), source),
+        }
+    }
+
+    pub fn agrees(self, expected: &Value, h: &impl Host) -> bool {
+        match self {
+            V::List(_) | V::Record(..) | V::Text(_) => with_view(h, &values::Arena::default(), |view| view.same(self, expected, h.tree(), h.source())),
+            scalar => scalar.same(expected, h.tree(), h.source()),
+        }
+    }
+
     /// The value's text, when it is text or a node.
     fn text<'s>(self, tree: &Tree, source: &'s str) -> Option<&'s str> {
         match self {
@@ -111,6 +156,7 @@ impl V {
                 n.end > n.start
             }
             V::Str(s) => !s.is_empty(),
+            V::List(_) | V::Record(..) | V::Text(_) => unreachable!("file values need their arena"),
         }
     }
 
@@ -120,6 +166,7 @@ impl V {
             V::Null => Some(0.0),
             V::Bool(b) => Some(f64::from(u8::from(b))),
             V::Num(n) => Some(n),
+            V::List(_) | V::Record(..) | V::Text(_) => None,
             text => text.text(tree, source)?.trim().parse().ok(),
         }
     }
@@ -154,6 +201,7 @@ impl V {
                 Value::from(&source[n.start as usize..n.end as usize])
             }
             V::Str(s) => Value::from(s),
+            V::List(_) | V::Record(..) | V::Text(_) => unreachable!("file values need their arena"),
         }
     }
 
@@ -173,6 +221,12 @@ impl V {
 #[derive(Clone, Debug)]
 pub enum VExpr {
     Const(V),
+    List(Box<[VExpr]>),
+    Record(u16, Box<[VExpr]>),
+    Key(Box<VExpr>, Box<str>),
+    Member(Box<VExpr>, Box<str>, Option<Box<VExpr>>),
+    Path(Box<VExpr>, Box<[Box<str>]>, Box<[Option<VExpr>]>),
+    Collect(Box<Seq>),
     /// The node, or its parent layer node, is one of these matchers.
     Is { parent: bool, kinds: Box<[u32]> },
     /// The node fills this field of one of these matchers.
@@ -195,8 +249,6 @@ pub enum VExpr {
     Line,
     /// A field's text: null, or one node's text (several: give up).
     Field(u16),
-    /// `inner` evaluated on the node `base` gives (null stays null).
-    On(Box<VExpr>, Box<VExpr>),
     /// `inner` on the single node of a field (none: null).
     OnField(u16, Box<VExpr>),
     OnParent(Box<VExpr>),
@@ -208,7 +260,6 @@ pub enum VExpr {
     Nullish(Box<VExpr>, Box<VExpr>),
     /// `contains(haystack, needle)` on text, or membership in constants.
     Contains(Box<VExpr>, Box<VExpr>),
-    InList(Box<[V]>, Box<VExpr>),
     StartsWith(Box<VExpr>, Box<VExpr>),
     EndsWith(Box<VExpr>, Box<VExpr>),
     /// A lambda parameter or pipeline value: frame slot `n`.
@@ -235,6 +286,55 @@ pub enum VExpr {
     Fold { of: Box<Seq>, init: Option<Box<VExpr>>, body: Box<VExpr>, slot: u16 },
     /// `min_by`/`max_by` over numeric keys; the first item wins ties.
     Pick { max: bool, of: Box<Seq>, key: Box<VExpr>, bind: Binder },
+    /// A value-only built-in function on its arguments: the interpreter's
+    /// own entry, so an error gives up (the interpreter reports it).
+    Call(&'static Function, Box<[VExpr]>),
+    /// A built-in variable read by the host (`indent`, `before`, ...).
+    Builtin(Builtin),
+    /// `position(offset)`: one of [`Position::KEYS`], or the whole record.
+    Position(Box<VExpr>, PositionRead),
+    /// `get(record, key)` with a computed key.
+    Get(Box<VExpr>, Box<VExpr>),
+    /// `containing(sel)`: the innermost selected node holding this one.
+    Containing(NodeSel),
+    /// `node_at(offset)`: the innermost default-layer node holding it.
+    NodeAt(Box<VExpr>),
+    /// `opener.x` / `closer.x`: on the first (last) child of these layers.
+    OwnChild(bool, Box<[u32]>, Box<VExpr>),
+    /// `matcher.x`: on the closest ancestor of that matcher.
+    OnAncestor(u32, Box<VExpr>),
+    /// `kind_name(n)`.
+    KindName(Box<VExpr>),
+    /// A template: its parts' texts joined.
+    Template(Box<[VExpr]>),
+    /// A rule's own `let`, by slot: computed once per rule run
+    /// ([`Session`]), on the rule's node.
+    Local(u16),
+    /// `value is a, b.field, layer l, .lang`, every test form.
+    IsTests(Box<VExpr>, Box<[IsTest]>),
+    /// A native link (`declaration`, `references`): its node(s).
+    Link(usize),
+    /// A pattern test (`x ~ pattern`): the [`CExpr::Test`] or
+    /// [`CExpr::TestDfa`] node, its matcher shared.
+    Pattern(Box<VExpr>, Box<CExpr>),
+    /// The closest ancestor of a matcher: its text, or one of its fields.
+    Ancestor(u32, Option<u16>),
+    /// A config `fn` on its arguments: its body is lowered once per config
+    /// and runs in a frame of its own.
+    CallFn(u32, Box<[VExpr]>),
+    /// A sub-expression without a native form: the interpreter evaluates
+    /// just this part, with the enclosing lambda parameters as its frame.
+    /// `site` counts its runs for `ZLINT_VM_STATS`.
+    Interp { expr: Box<CExpr>, params: Box<[VExpr]>, site: u32 },
+}
+
+/// What `position(offset)` reads.
+#[derive(Clone, Copy, Debug)]
+pub enum PositionRead {
+    /// One key, by index in [`Position::KEYS`].
+    Key(u8),
+    /// The record, in this config shape.
+    Whole(u16),
 }
 
 impl VExpr {
@@ -280,11 +380,13 @@ pub enum Seq {
     /// `item` on each node of a field (as a field read: one node gives its
     /// value, so a null there is no item), or of every child.
     Nodes { children: bool, label: u16, item: Box<VExpr> },
-    Const(Box<[V]>),
+    Value(Box<VExpr>),
     /// An item stage, its lambda run on each item.
     Stage(SeqStage, Box<Seq>, Box<VExpr>, Binder),
     /// `flat_map`: each item's body is itself a sequence.
     FlatMap(Box<Seq>, Box<Seq>, Binder),
+    /// `sort_by`: items ordered by their keys (stable).
+    SortBy(Box<Seq>, Box<VExpr>, Binder),
     /// `zip other (a, b) body`, as long as the shorter; the pair binds at
     /// the slot.
     Zip(Box<Seq>, Box<Seq>, Box<VExpr>, u16),
@@ -295,6 +397,14 @@ pub enum Seq {
     Unique(Box<Seq>),
     /// A pipeline value bound at the slot while the sequence is walked.
     Let(Box<VExpr>, u16, Box<Seq>),
+    /// `overlapping(sel)` / `overlapping(sel, start, end)`: selected nodes
+    /// overlapping this node (or the range), in source order.
+    Overlapping(NodeSel, Option<Box<(VExpr, VExpr)>>),
+    /// `descendants(sel)`: selected nodes under this one, in source order.
+    Descendants(NodeSel),
+    /// `walk(roots, n => next)`: every node reached, breadth first, once;
+    /// the node binds at the slot for the body.
+    Walk(Box<Seq>, Box<Seq>, u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,33 +424,39 @@ enum Lowered {
     Unbound,
 }
 
-/// How deep `fn` calls are inlined while lowering.
-const INLINE_DEPTH: u32 = 8;
+/// How deep the VM runs `fn` calls; deeper recursion is the interpreter's.
+const MAX_CALL_DEPTH: u32 = 64;
 
-/// What lowering can inline: the config's `fn`s, and for rule conditions
-/// the rule's `let`s.
-struct Scope<'a> {
+/// What lowering reads: the config's `fn`s, and for rule conditions the
+/// rule's `let`s.
+struct Scope<'a, 'v> {
     functions: &'a [UserFn],
     locals: &'a [CExpr],
+    values: &'v std::cell::RefCell<&'v mut Values>,
 }
 
-/// The typed form of an attribute definition, or the subexpression that
-/// kept it out of the subset.
-pub fn lower<'a>(e: &'a CExpr, functions: &'a [UserFn]) -> Result<VExpr, &'a CExpr> {
-    scalar(e, &Scope { functions, locals: &[] }, &[], 0, 0)
+/// The typed form of an attribute definition. Every expression lowers:
+/// parts without a native form become [`VExpr::Interp`] leaves.
+pub fn lower(e: &CExpr, functions: &[UserFn], values: &mut Values) -> VExpr {
+    let values = std::cell::RefCell::new(values);
+    scalar(e, &Scope { functions, locals: &[], values: &values }, &[], 0)
 }
 
-/// The typed form of a rule condition, reading the rule's `let`s inline
-/// (they are pure here, so inlining keeps their values).
-pub fn lower_condition<'a>(e: &'a CExpr, functions: &'a [UserFn], locals: &'a [CExpr]) -> Result<VExpr, &'a CExpr> {
-    scalar(e, &Scope { functions, locals }, &[], 0, 0)
+/// The typed form of a rule condition, `let` or clause; the rule's `let`s
+/// are read from their [`Session`] slots. With `item`, the rule's `each`
+/// item is frame slot 0 (its lambdas count from 1).
+pub fn lower_condition(e: &CExpr, functions: &[UserFn], locals: &[CExpr], values: &mut Values, item: bool) -> VExpr {
+    let values = std::cell::RefCell::new(values);
+    let args: &[Lowered] = if item { &[Lowered::V(VExpr::Bound(0))] } else { &[] };
+    scalar(e, &Scope { functions, locals, values: &values }, args, u16::from(item))
 }
 
-/// A short name for what blocked lowering, for `ZLINT_VM_STATS`.
-pub fn blocker_name(e: &CExpr) -> String {
+/// A short name for a delegated expression, for `ZLINT_VM_STATS`.
+pub fn site_name(e: &CExpr) -> String {
     match e {
         CExpr::Call(f, _) => format!("call {}", f.name),
         CExpr::Builtin(b) => format!("builtin {}", b.name()),
+        CExpr::Each(stage) => format!("each {:?}/{}", stage.kind, stage.args.len()),
         CExpr::Const(Value::List(items)) => match items.iter().find(|item| !matches!(item, Value::Null | Value::Bool(_) | Value::Num(_) | Value::Str(_))) {
             Some(item) => format!("const list of {}", item.type_name()),
             None => "const list as value".into(),
@@ -350,28 +466,86 @@ pub fn blocker_name(e: &CExpr) -> String {
             Value::Record(_) => "record",
             _ => "other",
         }),
+        // The variant name: debug output cut at its first delimiter (a whole
+        // subtree's debug text can be huge).
         other => {
-            let debug = format!("{other:?}");
-            debug.split(['(', ' ', '{']).next().unwrap_or("?").to_string()
+            struct Head(String);
+            impl std::fmt::Write for Head {
+                fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                    match s.find(['(', ' ', '{']) {
+                        Some(end) => { self.0.push_str(&s[..end]); Err(std::fmt::Error) }
+                        None => { self.0.push_str(s); Ok(()) }
+                    }
+                }
+            }
+            let mut head = Head(String::new());
+            let _ = std::fmt::Write::write_fmt(&mut head, format_args!("{other:?}"));
+            head.0
         }
     }
 }
 
-fn scalar<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound: u16) -> Result<VExpr, &'a CExpr> {
-    match lower_in(e, g, args, depth, bound)? {
-        Lowered::V(v) => Ok(v),
-        _ => Err(e),
+fn scalar(e: &CExpr, g: &Scope<'_, '_>, args: &[Lowered], bound: u16) -> VExpr {
+    match lower_in(e, g, args, bound) {
+        Ok(Lowered::V(v)) => v,
+        Ok(Lowered::Seq(s)) => VExpr::Collect(Box::new(s)),
+        _ => interp(e, g, args),
     }
 }
 
 /// `e` as a list the VM can walk.
-fn seq<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound: u16) -> Result<Seq, &'a CExpr> {
-    match lower_in(e, g, args, depth, bound)? {
-        Lowered::Seq(s) => Ok(s),
-        Lowered::V(VExpr::Field(label)) => Ok(Seq::Nodes { children: false, label, item: Box::new(VExpr::Text) }),
-        Lowered::V(VExpr::OnField(label, item)) => Ok(Seq::Nodes { children: false, label, item }),
-        _ => Err(e),
+fn seq(e: &CExpr, g: &Scope<'_, '_>, args: &[Lowered], bound: u16) -> Seq {
+    match lower_in(e, g, args, bound) {
+        Ok(Lowered::Seq(s)) => s,
+        Ok(Lowered::V(VExpr::Field(label))) => Seq::Nodes { children: false, label, item: Box::new(VExpr::Text) },
+        Ok(Lowered::V(VExpr::OnField(label, item))) => Seq::Nodes { children: false, label, item },
+        Ok(Lowered::V(v)) => Seq::Value(Box::new(v)),
+        _ => Seq::Value(Box::new(interp(e, g, args))),
     }
+}
+
+/// `e` delegated to the interpreter, its frame built from `args` (lambda
+/// parameters in scope; a view is collected, an unknown one is null).
+fn interp(e: &CExpr, g: &Scope<'_, '_>, args: &[Lowered]) -> VExpr {
+    // Only parameters `e` reads are evaluated for its frame.
+    fn reads(e: &CExpr, used: &mut [bool]) {
+        if let CExpr::Param(d) = e {
+            if let Some(slot) = used.get_mut(*d as usize) { *slot = true; }
+        }
+        e.for_each_child(&mut |child| reads(child, used));
+    }
+    let mut used = vec![false; args.len()];
+    reads(e, &mut used);
+    let params = args.iter().zip(used).map(|(arg, used)| match arg {
+        Lowered::V(v) if used => v.clone(),
+        Lowered::Seq(s) if used => VExpr::Collect(Box::new(s.clone())),
+        _ => VExpr::Const(V::Null),
+    }).collect();
+    // Records the interpreter builds (here, in called `fn`s, or as facts)
+    // must pack into a shape the config knows.
+    // Each `fn` body is walked once per config.
+    fn shapes(e: &CExpr, functions: &[UserFn], values: &mut Values) {
+        match e {
+            CExpr::Record(entries) => {
+                values.shape(entries.iter().map(|(key, _)| key.clone()));
+            }
+            CExpr::Fact(fact, _) => {
+                values.register_fact(*fact);
+            }
+            CExpr::UserCall(i, _) if values.shape_function(*i) => {
+                if let Some(body) = functions.get(*i as usize).and_then(|f| f.body.get()) {
+                    shapes(body, functions, values);
+                }
+            }
+            _ => {}
+        }
+        e.for_each_child(&mut |child| shapes(child, functions, values));
+    }
+    let mut guard = g.values.borrow_mut();
+    let values: &mut Values = &mut guard;
+    shapes(e, g.functions, values);
+    let site = values.interp_site(site_name(e));
+    VExpr::Interp { expr: Box::new(e.clone()), params, site }
 }
 
 /// `args` with `arity` parameters at `param` bound from frame slot `bound`
@@ -392,6 +566,12 @@ fn null_test<'a>(a: &'a CExpr, b: &'a CExpr) -> Option<&'a CExpr> {
     }
 }
 
+/// `position(offset).key`: the offset and the key's index.
+fn position_key<'a>(base: &'a CExpr, key: &str) -> Option<(&'a CExpr, u8)> {
+    let CExpr::Position(offset) = base else { return None };
+    Some((offset, Position::KEYS.iter().position(|k| *k == key)? as u8))
+}
+
 fn constant(v: &Value) -> Option<V> {
     Some(match v {
         Value::Null => V::Null,
@@ -402,22 +582,42 @@ fn constant(v: &Value) -> Option<V> {
     })
 }
 
-fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound: u16) -> Result<Lowered, &'a CExpr> {
-    let boxed = |e: &'a CExpr| scalar(e, g, args, depth, bound).map(Box::new);
-    let boxed_seq = |e: &'a CExpr| seq(e, g, args, depth, bound).map(Box::new);
+fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -> Result<Lowered, &'a CExpr> {
+    let boxed = |e: &'a CExpr| -> Result<Box<VExpr>, &'a CExpr> { Ok(Box::new(scalar(e, g, args, bound))) };
+    let boxed_seq = |e: &'a CExpr| -> Result<Box<Seq>, &'a CExpr> { Ok(Box::new(seq(e, g, args, bound))) };
+    let all = |items: &'a [CExpr]| -> Box<[VExpr]> { items.iter().map(|v| scalar(v, g, args, bound)).collect() };
     Ok(Lowered::V(match e {
-        CExpr::Const(Value::List(items)) => {
-            return Ok(Lowered::Seq(Seq::Const(items.iter().map(constant).collect::<Option<Box<[V]>>>().ok_or(e)?)));
+        CExpr::Const(v) => VExpr::Const(g.values.borrow_mut().constant(v).ok_or(e)?),
+        CExpr::List(items) => VExpr::List(all(items)),
+        CExpr::Record(entries) => {
+            let shape = g.values.borrow_mut().shape(entries.iter().map(|(key, _)| key.clone())).ok_or(e)?;
+            VExpr::Record(shape, entries.iter().map(|(_, v)| scalar(v, g, args, bound)).collect())
         }
-        CExpr::Const(v) => VExpr::Const(constant(v).ok_or(e)?),
-        CExpr::Hole(inner, _) => return lower_in(inner, g, args, depth, bound),
+        // `position(x).line`: only the key read, no record built.
+        CExpr::Key(base, key) if position_key(base, key).is_some() => {
+            let (offset, at) = position_key(base, key).expect("matched");
+            VExpr::Position(boxed(offset)?, PositionRead::Key(at))
+        }
+        CExpr::Member(base, key, _) if position_key(base, key).is_some() => {
+            let (offset, at) = position_key(base, key).expect("matched");
+            VExpr::Position(boxed(offset)?, PositionRead::Key(at))
+        }
+        CExpr::Key(base, key) => VExpr::Key(boxed(base)?, key.clone()),
+        CExpr::Member(base, key, part) => VExpr::Member(boxed(base)?, key.to_string().into(),
+            part.as_deref().map(boxed).transpose()?),
+        CExpr::Path(base, keys, parts) => VExpr::Path(boxed(base)?, keys.iter().map(|k| k.to_string().into()).collect(),
+            parts.iter().map(|part| part.as_ref().map(|e| scalar(e, g, args, bound))).collect()),
+        CExpr::Hole(inner, _) => return lower_in(inner, g, args, bound),
         CExpr::Param(d) => match args.get(*d as usize) {
             Some(Lowered::Unbound) | None => return Err(e),
             Some(lowered) => return Ok(lowered.clone()),
         },
         CExpr::Attr(a) => VExpr::Attr(*a),
         CExpr::ParentAttr(a) => VExpr::ParentAttr(*a),
-        CExpr::Fact(fact, of) => VExpr::Fact { fact: *fact, projection: None, of: *of },
+        CExpr::Fact(fact, of) => {
+            g.values.borrow_mut().register_fact(*fact).ok_or(e)?;
+            VExpr::Fact { fact: *fact, projection: None, of: *of }
+        }
         CExpr::FactField(read, of) => VExpr::Fact { fact: facts::FIELD_READS[*read].fact, projection: Some(*read), of: *of },
         CExpr::Relative(Relative::Children, inner) => {
             return Ok(Lowered::Seq(Seq::Nodes { children: true, label: 0, item: boxed(inner)? }));
@@ -426,14 +626,15 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         CExpr::Each(stage) => {
             let arity = u16::from(stage.arity);
             let inner = bind_params(args, stage.depth, arity, bound);
-            let body = || scalar(&stage.body, g, &inner, depth, bound + arity).map(Box::new);
+            let body = || -> Result<Box<VExpr>, &'a CExpr> { Ok(Box::new(scalar(&stage.body, g, &inner, bound + arity))) };
             let bind = Binder { slot: bound, indexed: stage.arity == 2 };
             let of = boxed_seq(&stage.input)?;
             return Ok(match (stage.kind, stage.args.as_slice()) {
                 (Each::Fold, [init]) => Lowered::V(VExpr::Fold { of, init: Some(boxed(init)?), body: body()?, slot: bound }),
                 (Each::Reduce, []) => Lowered::V(VExpr::Fold { of, init: None, body: body()?, slot: bound }),
                 (Each::Zip, [other]) => Lowered::Seq(Seq::Zip(of, boxed_seq(other)?, body()?, bound)),
-                (Each::FlatMap, []) => Lowered::Seq(Seq::FlatMap(of, Box::new(seq(&stage.body, g, &inner, depth, bound + arity)?), bind)),
+                (Each::FlatMap, []) => Lowered::Seq(Seq::FlatMap(of, Box::new(seq(&stage.body, g, &inner, bound + arity)), bind)),
+                (Each::SortBy, []) => Lowered::Seq(Seq::SortBy(of, body()?, bind)),
                 (kind, []) => {
                     let body = body()?;
                     let stage = match kind {
@@ -463,18 +664,22 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         }
         CExpr::Bind(value, param, body) => {
             let mut inner = bind_params(args, *param, 0, bound);
-            return Ok(match lower_in(value, g, args, depth, bound)? {
+            let value = lower_in(value, g, args, bound).unwrap_or_else(|_| Lowered::V(interp(value, g, args)));
+            return Ok(match value {
                 // A sequence stays a view: walked again where it is used.
                 Lowered::Seq(s) => {
                     inner.push(Lowered::Seq(s));
-                    lower_in(body, g, &inner, depth, bound)?
+                    match lower_in(body, g, &inner, bound) {
+                        Ok(lowered @ (Lowered::V(_) | Lowered::Seq(_))) => lowered,
+                        _ => Lowered::V(interp(body, g, &inner)),
+                    }
                 }
                 Lowered::V(v) => {
                     inner.push(Lowered::V(VExpr::Bound(bound)));
-                    match lower_in(body, g, &inner, depth, bound + 1)? {
-                        Lowered::V(b) => Lowered::V(VExpr::Let(Box::new(v), bound, Box::new(b))),
-                        Lowered::Seq(s) => Lowered::Seq(Seq::Let(Box::new(v), bound, Box::new(s))),
-                        Lowered::Unbound => return Err(e),
+                    match lower_in(body, g, &inner, bound + 1) {
+                        Ok(Lowered::Seq(s)) => Lowered::Seq(Seq::Let(Box::new(v), bound, Box::new(s))),
+                        Ok(Lowered::V(b)) => Lowered::V(VExpr::Let(Box::new(v), bound, Box::new(b))),
+                        _ => Lowered::V(VExpr::Let(Box::new(v), bound, Box::new(interp(body, g, &inner)))),
                     }
                 }
                 Lowered::Unbound => return Err(e),
@@ -482,44 +687,42 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         }
         // `[] x` and `.nodes` remain list views, including pipeline seeds.
         CExpr::Binary(BinOp::Join, a, b) if matches!(&**a, CExpr::Const(Value::List(items)) if items.is_empty()) => {
-            return Ok(Lowered::Seq(seq(b, g, args, depth, bound)?));
+            return Ok(Lowered::Seq(seq(b, g, args, bound)));
         }
         CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if null_test(a, b).is_some() => {
             let test = VExpr::IsNull(boxed(null_test(a, b).expect("matched"))?);
             if *op == BinOp::Eq { test } else { VExpr::Not(Box::new(test)) }
         }
-        CExpr::Is(subject, tests) if !matches!(&**subject, CExpr::Builtin(Builtin::Node | Builtin::Parent)) => {
-            let mut kinds = Vec::new();
-            for test in tests {
-                match test {
-                    IsTest::Kind(ids) => kinds.extend(ids),
-                    _ => return Err(e),
-                }
-            }
+        // Kind-only tests on a value, and kind/field tests on this node or
+        // its parent, have direct forms; the rest test the value generally.
+        CExpr::Is(subject, tests)
+            if !matches!(&**subject, CExpr::Builtin(Builtin::Node | Builtin::Parent)) && tests.iter().all(|t| matches!(t, IsTest::Kind(_))) =>
+        {
+            let kinds: Vec<u32> = tests.iter().flat_map(|t| match t { IsTest::Kind(ids) => ids.clone(), _ => Vec::new() }).collect();
             VExpr::IsValue(boxed(subject)?, kinds.into())
         }
-        CExpr::Is(subject, tests) => {
+        CExpr::Is(subject, tests)
+            if matches!(&**subject, CExpr::Builtin(Builtin::Node | Builtin::Parent))
+                && tests.iter().all(|t| matches!(t, IsTest::Kind(_)) || matches!(t, IsTest::Field(..)) && matches!(&**subject, CExpr::Builtin(Builtin::Node))) =>
+        {
             let parent = matches!(&**subject, CExpr::Builtin(Builtin::Parent));
-            let mut parts = Vec::new();
-            for test in tests {
-                parts.push(match test {
-                    IsTest::Kind(ids) => VExpr::Is { parent, kinds: ids.clone().into() },
-                    IsTest::Field(ids, label) if !parent => VExpr::InField(ids.clone().into(), *label),
-                    _ => return Err(e),
-                });
-            }
-            parts.into_iter().reduce(|a, b| VExpr::Binary(BinOp::Or, Box::new(a), Box::new(b))).ok_or(e)?
+            let parts = tests.iter().map(|test| match test {
+                IsTest::Kind(ids) => VExpr::Is { parent, kinds: ids.clone().into() },
+                IsTest::Field(ids, label) => VExpr::InField(ids.clone().into(), *label),
+                _ => unreachable!("matched"),
+            });
+            parts.reduce(|a, b| VExpr::Binary(BinOp::Or, Box::new(a), Box::new(b))).ok_or(e)?
         }
+        CExpr::Is(subject, tests) => VExpr::IsTests(boxed(subject)?, tests.clone().into()),
+        CExpr::Link(link) => VExpr::Link(*link),
+        CExpr::Test(value, _) | CExpr::TestDfa(value, _) => VExpr::Pattern(boxed(value)?, Box::new(e.clone())),
+        CExpr::Ancestor(matcher, field) => VExpr::Ancestor(*matcher, *field),
         CExpr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if matches!((&**a, &**b), (CExpr::Field(_), CExpr::Const(Value::Null)) | (CExpr::Const(Value::Null), CExpr::Field(_))) => {
             let ((CExpr::Field(label), _) | (_, CExpr::Field(label))) = (&**a, &**b) else { return Err(e) };
             let present = VExpr::FieldPresent(*label);
             if *op == BinOp::Ne { present } else { VExpr::Not(Box::new(present)) }
         }
-        CExpr::Binary(op, a, b) => match op {
-            BinOp::And | BinOp::Or | BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-            | BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Rem => VExpr::Binary(*op, boxed(a)?, boxed(b)?),
-            _ => return Err(e),
-        },
+        CExpr::Binary(op, a, b) => VExpr::Binary(*op, boxed(a)?, boxed(b)?),
         CExpr::Not(inner) => VExpr::Not(boxed(inner)?),
         CExpr::Neg(inner) => VExpr::Neg(boxed(inner)?),
         CExpr::If(c, a, b) => VExpr::If(boxed(c)?, boxed(a)?, boxed(b)?),
@@ -534,22 +737,20 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
             ("drop", [list, n]) => return Ok(Lowered::Seq(Seq::Drop(boxed_seq(list)?, boxed(n)?))),
             ("concat", [a, b]) => return Ok(Lowered::Seq(Seq::Concat(boxed_seq(a)?, boxed_seq(b)?))),
             ("unique", [list]) => return Ok(Lowered::Seq(Seq::Unique(boxed_seq(list)?))),
-            // Reversing a text reverses its characters: lists only.
-            ("reverse", [list]) => match lower_in(list, g, args, depth, bound)? {
+            // A list view reverses in place; text goes to the function.
+            ("reverse", [list]) => match lower_in(list, g, args, bound)? {
                 Lowered::Seq(s) => return Ok(Lowered::Seq(Seq::Reverse(Box::new(s)))),
-                _ => return Err(e),
+                Lowered::V(v) => VExpr::Call(f, Box::new([v])),
+                Lowered::Unbound => return Err(e),
             },
-            ("contains", [CExpr::Const(Value::List(items)), needle]) => {
-                let items = items.iter().map(constant).collect::<Option<Box<[V]>>>().ok_or(e)?;
-                VExpr::InList(items, boxed(needle)?)
-            }
+            ("get", [record, key]) => VExpr::Get(boxed(record)?, boxed(key)?),
             ("contains", [haystack, needle]) => VExpr::Contains(boxed(haystack)?, boxed(needle)?),
             ("re_test", [text, CExpr::Const(Value::Str(pattern))]) if crate::expr::re::compile(pattern).is_ok() => {
                 VExpr::ReTest(boxed(text)?, intern(pattern).0)
             }
             ("starts_with", [text, prefix]) => VExpr::StartsWith(boxed(text)?, boxed(prefix)?),
             ("ends_with", [text, suffix]) => VExpr::EndsWith(boxed(text)?, boxed(suffix)?),
-            _ => return Err(e),
+            _ => VExpr::Call(f, all(call_args)),
         },
         CExpr::Builtin(b) => match b {
             Builtin::Node => VExpr::Node,
@@ -559,10 +760,29 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
             Builtin::EndOffset => VExpr::EndOffset,
             Builtin::Index => VExpr::Index,
             Builtin::Line => VExpr::Line,
-            _ => return Err(e),
+            other => VExpr::Builtin(*other),
         },
+        CExpr::Position(offset) => {
+            let shape = g.values.borrow_mut().shape(Position::KEYS.iter().map(|&key| key.into())).ok_or(e)?;
+            VExpr::Position(boxed(offset)?, PositionRead::Whole(shape))
+        }
+        CExpr::Containing(sel) => VExpr::Containing(sel.clone()),
+        CExpr::NodeAt(offset) => VExpr::NodeAt(boxed(offset)?),
+        CExpr::OwnChild(last, kinds, inner) => VExpr::OwnChild(*last, kinds.clone().into(), boxed(inner)?),
+        CExpr::OnAncestor(matcher, inner) => VExpr::OnAncestor(*matcher, boxed(inner)?),
+        CExpr::KindName(inner) => VExpr::KindName(boxed(inner)?),
+        CExpr::Template(parts) => VExpr::Template(all(parts)),
+        CExpr::Overlapping(sel, range) => {
+            let range = range.as_deref().map(|(from, to)| Box::new((scalar(from, g, args, bound), scalar(to, g, args, bound))));
+            return Ok(Lowered::Seq(Seq::Overlapping(sel.clone(), range)));
+        }
+        CExpr::Descendants(sel) => return Ok(Lowered::Seq(Seq::Descendants(sel.clone()))),
+        CExpr::Walk(roots, param, body) => {
+            let inner = bind_params(args, *param, 1, bound);
+            let next = seq(body, g, &inner, bound + 1);
+            return Ok(Lowered::Seq(Seq::Walk(boxed_seq(roots)?, Box::new(next), bound)));
+        }
         CExpr::Field(label) => VExpr::Field(*label),
-        CExpr::Member(base, _, Some(part)) => VExpr::On(boxed(base)?, boxed(part)?),
         CExpr::OnField(label, inner) => VExpr::OnField(*label, boxed(inner)?),
         CExpr::OnParent(inner) => VExpr::OnParent(boxed(inner)?),
         CExpr::FieldAttr(label, a) => VExpr::OnField(*label, Box::new(VExpr::Attr(*a))),
@@ -570,14 +790,21 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a>, args: &[Lowered], depth: u32, bound
         CExpr::Coalesce(a, b) => VExpr::Coalesce(boxed(a)?, boxed(b)?),
         CExpr::Nullish(a, b) => VExpr::Nullish(boxed(a)?, boxed(b)?),
         CExpr::NonEmpty(value) => VExpr::NonEmpty(boxed(value)?),
-        // A rule's `let` on its own node; lambdas don't change the node.
-        CExpr::Local(i) if depth < INLINE_DEPTH => {
-            return lower_in(g.locals.get(*i as usize).ok_or(e)?, g, &[], depth + 1, bound);
-        }
-        CExpr::UserCall(i, call_args) if depth < INLINE_DEPTH => {
-            let body = g.functions.get(*i as usize).and_then(|f| f.body.get()).ok_or(e)?;
-            let lowered = call_args.iter().map(|a| lower_in(a, g, args, depth, bound)).collect::<Result<Vec<_>, _>>()?;
-            return lower_in(body, g, &lowered, depth + 1, bound);
+        // A rule's `let`: its own slot in the rule's session.
+        CExpr::Local(i) if (*i as usize) < g.locals.len() => VExpr::Local(*i),
+        // A call, not an inlined body: inlining copied each argument into
+        // every use, nested calls multiplying it.
+        CExpr::UserCall(i, call_args) => {
+            let f = g.functions.get(*i as usize).ok_or(e)?;
+            let body = f.body.get().ok_or(e)?;
+            let arity = u16::try_from(f.arity).map_err(|_| e)?;
+            let begun = g.values.borrow_mut().begin_function(*i);
+            if begun {
+                let params: Vec<Lowered> = (0..arity).map(|p| Lowered::V(VExpr::Bound(p))).collect();
+                let lowered = scalar(body, &Scope { functions: g.functions, locals: &[], values: g.values }, &params, arity);
+                g.values.borrow_mut().set_function(*i, lowered);
+            }
+            VExpr::CallFn(*i, all(call_args))
         }
         _ => return Err(e),
     }))
@@ -593,6 +820,31 @@ pub trait Host {
     fn attr(&self, node: u32, attr: u16) -> Option<V>;
     /// A native fact read on a node, when its value is one the VM holds.
     fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: FactOf) -> Option<V>;
+    fn values(&self) -> &Values;
+    fn file_vm(&self) -> Option<&FileVm> { None }
+    /// A built-in variable on a node, as the interpreter reads it.
+    fn builtin(&self, _node: u32, _builtin: Builtin) -> Option<Value<'_>> { None }
+    /// `position(offset)`.
+    fn position(&self, _offset: f64) -> Option<Position> { None }
+    /// `overlapping(sel)` from a node, over the node or clamped offsets.
+    fn overlapping(&self, _node: u32, _sel: &NodeSel, _range: Option<(f64, f64)>) -> Option<Vec<u32>> { None }
+    /// `containing(sel)` from a node.
+    fn containing(&self, _node: u32, _sel: &NodeSel) -> Option<Option<u32>> { None }
+    /// The interpreter's value of `e` on a node, with `params` as its
+    /// lambda frame ([`VExpr::Interp`]); `None` on an error.
+    fn interp(&self, _node: u32, _e: &CExpr, _params: Vec<Value<'static>>) -> Option<Value<'_>> { None }
+    /// The file's language, for `is .lang`.
+    fn lang(&self) -> usize { 0 }
+    /// A native link's target nodes from a node, and whether it is a list.
+    fn link(&self, _node: u32, _link: usize) -> Option<(Vec<u32>, bool)> { None }
+    /// Whether `text` passes a pattern test ([`CExpr::Test`]/[`CExpr::TestDfa`]).
+    fn pattern(&self, _test: &CExpr, _text: &str) -> Option<bool> { None }
+}
+
+/// `ZLINT_VM_STATS`: count delegated runs per site.
+pub fn stats() -> bool {
+    static STATS: OnceLock<bool> = OnceLock::new();
+    *STATS.get_or_init(|| std::env::var_os("ZLINT_VM_STATS").is_some())
 }
 
 fn parent_layer(tree: &Tree, node: u32) -> Option<u32> {
@@ -609,22 +861,294 @@ fn is_a(g: &Grammar, m: u32, kinds: &[u32]) -> bool {
 
 /// Evaluates `e` on `node`; `None` means the VM gives up (the caller falls
 /// back to the interpreter).
-pub fn eval(h: &impl Host, node: u32, e: &VExpr) -> Option<V> {
-    ev(h, node, e, &mut Vec::new())
+pub struct Evaluated {
+    value: V,
+    scratch: values::Arena,
+}
+
+fn with_view<R>(h: &impl Host, scratch: &values::Arena, run: impl FnOnce(&values::View<'_>) -> R) -> R {
+    let file = h.file_vm().map(|vm| vm.values.borrow());
+    let empty = values::Arena::default();
+    run(&values::View { config: h.values(), scratch, file: file.as_deref().unwrap_or(&empty) })
+}
+
+impl Evaluated {
+    #[cfg(test)]
+    pub fn truthy(&self, h: &impl Host) -> bool {
+        match self.value {
+            V::List(_) | V::Record(..) | V::Text(_) => with_view(h, &self.scratch, |view| view.truthy(self.value, h.tree())),
+            scalar => scalar.truthy(h.tree()),
+        }
+    }
+    pub fn value<'s>(&self, h: &impl Host, source: &'s str) -> Value<'s> {
+        with_view(h, &self.scratch, |view| view.value(self.value, h.tree(), source))
+    }
+    pub fn persist(self, file: &FileVm) -> Option<V> {
+        match self.value {
+            V::List(handle) | V::Record(_, handle) if handle.is_scratch() => {
+                self.scratch.promote(self.value, &mut file.values.borrow_mut())
+            }
+            V::Text(handle) if handle & values::SCRATCH_TEXT != 0 => self.scratch.promote(self.value, &mut file.values.borrow_mut()),
+            value => Some(value),
+        }
+    }
+}
+
+struct Runtime<'h, H> {
+    host: &'h H,
+    scratch: std::cell::RefCell<values::Arena>,
+    /// The rule's node, where its `let`s are read.
+    home: u32,
+    locals: &'h [VExpr],
+    local_values: std::cell::RefCell<Vec<LocalSlot>>,
+    /// Frames of finished `fn` calls, reused; and how deep calls are.
+    frames: std::cell::RefCell<Vec<Vec<V>>>,
+    calls: std::cell::Cell<u32>,
+}
+
+#[derive(Clone, Copy)]
+enum LocalSlot {
+    Unset,
+    Busy,
+    GaveUp,
+    Ready(V),
+}
+
+/// One rule run on one node: its conditions share evaluation scratch and
+/// each lowered `let`, computed at most once. Its buffers come from (and
+/// return to) the file's pool, so runs allocate only while they grow.
+pub struct Session<'h, H: Host> {
+    runtime: Runtime<'h, H>,
+    /// The evaluation frame, reused across this run's clauses.
+    frame: std::cell::RefCell<Vec<V>>,
+}
+
+/// A finished run's buffers, kept by the file for the next run.
+#[derive(Default)]
+pub(crate) struct Spare {
+    scratch: values::Arena,
+    local_values: Vec<LocalSlot>,
+    frames: Vec<Vec<V>>,
+    frame: Vec<V>,
+}
+
+impl<'h, H: Host> Session<'h, H> {
+    pub fn new(host: &'h H, node: u32, locals: &'h [VExpr]) -> Self {
+        let spare = host.file_vm().and_then(|vm| vm.spare.borrow_mut().pop()).unwrap_or_default();
+        let mut runtime = Runtime::new(host, node, locals);
+        runtime.scratch = std::cell::RefCell::new(spare.scratch);
+        runtime.local_values = std::cell::RefCell::new(spare.local_values);
+        runtime.frames = std::cell::RefCell::new(spare.frames);
+        Session { runtime, frame: std::cell::RefCell::new(spare.frame) }
+    }
+
+    /// `e` on the rule's node with the rule's `each` item (if any) in frame
+    /// slot 0.
+    fn run(&self, e: &VExpr, item: Option<V>) -> Option<V> {
+        let mut f = self.frame.take();
+        f.clear();
+        f.extend(item);
+        let v = ev(&self.runtime, self.runtime.home, e, &mut f);
+        self.frame.replace(f);
+        v
+    }
+
+    /// Whether `e` holds on the rule's node, with the rule's `each` item (if
+    /// any) in frame slot 0; `None`: an error the interpreter reports.
+    pub fn holds(&self, e: &VExpr, item: Option<V>) -> Option<bool> {
+        let v = self.run(e, item)?;
+        Some(self.runtime.truthy(v))
+    }
+
+    /// `e`'s value on the rule's node, as the interpreter's value.
+    pub fn value(&self, e: &VExpr, item: Option<V>) -> Option<Value<'_>> {
+        let v = self.run(e, item)?;
+        Some(self.runtime.unpack(v))
+    }
+
+    /// The items of the rule's `each` list.
+    pub fn items(&self, e: &VExpr) -> Option<Vec<V>> {
+        let v = self.run(e, None)?;
+        Some(self.runtime.items(v))
+    }
+
+    /// An item as the interpreter's value (for clauses it still evaluates).
+    pub fn item_value(&self, item: V) -> Value<'_> {
+        self.runtime.unpack(item)
+    }
+}
+
+impl<H: Host> Drop for Session<'_, H> {
+    fn drop(&mut self) {
+        let Some(vm) = self.runtime.host.file_vm() else { return };
+        let mut spare = Spare {
+            scratch: self.runtime.scratch.take(),
+            local_values: self.runtime.local_values.take(),
+            frames: self.runtime.frames.take(),
+            frame: self.frame.take(),
+        };
+        spare.scratch.clear();
+        spare.local_values.clear();
+        vm.spare.borrow_mut().push(spare);
+    }
+}
+
+impl<H> std::ops::Deref for Runtime<'_, H> {
+    type Target = H;
+    fn deref(&self) -> &H { self.host }
+}
+
+impl<'h, H: Host> Runtime<'h, H> {
+    fn new(host: &'h H, home: u32, locals: &'h [VExpr]) -> Self {
+        Runtime {
+            host,
+            scratch: Default::default(),
+            home,
+            locals,
+            // Most rule runs read no lowered `let`: no allocation until one does.
+            local_values: Default::default(),
+            frames: Default::default(),
+            calls: Default::default(),
+        }
+    }
+
+    /// `fn` `i` on `args`. Deeper recursion than [`MAX_CALL_DEPTH`] gives
+    /// up: the interpreter runs it (and reports its own depth limit).
+    fn call(&self, node: u32, i: u32, args: &[VExpr], f: &mut Vec<V>) -> Option<V> {
+        let body = self.values().function(i)?;
+        if self.calls.get() >= MAX_CALL_DEPTH {
+            return None;
+        }
+        let mut frame = self.frames.borrow_mut().pop().unwrap_or_default();
+        frame.clear();
+        let mut result = None;
+        if args.iter().try_for_each(|arg| { frame.push(ev(self, node, arg, f)?); Some(()) }).is_some() {
+            self.calls.set(self.calls.get() + 1);
+            result = ev(self, node, body, &mut frame);
+            self.calls.set(self.calls.get() - 1);
+        }
+        self.frames.borrow_mut().push(frame);
+        result
+    }
+
+    /// A rule `let`, computed on first read.
+    fn local(&self, local: u16) -> Option<V> {
+        let at = local as usize;
+        let body = self.locals.get(at)?;
+        {
+            let mut slots = self.local_values.borrow_mut();
+            if slots.is_empty() {
+                slots.resize(self.locals.len(), LocalSlot::Unset);
+            }
+            match slots[at] {
+                LocalSlot::Ready(v) => return Some(v),
+                LocalSlot::Busy | LocalSlot::GaveUp => return None,
+                LocalSlot::Unset => {}
+            }
+        }
+        self.local_values.borrow_mut()[at] = LocalSlot::Busy;
+        let v = ev(self, self.home, body, &mut Vec::new());
+        self.local_values.borrow_mut()[at] = v.map_or(LocalSlot::GaveUp, LocalSlot::Ready);
+        v
+    }
+
+    fn truthy(&self, value: V) -> bool {
+        match value {
+            V::List(_) | V::Record(..) | V::Text(_) => with_view(self.host, &self.scratch.borrow(), |view| view.truthy(value, self.tree())),
+            scalar => scalar.truthy(self.tree()),
+        }
+    }
+    fn equal(&self, a: V, b: V) -> bool {
+        match (a, b) {
+            (V::List(_) | V::Record(..) | V::Text(_), _) | (_, V::List(_) | V::Record(..) | V::Text(_)) => {
+                with_view(self.host, &self.scratch.borrow(), |view| view.equal(a, b, self.tree(), self.source()))
+            }
+            (a, b) => a.loose_eq(b, self.tree(), self.source()),
+        }
+    }
+    fn num(&self, value: V) -> Option<f64> {
+        match value {
+            V::Text(_) => self.with_text(value, |text| text.trim().parse().ok()),
+            scalar => scalar.num(self.tree(), self.source()),
+        }
+    }
+    fn with_text<R>(&self, value: V, run: impl FnOnce(&str) -> Option<R>) -> Option<R> {
+        match value {
+            V::Text(_) => with_view(self.host, &self.scratch.borrow(), |view| run(view.text(value, self.tree(), self.source())?)),
+            V::Null | V::Bool(_) | V::Num(_) => run(&scalar_text(value)),
+            scalar => run(scalar.text(self.tree(), self.source())?),
+        }
+    }
+    fn text_pair<R>(&self, a: V, b: V, run: impl FnOnce(&str, &str) -> R) -> Option<R> {
+        // Scalars read as the interpreter's text (`""`, `true`, `3`).
+        if matches!(a, V::Null | V::Bool(_) | V::Num(_)) {
+            let a = scalar_text(a);
+            return self.with_text(b, |b| Some(run(&a, b)));
+        }
+        if matches!(b, V::Null | V::Bool(_) | V::Num(_)) {
+            let b = scalar_text(b);
+            return self.with_text(a, |a| Some(run(a, &b)));
+        }
+        if !matches!(a, V::Text(_)) && !matches!(b, V::Text(_)) {
+            return Some(run(a.text(self.tree(), self.source())?, b.text(self.tree(), self.source())?));
+        }
+        with_view(self.host, &self.scratch.borrow(), |view| {
+            Some(run(view.text(a, self.tree(), self.source())?, view.text(b, self.tree(), self.source())?))
+        })
+    }
+    fn key(&self, value: V, key: &str) -> V {
+        match value {
+            V::Record(shape, handle) => with_view(self.host, &self.scratch.borrow(), |view| view.key(shape, handle, key)),
+            _ => V::Null,
+        }
+    }
+    fn list(&self, items: &[V]) -> Option<V> {
+        Some(V::List(self.scratch.borrow_mut().allocate(values::Region::Scratch, items)?))
+    }
+    /// The interpreter's form of a value (for functions the VM shares).
+    fn unpack(&self, value: V) -> Value<'_> {
+        match value {
+            V::List(_) | V::Record(..) | V::Text(_) => with_view(self.host, &self.scratch.borrow(), |view| view.value(value, self.tree(), self.source())),
+            scalar => scalar.value(self.tree(), self.source()),
+        }
+    }
+    /// An interpreter value as scratch; `None` (give up) for records of a
+    /// shape no config uses.
+    fn pack(&self, value: &Value) -> Option<V> {
+        self.values().scratch_value(value, &mut self.scratch.borrow_mut(), self.source())
+    }
+    fn items(&self, value: V) -> Vec<V> {
+        match value {
+            V::Null => Vec::new(),
+            V::List(handle) => with_view(self.host, &self.scratch.borrow(), |view| {
+                (0..view.len(handle)).map(|at| view.item(handle, at)).collect()
+            }),
+            value => vec![value],
+        }
+    }
+    fn project(&self, value: V, mut on: impl FnMut(V) -> Option<V>) -> Option<V> {
+        if matches!(value, V::List(_)) {
+            let items = self.items(value);
+            if items.iter().any(|v| matches!(v, V::Node(_))) {
+                return self.list(&items.into_iter().map(on).collect::<Option<Vec<_>>>()?);
+            }
+        }
+        on(value)
+    }
+}
+
+pub fn eval(h: &impl Host, node: u32, e: &VExpr) -> Option<Evaluated> {
+    let runtime = Runtime::new(h, node, &[]);
+    let value = ev(&runtime, node, e, &mut Vec::new())?;
+    Some(Evaluated { value, scratch: runtime.scratch.into_inner() })
 }
 
 /// Calls `each` with the items of `s` until it returns `false`; whether
 /// it ran to the end. `None`: the VM gives up.
-fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn FnMut(V, &mut Vec<V>) -> Option<bool>) -> Option<bool> {
+fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn FnMut(V, &mut Vec<V>) -> Option<bool>) -> Option<bool> {
     let tree = h.tree();
     match s {
-        Seq::Const(items) => {
-            for &v in items.iter() {
-                if !each(v, f)? {
-                    return Some(false);
-                }
-            }
-        }
+        Seq::Value(value) => return walk_value(h, ev(h, node, value, f)?, f, each),
         Seq::Nodes { children: true, item, .. } => {
             for edge in &tree.node(node).children {
                 let v = ev(h, edge.node, item, f)?;
@@ -638,7 +1162,7 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
             // One node reads as its value: a null there is no item.
             if let [one] = nodes.as_slice() {
                 let v = ev(h, *one, item, f)?;
-                return if v == V::Null { Some(true) } else { each(v, f) };
+                return walk_value(h, v, f, each);
             }
             for n in nodes {
                 let v = ev(h, n, item, f)?;
@@ -648,7 +1172,6 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
             }
         }
         Seq::Stage(stage, of, body, bind) => {
-            let source = h.source();
             let mut index = 0.0;
             // `take_while`: still taking; `skip_while`: still skipping.
             let mut open = true;
@@ -661,23 +1184,40 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
                         let mapped = call_bound(h, node, body, f, *bind, v, at)?;
                         each(mapped, f)
                     }
-                    SeqStage::Filter => if call_bound(h, node, body, f, *bind, v, at)?.truthy(tree) { each(v, f) } else { Some(true) },
+                    SeqStage::Filter => if h.truthy(call_bound(h, node, body, f, *bind, v, at)?) { each(v, f) } else { Some(true) },
                     SeqStage::TakeWhile => {
-                        open = open && call_bound(h, node, body, f, *bind, v, at)?.truthy(tree);
+                        open = open && h.truthy(call_bound(h, node, body, f, *bind, v, at)?);
                         if open { each(v, f) } else { Some(true) }
                     }
                     SeqStage::SkipWhile => {
-                        open = open && call_bound(h, node, body, f, *bind, v, at)?.truthy(tree);
+                        open = open && h.truthy(call_bound(h, node, body, f, *bind, v, at)?);
                         if open { Some(true) } else { each(v, f) }
                     }
                     SeqStage::UniqueBy => {
                         let key = call_bound(h, node, body, f, *bind, v, at)?;
-                        if keys.iter().any(|k| k.loose_eq(key, tree, source)) { return Some(true); }
+                        if keys.iter().any(|&k| h.equal(k, key)) { return Some(true); }
                         keys.push(key);
                         each(v, f)
                     }
                 }
             });
+        }
+        // Keys compare as the interpreter's values; equal keys keep order.
+        Seq::SortBy(of, body, bind) => {
+            let mut keyed: Vec<(Value<'static>, V)> = Vec::new();
+            let mut index = 0.0;
+            walk_seq(h, node, of, f, &mut |v, f| {
+                let key = call_bound(h, node, body, f, *bind, v, index)?;
+                index += 1.0;
+                keyed.push((h.unpack(key).into_static(), v));
+                Some(true)
+            })?;
+            keyed.sort_by(|(a, _), (b, _)| a.compare(b));
+            for (_, v) in keyed {
+                if !each(v, f)? {
+                    return Some(false);
+                }
+            }
         }
         Seq::FlatMap(of, body, bind) => {
             let mut index = 0.0;
@@ -701,7 +1241,7 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
             });
         }
         Seq::Take(of, n) | Seq::Drop(of, n) => {
-            let n = whole(ev(h, node, n, f)?.num(tree, h.source())?)?;
+            let n = whole(h.num(ev(h, node, n, f)?)?)?;
             let take = matches!(s, Seq::Take(..));
             let mut seen = 0;
             return walk_seq(h, node, of, f, &mut |v, f| {
@@ -725,10 +1265,9 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
             }
         }
         Seq::Unique(of) => {
-            let source = h.source();
             let mut seen: Vec<V> = Vec::new();
             return walk_seq(h, node, of, f, &mut |v, f| {
-                if seen.iter().any(|s| s.loose_eq(v, tree, source)) { return Some(true); }
+                if seen.iter().any(|&s| h.equal(s, v)) { return Some(true); }
                 seen.push(v);
                 each(v, f)
             });
@@ -737,8 +1276,64 @@ fn walk_seq(h: &impl Host, node: u32, s: &Seq, f: &mut Vec<V>, each: &mut dyn Fn
             let v = ev(h, node, value, f)?;
             return with_bound(f, *slot, &[v], |f| walk_seq(h, node, body, f, each));
         }
+        Seq::Overlapping(sel, range) => {
+            let range = match range.as_deref() {
+                Some((from, to)) => {
+                    let from = h.num(ev(h, node, from, f)?)?;
+                    Some((from, h.num(ev(h, node, to, f)?)?))
+                }
+                None => None,
+            };
+            for id in h.overlapping(node, sel, range)? {
+                if !each(V::Node(id), f)? {
+                    return Some(false);
+                }
+            }
+        }
+        Seq::Descendants(sel) => {
+            for id in sel.descendants(h.grammar(), tree, node) {
+                if !each(V::Node(id), f)? {
+                    return Some(false);
+                }
+            }
+        }
+        // Like the interpreter, the whole walk runs before any item is used.
+        Seq::Walk(roots, next, slot) => {
+            let mut queue = std::collections::VecDeque::new();
+            walk_seq(h, node, roots, f, &mut |v, _| { queue.push_back(v); Some(true) })?;
+            let mut seen = crate::fx_hash::FxHashSet::default();
+            let mut reached = Vec::new();
+            while let Some(v) = queue.pop_front() {
+                let V::Node(id) = v else { continue };
+                if !seen.insert(id) {
+                    continue;
+                }
+                with_bound(f, *slot, &[v], |f| walk_seq(h, node, next, f, &mut |more, _| { queue.push_back(more); Some(true) }))?;
+                reached.push(v);
+            }
+            for v in reached {
+                if !each(v, f)? {
+                    return Some(false);
+                }
+            }
+        }
     }
     Some(true)
+}
+
+fn walk_value<H: Host>(h: &Runtime<'_, H>, value: V, f: &mut Vec<V>, each: &mut dyn FnMut(V, &mut Vec<V>) -> Option<bool>) -> Option<bool> {
+    match value {
+        V::Null => Some(true),
+        V::List(handle) => {
+            let len = with_view(h.host, &h.scratch.borrow(), |view| view.len(handle));
+            for at in 0..len {
+                let value = with_view(h.host, &h.scratch.borrow(), |view| view.item(handle, at));
+                if !each(value, f)? { return Some(false); }
+            }
+            Some(true)
+        }
+        scalar => each(scalar, f),
+    }
 }
 
 impl Binder {
@@ -764,7 +1359,7 @@ fn with_bound<R>(f: &mut Vec<V>, slot: u16, values: &[V], run: impl FnOnce(&mut 
 }
 
 /// A stage lambda on one item (and its index, when the lambda takes one).
-fn call_bound(h: &impl Host, node: u32, body: &VExpr, f: &mut Vec<V>, bind: Binder, item: V, index: f64) -> Option<V> {
+fn call_bound<H: Host>(h: &Runtime<'_, H>, node: u32, body: &VExpr, f: &mut Vec<V>, bind: Binder, item: V, index: f64) -> Option<V> {
     let values = [item, V::Num(index)];
     with_bound(f, bind.slot, &values[..bind.width()], |f| ev(h, node, body, f))
 }
@@ -775,16 +1370,80 @@ fn whole(n: f64) -> Option<usize> {
     (n.is_finite() && n >= 0.0 && n.fract() == 0.0).then_some(n as usize)
 }
 
-fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
+/// A scalar's text, as [`Value`]'s `Display` writes it.
+fn scalar_text(value: V) -> String {
+    match value {
+        V::Bool(b) => b.to_string(),
+        V::Num(n) => Value::Num(n).to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Value functions on a list argument, read in the arena instead of copied
+/// out (same results as the `FUNCTIONS` entries); `None`: not handled here.
+fn list_call<H: Host>(h: &Runtime<'_, H>, name: &str, args: &[V]) -> Option<Option<V>> {
+    let &[V::List(handle), ..] = args else { return None };
+    let len = with_view(h.host, &h.scratch.borrow(), |view| view.len(handle));
+    Some(match (name, args) {
+        ("len", [_]) => Some(V::Num(len as f64)),
+        ("slice", [_, from, rest @ ..]) if rest.len() <= 1 => (|| {
+            let resolve = |i: f64| if i < 0.0 { len.saturating_sub((-i) as usize) } else { (i as usize).min(len) };
+            let from = resolve(h.num(*from)?);
+            let to = match rest { [to] => resolve(h.num(*to)?), _ => len }.max(from);
+            let items: Vec<V> = with_view(h.host, &h.scratch.borrow(), |view| (from..to).map(|at| view.item(handle, at)).collect());
+            h.list(&items)
+        })(),
+        ("index_of", [_, needle]) => {
+            let items: Vec<V> = with_view(h.host, &h.scratch.borrow(), |view| (0..len).map(|at| view.item(handle, at)).collect());
+            Some(V::Num(items.iter().position(|&item| h.equal(item, *needle)).map_or(-1.0, |at| at as f64)))
+        }
+        _ => return None,
+    })
+}
+
+fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
     let tree = h.tree();
     let source = h.source();
-    let text_of = |v: V| v.text(tree, source);
     macro_rules! eval {
         ($node:expr, $e:expr) => {
             ev(h, $node, $e, f)
         };
     }
     Some(match e {
+        VExpr::List(items) => {
+            let items = items.iter().map(|item| ev(h, node, item, f)).collect::<Option<Vec<_>>>()?;
+            h.list(&items)?
+        }
+        VExpr::Record(shape, entries) => {
+            let items = entries.iter().map(|entry| ev(h, node, entry, f)).collect::<Option<Vec<_>>>()?;
+            V::Record(*shape, h.scratch.borrow_mut().allocate(values::Region::Scratch, &items)?)
+        }
+        VExpr::Collect(sequence) => {
+            let mut items = Vec::new();
+            walk_seq(h, node, sequence, f, &mut |v, _| { items.push(v); Some(true) })?;
+            h.list(&items)?
+        }
+        VExpr::Key(base, key) => h.key(eval!(node, base)?, key),
+        VExpr::Member(base, key, part) => {
+            let base = eval!(node, base)?;
+            h.project(base, |value| match value {
+                V::Node(id) => match part { Some(part) => ev(h, id, part, f), None => Some(V::Null) },
+                value => Some(h.key(value, key)),
+            })?
+        }
+        VExpr::Path(base, keys, parts) => {
+            let base = eval!(node, base)?;
+            h.project(base, |mut value| {
+                for (at, key) in keys.iter().enumerate() {
+                    value = match value {
+                        V::Node(_) if &**key == "node" => value,
+                        V::Node(id) => return match &parts[at] { Some(part) => ev(h, id, part, f), None => Some(V::Null) },
+                        value => h.key(value, key),
+                    };
+                }
+                Some(value)
+            })?
+        }
         VExpr::OnSibling(after, inner) => match tree.field_sibling(node, *after) {
             Some(sibling) => eval!(sibling, inner)?,
             None => V::Null,
@@ -792,14 +1451,77 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         VExpr::Index => tree.field_index(node).map_or(V::Null, |index| V::Num(index as f64)),
         VExpr::Line => V::Num((h.lines().line_of(tree.node(node).start as usize) + 1) as f64),
         VExpr::Bound(slot) => *f.get(*slot as usize)?,
+        VExpr::Local(local) if node == h.home => h.local(*local)?,
+        // Another node's `let` (`previous.carried`) is the interpreter's: it
+        // memoises them per node.
+        VExpr::Local(local) => {
+            let value = h.interp(node, &CExpr::Local(*local), Vec::new())?;
+            h.pack(&value)?
+        }
+        VExpr::IsTests(subject, tests) => {
+            let value = eval!(node, subject)?;
+            let id = match value { V::Node(id) => Some(id), _ => None };
+            let g = h.grammar();
+            // Non-node values (tokens) carry a kind: their text, or a
+            // record's `kind`.
+            let tagged = match value {
+                V::NodeText(_) | V::Str(_) | V::Text(_) => h.with_text(value, |text| Some(g.matcher(text))).flatten(),
+                V::Record(..) => h.with_text(h.key(value, "kind"), |text| Some(g.matcher(text))).flatten(),
+                _ => None,
+            };
+            V::Bool(tests.iter().any(|test| match (test, id) {
+                (IsTest::Lang(lang), _) => *lang == h.lang(),
+                (IsTest::Kind(ids), None) => tagged.is_some_and(|m| is_a(g, m, ids)),
+                (_, None) => false,
+                (IsTest::Kind(ids), Some(id)) => is_a(g, tree.node(id).matcher, ids),
+                (IsTest::Field(ids, label), Some(id)) => {
+                    tree.label(id) == Some(*label) && tree.owner(id).is_some_and(|o| is_a(g, tree.node(o).matcher, ids))
+                }
+                (IsTest::Layer(layer), Some(id)) => tree.layer_of(id) == Some(*layer),
+            }))
+        }
+        VExpr::Link(link) => {
+            let (targets, many) = h.link(node, *link)?;
+            if many {
+                h.list(&targets.into_iter().map(V::Node).collect::<Vec<_>>())?
+            } else {
+                targets.first().map_or(V::Null, |&id| V::Node(id))
+            }
+        }
+        VExpr::Pattern(value, test) => {
+            let value = eval!(node, value)?;
+            let text = h.unpack(value).text().into_owned();
+            V::Bool(h.pattern(test, &text)?)
+        }
+        VExpr::Ancestor(matcher, field) => match tree.ancestor(h.grammar(), node, *matcher) {
+            None => V::Null,
+            Some(ancestor) => match field {
+                None => V::NodeText(ancestor),
+                Some(label) => match tree.fields(ancestor, *label).as_slice() {
+                    [] => V::Null,
+                    [one] => V::NodeText(*one),
+                    many => h.list(&many.iter().map(|&id| V::NodeText(id)).collect::<Vec<_>>())?,
+                },
+            },
+        },
+        VExpr::CallFn(i, args) => h.call(node, *i, args, f)?,
+        VExpr::Interp { expr, params, site } => {
+            if stats() {
+                h.values().interp_hit(*site);
+                note_fallback("interp leaf");
+            }
+            let mut frame = Vec::with_capacity(params.len());
+            for param in params.iter() {
+                let v = eval!(node, param)?;
+                frame.push(h.unpack(v).into_static());
+            }
+            let value = h.interp(node, expr, frame)?;
+            h.pack(&value)?
+        }
         VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
         VExpr::ReTest(text, pattern) => {
-            let hay = match eval!(node, text)? {
-                V::Null => "",
-                v => text_of(v)?,
-            };
-            let found = crate::expr::re::test(&[Value::from(hay), Value::from(*pattern)]).ok()?;
-            V::Bool(found.truthy())
+            let run = |hay: &str| Some(crate::expr::re::test(&[Value::from(hay), Value::from(*pattern)]).ok()?.truthy());
+            V::Bool(match eval!(node, text)? { V::Null => run("")?, value => h.with_text(value, run)? })
         }
         VExpr::Count(s) => {
             let mut n = 0.0;
@@ -808,7 +1530,7 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         }
         VExpr::Sum(s) => {
             let mut total = 0.0;
-            walk_seq(h, node, s, f, &mut |v, _| { total += v.num(tree, source)?; Some(true) })?;
+            walk_seq(h, node, s, f, &mut |v, _| { total += h.num(v)?; Some(true) })?;
             V::Num(total)
         }
         // The interpreter builds the whole list first, so every item is
@@ -828,7 +1550,7 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
             let mut items = Vec::new();
             walk_seq(h, node, s, f, &mut |v, _| { items.push(v); Some(true) })?;
             let holds = |at: usize, f: &mut Vec<V>| -> Option<bool> {
-                Some(call_bound(h, node, test, f, *bind, items[at], at as f64)?.truthy(tree))
+                Some(h.truthy(call_bound(h, node, test, f, *bind, items[at], at as f64)?))
             };
             match kind {
                 EachKind::Find | EachKind::FindLast => {
@@ -896,6 +1618,7 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         VExpr::NonEmpty(value) => match eval!(node, value)? {
             V::Str("") => V::Null,
             V::NodeText(id) if tree.node(id).end == tree.node(id).start => V::Null,
+            v @ (V::List(_) | V::Record(..) | V::Text(_)) if !h.truthy(v) => V::Null,
             v => v,
         },
         VExpr::Const(v) => *v,
@@ -913,44 +1636,54 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
             Some(p) => h.attr(p, *a)?,
             None => V::Null,
         },
-        VExpr::Not(inner) => V::Bool(!eval!(node, inner)?.truthy(tree)),
-        VExpr::Neg(inner) => V::Num(-eval!(node, inner)?.num(tree, source)?),
-        VExpr::If(c, a, b) => if eval!(node, c)?.truthy(tree) { eval!(node, a)? } else { eval!(node, b)? },
+        VExpr::Not(inner) => V::Bool(!h.truthy(eval!(node, inner)?)),
+        VExpr::Neg(inner) => V::Num(-h.num(eval!(node, inner)?)?),
+        VExpr::If(c, a, b) => if h.truthy(eval!(node, c)?) { eval!(node, a)? } else { eval!(node, b)? },
         VExpr::Binary(op, a, b) => {
             let a = eval!(node, a)?;
             match op {
-                BinOp::And if !a.truthy(tree) => return Some(V::Bool(false)),
-                BinOp::Or if a.truthy(tree) => return Some(V::Bool(true)),
+                BinOp::And if !h.truthy(a) => return Some(V::Bool(false)),
+                BinOp::Or if h.truthy(a) => return Some(V::Bool(true)),
                 _ => {}
             }
             let b = eval!(node, b)?;
             let order = || -> Option<std::cmp::Ordering> {
-                let texts = matches!(a, V::NodeText(_) | V::Str(_)) && matches!(b, V::NodeText(_) | V::Str(_));
-                match (a.num(tree, source), b.num(tree, source)) {
+                let texts = matches!(a, V::NodeText(_) | V::Str(_) | V::Text(_)) && matches!(b, V::NodeText(_) | V::Str(_) | V::Text(_));
+                match (h.num(a), h.num(b)) {
                     (Some(x), Some(y)) if !texts => Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)),
                     // Text order needs both sides as text the VM holds.
-                    _ => Some(text_of(a)?.cmp(text_of(b)?)),
+                    _ => h.text_pair(a, b, str::cmp),
                 }
             };
             match op {
-                BinOp::And | BinOp::Or => V::Bool(b.truthy(tree)),
-                BinOp::Eq => V::Bool(a.loose_eq(b, tree, source)),
-                BinOp::Ne => V::Bool(!a.loose_eq(b, tree, source)),
+                BinOp::And | BinOp::Or => V::Bool(h.truthy(b)),
+                BinOp::Eq => V::Bool(h.equal(a, b)),
+                BinOp::Ne => V::Bool(!h.equal(a, b)),
                 BinOp::Lt => V::Bool(order()?.is_lt()),
                 BinOp::Le => V::Bool(order()?.is_le()),
                 BinOp::Gt => V::Bool(order()?.is_gt()),
                 BinOp::Ge => V::Bool(order()?.is_ge()),
-                BinOp::Add => V::Num(a.num(tree, source)? + b.num(tree, source)?),
-                BinOp::Sub => V::Num(a.num(tree, source)? - b.num(tree, source)?),
+                BinOp::Add => V::Num(h.num(a)? + h.num(b)?),
+                BinOp::Sub => V::Num(h.num(a)? - h.num(b)?),
                 BinOp::Rem => {
-                    let divisor = b.num(tree, source)?;
+                    let divisor = h.num(b)?;
                     if divisor == 0.0 { return None; }
-                    V::Num(a.num(tree, source)? % divisor)
+                    V::Num(h.num(a)? % divisor)
                 },
-                BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_))) => {
-                    V::Num(a.num(tree, source)? * b.num(tree, source)?)
+                BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_) | V::Text(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_) | V::Text(_))) => {
+                    V::Num(h.num(a)? * h.num(b)?)
                 }
-                _ => return None,
+                BinOp::Join if matches!(a, V::List(_)) || matches!(b, V::List(_)) => {
+                    let mut items = h.items(a);
+                    items.extend(h.items(b));
+                    h.list(&items)?
+                }
+                // Text joins, text repeats and the rest: the interpreter's own
+                // operator on the same values (its error gives up).
+                _ => {
+                    let result = crate::expr::binary(*op, h.unpack(a), h.unpack(b)).ok()?;
+                    h.pack(&result)?
+                }
             }
         }
         VExpr::Node => V::Node(node),
@@ -961,16 +1694,15 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         VExpr::Field(label) => match tree.fields(node, *label).as_slice() {
             [] => V::Null,
             [one] => V::NodeText(*one),
-            _ => return None,
-        },
-        VExpr::On(base, inner) => match eval!(node, base)? {
-            V::Node(id) => eval!(id, inner)?,
-            _ => V::Null,
+            many => h.list(&many.iter().map(|&id| V::NodeText(id)).collect::<Vec<_>>())?,
         },
         VExpr::OnField(label, inner) => match tree.fields(node, *label).as_slice() {
             [] => V::Null,
             [one] => eval!(*one, inner)?,
-            _ => return None,
+            many => {
+                let items = many.iter().map(|&id| ev(h, id, inner, f)).collect::<Option<Vec<_>>>()?;
+                h.list(&items)?
+            }
         },
         VExpr::OnParent(inner) => match parent_layer(tree, node) {
             Some(p) => eval!(p, inner)?,
@@ -979,7 +1711,8 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
         VExpr::IsValue(subject, kinds) => {
             let matcher = match eval!(node, subject)? {
                 V::Node(id) => Some(tree.node(id).matcher),
-                v @ (V::NodeText(_) | V::Str(_)) => h.grammar().matcher(text_of(v)?),
+                v @ (V::NodeText(_) | V::Str(_) | V::Text(_)) => h.with_text(v, |text| Some(h.grammar().matcher(text)))?,
+                value @ V::Record(..) => h.with_text(h.key(value, "kind"), |text| Some(h.grammar().matcher(text))).flatten(),
                 _ => None,
             };
             V::Bool(matcher.is_some_and(|m| is_a(h.grammar(), m, kinds)))
@@ -992,21 +1725,99 @@ fn ev(h: &impl Host, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
             V::Null => eval!(node, b)?,
             value => value,
         },
-        VExpr::InList(items, needle) => {
-            let needle = eval!(node, needle)?;
-            V::Bool(items.iter().any(|item| item.loose_eq(needle, tree, source)))
-        }
         VExpr::Contains(haystack, needle) => {
             let (haystack, needle) = (eval!(node, haystack)?, eval!(node, needle)?);
-            V::Bool(text_of(haystack)?.contains(text_of(needle)?))
+            V::Bool(match haystack {
+                V::List(handle) => with_view(h.host, &h.scratch.borrow(), |view| {
+                    (0..view.len(handle)).any(|at| view.equal(view.item(handle, at), needle, tree, source))
+                }),
+                value => h.text_pair(value, needle, |text, needle| text.contains(needle))?,
+            })
         }
         VExpr::StartsWith(text, prefix) => {
             let (text, prefix) = (eval!(node, text)?, eval!(node, prefix)?);
-            V::Bool(text_of(text)?.starts_with(text_of(prefix)?))
+            V::Bool(h.text_pair(text, prefix, |text, prefix| text.starts_with(prefix))?)
         }
         VExpr::EndsWith(text, suffix) => {
             let (text, suffix) = (eval!(node, text)?, eval!(node, suffix)?);
-            V::Bool(text_of(text)?.ends_with(text_of(suffix)?))
+            V::Bool(h.text_pair(text, suffix, |text, suffix| text.ends_with(suffix))?)
+        }
+        VExpr::Call(function, items) => {
+            let mut args = [V::Null; 3];
+            let direct = items.len() <= args.len();
+            if direct {
+                for (slot, item) in args.iter_mut().zip(items.iter()) {
+                    *slot = eval!(node, item)?;
+                }
+                // List arguments stay in the arena: no interpreter copy.
+                if let Some(result) = list_call(h, function.name, &args[..items.len()]) {
+                    return result;
+                }
+            }
+            let mut values = Vec::with_capacity(items.len());
+            for (at, item) in items.iter().enumerate() {
+                let v = if direct { args[at] } else { eval!(node, item)? };
+                values.push(h.unpack(v));
+            }
+            let result = (function.call)(&values).ok()?;
+            h.pack(&result)?
+        }
+        VExpr::Builtin(builtin) => {
+            let value = h.builtin(node, *builtin)?;
+            h.pack(&value)?
+        }
+        VExpr::Position(offset, read) => {
+            let at = h.position(h.num(eval!(node, offset)?)?)?;
+            match read {
+                PositionRead::Key(key) => V::Num(at.get(usize::from(*key)) as f64),
+                PositionRead::Whole(shape) => {
+                    let items: Vec<V> = (0..Position::KEYS.len()).map(|key| V::Num(at.get(key) as f64)).collect();
+                    V::Record(*shape, h.scratch.borrow_mut().allocate(values::Region::Scratch, &items)?)
+                }
+            }
+        }
+        VExpr::Get(record, key) => {
+            let record = eval!(node, record)?;
+            let key = eval!(node, key)?;
+            let key = h.unpack(key).text().into_owned();
+            h.key(record, &key)
+        }
+        VExpr::Containing(sel) => h.containing(node, sel)?.map_or(V::Null, V::Node),
+        VExpr::NodeAt(offset) => match eval!(node, offset)? {
+            V::Null => V::Null,
+            at => {
+                let at = (h.num(at)?.max(0.0) as usize).min(source.len()) as u32;
+                tree.innermost_at(h.grammar(), at, u32::MAX).filter(|&id| !tree.is_root(id)).map_or(V::Null, V::Node)
+            }
+        },
+        VExpr::OwnChild(last, kinds, inner) => {
+            let fits = |edge: &&crate::grammar::Edge| kinds.iter().any(|&k| h.grammar().is_a(tree.node(edge.node).matcher, k));
+            let children = &tree.node(node).children;
+            let child = if *last { children.iter().rev().find(fits) } else { children.iter().find(fits) };
+            match child {
+                Some(edge) => eval!(edge.node, inner)?,
+                None => V::Null,
+            }
+        }
+        VExpr::KindName(inner) => match eval!(node, inner)? {
+            V::Node(id) => match tree.node(id).matcher {
+                crate::grammar::ROOT => h.pack(&Value::from(format!(".{}", h.grammar().langs[h.host.lang()].name)))?,
+                crate::grammar::TEXT => V::Null,
+                m => V::Str(intern(&h.grammar().matchers[m as usize].name).0),
+            },
+            _ => V::Null,
+        },
+        VExpr::OnAncestor(matcher, inner) => match tree.ancestor(h.grammar(), node, *matcher) {
+            Some(ancestor) => eval!(ancestor, inner)?,
+            None => V::Null,
+        },
+        VExpr::Template(parts) => {
+            let mut text = String::new();
+            for part in parts.iter() {
+                let v = eval!(node, part)?;
+                text.push_str(&h.unpack(v).text());
+            }
+            h.pack(&Value::from(text))?
         }
     })
 }
@@ -1063,6 +1874,91 @@ mod tests {
     use crate::expr::functions;
 
     #[test]
+    fn record_and_list_values_preserve_keys_paths_and_container_semantics() {
+        use crate::grammar::{Edge, Node};
+        struct TestHost {
+            tree: Tree,
+            lines: crate::line_index::LineIndex,
+            values: Values,
+        }
+        impl Host for TestHost {
+            fn tree(&self) -> &Tree { &self.tree }
+            fn grammar(&self) -> &Grammar { panic!("no grammar queries") }
+            fn source(&self) -> &str { "x" }
+            fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
+            fn attr(&self, _: u32, _: u16) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn values(&self) -> &Values { &self.values }
+        }
+        let mut host = TestHost {
+            tree: Tree::from_native(vec![
+                Node { matcher: TEXT, start: 0, end: 1, children: vec![] },
+                Node { matcher: ROOT, start: 0, end: 1, children: vec![Edge { node: 0, label: 0 }] },
+                Node { matcher: TEXT, start: 0, end: 1, children: vec![] },
+                Node { matcher: TEXT, start: 0, end: 1, children: vec![] },
+                Node { matcher: ROOT, start: 0, end: 1, children: vec![Edge { node: 2, label: 0 }, Edge { node: 3, label: 0 }] },
+            ], 1),
+            lines: crate::line_index::LineIndex::new("x"),
+            values: Values::default(),
+        };
+        let num = |n| CExpr::Const(Value::Num(n));
+        let record = || CExpr::Record(vec![
+            ("size".into(), num(3.0)),
+            ("size".into(), num(9.0)),
+            ("owner".into(), CExpr::Builtin(Builtin::Node)),
+        ]);
+        let call = |name, value| CExpr::Call(functions::lookup(name).expect("registered"), vec![value]);
+        let list = || CExpr::Const(Value::list(vec![Value::Num(2.0), Value::Num(5.0)]));
+        let empty_record = || CExpr::Const(Value::record(Vec::new()));
+        for (expression, expected) in [
+            (call("count", CExpr::List(vec![CExpr::Builtin(Builtin::Node), record()])), V::Num(2.0)),
+            (call("sum", CExpr::Member(Box::new(CExpr::List(vec![CExpr::Builtin(Builtin::Node), record()])),
+                "size".into(), Some(Box::new(CExpr::Builtin(Builtin::Line))))), V::Num(4.0)),
+            (CExpr::Key(Box::new(record()), "size".into()), V::Num(3.0)),
+            (CExpr::Key(Box::new(record()), "absent".into()), V::Null),
+            (CExpr::Member(Box::new(record()), "size".into(), None), V::Num(3.0)),
+            (CExpr::Path(Box::new(record()), vec!["owner".into(), "line".into()],
+                vec![None, Some(CExpr::Builtin(Builtin::Line))]), V::Num(1.0)),
+            (call("count", CExpr::If(Box::new(CExpr::Const(Value::Bool(true))), Box::new(list()), Box::new(empty_record()))), V::Num(2.0)),
+            (CExpr::Member(Box::new(list()), "size".into(), None), V::Null),
+            (CExpr::Not(Box::new(empty_record())), V::Bool(true)),
+            (CExpr::NonEmpty(Box::new(empty_record())), V::Null),
+            (CExpr::Binary(BinOp::Eq, Box::new(list()), Box::new(CExpr::Const(Value::list(vec![
+                Value::from("2"), Value::Num(5.0),
+            ])))), V::Bool(true)),
+            (CExpr::Binary(BinOp::Eq,
+                Box::new(CExpr::Const(Value::record(vec![("a".into(), Value::Num(1.0)), ("b".into(), Value::Bool(true))]))),
+                Box::new(CExpr::Const(Value::record(vec![("b".into(), Value::Bool(true)), ("a".into(), Value::from("1"))])))),
+                V::Bool(true)),
+        ] {
+            let lowered = lower(&expression, &[], &mut host.values);
+            assert_eq!(eval(&host, 0, &lowered).map(|v| v.value), Some(expected), "{expression:?}");
+        }
+        let projection = call("count", CExpr::OnField(0, Box::new(list())));
+        let lowered = lower(&projection, &[], &mut host.values);
+        assert_eq!(eval(&host, 1, &lowered).map(|v| v.value), Some(V::Num(2.0)), "one field's list is the sequence, not one nested item");
+        assert_eq!(eval(&host, 4, &lowered).map(|v| v.value), Some(V::Num(2.0)), "multiple fields keep nested lists");
+        let children = call("count", CExpr::Relative(Relative::Children, Box::new(list())));
+        let lowered = lower(&children, &[], &mut host.values);
+        assert_eq!(eval(&host, 4, &lowered).map(|v| v.value), Some(V::Num(2.0)), "children keep nested lists");
+        let composite = lower(&record(), &[], &mut host.values);
+        let file = FileVm::default();
+        let escaped = eval(&host, 0, &composite).unwrap().persist(&file).unwrap();
+        let file_bytes = file.values.borrow().bytes();
+        for _ in 0..100 {
+            let evaluated = eval(&host, 0, &composite).unwrap();
+            assert!(evaluated.truthy(&host));
+            assert!(evaluated.scratch.bytes() > 0);
+        }
+        assert_eq!(file.values.borrow().bytes(), file_bytes, "discarded evaluations must not retain payloads");
+        let scratch = values::Arena::default();
+        let persistent = file.values.borrow();
+        let view = values::View { config: &host.values, scratch: &scratch, file: &persistent };
+        let V::Record(shape, handle) = escaped else { panic!("record"); };
+        assert_eq!(view.key(shape, handle, "size"), V::Num(3.0));
+    }
+
+    #[test]
     fn position_and_remainder_reads_preserve_boundaries_and_failure() {
         use crate::grammar::{Edge, Node};
         struct TestHost {
@@ -1076,6 +1972,10 @@ mod tests {
             fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
             fn attr(&self, _: u32, _: u16) -> Option<V> { None }
             fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn values(&self) -> &Values {
+                static VALUES: OnceLock<Values> = OnceLock::new();
+                VALUES.get_or_init(Values::default)
+            }
         }
         let leaf = |start, end| Node { matcher: TEXT, start, end, children: vec![] };
         let host = TestHost { lines: crate::line_index::LineIndex::new("a\r\nβ\nc"), tree: Tree::from_native(vec![
@@ -1086,7 +1986,7 @@ mod tests {
                 Edge { node: 0, label: 7 },
             ] },
         ], 4) };
-        let run = |node, expression: CExpr| eval(&host, node, &lower(&expression, &[]).expect("lowerable position operation"));
+        let run = |node, expression: CExpr| eval(&host, node, &lower(&expression, &[], &mut Values::default())).map(|v| v.value);
         for (node, index, line) in [(0, 0.0, 1.0), (1, 0.0, 2.0), (2, 2.0, 3.0)] {
             assert_eq!(run(node, CExpr::Builtin(Builtin::Index)), Some(V::Num(index)));
             assert_eq!(run(node, CExpr::Builtin(Builtin::Line)), Some(V::Num(line)));
@@ -1103,66 +2003,6 @@ mod tests {
         assert_eq!(run(0, remainder(Value::from("invalid"), Value::Num(2.0))), None);
         assert_eq!(run(0, CExpr::Binary(BinOp::And, Box::new(CExpr::Const(Value::Bool(false))),
             Box::new(remainder(Value::Num(1.0), Value::Num(0.0))))), Some(V::Bool(false)));
-    }
-
-    #[test]
-    fn only_bodies_the_vm_can_answer_without_building_values_lower() {
-        let g: &[UserFn] = &[];
-        let num = |n: f64| Box::new(CExpr::Const(Value::Num(n)));
-        let call = |name: &str, args: Vec<CExpr>| CExpr::Call(functions::lookup(name).expect("registered"), args);
-        for supported in [
-            CExpr::Binary(BinOp::Add, num(1.0), num(2.0)),
-            CExpr::If(Box::new(CExpr::Attr(0)), num(1.0), Box::new(CExpr::ParentAttr(1))),
-            call("sum", vec![CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2)))]),
-            CExpr::Binary(BinOp::Ne, Box::new(CExpr::Field(3)), Box::new(CExpr::Const(Value::Null))),
-            CExpr::Const(Value::from("text")),
-            call("starts_with", vec![CExpr::Builtin(Builtin::Text), CExpr::Const(Value::from("a"))]),
-            CExpr::OnParent(Box::new(CExpr::Field(3))),
-        ] {
-            assert!(lower(&supported, g).is_ok(), "{supported:?}");
-        }
-        let children = || CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2)));
-        let stage = |kind, depth, arity, args, body| {
-            CExpr::Each(Box::new(crate::expr::pipeline::Stage { kind, depth, arity, input: children(), args, body }))
-        };
-        let add = |a: u16, b: u16| CExpr::Binary(BinOp::Add, Box::new(CExpr::Param(a)), Box::new(CExpr::Param(b)));
-        for supported in [
-            call("count", vec![stage(Each::Filter, 0, 2, vec![], CExpr::Param(1))]),
-            stage(Each::Fold, 0, 2, vec![CExpr::Const(Value::Num(0.0))], add(0, 1)),
-            stage(Each::MaxBy, 0, 1, vec![], CExpr::Param(0)),
-            call("count", vec![call("take", vec![children(), CExpr::Const(Value::Num(1.0))])]),
-            CExpr::NonEmpty(Box::new(CExpr::Builtin(Builtin::Text))),
-            // `x ?? 1`
-            CExpr::Nullish(Box::new(CExpr::Attr(0)), num(1.0)),
-            // A filtered view used inside a later lambda.
-            CExpr::Bind(
-                Box::new(stage(Each::Filter, 0, 1, vec![], CExpr::Param(0))),
-                0,
-                Box::new(stage(Each::All, 1, 1, vec![], call("count", vec![CExpr::Param(0)]))),
-            ),
-            CExpr::Bind(
-                Box::new(CExpr::Binary(BinOp::Join, Box::new(CExpr::Const(Value::list(vec![]))), Box::new(CExpr::Field(3)))),
-                0,
-                Box::new(call("count", vec![CExpr::Param(0)])),
-            ),
-        ] {
-            assert!(lower(&supported, g).is_ok(), "{supported:?}");
-        }
-        let local = CExpr::Bind(num(3.0), 0, Box::new(CExpr::Param(0)));
-        let condition = CExpr::Bind(num(10.0), 0, Box::new(CExpr::Binary(
-            BinOp::Eq,
-            Box::new(CExpr::Binary(BinOp::Add, Box::new(CExpr::Param(0)), Box::new(CExpr::Local(0)))),
-            num(13.0),
-        )));
-        assert!(lower_condition(&condition, g, &[local]).is_ok(), "a rule let remains lowerable inside a binding");
-        for unsupported in [
-            stage(Each::SortBy, 0, 1, vec![], CExpr::Param(0)),
-            CExpr::Binary(BinOp::Join, num(1.0), num(2.0)),
-            CExpr::Relative(Relative::Children, Box::new(CExpr::Attr(2))),
-            call("len", vec![CExpr::Builtin(Builtin::Text)]),
-        ] {
-            assert!(lower(&unsupported, g).is_err(), "{unsupported:?}");
-        }
     }
 
     #[test]
@@ -1206,9 +2046,60 @@ mod tests {
             in ts_function_like let picked { value parameter.nodes; max_by (p) p.offset; then (p) p.name ?? "none" }
             in ts_function_like let firsts { value parameter.nodes; take 1; concat parameter.nodes; unique; count }
             in ts_function_like let label { value parameter.nodes; first; then (p) p.name; nonempty } ?? "anon"
+            in ts_node let summary { owner: node, values: [1, 2], nested: { size: count(text) } }
+            in ts_parameter let parcel { owner: node, position: index, values: [2, 3] }
+            in ts_function_like let parcels { value parameter.nodes; map (p) p.parcel }
+            in ts_function_like let owners parameter.nodes
+            in ts_function_like rule records info "{summary.owner.line}:{summary.nested.size}:{summary.values}:{parcels}:{count(parcels)}:{owners.line}"
+            in ts_return let record_cycle { before: summary, loop: record_cycle }
+            in ts_return rule record_cycle info "{record_cycle}"
             in ts_function_like rule stages info "{shared}:{staged}:{picked}:{firsts}:{label}"
             in ts_block rule block_total info "{child_total}:{count(children.total)}:{first(children.depth)}"
             in ts_assignment rule left info "{left_named}:{operator == '??='}:{parent.depth}"
+            in ts_identifier let place position(offset).js_column
+            in ts_identifier let spot position(end_offset)
+            in ts_identifier let lead trim(before)
+            in ts_identifier let renamed replace(text, "a", "b") "-" text
+            in ts_identifier let holder containing(ts_function_like)
+            in ts_identifier let around { value overlapping(ts_identifier, offset, end_offset + 3); count }
+            in ts_identifier let reach { value walk([] node, n => n.parent); count }
+            in ts_identifier let at_end node_at(end_offset)
+            in ts_function_like let inner { value descendants(ts_identifier); map (n) n.renamed; count }
+            in ts_identifier rule hosted info "{place}:{spot.line}:{lead}:{renamed}:{holder.line}:{around}:{reach}:{at_end}"
+            in ts_function_like rule inner info "{inner}"
+            in ts_function_like let sorted { value parameter.nodes; sort_by (p) 0 - p.offset; map (p) p.text; first }
+            fn depth_of(n) = if n == null then 0 else 1 + depth_of(n.parent)
+            in ts_identifier let nesting depth_of(parent)
+            in ts_function_like rule items {
+                each p in parameter.nodes
+                when p.defaulted == true || len(p.text) > 0
+                info "{p.text}:{sorted}"
+            }
+            in ts_identifier rule nested info "{nesting}"
+            fn walk_after_inlined(n) = {
+                value names: [] n.parameter.name
+                value total: count(names)
+                value { value n; walk (c) c.parent; count }
+            }
+            in ts_identifier rule walked { when walk_after_inlined(node) > 2; info "walked" }
+            in ts_line rule indented info "{indent_level}:{len(indent_anchor)}" { indent in ts_block by 1 + count(text) % 2; indent in ts_class from offset by 2 }
+            in ts_function_like let owned_params parameter.nodes
+            in ts_function_like rule list_calls {
+                let size len(owned_params)
+                let rest { value owned_params; slice 1; count }
+                let tail slice(owned_params, -1, 9)
+                let final last(owned_params)
+                let found index_of(owned_params, final)
+                let missing index_of(owned_params, "zz")
+                let head { value text; slice 0 3; len }
+                info "{size}:{rest}:{tail}:{found}:{missing}:{head}"
+            }
+            in ts_parameter rule chained {
+                let own len(text)
+                let carried if own > 1 then own else previous.carried
+                when (carried ?? 0) > 0 && own == own
+                info "{carried}"
+            }
             in ts_node rule gated {
                 let twice_total twice(total)
                 when { value twice_total; then (t) t > 2 && !boundary }
@@ -1219,6 +2110,7 @@ mod tests {
         let sources = [
             "function f(a = 1, b) { if (a) { b ??= c; } else { d = e?.f; } switch (a) { case 1: break; default: } return; }",
             "class C { x = () => { y = 1; }; static { try { g(); } catch { h(); } } }",
+            "function g(a, b) {\n  if (a) {\n      b();\n  }\n}\nclass K {\n m() {}\n}\n",
         ];
         let run = |mode| {
             FORCED.set(Some(mode));
@@ -1232,7 +2124,11 @@ mod tests {
         let interpreted = run(Mode::Off);
         assert!(interpreted.iter().all(|file| file.len() > 5), "{interpreted:#?}");
         assert!(interpreted.iter().flatten().any(|d| d.1.contains("depends on itself")), "{interpreted:#?}");
+        take_fallbacks();
         assert_eq!(run(Mode::On), interpreted);
+        // Only errors (the cycles above) go back to the interpreter.
+        let fallbacks = take_fallbacks();
+        assert!(fallbacks.iter().all(|(route, _)| route.ends_with("error")), "{fallbacks:?}");
     }
 
 }

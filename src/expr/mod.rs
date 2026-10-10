@@ -37,7 +37,7 @@ pub fn is_builtin(name: &str) -> bool {
     Builtin::named(name).is_some() || facts::fact(name).is_some()
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum CExpr {
     Const(Value<'static>),
     Template(Vec<CExpr>),
@@ -60,8 +60,9 @@ pub enum CExpr {
     Neg(Box<CExpr>),
     Binary(BinOp, Box<CExpr>, Box<CExpr>),
     If(Box<CExpr>, Box<CExpr>, Box<CExpr>),
-    Test(Box<CExpr>, Box<Program>),
-    TestDfa(Box<CExpr>, Box<Dfa>),
+    /// Shared: VM interpreter leaves hold copies of their expressions.
+    Test(Box<CExpr>, std::sync::Arc<Program>),
+    TestDfa(Box<CExpr>, std::sync::Arc<Dfa>),
     /// A `let` attribute of the node itself.
     Attr(u16),
     /// A `let` attribute of the node's field (a list when it repeats).
@@ -111,9 +112,9 @@ pub enum CExpr {
     /// `position(offset)`: `{line, column, js_line, js_column}`, 1-based, of
     /// a byte offset.
     Position(Box<CExpr>),
-    /// `walk(roots, n => next)`; the body reads the node as the innermost
-    /// `Param`.
-    Walk(Box<CExpr>, Box<CExpr>),
+    /// `walk(roots, n => next)`; the body reads the node as the `Param` at
+    /// this depth.
+    Walk(Box<CExpr>, u16, Box<CExpr>),
     /// `descendants(layer)`: selected nodes under this one, in source order.
     Descendants(NodeSel),
     /// `overlapping(layer)`: selected nodes anywhere in the file whose span
@@ -158,7 +159,7 @@ macro_rules! child_visitor {
                 | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
                 | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
                 | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => f(inner),
-                CExpr::Binary(_, a, b) | CExpr::Bind(a, _, b) | CExpr::Nullish(a, b) | CExpr::Walk(a, b) | CExpr::Coalesce(a, b) => {
+                CExpr::Binary(_, a, b) | CExpr::Bind(a, _, b) | CExpr::Nullish(a, b) | CExpr::Walk(a, _, b) | CExpr::Coalesce(a, b) => {
                     f(a);
                     f(b);
                 }
@@ -206,7 +207,7 @@ impl CExpr {
 }
 
 /// One alternative of an `is` test.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum IsTest {
     /// Of one of these matchers (or a specialisation).
     Kind(Vec<u32>),
@@ -393,6 +394,44 @@ impl NodeSel {
             None => is_a(tree.node(id).matcher),
             Some(label) => tree.label(id) == Some(label) && tree.owner(id).is_some_and(|o| is_a(tree.node(o).matcher)),
         }
+    }
+
+    /// `descendants(sel)`: selected nodes under `node`, in source order
+    /// (outer first at one start), not entering nested files.
+    pub(crate) fn descendants(&self, grammar: &Grammar, tree: &Tree, node: u32) -> Vec<u32> {
+        let mut found = Vec::new();
+        let mut stack: Vec<u32> = tree.node(node).children.iter().map(|e| e.node).collect();
+        while let Some(id) = stack.pop() {
+            let n = tree.node(id);
+            if n.matcher == ROOT {
+                continue;
+            }
+            if self.matches(grammar, tree, id) {
+                found.push((n.start, std::cmp::Reverse(n.end), id));
+            }
+            stack.extend(n.children.iter().map(|e| e.node));
+        }
+        found.sort_unstable();
+        found.into_iter().map(|(_, _, id)| id).collect()
+    }
+}
+
+/// `position(offset)`: 1-based line and column, by line breaks and by
+/// JavaScript line terminators (UTF-16 columns), of a byte offset.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Position {
+    pub line: usize,
+    pub column: usize,
+    pub js_line: usize,
+    pub js_column: usize,
+    pub js_line_start: usize,
+}
+
+impl Position {
+    pub(crate) const KEYS: [&'static str; 5] = ["line", "column", "js_line", "js_column", "js_line_start"];
+
+    pub(crate) fn get(self, key: usize) -> usize {
+        [self.line, self.column, self.js_line, self.js_column, self.js_line_start][key]
     }
 }
 
@@ -785,10 +824,11 @@ impl Scope<'_> {
                 };
                 self.note(name.span, Resolved::Function("walk"));
                 let roots = self.compile(&args[0], errors)?;
+                let depth = self.params.len() as u16;
                 let mut inner = self.clone();
                 inner.params.push(param.text.clone());
                 let body = inner.compile(body, errors)?;
-                CExpr::Walk(Box::new(roots), Box::new(body))
+                CExpr::Walk(Box::new(roots), depth, Box::new(body))
             }
             ExprKind::Call(name, args) if args.last().is_some_and(|arg| matches!(arg.kind, ExprKind::Lambda(..))) => {
                 let Some((fname, each)) = Each::named(&name.text) else {
@@ -996,7 +1036,7 @@ impl Scope<'_> {
                 let resolve = |name: &str| self.grammar.pure_pat(name);
                 if is_decidable(pat, &resolve) {
                     match Dfa::whole(pat, &resolve) {
-                        Ok(dfa) => return Some(CExpr::TestDfa(Box::new(value), Box::new(dfa))),
+                        Ok(dfa) => return Some(CExpr::TestDfa(Box::new(value), std::sync::Arc::new(dfa))),
                         Err(err) => {
                             errors.push(ConfigError::new(e.span, err));
                             return None;
@@ -1007,7 +1047,7 @@ impl Scope<'_> {
                     self.grammar.matchers.iter().enumerate().map(|(i, m)| (m.name.clone(), i as u32)).collect();
                 // Labels inside a test pattern are never read; intern them privately.
                 match compile(pat, &names, &mut Labels::default()) {
-                    Ok(prog) => CExpr::Test(Box::new(value), Box::new(prog)),
+                    Ok(prog) => CExpr::Test(Box::new(value), std::sync::Arc::new(prog)),
                     Err(err) => {
                         errors.push(ConfigError::new(e.span, err));
                         return None;
@@ -1419,6 +1459,22 @@ fn js_line_starts(src: &str) -> Vec<usize> {
     starts
 }
 
+impl Ctx<'_> {
+    /// `position(offset)`, the offset clamped into the file and back to a
+    /// character boundary.
+    pub(crate) fn position_at(&self, offset: f64) -> Position {
+        let mut at = (offset.max(0.0) as usize).min(self.source.len());
+        while !self.source.is_char_boundary(at) {
+            at -= 1;
+        }
+        let (line, column) = self.lines.line_col(self.source, at);
+        let starts = self.memo.js_lines.get_or_init(|| js_line_starts(self.source));
+        let js_line = starts.partition_point(|&s| s <= at);
+        let js_column = self.source[starts[js_line - 1]..at].encode_utf16().count();
+        Position { line: line + 1, column: column + 1, js_line, js_column: js_column + 1, js_line_start: starts[js_line - 1] }
+    }
+}
+
 fn arity(f: &Function) -> String {
     if f.min == f.max {
         f.min.to_string()
@@ -1463,6 +1519,14 @@ impl<'a> Ctx<'a> {
     /// A rule's `each` slot, including its unbound placeholder during guards.
     pub(crate) fn with_rule_item<T>(&self, item: Value<'a>, run: impl FnOnce() -> T) -> T {
         self.with_params(&mut [item], run)
+    }
+
+    /// Replaces the item bound by the innermost [`Self::with_rule_item`].
+    pub(crate) fn set_rule_item(&self, item: Value<'a>) {
+        let base = self.memo.param_base.get();
+        if let Some(slot) = self.memo.params.borrow_mut().get_mut(base) {
+            *slot = item;
+        }
     }
 
     /// `f` without the parameters bound around it: attributes and `let`s
@@ -1864,38 +1928,11 @@ impl<'a> Ctx<'a> {
                 None => Value::Null,
             },
             CExpr::Position(offset) => {
-                let mut at = (self.eval(offset)?.num()?.max(0.0) as usize).min(self.source.len());
-                while !self.source.is_char_boundary(at) {
-                    at -= 1;
-                }
-                let (line, column) = self.lines.line_col(self.source, at);
-                let starts = self.memo.js_lines.get_or_init(|| js_line_starts(self.source));
-                let js_line = starts.partition_point(|&s| s <= at);
-                let js_column = self.source[starts[js_line - 1]..at].encode_utf16().count();
-                Value::record(vec![
-                    ("line".into(), Value::from(line + 1)),
-                    ("column".into(), Value::from(column + 1)),
-                    ("js_line".into(), Value::from(js_line)),
-                    ("js_column".into(), Value::from(js_column + 1)),
-                    ("js_line_start".into(), Value::from(starts[js_line - 1])),
-                ])
+                let at = self.position_at(self.eval(offset)?.num()?);
+                Value::record(Position::KEYS.iter().enumerate().map(|(key, name)| ((*name).into(), Value::from(at.get(key)))).collect::<Vec<_>>())
             }
-            CExpr::Descendants(sel) => {
-                let mut found = Vec::new();
-                let mut stack: Vec<u32> = self.tree.node(self.node).children.iter().map(|e| e.node).collect();
-                while let Some(id) = stack.pop() {
-                    let n = self.tree.node(id);
-                    if n.matcher == ROOT {
-                        continue;
-                    }
-                    if sel.matches(self.grammar, self.tree, id) {
-                        found.push((n.start, std::cmp::Reverse(n.end), id));
-                    }
-                    stack.extend(n.children.iter().map(|e| e.node));
-                }
-                found.sort_unstable();
-                Value::list(found.into_iter().map(|(_, _, id)| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
-            }
+            CExpr::Descendants(sel) => Value::list(sel.descendants(self.grammar, self.tree, self.node).into_iter()
+                .map(|id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect()),
             CExpr::NodeAt(offset) => {
                 let at = self.eval(offset)?;
                 match at {
@@ -1919,7 +1956,7 @@ impl<'a> Ctx<'a> {
             },
             CExpr::Containing(sel) => self.containing(sel),
             CExpr::Overlapping(sel, range) => self.overlapping(sel, range.as_deref())?,
-            CExpr::Walk(roots, next) => {
+            CExpr::Walk(roots, _, next) => {
                 let mut seen = std::collections::HashSet::new();
                 let mut queue: std::collections::VecDeque<Value<'a>> = self.eval(roots)?.items().into();
                 let mut out = Vec::new();

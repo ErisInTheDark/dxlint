@@ -256,7 +256,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let mut by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>> = Default::default();
     let mut by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>> = Default::default();
     let mut by_lang = Vec::new();
-    for (i, f) in rules.iter().enumerate() {
+    for (i, f) in rules.iter().enumerate().filter(|(_, f)| !f.never_reports()) {
         for &target in &f.targets {
             match target {
                 // Rules on a matcher also see its specialisations.
@@ -873,10 +873,17 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
         when,
         node_when_vm: Vec::new(),
         when_vm: Vec::new(),
+        each_vm: None,
+        fix_when_vm: None,
+        fix_vm: None,
+        fix_at_vm: None,
+        report_at_vm: None,
+        locals_vm: Vec::new(),
         locals,
         message,
         message_file: def.message.as_ref().map_or(def.name.span.file, |message| message.span.file),
         message_plan: None,
+        message_vm: None,
         fix,
         fix_when,
         fix_at,

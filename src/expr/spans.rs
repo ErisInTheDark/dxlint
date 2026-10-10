@@ -106,30 +106,42 @@ impl<'a> Ctx<'a> {
         spans
     }
 
-    pub(super) fn containing(&self, sel: &NodeSel) -> Value<'a> {
+    /// `containing(sel)` on this node: the innermost selected node holding it.
+    pub(crate) fn containing_id(&self, sel: &NodeSel) -> Option<u32> {
         let spans = self.layer_spans(sel);
         let node = self.tree.node(self.node);
-        match spans.containing(node.start, node.end, self.node, |a, b| self.is_ancestor(a, b)) {
-            Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
-            None => Value::Null,
-        }
+        spans.containing(node.start, node.end, self.node, |a, b| self.is_ancestor(a, b))
     }
 
-    pub(super) fn overlapping(&self, sel: &NodeSel, range: Option<&(CExpr, CExpr)>) -> Result<Value<'a>, String> {
-        let spans = self.layer_spans(sel);
+    /// `overlapping(sel, start, end)` from this node, as clamped offsets
+    /// (`None`: this node's span).
+    pub(crate) fn overlapping_ids(&self, sel: &NodeSel, range: Option<(f64, f64)>) -> Vec<u32> {
         let (start, end) = match range {
-            Some(range) => {
-                // Keep numeric conversion and clamping at the expression boundary.
+            Some((start, end)) => {
                 let len = self.source.len() as f64;
-                let at = |e: &CExpr| self.eval(e).and_then(|v| v.num()).map(|n| n.clamp(0.0, len) as u32);
-                (at(&range.0)?, at(&range.1)?)
+                (start.clamp(0.0, len) as u32, end.clamp(0.0, len) as u32)
             }
             None => {
                 let node = self.tree.node(self.node);
                 (node.start, node.end)
             }
         };
-        Ok(Value::list(spans.overlapping(start, end, self.node).into_iter()
+        self.layer_spans(sel).overlapping(start, end, self.node)
+    }
+
+    pub(super) fn containing(&self, sel: &NodeSel) -> Value<'a> {
+        match self.containing_id(sel) {
+            Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
+            None => Value::Null,
+        }
+    }
+
+    pub(super) fn overlapping(&self, sel: &NodeSel, range: Option<&(CExpr, CExpr)>) -> Result<Value<'a>, String> {
+        let range = match range {
+            Some((from, to)) => Some((self.eval(from)?.num()?, self.eval(to)?.num()?)),
+            None => None,
+        };
+        Ok(Value::list(self.overlapping_ids(sel, range).into_iter()
             .map(|id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect()))
     }
 }

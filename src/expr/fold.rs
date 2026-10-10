@@ -26,7 +26,7 @@ pub(super) fn bind(value: CExpr, depth: u16, mut body: CExpr) -> CExpr {
                 *expr = value.take().expect("one binding use");
                 return;
             }
-            CExpr::Param(i) | CExpr::Bind(_, i, _) if *i > depth => *i -= 1,
+            CExpr::Param(i) | CExpr::Bind(_, i, _) | CExpr::Walk(_, i, _) if *i > depth => *i -= 1,
             CExpr::Each(stage) if stage.depth > depth => stage.depth -= 1,
             _ => {}
         }
@@ -91,7 +91,7 @@ mod tests {
         let call = |name, args| CExpr::Call(functions::lookup(name).unwrap(), args);
         let field = CExpr::OnField(0, Box::new(CExpr::Builtin(crate::expr::Builtin::EndOffset)));
         let last = bind(field, 0, call("last", vec![CExpr::Param(0)]));
-        assert!(crate::vm::lower(&last, &[]).is_ok(), "a field projection still coerces to its whole list");
+        assert!(!matches!(crate::vm::lower(&last, &[], &mut crate::vm::Values::default()), crate::vm::VExpr::Interp { .. }), "a field projection still coerces to its whole list");
         let indexed = CExpr::Each(Box::new(Stage {
             kind: Each::Map, depth: 1, arity: 2, input: CExpr::Param(0), args: vec![],
             body: CExpr::Binary(crate::config::ast::BinOp::Add, Box::new(CExpr::Param(1)), Box::new(CExpr::Param(2))),

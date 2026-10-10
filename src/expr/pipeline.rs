@@ -2,7 +2,7 @@
 
 use super::{CExpr, Each, Value};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Stage {
     pub kind: Each,
     pub depth: u16,

@@ -86,7 +86,7 @@ impl<'a> Ctx<'a> {
                 Some(IndentHit { rule: Some(i), node, extra, .. }) => {
                     let rule = &self.indents[i];
                     let levels = match &rule.by {
-                        Some(by) => Ctx { node, ..*self }.eval(by)?.num()?,
+                        Some(by) => Ctx::indent_eval(&Ctx { node, ..*self }, by, self.indents.lowered_by(i))?.num()?,
                         None => 1.0,
                     };
                     Value::Num(extra + if rule.dedent { -levels } else { levels })
