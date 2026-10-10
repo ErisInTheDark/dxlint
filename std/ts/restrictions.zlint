@@ -418,13 +418,11 @@ in ts_program let restriction_classes {
   filter (item) item.max_classes_counted == true
   count
 }
-fn restriction_statement_total(local_count, child_totals) = (local_count.nonempty ?? 0) + sum(child_totals)
 fn restriction_branch_total(branch, extra, child_totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(child_totals)
 in ts_node {
   let restriction_metric_boundary is (ts_function_like, ts_static_block) || is ts_class_property.init
   let restriction_flow_branch is restriction_flow_control || (if is ts_parameter then restriction_parameter_branch == true else if is ts_try then restriction_catch_branch == true else if is ts_assignment then restriction_assignment_branch == true else if is (ts_member, ts_index, ts_call) then restriction_optional_branch == true else false)
-  let restriction_subtree_statements restriction_statement_total(restriction_local_statements, children.restriction_statement_contribution)
-  let restriction_statement_contribution if restriction_metric_boundary then 0 else restriction_statement_total(restriction_local_statements, children.restriction_statement_contribution)
+  let restriction_statement_owner if parent.node == null then null else if parent.restriction_metric_boundary then parent.node else parent.restriction_statement_owner
   let restriction_subtree_classic restriction_branch_total(restriction_flow_branch, restriction_case_branch, children.restriction_classic_contribution)
   let restriction_classic_contribution if restriction_metric_boundary then 0 else restriction_branch_total(restriction_flow_branch, restriction_case_branch, children.restriction_classic_contribution)
   let restriction_subtree_modified restriction_branch_total(restriction_flow_branch, is ts_switch, children.restriction_modified_contribution)
@@ -450,7 +448,16 @@ in restriction_parameter_function rule max-params {
   report at if is ts_function_type then offset else function_warning_site(node)
   warn "{@restriction_function_name} has too many parameters ({amount}). Maximum allowed is {max}."
 }
-in ts_function_like let max_statements_checked true
+in ts_function_like {
+  let restriction_subtree_statements {
+    value owner: node
+    value descendants(ts_block)
+    filter (block) !block.restriction_metric_boundary && block.restriction_statement_owner == owner
+    map (block) block.restriction_local_statements
+    sum
+  }
+  let max_statements_checked true
+}
 in ts_function_like rule max-statements {
   option max int(0..) = 10 "maximum statements"
   when restriction_subtree_statements > max
