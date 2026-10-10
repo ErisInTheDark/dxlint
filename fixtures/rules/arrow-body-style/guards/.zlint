@@ -1,0 +1,2 @@
+import .ts
+rule arrow-body-style { set mode "never" }
