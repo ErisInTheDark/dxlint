@@ -27,7 +27,8 @@ in ts_return let branch_exit true
 in ts_if let branch_exit consequent.return_end == true && alternate.return_end == true
 in ts_return, ts_if let returning_branch branch_exit == true
 in ts_block let returning_branch any([] body.branch_exit, r => r == true)
-in ts_if let chain_else_offset if consequent.returning_branch != true || alternate == null then null else if alternate is ts_if then alternate.chain_else_offset else alternate.offset
+in ts_if let chain_else_node if consequent.returning_branch != true || alternate == null then null else if alternate is ts_if then alternate.chain_else_node else alternate.node
+in ts_if let chain_else_offset chain_else_node.offset
 
 in ts_unary let negative_test operator == "!"
 in ts_binary let negative_test operator == "!=" || operator == "!=="
@@ -488,6 +489,54 @@ in ts_assignment rule no-return-assign {
   warn if return_info.arrow then "Arrow function should not return assignment." else "Return statement should not contain assignment."
 }
 
+fn suggestion_else_within(node, owner) = { value node; walk (current) current.parent.node; any (current) current == owner }
+fn suggestion_else_scope_safe(body, destination, declarations) = body not ts_function && (body not ts_block || {
+  value moved: { value declarations; filter (item) item.scope.node == body }
+  value names: { value moved; map (item) item.text }
+  value collision: {
+    value declarations
+    any (item) contains(names, item.text) && (item.scope.node == destination
+      || item.declaration_kind == "var" && destination.offset <= item.offset && item.end_offset <= destination.end_offset)
+  }
+  value identifiers: overlapping(ts_identifier, destination.offset, destination.end_offset)
+  value captured: {
+    value identifiers
+    any (item) contains(names, item.text) && item.scope != null
+      && !(body.offset <= item.offset && item.end_offset <= body.end_offset)
+      && item.declaration.node != item
+      && (item.declaration == null || !suggestion_else_within(item.declaration.scope.node, destination))
+  }
+  # Drop escape guard once native bindings decode identifier names.
+  value uncertain: any(moved, item => item.declaration_kind == "function" || contains(item.text, "\\"))
+    || count(moved) > 0 && any(identifiers, item => contains(item.text, "\\"))
+  value !collision && !captured && !uncertain
+})
+fn suggestion_else_fix(body, declarations) = {
+  value conditional: body.parent.node
+  value consequent: conditional.consequent.node
+  value destination: if conditional.parent is ts_case then conditional.parent.parent.node
+    else if conditional.parent is ts_block && conditional.parent.parent is ts_function_like then conditional.parent.parent.node
+    else conditional.parent.node
+  value owner: {
+    value conditional
+    walk (current) if current is (ts_function_like, ts_program) then null else current.parent.node
+    last
+  }
+  value first_statement: first(body.body.nodes)
+  value last_statement: last(body.body.nodes)
+  value before: consequent.last_token
+  value first_content: if body is ts_block then first_statement.first_token ?? body.last_token else body.first_token
+  value last_content: if body is ts_block then last_statement.last_token ?? body.first_token else body.last_token
+  value after: body.token_neighbours.after
+  value hazard_tokens: ["(", "[", "/", "+", "`", "-"]
+  value before_hazard: consequent not ts_block && before.text != ";" && any(hazard_tokens, token => starts_with(first_content.text, token))
+  value after_hazard: last_content.text != ";" && after != null && (any(hazard_tokens, token => starts_with(after.text, token))
+    || position(after.start).js_line == position(last_content.start).js_line && after.text != "}}")
+  value content: if body is ts_block then byte_slice(body.text, 1, body.end_offset - body.offset - 1) else body.text
+  value replacement: byte_slice(owner.text, 0, body.token_neighbours.before.start - owner.offset) content byte_slice(owner.text, body.end_offset - owner.offset)
+  value if before_hazard || after_hazard || !suggestion_else_scope_safe(body, destination, declarations) || !expression_fix_retains_comments(owner, replacement) then null
+    else {start: owner.offset, end: owner.end_offset, text: replacement}
+}
 in ts_if rule no-else-return {
   option allowElseIf boolean = true "allow returning else-if branches"
   when parent is (ts_program, ts_block, ts_case) && consequent.returning_branch == true && alternate != null
@@ -495,6 +544,9 @@ in ts_if rule no-else-return {
   when else_report != null
   report at else_report
   warn "Unnecessary 'else' after 'return'."
+  let body if allowElseIf then chain_else_node else alternate.node
+  let replacement suggestion_else_fix(body, ts_program.binding_declarations)
+  fix at replacement ?? node if replacement != null as replacement.text
 }
 
 fn arrow_body_expression_fix(source, n) = if n.body.single_return != true || first(n.body.body.nodes).argument == null then null else {

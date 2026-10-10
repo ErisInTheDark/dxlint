@@ -1,0 +1,4 @@
+file.js:1:46-1:46 no-else-return#0
+file.js:1:81-1:81 no-else-return#0
+file.js:2:57-2:57 no-else-return#0
+file.js:2:74-2:74 no-else-return#0
