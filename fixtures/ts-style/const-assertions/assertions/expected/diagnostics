@@ -1,0 +1,9 @@
+input.ts:1:18-1:21 prefer-as-const#0
+input.ts:1:38-1:39 prefer-as-const#0
+input.ts:2:12-2:15 prefer-as-const#0
+input.ts:3:12-3:13 prefer-as-const#0
+input.ts:4:20-4:23 prefer-as-const#0
+input.ts:5:29-5:32 prefer-as-const#0
+input.ts:6:24-6:27 prefer-as-const#0
+input.ts:7:26-7:29 prefer-as-const#0
+input.ts:8:23-8:31 prefer-as-const#0

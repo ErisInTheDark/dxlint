@@ -3,6 +3,21 @@ import .ts/expression-fixes
 
 define {
 
+in ts_number, ts_string, ts_boolean, ts_bigint, ts_null, ts_regex let raw_literal_expression text
+in ts_parenthesized let raw_literal_expression expression.raw_literal_expression
+in ts_literal_type let literal_type_text value
+in ts_as, ts_type_assertion let use_const_assertion type.literal_type_text != null && type.literal_type_text == expression.raw_literal_expression
+in ts_declarator, ts_class_property let use_const_annotation type.literal_type_text != null && type.literal_type_text == init.raw_literal_expression
+in ts_as.type, ts_type_assertion.type rule prefer-as-const {
+  when parent.use_const_assertion
+  warn "Expected a `const` instead of a literal type assertion."
+  fix at node as "const"
+}
+in ts_declarator.type, ts_class_property.type rule prefer-as-const:annotation {
+  when parent.use_const_annotation
+  warn "Expected a `const` assertion instead of a literal type annotation."
+}
+
 in ts_type_assertion let assertion_style_operand expression.node
 in ts_type_assertion let assertion_style_type type.text
 fn assertion_style_as(source, n) = {
