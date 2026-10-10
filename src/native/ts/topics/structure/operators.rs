@@ -6,29 +6,6 @@ pub(super) fn new_args(s: &Syntax, node: u32) -> bool {
     s.get(node, F::Callee).is_some_and(|callee| s.tree.node(callee).end < s.tree.node(node).end)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::precedence;
-    use crate::engine::tests::with_native_file;
-
-    #[test]
-    fn assertions_bind_like_their_expression_operators() {
-        with_native_file(
-            "const a = /*@*/x as T; const b = /*@*/x satisfies T; \
-             const c = /*@*/x < y; const d = /*@*/x + y; \
-             const e = /*@*/!x; const f = /*@*/<T>x;",
-            |file, nodes| {
-                let ranks: Vec<_> = nodes.iter().map(|&node| precedence(&file.syntax, node)).collect();
-                assert_eq!(ranks[0], ranks[2]);
-                assert_eq!(ranks[1], ranks[2]);
-                assert!(ranks[0] < ranks[3]);
-                assert!(ranks[0] < ranks[4]);
-                assert_eq!(ranks[5], ranks[4]);
-            },
-        );
-    }
-}
-
 pub(super) fn precedence(s: &Syntax, node: u32) -> u8 {
     match s.kind(node) {
         Some(K::Sequence) => 0,
@@ -52,5 +29,28 @@ pub(super) fn precedence(s: &Syntax, node: u32) -> u8 {
         Some(K::Call | K::New | K::TaggedTemplate | K::ImportCall) => 19,
         Some(K::Member | K::Index | K::NonNull | K::ArrayType) => 20,
         _ => 21,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::precedence;
+    use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn assertions_bind_like_their_expression_operators() {
+        with_native_file(
+            "const a = /*@*/x as T; const b = /*@*/x satisfies T; \
+             const c = /*@*/x < y; const d = /*@*/x + y; \
+             const e = /*@*/!x; const f = /*@*/<T>x;",
+            |file, nodes| {
+                let ranks: Vec<_> = nodes.iter().map(|&node| precedence(&file.syntax, node)).collect();
+                assert_eq!(ranks[0], ranks[2]);
+                assert_eq!(ranks[1], ranks[2]);
+                assert!(ranks[0] < ranks[3]);
+                assert!(ranks[0] < ranks[4]);
+                assert_eq!(ranks[5], ranks[4]);
+            },
+        );
     }
 }
