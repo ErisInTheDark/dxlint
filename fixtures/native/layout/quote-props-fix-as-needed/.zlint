@@ -1,0 +1,2 @@
+import .ts
+rule quote-props { set style "as-needed"; set keywords true; set numbers true }

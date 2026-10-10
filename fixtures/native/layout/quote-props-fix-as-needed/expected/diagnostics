@@ -1,0 +1,7 @@
+input.ts:1:18-1:18 quote-props#1
+input.ts:1:28-1:28 quote-props#1
+input.ts:1:43-1:43 quote-props#2
+input.ts:1:50-1:50 quote-props#3
+input.ts:2:19-2:19 quote-props#1
+input.ts:3:15-3:15 quote-props#1
+input.ts:4:32-4:32 quote-props#1

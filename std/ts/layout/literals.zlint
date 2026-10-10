@@ -1,6 +1,7 @@
 # .ts/layout/literals: literals layout rules.
 
 import .ts/layout/shared
+import .ts/import-attributes
 
 define {
 
@@ -38,6 +39,20 @@ in quoted_literals rule quotes {
   warn "Strings must use {if style == 'single' then 'singlequote' else if style == 'double' then 'doublequote' else 'backtick'}."
 }
 
+group layout_property_quote_owner ts_property, ts_pattern_property, ts_property_signature, ts_method_signature, ts_enum_member, ts_import_attribute
+fn layout_property_quote_key(site, current) = {
+  value owner: if current is layout_property_quote_owner && current.offset == site.offset then current else {
+    value overlapping(layout_property_quote_owner, site.offset, site.offset + 1)
+    filter (item) item.offset == site.offset
+    first
+  }
+  value if owner is ts_enum_member then owner.name.node else owner.key.node
+}
+fn layout_property_quote_text(site, current) = {
+  value key: layout_property_quote_key(site, current)
+  value name: if site.quoted then site.name else key.parent.static_name ?? site.name
+  value if site.quoted then name else "\"{name}\""
+}
 in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_object, ts_interface, ts_type_literal, ts_enum, ts_import, ts_export rule quote-props {
   option style "always" | "as-needed" | "consistent" | "consistent-as-needed" = "always" "property quoting policy"
   option keywords boolean = false "require quotes on reserved words"
@@ -49,6 +64,7 @@ in ts_property, ts_pattern_property, ts_property_signature, ts_enum_member, ts_o
   each property_site in filter(property_quote_sites, s => s.group == (style == "consistent" || style == "consistent-as-needed"))
   when if style == "always" then !property_site.quoted else if style == "as-needed" then (if property_site.quoted then unnecessary && property_site.redundant && !(numbers && property_site.redundant_number) && !(keywords && property_site.keyword) else keywords && property_site.keyword || numbers && property_site.numeric) else if style == "consistent-as-needed" && property_any_quoted && !property_necessary then property_site.quoted else !property_site.quoted && (property_any_quoted || style == "consistent-as-needed" && keywords && property_keyword != null)
   report at property_site.offset
+  fix at layout_property_quote_key(property_site, node) as layout_property_quote_text(property_site, node)
   warn if style == "always" then "Unquoted property '{property_site.name}' found." else if style == "as-needed" then (if property_site.quoted then "Unnecessarily quoted property '{property_site.name}' found." else if property_site.keyword then "Unquoted reserved word '{property_site.name}' used as key." else "Unquoted number literal '{property_site.name}' used as key.") else if style == "consistent-as-needed" && !property_necessary then "Properties shouldn't be quoted as all quotes are redundant." else if style == "consistent-as-needed" && keywords && property_keyword != null then "Properties should be quoted as '{property_keyword}' is a reserved word." else "Inconsistently quoted property '{property_site.name}' found."
 }
 
