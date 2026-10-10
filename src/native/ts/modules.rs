@@ -80,6 +80,7 @@ struct Config {
     /// Boolean `compilerOptions` (`strict`, `noImplicitThis`, ...), the
     /// nearest `extends` level winning.
     flags: HashMap<String, bool>,
+    node_module: Option<bool>,
 }
 
 /// Options `strict` turns on unless they are set themselves.
@@ -206,7 +207,7 @@ impl Project {
     /// may differ from the disk's).
     pub fn summary_for(&self, path: &Path, text: &str, view: &impl super::view::View, root: u32) -> (FileId, Summary) {
         let id = self.file_id(path);
-        let dts = path.to_string_lossy().ends_with(".d.ts");
+        let dts = [".d.ts", ".d.mts", ".d.cts"].iter().any(|suffix| path.to_string_lossy().ends_with(suffix));
         let s: Summary = Arc::new(summarise(view, root, dts));
         let known = Known { summary: Some(s.clone()), content: reads::hash_bytes(text.as_bytes()), fingerprint: s.fingerprint() };
         if let Ok(mut map) = self.summaries.write() {
@@ -565,6 +566,32 @@ impl Project {
         path.parent().and_then(|d| self.config_for(d))?.flags.get(name).copied()
     }
 
+    /// Node-format dynamic imports wrap CommonJS values in a namespace.
+    pub fn dynamic_import_commonjs(&self, importer: FileId, target: ModRef) -> bool {
+        let importer = self.path(importer);
+        if !importer.parent().and_then(|dir| self.config_for(dir)).is_some_and(|config| config.node_module == Some(true)) {
+            return false;
+        }
+        let ModRef::File(file) = target else { return false };
+        let path = self.path(file);
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("cts") => return true,
+            Some("mts") => return false,
+            _ => {}
+        }
+        let mut dir = path.parent();
+        while let Some(current) = dir {
+            if let Some(text) = reads::read(&current.join("package.json")) {
+                if let Ok(package) = serde_json::from_str::<serde_json::Value>(&text) {
+                    return package.get("type").and_then(|value| value.as_str()) != Some("module");
+                }
+                return true;
+            }
+            dir = current.parent();
+        }
+        true
+    }
+
     /// The global scope of the tsconfig governing `file`.
     pub fn globals(&self, file: FileId) -> Arc<Globals> {
         let path = self.path(file);
@@ -697,7 +724,7 @@ impl ModuleAt {
 fn summary_of(path: &Path, src: &str) -> Option<Summary> {
     let jsx = super::reads(path).unwrap_or(false);
     let parsed = super::parse(src, jsx).ok()?;
-    let dts = path.to_string_lossy().ends_with(".d.ts");
+    let dts = [".d.ts", ".d.mts", ".d.cts"].iter().any(|suffix| path.to_string_lossy().ends_with(suffix));
     Some(Arc::new(summarise(&Raw { src, nodes: &parsed.nodes }, parsed.root, dts)))
 }
 
@@ -755,8 +782,10 @@ fn with_extension(base: &Path) -> Option<PathBuf> {
         return Some(base.to_path_buf());
     }
     // `./x.js` in TypeScript source means `./x.ts`.
+    let substitutions: &[&str] = if s.ends_with(".mjs") { &[".mts", ".d.mts"] }
+        else if s.ends_with(".cjs") { &[".cts", ".d.cts"] } else { &[".ts", ".tsx", ".d.ts"] };
     if let Some(stem) = s.strip_suffix(".js").or_else(|| s.strip_suffix(".mjs")).or_else(|| s.strip_suffix(".cjs")) {
-        for ext in [".ts", ".tsx", ".mts", ".cts", ".d.ts"] {
+        for ext in substitutions {
             let p = PathBuf::from(format!("{stem}{ext}"));
             if reads::is_file(&p) {
                 return Some(p);
@@ -799,6 +828,10 @@ fn load_config(file: &Path) -> Option<Config> {
             }
         }
         if let Some(o) = json.get("compilerOptions") {
+            if config.node_module.is_none() {
+                config.node_module = o.get("module").and_then(|value| value.as_str())
+                    .map(|mode| matches!(mode.to_ascii_lowercase().as_str(), "node16" | "node18" | "node20" | "nodenext"));
+            }
             for (name, value) in o.as_object().into_iter().flatten() {
                 if let Some(on) = value.as_bool() {
                     config.flags.entry(name.clone()).or_insert(on);

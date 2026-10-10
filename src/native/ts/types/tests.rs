@@ -146,6 +146,143 @@ fn ambient_dynamic_imports_respect_synthetic_default_policy_and_real_exports() {
 }
 
 #[test]
+fn node_dynamic_imports_keep_commonjs_defaults_distinct_from_real_exports() {
+    let mut failures = Vec::new();
+    for (index, (module, extension, package, enabled, synthetic)) in [
+        ("node16", "ts", None, true, true),
+        ("node16", "ts", Some("module"), true, false),
+        ("node16", "ts", Some("commonjs"), true, true),
+        ("node16", "cts", Some("module"), true, true),
+        ("node16", "mts", None, true, false),
+        ("nodenext", "ts", None, true, true),
+        ("node18", "ts", None, true, true),
+        ("node20", "ts", None, true, true),
+        ("esnext", "ts", None, true, false),
+        ("node16", "ts", None, false, false),
+    ].into_iter().enumerate() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("target/node-import-owner-{index}"));
+        let config = format!("{{\"compilerOptions\":{{\"lib\":[\"fixture\"],\"types\":[],\"module\":\"{module}\",\"allowSyntheticDefaultImports\":{enabled}}}}}");
+        let package = package.map(|kind| format!("{{\"type\":\"{kind}\"}}"));
+        let mut inputs = vec![
+            ("tsconfig.json".to_string(), config),
+            ("node_modules/typescript/lib/lib.fixture.d.ts".to_string(), "interface Promise<T> { then(callback: (value: T) => unknown): unknown }".to_string()),
+            (format!("base.{extension}"), "/** @deprecated */ export default { value: 1 }; export const named: string = ''; export const __esModule = true;".to_string()),
+        ];
+        if extension != "ts" { inputs.push(("base.ts".to_string(), "export default { value: false };".to_string())); }
+        if let Some(package) = package { inputs.push(("package.json".to_string(), package)); }
+        let _buffers: Vec<_> = inputs.iter().map(|(name, text)| {
+            let path = dir.join(name);
+            reads::set_buffer(&path, text);
+            Buffer(path)
+        }).collect();
+        let source = "export {};";
+        let project = Project::default();
+        let parsed = crate::native::ts::parse(source, false).unwrap();
+        let (id, summary) = project.summary_for(&dir.join("main.ts"), source, &Raw { src: source, nodes: &parsed.nodes }, parsed.root);
+        let checker = Checker::new(&project, id, summary);
+        let specifier = match extension { "cts" => "./base.cjs", "mts" => "./base.mjs", _ => "./base.js" };
+        let namespace = checker.awaited(&checker.import_type(specifier, &Env::file(id)));
+        let default = checker.member(&namespace, "default");
+        let value = if synthetic { checker.member(&checker.member(&default, "default"), "value") } else { checker.member(&default, "value") };
+        let named = checker.member(&namespace, "named");
+        if checker.equivalent(&value.clone().widen(), &Ty::Prim("number")) != Some(true)
+            || checker.equivalent(&named, &Ty::Prim("string")) != Some(true)
+            || synthetic && !checker.member(&default, "value").is_opaque() {
+            failures.push((module, extension, enabled, namespace, default, value));
+        }
+    }
+    assert!(failures.is_empty(), "CommonJS import namespace contracts lost: {failures:?}");
+}
+
+#[test]
+fn dynamic_import_format_tracks_inherited_config_and_package_changes() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/node-import-reads");
+    let inputs = [
+        ("base-config.json", r#"{"compilerOptions":{"module":"node16","lib":["fixture"],"types":[]}}"#),
+        ("tsconfig.json", r#"{"extends":"./base-config.json"}"#),
+        ("package.json", r#"{"type":"commonjs"}"#),
+        ("node_modules/typescript/lib/lib.fixture.d.ts", "interface Promise<T> { then(callback: (value: T) => unknown): unknown }"),
+        ("child/base.ts", "export default { value: 1 };"),
+    ];
+    let _buffers: Vec<_> = inputs.iter().map(|(name, text)| {
+        let path = dir.join(name);
+        reads::set_buffer(&path, text);
+        Buffer(path)
+    }).collect();
+    let source = "export {};";
+    let project = Project::default();
+    let parsed = crate::native::ts::parse(source, false).unwrap();
+    let (id, summary) = project.summary_for(&dir.join("child/main.ts"), source, &Raw { src: source, nodes: &parsed.nodes }, parsed.root);
+    let checker = Checker::new(&project, id, summary);
+    let query = || checker.member(&checker.awaited(&checker.import_type("./base.js", &Env::file(id))), "default");
+    let (commonjs, dependencies) = reads::track(query);
+    let real_default = checker.member(&commonjs, "default");
+    assert_eq!(checker.equivalent(&checker.member(&real_default, "value").widen(), &Ty::Prim("number")), Some(true), "{commonjs:?}");
+    for name in ["base-config.json", "package.json", "child/package.json"] {
+        assert!(dependencies.any(&mut |dependency| dependency.path() == dir.join(name)), "format input not recorded: {name}");
+    }
+    let package = dir.join("package.json");
+    reads::set_buffer(&package, r#"{"type":"module"}"#);
+    assert!(dependencies.any(&mut |dependency| !dependency.holds(|_| 0)), "package edit did not invalidate the cached lint");
+    project.invalidate(&[package]);
+    assert_eq!(checker.equivalent(&checker.member(&query(), "value").widen(), &Ty::Prim("number")), Some(true));
+    let config = dir.join("base-config.json");
+    reads::set_buffer(&config, r#"{"compilerOptions":{"module":"esnext","lib":["fixture"],"types":[]}}"#);
+    project.invalidate(&[config]);
+    reads::set_buffer(&dir.join("package.json"), r#"{"type":"commonjs"}"#);
+    assert_eq!(checker.equivalent(&checker.member(&query(), "value").widen(), &Ty::Prim("number")), Some(true));
+}
+
+#[test]
+fn node_export_assignments_keep_base_properties_without_inventing_disabled_defaults() {
+    let mut failures = Vec::new();
+    for enabled in [true, false] {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("target/node-import-assignment-{enabled}"));
+        let config = format!("{{\"compilerOptions\":{{\"module\":\"node16\",\"allowSyntheticDefaultImports\":{enabled},\"lib\":[\"fixture\"],\"types\":[]}}}}");
+        let inputs = [
+            ("tsconfig.json", config.as_str()),
+            ("node_modules/typescript/lib/lib.fixture.d.ts", "interface Promise<T> { then(callback: (value: T) => unknown): unknown }"),
+            ("base.cts", "const assigned = { /** @deprecated */ value: 1 }; export=assigned;"),
+            ("class.cts", "class Assigned { static value: number = 1; private static hidden: number = 1; static method(): void {} static get accessor(): number { return 1; } static set setter(value: number) {} } export=Assigned;"),
+        ];
+        let _buffers: Vec<_> = inputs.iter().map(|(name, text)| {
+            let path = dir.join(name);
+            reads::set_buffer(&path, text);
+            Buffer(path)
+        }).collect();
+        let source = "export {};";
+        let project = Project::default();
+        let parsed = crate::native::ts::parse(source, false).unwrap();
+        let (id, summary) = project.summary_for(&dir.join("main.ts"), source, &Raw { src: source, nodes: &parsed.nodes }, parsed.root);
+        let checker = Checker::new(&project, id, summary);
+        let namespace = checker.awaited(&checker.import_type("./base.cjs", &Env::file(id)));
+        let value = checker.member(&namespace, "value");
+        let default = checker.member(&namespace, "default");
+        let default_matches = if enabled {
+            checker.equivalent(&checker.member(&default, "value").widen(), &Ty::Prim("number")) == Some(true)
+                && !checker.member_resolution(&namespace, "default").declarations.iter().any(|declaration| declaration.member.doc.is_some())
+        } else { default.is_opaque() };
+        let metadata = checker.member_resolution(&namespace, "value");
+        if checker.equivalent(&value.widen(), &Ty::Prim("number")) != Some(true) || !default_matches
+            || !metadata.declarations.iter().any(|declaration| declaration.member.doc.is_some()) {
+            failures.push((enabled, namespace, default));
+        }
+        let namespace = checker.awaited(&checker.import_type("./class.cjs", &Env::file(id)));
+        let base = if enabled { checker.member(&namespace, "default") } else { namespace.clone() };
+        assert_eq!(checker.equivalent(&checker.member(&namespace, "value"), &Ty::Prim("number")), Some(true));
+        assert!(!checker.member(&base, "method").is_opaque());
+        assert_eq!(checker.equivalent(&checker.member(&base, "accessor"), &Ty::Prim("number")), Some(true));
+        assert_eq!(checker.equivalent(&checker.member(&base, "setter"), &Ty::Prim("number")), Some(true));
+        if enabled {
+            let copied: Vec<_> = ["hidden", "method", "accessor", "setter"].into_iter()
+                .filter(|name| !checker.member(&namespace, name).is_opaque()).collect();
+            assert!(copied.is_empty(), "synthetic namespace copied class properties: {copied:?}");
+        }
+    }
+    assert!(failures.is_empty(), "CommonJS export= value domain lost: {failures:?}");
+}
+
+#[test]
 fn import_aliases_preserve_namespace_and_generic_class_types() {
     let source = "namespace N { export class Box<T> { value: T; } } import Space = N; import Box = N.Box; type Direct = /*@*/N.Box<number>; type Through = /*@*/Space.Box<number>; type Alias = /*@*/Box<number>;";
     crate::engine::tests::with_native_file(source, |file, nodes| {

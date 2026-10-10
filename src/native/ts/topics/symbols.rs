@@ -164,15 +164,21 @@ fn metadata(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     });
     let mut declarations = Vec::new();
     let mut aliases = Vec::new();
+    let mut alias_target_declarations = Vec::new();
     let property = property(file, node);
     let name = property.as_ref().map_or_else(|| s.text(node).to_string(), |(_, name)| name.clone());
     if let Some((object, name)) = property {
         let object = match object {
             Ty::Module(module) => {
-                let resolved = file.project.export_resolution(module.0, &name);
-                declarations.extend(resolved.declarations.into_iter().filter_map(|d| declaration(ck, d)));
-                aliases.extend(resolved.aliases.iter().map(|a| alias(file, a)));
-                Ty::Unknown
+                alias_target_declarations.extend(ck.module_alias_target(module, &name).into_iter().filter_map(|d| declaration(ck, d)));
+                if let Some(raw) = module.declared_export(&name) {
+                    let resolved = file.project.export_resolution(raw, &name);
+                    if !resolved.declarations.is_empty() || !resolved.aliases.is_empty() {
+                        declarations.extend(resolved.declarations.into_iter().filter_map(|d| declaration(ck, d)));
+                        aliases.extend(resolved.aliases.iter().map(|a| alias(file, a)));
+                        Ty::Unknown
+                    } else { Ty::Module(module) }
+                } else { Ty::Module(module) }
             }
             Ty::Ns(symbol) => {
                 let is_enum = symbol.iter().any(|reference| ck.summary_of(reference.file).is_some_and(|summary| {
@@ -251,6 +257,7 @@ fn metadata(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         ("own_doc".into(), own_doc.map_or(Value::Null, Value::from)),
         ("declarations".into(), Value::list(declarations)),
         ("aliases".into(), Value::list(aliases)),
+        ("alias_target_declarations".into(), Value::list(alias_target_declarations)),
         ("selected_signature".into(), signature(file, node)),
     ])
 }

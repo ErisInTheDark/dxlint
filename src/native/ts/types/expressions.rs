@@ -6,17 +6,18 @@ use crate::native::ts::summary::Init;
 impl Checker<'_> {
     pub(crate) fn import_type(&self, specifier: &str, env: &Env) -> Ty {
         let Some(module) = self.project.resolve(env.file, specifier) else { return Ty::Unknown };
-        let namespace = Ty::Module(super::ModRefKey(module));
-        // Ambient CommonJS declarations may expose their namespace as a
-        // synthetic default. TypeScript 6 enables this unless explicitly off.
-        let namespace = if matches!(module, crate::native::ts::modules::ModRef::Ambient(..))
-            && self.project.compiler_flag(env.file, "allowSyntheticDefaultImports").unwrap_or(true)
+        let raw = super::ModuleNamespace::raw(module);
+        let node_commonjs = self.project.dynamic_import_commonjs(env.file, module);
+        let synthetic = self.project.compiler_flag(env.file, "allowSyntheticDefaultImports").unwrap_or(true);
+        let ambient = matches!(module, crate::native::ts::modules::ModRef::Ambient(..))
             && self.project.export(module, "default").is_empty()
-            && self.project.export(module, "__esModule").is_empty() {
-                Ty::Inter(vec![namespace.clone(), Ty::Struct(vec![super::StructProperty {
-                    name: "default".into(), ty: namespace, origin: None,
-                }].into())])
-            } else { namespace };
+            && self.project.export(module, "__esModule").is_empty();
+        let namespace = if synthetic && (node_commonjs || ambient) {
+            let view = super::ModuleNamespace { module, view: super::ModuleView::SyntheticDefault };
+            if matches!(self.module_base(view), Ty::Any) { Ty::Any } else { Ty::Module(view) }
+        } else if node_commonjs && !self.project.export(module, "=").is_empty() {
+            self.module_base(raw)
+        } else { Ty::Module(raw) };
         self.global_named("Promise", vec![namespace])
     }
 
@@ -128,7 +129,7 @@ impl Checker<'_> {
                     Ty::Ns(ref symbols) if self.is_enum(symbols) && index + 1 == tail.len() =>
                         return matches!(self.enum_member_type(symbols, name), Ty::EnumMember(_)),
                     Ty::Ns(symbols) => self.namespace_member(&symbols, name),
-                    Ty::Module(module) => self.module_member(module.0, name),
+                    Ty::Module(module) if module.declared_export(name).is_some() => self.module_member(module.module, name),
                     _ if index + 1 == tail.len() => {
                         let members = self.member_resolution(&object, name).declarations;
                         return !members.is_empty() && members.iter().all(|declaration| declaration.member.ty.is_none()

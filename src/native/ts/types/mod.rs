@@ -88,7 +88,7 @@ pub enum Ty {
     Class(Sym),
     /// A namespace or enum as a value.
     Ns(Sym),
-    Module(ModRefKey),
+    Module(ModuleNamespace),
     /// An unresolved type parameter.
     Param(Box<str>),
 }
@@ -156,7 +156,21 @@ impl FromIterator<Ty> for Tuple {
 
 /// A module as a value (`import * as m`).
 #[derive(Clone, Copy, Debug)]
-pub struct ModRefKey(pub ModRef);
+pub struct ModuleNamespace {
+    pub module: ModRef,
+    pub view: ModuleView,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModuleView { Raw, SyntheticDefault }
+
+impl ModuleNamespace {
+    pub fn raw(module: ModRef) -> Self { Self { module, view: ModuleView::Raw } }
+
+    pub fn declared_export(self, name: &str) -> Option<ModRef> {
+        (!(self.view == ModuleView::SyntheticDefault && name == "default")).then_some(self.module)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct BoundSignature {
@@ -541,6 +555,17 @@ impl<'p> Checker<'p> {
         self.namespace_member(&eq, name)
     }
 
+    pub(crate) fn module_alias_target(&self, module: ModuleNamespace, name: &str) -> Vec<DeclRef> {
+        if module.declared_export(name).is_some() { return Vec::new() }
+        self.follow(self.project.export(module.module, "="))
+    }
+
+    pub(super) fn module_base(&self, module: ModuleNamespace) -> Ty {
+        let assigned = self.project.export(module.module, "=");
+        if assigned.is_empty() { Ty::Module(ModuleNamespace::raw(module.module)) }
+        else { self.value_of(&assigned) }
+    }
+
     // ---- type syntax -------------------------------------------------------
 
     pub fn eval(&self, syn: &TypeSyn, env: &Env) -> Ty {
@@ -828,7 +853,7 @@ impl<'p> Checker<'p> {
                 Some(m) => {
                     let eq = self.project.export(m, "=");
                     if eq.is_empty() {
-                        Ty::Module(ModRefKey(m))
+                        Ty::Module(ModuleNamespace::raw(m))
                     } else {
                         self.value_of(&eq)
                     }

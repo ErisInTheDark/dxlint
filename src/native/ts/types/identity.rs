@@ -185,7 +185,7 @@ impl<const STORED: bool> Comparison<STORED> {
             (Ty::Struct(a), Ty::Struct(b)) => return Arc::ptr_eq(a, b),
             (Ty::Fn(a), Ty::Fn(b)) => return Arc::ptr_eq(a, b),
             (Ty::Class(a), Ty::Class(b)) | (Ty::Ns(a), Ty::Ns(b)) => return a == b,
-            (Ty::Module(a), Ty::Module(b)) if STORED => return match (a.0, b.0) {
+            (Ty::Module(a), Ty::Module(b)) if STORED => return a.view == b.view && match (a.module, b.module) {
                 (super::super::modules::ModRef::File(a), super::super::modules::ModRef::File(b)) => a == b,
                 (super::super::modules::ModRef::Ambient(af, ai), super::super::modules::ModRef::Ambient(bf, bi)) => af == bf && ai == bi,
                 _ => false,

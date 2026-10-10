@@ -26,13 +26,20 @@ fn deprecation_declarations(declarations) = {
   filter (reason) reason != null
   first
 }
-fn deprecation_reason(metadata, computed) =
+fn deprecation_reason(metadata, computed, called) =
   if { value metadata.aliases; map (alias) alias.doc; deprecation_first } != null then { value metadata.aliases; map (alias) alias.doc; deprecation_first }
   else if !computed && metadata.selected_signature != null && count(metadata.declarations) > 0 && all(metadata.declarations, declaration => contains(["function", "method"], declaration.kind)) then deprecation_tag(metadata.selected_signature.doc)
   else if deprecation_declarations(metadata.declarations) != null then deprecation_declarations(metadata.declarations)
-  else deprecation_tag(metadata.selected_signature.doc)
+  else if deprecation_tag(metadata.selected_signature.doc) != null then deprecation_tag(metadata.selected_signature.doc)
+  else if called then { value metadata.alias_target_declarations; filter (declaration) !contains(["function", "method"], declaration.kind); deprecation_declarations }
+  else null
 fn deprecation_allowed(names, metadata) =
-  any(metadata.declarations, declaration => any(declaration.provenance, gate => contains(names, gate.name)))
+  any(metadata.declarations metadata.alias_target_declarations, declaration => any(declaration.provenance, gate => contains(names, gate.name)))
+
+in ts_node let deprecation_called
+  if is (ts_call.callee, ts_new.callee, ts_tagged_template.tag) then true
+  else if is (ts_member.property, ts_parenthesized.expression, ts_non_null.expression, ts_instantiation.expression) then parent.deprecation_called == true
+  else false
 
 in ts_node let deprecation_import
   if is (ts_import, ts_import_equals) then true
@@ -51,7 +58,7 @@ in ts_identifier, ts_private_name, ts_super, ts_jsx_attribute.name, ts_index rul
   let metadata deprecation_metadata
   when !(is ts_export_specifier.exported) || deprecation_tag(metadata.own_doc) == null
   let computed is ts_index
-  let tag deprecation_reason(metadata, computed)
+  let tag deprecation_reason(metadata, computed, deprecation_called)
   when tag != null
   when no_deprecated_checked
   when if computed then !type_is_allowed(allow, object.type_specifier_groups) else !deprecation_allowed(allow, metadata)

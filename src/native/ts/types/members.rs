@@ -69,7 +69,7 @@ impl Resolution {
                 origin,
                 member: Member {
                     doc: None,
-                    name: name.into(), kind: MemberKind::Prop, visibility: Visibility::Public,
+                    name: name.into(), kind: MemberKind::Prop, accessor: false, visibility: Visibility::Public,
                     signature: false, computed_key: None,
                     is_static: false, readonly: Some(false), optional: false, ty: None, index_key: None, sigs: Vec::new(), init: None,
                 },
@@ -365,7 +365,26 @@ impl Checker<'_> {
                 if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found), None) }
             }
             Ty::Module(m) => {
-                let found = self.module_member(m.0, name);
+                if m.declared_export(name).is_none() {
+                    return Resolution::property::<METADATA>(name, self.module_base(*m), None);
+                }
+                let found = self.module_member(m.module, name);
+                if found.is_empty() && m.view == super::ModuleView::SyntheticDefault {
+                    let base = self.module_base(*m);
+                    if !matches!(base, Ty::Module(_) | Ty::Fn(_) | Ty::Prim(_) | Ty::Lit(..)) {
+                        let mut found = match &base {
+                            Ty::Class(symbols) => self.static_member::<true>(symbols, name).unwrap_or_else(|| Resolution::typed(Ty::Unknown)),
+                            _ => self.member_lookup::<true, false>(&base, name, &base),
+                        };
+                        if found.declarations.iter().any(|declaration| declaration.member.visibility != Visibility::Public
+                            || declaration.owner.is_some_and(|owner| self.kind_of(owner) == Some(DeclKind::Class))
+                                && (declaration.member.kind == MemberKind::Method || declaration.member.accessor)) {
+                            return Resolution::typed(Ty::Unknown);
+                        }
+                        if !METADATA { found.declarations.clear(); found.signature_keys.clear(); }
+                        return found;
+                    }
+                }
                 if found.is_empty() { Resolution::typed(self.value_of(&found)) } else { Resolution::property::<METADATA>(name, self.value_of(&found), None) }
             }
             Ty::EnumMember(member) => self.member_inner::<METADATA>(&member.base, name, receiver),

@@ -138,6 +138,7 @@ pub struct Member {
     /// The key as written (`name`, `"str"`, `[Symbol.dispose]`).
     pub name: Box<str>,
     pub kind: MemberKind,
+    pub accessor: bool,
     pub visibility: Visibility,
     /// A type signature rather than an executable class/object member.
     pub signature: bool,
@@ -525,8 +526,9 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
     let computed_key = v.get(id, F::Key).filter(|&key| v.is(key, K::Computed))
         .and_then(|key| v.get(key, F::Expr)).map(|key| path_of(v, key))
         .filter(|path| !path.is_empty()).map(Vec::into_boxed_slice);
+    let accessor = v.is(id, K::Method) && v.get(id, F::Kind).is_some_and(|kind| matches!(v.text(kind), "get" | "set"));
     let named = |kind, ty, sigs| -> Option<Member> {
-        Some(Member { doc: doc.clone(), name: key_name(v, v.get(id, F::Key)?), kind, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
+        Some(Member { doc: doc.clone(), name: key_name(v, v.get(id, F::Key)?), kind, accessor, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
     };
     match v.kind(id)? {
         K::Mapped => {
@@ -534,7 +536,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
             let parameter = *v.all(id, F::TypeParam).first()?;
             Some(Member {
                 doc, name: v.text(v.get(parameter, F::Name)?).into(), kind: MemberKind::Mapped,
-                visibility, signature: false, computed_key: None, is_static: false,
+                accessor: false, visibility, signature: false, computed_key: None, is_static: false,
                 readonly: Some(v.all(id, F::Modifier).iter().any(|&modifier| !v.text(modifier).starts_with('-'))),
                 optional: v.get(id, F::Optional).is_some_and(|optional| !v.text(optional).starts_with('-')),
                 ty: v.get(id, F::Type).map(|ty| type_syn(v, ty)),
@@ -566,12 +568,13 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         }
         K::CallSig => {
             let kind = if v.get(id, F::Kind).is_some() { MemberKind::Construct } else { MemberKind::Call };
-            Some(Member { doc, name: "()".into(), kind, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
+            Some(Member { doc, name: "()".into(), kind, accessor: false, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
         }
         K::IndexSig => Some(Member {
             doc,
             name: "[index]".into(),
             kind: MemberKind::Index,
+            accessor: false,
             visibility,
             signature,
             computed_key: None,
@@ -752,6 +755,7 @@ impl<V: View> Builder<'_, V> {
                                 doc: leading_doc(v.src(), v.start(p) as usize).map(String::into_boxed_str),
                                 name: v.text(n).into(),
                                 kind: MemberKind::Prop,
+                                accessor: false,
                                 visibility: Visibility::of(v, p),
                                 signature: false,
                                 computed_key: None,
@@ -885,6 +889,7 @@ impl<V: View> Builder<'_, V> {
                             doc: leading_doc(v.src(), v.start(m) as usize).map(String::into_boxed_str),
                             name: key_name(v, name),
                             kind: MemberKind::Prop,
+                            accessor: false,
                             visibility: Visibility::Public,
                             signature: false,
                             computed_key: None,
