@@ -111,7 +111,7 @@ in ts_union, ts_intersection let structure_first_type_offset first(type.offset)
 in ts_type_alias let structure_start offset
 in ts_unary let structure_typeof operator == "typeof"
 in ts_parenthesized let structure_typeof expression.structure_typeof.nonempty ?? false
-in ts_parenthesized let structure_single_conditional expression is ts_conditional
+in ts_parenthesized let structure_single_conditional expression is ts_conditional || expression is ts_parenthesized && expression.structure_single_conditional
 
 @macro structure_mixed_operator_rule(name, position) {
   in ts_binary, ts_logical rule name {
@@ -835,6 +835,7 @@ in ts_arrow rule no-confusing-arrow {
   option onlyOneSimpleParam boolean = false "check only single identifier parameters"
   when body is ts_conditional || !allowParens && body is ts_parenthesized && body.structure_single_conditional
   when !onlyOneSimpleParam || count(parameter) == 1 && { value parameter; first; re_test /^[A-Za-z_$][\w$]*$/ }
+  fix at body.node if allowParens as "(" body.text ")"
   warn "Arrow function used ambiguously with a conditional expression."
 }
 
