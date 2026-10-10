@@ -274,8 +274,8 @@ pub struct Module {
     pub export_docs: HashMap<Box<str>, Box<str>>,
     /// `export * from "x"`
     pub stars: Vec<Box<str>>,
-    /// `export = name`
-    pub equals: Option<Vec<u32>>,
+    /// `export = name` or a qualified namespace path, resolved after declarations.
+    pub equals: Option<Box<[Box<str>]>>,
 }
 
 impl Hash for Module {
@@ -1078,12 +1078,7 @@ impl<V: View> Builder<'_, V> {
             Some(K::ExportAssign) => {
                 if let (Some(m), Some(e)) = (module, v.get(s, F::Expr)) {
                     let path = path_of(v, e);
-                    if let Some(first) = path.first() {
-                        m.equals = Some(scope.get(first).to_vec());
-                        if m.equals.as_ref().is_some_and(Vec::is_empty) {
-                            m.exports.insert("=".into(), Export::Reexport { from: "".into(), name: first.clone() });
-                        }
-                    }
+                    if !path.is_empty() { m.equals = Some(path.into()); }
                 }
             }
             _ => {}

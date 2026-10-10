@@ -1,0 +1,2 @@
+a.ts:5:3-5:22 await-thenable#0
+a.ts:6:22-6:35 await-thenable:aggregate#0

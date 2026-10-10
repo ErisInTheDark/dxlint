@@ -1,0 +1,3 @@
+import .ts
+rule await-thenable
+ignore "node_modules/**"

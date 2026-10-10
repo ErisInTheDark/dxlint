@@ -354,7 +354,9 @@ impl Project {
             let nm = d.join("node_modules");
             if reads::is_dir(&nm) {
                 if let Some(found) = package_types(&nm.join(spec)).or_else(|| package_types(&nm.join("@types").join(types_name(spec)))) {
-                    return Some(ModRef::File(self.file_id(&found)));
+                    let file = self.file_id(&found);
+                    let ambient = self.summary(file).and_then(|summary| summary.ambient_modules.iter().position(|(name, _, _)| &**name == spec));
+                    return Some(ambient.map_or(ModRef::File(file), |index| ModRef::Ambient(file, index)));
                 }
             }
             at = d.parent();
@@ -404,7 +406,7 @@ impl Project {
         };
         if name == "=" || (name == "default" && !module.exports.contains_key("default") && module.equals.is_some()) {
             if let Some(eq) = &module.equals {
-                return refs(eq);
+                return ExportResolution { declarations: self.export_assignment(file, &s, at, eq, hops - 1), aliases: Vec::new() };
             }
         }
         match module.exports.get(name) {
@@ -458,6 +460,41 @@ impl Project {
                 })
                 .unwrap_or_default(),
         }
+    }
+
+    fn export_assignment(&self, file: FileId, summary: &Summary, at: ModuleAt, path: &[Box<str>], hops: usize) -> Vec<DeclRef> {
+        if hops == 0 { return Vec::new() }
+        let Some((root, members)) = path.split_first() else { return Vec::new() };
+        let (_, scope) = at.get(summary);
+        let local = scope.get(root);
+        let local = if local.is_empty() { summary.top.get(root) } else { local };
+        let local = if local.is_empty() { summary.globals.get(root) } else { local };
+        let mut declarations = local.iter().map(|&decl| DeclRef { file, decl }).collect::<Vec<_>>();
+        if declarations.is_empty() {
+            declarations = self.globals(file).names.get(root).cloned().unwrap_or_default();
+        }
+        for member in members {
+            let mut next = Vec::new();
+            for declaration in declarations {
+                let Some(summary) = self.summary(declaration.file) else { continue };
+                let declaration_value = &summary.decls[declaration.decl as usize];
+                match &declaration_value.kind {
+                    super::summary::DeclKind::Namespace => {
+                        if let Some(scope) = &declaration_value.scope {
+                            next.extend(scope.get(member).iter().map(|&decl| DeclRef { file: declaration.file, decl }));
+                        }
+                    }
+                    super::summary::DeclKind::Import { from, name } if &**name == "*" => {
+                        if let Some(module) = self.resolve(declaration.file, from) {
+                            next.extend(self.export_hops::<false>(module, member, hops - 1).declarations);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            declarations = next;
+        }
+        declarations
     }
 
     /// The JSDoc of export `name` of `spec` imported from `from_file`:
@@ -884,6 +921,70 @@ mod tests {
             ModRef::File(file) => project.path(file),
             ModRef::Ambient(..) => panic!("file module expected"),
         })
+    }
+
+    #[test]
+    fn export_assignments_preserve_qualified_namespace_targets() {
+        use super::super::summary::TypeSyn;
+        use super::super::types::{Checker, Env, Ty};
+
+        let mut failures = Vec::new();
+        for (name, base, found) in [
+            ("simple control", "namespace Outer { export interface Result { x:number } } export=Outer;", true),
+            ("qualified", "namespace Outer { export namespace Public { export interface Result { x:number } } } export=Outer.Public;", true),
+            ("late declaration", "export=Outer.Public; namespace Outer { export namespace Public { export interface Result { x:number } } }", true),
+            ("ambient outer", "declare namespace Outer { namespace Public { interface Result { x:number } } } declare module 'pkg' { export=Outer.Public; }", true),
+            ("imported namespace", "import * as Outer from './public'; export=Outer.Public;", true),
+            ("missing segment", "namespace Outer { export interface Result { x:number } } export=Outer.Missing;", false),
+        ] {
+            let mut inputs = Inputs::new();
+            inputs.set("tsconfig.json", r#"{"compilerOptions":{"lib":[],"types":[]}}"#);
+            inputs.set(if name == "ambient outer" { "base.d.ts" } else { "base.ts" }, base);
+            inputs.set("public.ts", "export namespace Public { export interface Result { x:number } }");
+            let source = if name == "ambient outer" {
+                "import type {Result} from 'pkg';"
+            } else {
+                "import type {Result} from './base';"
+            };
+            let path = inputs.set("main.ts", source);
+            let project = Project::default();
+            let file = project.file_id(&path);
+            let checker = Checker::new(&project, file, project.summary(file).unwrap());
+            let result = checker.eval(&TypeSyn::Ref(vec!["Result".into()].into(), Vec::new()), &Env::file(file));
+            let property = checker.member(&result, "x");
+            if if found { checker.equivalent(&property, &Ty::Prim("number")) != Some(true) } else { !property.is_opaque() } {
+                failures.push((name, result, property));
+            }
+        }
+        assert!(failures.is_empty(), "qualified exports lost their members: {failures:?}");
+    }
+
+    #[test]
+    fn package_entries_use_the_matching_ambient_module() {
+        use super::super::summary::TypeSyn;
+        use super::super::types::{Checker, Env, Ty};
+
+        let mut failures = Vec::new();
+        for (name, base, found) in [
+            ("self-named", "declare namespace Outer { namespace Public { interface Result { x:number } } } declare module 'pkg' { export=Outer.Public; }", true),
+            ("top-level control", "export interface Result { x:number }", true),
+            ("other name control", "declare module 'other' { interface Result { x:number } }", false),
+        ] {
+            let mut inputs = Inputs::new();
+            inputs.set("app/tsconfig.json", r#"{"compilerOptions":{"lib":[],"types":[]}}"#);
+            inputs.set("node_modules/pkg/package.json", r#"{"types":"index.d.ts"}"#);
+            inputs.set("node_modules/pkg/index.d.ts", base);
+            let path = inputs.set("app/main.ts", "import type {Result} from 'pkg';");
+            let project = Project::default();
+            let file = project.file_id(&path);
+            let checker = Checker::new(&project, file, project.summary(file).unwrap());
+            let result = checker.eval(&TypeSyn::Ref(vec!["Result".into()].into(), Vec::new()), &Env::file(file));
+            let property = checker.member(&result, "x");
+            if if found { checker.equivalent(&property, &Ty::Prim("number")) != Some(true) } else { !property.is_opaque() } {
+                failures.push((name, result, property));
+            }
+        }
+        assert!(failures.is_empty(), "package entry selected the wrong module: {failures:?}");
     }
 
     #[test]
