@@ -1,6 +1,7 @@
 # .ts/layout/expressions: expressions layout rules.
 
 import .ts/layout/shared
+import .ts/expression-fixes
 
 define {
 
@@ -169,6 +170,11 @@ in ts_unary, ts_update, ts_new, ts_await, ts_yield, ts_non_null rule space-unary
     else if wants_space then
       if unary_prefix then "Unary operator '{unary_operator}' must be followed by whitespace." else "Space is required before unary operator '{unary_operator}'."
     else if unary_prefix then "Unexpected space after unary operator '{unary_operator}'." else "Unexpected space before unary operator '{unary_operator}'."
+  let left_token if unary_prefix then unary_token else unary_argument
+  let right_token if unary_prefix then unary_argument else unary_token
+  let gap byte_slice(source, left_token.end, right_token.start)
+  let joinable expression_fix_separator(left_token.text, right_token.text) == ""
+  fix at { start: left_token.end, end: right_token.start } if re_test(gap, /^\s*$/) && (wants_space || joinable) as if wants_space then " " else ""
 }
 
 in ts_ellipsis rule rest-spread-spacing {

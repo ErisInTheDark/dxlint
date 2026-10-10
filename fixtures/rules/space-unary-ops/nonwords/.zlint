@@ -1,0 +1,2 @@
+import .ts
+rule space-unary-ops { set nonwords true }
