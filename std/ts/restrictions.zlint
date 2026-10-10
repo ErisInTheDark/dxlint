@@ -242,8 +242,12 @@ in ts_import, ts_export let restriction_declaration_entry if from == null then n
   category: restriction_declaration_category, syntax: restriction_declaration_syntax,
   local: restriction_declaration_local
 }
-# Declaration spans contain their literal keyword; skip only impossible subtrees.
-in ts_node let restriction_declarations if !contains(text, "import") && !contains(text, "export") then [] else [] restriction_declaration_entry { value [] children.restriction_declarations; fold ([]) (entries, child) entries child }
+group restriction_declaration ts_import, ts_export
+in ts_program let restriction_declarations {
+  value descendants(restriction_declaration)
+  map (declaration) declaration.restriction_declaration_entry
+  filter (entry) entry != null
+}
 in ts_import let sort_imports_rank if restriction_declaration_syntax == "none" then 0 else if restriction_declaration_syntax == "all" then 1 else if restriction_declaration_syntax == "multiple" then 2 else 3
 @macro restriction_sort_import_options {
   option ignoreCase boolean = false "ignore letter case"
