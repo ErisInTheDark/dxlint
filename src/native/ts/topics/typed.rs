@@ -48,7 +48,7 @@ pub const FACTS: &[Fact] = &[
     Fact {
         shape: Fact::SCALAR.shape,
         name: "callable_contracts",
-        doc: "native expressions: callable_contracts(site, source, member_path?) gives callable return kinds and thenability at the requested member path (default root), through receiver contracts and direct heritage; incomplete rows indicate unresolved signatures or work limits",
+        doc: "native expressions: callable_contracts(site, source, member_path?, fields?) gives callable return kinds and thenability at the requested member path (default root), through receiver contracts and direct heritage; incomplete rows indicate unresolved signatures or work limits. Opt-in contextual_returns contains raw recursive kind/parts result profiles; null means unavailable, opaque or work-limited context",
         get: |f, n| f.with_file(callables::contracts, n),
     },
     Fact {

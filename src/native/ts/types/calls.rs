@@ -512,6 +512,45 @@ impl Checker<'_> {
         self.contract_parameters_at(ty, &[], Vec::new(), false, 0, &mut query)
     }
 
+    /// Visible callable results without inference from arguments; signature parameters stay open.
+    pub fn call_signature_returns(&self, ty: &Ty) -> Option<Vec<Ty>> {
+        self.call_signature_returns_at(ty, 0, &mut ContractQuery::new(ContractParameters::Declared { constrained: false }))
+    }
+
+    fn call_signature_returns_at(&self, ty: &Ty, depth: usize, query: &mut ContractQuery) -> Option<Vec<Ty>> {
+        if depth >= super::MAX_DEPTH as usize { return None }
+        match ty {
+            Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) => None,
+            Ty::Union(parts) | Ty::Inter(parts) => {
+                query.take(1)?;
+                let mut returns = Vec::new();
+                for part in parts { returns.extend(self.call_signature_returns_at(part, depth + 1, query)?); }
+                Some(returns)
+            }
+            Ty::Fn(callable) if callable.ret.is_some() => {
+                query.take(1 + callable.sigs.len())?;
+                Some(callable.ret.iter().cloned().collect())
+            }
+            _ => {
+                let signatures = self.inherited_call_signatures(ty, depth, query)?;
+                let overloaded = signatures.iter().any(|signature| signature.syntax.body_at.is_none());
+                let mut returns = Vec::new();
+                for signature in signatures {
+                    let syntax = &signature.syntax;
+                    if overloaded && syntax.body_at.is_some() { continue }
+                    query.take(syntax.type_params.len())?;
+                    let mut env = (*signature.env).clone();
+                    self.context_parameters(&syntax.type_params, Vec::new(), false, &mut env);
+                    let result = syntax.ret.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env));
+                    returns.push(if syntax.is_async && !matches!(result, Ty::Named(..)) {
+                        self.global_named("Promise", vec![result])
+                    } else { result });
+                }
+                Some(returns)
+            }
+        }
+    }
+
     fn contract_parameters_at(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>, construct: bool, depth: usize, query: &mut ContractQuery) -> Option<Vec<(Vec<Ty>, bool)>> {
         #[cfg(test)]
         CONTRACT_WORK.with(|work| work.set(work.get() + 1));

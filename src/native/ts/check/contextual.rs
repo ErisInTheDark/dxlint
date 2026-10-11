@@ -2,7 +2,7 @@
 
 use super::{F, K, NativeFile, Ty};
 use super::super::types::{Parameters, Tuple};
-use super::super::summary::TupleElement;
+use super::super::summary::{TupleElement, TypeSyn};
 use std::{cell::RefCell, collections::HashMap};
 #[cfg(test)]
 use std::cell::Cell;
@@ -120,12 +120,19 @@ impl NativeFile<'_> {
             let Some(opening) = s.parent(owner).filter(|&parent| s.is(parent, K::JsxOpening)) else { return Ty::Unknown };
             let Some(component) = s.get(opening, F::Name) else { return Ty::Unknown };
             let Some(name) = s.get(owner, F::Name).map(|name| s.text(name)) else { return Ty::Unknown };
-            let callee = self.type_of(component);
-            let props = if matches!(callee, Ty::Class(_)) {
-                self.ck().member(&self.ck().construct(&callee, &[], self.type_args(opening)), "props")
+            let tag = s.text(component);
+            let props = if tag.as_bytes().first().is_some_and(u8::is_ascii_lowercase) || tag.contains('-') {
+                // Intrinsic tags name a props entry, not a value binding.
+                let namespace = TypeSyn::Ref(vec!["JSX".into(), "IntrinsicElements".into()].into(), Vec::new());
+                self.ck().member(&self.ck().eval(&namespace, &self.env_at(component)), tag)
             } else {
-                self.ck().argument_parameters(&callee, &[], self.type_args(opening), false)
-                    .and_then(|(types, _)| types.into_iter().next()).unwrap_or(Ty::Unknown)
+                let callee = self.type_of(component);
+                if matches!(callee, Ty::Class(_)) {
+                    self.ck().member(&self.ck().construct(&callee, &[], self.type_args(opening)), "props")
+                } else {
+                    self.ck().argument_parameters(&callee, &[], self.type_args(opening), false)
+                        .and_then(|(types, _)| types.into_iter().next()).unwrap_or(Ty::Unknown)
+                }
             };
             return self.ck().member(&props, name);
         }
@@ -381,6 +388,42 @@ impl NativeFile<'_> {
 mod tests {
     use crate::engine::tests::with_native_file;
     use super::Ty;
+
+    #[test]
+    fn intrinsic_jsx_callbacks_use_declared_props_without_value_binding_fallback() {
+        use crate::engine::tests::native_front;
+        use crate::grammar::Tree;
+        use crate::native::ts::{facts::NativeFile, kinds::Kind, modules::Project, summary::TypeSyn, syntax::Syntax};
+        let source = r#"
+declare namespace JSX {
+  interface IntrinsicElements { button: {onClick: () => void}; "X-widget": {onClick: () => void} }
+}
+declare const button: () => number;
+declare function Component(props: {onClick: () => number}): unknown;
+const a = <button onClick={() => 1} />;
+const b = <X-widget onClick={() => 1} />;
+const c = <Component onClick={() => 1} />;
+const d = <missing onClick={() => 1} />;
+"#;
+        let front = native_front();
+        let parsed = crate::native::ts::parse(source, true).expect("JSX parses");
+        let tree = Tree::from_native(parsed.nodes, parsed.root);
+        let project = Project::default();
+        let file = NativeFile::new(Syntax::new(&tree, source, &front), std::path::Path::new("/root/a.tsx"), &project);
+        let callbacks: Vec<_> = tree.order.iter().copied().filter(|&node| file.syntax.is(node, Kind::Arrow)).collect();
+        assert_eq!(callbacks.len(), 4);
+        let checker = &file.typing().checker;
+        let intrinsic = checker.eval(&TypeSyn::Ref(vec!["JSX".into(), "IntrinsicElements".into()].into(), Vec::new()), &file.env_at(callbacks[0]));
+        assert!(matches!(intrinsic, Ty::Named(..)), "namespace lookup failed before context query: {intrinsic:?}");
+        for (&callback, expected) in callbacks.iter().zip([Some("void"), Some("void"), Some("number"), None]) {
+            let context = file.contextual_type_of(callback);
+            let returns = checker.call_signature_returns(&context);
+            if let Some(expected) = expected {
+                assert!(returns.as_ref().is_some_and(|returns| returns.len() == 1 && returns[0].kind() == expected),
+                    "wrong callback context: {context:?}; returns {returns:?}; expected {expected}");
+            } else { assert!(returns.is_none(), "missing intrinsic tag produced proven context"); }
+        }
+    }
 
     #[test]
     fn declared_generic_contracts_do_not_replace_inferred_call_results() {

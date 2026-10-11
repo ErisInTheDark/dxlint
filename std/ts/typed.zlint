@@ -17,6 +17,7 @@ import .ts/typed/type-constituents
 import .ts/typed/return-await
 import .ts/typed/nullish-coalescing
 import .ts/typed/boolean-comparisons
+import .ts/typed/void-expressions
 
 define {
 

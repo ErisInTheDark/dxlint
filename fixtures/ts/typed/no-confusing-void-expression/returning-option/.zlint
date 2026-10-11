@@ -1,0 +1,2 @@
+import .ts
+rule no-confusing-void-expression { set ignoreVoidReturningFunctions true }

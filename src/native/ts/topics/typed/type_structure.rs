@@ -57,6 +57,10 @@ pub(super) fn structure(file: &NativeFile<'_>, node: u32, properties: &[String])
     Value::record(entries)
 }
 
+pub(super) fn return_profile(ty: &Ty, ck: &Checker<'_>) -> Value<'static> {
+    describe(ty, ck, &[], &["kind".into(), "parts".into()], Vec::new(), false, 0)
+}
+
 struct PropertyWrites(HashMap<u32, Vec<Value<'static>>>);
 
 #[cfg(test)]

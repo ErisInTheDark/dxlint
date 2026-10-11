@@ -1,0 +1,3 @@
+a.ts:4:21-4:24 no-confusing-void-expression#4
+a.ts:5:30-5:33 no-confusing-void-expression#5
+a.ts:6:9-6:12 no-confusing-void-expression#6

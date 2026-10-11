@@ -1,0 +1,74 @@
+# Void-expression positions and source-preserving statement fixes.
+import .ts/expression-fixes
+
+define {
+
+in ts_node let void_expression_kind type_structure([], ["kind"]).kind
+in ts_node let void_expression_return_profile type_structure([], ["kind", "parts"], false)
+in ts_node let void_expression_contextual_returns callable_contracts(node, node, [], ["contextual_returns"])
+fn void_expression_like(n) = contains(["void", "undefined"], n.void_expression_kind)
+fn void_expression_contains_void(profile) = profile.kind == "void"
+  || profile.kind == "union" && any(profile.parts, part => void_expression_contains_void(part))
+fn void_expression_function(n) = {
+  value n
+  walk (current) current.parent.node
+  find (current) current is (ts_function, ts_arrow, ts_method)
+}
+fn void_expression_void_returning(n) = n != null && (
+  if n.return_type != null then void_expression_contains_void(n.return_type.void_expression_return_profile)
+  else (n is ts_arrow || n is ts_function && !expression_fix_declaration(n))
+    && any(n.void_expression_contextual_returns, row =>
+      any(row.contextual_returns ?? [], result => void_expression_contains_void(result))))
+fn void_expression_ancestor(n, arrows, operators) = {
+  value p: n.parent.node
+  value if p == null then null
+    else if p is ts_parenthesized then void_expression_ancestor(p, arrows, operators)
+    else if p is ts_expression_statement then null
+    else if p is ts_sequence && n.index < count(p.expression) - 1 then null
+    else if p is ts_logical && p.right.offset == n.offset
+      || p is ts_conditional && (p.consequent.offset == n.offset || p.alternate.offset == n.offset)
+      then void_expression_ancestor(p, arrows, operators)
+    else if p is ts_arrow && arrows || p is ts_unary && p.operator == "void" && operators then null
+    else p
+}
+fn void_expression_final_return(n) = n.parent is ts_block
+  && n.parent.parent is (ts_function, ts_arrow, ts_method)
+  && last(n.parent.body.nodes).offset == n.offset
+fn void_expression_return_text(n, final) = {
+  value argument: n.argument.node
+  value statement: (if any(["(", "[", "`"], token => starts_with(argument.text, token)) then ";" else "") argument.text ";" (if final then "" else " return;")
+  value if !final && n.parent not ts_block then "{{ " statement " }}" else statement
+}
+
+in ts_await, ts_call, ts_tagged_template rule no-confusing-void-expression {
+  option ignoreArrowShorthand boolean = false "Allow concise arrow bodies"
+  option ignoreVoidOperator boolean = false "Allow explicit void expressions"
+  option ignoreVoidReturningFunctions boolean = false "Allow explicitly or contextually void-returning functions"
+  let ancestor void_expression_ancestor(node, ignoreArrowShorthand, ignoreVoidOperator)
+  when ancestor != null
+  when void_expression_like(node)
+  let enclosing if ignoreVoidReturningFunctions then void_expression_function(ancestor) else null
+  when !ignoreVoidReturningFunctions || ancestor not (ts_arrow, ts_return)
+    || !void_expression_void_returning(enclosing)
+  let final ancestor is ts_return && void_expression_final_return(ancestor)
+  let mode if ancestor is ts_arrow then if ignoreVoidOperator then "arrow-void" else "arrow"
+    else if ancestor is ts_return then if ignoreVoidOperator then "return-void" else if final then "last" else "return"
+    else if ignoreVoidOperator then "expression-void" else "expression"
+  let target if mode == "arrow" then ancestor.body.node
+    else if contains(["last", "return"], mode) then ancestor else node
+  let replacement if mode == "arrow" then if void_expression_like(target) then "{{ " target.structure_unwrapped.text "; }}" else null
+    else if mode == "last" then if void_expression_like(ancestor.argument.node) then void_expression_return_text(ancestor, true) else null
+    else if mode == "return" then void_expression_return_text(ancestor, false)
+    else if contains(["arrow-void", "return-void"], mode) then "void " text
+    else null
+  warn if mode == "expression" then "Placing a void expression inside another expression is forbidden. Move it to its own statement instead."
+    else if mode == "arrow" then "Returning a void expression from an arrow function shorthand is forbidden. Please add braces to the arrow function."
+    else if mode == "last" then "Returning a void expression from a function is forbidden. Please remove the `return` statement."
+    else if mode == "return" then "Returning a void expression from a function is forbidden. Please move it before the `return` statement."
+    else if mode == "arrow-void" then "Void expressions returned from an arrow function shorthand must be marked explicitly with the `void` operator."
+    else if mode == "return-void" then "Void expressions returned from a function must be marked explicitly with the `void` operator."
+    else "Void expressions used inside another expression must be moved to its own statement or marked explicitly with the `void` operator."
+  fix at target if replacement != null && expression_fix_retains_comments(target, replacement) as replacement
+}
+
+}
