@@ -47,8 +47,9 @@ fn expression_fix_statement(n) = {
 fn expression_fix_before_nodes(n) = if n.token_neighbours.before == null then []
   else overlapping(ts_node, n.token_neighbours.before.start, n.token_neighbours.before.end)
 fn expression_fix_declaration(n) = n.parent is (ts_program, ts_block, ts_export, ts_case, ts_if, ts_labeled, ts_while, ts_do_while, ts_for, ts_for_in, ts_for_of)
-fn expression_fix_asi(n, before, owners) =
+fn expression_fix_asi(n, before, owners, replacement) =
   if before == null || { value [":", ";", "{{", "=>", "++", "--"]; contains before.text } then false
+  else if starts_with(replacement, "[") && any(owners, owner => owner is ts_as && owner.end_offset == before.end) then false
   else if any(owners, owner => owner is ts_interface && owner.end_offset == before.end) then false
   else if any(owners, owner => owner is ts_type_alias && owner.end_offset == before.end) then null
   else if before.text == ")" then !any(owners, owner =>

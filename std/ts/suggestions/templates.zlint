@@ -84,8 +84,8 @@ fn concatenation_text(source, n, before, after) = {
 fn concatenation_fix(source, n) = if concatenation_legacy_escape(n) then null else {
   value statement: expression_fix_statement(n)
   value owners: expression_fix_before_nodes(statement)
-  value semicolon: if statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners)
   value replacement: concatenation_text(source, n, null, null)
+  value semicolon: if statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners, replacement)
   # Comments inside removed operand parentheses have no safe interpolation slot.
   value retained: expression_fix_retains_comments(n, replacement)
   value if semicolon == null || !retained then null else (if semicolon then ";" else "") replacement

@@ -145,7 +145,7 @@ fn assertion_fix_output(n, text) = {
   }
     then {
       value owners: expression_fix_before_nodes(n)
-      value expression_fix_asi(statement, n.token_neighbours.before, owners)
+      value expression_fix_asi(statement, n.token_neighbours.before, owners, text)
     } else false
   value assertion_fix_result(n, text, asi)
 }

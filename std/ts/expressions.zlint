@@ -66,7 +66,7 @@ fn exponentiation_asi(n, text) = {
     then (head) contains(["(", "[", "/", "`"], head)
   } then {
     value owners: expression_fix_before_nodes(n)
-    value expression_fix_asi(statement, n.token_neighbours.before, owners)
+    value expression_fix_asi(statement, n.token_neighbours.before, owners, text)
   } else false
 }
 fn exponentiation_fix_result(n, text, semicolon) = if semicolon == null then null

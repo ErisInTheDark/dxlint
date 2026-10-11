@@ -76,7 +76,7 @@ fn object_spread_fix(source, n) = {
   value replacement: expression_fix_edits(n.text, n.offset, edits)
   value statement: expression_fix_statement(n)
   value owners: expression_fix_before_nodes(statement)
-  value semicolon: if !wrapped || statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners)
+  value semicolon: if !wrapped || statement == null then false else expression_fix_asi(statement, statement.token_neighbours.before, owners, replacement)
   value if open == null || semicolon == null || !expression_fix_retains_comments(n, replacement) then null
     else (if semicolon then ";" else "") replacement
 }

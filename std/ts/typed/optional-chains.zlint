@@ -189,7 +189,7 @@ fn optional_fix_output(boundary, target, text) = {
   value head: { value text; trim_start; slice 0 1 }
   value owners: expression_fix_before_nodes(boundary)
   value asi: if statement != null && contains(["(", "[", "/", "`"], head)
-    then expression_fix_asi(statement, boundary.token_neighbours.before, owners) else false
+    then expression_fix_asi(statement, boundary.token_neighbours.before, owners, text) else false
   value if asi == null then null else {target: target,
     text: (if asi then ";" else "") expression_fix_edges(edges, text)}
 }
