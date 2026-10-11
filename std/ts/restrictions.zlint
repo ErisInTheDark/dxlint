@@ -661,7 +661,7 @@ in ts_identifier, ts_private_name {
 }
 in ts_identifier, ts_private_name rule id-match {
   option mode regex = "^.+$" "required identifier pattern"
-  when !restriction_name_external && !restriction_name_attributes && id_match_checked
+  when !restriction_name_attributes && id_match_checked && !restriction_name_external
   when !re_test(restriction_identifier_name, mode)
   warn "Identifier '{text}' does not match the pattern '{mode}'."
 }
