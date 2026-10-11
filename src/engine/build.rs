@@ -141,6 +141,13 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         // A function's node parameters can hold tokens of any kind.
         function_reads[i] = ReadDependencies::collect(&grammar, &attr_names, function_uses, layer_reads.into_inner(), children || siblings);
     }
+    for condition in &grammar.names.conditions {
+        let Some(when) = &config.names[condition.item].when else { continue };
+        let scope = Scope { fields: target_fields(&grammar, Target::Matcher(condition.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
+        if let Some(e) = scope.compile(when, &mut errors) {
+            let _ = condition.expr.set(e);
+        }
+    }
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);

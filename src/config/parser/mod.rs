@@ -70,6 +70,8 @@ pub struct Parser<'a> {
     overriding: Option<Span>,
     /// Inside `define { ... }`: rules are defined but off.
     defining: usize,
+    /// Conditions of the `when cond { ... }` blocks around the current item.
+    conditions: Vec<Expr>,
 }
 
 impl<'a> Parser<'a> {
@@ -84,6 +86,7 @@ impl<'a> Parser<'a> {
             expr_depth: 0,
             overriding: None,
             defining: 0,
+            conditions: Vec::new(),
         }
     }
 
@@ -295,6 +298,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "let") => self.attr(ctx),
             (Tk::Ident, "forward") => self.forward(ctx),
             (Tk::Ident, "scope" | "declares" | "resolves") if ctx.is_some() => self.name_item(ctx),
+            (Tk::Ident, "when") if ctx.is_some() => self.when_block(ctx.expect("checked")),
             (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.old_set(),
             (Tk::Ident, "ignore") => self.ignore(),
@@ -492,16 +496,21 @@ impl<'a> Parser<'a> {
             "scope" => NameItem::Scope(classes),
             "declares" => {
                 let Some(path) = self.name_path("the field holding the declared name") else { return };
-                if !(self.word("in") && self.word("nearest")) {
-                    self.error_here("expected `in nearest <scope class>`: `declares value name in nearest block`");
+                let at = self.word("in");
+                let enclosing = if at && self.word("nearest") {
+                    false
+                } else if at && self.word("enclosing") {
+                    true
+                } else {
+                    self.error_here("expected `in nearest <scope class>` or `in enclosing <scope class>`: `declares value name in nearest block`");
                     return;
-                }
+                };
                 let nearest = self.name_list("a scope class");
                 if nearest.is_empty() {
                     return;
                 }
                 let hoisted = self.word("hoisted");
-                NameItem::Declares { classes, path, nearest, hoisted }
+                NameItem::Declares { classes, path, nearest, enclosing, hoisted }
             }
             _ => {
                 self.skip(false, true);
@@ -538,7 +547,51 @@ impl<'a> Parser<'a> {
             }
             return;
         }
-        self.config.names.push(NameDef { targets, item });
+        let when = self.condition();
+        self.config.names.push(NameDef { targets, item, when });
+    }
+
+    /// `when cond { items }` in a layer block: the name items inside apply
+    /// where `cond` holds on the node.
+    fn when_block(&mut self, ctx: &Context) {
+        let kw = self.bump().expect("peeked");
+        let Some(cond) = self.expr() else { return };
+        self.skip(false, true);
+        let Some(open) = self.ts.peek_raw(0).cloned().filter(|t| t.kind == Tk::LBrace) else {
+            self.error_here("expected `{` after the condition: `when cond { declares ... }`");
+            return;
+        };
+        self.ts.next_raw();
+        self.conditions.push(cond);
+        loop {
+            match self.peek() {
+                None => {
+                    self.errors.push(ConfigError::new(open.span, "unclosed `{`"));
+                    break;
+                }
+                Some(t) if t.kind == Tk::RBrace => {
+                    self.bump();
+                    break;
+                }
+                Some(t) if matches!(&*t.text, "scope" | "declares" | "resolves" | "when") && t.kind == Tk::Ident => self.item(Some(ctx)),
+                Some(t) => {
+                    self.errors.push(
+                        ConfigError::new(t.span, format!("only `scope`, `declares` and `resolves` can be conditional, found {}", t.describe()))
+                            .related(kw.span, "in this `when`"),
+                    );
+                    self.recover();
+                }
+            }
+        }
+        self.conditions.pop();
+    }
+
+    /// The conditions of the `when` blocks around the current item, joined.
+    fn condition(&self) -> Option<Expr> {
+        self.conditions.iter().cloned().reduce(|a, b| {
+            let span = a.span.to(b.span);
+            Expr { kind: ExprKind::Binary(BinOp::And, Box::new(a), Box::new(b)), span }
+        })
     }
 
     /// `a, b, c` on the current line.

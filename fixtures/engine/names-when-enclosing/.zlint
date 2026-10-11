@@ -1,0 +1,26 @@
+lang t "*.t"
+match block /\{/ until /\}/
+match ref /\w+/
+in .t, block {
+  match block
+  match fn_decl /\bfn\s+/ name:/\w+/ /\s*/ :block
+  match let_decl /\blet\s+/ name:/\w+/
+  match use_name /\buse\s+/ :ref
+}
+
+# A function's body shares the function's scope.
+in block {
+  when !(parent is fn_decl) { scope block }
+}
+in fn_decl {
+  scope function, block
+  # Its name belongs to the scope around it, not its own.
+  declares value name in enclosing block hoisted
+}
+in let_decl {
+  when name != "hidden" { declares value name in nearest block }
+}
+in ref {
+  resolves value
+  rule found warn "{text} -> {if scope_declaration == null then 'none' else scope_declaration.line}"
+}

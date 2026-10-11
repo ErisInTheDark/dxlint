@@ -24,6 +24,10 @@ pub struct Declare {
     pub nearest: u64,
     /// Visible in the whole scope, not only after its position.
     pub hoisted: bool,
+    /// `in enclosing`: the search starts outside the scope the node opens.
+    pub enclosing: bool,
+    /// `when` condition ([`Names::conditions`]).
+    pub when: Option<u32>,
 }
 
 /// One `resolves` item.
@@ -33,19 +37,29 @@ pub struct Resolve {
     pub classes: u64,
     /// Labels from the node to the using name; empty: the node itself.
     pub path: Vec<u16>,
+    pub when: Option<u32>,
 }
 
 /// What one matcher's nodes do with names.
 #[derive(Clone, Debug, Default)]
 pub struct KindNames {
-    /// Scope classes (bits) the node opens; 0 when it opens none.
-    pub scope: u64,
+    /// Scope classes (bits) the node opens, each under its condition.
+    pub scopes: Vec<(u64, Option<u32>)>,
     pub declares: Vec<Declare>,
     pub resolves: Vec<Resolve>,
     /// `declares through`: when something declares this node, it declares
-    /// what these lead to instead; per group, the first path that leads
-    /// anywhere.
-    pub through: Vec<Vec<Vec<u16>>>,
+    /// what these lead to instead; per group, the first alternative that
+    /// declares anything.
+    pub through: Vec<(Vec<Vec<u16>>, Option<u32>)>,
+}
+
+/// A `when` condition of one item on one layer; the engine compiles it
+/// with the layer's fields ([`Names::conditions`]).
+pub struct Condition {
+    /// Index of the item in the config's name items.
+    pub item: usize,
+    pub matcher: u32,
+    pub expr: std::sync::OnceLock<crate::expr::CExpr>,
 }
 
 /// The tables, per matcher (empty when the config has no name items).
@@ -54,6 +68,7 @@ pub struct Names {
     pub declaration_classes: Vec<String>,
     pub scope_classes: Vec<String>,
     pub kinds: Vec<KindNames>,
+    pub conditions: Vec<Condition>,
 }
 
 /// One tree's resolved names.
@@ -69,12 +84,15 @@ pub struct Resolved {
 /// A declaration in one scope: name node, start, classes, hoisted.
 type Declared = (u32, u32, u64, bool);
 
-struct Scope {
+struct Scope<'t> {
     classes: u64,
     parent: Option<usize>,
     /// Name -> its declarations in document order.
-    declared: FxHashMap<Box<str>, Vec<Declared>>,
+    declared: FxHashMap<&'t str, Vec<Declared>>,
 }
+
+/// No scope (in the dense node -> scope table).
+const NO_SCOPE: u32 = u32::MAX;
 
 impl Names {
     /// The tables of `config`'s name items. Classes come from the items
@@ -88,7 +106,7 @@ impl Names {
         let mut declared = 0u64;
         let mut opened = 0u64;
         let mut asked: Vec<(&Name, bool)> = Vec::new();
-        for def in &config.names {
+        for (item, def) in config.names.iter().enumerate() {
             let targets: Vec<u32> = def
                 .targets
                 .iter()
@@ -108,22 +126,32 @@ impl Names {
                     .collect::<Result<Vec<_>, _>>()
                     .ok()
             };
+            // One condition per target layer: it reads that layer's fields.
+            let when: Vec<Option<u32>> = targets
+                .iter()
+                .map(|&matcher| {
+                    def.when.as_ref().map(|_| {
+                        names.conditions.push(Condition { item, matcher, expr: std::sync::OnceLock::new() });
+                        names.conditions.len() as u32 - 1
+                    })
+                })
+                .collect();
             match &def.item {
                 NameItem::Scope(classes) => {
                     let Some(bits) = class_bits(&mut names.scope_classes, classes, errors) else { continue };
                     opened |= bits;
-                    for &m in &targets {
-                        names.add(g, m, |k| k.scope |= bits);
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |k| k.scopes.push((bits, when)));
                     }
                 }
-                NameItem::Declares { classes, path: p, nearest, hoisted } => {
+                NameItem::Declares { classes, path: p, nearest, enclosing, hoisted } => {
                     let Some(bits) = class_bits(&mut names.declaration_classes, classes, errors) else { continue };
                     let Some(near) = class_bits(&mut names.scope_classes, nearest, errors) else { continue };
                     declared |= bits;
                     asked.extend(nearest.iter().map(|n| (n, true)));
                     let Some(p) = path(errors, p) else { continue };
-                    let d = Declare { classes: bits, path: p, nearest: near, hoisted: *hoisted };
-                    for &m in &targets {
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        let d = Declare { classes: bits, path: p.clone(), nearest: near, hoisted: *hoisted, enclosing: *enclosing, when };
                         names.add(g, m, |k| k.declares.push(d.clone()));
                     }
                 }
@@ -134,16 +162,16 @@ impl Names {
                         let Some(paths) = paths else { continue };
                         through.push(paths);
                     }
-                    for &m in &targets {
-                        names.add(g, m, |k| k.through.extend(through.iter().cloned()));
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |k| k.through.extend(through.iter().map(|group| (group.clone(), when))));
                     }
                 }
                 NameItem::Resolves { classes, path: p } => {
                     let Some(bits) = class_bits(&mut names.declaration_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|c| (c, false)));
                     let Some(p) = path(errors, p) else { continue };
-                    let r = Resolve { classes: bits, path: p };
-                    for &m in &targets {
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        let r = Resolve { classes: bits, path: p.clone(), when };
                         names.add(g, m, |k| k.resolves.push(r.clone()));
                     }
                 }
@@ -173,25 +201,26 @@ impl Names {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.kinds.iter().all(|k| k.scope == 0 && k.declares.is_empty() && k.resolves.is_empty())
+        self.kinds.iter().all(|k| k.scopes.is_empty() && k.declares.is_empty() && k.resolves.is_empty())
     }
 
     /// The names a declaration of `node` declares: the node itself, or
     /// what its `declares through` paths lead to, recursively.
-    fn bindings(&self, tree: &Tree, node: u32, out: &mut Vec<u32>, depth: u32) {
+    fn bindings(&self, tree: &Tree, node: u32, holds: &dyn Fn(u32, Option<u32>) -> bool, out: &mut Vec<u32>, depth: u32) {
         let through = self.kinds.get(tree.node(node).matcher as usize).map_or(&[][..], |k| &k.through[..]);
-        if through.is_empty() || depth > 256 {
+        let mut through = through.iter().filter(|(_, when)| holds(node, *when)).peekable();
+        if through.peek().is_none() || depth > 256 {
             out.push(node);
             return;
         }
         // Per group, the first alternative that declares anything:
         // `value ?? key` falls back to the key when the value is a pattern
         // declaring nothing (`{ a = 1 }`).
-        for group in through {
+        for (group, _) in through {
             for path in group {
                 let before = out.len();
                 for n in follow(tree, node, path) {
-                    self.bindings(tree, n, out, depth + 1);
+                    self.bindings(tree, n, holds, out, depth + 1);
                 }
                 if out.len() > before {
                     break;
@@ -200,58 +229,86 @@ impl Names {
         }
     }
 
-    /// Resolves every name `tree` uses.
-    pub fn resolve(&self, tree: &Tree, text: &str) -> Resolved {
+    /// Resolves every name `tree` uses. `when(node, condition)` evaluates a
+    /// `when` condition on a node.
+    pub fn resolve(&self, tree: &Tree, text: &str, when: &dyn Fn(u32, u32) -> bool) -> Resolved {
         let mut out = Resolved::default();
         if self.is_empty() {
             return out;
         }
+        let holds = |node: u32, c: Option<u32>| c.is_none_or(|c| when(node, c));
         let name_text = |id: u32| {
             let n = tree.node(id);
             &text[n.start as usize..n.end as usize]
         };
         let mut scopes: Vec<Scope> = Vec::new();
         // Node -> the innermost scope it sits in (its own, when it opens one).
-        let mut scope_of: FxHashMap<u32, usize> = FxHashMap::default();
+        let mut scope_of = vec![NO_SCOPE; tree.nodes.len()];
+        let at = |scope_of: &[u32], id: u32| Some(scope_of[id as usize] as usize).filter(|&s| s != NO_SCOPE as usize);
         let mut uses: Vec<(u32, usize, u64)> = Vec::new();
+        let mut declared = Vec::new();
         for &id in &tree.order {
-            let outer = tree.parent(id).and_then(|p| scope_of.get(&p).copied());
-            let kind = self.kinds.get(tree.node(id).matcher as usize);
-            let here = match kind.filter(|k| k.scope != 0) {
-                Some(k) => {
-                    scopes.push(Scope { classes: k.scope, parent: outer, declared: FxHashMap::default() });
-                    Some(scopes.len() - 1)
+            let outer = tree.parent(id).and_then(|p| at(&scope_of, p));
+            let Some(kind) = self.kinds.get(tree.node(id).matcher as usize) else {
+                if let Some(outer) = outer {
+                    scope_of[id as usize] = outer as u32;
                 }
-                None => outer,
+                continue;
+            };
+            let classes = kind.scopes.iter().filter(|(_, c)| holds(id, *c)).fold(0, |all, (bits, _)| all | bits);
+            let here = if classes != 0 {
+                scopes.push(Scope { classes, parent: outer, declared: FxHashMap::default() });
+                Some(scopes.len() - 1)
+            } else {
+                outer
             };
             if let Some(here) = here {
-                scope_of.insert(id, here);
+                scope_of[id as usize] = here as u32;
             }
-            let Some(kind) = kind else { continue };
-            for d in &kind.declares {
-                let mut target = here;
+            for d in kind.declares.iter().filter(|d| holds(id, d.when)) {
+                let mut target = if d.enclosing { outer } else { here };
                 while let Some(s) = target.filter(|&s| scopes[s].classes & d.nearest == 0) {
                     target = scopes[s].parent;
                 }
                 let Some(target) = target else { continue };
-                let mut declared = Vec::new();
+                declared.clear();
                 for named in follow(tree, id, &d.path) {
-                    self.bindings(tree, named, &mut declared, 0);
+                    self.bindings(tree, named, &holds, &mut declared, 0);
                 }
-                for name in declared {
+                for &name in &declared {
                     let start = tree.node(name).start;
-                    scopes[target].declared.entry(name_text(name).into()).or_default().push((name, start, d.classes, d.hoisted));
+                    scopes[target].declared.entry(name_text(name)).or_default().push((name, start, d.classes, d.hoisted));
                 }
             }
             if let Some(here) = here {
-                for r in &kind.resolves {
-                    for name in follow(tree, id, &r.path) {
-                        uses.push((name, here, r.classes));
+                for r in kind.resolves.iter().filter(|r| holds(id, r.when)) {
+                    if r.path.is_empty() {
+                        uses.push((id, here, r.classes));
+                    } else {
+                        uses.extend(follow(tree, id, &r.path).into_iter().map(|name| (name, here, r.classes)));
                     }
                 }
             }
         }
+        // A later hoisted declaration of a merged name stands for the first.
+        for scope in &scopes {
+            for decls in scope.declared.values() {
+                let mut hoisted = decls.iter().filter(|d| d.3);
+                if let Some(first) = hoisted.next() {
+                    for later in hoisted.filter(|d| d.0 != first.0) {
+                        out.declaration.insert(later.0, first.0);
+                    }
+                }
+            }
+        }
+        // A name looked up twice keeps the first lookup, found or not: a
+        // parent's `resolves type name` comes before the name's own
+        // `resolves value`.
+        let mut asked = crate::fx_hash::FxHashSet::default();
         for (name, scope, want) in uses {
+            if !asked.insert(name) {
+                continue;
+            }
             let start = tree.node(name).start;
             let key = name_text(name);
             let mut at = Some(scope);

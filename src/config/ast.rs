@@ -110,14 +110,18 @@ pub struct AttrDef {
 pub struct NameDef {
     pub targets: Vec<Name>,
     pub item: NameItem,
+    /// `when cond { ... }` around the item: it applies to nodes where the
+    /// condition holds.
+    pub when: Option<Expr>,
 }
 
 #[derive(Clone, Debug)]
 pub enum NameItem {
     /// `scope block, function`: the node opens a scope of these classes.
     Scope(Vec<Name>),
-    /// `declares value, type name in nearest block [hoisted]`.
-    Declares { classes: Vec<Name>, path: Vec<Name>, nearest: Vec<Name>, hoisted: bool },
+    /// `declares value, type name in nearest block [hoisted]`; `in enclosing
+    /// block` skips the scopes the node opens itself.
+    Declares { classes: Vec<Name>, path: Vec<Name>, nearest: Vec<Name>, enclosing: bool, hoisted: bool },
     /// `resolves value [path]`: the node (or what `path` leads to) uses a name.
     Resolves { classes: Vec<Name>, path: Vec<Name> },
     /// `declares through a ?? b, c`: a node something declares (a pattern)

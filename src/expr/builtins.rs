@@ -199,6 +199,12 @@ impl<'a> Ctx<'a> {
 
     /// This tree's names, resolved on first use.
     fn names(&self) -> &'a crate::grammar::names::Resolved {
-        self.memo.names.get_or_init(|| self.grammar.names.resolve(self.tree, self.source))
+        self.memo.names.get_or_init(|| {
+            let names = &self.grammar.names;
+            let when = |node: u32, condition: u32| {
+                names.conditions[condition as usize].expr.get().is_some_and(|e| Ctx { node, ..*self }.eval(e).is_ok_and(|v| v.truthy()))
+            };
+            names.resolve(self.tree, self.source, &when)
+        })
     }
 }

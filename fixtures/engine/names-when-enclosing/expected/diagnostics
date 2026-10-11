@@ -1,0 +1,4 @@
+file.t:4:9-4:10 found#0 a -> 3
+file.t:5:9-5:10 found#0 f -> 2
+file.t:7:7-7:8 found#0 f -> 2
+file.t:9:7-9:13 found#0 hidden -> none

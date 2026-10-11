@@ -1,0 +1,3 @@
+type T = number;
+const T = 1;
+let x: T = T;

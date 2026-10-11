@@ -248,8 +248,16 @@ speed is within noise of native. Slower is a problem to solve, not a verdict.
 - Check: a config rule reporting `ts_identifier` nodes where
   `scope_declaration` differs from the native `declaration`, run on
   wayward; zero reports and equal speed is the bar.
-- Undecided: destructuring (patterns passing a declaration to their
-  fields), implicit names (`arguments`), conditional items (`when`).
+- Done: `declares through` (patterns pass a declaration to their fields;
+  per group the first alternative that declares anything), merging of
+  hoisted declarations across classes, first lookup of a name wins (a
+  parent's `resolves type name` before the name's own `resolves value`).
+- Wayward check: 17 of 661,376 references differ from native; 10 are a
+  function body's declarations seen from parameter annotations (`typeof x`;
+  TS puts body declarations in the function scope), which needs `when`.
+- Next: conditional items (`when <expr> { items }`, conditions compiled with
+  rule expressions and evaluated per node during resolution), then
+  `propagates` for type-position context, implicit names (`arguments`).
 
 ## Open
 

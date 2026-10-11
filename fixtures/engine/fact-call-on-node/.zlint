@@ -1,6 +1,8 @@
 import .ts
 
-# `node.fact(...)` asks the fact about that node, not the rule's.
+# `node.fact(...)` asks the fact about that node, not the rule's; a `fn`
+# may ask it about a node it is given.
+fn literal(n) = n.literal_value()
 in ts_binary rule lit warn "lit" {
-  when left.node.literal_value() != null && right.node.literal_value() == null
+  when literal(left.node) != null && right.node.literal_value() == null
 }

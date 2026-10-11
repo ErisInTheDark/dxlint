@@ -1,0 +1,13 @@
+import .ts
+
+in ts_program { scope block }
+in ts_type_alias { declares type name in nearest block hoisted }
+in ts_variable_declaration { declares value declaration in nearest block }
+in ts_declarator { declares through name }
+# The type reference looks its name up first; the name's own value lookup
+# then leaves it alone.
+in ts_type_reference { resolves type name }
+in ts_identifier {
+  resolves value
+  rule found warn "{text} -> {scope_declaration.line}" { when scope_declaration != null }
+}

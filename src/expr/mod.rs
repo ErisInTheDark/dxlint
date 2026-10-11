@@ -956,8 +956,9 @@ impl Scope<'_> {
                 let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
                 CExpr::FactCall(i, args, None)
             }
+            // Allowed in `fn` bodies too: the node is an explicit value.
             ExprKind::NodeCall(receiver, name, args) => {
-                let Some(i) = facts::fact(&name.text).filter(|_| !self.options_only) else {
+                let Some(i) = facts::fact(&name.text) else {
                     errors.push(
                         ConfigError::new(name.span, format!("`{}` is not a native fact; only facts are called on a node (`node.fact(...)`)", name.text))
                             .suggest(&name.text, facts::FACTS.iter().map(|f| f.name)),
