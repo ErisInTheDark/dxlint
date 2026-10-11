@@ -1,0 +1,4 @@
+file.ts:1:18-1:40 ban-tslint-comment#0
+file.ts:2:3-2:30 ban-tslint-comment#0
+file.ts:4:3-5:15 ban-tslint-comment#0
+file.ts:7:12-7:31 ban-tslint-comment#0

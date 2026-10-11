@@ -3,9 +3,34 @@
 define {
 
 # ---- comments --------------------------------------------------------------------
+fn tslint_comment_edit(source, n) = {
+  value line_start: position(n.offset).js_line_start
+  value prefix: byte_slice(source, line_start, n.offset)
+  value tail: n.after
+  value tail_bytes: byte_len(tail)
+  value tail_end: n.end_offset + tail_bytes
+  value after_end: tail_end + 1
+  value after_tail: byte_slice(source, tail_end, after_end)
+  value newline: if after_tail == "\r" && position(after_end).line == position(tail_end).line then 2 else if re_test(after_tail, /^[\r\n]/) then 1 else 0
+  value standalone: re_test(prefix, /^[ \t]*$/) && re_test(tail, /^[ \t]*$/)
+  value trimmed_prefix: re_replace(prefix, /[ \t]+$/, "")
+  # Inline multiline comments can carry ASI-significant line breaks.
+  value if standalone then { start: line_start, end: n.end_offset + byte_len(tail) + newline, text: "" }
+    else if n is ts_line_comment then { start: line_start + byte_len(trimmed_prefix), end: n.end_offset, text: "" }
+    else if re_test(n.text, /[\r\n]/) then null
+    else {
+      start: n.offset,
+      end: n.end_offset,
+      text: if re_test(prefix, /\S$/) && re_test(tail, /^\S/) && !re_test(tail, /^[;,)}\]]/) then " " else ""
+    }
+}
 in ts_comment rule ban-tslint-comment {
-  when re_test(text, /^\/[\/*]\s*tslint:/)
-  warn "tslint comment detected: \"{text}\""
+  let content re_replace(text, /^\/\/|^\/\*|\*\/$/, "")
+  let normalised re_replace(content, /^\s+|\s+$/, "")
+  when re_test(content, /^\s*tslint:(enable|disable)(?:-(line|next-line))?(:|\s|$)/)
+  let edit tslint_comment_edit(source, node)
+  warn "tslint comment detected: \"{if node is ts_line_comment then '// ' normalised else '/* ' normalised ' */'}\""
+  fix at edit if edit != null as edit.text
 }
 
 # Only directives before the first code token are triple-slash references.

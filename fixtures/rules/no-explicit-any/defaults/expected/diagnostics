@@ -1,0 +1,4 @@
+file.ts:1:12-1:15 no-explicit-any#0
+file.ts:2:19-2:22 no-explicit-any#0
+file.ts:3:27-3:30 no-explicit-any#0
+file.ts:3:33-3:36 no-explicit-any#0

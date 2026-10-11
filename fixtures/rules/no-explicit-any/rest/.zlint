@@ -1,0 +1,2 @@
+import .ts
+rule no-explicit-any { set fixToUnknown true; set ignoreRestArgs true }

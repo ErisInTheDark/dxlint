@@ -153,9 +153,15 @@ in ts_array_type let rest_array_argument rest_parameter_annotation(node)
 in ts_type_reference let rest_array_argument contains(["Array", "ReadonlyArray"], name) && rest_parameter_annotation(node)
 in ts_type_keyword let no_explicit_any_checked true
 in ts_type_keyword rule no-explicit-any {
+  option fixToUnknown boolean = false "Replace explicit any with unknown automatically."
+  option ignoreRestArgs boolean = false "Allow any in rest parameter arrays."
   when text == "any"
-  when no_explicit_any_checked
+  when no_explicit_any_checked && (!ignoreRestArgs || parent.rest_array_argument != true)
+  let keyof_any parent is ts_type_operator && parent.operator == "keyof"
+  let fix_target if keyof_any then parent.node else node
+  let replacement if keyof_any then "PropertyKey" else if node is ts_parameter.type && parent.rest_function_parameter == true then "unknown[]" else "unknown"
   warn "Unexpected any. Specify a different type."
+  fix at fix_target if fixToUnknown && expression_fix_retains_comments(fix_target, replacement) as replacement
 }
 
 in ts_number, ts_string let delete_literal_key true
