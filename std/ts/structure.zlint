@@ -268,7 +268,7 @@ in ts_line rule max-len {
   when !settings.ignoreUrls || !re_test(measured, /[^:/?#]:\/\/[^?#]/)
   when !settings.ignorePattern || !re_test(measured, settings.ignorePattern)
   let parts { value measured; split "\t"; map (part) utf16_len(part) }
-  let length { value extra: utf16_len(measured) - len(measured); value expanded_line_length(parts, extra, tab_width) }
+  let length if !contains(measured, "\t") then len(measured) else { value extra: utf16_len(measured) - len(measured); value expanded_line_length(parts, extra, tab_width) }
   let comment_applies comment_limit > 0 && structure_full_comment
   let limit if comment_applies then comment_limit else code_limit
   when length > limit
@@ -690,7 +690,7 @@ in ts_line rule max-statements-per-line {
   let statements { value overlapping(max_statements_counted); filter (statement) statement.max_statements_counted_here.nonempty ?? true }
   let tally {
     value statements
-    fold ({ count: 0, first_entry: null, first_exit: null, at_limit: null, after_limit: null }) (state, statement) {
+    fold ({ count: 0, first_entry: null, first_exit: null, at_limit: null, after_limit: null }) (state, statement) if statement.max_statements_entry_line != row && statement.max_statements_exit_line != row then state else {
       count: state.count + (if statement.max_statements_entry_line == row then 1 else 0),
       first_entry: if statement.max_statements_entry_line == row then state.first_entry.nonempty ?? statement.offset else state.first_entry,
       first_exit: if statement.max_statements_exit_line == row then { value state.first_exit.nonempty ?? statement.max_statements_exit_offset; min statement.max_statements_exit_offset } else state.first_exit,
