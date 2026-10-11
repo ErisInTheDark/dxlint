@@ -9,6 +9,14 @@ use std::sync::OnceLock;
 
 const NONE: u32 = u32::MAX;
 
+/// [`Tree::field_one`]: how many nodes a field holds, the node when one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldOne {
+    None,
+    One(u32),
+    Many,
+}
+
 pub struct Tree {
     pub nodes: Vec<Node>,
     parent: Vec<u32>,
@@ -206,18 +214,45 @@ impl Tree {
     /// which own their own fields.
     pub fn fields(&self, id: u32, label: u16) -> Vec<u32> {
         let mut out = Vec::new();
-        self.collect_fields(id, label, &mut out);
+        self.visit_fields(id, label, &mut |node| {
+            out.push(node);
+            true
+        });
         out
     }
 
-    fn collect_fields(&self, id: u32, label: u16, out: &mut Vec<u32>) {
+    /// [`Self::fields`] without building the list: `visit` sees each in
+    /// order until it returns false. False when it stopped early.
+    pub fn visit_fields(&self, id: u32, label: u16, visit: &mut impl FnMut(u32) -> bool) -> bool {
         for e in &self.nodes[id as usize].children {
-            if e.label == label {
-                out.push(e.node);
+            let go_on = if e.label == label {
+                visit(e.node)
             } else if self.nodes[e.node as usize].matcher == TEXT {
-                self.collect_fields(e.node, label, out);
+                self.visit_fields(e.node, label, visit)
+            } else {
+                true
+            };
+            if !go_on {
+                return false;
             }
         }
+        true
+    }
+
+    /// A field read: no node, one, or several (then see [`Self::fields`]).
+    pub fn field_one(&self, id: u32, label: u16) -> FieldOne {
+        let mut found = FieldOne::None;
+        self.visit_fields(id, label, &mut |node| match found {
+            FieldOne::None => {
+                found = FieldOne::One(node);
+                true
+            }
+            _ => {
+                found = FieldOne::Many;
+                false
+            }
+        });
+        found
     }
 
     /// The matcher node a labelled node is a field of (skipping text

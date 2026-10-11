@@ -630,16 +630,15 @@ impl Linter {
                         indent_reset: self.rules[fi].indent_reset.as_ref(),
                         profile: self.profile.as_ref(),
                     };
-                    let started = self.profile.as_ref().map(|_| std::time::Instant::now());
-                    for d in self.apply_each(&self.rules[fi], &ctx) {
+                    let found = match &self.profile {
+                        Some(profile) => profile.time_rule(fi, || self.apply_each(&self.rules[fi], &ctx)),
+                        None => self.apply_each(&self.rules[fi], &ctx),
+                    };
+                    for d in found {
                         if let Some([edit]) = d.fix.as_ref().map(|fix| fix.edits.as_slice()) {
                             record_reindent(&mut reindented[fi].borrow_mut(), run.text, run.lines, edit);
                         }
                         out.push(d);
-                    }
-                    if let (Some(p), Some(s)) = (&self.profile, started) {
-                        Profile::add_time(&p.rule_nanos[fi], s.elapsed());
-                        Profile::add(&p.rule_evals[fi], 1);
                     }
                 }
             };

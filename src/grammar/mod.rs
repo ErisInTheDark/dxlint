@@ -8,7 +8,7 @@ mod text;
 mod tree;
 
 pub use parse::{full_match, probe, Edge, Node, Parser, Probe, ROOT, TEXT};
-pub use tree::Tree;
+pub use tree::{FieldOne, Tree};
 pub use shapes::FieldTargets;
 
 use std::collections::HashMap;

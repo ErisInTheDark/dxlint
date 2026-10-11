@@ -9,7 +9,7 @@
 use crate::config::ast::BinOp;
 use crate::expr::functions::Function;
 use crate::expr::{facts, Builtin, CExpr, Each, FactOf, IsTest, NodeSel, Position, Relative, Value};
-use crate::grammar::{Grammar, Tree, UserFn, ROOT, TEXT};
+use crate::grammar::{FieldOne, Grammar, Tree, UserFn, ROOT, TEXT};
 use std::sync::OnceLock;
 
 mod records;
@@ -1401,7 +1401,147 @@ fn list_call<H: Host>(h: &Runtime<'_, H>, name: &str, args: &[V]) -> Option<Opti
     })
 }
 
+/// One expression on one node. Every nested expression is a call here, so
+/// this holds only the common scalar forms: an arm needing lists, closures
+/// or text would grow every call's frame. The rest is [`ev_rare`].
 fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
+    let tree = h.tree();
+    Some(match e {
+        VExpr::Const(v) => *v,
+        VExpr::Bound(slot) => *f.get(*slot as usize)?,
+        VExpr::Local(local) if node == h.home => h.local(*local)?,
+        VExpr::Attr(a) => h.attr(node, *a)?,
+        VExpr::ParentAttr(a) => match parent_layer(tree, node) {
+            Some(p) => h.attr(p, *a)?,
+            None => V::Null,
+        },
+        VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
+        VExpr::Is { parent, kinds } => {
+            let subject = if *parent { parent_layer(tree, node) } else { Some(node) };
+            V::Bool(subject.is_some_and(|n| is_a(h.grammar(), tree.node(n).matcher, kinds)))
+        }
+        VExpr::InField(kinds, label) => V::Bool(
+            tree.label(node) == Some(*label) && tree.owner(node).is_some_and(|o| is_a(h.grammar(), tree.node(o).matcher, kinds)),
+        ),
+        VExpr::FieldPresent(label) => V::Bool(tree.field_one(node, *label) != FieldOne::None),
+        VExpr::FieldCount(label) => {
+            let mut count = 0u32;
+            tree.visit_fields(node, *label, &mut |_| {
+                count += 1;
+                true
+            });
+            V::Num(f64::from(count))
+        }
+        VExpr::Field(label) => match tree.field_one(node, *label) {
+            FieldOne::None => V::Null,
+            FieldOne::One(one) => V::NodeText(one),
+            FieldOne::Many => return ev_rare(h, node, e, f),
+        },
+        VExpr::OnField(label, inner) => match tree.field_one(node, *label) {
+            FieldOne::None => V::Null,
+            FieldOne::One(one) => ev(h, one, inner, f)?,
+            FieldOne::Many => return ev_rare(h, node, e, f),
+        },
+        VExpr::OnParent(inner) => match parent_layer(tree, node) {
+            Some(p) => ev(h, p, inner, f)?,
+            None => V::Null,
+        },
+        VExpr::OnSibling(after, inner) => match tree.field_sibling(node, *after) {
+            Some(sibling) => ev(h, sibling, inner, f)?,
+            None => V::Null,
+        },
+        VExpr::OnAncestor(matcher, inner) => match tree.ancestor(h.grammar(), node, *matcher) {
+            Some(ancestor) => ev(h, ancestor, inner, f)?,
+            None => V::Null,
+        },
+        VExpr::Not(inner) => V::Bool(!h.truthy(ev(h, node, inner, f)?)),
+        VExpr::Neg(inner) => V::Num(-h.num(ev(h, node, inner, f)?)?),
+        VExpr::If(c, a, b) => if h.truthy(ev(h, node, c, f)?) { ev(h, node, a, f)? } else { ev(h, node, b, f)? },
+        VExpr::Binary(op, a, b) => {
+            let a = ev(h, node, a, f)?;
+            match op {
+                BinOp::And if !h.truthy(a) => return Some(V::Bool(false)),
+                BinOp::Or if h.truthy(a) => return Some(V::Bool(true)),
+                _ => {}
+            }
+            let b = ev(h, node, b, f)?;
+            match op {
+                BinOp::And | BinOp::Or => V::Bool(h.truthy(b)),
+                BinOp::Eq => V::Bool(h.equal(a, b)),
+                BinOp::Ne => V::Bool(!h.equal(a, b)),
+                _ => binary_rest(h, *op, a, b)?,
+            }
+        }
+        VExpr::IsNull(value) => V::Bool(ev(h, node, value, f)? == V::Null),
+        VExpr::NonEmpty(value) => match ev(h, node, value, f)? {
+            V::Str("") => V::Null,
+            V::NodeText(id) if tree.node(id).end == tree.node(id).start => V::Null,
+            v @ (V::List(_) | V::Record(..) | V::Text(_)) if !h.truthy(v) => V::Null,
+            v => v,
+        },
+        VExpr::Coalesce(a, b) => match ev(h, node, a, f)? {
+            v @ V::Node(_) => v,
+            _ => ev(h, node, b, f)?,
+        },
+        VExpr::Nullish(a, b) => match ev(h, node, a, f)? {
+            V::Null => ev(h, node, b, f)?,
+            value => value,
+        },
+        VExpr::Node => V::Node(node),
+        VExpr::Text => V::NodeText(node),
+        VExpr::Parent => parent_layer(tree, node).map_or(V::Null, V::Node),
+        VExpr::Offset => V::Num(f64::from(tree.node(node).start)),
+        VExpr::EndOffset => V::Num(f64::from(tree.node(node).end)),
+        _ => return ev_rare(h, node, e, f),
+    })
+}
+
+/// [`ev`]'s `Binary` past `and`/`or`/`==`/`!=`: orderings, arithmetic, joins.
+#[inline(never)]
+fn binary_rest<H: Host>(h: &Runtime<'_, H>, op: BinOp, a: V, b: V) -> Option<V> {
+    let order = || -> Option<std::cmp::Ordering> {
+        let texts = matches!(a, V::NodeText(_) | V::Str(_) | V::Text(_)) && matches!(b, V::NodeText(_) | V::Str(_) | V::Text(_));
+        match (h.num(a), h.num(b)) {
+            (Some(x), Some(y)) if !texts => Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)),
+            // Text order needs both sides as text the VM holds.
+            _ => h.text_pair(a, b, str::cmp),
+        }
+    };
+    Some(match op {
+        BinOp::Lt => V::Bool(order()?.is_lt()),
+        BinOp::Le => V::Bool(order()?.is_le()),
+        BinOp::Gt => V::Bool(order()?.is_gt()),
+        BinOp::Ge => V::Bool(order()?.is_ge()),
+        BinOp::Add => V::Num(h.num(a)? + h.num(b)?),
+        BinOp::Sub => V::Num(h.num(a)? - h.num(b)?),
+        BinOp::Rem => {
+            let divisor = h.num(b)?;
+            if divisor == 0.0 {
+                return None;
+            }
+            V::Num(h.num(a)? % divisor)
+        }
+        BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_) | V::Text(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_) | V::Text(_))) => {
+            V::Num(h.num(a)? * h.num(b)?)
+        }
+        BinOp::Join if matches!(a, V::List(_)) || matches!(b, V::List(_)) => {
+            let mut items = h.items(a);
+            items.extend(h.items(b));
+            h.list(&items)?
+        }
+        // Text joins, text repeats and the rest: the interpreter's own
+        // operator on the same values (its error gives up).
+        _ => {
+            let result = crate::expr::binary(op, h.unpack(a), h.unpack(b)).ok()?;
+            h.pack(&result)?
+        }
+    })
+}
+
+/// The forms [`ev`] hands over: whatever builds lists, records or text,
+/// walks sequences, or calls out.
+#[inline(never)]
+fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Option<V> {
     let tree = h.tree();
     let source = h.source();
     macro_rules! eval {
@@ -1444,14 +1584,8 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
                 Some(value)
             })?
         }
-        VExpr::OnSibling(after, inner) => match tree.field_sibling(node, *after) {
-            Some(sibling) => eval!(sibling, inner)?,
-            None => V::Null,
-        },
         VExpr::Index => tree.field_index(node).map_or(V::Null, |index| V::Num(index as f64)),
         VExpr::Line => V::Num((h.lines().line_of(tree.node(node).start as usize) + 1) as f64),
-        VExpr::Bound(slot) => *f.get(*slot as usize)?,
-        VExpr::Local(local) if node == h.home => h.local(*local)?,
         // Another node's `let` (`previous.carried`) is the interpreter's: it
         // memoises them per node.
         VExpr::Local(local) => {
@@ -1518,7 +1652,6 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             let value = h.interp(node, expr, frame)?;
             h.pack(&value)?
         }
-        VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
         VExpr::ReTest(text, pattern) => {
             let run = |hay: &str| Some(crate::expr::re::test(&[Value::from(hay), Value::from(*pattern)]).ok()?.truthy());
             V::Bool(match eval!(node, text)? { V::Null => run("")?, value => h.with_text(value, run)? })
@@ -1614,100 +1747,12 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             let v = eval!(node, value)?;
             with_bound(f, *slot, &[v], |f| ev(h, node, body, f))?
         }
-        VExpr::IsNull(value) => V::Bool(eval!(node, value)? == V::Null),
-        VExpr::NonEmpty(value) => match eval!(node, value)? {
-            V::Str("") => V::Null,
-            V::NodeText(id) if tree.node(id).end == tree.node(id).start => V::Null,
-            v @ (V::List(_) | V::Record(..) | V::Text(_)) if !h.truthy(v) => V::Null,
-            v => v,
-        },
-        VExpr::Const(v) => *v,
-        VExpr::Is { parent, kinds } => {
-            let subject = if *parent { parent_layer(tree, node) } else { Some(node) };
-            V::Bool(subject.is_some_and(|n| is_a(h.grammar(), tree.node(n).matcher, kinds)))
+        // A field holding several nodes (`ev` reads none or one).
+        VExpr::Field(label) => h.list(&tree.fields(node, *label).into_iter().map(V::NodeText).collect::<Vec<_>>())?,
+        VExpr::OnField(label, inner) => {
+            let items = tree.fields(node, *label).into_iter().map(|id| ev(h, id, inner, f)).collect::<Option<Vec<_>>>()?;
+            h.list(&items)?
         }
-        VExpr::InField(kinds, label) => V::Bool(
-            tree.label(node) == Some(*label) && tree.owner(node).is_some_and(|o| is_a(h.grammar(), tree.node(o).matcher, kinds)),
-        ),
-        VExpr::FieldPresent(label) => V::Bool(!tree.fields(node, *label).is_empty()),
-        VExpr::FieldCount(label) => V::Num(tree.fields(node, *label).len() as f64),
-        VExpr::Attr(a) => h.attr(node, *a)?,
-        VExpr::ParentAttr(a) => match parent_layer(tree, node) {
-            Some(p) => h.attr(p, *a)?,
-            None => V::Null,
-        },
-        VExpr::Not(inner) => V::Bool(!h.truthy(eval!(node, inner)?)),
-        VExpr::Neg(inner) => V::Num(-h.num(eval!(node, inner)?)?),
-        VExpr::If(c, a, b) => if h.truthy(eval!(node, c)?) { eval!(node, a)? } else { eval!(node, b)? },
-        VExpr::Binary(op, a, b) => {
-            let a = eval!(node, a)?;
-            match op {
-                BinOp::And if !h.truthy(a) => return Some(V::Bool(false)),
-                BinOp::Or if h.truthy(a) => return Some(V::Bool(true)),
-                _ => {}
-            }
-            let b = eval!(node, b)?;
-            let order = || -> Option<std::cmp::Ordering> {
-                let texts = matches!(a, V::NodeText(_) | V::Str(_) | V::Text(_)) && matches!(b, V::NodeText(_) | V::Str(_) | V::Text(_));
-                match (h.num(a), h.num(b)) {
-                    (Some(x), Some(y)) if !texts => Some(x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)),
-                    // Text order needs both sides as text the VM holds.
-                    _ => h.text_pair(a, b, str::cmp),
-                }
-            };
-            match op {
-                BinOp::And | BinOp::Or => V::Bool(h.truthy(b)),
-                BinOp::Eq => V::Bool(h.equal(a, b)),
-                BinOp::Ne => V::Bool(!h.equal(a, b)),
-                BinOp::Lt => V::Bool(order()?.is_lt()),
-                BinOp::Le => V::Bool(order()?.is_le()),
-                BinOp::Gt => V::Bool(order()?.is_gt()),
-                BinOp::Ge => V::Bool(order()?.is_ge()),
-                BinOp::Add => V::Num(h.num(a)? + h.num(b)?),
-                BinOp::Sub => V::Num(h.num(a)? - h.num(b)?),
-                BinOp::Rem => {
-                    let divisor = h.num(b)?;
-                    if divisor == 0.0 { return None; }
-                    V::Num(h.num(a)? % divisor)
-                },
-                BinOp::Mul if !matches!((a, b), (V::NodeText(_) | V::Str(_) | V::Text(_), V::Num(_)) | (V::Num(_), V::NodeText(_) | V::Str(_) | V::Text(_))) => {
-                    V::Num(h.num(a)? * h.num(b)?)
-                }
-                BinOp::Join if matches!(a, V::List(_)) || matches!(b, V::List(_)) => {
-                    let mut items = h.items(a);
-                    items.extend(h.items(b));
-                    h.list(&items)?
-                }
-                // Text joins, text repeats and the rest: the interpreter's own
-                // operator on the same values (its error gives up).
-                _ => {
-                    let result = crate::expr::binary(*op, h.unpack(a), h.unpack(b)).ok()?;
-                    h.pack(&result)?
-                }
-            }
-        }
-        VExpr::Node => V::Node(node),
-        VExpr::Text => V::NodeText(node),
-        VExpr::Parent => parent_layer(tree, node).map_or(V::Null, V::Node),
-        VExpr::Offset => V::Num(f64::from(tree.node(node).start)),
-        VExpr::EndOffset => V::Num(f64::from(tree.node(node).end)),
-        VExpr::Field(label) => match tree.fields(node, *label).as_slice() {
-            [] => V::Null,
-            [one] => V::NodeText(*one),
-            many => h.list(&many.iter().map(|&id| V::NodeText(id)).collect::<Vec<_>>())?,
-        },
-        VExpr::OnField(label, inner) => match tree.fields(node, *label).as_slice() {
-            [] => V::Null,
-            [one] => eval!(*one, inner)?,
-            many => {
-                let items = many.iter().map(|&id| ev(h, id, inner, f)).collect::<Option<Vec<_>>>()?;
-                h.list(&items)?
-            }
-        },
-        VExpr::OnParent(inner) => match parent_layer(tree, node) {
-            Some(p) => eval!(p, inner)?,
-            None => V::Null,
-        },
         VExpr::IsValue(subject, kinds) => {
             let matcher = match eval!(node, subject)? {
                 V::Node(id) => Some(tree.node(id).matcher),
@@ -1717,14 +1762,6 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             };
             V::Bool(matcher.is_some_and(|m| is_a(h.grammar(), m, kinds)))
         }
-        VExpr::Coalesce(a, b) => match eval!(node, a)? {
-            v @ V::Node(_) => v,
-            _ => eval!(node, b)?,
-        },
-        VExpr::Nullish(a, b) => match eval!(node, a)? {
-            V::Null => eval!(node, b)?,
-            value => value,
-        },
         VExpr::Contains(haystack, needle) => {
             let (haystack, needle) = (eval!(node, haystack)?, eval!(node, needle)?);
             V::Bool(match haystack {
@@ -1807,10 +1844,6 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             },
             _ => V::Null,
         },
-        VExpr::OnAncestor(matcher, inner) => match tree.ancestor(h.grammar(), node, *matcher) {
-            Some(ancestor) => eval!(ancestor, inner)?,
-            None => V::Null,
-        },
         VExpr::Template(parts) => {
             let mut text = String::new();
             for part in parts.iter() {
@@ -1819,6 +1852,11 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             }
             h.pack(&Value::from(text))?
         }
+        VExpr::Const(_) | VExpr::Bound(_) | VExpr::Attr(_) | VExpr::ParentAttr(_) | VExpr::Fact { .. } | VExpr::Is { .. }
+        | VExpr::InField(..) | VExpr::FieldPresent(_) | VExpr::FieldCount(_) | VExpr::OnParent(_) | VExpr::OnSibling(..)
+        | VExpr::OnAncestor(..) | VExpr::Not(_) | VExpr::Neg(_) | VExpr::If(..) | VExpr::Binary(..) | VExpr::IsNull(_)
+        | VExpr::NonEmpty(_) | VExpr::Coalesce(..) | VExpr::Nullish(..) | VExpr::Node | VExpr::Text | VExpr::Parent
+        | VExpr::Offset | VExpr::EndOffset => unreachable!("ev evaluates these itself"),
     })
 }
 

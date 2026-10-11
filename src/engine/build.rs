@@ -10,7 +10,7 @@ use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
 use crate::config::source::SourceMap;
 use crate::config::Loaded;
-use crate::expr::{Attr, Attributes, CExpr, Ctx, Scope, Value};
+use crate::expr::{Attr, AttrNames, Attributes, CExpr, Ctx, Scope, Value};
 use crate::grammar::Grammar;
 use crate::path_globs::{wildcard, PathGlobs};
 use crate::pattern::Pat;
@@ -49,10 +49,10 @@ struct ReadRequirements {
 }
 
 impl ReadDependencies {
-    fn collect(g: &Grammar, attrs: &[String], uses: &[(crate::config::source::Span, crate::expr::Resolved)], layers: Vec<u32>, all_tokens: bool) -> Self {
+    fn collect(g: &Grammar, attrs: &AttrNames, uses: &[(crate::config::source::Span, crate::expr::Resolved)], layers: Vec<u32>, all_tokens: bool) -> Self {
         use crate::expr::Resolved;
         let helpers = uses.iter().filter_map(|(_, resolved)| match resolved {
-            Resolved::Attr(name) => attrs.iter().position(|attr| attr == name),
+            Resolved::Attr(name) => attrs.get(name).map(usize::from),
             Resolved::UserFunction(name) => g.function(name).map(|id| attrs.len() + id),
             _ => None,
         }).collect();
@@ -123,12 +123,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
     let uses: Uses = RefCell::default();
-    let mut attr_names: Vec<String> = Vec::new();
-    for def in &config.attrs {
-        if !attr_names.contains(&def.name.text) {
-            attr_names.push(def.name.text.clone());
-        }
-    }
+    let attr_names = AttrNames::new(config.attrs.iter().map(|def| def.name.text.as_str()));
     let mut function_reads: Vec<_> = grammar.functions.iter().map(|_| ReadDependencies::default()).collect();
     for def in &config.functions {
         let Some(i) = grammar.function(&def.name.text) else { continue };
@@ -558,7 +553,7 @@ fn capture_inner_labels(pat: &Pat, label: &str) -> Vec<String> {
 fn attributes(
     config: &crate::config::ast::Config,
     g: &Grammar,
-    names: &[String],
+    names: &AttrNames,
     uses: &Uses,
     errors: &mut Vec<ConfigError>,
 ) -> (Vec<Attr>, Vec<ReadDependencies>) {
@@ -571,7 +566,7 @@ fn attributes(
             errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));
             continue;
         }
-        let id = names.iter().position(|n| *n == def.name.text).expect("collected");
+        let id = usize::from(names.get(&def.name.text).expect("collected"));
         for target in &def.targets {
             let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, errors) else { continue };
             // Through a group: a default its members' own definitions refine.
@@ -669,7 +664,7 @@ fn schemas(config: &Config, errors: &mut Vec<ConfigError>) -> Schemas {
     named
 }
 
-fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &Uses, helpers: &[ReadDependencies], errors: &mut Vec<ConfigError>) -> Option<Rule> {
+fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: &Uses, helpers: &[ReadDependencies], errors: &mut Vec<ConfigError>) -> Option<Rule> {
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
@@ -898,13 +893,13 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &[String], uses: &
 
 /// `in a forward x from field` as (matcher, attribute, label); groups give
 /// one per member.
-fn forwards(config: &crate::config::ast::Config, g: &Grammar, attr_names: &[String], errors: &mut Vec<ConfigError>) -> Vec<(u32, u16, u16)> {
+fn forwards(config: &crate::config::ast::Config, g: &Grammar, attr_names: &AttrNames, errors: &mut Vec<ConfigError>) -> Vec<(u32, u16, u16)> {
     let mut out: Vec<(u32, u16, u16)> = Vec::new();
     for def in &config.forwards {
         let mut attrs = Vec::new();
         for a in &def.attrs {
-            match attr_names.iter().position(|n| *n == a.text) {
-                Some(i) => attrs.push((i as u16, a)),
+            match attr_names.get(&a.text) {
+                Some(i) => attrs.push((i, a)),
                 None => errors.push(match Dropped::find(&config.dropped, &a.text) {
                     Some(d) => d.still_used(a.span),
                     None => ConfigError::new(a.span, format!("no attribute `{}`", a.text)).suggest(&a.text, attr_names.iter().map(String::as_str)),

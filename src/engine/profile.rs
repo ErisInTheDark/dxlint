@@ -1,8 +1,15 @@
 //! `zlint --profile`: where linting time goes, per matcher and rule.
 //! Counters are atomics so parallel lint threads share one profile.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+thread_local! {
+    /// This thread's outermost native fact time so far, and how deeply fact
+    /// computations are nested right now (a fact may read another fact).
+    static FACT_TIME: Cell<(u64, u32)> = const { Cell::new((0, 0)) };
+}
 
 #[derive(Default)]
 pub struct Profile {
@@ -13,7 +20,8 @@ pub struct Profile {
     /// Nanoseconds searching for each overlay matcher, and the nodes found.
     pub overlay_nanos: Vec<AtomicU64>,
     pub overlay_nodes: Vec<AtomicU64>,
-    /// Nanoseconds spent evaluating each rule, and how often.
+    /// Nanoseconds spent evaluating each rule (native fact time excluded),
+    /// and how often.
     pub rule_nanos: Vec<AtomicU64>,
     pub rule_evals: Vec<AtomicU64>,
     /// Nanoseconds spent computing each native fact (memo misses only, so
@@ -59,5 +67,33 @@ impl Profile {
 
     pub fn get(counter: &AtomicU64) -> u64 {
         counter.load(Ordering::Relaxed)
+    }
+
+    /// Computes one native fact, counting its time against the fact and,
+    /// when outermost, against this thread's fact clock.
+    pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        FACT_TIME.with(|time| time.set((time.get().0, time.get().1 + 1)));
+        let value = compute();
+        let elapsed = started.elapsed();
+        FACT_TIME.with(|time| {
+            let (total, depth) = time.get();
+            time.set((if depth == 1 { total + elapsed.as_nanos() as u64 } else { total }, depth - 1));
+        });
+        Profile::add_time(&self.fact_nanos[fact], elapsed);
+        Profile::add(&self.fact_calls[fact], 1);
+        value
+    }
+
+    /// Times one rule evaluation, excluding the native facts it computed:
+    /// those are shared by every rule, so they count only as facts.
+    pub fn time_rule<T>(&self, rule: usize, run: impl FnOnce() -> T) -> T {
+        let facts_before = FACT_TIME.with(|time| time.get().0);
+        let started = Instant::now();
+        let value = run();
+        let facts = FACT_TIME.with(|time| time.get().0) - facts_before;
+        Profile::add(&self.rule_nanos[rule], (started.elapsed().as_nanos() as u64).saturating_sub(facts));
+        Profile::add(&self.rule_evals[rule], 1);
+        value
     }
 }

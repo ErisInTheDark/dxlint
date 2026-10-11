@@ -318,7 +318,7 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         .filter(|(_, calls, _)| *calls > 0)
         .collect();
     facts.sort_by_key(|f| std::cmp::Reverse(f.0));
-    output.err(format_args!("\n  {BOLD}facts{BOLD:#} {DIM}by time, part of the rules' (a whole-file analysis counts on the first fact needing it){DIM:#}"));
+    output.err(format_args!("\n  {BOLD}facts{BOLD:#} {DIM}by time, not in the rules' (a whole-file analysis counts on the first fact needing it){DIM:#}"));
     for (nanos, calls, name) in facts.iter().take(15) {
         output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*nanos)));
     }

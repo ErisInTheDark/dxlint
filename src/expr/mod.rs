@@ -435,6 +435,44 @@ impl Position {
     }
 }
 
+/// Every `let` attribute's name by id, and each name's id: name resolution
+/// asks for ids by name once per name read, and configs define thousands.
+#[derive(Debug)]
+pub struct AttrNames {
+    names: Vec<String>,
+    ids: crate::fx_hash::FxHashMap<String, u16>,
+}
+
+impl AttrNames {
+    const EMPTY: AttrNames = AttrNames { names: Vec::new(), ids: crate::fx_hash::FxHashMap::with_hasher(crate::fx_hash::FxBuild::new()) };
+
+    /// The names in first-definition order (a repeated name keeps its id).
+    pub fn new<'n>(names: impl IntoIterator<Item = &'n str>) -> Self {
+        let mut all = AttrNames::EMPTY;
+        for name in names {
+            if !all.ids.contains_key(name) {
+                all.ids.insert(name.to_string(), all.names.len() as u16);
+                all.names.push(name.to_string());
+            }
+        }
+        all
+    }
+
+    pub fn get(&self, name: &str) -> Option<u16> {
+        self.ids.get(name).copied()
+    }
+}
+
+static NO_ATTRS: AttrNames = AttrNames::EMPTY;
+
+impl std::ops::Deref for AttrNames {
+    type Target = [String];
+
+    fn deref(&self) -> &[String] {
+        &self.names
+    }
+}
+
 /// What names mean inside one rule.
 #[derive(Clone)]
 pub struct Scope<'a> {
@@ -445,7 +483,7 @@ pub struct Scope<'a> {
     /// Option values are constants: no node names at all.
     pub options_only: bool,
     /// Names of every `let` attribute, by id.
-    pub attrs: &'a [String],
+    pub attrs: &'a AttrNames,
     /// The rule's own `let` values visible here, by slot.
     pub locals: Vec<String>,
     /// Lambda parameters in scope, outermost first.
@@ -517,7 +555,7 @@ impl<'a> Scope<'a> {
             fields: Vec::new(),
             options: Vec::new(),
             options_only: false,
-            attrs: &[],
+            attrs: &NO_ATTRS,
             locals: Vec::new(),
             params: Vec::new(),
             rule: None,
@@ -540,7 +578,7 @@ impl<'a> Scope<'a> {
             ("rule let", self.locals.iter().any(|local| local == name)),
             ("rule option", self.options.iter().any(|option| option == name)),
             ("field", self.fields.iter().any(|(field, _)| field == name)),
-            ("attribute", self.attrs.iter().any(|attr| attr == name)),
+            ("attribute", self.attrs.get(name).is_some()),
             ("builtin", Builtin::named(name).is_some()),
             ("fact", facts::fact(name).is_some()),
             ("node link", facts::link(name).is_some()),
@@ -558,21 +596,21 @@ impl<'a> Scope<'a> {
         Scope { options_only: true, ..Scope::new(grammar) }
     }
 
-    /// What `x` means on a relative node: the rule's own `let` (also the one
-    /// being defined: `let depth previous.depth + 1`), an attribute, a fact,
-    /// a link, a builtin or a field label (any layer's).
-    fn relative_part(&self, part: &crate::config::ast::Name, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
-        let found = self.node_part(part);
-        if found.is_none() {
+    /// A relative read's result, its unmatched part reported. Probes that
+    /// try a read (`member_path`) skip this: the suggestion scans every name.
+    fn reported<T>(&self, read: Result<T, &crate::config::ast::Name>, errors: &mut Vec<ConfigError>) -> Option<T> {
+        read.map_err(|part| {
             errors.push(
                 ConfigError::new(part.span, format!("no let, attribute, fact, builtin or field `{}`", part.text))
                     .suggest(&part.text, self.attrs.iter().map(String::as_str).chain(facts::FACTS.iter().map(|f| f.name))),
             );
-        }
-        found
+        })
+        .ok()
     }
 
-    /// `x` read on some node, when it names something nodes have.
+    /// `x` read on some node, when it names something nodes have: the rule's
+    /// own `let` (also the one being defined: `let depth previous.depth + 1`),
+    /// an attribute, a fact, a link, a builtin or a field label (any layer's).
     fn node_part(&self, part: &crate::config::ast::Name) -> Option<CExpr> {
         let rule = || self.rule.unwrap_or_default().to_string();
         if let Some(i) = self.locals.iter().position(|l| *l == part.text) {
@@ -587,9 +625,9 @@ impl<'a> Scope<'a> {
             self.note(part.span, Resolved::Fact(facts::LINKS[i].name));
             return Some(CExpr::Link(i));
         }
-        if let Some(i) = self.attrs.iter().position(|a| *a == part.text) {
+        if let Some(i) = self.attrs.get(&part.text) {
             self.note(part.span, Resolved::Attr(part.text.clone()));
-            return Some(CExpr::Attr(i as u16));
+            return Some(CExpr::Attr(i));
         }
         if let Some(i) = facts::fact(&part.text) {
             self.note(part.span, Resolved::Fact(facts::FACTS[i].name));
@@ -643,14 +681,7 @@ impl<'a> Scope<'a> {
                 // The read of `keys[i..]` on a node, for each `i`: a node
                 // reached part way through a record (`rec.owner.line`) reads
                 // the rest there.
-                let parts = (0..keys.len())
-                    .map(|i| {
-                        let mut quiet = Vec::new();
-                        let rest = &keys[i..];
-                        let part = if rest.len() == 1 { self.node_part(&rest[0]) } else { self.relative_path(rest, &mut quiet) };
-                        part.filter(|_| quiet.is_empty())
-                    })
-                    .collect();
+                let parts = (0..keys.len()).map(|i| self.relative_path(&keys[i], &keys[i + 1..]).ok()).collect();
                 CExpr::Path(Box::new(base), keys.iter().map(|k| k.text.clone().into()).collect(), parts)
             }
         }
@@ -1167,9 +1198,9 @@ impl Scope<'_> {
             && Relative::named(&first.text).is_none();
         let own = if !plain {
             None
-        } else if let Some(i) = self.attrs.iter().position(|a| *a == first.text) {
+        } else if let Some(i) = self.attrs.get(&first.text) {
             self.note(first.span, Resolved::Attr(first.text.clone()));
-            Some(CExpr::Attr(i as u16))
+            Some(CExpr::Attr(i))
         } else if let Some(i) = facts::fact(&first.text) {
             self.note(first.span, Resolved::Fact(facts::FACTS[i].name));
             Some(CExpr::Fact(i, FactOf::Node))
@@ -1197,9 +1228,9 @@ impl Scope<'_> {
                     self.note(name.span, Resolved::Field(name.text.clone()));
                     return Some(CExpr::Field(*label));
                 }
-                if let Some(i) = self.attrs.iter().position(|a| *a == name.text) {
+                if let Some(i) = self.attrs.get(&name.text) {
                     self.note(name.span, Resolved::Attr(name.text.clone()));
-                    return Some(CExpr::Attr(i as u16));
+                    return Some(CExpr::Attr(i));
                 }
                 if let Some(b) = Builtin::named(&name.text) {
                     self.note(name.span, Resolved::Builtin(b.name()));
@@ -1267,7 +1298,7 @@ impl Scope<'_> {
                     }
                     _ => (members(&layer.text).expect("checked"), second, &path[2..]),
                 };
-                let inner = self.relative_part(field, errors)?;
+                let inner = self.reported(self.node_part(field).ok_or(field), errors)?;
                 if let Some(reads) = self.layer_reads {
                     reads.borrow_mut().extend(&ids);
                 }
@@ -1283,14 +1314,14 @@ impl Scope<'_> {
                 // `children.x`, `previous.x`, `next.x`.
                 if let (Some(rel), None, None) = (Relative::named(&layer.text), own_field, self.grammar.matcher(&layer.text)) {
                     self.note(layer.span, Resolved::Relative(Relative::NAMES.iter().find(|(_, r)| *r == rel).expect("named").0));
-                    return Some(CExpr::Relative(rel, Box::new(self.relative_part(field, errors)?)));
+                    return Some(CExpr::Relative(rel, Box::new(self.reported(self.node_part(field).ok_or(field), errors)?)));
                 }
-                let attr = self.attrs.iter().position(|a| *a == field.text);
+                let attr = self.attrs.get(&field.text);
                 let ancestor_field = self.grammar.matcher(&layer.text).is_some_and(|m| self.grammar.matchers[m as usize].labels().contains(&field.text));
                 if let (Some((_, label)), Some(attr), false) = (own_field, attr, ancestor_field) {
                     self.note(layer.span, Resolved::Field(layer.text.clone()));
                     self.note(field.span, Resolved::Attr(field.text.clone()));
-                    return Some(CExpr::FieldAttr(*label, attr as u16));
+                    return Some(CExpr::FieldAttr(*label, attr));
                 }
                 // `field.fact`: a native fact of one of the node's fields.
                 let fact = facts::fact(&field.text);
@@ -1320,7 +1351,7 @@ impl Scope<'_> {
                     self.note(layer.span, Resolved::Builtin("parent"));
                     if let Some(a) = attr {
                         self.note(field.span, Resolved::Attr(field.text.clone()));
-                        return Some(CExpr::ParentAttr(a as u16));
+                        return Some(CExpr::ParentAttr(a));
                     }
                     if let Some(fact) = fact {
                         self.note(field.span, Resolved::Fact(facts::FACTS[fact].name));
@@ -1377,7 +1408,8 @@ impl Scope<'_> {
                 // Longer paths walk: `callee.object.x` (own field, then the
                 // rest on its node), `parent.callee.x`, `previous.left.x`,
                 // `ts_class.body.x`.
-                let inner = self.relative_path(rest, errors)?;
+                let (second, tail) = rest.split_first()?;
+                let inner = self.reported(self.relative_path(second, tail), errors)?;
                 if let Some((_, label)) = self.fields.iter().find(|(f, _)| *f == first.text) {
                     self.note(first.span, Resolved::Field(first.text.clone()));
                     return Some(CExpr::OnField(*label, Box::new(inner)));
@@ -1409,36 +1441,37 @@ impl Scope<'_> {
         match self.node_part(first)? {
             CExpr::Field(label) => {
                 self.note(first.span, Resolved::Field(first.text.clone()));
-                Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?)))
+                let (second, tail) = rest.split_first()?;
+                Some(CExpr::OnField(label, Box::new(self.reported(self.relative_path(second, tail), errors)?)))
             }
             value => Some(self.member_path(value, rest)),
         }
     }
 
-    /// The rest of a path, read on some node: field labels walk into their
-    /// nodes; anything else is read there, then `.key`s.
-    fn relative_path(&self, parts: &[crate::config::ast::Name], errors: &mut Vec<ConfigError>) -> Option<CExpr> {
-        let [first, rest @ ..] = parts else { return None };
-        if rest.is_empty() {
-            return self.relative_part(first, errors);
-        }
+    /// The path `first.rest...`, read on some node: field labels walk into
+    /// their nodes; anything else is read there, then `.key`s. `Err` is the
+    /// part nothing on a node matched ([`Self::reported`] says so).
+    fn relative_path<'n>(&self, first: &'n crate::config::ast::Name, rest: &'n [crate::config::ast::Name]) -> Result<CExpr, &'n crate::config::ast::Name> {
+        let Some((second, tail)) = rest.split_first() else {
+            return self.node_part(first).ok_or(first);
+        };
         // `n.parent.x`, `n.previous.x`: step to that node, read the rest there.
         if first.text == "parent" && self.grammar.matcher("parent").is_none() {
-            return Some(CExpr::OnParent(Box::new(self.relative_path(rest, errors)?)));
+            return Ok(CExpr::OnParent(Box::new(self.relative_path(second, tail)?)));
         }
         if let Some(rel) = Relative::named(&first.text) {
-            return Some(CExpr::Relative(rel, Box::new(self.relative_path(rest, errors)?)));
+            return Ok(CExpr::Relative(rel, Box::new(self.relative_path(second, tail)?)));
         }
         match self.node_part(first) {
-            Some(CExpr::Field(label)) => Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?))),
+            Some(CExpr::Field(label)) => Ok(CExpr::OnField(label, Box::new(self.relative_path(second, tail)?))),
             // `n.index.node`: a builtin is a plain value with nothing to read
             // on, so a field of that name is meant (`index`, `kind`...).
             Some(CExpr::Builtin(_)) if self.grammar.labels.get(&first.text).is_some() => {
                 let label = self.grammar.labels.get(&first.text).expect("checked");
-                Some(CExpr::OnField(label, Box::new(self.relative_path(rest, errors)?)))
+                Ok(CExpr::OnField(label, Box::new(self.relative_path(second, tail)?)))
             }
-            Some(value) => Some(self.member_path(value, rest)),
-            None => self.relative_part(first, errors),
+            Some(value) => Ok(self.member_path(value, rest)),
+            None => Err(first),
         }
     }
 }
@@ -1634,16 +1667,14 @@ impl<'a> Ctx<'a> {
             }
             let slot = projection.map_or(fact, |index| facts::FACTS.len() + index);
             self.memo_fact(node, slot, || {
-                let started = self.profile.map(|_| std::time::Instant::now());
-                let value = match read {
+                let compute = || match read {
                     Some(read) => (read.get)(native, node, read.field),
                     None => (facts::FACTS[fact].get)(native, node),
                 };
-                if let (Some(profile), Some(started)) = (self.profile, started) {
-                    crate::engine::Profile::add_time(&profile.fact_nanos[fact], started.elapsed());
-                    crate::engine::Profile::add(&profile.fact_calls[fact], 1);
+                match self.profile {
+                    Some(profile) => profile.time_fact(fact, compute),
+                    None => compute(),
                 }
-                value
             })
         };
         match of {
@@ -1911,13 +1942,11 @@ impl<'a> Ctx<'a> {
             CExpr::FactCall(i, args) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
                 let args = args.iter().map(|a| self.eval(a).map(Value::into_static)).collect::<Result<Vec<_>, _>>()?;
-                let started = self.profile.map(|_| std::time::Instant::now());
-                let v = facts::with_args(args, || (facts::FACTS[*i].get)(native, self.node));
-                if let (Some(p), Some(s)) = (self.profile, started) {
-                    crate::engine::Profile::add_time(&p.fact_nanos[*i], s.elapsed());
-                    crate::engine::Profile::add(&p.fact_calls[*i], 1);
+                let compute = || facts::with_args(args, || (facts::FACTS[*i].get)(native, self.node));
+                match self.profile {
+                    Some(profile) => profile.time_fact(*i, compute),
+                    None => compute(),
                 }
-                v
             }
             CExpr::ParentField(label) => match self.parent_layer() {
                 Some(p) => self.field(p, *label),
