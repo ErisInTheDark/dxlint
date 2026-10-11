@@ -35,7 +35,6 @@ pub trait Facts {
     fn type_members(&self, node: u32) -> Option<Vec<Box<str>>>;
     fn type_params(&self, node: u32) -> Option<TypeParamFacts>;
     fn type_flags(&self, node: u32) -> Option<Vec<&'static str>>;
-    fn type_arg_redundant(&self, node: u32) -> Option<&'static str>;
     /// `local`, `import` or `global` for a referencing identifier.
     fn resolved(&self, node: u32) -> Option<&'static str>;
     /// The kind of the declaration a referencing identifier resolves to.
@@ -170,10 +169,6 @@ impl Facts for NativeFile<'_> {
 
     fn type_flags(&self, node: u32) -> Option<Vec<&'static str>> {
         NativeFile::type_flags(self, node)
-    }
-
-    fn type_arg_redundant(&self, node: u32) -> Option<&'static str> {
-        NativeFile::type_arg_redundant(self, node)
     }
 
     fn resolved(&self, node: u32) -> Option<&'static str> {
