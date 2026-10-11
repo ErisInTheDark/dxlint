@@ -1,10 +1,12 @@
 //! typescript-eslint's type-aware rules (`std/ts/typed`).
 
-use crate::expr::facts::{Fact, Shape};
+use crate::expr::facts::Shape;
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field, Kind};
 use crate::native::ts::types::{Checker, Ty};
+
+use super::Fact;
 
 mod template;
 mod type_properties;

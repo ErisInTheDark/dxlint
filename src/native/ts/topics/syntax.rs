@@ -1,6 +1,8 @@
 //! Generic syntax, tokens and gaps; policy lives in .zlint.
 
-use crate::expr::{facts::{Fact, FactFields, Shape}, Value};
+use crate::expr::{facts::Shape, Value};
+
+use super::{Fact, FactFields};
 use crate::native::ts::{facts::NativeFile, tokens};
 
 const GAP: Shape = Shape::Record(&[

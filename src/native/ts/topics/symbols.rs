@@ -1,6 +1,6 @@
 //! Documentation and origins of resolved symbols and call signatures.
 
-use crate::expr::facts::Fact;
+use super::Fact;
 use crate::expr::Value;
 
 use super::super::facts::{Facts, NativeFile};

@@ -1,6 +1,6 @@
 //! Runtime value domains and resolved call contracts.
 
-use crate::expr::facts::Fact;
+use super::Fact;
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::types::{LiteralValue, Ty, ValueDomains};

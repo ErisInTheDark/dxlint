@@ -9,7 +9,9 @@ mod loops;
 mod names;
 mod receivers;
 
-use crate::expr::facts::{Fact, Shape};
+use crate::expr::facts::Shape;
+
+use super::Fact;
 use crate::expr::Value;
 use crate::native::ts::directives;
 use crate::native::ts::kinds::Kind;

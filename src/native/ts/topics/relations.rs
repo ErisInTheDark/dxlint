@@ -1,7 +1,7 @@
 //! Links between nodes that rules navigate (`declaration.line`): bindings
 //! and their uses. What a rule makes of them is written in the rule.
 
-use crate::expr::facts::Link;
+use super::Link;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 

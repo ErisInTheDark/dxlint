@@ -42,8 +42,9 @@ impl Linter {
                     });
                     let known: Vec<String> = facts::FACTS
                         .iter()
-                        .filter_map(|f| {
-                            let v = (f.get)(&*file, node);
+                        .enumerate()
+                        .filter_map(|(i, f)| {
+                            let v = facts::read(&*file, i, node);
                             (!matches!(v, crate::expr::Value::Null)).then(|| format!("`{}` = {}", f.name, short(&show(&v))))
                         })
                         .collect();

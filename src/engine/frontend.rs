@@ -8,13 +8,25 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::expr::facts::{FactInfo, LinkInfo, ProjectionInfo};
 use crate::expr::Value;
 use crate::grammar::{NativeFront, Node, Tree};
 use super::reads::{Dep, Discovery, Reads};
 
-/// What one parsed file answers about its nodes (facts, links, tokens).
-// Step B of the split replaces this with an engine-owned interface.
-pub type Native<'t> = dyn crate::native::ts::facts::Facts + 't;
+/// What one parsed file answers about its nodes. Facts, projections and
+/// links are numbered as its front end declares them
+/// ([`Frontend::facts`]); [`crate::expr::facts`] reads them.
+pub trait Native {
+    /// Its front end's name.
+    fn frontend(&self) -> &'static str;
+    fn fact(&self, fact: usize, node: u32) -> Value<'static>;
+    /// One field of a projection's fact (`Some`), or whether it is there.
+    fn projection(&self, projection: usize, node: u32, field: Option<usize>) -> Value<'static>;
+    fn link(&self, link: usize, node: u32) -> Vec<u32>;
+    /// Byte `at` lies strictly inside one token or comment (a line of a
+    /// multi-line string or block comment starts there).
+    fn inside_token(&self, at: usize) -> bool;
+}
 
 /// Which node kinds may fill a field of one node kind.
 #[derive(Default)]
@@ -75,7 +87,17 @@ pub trait Frontend: Sync {
     /// Adds token nodes of the `wanted` kinds (by kind number).
     fn attach_tokens(&self, text: &str, parsed: &mut Parsed, wanted: &[bool]);
     /// The fact object of one parsed file.
-    fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<Native<'t>>;
+    fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't>;
+    /// The facts its files answer, numbered as [`Native::fact`] reads them.
+    fn facts(&self) -> Vec<FactInfo> {
+        Vec::new()
+    }
+    fn projections(&self) -> Vec<ProjectionInfo> {
+        Vec::new()
+    }
+    fn links(&self) -> Vec<LinkInfo> {
+        Vec::new()
+    }
 
     /// State shared by every file of a project (other files' exports, globals).
     fn project(&self) -> Box<dyn Project>;

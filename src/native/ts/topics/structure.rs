@@ -1,7 +1,9 @@
 //! @stylistic code shape across lines (`std/ts/structure`): indentation,
 //! parentheses, wrapping.
 
-use crate::expr::{facts::{Fact, Shape}, Value};
+use crate::expr::{facts::Shape, Value};
+
+use super::Fact;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::Kind;
 

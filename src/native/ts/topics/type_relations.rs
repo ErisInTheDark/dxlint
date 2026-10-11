@@ -1,6 +1,8 @@
 //! Relationships between an expression's operand, annotation and context.
 
-use crate::expr::{facts::Fact, Value};
+use crate::expr::Value;
+
+use super::Fact;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field as F, Kind as K};
 use crate::native::ts::types::{Checker, Ty};

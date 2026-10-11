@@ -40,8 +40,6 @@ use std::path::Path;
 
 use crate::grammar::Node;
 
-pub use topics::{FACT_FIELD_GROUPS, FACT_GROUPS, LINK_GROUPS};
-
 pub struct Parsed {
     /// Nodes with `matcher` = [`kinds::Kind`] and edge labels =
     /// [`kinds::Field`] (plain text nodes use `TEXT`).

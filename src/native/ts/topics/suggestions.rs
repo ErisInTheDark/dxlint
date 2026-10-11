@@ -1,6 +1,8 @@
 //! eslint core suggestion rules (`std/ts/suggestions`, `std/js/problems`).
 
-use crate::expr::facts::{Fact, Shape};
+use crate::expr::facts::Shape;
+
+use super::Fact;
 
 pub(crate) mod expressions;
 mod accessors;

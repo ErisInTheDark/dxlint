@@ -28,9 +28,6 @@ pub trait Facts {
     fn with_field(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32, Option<usize>) -> Value<'static>, node: u32, field: Option<usize>) -> Value<'static>;
     /// `f` on the file itself, for links (nodes a node leads to).
     fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
-    /// Byte `at` lies strictly inside one token or comment (a line of a
-    /// multi-line template, string or block comment starts there).
-    fn inside_token(&self, at: usize) -> bool;
     fn binding(&self, node: u32) -> Option<Binding>;
     fn import_of(&self, node: u32) -> Option<(String, String)>;
     fn decl_doc(&self, node: u32) -> Option<String>;
@@ -135,14 +132,6 @@ pub struct RegexFinding {
 pub type TypeParamFacts = (Vec<Option<String>>, Vec<Option<String>>);
 
 impl Facts for NativeFile<'_> {
-    fn inside_token(&self, at: usize) -> bool {
-        use super::lexer::Tok;
-        let tokens = self.cached(super::tokens::lex_comments);
-        let after = tokens.0.partition_point(|token| (token.start as usize) < at);
-        // JSX text is content laid out by its own lines, not one token.
-        after.checked_sub(1).map(|i| &tokens.0[i]).is_some_and(|token| token.end as usize > at && matches!(token.tok, Tok::Template | Tok::Str | Tok::P("/*")))
-    }
-
     fn with_file(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Value<'static>, node: u32) -> Value<'static> {
         f(self, node)
     }

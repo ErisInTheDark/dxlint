@@ -1541,7 +1541,7 @@ pub struct Ctx<'a> {
     /// layers it targets (empty: not only whole layers).
     pub locals: Option<(u32, &'a [CExpr], &'a [u32])>,
     /// Facts of the native front end, when `tree` is a native tree.
-    pub native: Option<&'a crate::engine::frontend::Native<'a>>,
+    pub native: Option<&'a (dyn crate::engine::frontend::Native + 'a)>,
     /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
     pub indents: &'a IndentPlan,
     pub indent_reset: Option<&'a CExpr>,
@@ -1668,9 +1668,9 @@ impl<'a> Ctx<'a> {
             }
             let slot = projection.map_or(fact, |index| facts::FACTS.len() + index);
             self.memo_fact(node, slot, || {
-                let compute = || match read {
-                    Some(read) => (read.get)(native, node, read.field),
-                    None => (facts::FACTS[fact].get)(native, node),
+                let compute = || match projection {
+                    Some(read) => facts::read_field(native, read, node),
+                    None => facts::read(native, fact, node),
                 };
                 match self.profile {
                     Some(profile) => profile.time_fact(fact, compute),
@@ -1894,8 +1894,8 @@ impl<'a> Ctx<'a> {
             }
             CExpr::Link(i) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
-                let link = facts::LINKS[*i];
-                let nodes = (link.get)(native, self.node);
+                let link = &facts::LINKS[*i];
+                let nodes = facts::follow(native, *i, self.node);
                 let node = |id: u32| {
                     let n = self.tree.node(id);
                     Value::Node(id, value::Text::Borrowed(&self.source[n.start as usize..n.end as usize]))
@@ -1943,7 +1943,7 @@ impl<'a> Ctx<'a> {
             CExpr::FactCall(i, args) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
                 let args = args.iter().map(|a| self.eval(a).map(Value::into_static)).collect::<Result<Vec<_>, _>>()?;
-                let compute = || facts::with_args(args, || (facts::FACTS[*i].get)(native, self.node));
+                let compute = || facts::with_args(args, || facts::read(native, *i, self.node));
                 match self.profile {
                     Some(profile) => profile.time_fact(*i, compute),
                     None => compute(),

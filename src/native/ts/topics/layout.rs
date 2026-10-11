@@ -1,6 +1,8 @@
 //! @stylistic spacing, punctuation and line breaks: lexical neighbours.
 
-use crate::expr::facts::{Fact, Link, Shape};
+use crate::expr::facts::Shape;
+
+use super::{Fact, Link};
 use crate::native::ts::tokens::lex;
 
 mod punctuation;

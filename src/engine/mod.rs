@@ -397,7 +397,7 @@ impl Linter {
         run: &Run<'t>,
         (path, rel): (&'t Path, &Path),
         state: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
-    ) -> Box<Native<'t>> {
+    ) -> Box<dyn Native + 't> {
         let native = &self.grammar.natives[front];
         let options: Vec<_> = self.language_options.values(run.lang, rel).collect();
         native.frontend.file(FileInput {
@@ -609,7 +609,7 @@ impl Linter {
     }
 
     /// Runs every active rule on the nodes of `tree` they target.
-    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a Native<'a>>, out: &mut Vec<Diagnostic>) {
+    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>) {
         // Nodes run in document order, so a rule's indentation fix of a line
         // is known before it checks the lines below. Per rule: what one rule
         // fixes never changes what another sees, so rules can run apart.
@@ -623,7 +623,7 @@ impl Linter {
                 let Some(links) = self.by_link.get(&tree.node(owner).matcher) else { continue };
                 for (link, rules) in links {
                     if !rules.iter().any(|&fi| run.active[fi]) { continue; }
-                    for node in (crate::expr::facts::LINKS[*link].get)(native, owner) {
+                    for node in crate::expr::facts::follow(native, *link, owner) {
                         let selected = linked.entry(node).or_default();
                         for &fi in rules.iter().filter(|&&fi| run.active[fi]) {
                             if !selected.contains(&fi) { selected.push(fi); }

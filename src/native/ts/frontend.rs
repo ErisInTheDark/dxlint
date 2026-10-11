@@ -12,7 +12,10 @@ use super::modules::{Project, Stale};
 use super::reads::{Dep, Discovery, Reads};
 use super::syntax::Syntax;
 use super::tokens::Lexed;
+use super::topics;
 use crate::engine::frontend::{self, FieldShape, FileInput, Frontend, Native, Parsed};
+use crate::expr::facts::{FactInfo, LinkInfo, ProjectionInfo};
+use crate::expr::Value;
 
 pub struct Ts;
 
@@ -79,7 +82,7 @@ impl Frontend for Ts {
         parsed.state = own.tokens.map(|tokens| Arc::new(tokens) as Arc<dyn Any + Send + Sync>);
     }
 
-    fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<Native<'t>> {
+    fn file<'t>(&'t self, input: FileInput<'t, '_>) -> Box<dyn Native + 't> {
         let project = input.project.as_any().downcast_ref::<Project>().expect("a ts project");
         let tokens = input.state.as_deref().and_then(|state| state.downcast_ref::<Lexed>()).cloned();
         Box::new(
@@ -87,6 +90,18 @@ impl Frontend for Ts {
                 .with_environment(Environment::from_values(input.options.iter().copied()))
                 .with_tokens(tokens),
         )
+    }
+
+    fn facts(&self) -> Vec<FactInfo> {
+        topics::FACTS.iter().map(|f| FactInfo { name: f.name, doc: f.doc, shape: f.shape }).collect()
+    }
+
+    fn projections(&self) -> Vec<ProjectionInfo> {
+        topics::PROJECTIONS.iter().map(|p| ProjectionInfo { name: p.name, fields: p.fields }).collect()
+    }
+
+    fn links(&self) -> Vec<LinkInfo> {
+        topics::LINKS.iter().map(|l| LinkInfo { name: l.name, doc: l.doc, many: l.many }).collect()
     }
 
     fn project(&self) -> Box<dyn frontend::Project> {
@@ -99,6 +114,32 @@ impl Frontend for Ts {
 }
 
 static DISCOVERIES: [&Discovery; 1] = [&super::reads::GLOBAL_FILES];
+
+impl Native for NativeFile<'_> {
+    fn frontend(&self) -> &'static str {
+        TS.name()
+    }
+
+    fn fact(&self, fact: usize, node: u32) -> Value<'static> {
+        (topics::FACTS[fact].get)(self, node)
+    }
+
+    fn projection(&self, projection: usize, node: u32, field: Option<usize>) -> Value<'static> {
+        (topics::PROJECTIONS[projection].get)(self, node, field)
+    }
+
+    fn link(&self, link: usize, node: u32) -> Vec<u32> {
+        (topics::LINKS[link].get)(self, node)
+    }
+
+    fn inside_token(&self, at: usize) -> bool {
+        use super::lexer::Tok;
+        let tokens = self.cached(super::tokens::lex_comments);
+        let after = tokens.0.partition_point(|token| (token.start as usize) < at);
+        // JSX text is content laid out by its own lines, not one token.
+        after.checked_sub(1).map(|i| &tokens.0[i]).is_some_and(|token| token.end as usize > at && matches!(token.tok, Tok::Template | Tok::Str | Tok::P("/*")))
+    }
+}
 
 impl frontend::Project for Project {
     fn as_any(&self) -> &dyn Any {
