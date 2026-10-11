@@ -3,6 +3,25 @@ import .ts/expression-fixes
 
 define {
 
+in ts_import_specifier let type_only_specifier kind == "type"
+fn import_type_side_effect_fix(source, n) = {
+  value items: n.specifier.nodes
+  value qualifiers: map(items, item => {
+    value gap: byte_slice(source, item.kind.end_offset, item.imported.offset)
+    value whitespace: re_find(gap, /^\s*/)
+    value { start: item.kind.offset, end: item.kind.end_offset + byte_len(whitespace), text: "" }
+  })
+  value edits: [{ start: n.first_token.end, end: n.first_token.end, text: " type" }] qualifiers
+  value expression_fix_edits(n.text, n.offset, edits)
+}
+in ts_import rule no-import-type-side-effects {
+  when kind != "type" && default_import == null && namespace == null && count(specifier) > 0
+  when { value [] specifier.type_only_specifier; filter (t) t; count } == count(specifier)
+  let replacement import_type_side_effect_fix(source, node)
+  warn "TypeScript will only remove the inline type specifiers which will leave behind a side effect import at runtime. Convert this to a top-level type qualifier to properly remove the entire import."
+  fix at node if first_token.text == "import" && expression_fix_retains_comments(node, replacement) as replacement
+}
+
 in ts_export let empty_module_export declaration == null && expression == null && from == null && namespace == null && count(specifier) == 0 && { value result: "{{"; value contains(text, result) }
 in ts_export let module_item !empty_module_export
 in ts_import, ts_import_equals, ts_export_assignment let module_item true

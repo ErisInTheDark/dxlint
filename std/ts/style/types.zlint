@@ -237,13 +237,6 @@ in ts_assignment.left rule no-this-alias:assignment {
   warn if is ts_identifier then "Unexpected aliasing of 'this' to local variable." else "Unexpected aliasing of members of 'this' to local variables."
 }
 
-in ts_import_specifier let type_only_specifier kind == "type"
-in ts_import rule no-import-type-side-effects {
-  when kind != "type" && default_import == null && namespace == null && count(specifier) > 0
-  when { value [] specifier.type_only_specifier; filter (t) t; count } == count(specifier)
-  warn "TypeScript will only remove the inline type specifiers which will leave behind a side effect import at runtime. Convert this to a top-level type qualifier to properly remove the entire import."
-}
-
 fn property_modifiers(xs) = { value ["public", "protected", "private", "readonly"]; filter (m) contains(xs, m); join " " }
 in ts_parameter, ts_class_property let parameter_modifiers property_modifiers([] modifier)
 in ts_parameter, ts_class_property let parameter_properties_checked true
@@ -455,6 +448,7 @@ in ts_interface.name rule consistent-type-definitions:interface {
 in ts_namespace rule prefer-namespace-keyword {
   when kind == "module" && { value name; re_replace /\..*$/ ""; is_identifier }
   warn "Use 'namespace' instead of 'module' to declare custom TypeScript modules."
+  fix at { start: kind.offset, end: kind.end_offset } as "namespace"
 }
 
 }
