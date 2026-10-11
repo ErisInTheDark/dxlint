@@ -24,6 +24,21 @@ impl Query {
         self.remaining -= 1;
         true
     }
+    // Recursive `this` projections can grow owned inputs faster than relation edges.
+    fn input(&mut self, ty: &Ty, depth: usize) -> bool {
+        if depth >= 64 {
+            self.remaining = 0;
+            return false;
+        }
+        if !self.visit() { return false }
+        match ty {
+            Ty::Union(parts) | Ty::Inter(parts) | Ty::Named(_, parts) =>
+                parts.iter().all(|part| self.input(part, depth + 1)),
+            Ty::Array(array) => self.input(&array.element, depth + 1),
+            Ty::Tuple(tuple) => tuple.iter().all(|part| self.input(part, depth + 1)),
+            _ => true,
+        }
+    }
 }
 
 pub(super) fn flow(file: &NativeFile<'_>, node: u32) -> Value<'static> {
@@ -142,7 +157,9 @@ fn can_have_properties(checker: &Checker<'_>, ty: &Ty) -> bool {
 }
 
 fn relation(checker: &Checker<'_>, sender: &Ty, receiver: &Ty, path: &mut Vec<(Ty, Ty)>, query: &mut Query) -> Value<'static> {
-    if !query.visit() { return Value::record(vec![("complete".into(), Value::Bool(false))]) }
+    if !query.input(sender, 0) || !query.input(receiver, 0) {
+        return Value::record(vec![("complete".into(), Value::Bool(false))]);
+    }
     let sender = checker.readonly_source(sender).unwrap_or(sender);
     let receiver = checker.readonly_source(receiver).unwrap_or(receiver);
     if path.len() >= 64 {
@@ -174,9 +191,10 @@ fn relation(checker: &Checker<'_>, sender: &Ty, receiver: &Ty, path: &mut Vec<(T
             names.sort();
             names.dedup();
             for name in names {
-                if query.remaining == 0 { break }
+                if !query.visit() { break }
                 let source = checker.member_resolution(sender, &name);
                 if !source.declared { continue }
+                if !query.visit() { break }
                 let target = checker.member(receiver, &name);
                 if !source.ty.is_opaque() && !target.is_opaque() {
                     children.push(relation(checker, &source.ty, &target, path, query));
@@ -185,9 +203,16 @@ fn relation(checker: &Checker<'_>, sender: &Ty, receiver: &Ty, path: &mut Vec<(T
         }
         path.pop();
     }
-    let assignable = parts(sender).iter().map(|source| Value::list(parts(receiver).iter().map(|target| {
-        checker.assignable(source, target).map_or(Value::Null, Value::Bool)
-    }).collect())).collect();
+    let mut assignable = Vec::new();
+    for source in parts(sender) {
+        let mut row = Vec::new();
+        for target in parts(receiver) {
+            if !query.visit() { break }
+            row.push(checker.assignable(source, target).map_or(Value::Null, Value::Bool));
+        }
+        assignable.push(Value::list(row));
+        if query.remaining == 0 { break }
+    }
     Value::record(vec![
         ("sender".into(), Value::list(parts(sender).iter().map(|ty| arm(checker, ty)).collect())),
         ("receiver".into(), Value::list(parts(receiver).iter().map(|ty| arm(checker, ty)).collect())),
@@ -199,7 +224,7 @@ fn relation(checker: &Checker<'_>, sender: &Ty, receiver: &Ty, path: &mut Vec<(T
 }
 
 fn enum_names(checker: &Checker<'_>, ty: &Ty, path: &mut Vec<Ty>, out: &mut Vec<String>, query: &mut Query) {
-    if !query.visit() { return }
+    if !query.input(ty, 0) { return }
     if path.len() >= 64 { query.remaining = 0; return }
     if path.iter().any(|seen| seen.same_identity(ty)) { return }
     let symbol = match ty {
@@ -210,6 +235,7 @@ fn enum_names(checker: &Checker<'_>, ty: &Ty, path: &mut Vec<Ty>, out: &mut Vec<
     if let Some(symbol) = symbol {
         if checker.is_enum(symbol) {
             for decl in symbol.iter() {
+                if !query.visit() { break }
                 if let Some(summary) = checker.summary_of(decl.file) {
                     let name = summary.decls[decl.decl as usize].name.to_string();
                     if !out.contains(&name) { out.push(name) }
@@ -231,7 +257,7 @@ fn enum_names(checker: &Checker<'_>, ty: &Ty, path: &mut Vec<Ty>, out: &mut Vec<
         let mut names = Vec::new();
         checker.member_names(ty, &mut names);
         for name in names {
-            if query.remaining == 0 { break }
+            if !query.visit() { break }
             enum_names(checker, &checker.member(ty, &name), path, out, query);
         }
     }
@@ -270,6 +296,45 @@ mod tests {
 
     fn relation_count(value: &Value<'_>) -> usize {
         1 + value.key("children").items().iter().map(relation_count).sum::<usize>()
+    }
+
+    #[test]
+    fn wide_property_scans_exhaust_the_relation_query() {
+        with_native_file("const value = /*@*/0;", |file, _| {
+            let checker = &file.typing().checker;
+            let sender = Ty::Struct(Vec::new().into());
+            let receiver = Ty::Struct((0..32).map(|index| StructProperty {
+                name: format!("p{index}").into(), ty: Ty::Prim("number"), origin: None,
+            }).collect());
+            let mut query = Query { remaining: 4 };
+            let graph = relation(checker, &sender, &receiver, &mut Vec::new(), &mut query);
+            assert_eq!(graph.key("complete"), Value::Bool(false), "unmatched property scans escaped the query limit");
+            assert!(graph.key("children").items().is_empty());
+        });
+    }
+
+    #[test]
+    fn union_comparisons_exhaust_the_relation_query() {
+        with_native_file("const value = /*@*/0;", |file, _| {
+            let checker = &file.typing().checker;
+            let sender = Ty::union(vec![Ty::Lit("1".into(), "number"), Ty::Lit("'x'".into(), "string")]);
+            let receiver = Ty::union(vec![Ty::Prim("number"), Ty::Prim("string"), Ty::Prim("boolean")]);
+            let mut query = Query { remaining: 10 };
+            let graph = relation(checker, &sender, &receiver, &mut Vec::new(), &mut query);
+            assert_eq!(graph.key("complete"), Value::Bool(false), "union comparison matrix escaped the query limit");
+        });
+    }
+
+    #[test]
+    fn owned_composite_inputs_exhaust_the_relation_query_before_identity() {
+        with_native_file("const value = /*@*/0;", |file, _| {
+            let checker = &file.typing().checker;
+            let mut ty = Ty::Prim("number");
+            for _ in 0..16 { ty = Ty::array(ty); }
+            let mut query = Query { remaining: 4 };
+            let graph = relation(checker, &ty, &ty, &mut Vec::new(), &mut query);
+            assert_eq!(graph.key("complete"), Value::Bool(false), "owned input traversal escaped the query limit");
+        });
     }
 
     #[test]
