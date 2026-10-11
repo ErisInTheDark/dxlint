@@ -22,8 +22,9 @@ pub(super) fn structure(file: &NativeFile<'_>, node: u32, properties: &[String])
         let retained = specifiers::retained_alias(ck, r, &mut Vec::new())?;
         Some(Value::from(ck.summary_of(retained.file)?.decls[retained.decl as usize].name.to_string()))
     }).collect() } else { Vec::new() };
-    let ty = file.constrained_type_of(node);
-    let value = describe(&ty, ck, properties, &fields, aliases, 0);
+    let constrained = !matches!(args.get(2), Some(Value::Bool(false)));
+    let ty = if constrained { file.constrained_type_of(node) } else { file.type_of(node) };
+    let value = describe(&ty, ck, properties, &fields, aliases, constrained, 0);
     if !requested("property_writes") && !requested("name_bindings") { return value }
     let Value::Record(entries) = value else { unreachable!() };
     let mut entries = entries.iter().cloned().collect::<Vec<_>>();
@@ -95,19 +96,27 @@ fn property_writes(file: &NativeFile<'_>) -> PropertyWrites {
     PropertyWrites(writes)
 }
 
-fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String], aliases: Vec<Value<'static>>, depth: usize) -> Value<'static> {
+fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String], aliases: Vec<Value<'static>>, constrained: bool, depth: usize) -> Value<'static> {
     if depth >= 64 { return Value::record(vec![("kind".into(), Value::from("recursive"))]) }
-    if let Some(source) = ck.readonly_source(ty) { return describe(source, ck, properties, fields, aliases, depth + 1) }
+    if constrained {
+        if let Some(source) = ck.readonly_source(ty) { return describe(source, ck, properties, fields, aliases, constrained, depth + 1) }
+    }
     let requested = |name: &str| fields.iter().any(|field| field == name);
     let parts = if requested("parts") { match ty {
-        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().map(|part| describe(part, ck, properties, fields, Vec::new(), depth + 1)).collect(),
-        Ty::Array(array) => vec![describe(&array.element, ck, properties, fields, Vec::new(), depth + 1)],
+        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().map(|part| describe(part, ck, properties, fields, Vec::new(), constrained, depth + 1)).collect(),
+        Ty::Array(array) => vec![describe(&array.element, ck, properties, fields, Vec::new(), constrained, depth + 1)],
         Ty::Tuple(tuple) => tuple.elements.iter().map(|element| {
-            if element.optional { describe(&element.ty.clone().or_undefined(), ck, properties, fields, Vec::new(), depth + 1) }
-            else { describe(&element.ty, ck, properties, fields, Vec::new(), depth + 1) }
+            if element.optional { describe(&element.ty.clone().or_undefined(), ck, properties, fields, Vec::new(), constrained, depth + 1) }
+            else { describe(&element.ty, ck, properties, fields, Vec::new(), constrained, depth + 1) }
         }).collect(),
         _ => Vec::new(),
     } } else { Vec::new() };
+    let arguments = if requested("arguments") {
+        match ty {
+            Ty::Named(_, arguments) => arguments.iter().map(|argument| describe(argument, ck, properties, fields, Vec::new(), constrained, depth + 1)).collect(),
+            _ => Vec::new(),
+        }
+    } else { Vec::new() };
     let named = if requested("names") || requested("generic_names") || requested("declarations") { specifiers::named_types(ty, ck, &mut Vec::new()) } else { Vec::new() };
     let class_symbols = if let Ty::Class(symbols) = ty { &symbols[..] } else { &[] };
     let declarations = if requested("declarations") { named.iter().map(|(r, _)| r).chain(class_symbols).filter_map(|r| {
@@ -183,6 +192,7 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
     let entries: Vec<(crate::expr::value::Key, Value<'static>)> = vec![
         ("kind".into(), Value::from(ty.kind())),
         ("parts".into(), Value::list(parts)),
+        ("arguments".into(), Value::list(arguments)),
         ("names".into(), Value::list(names)),
         ("generic_names".into(), Value::list(generic_names)),
         ("aliases".into(), Value::list(aliases)),
@@ -202,6 +212,54 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
 mod tests {
     use crate::engine::tests::with_native_file;
     use crate::expr::Value;
+
+    #[test]
+    fn resolved_generic_arguments_keep_union_and_intersection_structure() {
+        for (annotation, kind, argument_kind) in [
+            ("V", "void", None),
+            ("V | number", "union", None),
+            ("V & number", "intersection", None),
+            ("Promise<V>", "object", Some("void")),
+            ("PromiseLike<V | number>", "object", Some("union")),
+            ("Promise<PromiseLike<V>>", "object", Some("object")),
+        ] {
+            let source = format!("interface Promise<T> {{}} interface PromiseLike<T> {{}} type V = void; function f(): {annotation} {{ return; }}");
+            with_native_file(&source, |file, _| {
+                use crate::native::ts::kinds::{Field as F, Kind as K};
+                let function = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, K::Function)).unwrap();
+                let annotation = file.syntax.get(function, F::ReturnType).unwrap();
+                let fields = ["kind", "parts", "declarations", "arguments"].into_iter().map(Value::from).collect();
+                let result = crate::expr::facts::with_args(vec![Value::list(Vec::new()), Value::list(fields), Value::Bool(false)], || super::structure(file, annotation, &[]));
+                assert_eq!(result.key("kind"), Value::from(kind), "{source}");
+                let arguments = result.key("arguments").items();
+                if let Some(kind) = argument_kind {
+                    assert_eq!(arguments.len(), 1, "{source}");
+                    assert_eq!(arguments[0].key("kind"), Value::from(kind), "{source}");
+                } else {
+                    assert!(arguments.is_empty(), "{source}");
+                }
+                if matches!(kind, "union" | "intersection") {
+                    let parts = result.key("parts").items();
+                    assert!(parts.iter().any(|part| part.key("kind") == Value::from("void")), "{source}");
+                    assert!(parts.iter().any(|part| part.key("kind") == Value::from("number")), "{source}");
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn raw_structure_retains_open_parameters_inside_generic_arguments() {
+        with_native_file("interface Box<T> {} function f<T extends void>(box: Box<T>) { const result = /*@*/box; }", |file, nodes| {
+            let fields = ["kind", "arguments"].into_iter().map(Value::from).collect();
+            let raw = crate::expr::facts::with_args(vec![Value::list(Vec::new()), Value::list(fields), Value::Bool(false)], || super::structure(file, nodes[0], &[]));
+            assert_eq!(raw.key("arguments").items()[0].key("kind"), Value::from("parameter"));
+            let fields = ["kind", "arguments"].into_iter().map(Value::from).collect();
+            let bounded = crate::expr::facts::with_args(vec![Value::list(Vec::new()), Value::list(fields)], || super::structure(file, nodes[0], &[]));
+            assert_eq!(bounded.key("arguments").items()[0].key("kind"), Value::from("void"));
+            let default = super::structure(file, nodes[0], &[]);
+            assert_eq!(default.key("arguments"), Value::Null);
+        });
+    }
 
     #[test]
     fn default_structure_does_not_resolve_unrequested_properties() {

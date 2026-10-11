@@ -76,7 +76,7 @@ pub const FACTS: &[Fact] = &[
     Fact {
         shape: Fact::SCALAR.shape,
         name: "type_structure",
-        doc: "native values and types: constrained recursive structure and queried winning members; optional second argument selects fields, default kind/parts/names/generic_names/aliases/members; declaration/value, call/construct/property/iteration metadata and root binding writes are opt-in",
+        doc: "native values and types: recursive structure and queried winning members; optional second argument selects fields, default kind/parts/names/generic_names/aliases/members; generic arguments, declaration/value, call/construct/property/iteration metadata and root binding writes are opt-in; optional third constrained argument defaults true, false retains open parameters and named wrappers",
         get: |f, n| f.with_file(|file, node| {
             let args = crate::expr::facts::args();
             let names = args.first().map(|value| value.items().iter().map(ToString::to_string).collect::<Vec<_>>()).unwrap_or_default();

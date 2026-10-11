@@ -8,20 +8,26 @@ use super::summary::Sig;
 use super::types::Ty;
 
 impl NativeFile<'_> {
-    /// Return/yield sites in this function, excluding nested functions/classes.
+    /// Return/yield sites in this function or program, excluding nested scopes.
     pub fn return_sites(&self, func: u32) -> impl Iterator<Item = u32> + '_ {
         let s = &self.syntax;
-        let mut stack: Vec<_> = s.get(func, F::Body).into_iter().collect();
+        let mut stack: Vec<_> = if s.is(func, K::Program) { vec![func] } else { s.get(func, F::Body).into_iter().collect() };
         std::iter::from_fn(move || {
             while let Some(node) = stack.pop() {
                 match s.kind(node) {
-                    Some(K::Function | K::Arrow | K::Method | K::Class) => {}
+                    Some(K::Function | K::Arrow | K::Method | K::Class | K::StaticBlock) => {}
                     Some(K::Return | K::Yield) => return Some(node),
                     _ => stack.extend(s.kids(node).map(|(_, child)| child)),
                 }
             }
             None
         })
+    }
+
+    pub fn own_returns(&self, func: u32) -> Vec<u32> {
+        let mut returns: Vec<_> = self.return_sites(func).filter(|&node| self.syntax.is(node, K::Return)).collect();
+        returns.sort_by_key(|&node| self.syntax.tree.node(node).start);
+        returns
     }
 
     /// What calling `sig` returns, when it is this file's own unannotated
@@ -106,5 +112,26 @@ impl NativeFile<'_> {
         } else {
             t
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::tests::with_native_file;
+    use crate::native::ts::kinds::{Field as F, Kind as K};
+
+    #[test]
+    fn own_returns_keep_source_order_and_scope_boundaries() {
+        with_native_file("function outer(x: boolean) { function nested() { return 1; } const arrow = () => { return 2; }; class C { method() { return 3; } static { } } if (x) return; return void nested(); } return 4;", |file, _| {
+            let program = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, K::Program)).unwrap();
+            let outer = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, K::Function) && file.syntax.get(node, F::Name).is_some_and(|name| file.syntax.text(name) == "outer")).unwrap();
+            let returns = file.own_returns(outer);
+            assert_eq!(returns.len(), 2);
+            assert!(file.syntax.get(returns[0], F::Arg).is_none());
+            assert!(file.syntax.get(returns[1], F::Arg).is_some());
+            let program_returns = file.own_returns(program);
+            assert_eq!(program_returns.len(), 1);
+            assert_eq!(file.syntax.get(program_returns[0], F::Arg).map(|argument| file.static_number(argument)), Some(Some(4.0)));
+        });
     }
 }

@@ -98,32 +98,58 @@ in ts_function, ts_arrow rule no-loop-func {
   warn "Function declared in a loop contains unsafe references to variable(s) {captured_names}."
 }
 
+in ts_node let scoping_outer_parens if parent is ts_parenthesized then parent.scoping_outer_parens else node
+in ts_node let scoping_callback_destination
+  if parent is (ts_parenthesized, ts_logical, ts_conditional, ts_return) then parent.scoping_callback_destination
+  else if parent is ts_call then { call: parent.node, argument: node } else null
+in ts_return let scoping_callback_destination {
+  value owner: containing(ts_function_like).scoping_outer_parens
+  value if owner.parent is ts_call && owner.parent.callee.node == owner then owner.parent.scoping_callback_destination else null
+}
+in ts_function, ts_arrow let scoping_callback_method {
+  value destination: if contains([] modifier, "*") then null else scoping_callback_destination
+  value callee: destination.call.callee.scoping_unparen_node.nonempty ?? destination.call.callee.node
+  value method: callee.static_name
+  value object: callee.object.scoping_unparen_node.nonempty ?? callee.object.node
+  value factory: object is ts_identifier && (method == "from" && ends_with(object.text, "Array") || method == "fromAsync" && object.text == "Array")
+  value arguments: [] destination.call.argument.nodes
+  value index: if factory then 1 else 0
+  value next_index: index + 1
+  value asynchronous: contains([] modifier, "async")
+  value if destination == null || body == null || callee not (ts_member, ts_index)
+    || { value arguments; slice index next_index; first } != destination.argument then null
+    else if factory && (method == "fromAsync" || !asynchronous)
+      || !asynchronous && contains(["every", "filter", "find", "findLast", "findIndex", "findLastIndex", "flatMap", "forEach", "map", "reduce", "reduceRight", "some", "sort", "toSorted"], method) then method else null
+}
+in ts_function, ts_arrow let scoping_callback_label
+  if contains(["from", "fromAsync"], scoping_callback_method) then "Array." scoping_callback_method else "Array.prototype." scoping_callback_method
+in ts_function, ts_arrow let scoping_callback_head
+  if parent is (ts_property, ts_class_property) && is (ts_property.value, ts_class_property.init) then parent.offset
+  else if is ts_arrow then operator.offset else offset
 in ts_function, ts_arrow rule array-callback-return {
   option allowImplicit boolean = false
   option checkForEach boolean = false
   option allowVoid boolean = false
-  let callback scoping_array_callback
-  when callback != null && !callback.foreach && callback.falls
-  report at callback.offset
-  warn if callback.has_return then "{callback.method}() expects a value to be returned at the end of {callback.name}." else "{callback.method}() expects a return value from {callback.name}."
+  when scoping_callback_method != null && scoping_callback_method != "forEach" && body is ts_block && code_path == "falls_off"
+  report at scoping_callback_head
+  warn if count(own_returns) > 0 then "{scoping_callback_label}() expects a value to be returned at the end of {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
 }
 in ts_function, ts_arrow rule array-callback-return:return {
   option allowImplicit boolean = false
   option checkForEach boolean = false
   option allowVoid boolean = false
-  let callback scoping_array_callback
-  each returned in filter(callback.returns, r => if callback.foreach then checkForEach && r.value && !(allowVoid && r.void) else !allowImplicit && !r.value)
+  when scoping_callback_method != null && body is ts_block
+  each returned in filter(own_returns, r => if scoping_callback_method == "forEach" then checkForEach && r.argument != null && !(allowVoid && r.argument.scoping_void_expression == true) else !allowImplicit && r.argument == null)
   report at returned.offset
-  warn if callback.foreach then "{callback.method}() expects no useless return value from {callback.name}." else "{callback.method}() expects a return value from {callback.name}."
+  warn if scoping_callback_method == "forEach" then "{scoping_callback_label}() expects no useless return value from {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
 }
 in ts_arrow rule array-callback-return:concise {
   option allowImplicit boolean = false
   option checkForEach boolean = false
   option allowVoid boolean = false
-  let callback scoping_array_callback
-  when callback.foreach && checkForEach && callback.concise && !(allowVoid && callback.void)
-  report at callback.offset
-  warn "{callback.method}() expects no useless return value from {callback.name}."
+  when scoping_callback_method == "forEach" && checkForEach && body not ts_block && !(allowVoid && body.scoping_void_expression == true)
+  report at scoping_callback_head
+  warn "{scoping_callback_label}() expects no useless return value from {function_name}."
 }
 
 fn scoping_const_declaration(n) = {
@@ -255,20 +281,51 @@ in ts_return rule no-useless-return {
     byte_slice(owner.text, 0, offset - owner.offset) byte_slice(owner.text, end_offset - owner.offset)
 }
 
+fn scoping_return_void(t, asynchronous) = t.kind == "void"
+  || t.kind == "union" && any(t.parts, part => scoping_return_void(part, asynchronous))
+  || asynchronous && any(t.declarations, declaration => !declaration.inherited && contains(["Promise", "PromiseLike"], declaration.name))
+    && { value t.arguments; first; scoping_return_void true }
+in ts_node let scoping_return_type_structure type_structure([], ["kind", "parts", "declarations", "arguments"], false)
+in ts_program let scoping_return_void_annotation false
+in ts_function, ts_arrow, ts_method let scoping_return_void_annotation
+  return_type != null && {
+    value asynchronous: contains([] modifier, "async")
+    value return_type.scoping_return_type_structure
+    scoping_return_void asynchronous
+  }
+in ts_program, ts_function, ts_arrow, ts_method let scoping_consistent_returns
+  if re_test(file, /\.(ts|tsx|mts|cts)$/) && any(own_returns, returned => returned.argument == null)
+    && any(own_returns, returned => returned.argument != null) && scoping_return_void_annotation == true
+    then filter(own_returns, returned => returned.argument != null) else own_returns
+in ts_node let scoping_return_undefined
+  is ts_identifier && text == "undefined" || scoping_void_expression == true
+  || re_test(file, /\.(ts|tsx|mts|cts)$/) && type == "undefined" && contains(type_flags, "undefined")
+in ts_parenthesized let scoping_return_undefined expression.scoping_return_undefined
+fn scoping_return_specified(returned, unspecified) = returned.argument != null && !(unspecified && returned.argument.scoping_return_undefined == true)
+in ts_program, ts_function, ts_arrow, ts_method let scoping_return_name function_name.nonempty ?? "program"
+in ts_program, ts_function, ts_arrow, ts_method let scoping_return_capitalized
+  { value scoping_return_name; slice 0 1; upper } { value scoping_return_name; slice 1 }
+in ts_program, ts_function, ts_arrow, ts_method let scoping_return_head
+  if is ts_arrow then operator.offset else if is ts_method then key.offset else if is ts_function then name.offset.nonempty ?? offset else offset
+in ts_function let scoping_return_uppercase name != null && re_test(name, /^\p{Uppercase}/)
+in ts_program, ts_function, ts_arrow, ts_method let scoping_return_constructor
+  function_name == "constructor" || scoping_return_uppercase == true
 in ts_program, ts_function, ts_arrow, ts_method rule consistent-return {
   option treatUndefinedAsUnspecified boolean = false "treat undefined and void as bare returns"
-  let result scoping_consistent_returns
-  let expected result.specified && !(treatUndefinedAsUnspecified && result.undefined)
-  each returned in filter(result.returns, r => (r.specified && !(treatUndefinedAsUnspecified && r.undefined)) != expected)
+  let returns scoping_consistent_returns
+  let initial first(returns)
+  let expected scoping_return_specified(initial, treatUndefinedAsUnspecified)
+  each returned in filter(returns, r => r != initial && scoping_return_specified(r, treatUndefinedAsUnspecified) != expected)
   report at returned.offset
-  warn if expected then "{result.capitalized} expected a return value." else "{result.capitalized} expected no return value."
+  warn if expected then "{scoping_return_capitalized} expected a return value." else "{scoping_return_capitalized} expected no return value."
 }
 in ts_program, ts_function, ts_arrow, ts_method rule consistent-return:fallthrough {
   option treatUndefinedAsUnspecified boolean = false "treat undefined and void as bare returns"
-  let result scoping_consistent_returns
-  when result.falls && result.specified && !(treatUndefinedAsUnspecified && result.undefined)
-  report at result.offset
-  warn "Expected to return a value at the end of {result.name}."
+  let initial first(scoping_consistent_returns)
+  when scoping_return_specified(initial, treatUndefinedAsUnspecified)
+  when !scoping_return_constructor && code_path == "falls_off"
+  report at scoping_return_head
+  warn "Expected to return a value at the end of {scoping_return_name}."
 }
 
 in ts_node let underscore_declarator
