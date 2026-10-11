@@ -254,6 +254,23 @@ in ts_program let restriction_declarations {
   filter (entry) entry != null
 }
 in ts_import let sort_imports_rank if restriction_declaration_syntax == "none" then 0 else if restriction_declaration_syntax == "all" then 1 else if restriction_declaration_syntax == "multiple" then 2 else 3
+fn restriction_sorted_items(items, ordered) = {
+  value final_item: last(items)
+  value items
+  zip ordered (original, replacement) {
+    value replacement.text (if original != final_item then
+      byte_slice(original.parent.text, original.end_offset - original.parent.offset, original.next.offset - original.parent.offset)
+      else "")
+  }
+  join ""
+}
+fn restriction_sorted_imports(members, insensitive) = {
+  value ordered: {
+    value members
+    sort_by (item) if insensitive then lower(item.restriction_declaration_local) else item.restriction_declaration_local
+  }
+  value restriction_sorted_items(members, ordered)
+}
 @macro restriction_sort_import_options {
   option ignoreCase boolean = false "ignore letter case"
   option allowSeparatedGroups boolean = false "reset declaration order after blank lines"
@@ -276,6 +293,11 @@ in ts_import_specifier rule sort-imports:members {
   let encountered previous.encountered == true || unsorted
   when parent is ts_import && parent.restriction_declaration_entry != null && unsorted && previous.encountered != true
   report at local.node ?? imported.node
+  let members parent.specifier.nodes
+  fix at {start: first(members).offset, end: last(members).end_offset} if {
+    value members
+    all (member) !member.space_before.comments && !member.space_after.comments
+  } as restriction_sorted_imports(members, ignoreCase)
   warn "Member '{restriction_declaration_local}' of the import declaration should be sorted alphabetically."
 }
 fn restriction_import_mergeable(a, b) = !(a.type_only && b.type_only && (a.category == "default" && b.category == "named" || a.category == "named" && b.category == "default")) && !(a.category == "all" && contains(["named", "namespace", "default"], b.category) || b.category == "all" && contains(["named", "namespace", "default"], a.category) || a.category == "namespace" && b.category == "named" || a.category == "named" && b.category == "namespace")
@@ -306,14 +328,7 @@ fn restriction_sorted_variables(bindings, insensitive) = {
     value bindings
     sort_by (item) if insensitive then lower(item.name) else item.name.text
   }
-  value final_binding: last(bindings)
-  value bindings
-  zip ordered (original, replacement) {
-    value replacement.text (if original != final_binding then
-      byte_slice(original.parent.text, original.end_offset - original.parent.offset, original.next.offset - original.parent.offset)
-      else "")
-  }
-  join ""
+  value restriction_sorted_items(bindings, ordered)
 }
 in ts_declarator rule sort-vars {
   option ignoreCase boolean = false "ignore letter case"
