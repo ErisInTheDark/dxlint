@@ -1,5 +1,27 @@
 # List policy, shared by native and pattern syntax adapters.
 define {
+fn core_list_gap_parts(source, from, to, comments) = {
+  value comments
+  filter (comment) comment.offset >= from && comment.end_offset <= to
+  fold ({ cursor: from, text: "" }) (state, comment) {
+    cursor: comment.end_offset, text: state.text byte_slice(source, state.cursor, comment.offset),
+  }
+}
+fn core_list_gap_text(source, to, parts) = parts.text byte_slice(source, parts.cursor, to)
+fn core_list_site(source, context, mode, before, after, comments) = {
+  kind: context.kind, brackets: context.brackets, count: context.count,
+  single: context.single, node_single: context.node_single.nonempty ?? context.single,
+  first_broken: context.first_broken, empty_comments: context.empty_comments,
+  mode: mode, offset: before.end, end: after.start, prev: before.text, next: after.text,
+  comments: any(comments, comment => comment.offset >= before.end && comment.end_offset <= after.start),
+  spaced: {
+    value source
+    parts: core_list_gap_parts before.end after.start comments
+    value core_list_gap_text(source, after.start, parts)
+    re_test /\s/
+  },
+  broken: { value source; byte_slice before.end after.start; re_test /[\n\r\u{2028}\u{2029}]/ },
+}
 fn core_list_violation(info, by_node, by_bracket, empty, single, multi) =
   !(by_node == "off" || by_node == null && by_bracket == "off")
   && !(info.count == 0 && (by_node.empty.nonempty ?? by_bracket.empty.nonempty ?? empty) == "ignore")

@@ -4,6 +4,7 @@
 import .ts/parentheses
 import .ts/structure/padding
 import .ts/expression-fixes
+import .ts/import-attributes
 
 define {
 
@@ -641,7 +642,10 @@ group core_ts_list ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_
   ts_call, ts_new, ts_if, ts_import, ts_export, ts_enum, ts_function_type, ts_interface,
   ts_type_literal, ts_tuple_type, ts_type_reference, ts_method, ts_class
 group core_list core_ts_list
-in core_ts_list let core_list_layout list_layout
+in ts_import, ts_export let structure_attribute_lists overlapping(ts_import_attributes, offset, end_offset)
+in core_ts_list let core_list_layout
+  if is (ts_import, ts_export) then filter(list_layout, site => !contains(["ImportDeclaration", "ExportNamedDeclaration"], site.kind) || !any(structure_attribute_lists, attributes => site.offset >= attributes.open.offset && site.end <= attributes.close.end_offset))
+  else list_layout
 
 group structure_declaration_parent ts_program, ts_block, ts_if, ts_for, ts_for_in, ts_for_of,
   ts_while, ts_do_while, ts_labeled, ts_with, ts_export

@@ -53,28 +53,6 @@ define {
   in json_property let json_child_edges [json_edge(key.node, false), json_edge(value.node, true)]
   in json_value let json_child_edges [json_edge(node, false), json_edge(node, true)]
   in json_comma, json_comment let json_child_edges [{ start: offset, end: end_offset, text: text, comment: is json_comment }]
-  fn json_gap_parts(source, from, to, comments) = {
-    value comments
-    filter (comment) comment.offset >= from && comment.end_offset <= to
-    fold ({ cursor: from, text: "" }) (state, comment) {
-      cursor: comment.end_offset, text: state.text byte_slice(source, state.cursor, comment.offset),
-    }
-  }
-  fn json_gap_text(source, to, parts) = parts.text byte_slice(source, parts.cursor, to)
-  fn json_layout_site(source, context, mode, before, after, comments) = {
-    kind: context.kind, brackets: context.brackets, count: context.count,
-    single: context.single, node_single: context.single,
-    first_broken: context.first_broken, empty_comments: context.empty_comments,
-    mode: mode, offset: before.end, end: after.start, prev: before.text, next: after.text,
-    comments: any(comments, comment => comment.offset >= before.end && comment.end_offset <= after.start),
-    spaced: {
-      value source
-      parts: json_gap_parts before.end after.start comments
-      value json_gap_text(source, after.start, parts)
-      re_test /\s/
-    },
-    broken: { value source; byte_slice before.end after.start; re_test /[\n\r\u{2028}\u{2029}]/ },
-  }
   in json_list let json_items filter(children.node, child => child is (json_property, json_value))
   in json_list let json_edges { value children.node; fold ([]) (edges, child) edges child.json_child_edges }
   in json_list let json_plain filter(json_edges, edge => !edge.comment)
@@ -108,19 +86,19 @@ define {
       before: first
       value pair
       after: last
-      value json_layout_site(source, json_layout_context, "spacing", before, after, json_layout_comments)
+      value core_list_site(source, json_layout_context, "spacing", before, after, json_layout_comments)
     })
     (if json_layout_context.count > 0 then map(json_wrapping_pairs, pair => {
       value pair
       before_2: first
       value pair
       after_2: last
-      value json_layout_site(source, json_layout_context, "wrapping", before_2, after_2, json_layout_comments)
+      value core_list_site(source, json_layout_context, "wrapping", before_2, after_2, json_layout_comments)
     }) else map(json_spacing_pairs, pair => {
       value pair
       before_3: first
       value pair
       after_3: last
-      value json_layout_site(source, json_layout_context, "empty_wrapping", before_3, after_3, json_layout_comments)
+      value core_list_site(source, json_layout_context, "empty_wrapping", before_3, after_3, json_layout_comments)
     })))
 }

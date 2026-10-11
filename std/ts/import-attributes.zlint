@@ -8,4 +8,75 @@ in ts_import_attributes match ts_import_attribute_gap /\s+/ or ts_import_attribu
 in ts_import_attributes match ts_import_attribute_colon /:/
 in ts_import_attributes match ts_import_attribute_comma /,/
 in ts_import_attributes match ts_import_attribute key:ts_import_attribute_key ts_import_attribute_gap* colon:ts_import_attribute_colon ts_import_attribute_gap* value:ts_import_attribute_string
+
+group core_list ts_import_attributes
+group attribute_list_part ts_import_attribute, ts_import_attribute_comma, ts_import_attribute_comment
+fn attribute_list_edge(item) = {
+  start: item.offset, end: item.end_offset, comment: item is ts_import_attribute_comment,
+  text: if item not ts_import_attribute_comment then item.text
+    else if starts_with(item.text, "/*") then { value tail: byte_len(item.text) - 2; value byte_slice(item.text, 2, tail) }
+    else slice(item.text, 2),
+}
+in ts_import_attribute let attribute_list_child_edges [attribute_list_edge(key.node), attribute_list_edge(value.node)]
+in ts_import_attribute_comma, ts_import_attribute_comment let attribute_list_child_edges [attribute_list_edge(node)]
+in ts_import_attribute_comment let attribute_list_outer containing(ts_import_attribute) == null
+in ts_import_attributes let attribute_list_items descendants(ts_import_attribute)
+in ts_import_attributes let attribute_list_parts {
+  value descendants(attribute_list_part)
+  filter (part) part not ts_import_attribute_comment || part.attribute_list_outer
+}
+in ts_import_attributes let attribute_list_edges {
+  value attribute_list_parts
+  fold ([]) (edges, part) edges part.attribute_list_child_edges
+}
+in ts_import_attributes let attribute_list_plain filter(attribute_list_edges, edge => !edge.comment)
+in ts_import_attributes let attribute_list_open attribute_list_edge(open.node)
+in ts_import_attributes let attribute_list_close attribute_list_edge(close.node)
+in ts_import_attributes let attribute_list_first { value attribute_list_edges; first; nonempty } ?? attribute_list_close
+in ts_import_attributes let attribute_list_last { value attribute_list_edges; last; nonempty } ?? attribute_list_open
+in ts_import_attributes let attribute_list_context {
+  kind: "ImportAttributes", brackets: "{{}}", count: count(attribute_list_items),
+  single: !{ value byte_slice(source, open.offset, close.end_offset); re_test /[\n\r\u{2028}\u{2029}]/ },
+  node_single: !{ value containing(ts_import).text.nonempty ?? containing(ts_export).text; re_test /[\n\r\u{2028}\u{2029}]/ },
+  first_broken: count(attribute_list_items) > 0 && {
+    value first_offset: first(attribute_list_items).offset
+    value byte_slice(source, open.end_offset, first_offset)
+    re_test /[\n\r\u{2028}\u{2029}]/
+  },
+  empty_comments: count(attribute_list_edges) > 0,
+}
+in ts_import_attributes let attribute_list_spacing_pairs ([[attribute_list_open, attribute_list_first]]
+  (if count(attribute_list_edges) == 0 then [] else [[attribute_list_last, attribute_list_close]]))
+in ts_import_attributes let attribute_list_wrapping_pairs (
+  [[attribute_list_open, { value attribute_list_plain; first; nonempty } ?? attribute_list_close]]
+  {
+    value attribute_list_items
+    slice 1
+    map (item) [
+      { value attribute_list_plain; filter (edge) edge.end <= item.offset; last },
+      attribute_list_edge(item.key.node),
+    ]
+  }
+  [[{ value attribute_list_plain; last; nonempty } ?? attribute_list_open, attribute_list_close]]
+)
+in ts_import_attributes let attribute_list_comments descendants(ts_import_attribute_comment)
+in ts_import_attributes let core_list_layout (
+  map(attribute_list_spacing_pairs, pair => {
+    value before: first(pair)
+    value after: last(pair)
+    value core_list_site(source, attribute_list_context, "spacing", before, after, attribute_list_comments)
+  })
+  (if attribute_list_context.count > 0 then
+    map(attribute_list_wrapping_pairs, pair => {
+      value before: first(pair)
+      value after: last(pair)
+      value core_list_site(source, attribute_list_context, "wrapping", before, after, attribute_list_comments)
+    })
+  else
+    map(attribute_list_spacing_pairs, pair => {
+      value before: first(pair)
+      value after: last(pair)
+      value core_list_site(source, attribute_list_context, "empty_wrapping", before, after, attribute_list_comments)
+    }))
+)
 }
