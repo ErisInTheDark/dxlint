@@ -163,6 +163,14 @@ fn structure_parens_cast(pair, source) = {
   value comment: structure_parens_comment(pair, source)
   value comment is ts_block_comment && contains(comment.structure_comment_body, "@type")
 }
+fn structure_parens_replacement(source, pairs) = {
+  value pairs
+  fold (null) (body, pair) {
+    start: pair.offset, end: pair.end_offset,
+    text: if body == null then byte_slice(source, pair.offset + 1, pair.end_offset - 1)
+      else byte_slice(source, pair.offset + 1, body.start) body.text byte_slice(source, body.end, pair.end_offset - 1),
+  }
+}
 
 in structure_parens rule no-extra-parens {
   option conditionalAssign boolean = true "enforce assignments in conditions"
@@ -212,12 +220,25 @@ in structure_parens rule no-extra-parens {
   when owner not ts_spread || inner not no_extra_parens_spread_allowed
   when allowParensAfterCommentPattern == "" || comment == null || !re_test(comment.structure_comment_body, allowParensAfterCommentPattern)
   warn "Unnecessary parentheses around expression."
-  let pair if typed_inner then {
+  let directive owner is ts_expression_statement && (owner.parent is ts_program
+    || owner.parent is ts_block && owner.parent.parent is (ts_function, ts_arrow, ts_method))
+  let minimum if directive && inner is ts_string
+    || !nestedBinaryExpressions && inner is (ts_union, ts_intersection) && owner is (ts_union, ts_intersection)
+    || protected && required < 1 then 1 else required
+  let chain {
     value node
     walk (pair) if pair.parent is structure_parens then pair.parent.node else null
-    find (pair) !structure_parens_cast(pair, source)
-  } else node
-  let body byte_slice(source, pair.offset + 1, pair.end_offset - 1)
+  }
+  let batch is ts_parenthesized_type || any(chain, pair => structure_parens_cast(pair, source))
+  let removable if batch then structure_parens_count - minimum else 1
+  let pairs {
+    value chain
+    filter (pair) !structure_parens_cast(pair, source)
+    slice 0 removable
+  }
+  let replacement structure_parens_replacement(source, pairs)
+  let pair { value pairs; last }
+  let body replacement.text
   let before if {
     value 0
     max: max (pair.offset - 1)
@@ -225,14 +246,12 @@ in structure_parens rule no-extra-parens {
     any (c) c.end_offset == pair.offset
   } then "" else byte_char(source, pair.offset, true)
   let after byte_char(source, pair.end_offset)
-  let first byte_char(source, pair.offset + 1)
-  let last byte_char(source, pair.end_offset - 1, true)
-  let directive owner is ts_expression_statement && (owner.parent is ts_program
-    || owner.parent is ts_block && owner.parent.parent is (ts_function, ts_arrow, ts_method))
+  let first byte_char(body, 0)
+  let last { value body; length: byte_len; value byte_char(body, length, true) }
   let fixable pair != null && byte_char(source, pair.offset) == "(" && byte_char(source, pair.end_offset, true) == ")"
     && !structure_boundary_uncertain(before, first) && !structure_boundary_uncertain(last, after)
     && !(structure_parens_count == 1 && directive && inner is ts_string)
-  fix at { start: pair.offset, end: pair.end_offset } if fixable as (if structure_boundary_space(before, first) then " " else "") body (if structure_boundary_space(last, after) then " " else "")
+  fix at replacement if fixable as (if structure_boundary_space(before, first) then " " else "") body (if structure_boundary_space(last, after) then " " else "")
 }
 
 }
