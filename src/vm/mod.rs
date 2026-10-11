@@ -322,6 +322,9 @@ pub enum VExpr {
     /// A config `fn` on its arguments: its body is lowered once per config
     /// and runs in a frame of its own.
     CallFn(u32, Box<[VExpr]>),
+    /// A call's body with its arguments in place ([`inlinable`]); like
+    /// [`VExpr::CallFn`] it gives up past [`MAX_CALL_DEPTH`].
+    Inlined(Box<VExpr>),
     /// A sub-expression without a native form: the interpreter evaluates
     /// just this part, with the enclosing lambda parameters as its frame.
     /// `site` counts its runs for `ZLINT_VM_STATS`.
@@ -433,6 +436,44 @@ struct Scope<'a, 'v> {
     functions: &'a [UserFn],
     locals: &'a [CExpr],
     values: &'v std::cell::RefCell<&'v mut Values>,
+}
+
+/// Whether `fn` `body` inlined at a call ([`VExpr::Inlined`]) evaluates just
+/// what the call does: it calls no `fn` itself (so arguments and body run at
+/// the call's depth either way), and reads each of its `arity` parameters
+/// exactly once where it always evaluates it (not in a branch, a
+/// short-circuit's right side or a lambda). Then an argument stays a view
+/// (`children.x` is walked, not collected) and no frame is built.
+fn inlinable(body: &CExpr, arity: u16) -> bool {
+    fn count(e: &CExpr, eager: bool, uses: &mut [u8]) -> bool {
+        match e {
+            CExpr::UserCall(..) => return false,
+            CExpr::Param(d) => {
+                return match uses.get_mut(usize::from(*d)) {
+                    Some(n) => {
+                        *n = n.saturating_add(1);
+                        eager && *n == 1
+                    }
+                    None => true,
+                };
+            }
+            _ => {}
+        }
+        // Children from this index on are evaluated conditionally or repeatedly.
+        let lazy_from = match e {
+            CExpr::If(..) | CExpr::Binary(BinOp::And | BinOp::Or, ..) | CExpr::Nullish(..) | CExpr::Coalesce(..) | CExpr::Walk(..) => 1,
+            CExpr::Each(stage) => 1 + stage.args.len(),
+            _ => usize::MAX,
+        };
+        let (mut ok, mut at) = (true, 0);
+        e.for_each_child(&mut |child| {
+            ok &= count(child, eager && at < lazy_from, uses);
+            at += 1;
+        });
+        ok
+    }
+    let mut uses = vec![0u8; usize::from(arity)];
+    count(body, true, &mut uses) && uses.iter().all(|&n| n == 1)
 }
 
 /// The typed form of an attribute definition. Every expression lowers:
@@ -792,12 +833,25 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
         CExpr::NonEmpty(value) => VExpr::NonEmpty(boxed(value)?),
         // A rule's `let`: its own slot in the rule's session.
         CExpr::Local(i) if (*i as usize) < g.locals.len() => VExpr::Local(*i),
-        // A call, not an inlined body: inlining copied each argument into
-        // every use, nested calls multiplying it.
+        // Inlined only where that evaluates exactly what the call would
+        // ([`inlinable`]): inlining a body that reads a parameter twice
+        // copies the argument into every use, nested calls multiplying it.
         CExpr::UserCall(i, call_args) => {
             let f = g.functions.get(*i as usize).ok_or(e)?;
             let body = f.body.get().ok_or(e)?;
             let arity = u16::try_from(f.arity).map_err(|_| e)?;
+            if call_args.len() == f.arity && inlinable(body, arity) {
+                let lowered: Vec<Lowered> =
+                    call_args.iter().map(|arg| lower_in(arg, g, args, bound).unwrap_or_else(|_| Lowered::V(interp(arg, g, args)))).collect();
+                let inner = Scope { functions: g.functions, locals: &[], values: g.values };
+                // A body that is a list view stays a call: inlined, it would
+                // escape the depth check.
+                match lower_in(body, &inner, &lowered, bound) {
+                    Ok(Lowered::V(v)) => return Ok(Lowered::V(VExpr::Inlined(Box::new(v)))),
+                    Err(_) => return Ok(Lowered::V(VExpr::Inlined(Box::new(interp(body, &inner, &lowered))))),
+                    Ok(_) => {}
+                }
+            }
             let begun = g.values.borrow_mut().begin_function(*i);
             if begun {
                 let params: Vec<Lowered> = (0..arity).map(|p| Lowered::V(VExpr::Bound(p))).collect();
@@ -1416,6 +1470,8 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
             None => V::Null,
         },
         VExpr::Fact { fact, projection, of } => h.fact(node, *fact, *projection, *of)?,
+        VExpr::Inlined(body) if h.calls.get() < MAX_CALL_DEPTH => ev(h, node, body, f)?,
+        VExpr::Inlined(_) => return None,
         VExpr::Is { parent, kinds } => {
             let subject = if *parent { parent_layer(tree, node) } else { Some(node) };
             V::Bool(subject.is_some_and(|n| is_a(h.grammar(), tree.node(n).matcher, kinds)))
@@ -1852,7 +1908,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             }
             h.pack(&Value::from(text))?
         }
-        VExpr::Const(_) | VExpr::Bound(_) | VExpr::Attr(_) | VExpr::ParentAttr(_) | VExpr::Fact { .. } | VExpr::Is { .. }
+        VExpr::Const(_) | VExpr::Bound(_) | VExpr::Attr(_) | VExpr::ParentAttr(_) | VExpr::Fact { .. } | VExpr::Inlined(_) | VExpr::Is { .. }
         | VExpr::InField(..) | VExpr::FieldPresent(_) | VExpr::FieldCount(_) | VExpr::OnParent(_) | VExpr::OnSibling(..)
         | VExpr::OnAncestor(..) | VExpr::Not(_) | VExpr::Neg(_) | VExpr::If(..) | VExpr::Binary(..) | VExpr::IsNull(_)
         | VExpr::NonEmpty(_) | VExpr::Coalesce(..) | VExpr::Nullish(..) | VExpr::Node | VExpr::Text | VExpr::Parent
@@ -2138,6 +2194,12 @@ mod tests {
                 when (carried ?? 0) > 0 && own == own
                 info "{carried}"
             }
+            fn branch_total(branch, extra, totals) = (if branch then 1 else 0) + (if extra == true then 1 else 0) + sum(totals)
+            in ts_node let inlined_total branch_total(boundary, is ts_block, children.contribution)
+            in ts_function_like, ts_block rule inlined info "{inlined_total}"
+            fn lazy_pick(flag, x) = if flag then 0 else x
+            in ts_identifier let text_number num(text)
+            in ts_identifier rule lazy_arg info "{lazy_pick(true, text_number)}"
             in ts_node rule gated {
                 let twice_total twice(total)
                 when { value twice_total; then (t) t > 2 && !boundary }
