@@ -1,6 +1,7 @@
 //! File-local interval queries over a selector's sorted syntax nodes.
 
 use super::{value, CExpr, Ctx, NodeSel, Value};
+use crate::engine::Query;
 
 pub(super) struct LayerSpans {
     nodes: Vec<(u32, u32, u32)>,
@@ -106,11 +107,21 @@ impl<'a> Ctx<'a> {
         spans
     }
 
+    /// One node query, timed under `--profile`.
+    fn query<T>(&self, query: Query, run: impl FnOnce() -> T, found: impl FnOnce(&T) -> usize) -> T {
+        match self.profile {
+            Some(profile) => profile.time_query(query, run, found),
+            None => run(),
+        }
+    }
+
     /// `containing(sel)` on this node: the innermost selected node holding it.
     pub(crate) fn containing_id(&self, sel: &NodeSel) -> Option<u32> {
-        let spans = self.layer_spans(sel);
-        let node = self.tree.node(self.node);
-        spans.containing(node.start, node.end, self.node, |a, b| self.is_ancestor(a, b))
+        self.query(Query::Containing, || {
+            let spans = self.layer_spans(sel);
+            let node = self.tree.node(self.node);
+            spans.containing(node.start, node.end, self.node, |a, b| self.is_ancestor(a, b))
+        }, |found| usize::from(found.is_some()))
     }
 
     /// `overlapping(sel, start, end)` from this node, as clamped offsets
@@ -126,7 +137,12 @@ impl<'a> Ctx<'a> {
                 (node.start, node.end)
             }
         };
-        self.layer_spans(sel).overlapping(start, end, self.node)
+        self.query(Query::Overlapping, || self.layer_spans(sel).overlapping(start, end, self.node), Vec::len)
+    }
+
+    /// `descendants(sel)` under this node.
+    pub(crate) fn descendant_ids(&self, sel: &NodeSel) -> Vec<u32> {
+        self.query(Query::Descendants, || sel.descendants(self.grammar, self.tree, self.node), Vec::len)
     }
 
     pub(super) fn containing(&self, sel: &NodeSel) -> Value<'a> {

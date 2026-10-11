@@ -322,6 +322,19 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
     for (nanos, calls, name) in facts.iter().take(15) {
         output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(*nanos)));
     }
+    output.err(format_args!("\n  {BOLD}node queries{BOLD:#} {DIM}part of the rules' time{DIM:#}"));
+    for query in crate::engine::Query::ALL {
+        let at = query as usize;
+        let calls = Profile::get(&p.query_calls[at]);
+        if calls > 0 {
+            output.err(format_args!(
+                "  {:>11.1} ms {calls:>11} calls {:>11} nodes  {CYAN}{}{CYAN:#}",
+                ms(Profile::get(&p.query_nanos[at])),
+                Profile::get(&p.query_nodes[at]),
+                query.name()
+            ));
+        }
+    }
 }
 
 pub fn functions(output: &mut Output<'_>) -> u8 {

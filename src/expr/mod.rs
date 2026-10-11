@@ -1960,7 +1960,7 @@ impl<'a> Ctx<'a> {
                 let at = self.position_at(self.eval(offset)?.num()?);
                 Value::record(Position::KEYS.iter().enumerate().map(|(key, name)| ((*name).into(), Value::from(at.get(key)))).collect::<Vec<_>>())
             }
-            CExpr::Descendants(sel) => Value::list(sel.descendants(self.grammar, self.tree, self.node).into_iter()
+            CExpr::Descendants(sel) => Value::list(self.descendant_ids(sel).into_iter()
                 .map(|id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect()),
             CExpr::NodeAt(offset) => {
                 let at = self.eval(offset)?;

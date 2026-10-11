@@ -884,6 +884,10 @@ pub trait Host {
     fn overlapping(&self, _node: u32, _sel: &NodeSel, _range: Option<(f64, f64)>) -> Option<Vec<u32>> { None }
     /// `containing(sel)` from a node.
     fn containing(&self, _node: u32, _sel: &NodeSel) -> Option<Option<u32>> { None }
+    /// `descendants(sel)` under `node`, in source order.
+    fn descendants(&self, node: u32, sel: &NodeSel) -> Vec<u32> {
+        sel.descendants(self.grammar(), self.tree(), node)
+    }
     /// The interpreter's value of `e` on a node, with `params` as its
     /// lambda frame ([`VExpr::Interp`]); `None` on an error.
     fn interp(&self, _node: u32, _e: &CExpr, _params: Vec<Value<'static>>) -> Option<Value<'_>> { None }
@@ -1345,7 +1349,7 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
             }
         }
         Seq::Descendants(sel) => {
-            for id in sel.descendants(h.grammar(), tree, node) {
+            for id in h.descendants(node, sel) {
                 if !each(V::Node(id), f)? {
                     return Some(false);
                 }

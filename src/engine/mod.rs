@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 pub use build::{build, build_for_lint, Built};
 pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
-pub use profile::Profile;
+pub use profile::{Profile, Query};
 
 use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{FileId, SourceMap, Span};

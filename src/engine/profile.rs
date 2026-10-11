@@ -36,6 +36,32 @@ pub struct Profile {
     pub layer_nanos: AtomicU64,
     /// Time spent running rules, all together.
     pub rules_nanos: AtomicU64,
+    /// Node queries by [`Query`]: nanoseconds (inside the rules' time),
+    /// calls and nodes returned.
+    pub query_nanos: [AtomicU64; Query::ALL.len()],
+    pub query_calls: [AtomicU64; Query::ALL.len()],
+    pub query_nodes: [AtomicU64; Query::ALL.len()],
+}
+
+/// The node queries rules run (`overlapping(...)`, `containing(...)`,
+/// `descendants(...)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Query {
+    Overlapping,
+    Containing,
+    Descendants,
+}
+
+impl Query {
+    pub const ALL: [Query; 3] = [Query::Overlapping, Query::Containing, Query::Descendants];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Query::Overlapping => "overlapping",
+            Query::Containing => "containing",
+            Query::Descendants => "descendants",
+        }
+    }
 }
 
 fn counters(n: usize) -> Vec<AtomicU64> {
@@ -82,6 +108,17 @@ impl Profile {
         });
         Profile::add_time(&self.fact_nanos[fact], elapsed);
         Profile::add(&self.fact_calls[fact], 1);
+        value
+    }
+
+    /// Runs one node query, counting its time, the call and the nodes found.
+    pub fn time_query<T>(&self, query: Query, run: impl FnOnce() -> T, found: impl FnOnce(&T) -> usize) -> T {
+        let started = Instant::now();
+        let value = run();
+        let at = query as usize;
+        Profile::add_time(&self.query_nanos[at], started.elapsed());
+        Profile::add(&self.query_calls[at], 1);
+        Profile::add(&self.query_nodes[at], found(&value) as u64);
         value
     }
 

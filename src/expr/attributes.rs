@@ -389,6 +389,10 @@ impl vm::Host for Ctx<'_> {
         Some(Ctx { node, ..*self }.containing_id(sel))
     }
 
+    fn descendants(&self, node: u32, sel: &super::NodeSel) -> Vec<u32> {
+        Ctx { node, ..*self }.descendant_ids(sel)
+    }
+
     fn tree(&self) -> &crate::grammar::Tree {
         self.tree
     }
