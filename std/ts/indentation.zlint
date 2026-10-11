@@ -78,6 +78,7 @@ fn indent_callee_tail(callee) =
     walk (item) if item is ts_member && position(item.object.last_token.end).js_line == position(item.property.first_token.start).js_line then item.object.node else null
     last
   }
+fn indent_optional_call_anchor(owner) = if position(owner.callee.last_token.end).js_line == position(owner.indent_list_open.offset).js_line then owner.callee.last_token.start else owner.callee.first_token.start
 fn indent_function_anchor(owner) =
   if owner not (ts_call.argument, ts_new.argument) || position(owner.first_token.start).js_column == len(owner.indent) + 1 then owner.offset
   else if indent_list_anchor(owner) != owner.offset then indent_list_anchor(owner)
@@ -276,9 +277,9 @@ in ts_line rule indent {
   indent ts_template.expression from indent_template_code_anchor(parent.node, index, mode, tab_length, false) by if { value parent.node; indent_template_parts index; indent_template_relative } then 1 else 0
   indent ts_template.quasi from if index == 0 then offset else indent_template_code_anchor(parent.node, index - 1, mode, tab_length, true) by 0
   indent in ts_index from indent_index_open
-  indent ts_index.token from if text == "]" then parent.indent_index_open else parent.optional.offset.nonempty ?? parent.offset by if text == "]" then 0 else indent_numeric(member_expression)
+  indent ts_index.token from if text == "]" then parent.indent_index_open else if text == "?." then parent.offset else parent.optional.offset.nonempty ?? parent.offset by if text == "]" then 0 else indent_numeric(member_expression)
   indent in indent_calls from indent_call_anchor by { value indent_arguments_offset.nonempty ?? call_expression; indent_numeric }
-  indent indent_calls.token from if is (ts_open_paren, ts_close_paren) then parent.indent_call_anchor else offset by 0
+  indent indent_calls.token from if text == "?." then indent_optional_call_anchor(parent) else if is (ts_open_paren, ts_close_paren) then parent.indent_call_anchor else offset by if text == "?." then 1 else 0
   indent in ts_function.body, ts_arrow.body, ts_method.body from indent_function_anchor(parent.indent_body_root) by if parent.indent_outer_iife then parent.indent_body_offset.nonempty ?? indent_numeric(outerIIFEBody) else indent_function_offset(parent, parent.indent_body_offset, function_declaration_body, function_expression_body)
   indent in ts_static_block.body by parent.indent_body_offset.nonempty ?? static_block
   indent ts_function.parameter, ts_arrow.parameter, ts_method.parameter by {
@@ -305,7 +306,7 @@ in ts_line rule indent {
   }
   indent ts_declarator.token from token_neighbours.before.start by if text == "=" then indent_numeric(assignment_operator) else 0
   indent ts_member.property, ts_member.token, ts_member.optional, ts_index.optional, ts_meta_property.token by indent_numeric(member_expression)
-  indent ts_call.optional from if position(parent.callee.last_token.end).js_line == position(parent.indent_list_open.offset).js_line then parent.callee.last_token.start else parent.callee.first_token.start
+  indent ts_call.optional from indent_optional_call_anchor(parent)
   indent ts_import.specifier by indent_numeric(import_declaration)
   indent ts_import.token, ts_export.token from if parent.indent_module_tail != null && offset >= parent.indent_module_tail && node not ts_semicolon then parent.offset else offset
   indent ts_import.from, ts_export.from from if parent.indent_module_from != null then parent.offset else offset

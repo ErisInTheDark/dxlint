@@ -1,0 +1,5 @@
+obj
+?.prop
+?.[key]
+?.
+[key]
