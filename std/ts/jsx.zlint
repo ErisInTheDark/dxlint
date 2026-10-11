@@ -520,7 +520,12 @@ in ts_jsx_element rule jsx-pascal-case {
 }
 in ts_jsx_element rule jsx-shorthand-fragment {
   when contains(["Fragment", "React.Fragment"], jsx_name_spelling) && opening.property == null
+  report at opening.node
   warn "Use shorthand fragment syntax `<>...</>` instead of `<{jsx_name_spelling}>...</{jsx_name_spelling}>`."
+  let body_start opening.end_offset - offset
+  let body_end closing.offset - offset
+  let content byte_slice(text, body_start, body_end)
+  fix at node if closing != null && opening.type_argument == null && expression_fix_clean(opening.node) && expression_fix_clean(closing.node) as "<>" content "</>"
 }
 in ts_jsx_attribute rule jsx-shorthand-boolean {
   when value is ts_jsx_expression && value.jsx_boolean_true == true
