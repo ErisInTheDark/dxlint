@@ -1,0 +1,6 @@
+import .ts
+
+# `node.fact(...)` asks the fact about that node, not the rule's.
+in ts_binary rule lit warn "lit" {
+  when left.node.literal_value() != null && right.node.literal_value() == null
+}

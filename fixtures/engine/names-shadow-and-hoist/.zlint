@@ -1,0 +1,23 @@
+lang t "*.t"
+match block /\{/ until /\}/
+match ref /\w+/
+in .t, block {
+  match block
+  match let_decl /\blet\s+/ name:/\w+/
+  match fn_decl /\bfn\s+/ name:/\w+/
+  match use_name /\buse\s+/ :ref
+}
+
+in block {
+  scope block
+}
+in let_decl {
+  declares value name in nearest block
+}
+in fn_decl {
+  declares value name in nearest block hoisted
+}
+in ref {
+  resolves value
+  rule found warn "{text} -> {if scope_declaration == null then 'none' else scope_declaration.line}"
+}

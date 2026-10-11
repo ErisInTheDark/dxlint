@@ -26,6 +26,8 @@ pub struct Config {
     pub natives: Vec<Name>,
     pub attrs: Vec<AttrDef>,
     pub forwards: Vec<ForwardDef>,
+    /// `scope`, `declares` and `resolves` items.
+    pub names: Vec<NameDef>,
     /// `schema name T`: option schemas rules share.
     pub schemas: Vec<SchemaDef>,
     /// Names removed by `drop`: anything still using one is an error at
@@ -101,6 +103,27 @@ pub struct AttrDef {
     pub expr: Expr,
     /// Written inside `define { ... }`: kept only while something needs it.
     pub library: bool,
+}
+
+/// A name item on the nodes of `targets` (docs/design/type-layers.md).
+#[derive(Clone, Debug)]
+pub struct NameDef {
+    pub targets: Vec<Name>,
+    pub item: NameItem,
+}
+
+#[derive(Clone, Debug)]
+pub enum NameItem {
+    /// `scope block, function`: the node opens a scope of these classes.
+    Scope(Vec<Name>),
+    /// `declares value, type name in nearest block [hoisted]`.
+    Declares { classes: Vec<Name>, path: Vec<Name>, nearest: Vec<Name>, hoisted: bool },
+    /// `resolves value [path]`: the node (or what `path` leads to) uses a name.
+    Resolves { classes: Vec<Name>, path: Vec<Name> },
+    /// `declares through a ?? b, c`: a node something declares (a pattern)
+    /// passes the declaration on to these fields; per comma-separated group,
+    /// the first path that leads anywhere.
+    Through(Vec<Vec<Vec<Name>>>),
 }
 
 /// A rule's `indent X by n` / `indent in X by n`: the indentation structure
@@ -450,6 +473,9 @@ pub enum ExprKind {
     /// `name` or `layer.field`.
     Var(Vec<Name>),
     Call(Name, Vec<Expr>),
+    /// `a.b.fact(args)`: a native fact asked about the node `a.b` leads to;
+    /// the arguments are evaluated where the call is written.
+    NodeCall(Box<Expr>, Name, Vec<Expr>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// Null-only, lazy fallback.

@@ -97,6 +97,20 @@ fn big_files_report_the_same_when_their_rules_run_in_groups() {
 }
 
 #[test]
+fn name_classes_must_be_declared_or_opened_somewhere() {
+    let errors = errors(r#"
+        in paren {
+          scope block
+          declares value x in nearest blok
+          resolves valeu
+        }
+    "#);
+    assert!(errors.iter().any(|e| e.contains("no layer opens a scope of class `blok`")), "{errors:?}");
+    assert!(errors.iter().any(|e| e.contains("nothing declares class `valeu`")), "{errors:?}");
+    assert!(errors.iter().any(|e| e.contains("no layer has a field `x`")), "{errors:?}");
+}
+
+#[test]
 fn failed_fix_conditions_produce_no_fix() {
     let l = linter(r#"
         in .t match word /[a-z]+/

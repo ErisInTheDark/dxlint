@@ -1,6 +1,7 @@
 //! The runtime layer grammar: every matcher compiled, wired to its parents,
 //! and pre-resolved per language so parsing a file is pure table lookups.
 
+pub mod names;
 mod parse;
 mod shapes;
 mod states;
@@ -193,6 +194,8 @@ pub struct Grammar {
     /// The config's `fn`s, by index; bodies are compiled once every
     /// function is known (they may call each other).
     pub functions: Vec<UserFn>,
+    /// `scope`, `declares` and `resolves` tables.
+    pub names: names::Names,
 }
 
 /// A config `fn`: its name, its arity and its compiled body.
@@ -535,8 +538,10 @@ impl Grammar {
             cache_pool: Mutex::new(Vec::new()),
             dropped: config.dropped.clone(),
             functions: user_functions(config, errors),
+            names: names::Names::default(),
         };
         grammar.shapes = shapes::Shapes::build(&grammar);
+        grammar.names = names::Names::build(config, &grammar, errors);
         grammar
     }
 

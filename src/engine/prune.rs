@@ -58,6 +58,11 @@ fn expr_names(e: &Expr, out: &mut HashSet<String>) {
             out.insert(name.text.clone());
             args.iter().for_each(|a| expr_names(a, out));
         }
+        ExprKind::NodeCall(receiver, name, args) => {
+            expr_names(receiver, out);
+            out.insert(name.text.clone());
+            args.iter().for_each(|a| expr_names(a, out));
+        }
         ExprKind::Unary(_, a) => expr_names(a, out),
         ExprKind::Binary(_, a, b) | ExprKind::Nullish(a, b) => {
             expr_names(a, out);

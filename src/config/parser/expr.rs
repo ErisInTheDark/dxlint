@@ -654,15 +654,16 @@ impl Parser<'_> {
         let span = first.span.to(last.span);
         let paren = self.ts.peek_raw(0).cloned();
         if let Some(p) = paren.filter(|p| p.kind == Tk::LParen && last.touches(p)) {
-            if path.len() > 1 {
-                self.errors.push(ConfigError::new(span, "only plain function names can be called"));
-                return None;
-            }
             self.ts.next_raw();
             let args = self.comma_list(Tk::RParen, "`)`")?;
             self.call_arguments(&args);
             let span = span.to(self.ts.last_span.unwrap_or(p.span));
-            return Some(Expr { kind: ExprKind::Call(path.pop().expect("one"), args), span });
+            let name = path.pop().expect("one");
+            if path.is_empty() {
+                return Some(Expr { kind: ExprKind::Call(name, args), span });
+            }
+            let receiver = Expr { span: path[0].span.to(path[path.len() - 1].span), kind: ExprKind::Var(path) };
+            return Some(Expr { kind: ExprKind::NodeCall(Box::new(receiver), name, args), span });
         }
         Some(Expr { kind: ExprKind::Var(path), span })
     }
@@ -678,7 +679,7 @@ impl Parser<'_> {
                 ExprKind::Key(value, _) | ExprKind::Unary(_, value)
                 | ExprKind::Test(value, _) | ExprKind::Is(value, _) => simple(value),
                 ExprKind::Binary(_, left, right) | ExprKind::Nullish(left, right) => simple(left) && simple(right),
-                ExprKind::Call(..) | ExprKind::If(..) | ExprKind::Pipeline(_) => false,
+                ExprKind::Call(..) | ExprKind::NodeCall(..) | ExprKind::If(..) | ExprKind::Pipeline(_) => false,
             }
         }
         for arg in args.iter().filter(|arg| !simple(arg)) {

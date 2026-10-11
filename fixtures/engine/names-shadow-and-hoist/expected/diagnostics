@@ -1,0 +1,6 @@
+file.t:11:7-11:8 found#0 a -> 4
+file.t:12:7-12:8 found#0 b -> none
+file.t:2:7-2:8 found#0 a -> none
+file.t:3:7-3:8 found#0 f -> 6
+file.t:5:7-5:8 found#0 a -> 4
+file.t:9:9-9:10 found#0 a -> 8

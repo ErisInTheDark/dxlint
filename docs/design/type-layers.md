@@ -230,6 +230,27 @@ speed is within noise of native. Slower is a problem to solve, not a verdict.
 4. **Narrowing:** `propagates`, `truthy`, `excludes`, `mutated`; consumers:
    no-unnecessary-condition, strict-boolean-expressions.
 
+## Step 1 prototype (in progress)
+
+- Parser: `scope`, `declares`, `resolves` items in layer contexts
+  (`config/ast.rs` `NameDef`); not reserved words (only item position).
+- Build: per-matcher tables of scope classes, declarations, resolutions;
+  config errors for classes resolved but never declared, `in nearest`
+  classes nothing opens.
+- Engine `engine/names.rs`: per tree, document order, scope stack by
+  containment; `nearest` searches outward from the declaring node,
+  including scopes the node itself opens; non-hoisted declarations are
+  visible from their start; same name + scope merges into the first;
+  references resolve after the walk.
+- Rules read builtins `scope_declaration` (node or null) and
+  `scope_references` (list); computed once per tree in the attribute memo.
+  At cutover they become the `declaration` / `references` links.
+- Check: a config rule reporting `ts_identifier` nodes where
+  `scope_declaration` differs from the native `declaration`, run on
+  wayward; zero reports and equal speed is the bar.
+- Undecided: destructuring (patterns passing a declaration to their
+  fields), implicit names (`arguments`), conditional items (`when`).
+
 ## Open
 
 - Negative proofs (`x === undefined` proving nullable in the consequent):

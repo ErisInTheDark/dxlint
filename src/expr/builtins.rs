@@ -62,6 +62,8 @@ builtins! {
     Index = "index": "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root",
     GapBefore = "gap_before": "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child",
     Node = "node": "the node itself as a node value (reads as its text): for `walk`, `report at`, and `.x` reads later (`right.node`, `parent.node`)",
+    ScopeDeclaration = "scope_declaration": "on a name a `resolves` item looks up: the name node that declares it (through `scope` and `declares` items); null when nothing does",
+    ScopeReferences = "scope_references": "on a declared name: the names resolving to it, in order",
 }
 
 impl Builtin {
@@ -181,6 +183,22 @@ impl<'a> Ctx<'a> {
             },
             Builtin::Source => Value::from(self.source),
             Builtin::Node => Value::Node(self.node, value::Text::Borrowed(self.node_text(self.node))),
+            Builtin::ScopeDeclaration => match self.names().declaration.get(&self.node) {
+                Some(&id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
+                None => Value::Null,
+            },
+            Builtin::ScopeReferences => Value::list(
+                self.names()
+                    .references
+                    .get(&self.node)
+                    .map(|refs| refs.iter().map(|&id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
+                    .unwrap_or_default(),
+            ),
         })
+    }
+
+    /// This tree's names, resolved on first use.
+    fn names(&self) -> &'a crate::grammar::names::Resolved {
+        self.memo.names.get_or_init(|| self.grammar.names.resolve(self.tree, self.source))
     }
 }

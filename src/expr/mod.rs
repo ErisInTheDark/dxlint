@@ -94,9 +94,10 @@ pub enum CExpr {
     /// Lazy null-only fallback; the left value is evaluated once.
     Nullish(Box<CExpr>, Box<CExpr>),
     NonEmpty(Box<CExpr>),
-    /// `fact(args)` on the node: the fact reads its arguments through
+    /// `fact(args)` on the node, or on the node the third part gives
+    /// (`a.b.fact(args)`): the fact reads its arguments through
     /// [`facts::args`].
-    FactCall(usize, Vec<CExpr>),
+    FactCall(usize, Vec<CExpr>, Option<Box<CExpr>>),
     /// A link (`declaration`, `references`): the node(s) it leads to.
     Link(usize),
     /// `base.key`: on a record its key; on a node (or nodes) the compiled
@@ -151,8 +152,12 @@ macro_rules! child_visitor {
         pub(crate) fn $name<'e>(&'e $($m)? self, f: &mut impl FnMut(&'e $($m)? CExpr)) {
             match self {
                 CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
-                | CExpr::FactCall(_, items) | CExpr::UserCall(_, items) => {
+                | CExpr::UserCall(_, items) => {
                     for item in items { f(item) }
+                }
+                CExpr::FactCall(_, items, receiver) => {
+                    for item in items { f(item) }
+                    if let Some(receiver) = receiver { f(receiver) }
                 }
                 CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner) | CExpr::NonEmpty(inner)
                 | CExpr::Test(inner, _) | CExpr::TestDfa(inner, _) | CExpr::Dbg(inner, _)
@@ -347,6 +352,8 @@ pub struct AttrMemo<'a> {
     visit: std::cell::Cell<u32>,
     /// Indentation queries shared only within the active rule invocation.
     indent_hits: RefCell<FxHashMap<u32, Option<IndentHit>>>,
+    /// The tree's names resolved (`scope_declaration`), on first read.
+    names: std::cell::OnceCell<crate::grammar::names::Resolved>,
 }
 
 struct ParamFrame<'m, 'a> {
@@ -947,7 +954,20 @@ impl Scope<'_> {
                 let i = facts::fact(&name.text).expect("checked");
                 self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
                 let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
-                CExpr::FactCall(i, args)
+                CExpr::FactCall(i, args, None)
+            }
+            ExprKind::NodeCall(receiver, name, args) => {
+                let Some(i) = facts::fact(&name.text).filter(|_| !self.options_only) else {
+                    errors.push(
+                        ConfigError::new(name.span, format!("`{}` is not a native fact; only facts are called on a node (`node.fact(...)`)", name.text))
+                            .suggest(&name.text, facts::FACTS.iter().map(|f| f.name)),
+                    );
+                    return None;
+                };
+                self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
+                let receiver = self.compile(receiver, errors)?;
+                let args = args.iter().map(|a| self.compile(a, errors)).collect::<Option<Vec<_>>>()?;
+                CExpr::FactCall(i, args, Some(Box::new(receiver)))
             }
             ExprKind::Call(name, args) => {
                 let Some(f) = functions::lookup(&name.text) else {
@@ -1940,10 +1960,17 @@ impl<'a> Ctx<'a> {
                     v
                 })?
             }
-            CExpr::FactCall(i, args) => {
+            CExpr::FactCall(i, args, receiver) => {
                 let Some(native) = self.native else { return Ok(Value::Null) };
+                let node = match receiver {
+                    None => self.node,
+                    Some(receiver) => match self.eval(receiver)? {
+                        Value::Node(id, _) => id,
+                        _ => return Ok(Value::Null),
+                    },
+                };
                 let args = args.iter().map(|a| self.eval(a).map(Value::into_static)).collect::<Result<Vec<_>, _>>()?;
-                let compute = || facts::with_args(args, || facts::read(native, *i, self.node));
+                let compute = || facts::with_args(args, || facts::read(native, *i, node));
                 match self.profile {
                     Some(profile) => profile.time_fact(*i, compute),
                     None => compute(),

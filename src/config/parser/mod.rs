@@ -294,6 +294,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "indent") => self.indent(ctx),
             (Tk::Ident, "let") => self.attr(ctx),
             (Tk::Ident, "forward") => self.forward(ctx),
+            (Tk::Ident, "scope" | "declares" | "resolves") if ctx.is_some() => self.name_item(ctx),
             (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.old_set(),
             (Tk::Ident, "ignore") => self.ignore(),
@@ -358,11 +359,12 @@ impl<'a> Parser<'a> {
             Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
             Some(t) if t.is_ident("let") => self.attr(Some(&ctx)),
             Some(t) if t.is_ident("forward") => self.forward(Some(&ctx)),
+            Some(t) if t.is_ident("scope") || t.is_ident("declares") || t.is_ident("resolves") => self.name_item(Some(&ctx)),
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
                 self.errors.push(ConfigError::new(
                     span,
-                    format!("expected `match`, `rule`, `indent`, `let`, `forward` or `{{` after `{} ...`", kw.text),
+                    format!("expected `match`, `rule`, `indent`, `let`, `forward`, `scope`, `declares`, `resolves` or `{{` after `{} ...`", kw.text),
                 ));
             }
         }
@@ -454,6 +456,128 @@ impl<'a> Parser<'a> {
 
     /// `in a, b forward x, y from field`: those attributes, where these
     /// layers lack them, come from that field's node.
+    /// `scope c, ...`, `declares c, ... path in nearest s, ... [hoisted]`,
+    /// `resolves c, ... [path]`: names on the context's layers.
+    fn name_item(&mut self, ctx: Option<&Context>) {
+        let kw = self.bump().expect("peeked");
+        let what = kw.text.to_string();
+        let through = what == "declares" && self.word("through");
+        let classes = if through { Vec::new() } else { self.name_list("a class name") };
+        if classes.is_empty() && !through {
+            return;
+        }
+        let item = match what.as_str() {
+            _ if through => {
+                let mut groups = Vec::new();
+                loop {
+                    let mut alternatives = Vec::new();
+                    loop {
+                        let Some(path) = self.name_path("a field holding declared names") else { return };
+                        alternatives.push(path);
+                        self.skip(false, true);
+                        if !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Nullish) {
+                            break;
+                        }
+                        self.ts.next_raw();
+                    }
+                    groups.push(alternatives);
+                    self.skip(false, true);
+                    if !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Comma) {
+                        break;
+                    }
+                    self.ts.next_raw();
+                }
+                NameItem::Through(groups)
+            }
+            "scope" => NameItem::Scope(classes),
+            "declares" => {
+                let Some(path) = self.name_path("the field holding the declared name") else { return };
+                if !(self.word("in") && self.word("nearest")) {
+                    self.error_here("expected `in nearest <scope class>`: `declares value name in nearest block`");
+                    return;
+                }
+                let nearest = self.name_list("a scope class");
+                if nearest.is_empty() {
+                    return;
+                }
+                let hoisted = self.word("hoisted");
+                NameItem::Declares { classes, path, nearest, hoisted }
+            }
+            _ => {
+                self.skip(false, true);
+                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident) {
+                    match self.name_path("the field holding the used name") {
+                        Some(path) => path,
+                        None => return,
+                    }
+                } else {
+                    Vec::new()
+                };
+                NameItem::Resolves { classes, path }
+            }
+        };
+        self.end_of_item();
+        let targets: Vec<Name> = ctx
+            .filter(|c| c.layer.is_none())
+            .map(|c| {
+                c.parents
+                    .iter()
+                    .filter_map(|(p, f)| match (p, f) {
+                        (Parent::Matcher(n), None) => Some(n.clone()),
+                        _ => {
+                            self.errors.push(ConfigError::new(p.span(), format!("`{what}` belongs to layers, not fields or languages")));
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if targets.is_empty() {
+            if ctx.is_none_or(|c| c.layer.is_some()) {
+                self.errors.push(ConfigError::new(kw.span, format!("`{what}` needs a layer: `in <layer> {{ {what} ... }}`")));
+            }
+            return;
+        }
+        self.config.names.push(NameDef { targets, item });
+    }
+
+    /// `a, b, c` on the current line.
+    fn name_list(&mut self, what: &str) -> Vec<Name> {
+        let mut out = Vec::new();
+        loop {
+            self.skip(false, true);
+            let Some(name) = self.ident(what) else { return Vec::new() };
+            out.push(name);
+            self.skip(false, true);
+            if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Comma) {
+                self.ts.next_raw();
+                continue;
+            }
+            return out;
+        }
+    }
+
+    /// `field.field...`.
+    fn name_path(&mut self, what: &str) -> Option<Vec<Name>> {
+        self.skip(false, true);
+        let mut path = vec![self.ident(what)?];
+        while self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Dot) {
+            self.ts.next_raw();
+            path.push(self.ident(what)?);
+        }
+        Some(path)
+    }
+
+    /// Takes `word` if it comes next on the line.
+    fn word(&mut self, word: &str) -> bool {
+        self.skip(false, true);
+        let next = self.ts.peek_raw(0).is_some_and(|t| t.is_ident(word));
+        if next {
+            self.ts.next_raw();
+        }
+        next
+    }
+
     fn forward(&mut self, ctx: Option<&Context>) {
         let kw = self.bump().expect("peeked");
         let mut attrs = Vec::new();
