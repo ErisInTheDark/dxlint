@@ -1,2 +1,2 @@
-boolean-narrowed-any-property.ts:1:80-1:96 no-unnecessary-boolean-literal-compare#0
-boolean-required-method.ts:1:72-1:87 no-unnecessary-boolean-literal-compare#1
+boolean-narrowed-any-property.ts:1:80-1:96 no-unnecessary-boolean-literal-compare#4
+boolean-required-method.ts:1:72-1:87 no-unnecessary-boolean-literal-compare#4

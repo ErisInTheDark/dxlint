@@ -1,0 +1,72 @@
+# Boolean literal comparisons, nullable options and source-preserving fixes.
+import .ts/expression-fixes
+
+define {
+
+fn typed_boolean_comparison(n) = {
+  value right: unparenthesised_node(n.right.node)
+  value left: unparenthesised_node(n.left.node)
+  value if right is ts_boolean then {literal: right.text, expression: left}
+    else if left is ts_boolean then {literal: left.text, expression: right} else null
+}
+fn typed_boolean_domain(domain) = domain.primitive == "boolean"
+  || domain.kind == "union" && count(domain.parts) > 0 && all(domain.parts, part => part.primitive == "boolean")
+fn typed_nullable_boolean(domain) = domain.kind == "union" && contains(domain.flags, "boolean") && domain.nullish
+  && all(domain.parts, part => part.primitive == "boolean" || part.kind == "null" || part.kind == "undefined")
+fn typed_boolean_conditional(n) = {
+  value n
+  walk (current) if current.parent is ts_parenthesized
+    || current.parent is ts_logical && (current.parent.operator != "??" || current is ts_logical.right)
+    || current.parent is ts_conditional && current not ts_conditional.test
+    || current.parent is ts_sequence && last(current.parent.expression.nodes) == current
+    || current.parent is ts_unary && current.parent.operator == "!" then current.parent.node else null
+  any (current) current is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test)
+}
+fn typed_boolean_outer(n) = {
+  value n
+  walk (current) if current.parent is ts_parenthesized then current.parent.node else null
+  last
+}
+fn typed_boolean_fix(n, comparison, nullable) = {
+  value outside: typed_boolean_outer(n)
+  value negated_parent: outside.parent is ts_unary && outside.parent.operator == "!"
+  value target: if negated_parent then outside.parent.node else n
+  value negative: starts_with(n.operator, "!")
+  value overall_negative: (negative != (comparison.literal == "false")) != negated_parent
+  value operand: comparison.expression
+  value weak_operand: operand.precedence < 18
+  value conditional: typed_boolean_conditional(target)
+  value direct_default: nullable && comparison.literal == "true" && !overall_negative && !conditional
+  value false_default: nullable && comparison.literal == "false" && !direct_default
+  value base: expression_fix_wrap(operand.text, weak_operand && (direct_default || false_default || overall_negative))
+  value defaulted: base (if direct_default then " ?? false" else if false_default then " ?? true" else "")
+  value replacement: if overall_negative then "!" expression_fix_wrap(defaulted, false_default) else defaulted
+  value weak_replacement: !overall_negative && (weak_operand || direct_default || false_default)
+  value outer: typed_boolean_outer(target)
+  value weak_parent: outer.parent is (ts_update, ts_unary, ts_binary, ts_logical, ts_conditional, ts_await)
+    || outer is (ts_member.object, ts_index.object, ts_call.callee, ts_new.callee, ts_tagged_template.tag)
+  value wrapped: expression_fix_wrap(replacement, weak_replacement && weak_parent && target.parent not ts_parenthesized)
+  value text: expression_fix_edges(target, wrapped)
+  value if !expression_fix_clean(target) then null else {start: target.offset, end: target.end_offset, text: text}
+}
+in ts_binary rule no-unnecessary-boolean-literal-compare {
+  option allowComparingNullableBooleansToTrue boolean = true "Allow nullable boolean comparisons with true"
+  option allowComparingNullableBooleansToFalse boolean = true "Allow nullable boolean comparisons with false"
+  let comparison typed_boolean_comparison(node)
+  when re_test(operator, /^[!=]==?$/) && comparison != null
+  let domain comparison.expression.type_domains
+  let nullable typed_nullable_boolean(domain)
+  when typed_boolean_domain(domain) || nullable && !(if comparison.literal == "true" then allowComparingNullableBooleansToTrue else allowComparingNullableBooleansToFalse)
+  let negative starts_with(operator, "!")
+  warn if nullable then if comparison.literal == "true" then if negative then "This expression unnecessarily compares a nullable boolean value to true instead of negating it." else "This expression unnecessarily compares a nullable boolean value to true instead of using it directly." else "This expression unnecessarily compares a nullable boolean value to false instead of using the ?? operator to provide a default." else if negative then "This expression unnecessarily compares a boolean value to a boolean instead of negating it." else "This expression unnecessarily compares a boolean value to a boolean instead of using it directly."
+  let replacement typed_boolean_fix(node, comparison, nullable)
+  fix at replacement ?? node if replacement != null as replacement.text
+}
+in ts_program rule no-unnecessary-boolean-literal-compare:strict {
+  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
+  when compiler_options.strictNullChecks == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
+  report at {start: 0, end: 0}
+  warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
+}
+
+}

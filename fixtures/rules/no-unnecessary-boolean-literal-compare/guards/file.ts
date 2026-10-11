@@ -1,0 +1,11 @@
+declare const anyValue: any;
+declare const mixed: boolean | string | null;
+declare const nullish: null | undefined;
+declare const neverValue: never;
+declare const nothing: void;
+anyValue === true;
+mixed === false;
+nullish === true;
+neverValue === true;
+nothing === false;
+"true" === false;

@@ -1185,6 +1185,7 @@ and `final-newline`.
 | `.ts/suggestions/computed-keys` | unnecessary computed literal keys and comment-preserving, token-safe fixes, imported by `.ts/suggestions` |
 | `.ts/suggestions/comparisons` | literal-side comparison policy, range exceptions and source-preserving operand swaps |
 | `.ts/typed/optional-chains` | optional-chain guard selection, return-type safety and atomic fixes, imported by `.ts/typed` |
+| `.ts/typed/boolean-comparisons` | boolean literal comparisons, nullable options and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/type-constituents` | duplicate union and intersection constituents by type identity, with token-safe removal fixes, imported by `.ts/typed` |
 | `.ts/typed/readonly-members` | readonly private members and parameter properties, with type-preserving annotation fixes, imported by `.ts/typed` |
 | `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |

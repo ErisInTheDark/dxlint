@@ -16,6 +16,7 @@ import .ts/typed/string-boundaries
 import .ts/typed/type-constituents
 import .ts/typed/return-await
 import .ts/typed/nullish-coalescing
+import .ts/typed/boolean-comparisons
 
 define {
 
@@ -410,15 +411,6 @@ in ts_for_in rule no-for-in-array {
   report at unparenthesised_node(right.node)
   when { value right.type_flags.nonempty ?? []; has_only_flags (["array", "tuple", "union", "nullable", "undefined", "null"]) } && contains(right.type_flags, "array")
   warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
-}
-
-in ts_binary {
-  let boolean_literal if re_test(right, /^(true|false)$/) then right else if re_test(left, /^(true|false)$/) then left else null
-  let other_side_flags if re_test(right, /^(true|false)$/) then left.type_flags else right.type_flags
-}
-in ts_binary rule no-unnecessary-boolean-literal-compare {
-  when re_test(operator, /^[!=]==?$/) && boolean_literal != null && { value other_side_flags.nonempty ?? []; has_only_flags (["boolean", "literal"]) }
-  warn if boolean_literal == "true" then "This expression unnecessarily compares a boolean value to a boolean instead of using it directly." else "This expression unnecessarily compares a boolean value to a boolean instead of negating it."
 }
 
 # Receivers: what the object of `x.method(...)` is.
