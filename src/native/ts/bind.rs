@@ -6,6 +6,7 @@
 
 // Keyed by node ids and names, built for every file: the fast hasher.
 use crate::fx_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::borrow::Cow;
 use std::cell::OnceCell;
 
 use super::kinds::{Field as F, Kind as K};
@@ -13,6 +14,14 @@ use super::syntax::Syntax;
 
 const VALUE: u8 = 1;
 const TYPE: u8 = 2;
+
+fn decoded_name(text: &str) -> Cow<'_, str> {
+    if text.contains('\\') {
+        Cow::Owned(super::statics::identifier_name(text))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Binding {
@@ -106,7 +115,7 @@ impl Bindings {
 
     /// Implicit `arguments` has an owning scope, but no declaring identifier.
     pub fn arguments_owner(&self, s: &Syntax, reference: u32) -> Option<u32> {
-        if s.text(reference) != "arguments" || self.refs.contains_key(&reference) || self.unresolved.contains(&reference) {
+        if decoded_name(s.text(reference)) != "arguments" || self.refs.contains_key(&reference) || self.unresolved.contains(&reference) {
             return None;
         }
         // Unresolved type names also lack a declaration; only the value
@@ -135,6 +144,7 @@ impl Bindings {
     /// For names no reference spells out:
     /// `{}.hasOwnProperty` asks whether `Object` is the global one.
     pub fn visible(&self, s: &Syntax, at: u32, name: &str, value: bool) -> Option<u32> {
+        let name = decoded_name(name);
         let mut scope = None;
         let mut node = Some(at);
         while let (None, Some(n)) = (scope, node) {
@@ -149,7 +159,7 @@ impl Bindings {
         };
         while let Some(sc) = scope {
             let found = self.decl_scope.iter()
-                .filter(|&(&d, &ds)| ds == sc && s.text(d) == name && (!value || !type_only(self.merged.get(&d).copied().unwrap_or(d))))
+                .filter(|&(&d, &ds)| ds == sc && decoded_name(s.text(d)) == name && (!value || !type_only(self.merged.get(&d).copied().unwrap_or(d))))
                 .map(|(&d, _)| self.merged.get(&d).copied().unwrap_or(d))
                 .min_by_key(|&d| s.tree.node(d).start);
             if found.is_some() {
@@ -214,7 +224,7 @@ impl ScopeInfo {
 
 struct Scope<'t> {
     info: ScopeInfo,
-    names: HashMap<&'t str, Vec<(u32, u8)>>,
+    names: HashMap<Cow<'t, str>, Vec<(u32, u8)>>,
 }
 
 struct Binder<'s, 't> {
@@ -308,8 +318,9 @@ impl<'t> Binder<'_, 't> {
         if !s.is(ident, K::Ident) {
             return;
         }
-        let name = s.text(ident);
-        self.scopes[scope].names.entry(name).or_default().push((ident, space));
+        let names = self.scopes[scope].names.entry(decoded_name(s.text(ident))).or_default();
+        let first = names.first().map(|&(d, _)| d).filter(|&d| d != ident);
+        names.push((ident, space));
         self.decl_scope.insert(ident, scope);
         let (kind, owner) = self.current;
         // The statement: a declarator's `var`, or the declaration itself.
@@ -326,7 +337,6 @@ impl<'t> Binder<'_, 't> {
         }
         // Merged declarations (`interface X` + `const X`, overloads) are one
         // binding: the first.
-        let first = self.scopes[scope].names[name].first().map(|&(d, _)| d).filter(|&d| d != ident);
         if let Some(first) = first {
             self.merged.insert(ident, first);
             self.merged_kinds.entry(first).or_default().push(kind);
@@ -989,7 +999,7 @@ impl<'t> Binder<'_, 't> {
         let mut ref_scope = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
         for (ident, scope, use_) in refs {
             ref_scope.insert(ident, scope);
-            let name = s.text(ident);
+            let name = decoded_name(s.text(ident));
             access.insert(
                 ident,
                 match use_ {
@@ -1009,7 +1019,7 @@ impl<'t> Binder<'_, 't> {
             let mut arguments = None;
             while let Some(sc) = at {
                 let implicit = name == "arguments" && want & VALUE != 0 && scopes[sc].info.owns_arguments(s);
-                if let Some(list) = scopes[sc].names.get(name) {
+                if let Some(list) = scopes[sc].names.get(name.as_ref()) {
                     if let Some(&(decl, _)) = list.iter().find(|(_, space)| space & want != 0) {
                         found = Some(decl);
                         break;
@@ -1067,6 +1077,46 @@ impl<'t> Binder<'_, 't> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn escaped_names_share_bindings_and_keep_scope_boundaries() {
+        crate::engine::tests::with_native_file(
+            r"let \u0061; void /*@*/a; { let a; void /*@*/\u{61}; } void /*@*/\u0061; var b; var \u0062; void /*@*/b;",
+            |file, nodes| {
+                let outer = file.decl_of(nodes[0]).expect("decoded outer binding");
+                assert_ne!(file.decl_of(nodes[1]), Some(outer), "block binding shadows");
+                assert_eq!(file.decl_of(nodes[2]), Some(outer));
+                let merged = file.decl_of(nodes[3]).expect("merged binding");
+                assert_eq!(file.bindings().references_of(&file.syntax, merged), &[nodes[3]]);
+                assert_eq!(file.bindings().declarations(&file.syntax)[&merged].len(), 2);
+                assert_eq!(file.bindings().visible(&file.syntax, nodes[0], "a", true), Some(outer));
+            },
+        );
+    }
+
+    #[test]
+    fn escaped_arguments_still_use_the_implicit_function_binding() {
+        use crate::native::ts::facts::Facts;
+        crate::engine::tests::with_native_file(r"function f() { return /*@*/\u0061rguments; }", |file, nodes| {
+            assert_eq!(file.resolved(nodes[0]), Some("local"));
+            assert!(file.bindings().arguments_owner(&file.syntax, nodes[0]).is_some());
+        });
+    }
+
+    #[test]
+    fn escaped_type_names_do_not_shadow_value_names() {
+        crate::engine::tests::with_native_file(
+            r"const T = 1; function f() { type \u0054 = number; void /*@*/T; let value: /*@*/T; }",
+            |file, nodes| {
+                let value = file.decl_of(nodes[0]).expect("outer value");
+                let type_name = file.syntax.get(nodes[1], super::F::Name).unwrap_or(nodes[1]);
+                let annotation = file.decl_of(type_name).expect("inner type");
+                assert_ne!(value, annotation);
+                assert_eq!(file.binding(value).unwrap().kind, "const");
+                assert_eq!(file.binding(annotation).unwrap().kind, "type");
+            },
+        );
+    }
+
     #[test]
     fn explicit_arguments_shadowing_does_not_hide_nested_function_arguments() {
         use crate::native::ts::facts::Facts;

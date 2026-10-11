@@ -211,8 +211,11 @@ fn unused_globals(file: &NativeFile) -> Vec<(String, u32)> {
     }
     let b = file.bindings();
     let script = file.source_type() == "script";
-    let read: HashSet<&str> = b.unresolved.iter().filter(|r| b.access.get(r).is_some_and(|&a| a != "write")).map(|&r| s.text(r)).collect();
-    let top: HashSet<&str> = if script { b.decl_scope.iter().filter(|(_, &sc)| sc == 0).map(|(&d, _)| s.text(d)).collect() } else { HashSet::new() };
+    let read: HashSet<String> = b.unresolved.iter().filter(|r| b.access.get(r).is_some_and(|&a| a != "write"))
+        .map(|&r| super::statics::identifier_name(s.text(r))).collect();
+    let top: HashSet<String> = if script {
+        b.decl_scope.iter().filter(|(_, &sc)| sc == 0).map(|(&d, _)| super::statics::identifier_name(s.text(d))).collect()
+    } else { HashSet::new() };
     globals
         .mentions
         .iter()

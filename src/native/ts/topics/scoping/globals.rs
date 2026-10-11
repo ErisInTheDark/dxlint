@@ -18,7 +18,7 @@ pub(super) fn redeclarations(file: &NativeFile, _: u32) -> Value<'static> {
         for (name, offset) in globals.mentions {
             let builtin = file.globals().is_implicit(&name)
                 && matches!(file.globals().setting(&name), Some("readonly" | "writable"));
-            let syntax = file.source_type() == "script" && file.bindings().decl_scope.iter().any(|(&id, &scope)| scope == 0 && s.text(id) == name);
+            let syntax = file.source_type() == "script" && file.bindings().decl_scope.iter().any(|(&id, &scope)| scope == 0 && crate::native::ts::statics::identifier_name(s.text(id)) == name);
             let duplicate = !seen.insert(name.clone());
             out.push(Value::record(vec![
                 ("name".into(), Value::from(name)),
@@ -51,12 +51,12 @@ pub(super) fn declarations(file: &NativeFile, node: u32) -> Value<'static> {
         declarations.sort_by_key(|&id| s.tree.node(id).start);
         for id in declarations {
             let kind = super::bindings::declaration_kind(s, id);
-            let name = s.text(id);
+            let name = crate::native::ts::statics::identifier_name(s.text(id));
             entries.push(Value::record(vec![
                 ("kind".into(), Value::from(kind)),
-                ("name".into(), Value::from(name.to_string())),
-                ("exported".into(), Value::Bool(exported.0.contains(name))),
-                ("setting".into(), file.globals().setting(name).map_or(Value::Null, Value::from)),
+                ("exported".into(), Value::Bool(exported.0.contains(&name))),
+                ("setting".into(), file.globals().setting(&name).map_or(Value::Null, Value::from)),
+                ("name".into(), Value::from(name)),
                 ("offset".into(), Value::from(s.tree.node(owner).start as usize)),
             ]));
         }

@@ -689,10 +689,7 @@ pub fn summarise(v: &impl View, root: u32, dts: bool) -> FileSummary {
         }
     }
     let stmts = v.all(root, F::Body);
-    b.out.is_module = stmts.iter().any(|&s| matches!(v.kind(s), Some(K::Import | K::Export | K::ExportAssign | K::ImportEquals)) && {
-        // `import x = A.B` alone does not make a module.
-        !v.is(s, K::ImportEquals) || v.get(s, F::Value).is_some_and(|x| v.is(x, K::Call))
-    });
+    b.out.is_module = stmts.iter().any(|&node| super::view::external_module_statement(v, node));
     let mut top = Scope::default();
     let mut module = Module::default();
     for s in stmts {

@@ -320,12 +320,32 @@ fn walks() -> &'static RwLock<HashMap<PathBuf, Arc<HashSet<PathBuf>>>> {
     WALKS.get_or_init(Default::default)
 }
 
+/// Cheap negative screen: a global augmentation's next token is `{`.
+fn global_augmentation_candidate(text: &str) -> bool {
+    text.match_indices("global").any(|(offset, _)| {
+        let rest = text[offset + "global".len()..].trim_start_matches(|c: char| c.is_ascii_whitespace() || super::lexer::js_space(c));
+        // Comments remain candidates; only the parser decides what they mean.
+        matches!(rest.chars().next(), Some('{' | '/'))
+    })
+}
+
 /// Does a TypeScript file add to the global scope (a declaration script,
 /// or a `declare global`)?
 fn declares_globals(path: &Path, text: &str) -> bool {
     let name = path.to_string_lossy();
-    let script = name.ends_with(".d.ts") && !text.contains("import ") && !text.contains("export ");
-    script || text.contains("declare global")
+    let declaration = name.ends_with(".d.ts");
+    if declaration {
+        if !text.contains("import") && !text.contains("export") {
+            return true;
+        }
+    } else if !global_augmentation_candidate(text) {
+        return false;
+    }
+    let Ok(parsed) = super::parse(text, name.ends_with(".tsx")) else { return false };
+    let view = super::view::Raw { src: text, nodes: &parsed.nodes };
+    use super::view::View;
+    declaration && !view.all(parsed.root, super::kinds::Field::Body).into_iter().any(|node| super::view::external_module_statement(&view, node))
+        || super::view::global_augmentation(&view, parsed.root)
 }
 
 fn walk_globals(dir: &Path, jobs: usize) -> (Vec<PathBuf>, u64) {
@@ -402,6 +422,38 @@ pub fn globals_changed(changed: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_declaration_detection_uses_syntax_not_quoted_words() {
+        let declaration = Path::new("globals.d.ts");
+        for source in [
+            r#"// export ignored
+declare const value: "import marker";"#,
+            "/* import fake */ declare const value: number;",
+            "declare module 'ambient' { export const value: number; }",
+            "import Alias = Local.Member; declare namespace Local { class Member {} }",
+        ] {
+            assert!(declares_globals(declaration, source), "{source}");
+        }
+        for source in [
+            "export\n{}; declare const value: number;",
+            "import\n{ Value } from 'module';",
+            "import Alias = require('module');",
+        ] {
+            assert!(!declares_globals(declaration, source), "{source}");
+        }
+        let implementation = Path::new("module.ts");
+        assert!(!declares_globals(implementation, r#"const text = "declare global";"#));
+        assert!(!declares_globals(implementation, "// declare global\nexport {};"));
+        for source in [
+            "export {}; declare\n global { interface Window { value: number } }",
+            "export {}; declare global /* marker */ { interface Window { value: number } }",
+            "export {}; declare global // marker\n{ interface Window { value: number } }",
+            "export {}; declare\u{feff}global\u{2007}{ interface Window { value: number } }",
+        ] {
+            assert!(declares_globals(implementation, source), "{source}");
+        }
+    }
 
     #[test]
     fn global_module_precedence_orders_disk_and_buffer_files_together() {

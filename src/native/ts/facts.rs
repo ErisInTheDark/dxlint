@@ -550,7 +550,7 @@ impl<'t> NativeFile<'t> {
         match self.path.extension().and_then(|e| e.to_str()) {
             Some("cjs" | "cts") => "commonjs",
             Some("mjs" | "mts") => "module",
-            _ if s.all(s.root(), Field::Body).any(|n| matches!(s.kind(n), Some(Kind::Import | Kind::Export | Kind::ExportAssign | Kind::ImportEquals))) => "module",
+            _ if s.all(s.root(), Field::Body).any(|node| super::view::external_module_statement(s, node)) => "module",
             _ => "script",
         }
     }
@@ -582,7 +582,12 @@ impl<'t> NativeFile<'t> {
         if !self.bindings().unresolved.contains(&node) {
             return None;
         }
-        self.globals().setting(self.syntax.text(node))
+        let name = self.syntax.text(node);
+        if name.contains('\\') {
+            self.globals().setting(&super::statics::identifier_name(name))
+        } else {
+            self.globals().setting(name)
+        }
     }
 
     /// Type state, created on the first type question (summarising this
@@ -694,6 +699,26 @@ impl<'t> NativeFile<'t> {
 mod tests {
     use crate::engine::tests::with_native_file;
     use super::{Facts, Field};
+
+    #[test]
+    fn escaped_global_references_keep_configured_global_settings() {
+        with_native_file(r"void /*@*/\u004fbject;", |file, nodes| {
+            assert_eq!(file.global_setting(nodes[0]), file.globals().setting("Object"));
+            assert!(file.global_setting(nodes[0]).is_some());
+        });
+    }
+
+    #[test]
+    fn source_type_matches_external_import_alias_syntax() {
+        for (source, expected) in [
+            ("import Alias = Local.Member; declare namespace Local { class Member {} }", "script"),
+            ("import Alias = require('module');", "module"),
+            ("export {};", "module"),
+            ("void import('module');", "script"),
+        ] {
+            with_native_file(source, |file, _| assert_eq!(file.source_type(), expected, "{source}"));
+        }
+    }
 
     #[test]
     fn unused_member_queries_do_not_initialise_typed_write_resolution() {

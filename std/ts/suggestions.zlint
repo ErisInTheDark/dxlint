@@ -529,23 +529,21 @@ in ts_assignment rule no-return-assign {
 fn suggestion_else_within(node, owner) = { value node; walk (current) current.parent.node; any (current) current == owner }
 fn suggestion_else_scope_safe(body, destination, declarations) = body not ts_function && (body not ts_block || {
   value moved: { value declarations; filter (item) item.scope.node == body }
-  value names: { value moved; map (item) item.text }
+  value names: { value moved; map (item) item.identifier_name }
   value collision: {
     value declarations
-    any (item) contains(names, item.text) && (item.scope.node == destination
+    any (item) contains(names, item.identifier_name) && (item.scope.node == destination
       || item.declaration_kind == "var" && destination.offset <= item.offset && item.end_offset <= destination.end_offset)
   }
   value identifiers: overlapping(ts_identifier, destination.offset, destination.end_offset)
   value captured: {
     value identifiers
-    any (item) contains(names, item.text) && item.scope != null
+    any (item) contains(names, item.identifier_name) && item.scope != null
       && !(body.offset <= item.offset && item.end_offset <= body.end_offset)
       && item.declaration.node != item
       && (item.declaration == null || !suggestion_else_within(item.declaration.scope.node, destination))
   }
-  # Drop escape guard once native bindings decode identifier names.
-  value uncertain: any(moved, item => item.declaration_kind == "function" || contains(item.text, "\\"))
-    || count(moved) > 0 && any(identifiers, item => contains(item.text, "\\"))
+  value uncertain: any(moved, item => item.declaration_kind == "function")
   value !collision && !captured && !uncertain
 })
 fn suggestion_else_fix(body, declarations) = {

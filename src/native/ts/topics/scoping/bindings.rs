@@ -110,15 +110,16 @@ fn redeclarations(file: &NativeFile) -> Redeclarations {
     let s = &file.syntax;
     let b = file.bindings();
     let ts = matches!(file.path.extension().and_then(|e| e.to_str()), Some("ts" | "tsx" | "mts" | "cts"));
-    let mut groups: HashMap<(usize, &str), Vec<u32>> = HashMap::new();
+    let mut groups: HashMap<(usize, u32), Vec<u32>> = HashMap::new();
     for (&id, &scope) in &b.decl_scope {
         if ts && s.parent(id).is_some_and(|p| s.is(p, K::Function) && s.get(p, F::Body).is_none()) {
             continue;
         }
-        groups.entry((scope, s.text(id))).or_default().push(id);
+        groups.entry((scope, b.merged.get(&id).copied().unwrap_or(id))).or_default().push(id);
     }
     let mut out = Redeclarations::default();
-    for ((scope, name), mut ids) in groups {
+    for ((scope, canonical), mut ids) in groups {
+        let name = crate::native::ts::statics::identifier_name(s.text(canonical));
         ids.sort_by_key(|&id| s.tree.node(id).start);
         let kinds: Vec<_> = ids.iter().map(|&id| declaration_kind(s, id)).collect();
         let merge_category = if kinds.iter().all(|&k| matches!(k, "class" | "interface" | "namespace")) {
@@ -132,9 +133,9 @@ fn redeclarations(file: &NativeFile) -> Redeclarations {
         };
         let merge_all = kinds.iter().all(|&k| k == "interface") || kinds.iter().all(|&k| k == "namespace");
         let builtin = scope == 0 && file.source_type() == "script"
-            && file.globals().is_implicit(name)
-            && matches!(file.globals().setting(name), Some("readonly" | "writable"));
-        let comment = ts && scope == 0 && file.source_type() == "script" && file.globals().in_comment(name) && !builtin;
+            && file.globals().is_implicit(&name)
+            && matches!(file.globals().setting(&name), Some("readonly" | "writable"));
+        let comment = ts && scope == 0 && file.source_type() == "script" && file.globals().in_comment(&name) && !builtin;
         let mut runtime_seen = false;
         for (i, (&id, &kind)) in ids.iter().zip(&kinds).enumerate() {
             let merge_report = if merge_all { false } else if let Some(category) = merge_category {
@@ -170,7 +171,7 @@ fn scope_names(file: &NativeFile) -> ScopeNames {
         if b.merged.contains_key(&id) && !named_function {
             continue;
         }
-        let entry = names.entry((scope, s.text(id).to_string())).or_insert(id);
+        let entry = names.entry((scope, crate::native::ts::statics::identifier_name(s.text(id)))).or_insert(id);
         if named_function && id != canonical && *entry == canonical
             || !(named_function && id == canonical && *entry != canonical) && s.tree.node(id).start < s.tree.node(*entry).start
         {
@@ -210,7 +211,8 @@ pub(super) fn shadow(file: &NativeFile, id: u32) -> Value<'static> {
     let Some(scope) = b.decl_scope.get(&id).copied().or(enum_scope) else { return Value::Null };
     let canonical = b.merged.get(&id).copied().unwrap_or(id);
     let named_function = b.decls.get(&canonical).is_some_and(|b| b.kind == "function_name");
-    if b.merged.contains_key(&id) && !named_function || s.text(id) == "this" {
+    let name = crate::native::ts::statics::identifier_name(s.text(id));
+    if b.merged.contains_key(&id) && !named_function || name == "this" {
         return Value::Null;
     }
     let enum_binding = crate::native::ts::bind::Binding { kind: "enum_member", ..Default::default() };
@@ -236,7 +238,7 @@ pub(super) fn shadow(file: &NativeFile, id: u32) -> Value<'static> {
     let mut outer = (named_function && id != canonical).then_some(canonical);
     while let Some(scope) = cursor {
         if outer.is_some() { break; }
-        if let Some(&declaration) = names.0.get(&(scope, s.text(id).to_string())) {
+        if let Some(&declaration) = names.0.get(&(scope, name.clone())) {
             outer = Some(declaration);
             break;
         }
@@ -244,7 +246,7 @@ pub(super) fn shadow(file: &NativeFile, id: u32) -> Value<'static> {
     }
     let ts = matches!(file.path.extension().and_then(|e| e.to_str()), Some("ts" | "tsx" | "mts" | "cts"));
     let builtin = outer.is_none() && (scope != 0 || file.source_type() != "script" || ts)
-        && matches!(file.globals().setting(s.text(id)), Some("readonly" | "writable"));
+        && matches!(file.globals().setting(&name), Some("readonly" | "writable"));
     if outer.is_none() && !builtin {
         return Value::Null;
     }
@@ -514,5 +516,21 @@ fn receiver_in(s: &Syntax, node: u32) -> bool {
                 })
         }
         _ => s.kids(node).any(|(_, child)| receiver_in(s, child)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn escaped_names_keep_redeclaration_and_shadow_identity() {
+        crate::engine::tests::with_native_file(
+            r"var a; var /*@*/\u0061; { let /*@*/\u{61}; }",
+            |file, nodes| {
+                let names: Vec<_> = nodes.iter().map(|&node| file.syntax.get(node, super::F::Name).unwrap_or(node)).collect();
+                let duplicate = super::redeclaration(file, names[0]).key("duplicate").truthy();
+                let shadow = !matches!(super::shadow(file, names[1]), crate::expr::Value::Null);
+                assert!(duplicate && shadow, "duplicate={duplicate}, shadow={shadow}");
+            },
+        );
     }
 }

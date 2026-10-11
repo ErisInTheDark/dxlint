@@ -24,14 +24,13 @@ in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body 
 in ts_namespace let format_global_namespace kind == "global"
 in ts_node let format_global_scope (format_global_namespace.nonempty ?? false) || (parent.format_global_scope.nonempty ?? false)
 in ts_program let format_script_global source_type == "script" && !source_environment.root_function
-# Dynamic names and escaped identifiers prevent a binding-preservation proof.
+# Dynamic names prevent a binding-preservation proof.
 in ts_program, ts_function_like, ts_static_block let format_lexical_dynamic
   { value descendants(ts_with); count } > 0
   || {
     value descendants(ts_call)
-    any (call) call.callee.structure_unwrapped is ts_identifier && call.callee.structure_unwrapped.text == "eval"
+    any (call) call.callee.structure_unwrapped is ts_identifier && call.callee.structure_unwrapped.identifier_name == "eval"
   }
-  || { value descendants(ts_identifier); any (identifier) contains(identifier.text, "\\") }
 fn format_lexical_container(n) = {
   value n.parent.node
   walk (current) if current is (ts_program, ts_block, ts_for, ts_for_in, ts_for_of) then null else current.parent.node
@@ -54,7 +53,7 @@ fn format_lexical_catch(declarator) = {
 }
 fn format_lexical_binding(declarator, container) =
   declarator.name is ts_identifier
-  && !contains(["let", "arguments"], declarator.name.text)
+  && !contains(["let", "arguments"], declarator.name.identifier_name)
   && declarator.name.ambient != true
   && count(declarator.name.declarations) == 1
   && declarator.name.scope.format_script_global != true

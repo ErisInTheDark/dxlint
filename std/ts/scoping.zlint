@@ -497,7 +497,7 @@ in ts_program.binding_declarations rule no-shadow {
   option ignoreTypeValueShadow boolean = true "allow type and value namespace shadowing"
   option ignoreFunctionTypeParameterNameValueShadow boolean = true "allow parameter names in function types"
   let shadowed scoping_shadow
-  when shadowed != null && !contains(allow, text)
+  when shadowed != null && !contains(allow, identifier_name)
   when !shadowed.global || builtinGlobals
   when !(ignoreTypeValueShadow && shadowed.type_value)
   when !(ignoreFunctionTypeParameterNameValueShadow && shadowed.function_type)
@@ -565,8 +565,8 @@ in ts_identifier rule no-param-reassign:property {
   option props boolean = false "also assignments to parameter properties"
   option ignorePropertyModificationsFor string[] = [] "parameter names whose properties may change"
   option ignorePropertyModificationsForRegex string[] = [] "patterns for exempt parameter names"
-  when props && param_property_write && !contains(ignorePropertyModificationsFor, text)
-  when !any(ignorePropertyModificationsForRegex, pattern => re_test(text, pattern))
+  when props && param_property_write && !contains(ignorePropertyModificationsFor, identifier_name)
+  when !any(ignorePropertyModificationsForRegex, pattern => re_test(identifier_name, pattern))
   warn "Assignment to property of function parameter '{text}'."
 }
 

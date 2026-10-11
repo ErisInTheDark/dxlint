@@ -383,7 +383,7 @@ in ts_declarator rule no-unassigned-vars {
 # Writes to the built-in globals.
 in ts_identifier rule no-global-assign {
   option exceptions string[] = [] "read-only globals that may be modified"
-  when global == "readonly" && @is_write && !contains(exceptions, text)
+  when global == "readonly" && @is_write && !contains(exceptions, identifier_name)
   warn "Read-only global '{text}' should not be modified."
 }
 

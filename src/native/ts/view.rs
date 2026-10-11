@@ -24,6 +24,28 @@ pub trait View {
     }
 }
 
+/// Only external import aliases make a file a module; `import X = A.B` does not.
+pub fn external_module_statement(v: &impl View, node: u32) -> bool {
+    matches!(v.kind(node), Some(Kind::Import | Kind::Export | Kind::ExportAssign | Kind::ImportEquals))
+        && (!v.is(node, Kind::ImportEquals) || v.get(node, Field::Value).is_some_and(|value| v.is(value, Kind::Call)))
+}
+
+pub fn global_augmentation(v: &impl View, root: u32) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        match v.kind(node) {
+            Some(Kind::Namespace) => {
+                if v.get(node, Field::Kind).is_some_and(|kind| v.text(kind) == "global") { return true }
+                pending.extend(v.get(node, Field::Body));
+            }
+            Some(Kind::Program | Kind::Block) => pending.extend(v.all(node, Field::Body)),
+            Some(Kind::Export) => pending.extend(v.children(node)),
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Nodes straight from the parser.
 pub struct Raw<'a> {
     pub src: &'a str,
