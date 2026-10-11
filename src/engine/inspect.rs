@@ -5,11 +5,10 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use super::frontend::FileInput;
 use super::Linter;
 use crate::expr::{facts, show};
 use crate::grammar::{Tree, ROOT, TEXT};
-use crate::native::ts::facts::NativeFile;
-use crate::native::ts::syntax::Syntax;
 
 /// At most this many characters of a node's text are shown.
 const SNIPPET: usize = 40;
@@ -25,16 +24,26 @@ impl Linter {
         let overlays = vec![true; self.grammar.matchers.len()];
         let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), None);
         self.layers_at(&tree, text, offset, &mut out);
-        if let (Some(front), Some(jsx)) = (self.grammar.natives.first(), crate::native::ts::reads(path)) {
-            if let Ok(parsed) = crate::native::ts::parse(text, jsx) {
+        let accepting = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
+        if let Some(index) = accepting {
+            let front = &self.grammar.natives[index];
+            if let Ok(parsed) = front.frontend.parse(text, path) {
                 let tree = Tree::from_native(front.remap(parsed.nodes), parsed.root);
                 let chain = self.layers_at(&tree, text, offset, &mut out);
                 if let Some(&node) = chain.first() {
-                    let file = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project);
+                    let file = front.frontend.file(FileInput {
+                        tree: &tree,
+                        text,
+                        front,
+                        path,
+                        project: self.projects.get(index),
+                        options: &[],
+                        state: parsed.state,
+                    });
                     let known: Vec<String> = facts::FACTS
                         .iter()
                         .filter_map(|f| {
-                            let v = (f.get)(&file, node);
+                            let v = (f.get)(&*file, node);
                             (!matches!(v, crate::expr::Value::Null)).then(|| format!("`{}` = {}", f.name, short(&show(&v))))
                         })
                         .collect();

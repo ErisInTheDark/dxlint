@@ -37,28 +37,7 @@ pub fn pattern_error(pattern: &str, unicode: bool, sets: bool) -> Option<String>
     }
 }
 
-/// no-invalid-regexp's flags check: `u` with `v`, duplicates, then
-/// unknown flags (`allowed` extra ones pass).
-pub fn flags_error(flags: &str, allowed: &str) -> Option<String> {
-    // Standard flags are not "allowed" twice.
-    let mut extra: Vec<char> = allowed.chars().filter(|c| !"dgimsuvy".contains(*c)).collect();
-    extra.dedup();
-    let all: Vec<char> = "dgimsuvy".chars().chain(extra).collect();
-    let mut rest = flags.to_string();
-    for f in &all {
-        if let Some(i) = rest.find(*f) {
-            rest.remove(i);
-        }
-    }
-    if flags.contains('u') && flags.contains('v') {
-        return Some("Regex 'u' and 'v' flags cannot be used together".into());
-    }
-    let dupes: String = rest.chars().filter(|c| all.contains(c)).collect();
-    if !dupes.is_empty() {
-        return Some(format!("Duplicate flags ('{dupes}') supplied to RegExp constructor"));
-    }
-    (!rest.is_empty()).then(|| format!("Invalid flags supplied to RegExp constructor '{rest}'"))
-}
+pub use crate::expr::js::regex_flags_error as flags_error;
 
 /// What the checks find in a pattern. `raw(start, end)` gives the source
 /// text of characters `start..end` (through string escapes, for patterns
@@ -457,14 +436,6 @@ mod tests {
         assert!(pattern_error("[(]", false, true).unwrap().contains("Invalid character in character class"));
         assert!(pattern_error("\\p{Foo}", true, false).unwrap().contains("Invalid property name"));
         assert!(pattern_error("\\p{Script=Greek}", true, false).is_none());
-    }
-
-    #[test]
-    fn flags_are_checked_like_the_constructor() {
-        assert_eq!(flags_error("gg", "").as_deref(), Some("Duplicate flags ('g') supplied to RegExp constructor"));
-        assert_eq!(flags_error("z", "").as_deref(), Some("Invalid flags supplied to RegExp constructor 'z'"));
-        assert_eq!(flags_error("uv", "").as_deref(), Some("Regex 'u' and 'v' flags cannot be used together"));
-        assert!(flags_error("gz", "z").is_none());
     }
 
     #[test]

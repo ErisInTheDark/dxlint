@@ -65,16 +65,38 @@ pub struct Matcher {
     overlays: Vec<u32>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct NativeKind {
     /// Index into [`Grammar::natives`].
     pub front: u8,
+    pub frontend: &'static dyn crate::engine::frontend::Frontend,
     pub kind: u16,
 }
+
+impl NativeKind {
+    pub fn is_token(self) -> bool {
+        self.frontend.is_token(self.kind)
+    }
+}
+
+impl std::fmt::Debug for NativeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}#{}", self.frontend.name(), self.kind)
+    }
+}
+
+impl PartialEq for NativeKind {
+    fn eq(&self, other: &Self) -> bool {
+        (self.front, self.kind) == (other.front, other.kind)
+    }
+}
+
+impl Eq for NativeKind {}
 
 /// A native front end enabled by `native <name>`.
 pub struct NativeFront {
     pub name: &'static str,
+    pub frontend: &'static dyn crate::engine::frontend::Frontend,
     /// Matcher id of its first node kind; kinds are contiguous.
     pub base: u32,
     /// Label id of each of its fields.
@@ -108,13 +130,14 @@ impl Matcher {
         match self.native {
             // Every non-token node also holds its own punctuation and
             // keywords as `token` (`ts_member.token`: the `.`).
-            Some(n) if n.front == 0 => {
-                let kind = crate::native::ts::kinds::ALL_KINDS[n.kind as usize];
-                let own = crate::native::ts::kinds::KINDS[n.kind as usize].1.iter().map(|f| crate::native::ts::kinds::FIELD_NAMES[*f as usize].to_string());
-                let token = crate::native::ts::kinds::FIELD_NAMES[crate::native::ts::kinds::Field::Token as usize];
-                own.chain((!kind.is_token()).then(|| token.to_string())).collect()
+            Some(n) => {
+                let front = n.frontend;
+                let names = front.fields();
+                let own = front.kind_fields(n.kind).into_iter().map(|f| names[f as usize].to_string());
+                let token = names[front.token_field() as usize];
+                own.chain((!front.is_token(n.kind)).then(|| token.to_string())).collect()
             }
-            _ => self.pat.labels(),
+            None => self.pat.labels(),
         }
     }
 }
@@ -537,20 +560,21 @@ fn add_natives(
     labels: &mut Labels,
     errors: &mut Vec<ConfigError>,
 ) -> Vec<NativeFront> {
-    use crate::native::ts::kinds::{FIELD_NAMES, KINDS};
+    use crate::engine::frontend;
     let mut fronts: Vec<NativeFront> = Vec::new();
     for name in &config.natives {
-        if name.text != "ts" {
-            errors.push(ConfigError::new(name.span, format!("unknown native front end `{}`", name.text)).note("available: ts"));
+        let Some(front) = frontend::named(&name.text) else {
+            let available: Vec<&str> = frontend::all().iter().map(|f| f.name()).collect();
+            errors.push(ConfigError::new(name.span, format!("unknown native front end `{}`", name.text)).note(format!("available: {}", available.join(", "))));
             continue;
-        }
-        if fronts.iter().any(|f| f.name == "ts") {
+        };
+        if fronts.iter().any(|f| f.name == front.name()) {
             continue;
         }
         let base = matchers.len() as u32;
-        for (kind, (layer, _)) in KINDS.iter().enumerate() {
+        for (kind, layer) in front.kinds().iter().enumerate() {
             if by_name.contains_key(*layer) {
-                errors.push(ConfigError::new(name.span, format!("`native ts` defines `{layer}`, which is already a matcher")));
+                errors.push(ConfigError::new(name.span, format!("`native {}` defines `{layer}`, which is already a matcher", front.name())));
             } else {
                 by_name.insert(layer.to_string(), matchers.len() as u32);
             }
@@ -570,14 +594,14 @@ fn add_natives(
                 has_skip: false,
                 like: None,
                 layer: None,
-                native: Some(NativeKind { front: fronts.len() as u8, kind: kind as u16 }),
+                native: Some(NativeKind { front: fronts.len() as u8, frontend: front, kind: kind as u16 }),
                 gate: None,
                 children: Vec::new(),
                 overlays: Vec::new(),
             });
         }
-        let labels = FIELD_NAMES.iter().map(|f| labels.intern(f)).collect();
-        fronts.push(NativeFront { name: "ts", base, labels });
+        let labels = front.fields().iter().map(|f| labels.intern(f)).collect();
+        fronts.push(NativeFront { name: front.name(), frontend: front, base, labels });
     }
     fronts
 }

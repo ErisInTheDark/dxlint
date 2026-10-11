@@ -24,8 +24,8 @@ use crate::config::source::{normalize_path, SourceProvider};
 use crate::config::{self};
 use crate::engine::Linter;
 use crate::line_index::LineIndex;
-use crate::native::ts::modules::Stale;
-use crate::native::ts::reads::{self, Reads};
+use crate::engine::Stale;
+use crate::engine::reads::{self, Reads};
 
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,7 @@
 //! `.zlintcache`: lint results kept between runs, beside the config. A
 //! file's result is reused when its text and everything its lint read
 //! (other files' summaries, module resolution probes, tsconfigs: see
-//! `native::ts::reads`) still match. Results are kept for clean files and
+//! `engine::reads`) still match. Results are kept for clean files and
 //! for files with problems alike, so a warm run only lints what changed.
 //!
 //! The whole cache belongs to one rule state: the config's tokens (imports
@@ -20,11 +20,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use super::{Diagnostic, Edit, Fix, Linter};
 use crate::config::ast::Severity;
-use crate::native::ts::reads::{hash_bytes, Dep, Reads};
+use super::reads::{hash_bytes, Dep, Reads};
 
 pub const FILE_NAME: &str = ".zlintcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC3";
+const MAGIC: &[u8; 4] = b"ZLC4";
 
 /// Deps and groups, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -382,13 +382,16 @@ impl Writer<'_> {
             Dep::IsDir(_, found) => (2, u64::from(*found), None),
             Dep::List(_, h) => (3, *h, None),
             Dep::Summary(_, content, fingerprint) => (4, *content, Some(*fingerprint)),
-            Dep::Globals(_, h) => (5, *h, None),
+            Dep::Discovered(_, _, h) => (5, *h, None),
         };
         self.out.push(tag);
         self.path(d.path());
         self.out.extend_from_slice(&a.to_le_bytes());
         if let Some(b) = b {
             self.out.extend_from_slice(&b.to_le_bytes());
+        }
+        if let Dep::Discovered(name, ..) = d {
+            self.str(name);
         }
     }
 
@@ -524,7 +527,8 @@ impl<'a> Reader<'a> {
             2 => Dep::IsDir(path, a != 0),
             3 => Dep::List(path, a),
             4 => Dep::Summary(path, a, self.u64()?),
-            5 => Dep::Globals(path, a),
+            // An unknown discovery (another build's front end) drops the entry.
+            5 => Dep::Discovered(super::reads::discovery_name(&self.str()?)?, path, a),
             _ => return None,
         })
     }

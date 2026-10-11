@@ -39,8 +39,9 @@ in rs_code match rs_unwrap /\.unwrap\(\)/ {
 # `.zlintcache` reuses a result while everything its lint read is unchanged,
 # so native code must read the filesystem through the one door that records it.
 in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists|metadata)\(\)|\bread_dir\b|\bWalkBuilder\b/ {
-  rule native-reads-through-door error "native code reads the filesystem through `reads.rs`, which records the read for the cache" {
+  rule native-reads-through-door error "native code reads the filesystem through `engine/reads.rs`, which records the read for the cache" {
     files "src/native/**"
+    # These tests write fixture files to disk.
     ignore "src/native/ts/reads.rs" "src/native/ts/tests.rs"
   }
 }

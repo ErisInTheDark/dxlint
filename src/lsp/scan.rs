@@ -20,7 +20,7 @@ use super::transport::Outbox;
 use super::{convert, uri};
 use crate::engine::cache::Cache;
 use crate::engine::Linter;
-use crate::native::ts::reads::Reads;
+use crate::engine::reads::Reads;
 
 /// State shared between the request loop and scans.
 #[derive(Default)]

@@ -21,7 +21,7 @@ use crate::config::source::{normalize_path, Disk, SourceProvider};
 use crate::config;
 use crate::engine::symbols::Symbols;
 use crate::engine::{build, build_for_lint, Linter};
-use crate::native::ts::reads;
+use crate::engine::reads;
 
 #[derive(serde::Deserialize)]
 struct SourceRecord {

@@ -119,7 +119,7 @@ fn fix_preview_is_one_readonly_pass_for_disk_and_packed_sources() {
             assert_eq!(std::fs::read_to_string(dir.join("a.t")).unwrap(), "ab");
             assert!(!dir.join(".zlintcache").exists());
             assert_eq!(std::fs::read_dir(&packed_dir).unwrap().count(), 1);
-            assert!(!crate::native::ts::reads::is_file(&packed_dir.join("a.t")), "invocation leaked buffers");
+            assert!(!crate::engine::reads::is_file(&packed_dir.join("a.t")), "invocation leaked buffers");
         }
     }
     for args in [
@@ -155,13 +155,13 @@ fn packed_sources_resolve_virtual_projects_without_writing_files() {
         assert!(String::from_utf8_lossy(&out.stderr).contains("2 files"), "{}", String::from_utf8_lossy(&out.stderr));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
     }
-    assert!(!crate::native::ts::reads::is_file(&dir.join("main.ts")), "invocation leaked buffers");
+    assert!(!crate::engine::reads::is_file(&dir.join("main.ts")), "invocation leaked buffers");
     std::fs::remove_dir(&dir).expect("empty project cleanup");
 }
 
 #[test]
 fn packed_input_errors_restore_existing_buffers_before_any_lint() {
-    use crate::native::ts::reads;
+    use crate::engine::reads;
     let dir = std::env::temp_dir().join("zlint-cli-tests").join("packed-input-errors");
     let file = dir.join("main.ts");
     reads::set_buffer(&file, "original");
@@ -204,7 +204,7 @@ fn packed_config_is_available_to_tooling_commands() {
     }
     let out = zlint_input(&dir, &["--sources", "-", "lsp"], "");
     assert_eq!(out.code, 2);
-    assert!(!crate::native::ts::reads::is_file(&dir.join(".zlint")));
+    assert!(!crate::engine::reads::is_file(&dir.join(".zlint")));
 }
 
 #[test]

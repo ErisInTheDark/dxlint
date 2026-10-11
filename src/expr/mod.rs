@@ -9,6 +9,7 @@ pub mod functions;
 pub mod pipeline;
 pub(crate) mod fold;
 pub mod indent;
+pub mod js;
 pub(crate) mod re;
 mod spans;
 mod static_eval;
@@ -1540,7 +1541,7 @@ pub struct Ctx<'a> {
     /// layers it targets (empty: not only whole layers).
     pub locals: Option<(u32, &'a [CExpr], &'a [u32])>,
     /// Facts of the native front end, when `tree` is a native tree.
-    pub native: Option<&'a dyn crate::native::ts::facts::Facts>,
+    pub native: Option<&'a crate::engine::frontend::Native<'a>>,
     /// The applied rule's `indent` lines (`indented`, `indent_level`, ...).
     pub indents: &'a IndentPlan,
     pub indent_reset: Option<&'a CExpr>,

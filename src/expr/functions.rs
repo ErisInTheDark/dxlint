@@ -76,7 +76,7 @@ fn javascript_literal_number(kind: &str, text: &str) -> Option<f64> {
         "boolean" => match text { "true" => Some(1.0), "false" => Some(0.0), _ => None },
         "null" => Some(0.0),
         "undefined" | "regex" => Some(f64::NAN),
-        "number" => crate::native::ts::statics::number(text),
+        "number" => super::js::number(text),
         "bigint" => BigIntDecimal::parse(text, true).map(|value| value.to_number()),
         _ => None,
     }
@@ -184,7 +184,7 @@ fn grapheme_count(text: &str) -> usize {
         let regional = (0x1F1E6..=0x1F1FF).contains(&v);
         let extends = c == '\u{200D}'
             || joined
-            || crate::native::ts::is_combining_mark(c)
+            || super::js::is_mark(c)
             || (0xFE00..=0xFE0F).contains(&v)
             || (0x1F3FB..=0x1F3FF).contains(&v)
             || (0xE0020..=0xE007F).contains(&v)
@@ -276,7 +276,7 @@ pub static FUNCTIONS: &[Function] = &[
         max: 4,
         call: |a| {
             let flag = |i: usize| a.get(i).is_some_and(Value::truthy);
-            let order = crate::native::ts::statics::compare_names(&a[0].text(), &a[1].text(), flag(3), flag(2));
+            let order = super::js::compare_names(&a[0].text(), &a[1].text(), flag(3), flag(2));
             Ok(Value::Num(order as i8 as f64))
         },
     },
@@ -763,7 +763,7 @@ pub static FUNCTIONS: &[Function] = &[
         max: 2,
         call: |a| {
             let allowed: String = a.get(1).map(|v| v.items().iter().map(|x| x.text().into_owned()).collect()).unwrap_or_default();
-            Ok(match crate::native::ts::regex_flags_error(&a[0].text(), &allowed) {
+            Ok(match super::js::regex_flags_error(&a[0].text(), &allowed) {
                 Some(m) => Value::from(m),
                 None => Value::Null,
             })
@@ -856,7 +856,7 @@ impl BigIntDecimal {
         if matches!(body.to_ascii_lowercase().as_str(), "0x" | "0o" | "0b") {
             return None;
         }
-        let digits = crate::native::ts::statics::bigint_decimal(body)?;
+        let digits = super::js::bigint_decimal(body)?;
         Some(Self { negative: text.starts_with('-') && digits != "0", digits })
     }
 

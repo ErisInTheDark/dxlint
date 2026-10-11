@@ -70,7 +70,7 @@ pub struct Disk;
 
 impl SourceProvider for Disk {
     fn read(&self, path: &Path) -> io::Result<String> {
-        if let Some(text) = crate::native::ts::reads::buffer(&normalize_path(path)) {
+        if let Some(text) = crate::engine::reads::buffer(&normalize_path(path)) {
             return Ok(text.to_string());
         }
         std::fs::read_to_string(path)

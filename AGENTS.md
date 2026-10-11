@@ -16,7 +16,8 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - `src/grammar`: layers per language, `parse.rs` builds trees
 - `src/expr`: rule expressions; functions registry in `functions.rs`
 - `src/engine`: linter, fixes, suppressions, `.zlintcache` (`cache.rs`), symbol index; end-to-end tests in `engine/tests.rs`
-- `src/native/ts`: TypeScript front end; `modules.rs` project (summaries, resolution, globals)
+- `src/engine/frontend.rs`: the `Frontend` trait, the engine's only view of a native front end (kinds/fields, parse, per-file facts, project state); `lib.rs` `FRONTENDS` registers them
+- `src/native/ts`: TypeScript front end (`frontend.rs` implements `Frontend`); `modules.rs` project (summaries, resolution, globals)
 - `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.zlint`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
@@ -37,7 +38,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - new std module or ruleset: add its file (and the docs table entry)
 - std rules and their layers live in `define { }`; library layers parse only while needed (`engine/prune.rs`), so a needed layer's parents and pattern references must stay reachable
 - with every rule on (`rule *`), std must build without errors (`engine/tests.rs` checks)
-- native code reads the filesystem only through `native/ts/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`). Else `.zlintcache` replays stale results
+- native code reads the filesystem only through `engine/reads.rs` (self-lint enforces); shared project answers keep their `Reads` (`Cached`); directory searches go through a registered `Discovery`. Else `.zlintcache` replays stale results
 - lint output depends only on file text, config tokens and recorded reads
 
 ## Scratch

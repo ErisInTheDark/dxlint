@@ -2,8 +2,6 @@
 //! regexpp` does: an AST with positions (in characters of the pattern) and
 //! its syntax error messages.
 
-use std::sync::OnceLock;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     Pattern,
@@ -923,13 +921,7 @@ fn is_id_continue(c: char) -> bool {
     is_id_start(c) || c.is_alphanumeric() || c == '\u{200C}' || c == '\u{200D}' || is_mark(c)
 }
 
-/// Unicode general category M (marks).
-pub fn is_mark(c: char) -> bool {
-    static RE: OnceLock<regex_automata::meta::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| regex_automata::meta::Regex::new(r"^[\p{Mn}\p{Mc}\p{Me}]$").expect("valid"));
-    let mut buf = [0u8; 4];
-    re.is_match(c.encode_utf8(&mut buf).as_bytes())
-}
+pub use crate::expr::js::is_mark;
 
 /// Properties of strings (`v` flag only).
 const STRING_PROPERTIES: &[&str] =

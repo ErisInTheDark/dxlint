@@ -36,7 +36,7 @@ fn nearest(start: &Path) -> Option<PathBuf> {
     while let Some(d) = dir {
         for name in [CONFIG_NAME, OLD_CONFIG_NAME] {
             let candidate = d.join(name);
-            if crate::native::ts::reads::is_file(&candidate) {
+            if crate::engine::reads::is_file(&candidate) {
                 return Some(candidate);
             }
         }

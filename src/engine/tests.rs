@@ -138,6 +138,7 @@ pub(crate) fn native_linter(rules: &str) -> Linter {
 pub(crate) fn native_front() -> crate::grammar::NativeFront {
     crate::grammar::NativeFront {
         name: "ts",
+        frontend: &crate::native::ts::frontend::TS,
         base: 0,
         labels: crate::native::ts::kinds::ALL_FIELDS.iter().map(|&field| field as u16).collect(),
     }

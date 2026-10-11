@@ -4,11 +4,13 @@ mod build;
 pub mod cache;
 pub mod diagnostic;
 mod fix;
+pub mod frontend;
 mod inspect;
 mod language_options;
 mod message;
 mod profile;
 mod prune;
+pub mod reads;
 mod suppress;
 pub mod symbols;
 #[cfg(test)]
@@ -21,6 +23,7 @@ use std::path::{Path, PathBuf};
 pub use build::{build, build_for_lint, Built};
 pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
+pub use frontend::Stale;
 pub use profile::{Profile, Query};
 
 use crate::config::ast::{FixTarget, Report, Severity};
@@ -28,11 +31,9 @@ use crate::config::source::{FileId, SourceMap, Span};
 use crate::expr::{Attributes, AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, Tree, ROOT, TEXT};
 use crate::line_index::LineIndex;
-use crate::native::ts::facts::{Facts, NativeFile};
-use crate::native::ts::modules::Stale;
-use crate::native::ts::reads::{self, Dep, Reads};
-use crate::native::ts::syntax::Syntax;
 use crate::path_globs::PathGlobs;
+use reads::{Dep, Reads};
+use frontend::{FileInput, Native};
 use suppress::Suppressions;
 
 pub struct OptionSlot {
@@ -202,8 +203,9 @@ pub struct Linter {
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
     attrs: Attributes,
-    /// Other files' exports, read on demand by native rules.
-    project: crate::native::ts::modules::Project,
+    /// Each native front end's project state (other files' exports...),
+    /// read on demand by native rules.
+    projects: frontend::Projects,
     /// Identifies these rules: the tokens parsed (imports and macros
     /// expanded) and the project root.
     pub fingerprint: u64,
@@ -341,7 +343,7 @@ impl Linter {
 
     /// Budget for the shared, one-time project global discovery.
     pub fn set_discovery_jobs(&mut self, jobs: usize) {
-        self.project.set_discovery_jobs(jobs);
+        self.projects.set_discovery_jobs(jobs);
     }
 
     /// Collect `--profile` counters from now on.
@@ -374,17 +376,39 @@ impl Linter {
     }
 
     pub fn holds(&self, dep: &Dep) -> bool {
-        self.project.holds(dep)
+        self.projects.holds(dep)
     }
 
     /// Forgets what the `changed` files said (see `Project::invalidate`);
     /// [`Linter::is_stale`] then tells which recorded deps they broke.
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
-        self.project.invalidate(changed)
+        self.projects.invalidate(changed)
     }
 
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        self.project.is_stale(stale, reads)
+        self.projects.is_stale(stale, reads)
+    }
+
+    /// One parsed file's native facts, from front end `front`.
+    fn native_facts<'t>(
+        &'t self,
+        front: usize,
+        tree: &'t Tree,
+        run: &Run<'t>,
+        (path, rel): (&'t Path, &Path),
+        state: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>,
+    ) -> Box<Native<'t>> {
+        let native = &self.grammar.natives[front];
+        let options: Vec<_> = self.language_options.values(run.lang, rel).collect();
+        native.frontend.file(FileInput {
+            tree,
+            text: run.text,
+            front: native,
+            path,
+            project: self.projects.get(front),
+            options: &options,
+            state,
+        })
     }
 
     pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
@@ -402,13 +426,17 @@ impl Linter {
         // each tree only when an active rule targets its layers.
         let mut targets = vec![false; self.grammar.matchers.len()];
         let (mut wants_layers, mut wants_native) = (false, false);
+        // The native front end reading this file, if any.
+        let accepting = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
         // Token kinds the active rules use (a node per token costs): the
         // ones they target, and brackets for `opener.x`. All of them when a
         // read would see the difference (`children.x`, `previous.x` on a token).
-        use crate::native::ts::kinds::ALL_KINDS;
-        let mut token_kinds = [false; ALL_KINDS.len()];
+        let kind_count = accepting.map_or(0, |front| self.grammar.natives[front].frontend.kinds().len());
+        let mut token_kinds = vec![false; kind_count];
         let (mut all_tokens, mut token_fields, mut lang_layers) = (false, false, false);
-        let token_kind = |m: u32| self.grammar.native_kind(m).map(|k| k.kind as usize).filter(|&k| ALL_KINDS.get(k).is_some_and(|k| k.is_token()));
+        let token_kind = |m: u32| {
+            self.grammar.native_kind(m).filter(|k| Some(usize::from(k.front)) == accepting && k.is_token()).map(|k| usize::from(k.kind))
+        };
         // A layer some active rule targets or reads by name (`opener.x`,
         // `descendants(x)`): its nodes must be built.
         let mut need = |m: u32, targets: &mut [bool]| {
@@ -443,7 +471,12 @@ impl Linter {
         }
         wants_layers |= lang_layers;
         if token_kinds.iter().any(|&k| k) && all_tokens || token_fields {
-            crate::native::ts::tokens::add_all_tokens(&mut token_kinds);
+            if let Some(front) = accepting {
+                let frontend = self.grammar.natives[front].frontend;
+                for (kind, wanted) in token_kinds.iter_mut().enumerate() {
+                    *wanted |= frontend.is_token(kind as u16);
+                }
+            }
         }
         let wants_tokens = token_kinds.iter().any(|&k| k);
         let lines = LineIndex::new(text);
@@ -455,18 +488,18 @@ impl Linter {
         // One tree per file: where a front end reads the file, its tree with
         // the pattern layers grafted in; elsewhere the pattern layers' own.
         let front = match wants_layers || wants_native {
-            true => self.grammar.natives.first().zip(crate::native::ts::reads(path)),
+            true => accepting.map(|index| (index, &self.grammar.natives[index])),
             false => None,
         };
         let mut pattern_tree = wants_layers;
         let mut fallback_active = None;
-        if let Some((front, jsx)) = front {
+        if let Some((index, front)) = front {
             let parse_started = std::time::Instant::now();
-            let mut parsed = crate::native::ts::parse(text, jsx);
+            let mut parsed = front.frontend.parse(text, path);
             let native_done = std::time::Instant::now();
             // Token layers cost a node per token: only the kinds rules use.
             if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
-                crate::native::ts::tokens::attach_selected(text, parsed, &token_kinds);
+                front.frontend.attach_tokens(text, parsed, &token_kinds);
             }
             let tokens_done = std::time::Instant::now();
             match parsed {
@@ -485,10 +518,8 @@ impl Linter {
                     }
                     let groups = self.rule_groups(&active, text.len());
                     if groups.len() <= 1 {
-                        let facts = NativeFile::new(Syntax::new(&tree, text, front), path, &self.project)
-                            .with_environment(crate::native::ts::environment::Environment::from_values(self.language_options.values(lang, &rel)))
-                            .with_tokens(parsed.tokens);
-                        self.check_tree(&tree, &run, Some(&facts), &mut out);
+                        let facts = self.native_facts(index, &tree, &run, (path, &rel), parsed.state);
+                        self.check_tree(&tree, &run, Some(&*facts), &mut out);
                     } else {
                         // A big file sets the floor of a whole run: its rules
                         // run in groups on several threads, each with its own
@@ -499,16 +530,14 @@ impl Linter {
                             let handles: Vec<_> = groups
                                 .iter()
                                 .map(|mask| {
-                                    let tokens = parsed.tokens.clone();
+                                    let state = parsed.state.clone();
                                     let run = Run { active: mask, ..run };
                                     // Reads are tracked per thread: pass them on.
                                     s.spawn(move || {
                                         reads::track(|| {
-                                            let facts = NativeFile::new(Syntax::new(tree, text, front), path, &self.project)
-                                                .with_environment(crate::native::ts::environment::Environment::from_values(self.language_options.values(lang, rel)))
-                                                .with_tokens(tokens);
+                                            let facts = self.native_facts(index, tree, &run, (path, rel), state);
                                             let mut part = Vec::new();
-                                            self.check_tree(tree, &run, Some(&facts), &mut part);
+                                            self.check_tree(tree, &run, Some(&*facts), &mut part);
                                             part
                                         })
                                     })
@@ -580,7 +609,7 @@ impl Linter {
     }
 
     /// Runs every active rule on the nodes of `tree` they target.
-    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a dyn Facts>, out: &mut Vec<Diagnostic>) {
+    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a Native<'a>>, out: &mut Vec<Diagnostic>) {
         // Nodes run in document order, so a rule's indentation fix of a line
         // is known before it checks the lines below. Per rule: what one rule
         // fixes never changes what another sees, so rules can run apart.

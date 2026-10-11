@@ -12,7 +12,7 @@ use crate::config::ast::Severity;
 use crate::engine::cache::{self, Cache};
 use crate::engine::{apply_fixes, Diagnostic, Edit, Linter};
 use crate::line_index::LineIndex;
-use crate::native::ts::reads;
+use crate::engine::reads;
 
 struct FileResult {
     path: PathBuf,

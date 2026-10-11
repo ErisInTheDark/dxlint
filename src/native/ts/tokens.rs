@@ -39,13 +39,6 @@ pub type TokenMask = [bool; ALL_KINDS.len()];
 #[cfg(test)]
 pub const ALL_TOKENS: TokenMask = [true; ALL_KINDS.len()];
 
-/// Adds every token kind.
-pub fn add_all_tokens(mask: &mut TokenMask) {
-    for k in ALL_KINDS.iter().filter(|k| k.is_token()) {
-        mask[*k as usize] = true;
-    }
-}
-
 pub(crate) fn lex_comments(file: &NativeFile<'_>) -> LexedComments {
     let lexed = file.cached(lex);
     let mut tokens = lexed.0.to_vec();

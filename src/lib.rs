@@ -22,3 +22,6 @@ pub mod path_globs;
 pub mod pattern;
 pub(crate) mod js_regex;
 pub(crate) mod vm;
+
+/// The native front ends this build has (`native ts`).
+pub(crate) static FRONTENDS: &[&dyn engine::frontend::Frontend] = &[&native::ts::frontend::TS];

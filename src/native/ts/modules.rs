@@ -294,8 +294,10 @@ impl Project {
         if !stale.changed.iter().any(|p| dep.touches(p)) {
             return false;
         }
-        if let Dep::Globals(dir, _) = dep {
-            return stale.globals.contains(dir);
+        if let Dep::Discovered(name, dir, _) = dep {
+            if *name == reads::GLOBAL_FILES.name {
+                return stale.globals.contains(dir);
+            }
         }
         let checked = stale.checked.lock().ok().and_then(|c| c.get(dep).copied());
         checked.unwrap_or_else(|| {

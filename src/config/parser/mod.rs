@@ -506,21 +506,20 @@ impl<'a> Parser<'a> {
         self.bump();
         let Some(name) = self.ident("a native front end name (`ts`)") else { return };
         self.end_of_item();
-        // `ts_node`: every syntax layer of the front end (tokens aside);
-        // `ts_code`: those whose text is code (literal text aside).
-        if name.text == "ts" && !self.config.natives.iter().any(|n| n.text == "ts") {
-            use crate::native::ts::kinds::{Kind, ALL_KINDS, KINDS};
-            let group = |text: &str, keep: &dyn Fn(Kind) -> bool| GroupDef {
-                name: Name { text: text.into(), span: name.span },
-                parents: ALL_KINDS
-                    .iter()
-                    .filter(|&&k| !k.is_token() && keep(k))
-                    .map(|&k| Parent::Matcher(Name { text: KINDS[k as usize].0.to_string(), span: name.span }))
+        // `<name>_node`: every syntax layer of the front end (tokens aside);
+        // `<name>_code`: those whose text is code (literal text aside).
+        let front = crate::engine::frontend::named(&name.text);
+        if let (Some(front), false) = (front, self.config.natives.iter().any(|n| n.text == name.text)) {
+            let group = |suffix: &str, keep: &dyn Fn(u16) -> bool| GroupDef {
+                name: Name { text: format!("{}_{suffix}", front.name()), span: name.span },
+                parents: (0..front.kinds().len() as u16)
+                    .filter(|&k| !front.is_token(k) && keep(k))
+                    .map(|k| Parent::Matcher(Name { text: front.kinds()[k as usize].to_string(), span: name.span }))
                     .collect(),
                 library: true,
             };
-            self.config.groups.push(group("ts_node", &|_| true));
-            self.config.groups.push(group("ts_code", &|k| !k.is_literal_text()));
+            self.config.groups.push(group("node", &|_| true));
+            self.config.groups.push(group("code", &|k| !front.is_literal_text(k)));
         }
         self.config.natives.push(name);
     }

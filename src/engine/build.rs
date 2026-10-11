@@ -280,6 +280,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     let attrs = Attributes::new(attrs, &forwards, &grammar);
     let mut linter = Linter {
+        projects: super::frontend::Projects::new(&grammar.natives),
         reach: grammar.reach(),
         profile: None,
         split_at: 128 * 1024,
@@ -296,7 +297,6 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         by_link,
         by_lang,
         attrs,
-        project: Default::default(),
         fingerprint,
     };
     linter.lower_conditions();
@@ -632,7 +632,7 @@ fn unique(mut ids: Vec<u32>) -> Vec<u32> {
 }
 
 fn is_token_layer(g: &Grammar, m: u32) -> bool {
-    g.native_kind(m).and_then(|k| crate::native::ts::kinds::ALL_KINDS.get(k.kind as usize)).is_some_and(|k| k.is_token())
+    g.native_kind(m).is_some_and(|k| k.is_token())
 }
 
 fn is_native_layer(g: &Grammar, m: u32) -> bool {

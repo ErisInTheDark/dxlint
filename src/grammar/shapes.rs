@@ -26,24 +26,15 @@ impl Shapes {
             let id = id as u32;
             let mut body = if let Some(native) = grammar.native_kind(id) {
                 let mut body = Body::default();
-                if native.front == 0 {
-                    use crate::native::ts::kinds::{field_shape, ALL_FIELDS, ALL_KINDS};
-                    let front = &grammar.natives[native.front as usize];
-                    for &field in ALL_FIELDS {
-                        let shape = field_shape(ALL_KINDS[native.kind as usize], field);
-                        let targets = FieldTargets {
-                            kinds: shape.kinds.iter().flat_map(|kind| variants(grammar, front.base + *kind as u32)).collect(),
-                            text: shape.text,
-                            any: shape.any,
-                        };
-                        body.field(front.labels[field as usize], targets);
-                    }
-                } else {
-                    for label in matcher.labels() {
-                        if let Some(label) = grammar.labels.get(&label) {
-                            body.field(label, FieldTargets { any: true, ..FieldTargets::default() });
-                        }
-                    }
+                let front = &grammar.natives[native.front as usize];
+                for field in 0..front.labels.len() as u16 {
+                    let shape = native.frontend.field_shape(native.kind, field);
+                    let targets = FieldTargets {
+                        kinds: shape.kinds.iter().flat_map(|&kind| variants(grammar, front.base + u32::from(kind))).collect(),
+                        text: shape.text,
+                        any: shape.any,
+                    };
+                    body.field(front.labels[field as usize], targets);
                 }
                 body
             } else {
@@ -55,7 +46,7 @@ impl Shapes {
                 body.nodes(NO_LABEL, matcher.children.iter().copied());
             }
             body.nodes(NO_LABEL, matcher.overlays.iter().copied().filter(|&id| grammar.matchers[id as usize].layer.is_none()));
-            if matcher.native.is_some_and(|native| native.front == 0 && native.kind == crate::native::ts::kinds::Kind::Program as u16) {
+            if matcher.native.is_some_and(|native| native.kind == native.frontend.root_kind()) {
                 for language in &grammar.langs {
                     body.nodes(NO_LABEL, language.children.iter().copied());
                     body.nodes(NO_LABEL, language.overlays.iter().copied().filter(|&id| grammar.matchers[id as usize].layer.is_none()));
