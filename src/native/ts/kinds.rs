@@ -158,7 +158,7 @@ kinds! {
     JsxExpression = "ts_jsx_expression" [Expr],
     JsxText = "ts_jsx_text" [],
     JsxName = "ts_jsx_name" [],
-    // ---- tokens: punctuation and keywords no child node covers, under the
+    // ---- tokens: punctuation and keywords no syntax child covers, under the
     // node that owns them (field `token`); built only when a rule needs them
     Comma = "ts_comma" [],
     Semicolon = "ts_semicolon" [],

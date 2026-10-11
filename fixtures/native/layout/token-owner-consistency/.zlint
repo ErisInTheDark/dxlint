@@ -1,0 +1,23 @@
+import .ts
+group optional_owner ts_member, ts_index, ts_call
+in optional_owner rule optional-token-query {
+  when optional != null
+  let queried overlapping(ts_token, optional.offset, optional.end_offset)
+  let found first(queried)
+  when found == null || found.offset != optional.offset || found.end_offset != optional.end_offset
+  warn "Optional token query lost its token."
+}
+in ts_binary rule operator-token-query {
+  let queried overlapping(ts_token, operator.offset, operator.end_offset)
+  let found first(queried)
+  when found == null || found.offset != operator.offset || found.end_offset != operator.end_offset
+  warn "Operator token query lost its token."
+}
+in ts_token rule token-neighbour-query {
+  let after token_neighbours.after
+  when after != null && after.text == "?."
+  let queried overlapping(ts_token, after.start, after.end)
+  let found first(queried)
+  when found == null || found.offset != after.start || found.end_offset != after.end
+  warn "Token neighbour and query disagree."
+}

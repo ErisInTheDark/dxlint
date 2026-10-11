@@ -23,6 +23,15 @@ impl Lexed {
         let to = self.0.partition_point(|token| token.end <= end);
         &self.0[from..to.max(from)]
     }
+
+    fn neighbour(&self, span: &Node, before: bool) -> Option<&Token> {
+        let index = if before {
+            self.0.partition_point(|token| token.end <= span.start).checked_sub(1)?
+        } else {
+            self.0.partition_point(|token| token.start < span.end)
+        };
+        self.0.get(index)
+    }
 }
 
 /// Requested token kinds, indexed by the native kind registry.
@@ -78,7 +87,7 @@ fn raw_kind(node: &Node) -> Option<K> {
     (node.matcher != TEXT).then(|| ALL_KINDS.get(node.matcher as usize).copied()).flatten()
 }
 
-/// Gives each punctuation and keyword token that no child node covers a
+/// Gives each punctuation and keyword token that no syntax child covers a
 /// token node (`ts_comma`, `ts_keyword`, ...) under the innermost node
 /// holding it, in field `token`, so rules can target tokens as layers.
 /// Only the kinds in `wanted`: which syntax node owns each token does not
@@ -120,7 +129,8 @@ pub fn attach_selected(src: &str, parsed: &mut Parsed, wanted: &TokenMask) {
             continue;
         }
         children.clear();
-        children.extend(node.children.iter().map(|e| &nodes[e.node as usize]));
+        // Labelled text projects syntax fields, but does not own code tokens.
+        children.extend(node.children.iter().map(|e| &nodes[e.node as usize]).filter(|child| child.matcher != TEXT));
         if !children.windows(2).all(|pair| pair[0].start <= pair[1].start) {
             children.sort_by_key(|c| c.start);
         }
@@ -197,6 +207,47 @@ fn token_record_kind(file: &NativeFile<'_>, t: &Token, kind: Option<K>) -> Value
         ("kind".into(), kind.map_or(Value::Null, |k| Value::from(k.name()))),
         ("start".into(), Value::from(t.start as usize)),
         ("end".into(), Value::from(t.end as usize)),
+    ])
+}
+
+pub(crate) fn neighbour_kind(file: &NativeFile<'_>, node: u32, before: bool) -> Value<'static> {
+    let code = file.cached(lex);
+    code.neighbour(file.syntax.tree.node(node), before)
+        .and_then(|token| token_layer(file, token))
+        .map_or(Value::Null, |kind| Value::from(kind.name()))
+}
+
+pub(crate) fn gap_bounds(file: &NativeFile<'_>, node: u32, before: bool) -> Option<(usize, usize)> {
+    let code = file.cached(lex);
+    let span = file.syntax.tree.node(node);
+    let token = code.neighbour(span, before)?;
+    let (from, to) = if before { (token.end, span.start) } else { (span.end, token.start) };
+    Some((from as usize, to as usize))
+}
+
+fn neighbour_record(src: &str, token: Option<&Token>, span: &Node, before: bool) -> Value<'static> {
+    let Some(token) = token else { return Value::Null };
+    let (from, to) = if before { (token.end, span.start) } else { (span.end, token.start) };
+    let gap = &src[from as usize..to as usize];
+    let line_break = breaks_line(gap);
+    Value::record([
+        ("text".into(), Value::text_copy(&src[token.start as usize..token.end as usize])),
+        ("start".into(), Value::from(token.start as usize)),
+        ("end".into(), Value::from(token.end as usize)),
+        ("gap".into(), Value::text_copy(gap)),
+        ("spaced".into(), Value::Bool(gap_has_space(gap))),
+        ("same_line".into(), Value::Bool(!line_break)),
+        ("line_break".into(), Value::Bool(line_break)),
+    ])
+}
+
+pub(crate) fn neighbours(file: &NativeFile<'_>, node: u32) -> Value<'static> {
+    let code = file.cached(lex);
+    let span = file.syntax.tree.node(node);
+    Value::record([
+        ("before".into(), neighbour_record(file.syntax.src, code.neighbour(span, true), span, true)),
+        ("after".into(), neighbour_record(file.syntax.src, code.neighbour(span, false), span, false)),
+        ("parent_start".into(), file.syntax.parent(node).map_or(Value::Null, |parent| Value::from(file.syntax.tree.node(parent).start as usize))),
     ])
 }
 
@@ -558,6 +609,34 @@ mod lexical_tests {
     use crate::engine::tests::with_native_file;
 
     #[test]
+    fn token_queries_include_code_projected_as_plain_field_text() {
+        for (src, jsx) in [
+            ("const value = receiver?.property; receiver?.[index]; receiver?.(argument);", false),
+            ("const value = left + right; value += other; !value; value as unknown;", false),
+            ("export default class C { public readonly value?: number; async method() {} }", false),
+            ("type T = { readonly [K in keyof U]+?: U[K] };", false),
+            ("const view = <Box enabled={left && right}>raw ?. + text</Box>;", true),
+        ] {
+            let mut parsed = super::super::parse(src, jsx).expect("valid syntax");
+            let syntax_nodes = parsed.nodes.clone();
+            attach_selected(src, &mut parsed, &ALL_TOKENS);
+            let code = &parsed.tokens.as_ref().expect("attached stream").0;
+            for token in code.iter() {
+                let Some(kind) = token_kind(src, token) else { continue };
+                if syntax_nodes.iter().any(|node| {
+                    raw_kind(node).is_some() && (node.start, node.end) == (token.start, token.end)
+                }) {
+                    continue;
+                }
+                let attached = parsed.nodes[syntax_nodes.len()..].iter().filter(|node| {
+                    (node.start, node.end) == (token.start, token.end) && raw_kind(node) == Some(kind)
+                }).count();
+                assert_eq!(attached, 1, "code token missing or duplicated: {:?}", &src[token.start as usize..token.end as usize]);
+            }
+        }
+    }
+
+    #[test]
     fn token_ranges_exclude_partial_literals_and_empty_intervals() {
         with_native_file(r#"const a = [/x/, "text"];"#, |file, _| {
             let code = file.cached(lex);
@@ -690,6 +769,7 @@ mod lexical_tests {
     fn selected_tokens_preserve_their_spans_and_owners() {
         for (src, jsx) in [
             ("const values = [call(left, right), ...other];", false),
+            ("const value = receiver?.property + receiver?.[index]; receiver?.(argument);", false),
             ("function run<T>(left, right) { const values = [left, ...right]; if (left) return values; }", false),
             ("@dec export default class C<T> { method(a: T, b: T) { return /[,;]/.test(`${a},${b}`); } }", false),
             ("const view = <Box a=\"\\\" b={call(left, right)}>raw,; {child}</Box>;", true),
@@ -718,7 +798,7 @@ mod lexical_tests {
                 assert_eq!(owners, [K::Call, K::Array]);
             }
             let mut wanted = [false; ALL_KINDS.len()];
-            for kind in [K::Comma, K::OpenBrace, K::Ellipsis] {
+            for kind in [K::Comma, K::OpenBrace, K::Ellipsis, K::Punctuator] {
                 wanted[kind as usize] = true;
             }
             let expected: Vec<_> = all_tokens.into_iter().filter(|token| wanted[token.3 as usize]).collect();

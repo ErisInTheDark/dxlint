@@ -1,11 +1,16 @@
 //! Generic syntax, tokens and gaps; policy lives in .zlint.
 
 use crate::expr::{facts::{Fact, FactFields, Shape}, Value};
-use crate::native::ts::{facts::NativeFile, kinds, tokens};
+use crate::native::ts::{facts::NativeFile, tokens};
 
 const GAP: Shape = Shape::Record(&[
     ("text", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar), ("spaced", Shape::Scalar),
     ("line_break", Shape::Scalar), ("blank_lines", Shape::Scalar), ("blank_gaps", Shape::Scalar), ("comments", Shape::Scalar),
+]);
+
+const TOKEN_EDGE: Shape = Shape::Record(&[
+    ("text", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar), ("gap", Shape::Scalar),
+    ("spaced", Shape::Scalar), ("same_line", Shape::Scalar), ("line_break", Shape::Scalar),
 ]);
 
 pub const FACTS: &[Fact] = &[
@@ -25,13 +30,21 @@ pub const FACTS: &[Fact] = &[
         shape: Fact::SCALAR.shape,
         name: "previous_token",
         doc: "native layers: the layer of the token before this node (`ts_comma`, `ts_open_paren`, `ts_keyword`...; for a name or literal, the layer of its node), for `is` and `not`",
-        get: |f, n| f.with_file(|file, n| neighbour(file, n, true), n),
+        get: |f, n| f.with_file(|file, n| tokens::neighbour_kind(file, n, true), n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
         name: "next_token",
         doc: "native layers: the layer of the token after this node, as `previous_token`",
-        get: |f, n| f.with_file(|file, n| neighbour(file, n, false), n),
+        get: |f, n| f.with_file(|file, n| tokens::neighbour_kind(file, n, false), n),
+    },
+    Fact {
+        shape: Shape::Record(&[
+            ("before", TOKEN_EDGE), ("after", TOKEN_EDGE), ("parent_start", Shape::Scalar),
+        ]),
+        name: "token_neighbours",
+        doc: "native layers: adjacent tokens as before/after records {text,start,end,gap,spaced,same_line,line_break}; gap retains comments, spaced counts whitespace outside comments, line_break includes comment line breaks; parent_start is the parent's byte offset",
+        get: |f, n| f.with_file(tokens::neighbours, n),
     },
 ];
 
@@ -48,44 +61,16 @@ pub const FACT_FIELDS: &[FactFields] = &[
     },
 ];
 
-/// The index of the code token right before (or after) `node`.
-fn neighbour_index(tokens: &[super::super::lexer::Token], span: &crate::grammar::Node, before: bool) -> Option<usize> {
-    if before {
-        tokens.partition_point(|t| t.end <= span.start).checked_sub(1)
-    } else {
-        let at = tokens.partition_point(|t| t.start < span.end);
-        (at < tokens.len()).then_some(at)
-    }
-}
-
 fn gap_around(file: &NativeFile<'_>, node: u32, before: bool) -> Value<'static> {
-    let Some((from, to)) = gap_bounds(file, node, before) else { return Value::Null };
+    let Some((from, to)) = tokens::gap_bounds(file, node, before) else { return Value::Null };
     tokens::gap_value(file.syntax.src, from, to)
 }
 
-fn gap_bounds(file: &NativeFile<'_>, node: u32, before: bool) -> Option<(usize, usize)> {
-    let tokens = &file.cached(tokens::lex).0;
-    let span = file.syntax.tree.node(node);
-    let i = neighbour_index(tokens, span, before)?;
-    let (from, to) = if before { (tokens[i].end, span.start) } else { (span.end, tokens[i].start) };
-    Some((from as usize, to as usize))
-}
-
 fn gap_projection(file: &NativeFile<'_>, node: u32, before: bool, field: Option<usize>) -> Value<'static> {
-    let bounds = gap_bounds(file, node, before);
+    let bounds = tokens::gap_bounds(file, node, before);
     let Some(field) = field else { return Value::Bool(bounds.is_some()) };
     let Some((from, to)) = bounds else { return Value::Null };
     tokens::gap_field(file.syntax.src, from, to, tokens::GAP_FIELDS[field])
-}
-
-fn neighbour(file: &NativeFile<'_>, node: u32, before: bool) -> Value<'static> {
-    let tokens = file.cached(tokens::lex);
-    let Some(i) = neighbour_index(&tokens.0, file.syntax.tree.node(node), before) else { return Value::Null };
-    let token = tokens.0[i];
-    match tokens::token_layer(file, &token) {
-        Some(kind) => Value::from(kinds::KINDS[kind as usize].0),
-        None => Value::Null,
-    }
 }
 
 #[cfg(test)]
