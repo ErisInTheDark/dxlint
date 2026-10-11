@@ -1,0 +1,3 @@
+import .ts
+rule keyword-spacing:before
+rule keyword-spacing:after
