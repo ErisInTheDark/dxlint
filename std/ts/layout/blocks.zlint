@@ -185,14 +185,16 @@ in ts_open_brace rule space-before-blocks {
   option keywords "always" | "never" | "off" | null = null "statement body policy"
   option classes "always" | "never" | "off" | null = null "class body policy"
   option modules "always" | "never" | "off" | null = null "module body policy"
-  when parent is (ts_block, ts_switch, ts_class, ts_interface, ts_enum) && previous_token != null
+  when parent is (ts_block, ts_switch, ts_class, ts_interface, ts_enum)
+  when !space_before.line_break
+  when functions != null || keywords != null || classes != null || modules != null || space_before.spaced != (style == "always")
+  when previous_token != null
   let block_class parent is (ts_class, ts_interface, ts_enum)
   let block_function parent.layout_block_function.nonempty ?? false
   let block_previous token_neighbours.before.text
   when block_previous != "=>"
   when !(contains(["try", "do", "else", "finally", "catch", "static"], block_previous) && !block_class && !block_function)
   when !(block_previous == ":" && (parent.layout_block_case.nonempty ?? false))
-  when !space_before.line_break
   let block_mode if block_class then classes.nonempty ?? style else if block_function then functions.nonempty ?? style else if parent.layout_block_module.nonempty ?? false then modules.nonempty ?? style else keywords.nonempty ?? style
   when block_mode != "off" && space_before.spaced != (block_mode == "always")
   fix at { start: if block_mode == "always" then offset else token_neighbours.before.end, end: offset } if block_mode == "always" || !space_before.comments as if block_mode == "always" then " " else ""
