@@ -1,0 +1,4 @@
+file.ts:11:3-11:10 no-array-constructor#0
+file.ts:15:3-15:14 no-array-constructor#0
+file.ts:3:3-3:10 no-array-constructor#0
+file.ts:7:3-7:14 no-array-constructor#0

@@ -238,7 +238,11 @@ fn array_constructor_fix(source, n) = {
   }
   value arguments: if open != null then byte_slice(source, open.end_offset, open.paired_token.start) else ""
   value replacement: "[" arguments "]"
-  value if open == null && count(n.argument) > 0 || !expression_fix_retains_comments(n, replacement) then null else replacement
+  value statement: expression_fix_statement(n)
+  value owners: if statement != null then expression_fix_before_nodes(n) else []
+  value semicolon: if statement != null then expression_fix_asi(statement, n.token_neighbours.before, owners) else false
+  value if open == null && count(n.argument) > 0 || !expression_fix_retains_comments(n, replacement) || semicolon == null then null
+    else (if semicolon then ";" else "") replacement
 }
 in ts_call, ts_new rule no-array-constructor {
   when global_callee == "Array" && count(type_argument) == 0
