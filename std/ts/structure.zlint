@@ -505,8 +505,8 @@ in structure_tab_run rule no-tabs {
 
 in ts_line rule no-mixed-spaces-and-tabs {
   option mode "default" | "smart-tabs" = "default"
+  when re_test(text, /^(?: +\t|\t+ )/)
   let indentation re_find(structure_line_content, /^[ \t]+/)
-  when indentation != null && contains(indentation, " ") && contains(indentation, "\t")
   let smart_prefix re_find(indentation, /^[ \t]*? \t/)
   when mode != "smart-tabs" || smart_prefix != null
   let boundary offset + (if mode == "smart-tabs" then len(smart_prefix) - 2 else { value indentation; re_find /^(?: +|\t+)/; len } - 1)

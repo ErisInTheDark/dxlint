@@ -87,7 +87,7 @@ in ts_open_paren rule space-in-parens:after {
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_space { value space_after.text; re_find /^\s*/; nonempty } ?? ""
   let paren_next if space_after.comments then "" else if next_token is ts_open_brace then "{{}}" else if next_token is ts_open_bracket then "[]" else if next_token is ts_open_paren then "()" else if next_token is ts_close_paren then "empty" else ""
-  let paren_wants (mode == "always") != contains(exceptions, paren_next)
+  let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_next)
   when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !{ value space_after.text; trim_start; starts_with "//" } && !paren_wants else paren_wants && (paren_next != "empty" || contains(exceptions, "empty"))
   report at if paren_space != "" then end_offset else offset
   fix space_after as if paren_wants then " " else ""
@@ -98,7 +98,7 @@ in ts_close_paren rule space-in-parens:before {
   option exceptions ("{}" | "[]" | "()" | "empty")[] = [] "invert spacing for nested delimiters"
   let paren_space { value space_before.text; re_find /\s*$/; nonempty } ?? ""
   let paren_previous if space_before.comments then "" else if previous_token is ts_close_brace then "{{}}" else if previous_token is ts_close_bracket then "[]" else if previous_token is ts_close_paren then "()" else if previous_token is ts_open_paren then "empty" else ""
-  let paren_wants (mode == "always") != contains(exceptions, paren_previous)
+  let paren_wants if count(exceptions) == 0 then mode == "always" else (mode == "always") != contains(exceptions, paren_previous)
   when if paren_space != "" then !re_test(paren_space, /[\n\r\u{2028}\u{2029}]/) && !paren_wants else paren_wants && (paren_previous != "empty" || contains(exceptions, "empty"))
   report at if paren_space != "" then offset - byte_len(paren_space) else offset
   fix space_before as if paren_wants then " " else ""
