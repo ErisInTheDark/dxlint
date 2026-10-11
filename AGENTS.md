@@ -21,7 +21,7 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 - `src/native/ts/topics/<family>.rs`: native facts grouped by family (`FACTS` list, read via `Facts::with_file`; whole-file results via `NativeFile::cached`); legacy home of rule logic being moved to `std/ts/<family>.zlint`
 - `std/`: built-in languages (`import .ts`); matchers, plus rule definitions in `define { }` (off until `rule name`), topic files under `std/<lang>/`
 - `rules/`: built-in rulesets (`import rules:x`): only `rule name` lines
-- `build.rs` embeds every file of both (`src/config/std_lib.rs` reads them); `ZLINT_LIBRARY=<checkout>` reads them from disk instead (no rebuild for .zlint edits)
+- nothing is compiled in: `src/config/std_lib.rs` reads both from `ZLINT_LIBRARY=<dir>`, else the nearest ancestor of the executable holding `std/` and `rules/` (no rebuild for .zlint edits; pinned binaries need `ZLINT_LIBRARY`)
 
 ## Invariants
 

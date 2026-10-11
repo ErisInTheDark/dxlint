@@ -54,6 +54,11 @@ warn: `doThing` should be snake_case [fn-snake-case] (fixable)
 cargo build --release          # binary: target/release/zlint
 ```
 
+The binary reads its built-in library (`std/`, `rules/`) from disk: the
+nearest directory holding both, from the binary's own directory up (so a
+checkout's build finds the checkout's), or `ZLINT_LIBRARY=<dir>`. Editing a
+`.zlint` file there needs no rebuild.
+
 Put a `.zlint` at your project root. zlint finds the nearest one above the
 current directory, and paths in it are relative to its directory.
 
@@ -213,7 +218,7 @@ Where the speed comes from:
 
 | path | |
 |---|---|
-| `src/config` | lexer, macro/import token stream, parser, embedded std |
+| `src/config` | lexer, macro/import token stream, parser, library loading |
 | `src/pattern` | pattern AST, regex parser, compiler, DFA bridge, prefilters |
 | `src/grammar` | layers per language, the parser that builds trees |
 | `src/expr` | rule expressions, values, functions |

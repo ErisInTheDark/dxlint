@@ -32,7 +32,7 @@ impl Span {
 }
 
 pub struct SourceFile {
-    /// Display name: a path for disk files, `std/rust` for embedded ones.
+    /// Display name: a path for user files, `std/rust` for library ones.
     pub name: String,
     pub path: Option<PathBuf>,
     pub text: Arc<str>,

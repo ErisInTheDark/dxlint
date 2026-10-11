@@ -1,6 +1,7 @@
 // Thin client: all linting happens in `zlint lsp`.
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 
@@ -98,6 +99,19 @@ function copyOfBuild(build) {
   return copy;
 }
 
+function libraryOfBuild(build) {
+  const sidecar = JSON.parse(fs.readFileSync(`${build.path}.library.json`, "utf8"));
+  const hash = crypto.createHash("sha256").update(fs.readFileSync(build.path)).digest("hex");
+  if (sidecar.binarySha256 !== hash || typeof sidecar.library !== "string") {
+    throw new Error("workspace build library does not match the executable");
+  }
+  const library = path.resolve(path.dirname(build.path), sidecar.library);
+  if (!["std", "rules"].every(dir => fs.existsSync(path.join(library, dir)))) {
+    throw new Error("workspace build library is missing");
+  }
+  return library;
+}
+
 // `zlint.path` if set (relative paths resolve against the first workspace
 // folder), else a workspace build, else `zlint` from PATH.
 function resolveServer(configured) {
@@ -110,7 +124,7 @@ function resolveServer(configured) {
     return { command: path.resolve(root, configured) };
   }
   const build = workspaceBuild();
-  return build ? { command: copyOfBuild(build), build } : { command: "zlint" };
+  return build ? { library: libraryOfBuild(build), command: copyOfBuild(build), build } : { command: "zlint" };
 }
 
 // A workspace build changed: restart once it settles, if it is now a
@@ -128,11 +142,13 @@ function onBuildChanged() {
   }, REBUILD_SETTLE_MS);
 }
 
-function createClient(command) {
+function createClient(command, library) {
   const config = vscode.workspace.getConfiguration("zlint");
   // No `transport`: TransportKind.stdio appends `--stdio`, which `zlint lsp`
   // rejects. Plain executables talk over stdio anyway.
-  const serverOptions = { command, args: ["lsp"] };
+  const serverOptions = { command, args: ["lsp"], options: {
+    env: { ...process.env, ...(library ? { ZLINT_LIBRARY: library } : {}) },
+  } };
   const clientOptions = {
     // The server decides which files it owns (via `lang` in .zlint), so
     // every file document is offered to it.
@@ -186,7 +202,7 @@ async function start() {
   try {
     const server = resolveServer(configured);
     command = server.command;
-    client = createClient(command);
+    client = createClient(command, server.library);
     await client.start();
     runningBuild = server.build && server.build.key;
     sendFocus();

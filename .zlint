@@ -46,6 +46,15 @@ in rs_code match rs_filesystem /\bstd::fs\b|\bfs::\w+|\.(?:is_file|is_dir|exists
   }
 }
 
+# Front ends plug into the engine through `engine/frontend.rs`; only
+# `lib.rs` names them (`FRONTENDS`). Tests may use the real ones.
+in rs_code match rs_front_end_path /\bnative::(?:ts\b|\{)/ {
+  rule engine-names-no-front-end error "the engine reaches front ends only through `engine/frontend.rs`; list them in `FRONTENDS` (lib.rs)" {
+    when rs_test_module == null
+    ignore "src/native/**" "src/lib.rs" "tests.rs" "tests/**"
+  }
+}
+
 in rs_code match rs_function /\bfn[ \t]+/ name:identifier
 in rs_function.name rule fn-snake-case warn "function names are snake_case" fix as snake_case(text)
 

@@ -589,6 +589,10 @@ impl<'a> Parser<'a> {
                     let id = self.push_source(key, None, text.to_string());
                     self.config.uses.push(Use::Import(span, id));
                 }
+                None if std_lib::root().is_none() => self.errors.push(
+                    ConfigError::new(span, format!("cannot import `{path}`: no built-in library found"))
+                        .note("zlint reads `std/` and `rules/` from beside its executable (or a directory above it), or from `ZLINT_LIBRARY`"),
+                ),
                 None if namespace == "std" => self.errors.push(
                     ConfigError::new(span, format!("unknown built-in language `{path}`"))
                         .suggest(&name, std_lib::names().filter(|n| !n.contains('/'))),
