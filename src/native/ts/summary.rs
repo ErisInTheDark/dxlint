@@ -70,6 +70,8 @@ pub struct TParam {
 pub struct Param {
     pub name: Box<str>,
     pub ty: Option<TypeSyn>,
+    /// Native node kind before semantic type folding.
+    pub annotation_kind: Option<u16>,
     pub optional: bool,
     pub rest: bool,
 }
@@ -155,6 +157,21 @@ pub struct Member {
     pub sigs: Vec<Arc<Sig>>,
     /// An unannotated property's initializer.
     pub init: Option<Init>,
+    /// Raw declaration syntax, independent of the initializer used for typing.
+    pub initializer_syntax: Option<InitializerSyntax>,
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+pub struct InitializerSyntax {
+    pub kind: InitializerKind,
+    pub signature: Option<Arc<Sig>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InitializerKind {
+    Function,
+    Arrow,
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash)]
@@ -442,6 +459,7 @@ pub fn sig(v: &impl View, id: u32) -> Sig {
             Param {
                 name: name.map_or("".into(), |n| v.text(n).trim_start_matches("...").into()),
                 ty: v.get(p, F::Type).map(|t| type_syn(v, t)),
+                annotation_kind: v.get(p, F::Type).and_then(|t| v.kind(t)).map(|kind| kind as u16),
                 optional: v.get(p, F::Optional).is_some() || v.get(p, F::Init).is_some(),
                 rest,
             }
@@ -528,7 +546,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
         .filter(|path| !path.is_empty()).map(Vec::into_boxed_slice);
     let accessor = v.is(id, K::Method) && v.get(id, F::Kind).is_some_and(|kind| matches!(v.text(kind), "get" | "set"));
     let named = |kind, ty, sigs| -> Option<Member> {
-        Some(Member { doc: doc.clone(), name: key_name(v, v.get(id, F::Key)?), kind, accessor, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None })
+        Some(Member { doc: doc.clone(), name: key_name(v, v.get(id, F::Key)?), kind, accessor, visibility, signature, computed_key: computed_key.clone(), is_static, readonly, optional, ty, index_key: None, sigs, init: None, initializer_syntax: None })
     };
     match v.kind(id)? {
         K::Mapped => {
@@ -541,7 +559,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
                 optional: v.get(id, F::Optional).is_some_and(|optional| !v.text(optional).starts_with('-')),
                 ty: v.get(id, F::Type).map(|ty| type_syn(v, ty)),
                 index_key: v.get(parameter, F::Constraint).map(|key| type_syn(v, key)),
-                sigs: Vec::new(), init: None,
+                sigs: Vec::new(), init: None, initializer_syntax: None,
             })
         }
         K::Method | K::MethodSig => {
@@ -559,16 +577,32 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
             // A property holding a function type is called like a method.
             let ty = v.get(id, F::Type).map(|t| type_syn(v, t));
             let mut m = named(MemberKind::Prop, ty.clone(), Vec::new())?;
+            let initializer = if v.is(id, K::Prop) {
+                v.get(id, F::Value).or_else(|| v.get(id, F::Key))
+            } else { v.get(id, F::Init) };
             if ty.is_none() {
-                m.init = if v.is(id, K::Prop) {
-                    v.get(id, F::Value).or_else(|| v.get(id, F::Key)).map(|i| init(v, i))
-                } else { v.get(id, F::Init).map(|i| init(v, i)) };
+                m.init = initializer.map(|i| init(v, i));
             }
+            let raw_initializer = if v.is(id, K::Prop) { v.get(id, F::Value) } else { v.get(id, F::Init) };
+            m.initializer_syntax = raw_initializer.map(|initializer| {
+                let kind = match v.kind(initializer) {
+                    Some(K::Function) => InitializerKind::Function,
+                    Some(K::Arrow) => InitializerKind::Arrow,
+                    _ => InitializerKind::Other,
+                };
+                InitializerSyntax {
+                    kind,
+                    signature: matches!(v.kind(initializer), Some(K::Function | K::Arrow)).then(|| match &m.init {
+                        Some(Init::Type(TypeSyn::Fn(signature))) => signature.clone(),
+                        _ => Arc::new(sig(v, initializer)),
+                    }),
+                }
+            });
             Some(m)
         }
         K::CallSig => {
             let kind = if v.get(id, F::Kind).is_some() { MemberKind::Construct } else { MemberKind::Call };
-            Some(Member { doc, name: "()".into(), kind, accessor: false, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None })
+            Some(Member { doc, name: "()".into(), kind, accessor: false, visibility, signature, computed_key: None, is_static, readonly, optional, ty: None, index_key: None, sigs: vec![Arc::new(sig(v, id))], init: None, initializer_syntax: None })
         }
         K::IndexSig => Some(Member {
             doc,
@@ -585,6 +619,7 @@ pub fn member(v: &impl View, id: u32) -> Option<Member> {
             index_key: v.all(id, F::Param).first().and_then(|&p| v.get(p, F::Type)).map(|t| type_syn(v, t)),
             sigs: Vec::new(),
             init: None,
+            initializer_syntax: None,
         }),
         _ => None,
     }
@@ -763,6 +798,7 @@ impl<V: View> Builder<'_, V> {
                                 index_key: None,
                                 sigs: Vec::new(),
                                 init: None,
+                                initializer_syntax: None,
                             });
                         }
                     }
@@ -897,6 +933,7 @@ impl<V: View> Builder<'_, V> {
                             index_key: None,
                             sigs: Vec::new(),
                             init: v.get(m, F::Init).map(|initializer| enum_init(v, initializer)),
+                            initializer_syntax: None,
                         })
                     })
                     .collect();
@@ -1161,6 +1198,29 @@ mod tests {
     fn fingerprint(src: &str) -> u64 {
         let parsed = super::super::parse(src, false).unwrap();
         summarise(&Raw { src, nodes: &parsed.nodes }, parsed.root, false).fingerprint()
+    }
+
+    #[test]
+    fn initializer_syntax_changes_invalidate_dependent_metadata() {
+        for annotation in ["", ": () => void"] {
+            let direct = fingerprint(&format!("class C {{ value{annotation} = function() {{}}; }}"));
+            for initializer in ["() => {}", "(function() {})"] {
+                assert_ne!(
+                    direct,
+                    fingerprint(&format!("class C {{ value{annotation} = {initializer}; }}")),
+                    "initializer syntax was lost for {annotation:?}: {initializer}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn raw_receiver_annotation_changes_invalidate_dependent_metadata() {
+        assert_ne!(
+            fingerprint("interface C { value(this: void): void; }"),
+            fingerprint("interface C { value(this: (void)): void; }"),
+            "equal resolved types hid a changed annotation syntax",
+        );
     }
 
     #[test]

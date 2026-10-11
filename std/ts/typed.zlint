@@ -10,6 +10,7 @@ import .ts/type-specifiers
 import .ts/typed/promises
 import .ts/typed/optional-chains
 import .ts/typed/floating-promises
+import .ts/typed/unbound-method
 import .ts/typed/template-expressions
 import .ts/typed/readonly-members
 import .ts/typed/string-boundaries

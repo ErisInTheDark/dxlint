@@ -1,0 +1,145 @@
+# Receiver-preserving method extraction.
+
+define {
+fn unbound_safe_use(n) =
+  if n.parent is (ts_if, ts_for, ts_member, ts_index, ts_switch, ts_update, ts_while) then true
+  else if n is (ts_call.callee, ts_conditional.test, ts_tagged_template.tag) then true
+  else if n.parent is ts_unary then contains(["!", "delete", "typeof", "void"], n.parent.operator)
+  else if n.parent is ts_binary then contains(["!=", "!==", "==", "===", "instanceof"], n.parent.operator)
+  else if n.parent is ts_assignment && n.parent.operator == "=" then n is ts_assignment.left
+    || n.object is ts_super && n.parent.left is ts_member && n.parent.left.object is ts_this
+  else if n.parent is (ts_parenthesized, ts_non_null, ts_as, ts_type_assertion) then unbound_safe_use(n.parent.node)
+  else if n.parent is ts_logical then n.parent.operator == "&&" && n is ts_logical.left || unbound_safe_use(n.parent.node)
+  else false
+
+fn unbound_type_only(n) = {
+  value n
+  walk (current) current.parent.node
+  any (current) current is (ts_interface, ts_type_alias, ts_function_type, ts_method_signature, ts_call_signature)
+    || current is (ts_class, ts_function, ts_variable_declaration) && contains([] current.modifier, "declare")
+    || current is ts_method && contains([] current.modifier, "abstract")
+}
+
+fn unbound_source(n, path, bound) = if n == null then [] else [{node: n, path: path, bound: bound}]
+fn unbound_pattern_sources(n) =
+  if n is (ts_declarator.name, ts_parameter.name) then
+    { value unbound_source(n.parent.init.node, [], n.parent is ts_declarator) unbound_source(n, [], false) }
+  else if n is ts_assignment.left then unbound_source(n.parent.right.node, [], true)
+  else if n is ts_assignment_pattern.left then
+    { value unbound_source(n.parent.right.node, [], false) unbound_pattern_sources(n.parent.node) }
+  else if n is ts_pattern_property.value then {
+    value unbound_pattern_sources(n.parent.parent.node)
+    map (source) {node: source.node, path: source.path [n.parent.static_name], bound: source.bound}
+  } else []
+
+fn unbound_type(n, names, path) = n.type_structure(names, ["kind", "parts", "declarations", "member_metadata"], true, path)
+fn unbound_profiles(t) =
+  if contains(["union", "intersection"], t.kind) then {
+    value t.parts
+    flat_map (part) unbound_profiles(part)
+  } else [t]
+fn unbound_member(t, key) = {
+  value t.member_metadata
+  filter (member) member.name == key
+  flat_map (member) member.declarations
+  first
+}
+fn unbound_builtin_type(t, key) = {
+  value member: unbound_member(t, key)
+  value key == "compare" && any(t.declarations, declaration => declaration.name == "Collator" && declaration.from == "lib")
+  || member.owner.name == "ArrayConstructor" && member.owner.from == "lib"
+  || any(t.declarations, declaration => declaration.from == "lib"
+    && contains(["NumberConstructor", "ObjectConstructor", "StringConstructor", "SymbolConstructor", "ArrayConstructor",
+      "Array", "ProxyConstructor", "Console", "DateConstructor", "Atomics", "Math", "JSON"], declaration.name))
+    && member.provenance.from == "lib"
+}
+fn unbound_global(n, key) = {
+  value spelling: join([n.text, key.text], ".")
+  value n is ts_identifier && key is ts_identifier
+  && n.declaration == null && (n.global != null
+    || any(n.symbol_metadata.declarations, declaration => any(declaration.provenance, gate => contains(["lib", "package"], gate.from))))
+  && contains([
+    "Number.isFinite", "Number.isInteger", "Number.isNaN", "Number.isSafeInteger", "Number.parseFloat", "Number.parseInt",
+    "Object.assign", "Object.getOwnPropertyDescriptor", "Object.getOwnPropertyDescriptors", "Object.getOwnPropertyNames",
+    "Object.getOwnPropertySymbols", "Object.hasOwn", "Object.is", "Object.preventExtensions", "Object.seal", "Object.create",
+    "Object.defineProperties", "Object.defineProperty", "Object.freeze", "Object.getPrototypeOf", "Object.setPrototypeOf",
+    "Object.isExtensible", "Object.isFrozen", "Object.isSealed", "Object.keys", "Object.entries", "Object.fromEntries",
+    "Object.values", "Object.groupBy", "String.fromCharCode", "String.fromCodePoint", "String.raw", "RegExp.escape",
+    "Symbol.for", "Symbol.keyFor", "Array.isArray", "Array.from", "Array.fromAsync", "Array.of", "Proxy.revocable",
+    "Date.now", "Date.parse", "Date.UTC", "Atomics.load", "Atomics.store", "Atomics.add", "Atomics.sub", "Atomics.and",
+    "Atomics.or", "Atomics.xor", "Atomics.exchange", "Atomics.compareExchange", "Atomics.isLockFree", "Atomics.wait",
+    "Atomics.waitAsync", "Atomics.notify", "Atomics.pause", "Reflect.defineProperty", "Reflect.deleteProperty", "Reflect.apply",
+    "Reflect.construct", "Reflect.get", "Reflect.getOwnPropertyDescriptor", "Reflect.getPrototypeOf", "Reflect.has",
+    "Reflect.isExtensible", "Reflect.ownKeys", "Reflect.preventExtensions", "Reflect.set", "Reflect.setPrototypeOf",
+    "console.log", "console.info", "console.debug", "console.warn", "console.error", "console.dir", "console.time",
+    "console.timeEnd", "console.timeLog", "console.trace", "console.assert", "console.clear", "console.count",
+    "console.countReset", "console.group", "console.groupEnd", "console.table", "console.dirxml", "console.groupCollapsed",
+    "console.Console", "console.profile", "console.profileEnd", "console.timeStamp", "console.context", "console.createTask",
+    "Math.abs", "Math.acos", "Math.acosh", "Math.asin", "Math.asinh", "Math.atan", "Math.atanh", "Math.atan2", "Math.ceil",
+    "Math.cbrt", "Math.expm1", "Math.clz32", "Math.cos", "Math.cosh", "Math.exp", "Math.floor", "Math.f16round", "Math.fround",
+    "Math.hypot", "Math.imul", "Math.log", "Math.log1p", "Math.log2", "Math.log10", "Math.max", "Math.min", "Math.pow",
+    "Math.random", "Math.round", "Math.sign", "Math.sin", "Math.sinh", "Math.sqrt", "Math.tan", "Math.tanh", "Math.trunc",
+    "JSON.parse", "JSON.stringify", "JSON.rawJSON", "JSON.isRawJSON", "Intl.getCanonicalLocales", "Intl.supportedValuesOf",
+    "Intl.DateTimeFormat", "Intl.NumberFormat", "Intl.Collator", "Intl.PluralRules", "Intl.RelativeTimeFormat", "Intl.ListFormat",
+    "Intl.Locale", "Intl.DisplayNames", "Intl.Segmenter", "Intl.DurationFormat",
+  ], spelling)
+}
+
+fn unbound_danger(t, key, ignore_static) = {
+  value declaration: unbound_member(t, key)
+  value receiver: first(declaration.signatures).receiver
+  value if declaration == null || ignore_static && declaration.is_static
+    || !(declaration.kind == "method" || declaration.kind == "property" && declaration.initializer_kind == "function")
+    || receiver.annotation.kind == "ts_type_keyword" && receiver.annotation.keyword == "void" then null
+    else {without_this: receiver == null}
+}
+fn unbound_warning(danger) = {
+  value [
+    "A method that is not declared with `this: void` may cause unintentional scoping of `this` when separated from its object.\nConsider using an arrow function or explicitly `.bind()`ing the method to avoid calling the method with an unintended `this` value. ",
+    if danger.without_this then "\nIf a function does not access `this`, it can be annotated with `this: void`." else "",
+  ]
+  join ""
+}
+
+in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_key.expression rule unbound-method {
+  option ignoreStatic boolean = false "Allow extracting static methods"
+  let pattern_property if is ts_pattern_property.key then parent.node
+    else if is ts_property.key && parent.parent is ts_assignment.left then parent.node
+    else if is ts_computed_key.expression && parent.parent is ts_pattern_property then parent.parent.node else null
+  let pattern pattern_property != null
+  when pattern || is (ts_member, ts_index)
+  when if pattern then is ts_identifier && !unbound_type_only(node) else !unbound_safe_use(node)
+  when pattern || !(is ts_member) || property.node is ts_identifier
+  let keys if pattern then [if parent is ts_computed_key then text else pattern_property.static_name] else if is ts_member then [static_name]
+    else { value node.index.type_literal_values; filter (literal) contains(["string", "number"], literal.type); map (literal) literal.value }
+  when count(keys) > 0
+  let key_node if pattern then node else if is ts_member then property.node else node.index.node
+  let sources if pattern then unbound_pattern_sources(pattern_property.parent.node) else unbound_source(object.node, [], true)
+  let profiles {
+    value sources
+    map (source) {
+      value profile: unbound_type(source.node, keys, source.path)
+      value {
+        node: source.node,
+        bound: source.bound,
+        direct: count(source.path) == 0,
+        profiles: unbound_profiles(profile),
+      }
+    }
+  }
+  let danger {
+    value keys
+    flat_map (key) if any(profiles, source => source.bound && (source.direct && unbound_global(source.node, key_node)
+      || count(source.profiles) > 0 && all(source.profiles, profile => unbound_builtin_type(profile, key)))) then []
+      else {
+        value profiles
+        flat_map (source) source.profiles
+        map (profile) unbound_danger(profile, key, ignoreStatic)
+        filter (danger) danger != null
+      }
+    first
+  }
+  when danger != null
+  warn unbound_warning(danger)
+}
+}

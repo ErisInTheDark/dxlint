@@ -98,6 +98,19 @@ pub struct Globals {
     pub modules: HashMap<Box<str>, Vec<ModRef>>,
 }
 
+// TypeScript's libMap aliases name ES-only libraries, not full-target wrappers.
+fn canonical_library(name: &str) -> &str {
+    const ALIASES: &[(&str, &str)] = &[
+        ("es6", "es2015"), ("es7", "es2016"),
+        ("esnext.asynciterable", "es2018.asynciterable"), ("esnext.symbol", "es2019.symbol"),
+        ("esnext.bigint", "es2020.bigint"), ("esnext.weakref", "es2021.weakref"),
+        ("esnext.object", "es2024.object"), ("esnext.regexp", "es2024.regexp"),
+        ("esnext.string", "es2024.string"), ("esnext.float16", "es2025.float16"),
+        ("esnext.iterator", "es2025.iterator"), ("esnext.promise", "es2025.promise"),
+    ];
+    ALIASES.iter().find_map(|&(alias, canonical)| (alias == name).then_some(canonical)).unwrap_or(name)
+}
+
 #[derive(Default)]
 struct Files {
     by_path: HashMap<PathBuf, FileId>,
@@ -631,7 +644,7 @@ impl Project {
         if let Some(lib_dir) = lib_dir {
             let libs: Vec<String> = if config.lib.is_empty() { vec!["es2023".into(), "dom".into()] } else { config.lib.clone() };
             for l in libs {
-                queue.push_back(lib_dir.join(format!("lib.{l}.d.ts")));
+                queue.push_back(lib_dir.join(format!("lib.{}.d.ts", canonical_library(&l))));
             }
         }
         let node_modules = find_up(&config.dir, &["node_modules"]);
@@ -663,7 +676,7 @@ impl Project {
             let dir = p.parent().map(Path::to_path_buf).unwrap_or_default();
             for l in &s.ref_libs {
                 if let Some(lib_dir) = lib_dir {
-                    queue.push_back(lib_dir.join(format!("lib.{}.d.ts", l.to_lowercase())));
+                    queue.push_back(lib_dir.join(format!("lib.{}.d.ts", canonical_library(&l.to_lowercase()))));
                 }
             }
             for r in &s.ref_paths {
@@ -956,6 +969,32 @@ mod tests {
             ModRef::File(file) => project.path(file),
             ModRef::Ambient(..) => panic!("file module expected"),
         })
+    }
+
+    #[test]
+    fn compiler_library_aliases_load_canonical_files_without_wrapper_globals() {
+        for (alias, canonical) in [
+            ("es6", "es2015"), ("es7", "es2016"),
+            ("esnext.asynciterable", "es2018.asynciterable"), ("esnext.symbol", "es2019.symbol"),
+            ("esnext.bigint", "es2020.bigint"), ("esnext.weakref", "es2021.weakref"),
+            ("esnext.object", "es2024.object"), ("esnext.regexp", "es2024.regexp"),
+            ("esnext.string", "es2024.string"), ("esnext.float16", "es2025.float16"),
+            ("esnext.iterator", "es2025.iterator"), ("esnext.promise", "es2025.promise"),
+        ] {
+            for through_reference in [false, true] {
+                let mut inputs = Inputs::new();
+                let entry = if through_reference { "entry" } else { alias };
+                inputs.set("app/tsconfig.json", &format!(r#"{{"compilerOptions":{{"lib":["{entry}"],"types":[]}}}}"#));
+                inputs.set("node_modules/typescript/lib/lib.entry.d.ts", &format!("/// <reference lib=\"{alias}\" />"));
+                inputs.set(&format!("node_modules/typescript/lib/lib.{alias}.d.ts"), "interface Wrapper {}");
+                inputs.set(&format!("node_modules/typescript/lib/lib.{canonical}.d.ts"), "interface Canonical {}");
+                let path = inputs.set("app/main.ts", "export {}");
+                let project = Project::default();
+                let globals = project.globals(project.file_id(&path));
+                assert!(globals.names.contains_key("Canonical"), "{alias} (reference {through_reference}) did not load its canonical declarations");
+                assert!(!globals.names.contains_key("Wrapper"), "{alias} loaded extra wrapper globals");
+            }
+        }
     }
 
     #[test]

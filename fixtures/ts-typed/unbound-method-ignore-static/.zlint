@@ -1,0 +1,4 @@
+import .ts
+rule unbound-method {
+  set ignoreStatic true
+}

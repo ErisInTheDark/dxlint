@@ -11,6 +11,7 @@ rule no-unnecessary-boolean-literal-compare
 rule no-unnecessary-template-expression
 rule no-unnecessary-type-arguments
 rule no-unsafe-unary-minus
+rule unbound-method
 rule prefer-find*
 rule prefer-includes
 rule prefer-optional-chain

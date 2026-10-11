@@ -319,6 +319,28 @@ impl<'t> NativeFile<'t> {
         Ty::Unknown
     }
 
+    fn super_type(&self, at: u32) -> Ty {
+        let s = &self.syntax;
+        let mut node = s.parent(at);
+        let mut is_static = false;
+        while let Some(owner) = node {
+            match s.kind(owner) {
+                Some(K::Function) => return Ty::Unknown,
+                Some(K::Method) if !s.parent(owner).is_some_and(|parent| s.is(parent, K::Class)) => return Ty::Unknown,
+                Some(K::Method | K::ClassProp | K::StaticBlock) =>
+                    is_static = s.has_word(owner, F::Modifier, "static") || s.is(owner, K::StaticBlock),
+                Some(K::Class) => {
+                    let Some(base) = s.get(owner, F::Extends) else { return Ty::Unknown };
+                    let base = self.type_of(base);
+                    return if is_static { base } else { self.ck().construct(&base, &[], self.type_args(owner)) };
+                }
+                _ => {}
+            }
+            node = s.parent(owner);
+        }
+        Ty::Unknown
+    }
+
     fn ident_type(&self, id: u32) -> Ty {
         let s = &self.syntax;
         let ck = self.ck();
@@ -650,6 +672,8 @@ impl<'t> NativeFile<'t> {
                 self.narrow(id, t)
             }
             K::This => self.this_type(id),
+            K::Super => self.super_type(id),
+            K::ObjectPattern | K::ArrayPattern => self.binding_type(id, "const"),
             K::ClassProp => {
                 let Some(class) = s.parent(id).filter(|&parent| s.is(parent, K::Class)) else { return Ty::Unknown };
                 let name = self.symbolic_property_key(id).map(|symbol| format!("[Symbol.{symbol}]"))
@@ -670,7 +694,7 @@ impl<'t> NativeFile<'t> {
                 self.ck().class_value_at(s.tree.node(id).start, self.ck().file),
             K::Number => Ty::Lit(s.text(id).into(), "number"),
             K::String => Ty::Lit(s.text(id).into(), "string"),
-            K::Template => Ty::Prim("string"),
+            K::Template => self.static_string(id).map_or(Ty::Prim("string"), |value| Ty::Lit(format!("{value:?}").into(), "string")),
             K::Bool => Ty::Lit(s.text(id).into(), "boolean"),
             K::BigInt => Ty::Lit(s.text(id).into(), "bigint"),
             K::Null => Ty::Null,
@@ -995,6 +1019,78 @@ fn may_be_nullish(ty: &Ty) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::engine::tests::with_native_file;
+
+    #[test]
+    fn super_receivers_select_base_instance_or_constructor_through_arrows() {
+        with_native_file(r#"
+            class Base<T> { value: T; static value: boolean; }
+            class Derived extends Base<string> {
+                value: number;
+                method() { const value = /*@*/super.value; const arrow = () => /*@*/super.value; }
+                static method() { const value = /*@*/super.value; }
+            }
+        "#, |file, nodes| {
+            for (node, expected) in nodes.iter().zip(["string", "string", "boolean"]) {
+                assert!(matches!(file.type_of(*node), super::Ty::Prim(kind) if kind == expected),
+                    "base receiver lost {expected}: {:?}", file.type_of(*node));
+            }
+        });
+    }
+
+    #[test]
+    fn object_method_super_does_not_borrow_an_enclosing_class_base() {
+        with_native_file(r#"
+            class Base { value: string; }
+            class Derived extends Base {
+                method() {
+                    return {
+                        method() { return /*@*/super.value; },
+                        arrow() { return () => /*@*/super.value; },
+                    };
+                }
+            }
+        "#, |file, nodes| {
+            for &node in nodes {
+                assert!(matches!(file.type_of(node), super::Ty::Unknown),
+                    "object home borrowed the enclosing base: {:?}", file.type_of(node));
+            }
+        });
+    }
+
+    #[test]
+    fn constant_template_types_keep_literals_without_narrowing_dynamic_templates() {
+        with_native_file(r#"
+            declare const dynamic: string;
+            const first = /*@*/`ba${'zz'}`;
+            const second = /*@*/`item${1}`;
+            const third = /*@*/`ba${dynamic}`;
+        "#, |file, nodes| {
+            for (node, expected) in nodes.iter().zip(["\"bazz\"", "\"item1\""]) {
+                assert!(matches!(file.type_of(*node), super::Ty::Lit(value, "string") if &*value == expected),
+                    "constant template widened: {:?}", file.type_of(*node));
+            }
+            assert!(matches!(file.type_of(nodes[2]), super::Ty::Prim("string")), "dynamic template invented a literal");
+        });
+    }
+
+    #[test]
+    fn binding_pattern_nodes_share_contextual_and_iterated_binding_types() {
+        with_native_file(r#"
+            interface Item { value: string; child: { value: number }; }
+            declare function consume(callback: (item: Item) => void): void;
+            consume((/*@*/{ value, child: /*@*/{ value: nested } }) => {});
+            declare const items: Item[];
+            for (const /*@*/{ value } of items) {}
+        "#, |file, nodes| {
+            let checker = &file.typing().checker;
+            for (node, expected) in nodes.iter().zip(["string", "number", "string"]) {
+                let pattern = file.syntax.get(*node, super::F::Name).unwrap_or(*node);
+                let value = checker.member(&file.type_of(pattern), "value");
+                assert!(matches!(value, super::Ty::Prim(kind) if kind == expected),
+                    "binding pattern lost {expected}: {value:?}");
+            }
+        });
+    }
 
     #[test]
     fn new_target_uses_the_nearest_constructor_or_function_through_arrows() {

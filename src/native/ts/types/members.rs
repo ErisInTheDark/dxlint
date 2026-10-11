@@ -72,6 +72,7 @@ impl Resolution {
                     name: name.into(), kind: MemberKind::Prop, accessor: false, visibility: Visibility::Public,
                     signature: false, computed_key: None,
                     is_static: false, readonly: Some(false), optional: false, ty: None, index_key: None, sigs: Vec::new(), init: None,
+                    initializer_syntax: None,
                 },
             });
         }
@@ -423,13 +424,13 @@ impl Checker<'_> {
             }
             // Statics are inherited too.
             if let Some(TypeSyn::Ref(path, _)) = decl.extends.first().filter(|_| decl.kind == DeclKind::Class) {
-                if let Ty::Class(base) = self.value_path(path, &env) {
-                    if base.iter().any(|b| sym.contains(b)) {
-                        continue;
-                    }
-                    if let Some(t) = self.static_member::<METADATA>(&base, name) {
-                        return Some(t);
-                    }
+                let base = self.value_path(path, &env);
+                if let Ty::Class(base) = &base {
+                    if base.iter().any(|b| sym.contains(b)) { continue }
+                    if let Some(t) = self.static_member::<METADATA>(base, name) { return Some(t) }
+                } else if !base.is_opaque() {
+                    let inherited = self.member_lookup::<METADATA, false>(&base, name, &base);
+                    if inherited.declared { return Some(inherited) }
                 }
             }
         }

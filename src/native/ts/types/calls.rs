@@ -512,6 +512,27 @@ impl Checker<'_> {
         self.contract_parameters_at(ty, &[], Vec::new(), false, 0, &mut query)
     }
 
+    /// Visible declaration headers, without inference from call arguments.
+    pub fn call_signature_headers(&self, ty: &Ty, constrained: bool) -> Option<Vec<(BoundSignature, Option<Ty>)>> {
+        if matches!(ty, Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_)) { return None }
+        let mut query = ContractQuery::new(ContractParameters::Declared { constrained });
+        let signatures = self.inherited_call_signatures(ty, 0, &mut query)?;
+        let overloaded = signatures.iter().any(|signature| signature.syntax.body_at.is_none());
+        let mut headers = Vec::new();
+        for signature in signatures {
+            if overloaded && signature.syntax.body_at.is_some() { continue }
+            query.take(1)?;
+            let receiver = if let Some(parameter) = signature.syntax.params.first().filter(|parameter| &*parameter.name == "this") {
+                query.take(signature.syntax.type_params.len())?;
+                let mut env = (*signature.env).clone();
+                self.context_parameters(&signature.syntax.type_params, Vec::new(), constrained, &mut env);
+                Some(parameter.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env)))
+            } else { None };
+            headers.push((signature, receiver));
+        }
+        Some(headers)
+    }
+
     /// Visible callable results without inference from arguments; signature parameters stay open.
     pub fn call_signature_returns(&self, ty: &Ty) -> Option<Vec<Ty>> {
         self.call_signature_returns_at(ty, 0, &mut ContractQuery::new(ContractParameters::Declared { constrained: false }))
@@ -773,6 +794,31 @@ mod tests {
     use crate::native::ts::facts::NativeFile;
     use crate::native::ts::modules::DeclRef;
     use super::Ty;
+
+    #[test]
+    fn receiver_headers_complete_cycles_and_discard_exhausted_projections() {
+        with_native_file(r#"
+            interface A extends B { (this: string): void; }
+            interface B extends A {}
+            declare const callback: A;
+            const reflected = /*@*/callback;
+        "#, |file, nodes| {
+            let checker = &file.typing().checker;
+            let headers = checker.call_signature_headers(&file.type_of(nodes[0]), true).expect("finite cycle was incomplete");
+            assert_eq!(headers.len(), 1, "cyclic inheritance repeated a header");
+            assert!(matches!(headers[0].1, Some(Ty::Prim("string"))));
+        });
+        let mut source = String::from("interface Wide {");
+        for index in 0..super::Checker::CONTRACT_WORK_LIMIT / 3 {
+            source.push_str(&format!("<T{index} extends string>(this: T{index}): void;"));
+        }
+        source.push_str("} declare const callback: Wide; const reflected = /*@*/callback;");
+        with_native_file(&source, |file, nodes| {
+            let checker = &file.typing().checker;
+            assert!(checker.call_signature_headers(&file.type_of(nodes[0]), true).is_none(),
+                "receiver projection returned complete or partial headers after its work limit");
+        });
+    }
 
     #[test]
     fn inherited_call_signatures_keep_own_and_base_overloads() {

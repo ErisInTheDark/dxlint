@@ -67,6 +67,11 @@ impl NativeFile<'_> {
             return if s.is(owner, K::Param) && s.get(owner, F::Optional).is_some() { value.or_undefined() } else { value };
         }
         if s.is(owner, K::Param) { return self.contextual_param(owner) }
+        if let Some(loop_node) = s.parent(owner).and_then(|statement| s.parent(statement))
+            .filter(|&loop_node| s.is(loop_node, K::ForOf) && s.get(loop_node, F::Left) == s.parent(owner)) {
+            if s.has_word(loop_node, F::Modifier, "await") { return Ty::Unknown }
+            return s.get(loop_node, F::Right).map_or(Ty::Unknown, |source| self.ck().iteration_element(&self.type_of(source)));
+        }
         match s.get(owner, F::Init) {
             // Empty arrays evolve with later writes.
             Some(init) if s.is(init, K::Array) && s.all(init, F::Element).next().is_none() => Ty::Unknown,
