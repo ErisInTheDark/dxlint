@@ -8,6 +8,7 @@ fn expression_fix_clean(n) = !{
   value overlapping(ts_comment, n.offset, n.end_offset)
   any (comment) n.offset <= comment.offset && comment.end_offset <= n.end_offset
 }
+fn expression_fix_continuation(text) = any(["(", "[", "/", "+", "`", "-"], token => starts_with(text, token))
 fn expression_fix_edits(source, start, edits) = {
   value edits
   sort_by (edit) edit.start

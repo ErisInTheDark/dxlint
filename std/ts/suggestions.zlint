@@ -459,9 +459,23 @@ in ts_block rule no-lone-blocks {
   warn if nested then "Nested block is redundant." else "Block is redundant."
 }
 
+fn suggestion_lonely_if_fix(source, n) = {
+  value body: n.parent.node
+  value before_gap: { value byte_slice(source, body.first_token.end, n.offset); trim }
+  value after_gap: { value byte_slice(source, n.end_offset, body.last_token.start); trim }
+  value last_token: n.consequent.last_token
+  value after: body.token_neighbours.after
+  value hazard: n.consequent not ts_block && last_token.text != ";" && after != null
+    && (position(n.consequent.end_offset).js_line == position(after.start).js_line
+      || expression_fix_continuation(after.text) || contains(["++", "--"], last_token.text))
+  value if before_gap != "" || after_gap != "" || hazard then null
+    else (if body.token_neighbours.before.end == body.offset then " " else "") n.text
+}
 in ts_if rule no-lonely-if {
   when parent.else_block == true && parent.statement_count == 1
   when !(unmatched_tail && parent.enclosing_else_boundary == true)
+  let lonely_if_fix suggestion_lonely_if_fix(source, node)
+  fix at parent.node if lonely_if_fix != null as lonely_if_fix
   warn "Unexpected if as the only statement in an else block."
 }
 
@@ -551,9 +565,8 @@ fn suggestion_else_fix(body, declarations) = {
   value first_content: if body is ts_block then first_statement.first_token ?? body.last_token else body.first_token
   value last_content: if body is ts_block then last_statement.last_token ?? body.first_token else body.last_token
   value after: body.token_neighbours.after
-  value hazard_tokens: ["(", "[", "/", "+", "`", "-"]
-  value before_hazard: consequent not ts_block && before.text != ";" && any(hazard_tokens, token => starts_with(first_content.text, token))
-  value after_hazard: last_content.text != ";" && after != null && (any(hazard_tokens, token => starts_with(after.text, token))
+  value before_hazard: consequent not ts_block && before.text != ";" && expression_fix_continuation(first_content.text)
+  value after_hazard: last_content.text != ";" && after != null && (expression_fix_continuation(after.text)
     || position(after.start).js_line == position(last_content.start).js_line && after.text != "}}")
   value content: if body is ts_block then byte_slice(body.text, 1, body.end_offset - body.offset - 1) else body.text
   value replacement: byte_slice(owner.text, 0, body.token_neighbours.before.start - owner.offset) content byte_slice(owner.text, body.end_offset - owner.offset)
@@ -577,8 +590,7 @@ fn arrow_body_expression_fix(source, n) = if n.body.single_return != true || fir
   value statement: first(body.body.nodes)
   value argument: statement.argument.node
   value after: body.token_neighbours.after.text
-  value hazard_tokens: ["(", "[", "/", "`", "+", "-"]
-  value hazard: after != null && any(hazard_tokens, token => starts_with(after, token))
+  value hazard: after != null && expression_fix_continuation(after)
   value parens: expression_fix_parens(source, body, argument)
   value initialiser: { value n; walk (current) current.parent.node; any (current) current is ts_for.init }
   value binaries: overlapping(ts_binary, body.offset, body.end_offset)
