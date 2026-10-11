@@ -6,7 +6,7 @@ define {
 
 @macro multiple_space_horizontal "[ \\t\\u{{b}}\\u{{c}}\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
 @macro multiple_space_nonspace "[^ \\t\\u{{b}}\\u{{c}}\\r\\n\\u{{a0}}\\u{{1680}}\\u{{2000}}-\\u{{200a}}\\u{{2028}}\\u{{2029}}\\u{{202f}}\\u{{205f}}\\u{{3000}}\\u{{feff}}]"
-in ts_code match multiple_space_gap /[ \t\u{b}\u{c}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{feff}]+/
+in ts_code match multiple_space_gap /[ \t\u{b}\u{c}\u{a0}\u{1680}\u{2000}-\u{200a}\u{202f}\u{205f}\u{3000}\u{feff}]{2,}/
 fn multiple_space_preview_body(body) = if contains(body, "\n") || len(body) > 12 then {
   value body
   split "\n"
