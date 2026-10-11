@@ -189,6 +189,25 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
         }).collect();
         Value::record(vec![("name".into(), Value::from(name.clone())), ("declarations".into(), Value::list(declarations))])
     }).collect() } else { Vec::new() };
+    let member_types = if requested("member_types") { properties.iter().map(|name| {
+        let member = ck.member(ty, name);
+        Value::record(vec![
+            ("name".into(), Value::from(name.clone())),
+            ("type".into(), describe(&member, ck, &[], fields, Vec::new(), constrained, depth + 1)),
+        ])
+    }).collect() } else { Vec::new() };
+    let call_signatures = if requested("call_signatures") {
+        ck.call_signature_parameters(ty, constrained).map_or(Value::Null, |signatures| {
+            // Parameter types retain selected scalar and collection fields, not callback graphs.
+            let parameter_fields: Vec<_> = fields.iter().filter(|field|
+                !matches!(field.as_str(), "members" | "member_types" | "call_signatures")).cloned().collect();
+            Value::list(signatures.into_iter().map(|(parameters, rest)| Value::record(vec![
+                ("parameters".into(), Value::list(parameters.iter().map(|parameter|
+                    describe(parameter, ck, &[], &parameter_fields, Vec::new(), constrained, depth + 1)).collect())),
+                ("rest".into(), Value::Bool(rest)),
+            ])).collect())
+        })
+    } else { Value::Null };
     let entries: Vec<(crate::expr::value::Key, Value<'static>)> = vec![
         ("kind".into(), Value::from(ty.kind())),
         ("parts".into(), Value::list(parts)),
@@ -197,6 +216,8 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
         ("generic_names".into(), Value::list(generic_names)),
         ("aliases".into(), Value::list(aliases)),
         ("members".into(), Value::list(members)),
+        ("member_types".into(), Value::list(member_types)),
+        ("call_signatures".into(), call_signatures),
         ("declarations".into(), Value::list(declarations)),
         ("callable".into(), Value::Bool(requested("callable") && ck.callable_type(ty))),
         ("constructor".into(), Value::Bool(requested("constructor") && constructible(ty, ck))),
@@ -212,6 +233,85 @@ fn describe(ty: &Ty, ck: &Checker<'_>, properties: &[String], fields: &[String],
 mod tests {
     use crate::engine::tests::with_native_file;
     use crate::expr::Value;
+
+    fn callable_structure(file: &crate::native::ts::facts::NativeFile<'_>, node: u32, names: &[&str]) -> Value<'static> {
+        let fields = ["kind", "parts", "member_types", "call_signatures", "callable"];
+        crate::expr::facts::with_args(vec![
+            Value::list(names.iter().map(|name| Value::from(name.to_string())).collect()),
+            Value::list(fields.into_iter().map(Value::from).collect()),
+        ], || super::structure(file, node, &names.iter().map(|name| name.to_string()).collect::<Vec<_>>()))
+    }
+
+    #[test]
+    fn callable_structure_keeps_inherited_overloads_and_callback_union_types() {
+        with_native_file(r#"
+            type Callback = () => void;
+            interface Base<T> {
+                then(first: T, second?: T | undefined): unknown;
+                then(value: string): unknown;
+            }
+            interface Derived extends Base<Callback> {}
+            declare const value: Derived;
+            const reflected = /*@*/value;
+        "#, |file, nodes| {
+            let projected = callable_structure(file, nodes[0], &["then"]);
+            let members = projected.key("member_types").items();
+            assert_eq!(members.len(), 1, "requested inherited member was not projected");
+            let signatures = members[0].key("type").key("call_signatures").items();
+            let parameters = signatures.iter().find(|signature| signature.key("parameters").items().len() == 2)
+                .expect("inherited two-callback overload missing").key("parameters").items();
+            assert_eq!(parameters[0].key("callable"), Value::Bool(true), "generic callback did not bind");
+            let optional = parameters[1].key("parts").items();
+            assert!(optional.iter().any(|part| part.key("callable") == Value::Bool(true)),
+                "optional callback lost its callable arm");
+            assert!(optional.iter().any(|part| part.key("kind") == Value::from("undefined")),
+                "optional callback lost its missing-value arm");
+            assert!(signatures.iter().any(|signature| {
+                let parameters = signature.key("parameters").items();
+                parameters.len() == 1 && parameters[0].key("kind") == Value::from("string")
+            }), "other overload was discarded");
+        });
+    }
+
+    #[test]
+    fn callable_structure_distinguishes_recursive_callable_plain_and_unknown_types() {
+        with_native_file(r#"
+            interface Recursive { (value: Recursive): void; }
+            declare const recursive: Recursive;
+            declare const plain: number;
+            declare const missing: unknown;
+            const first = /*@*/recursive;
+            const second = /*@*/plain;
+            const third = /*@*/missing;
+        "#, |file, nodes| {
+            let signatures = callable_structure(file, nodes[0], &[]).key("call_signatures").items();
+            assert_eq!(signatures.len(), 1, "recursive callable contract missing");
+            let parameters = signatures[0].key("parameters").items();
+            assert_eq!(parameters.len(), 1);
+            assert_eq!(parameters[0].key("callable"), Value::Bool(true), "recursive parameter became opaque");
+            assert_eq!(callable_structure(file, nodes[1], &[]).key("call_signatures"), Value::list(Vec::new()),
+                "known non-callable acquired signatures");
+            assert_eq!(callable_structure(file, nodes[2], &[]).key("call_signatures"), Value::Null,
+                "unknown was presented as known non-callable");
+        });
+    }
+
+    #[test]
+    fn callable_structure_raw_parameters_stay_open() {
+        with_native_file("declare function generic<T extends () => void>(callback: T): void; const value = /*@*/generic;", |file, nodes| {
+            for (constrained, expected) in [(true, "function"), (false, "parameter")] {
+                let fields = ["kind", "parts", "call_signatures", "callable"].into_iter().map(Value::from).collect();
+                let projected = crate::expr::facts::with_args(vec![
+                    Value::list(Vec::new()), Value::list(fields), Value::Bool(constrained),
+                ], || super::structure(file, nodes[0], &[]));
+                let signatures = projected.key("call_signatures").items();
+                assert_eq!(signatures.len(), 1, "generic callable contract missing");
+                let parameters = signatures[0].key("parameters").items();
+                assert_eq!(parameters.len(), 1);
+                assert_eq!(parameters[0].key("kind"), Value::from(expected), "wrong constraint mode");
+            }
+        });
+    }
 
     #[test]
     fn resolved_generic_arguments_keep_union_and_intersection_structure() {

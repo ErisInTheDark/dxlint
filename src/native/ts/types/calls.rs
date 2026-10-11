@@ -14,9 +14,19 @@ thread_local! {
 struct ContractQuery {
     remaining: usize,
     seen: Vec<Ty>,
+    parameters: ContractParameters,
+}
+
+enum ContractParameters {
+    Inferred,
+    Declared { constrained: bool },
 }
 
 impl ContractQuery {
+    fn new(parameters: ContractParameters) -> Self {
+        Self { remaining: Checker::CONTRACT_WORK_LIMIT, seen: Vec::new(), parameters }
+    }
+
     fn take(&mut self, work: usize) -> Option<()> {
         self.remaining = self.remaining.checked_sub(work)?;
         Some(())
@@ -207,14 +217,22 @@ impl Checker<'_> {
     fn signatures(&self, t: &Ty, construct: bool) -> Option<Vec<BoundSignature>> {
         match t {
             Ty::Fn(c) if !construct => Some(c.sigs.clone()),
+            Ty::Obj(members, env) if !construct => {
+                let sigs: Vec<_> = members.iter().filter(|member| member.kind == MemberKind::Call)
+                    .flat_map(|member| member.sigs.iter().cloned()).collect();
+                (!sigs.is_empty()).then(|| super::Callable::new(sigs, env.clone(), None).sigs)
+            }
             // A function merged with a namespace.
             Ty::Inter(items) => items.iter().find_map(|i| self.signatures(i, construct)),
             Ty::Named(sym, args) => {
-                let kind = if construct { MemberKind::Construct } else { MemberKind::Call };
+                if !construct {
+                    let sigs = self.inherited_call_signatures(t, 0, &mut ContractQuery::new(ContractParameters::Inferred))?;
+                    return (!sigs.is_empty()).then_some(sigs);
+                }
                 for &r in sym.iter() {
                     let s = self.summary_of(r.file)?;
                     let decl = &s.decls[r.decl as usize];
-                    let sigs: Vec<Arc<Sig>> = decl.members.iter().filter(|m| m.kind == kind).flat_map(|m| m.sigs.iter().cloned()).collect();
+                    let sigs: Vec<Arc<Sig>> = decl.members.iter().filter(|m| m.kind == MemberKind::Construct).flat_map(|m| m.sigs.iter().cloned()).collect();
                     if !sigs.is_empty() {
                         let mut env = self.decl_env(r);
                         env.tparams = self.bind_tparams(&decl.type_params, args.clone(), &env);
@@ -224,6 +242,53 @@ impl Checker<'_> {
                 None
             }
             _ => None,
+        }
+    }
+
+    fn inherited_call_signatures(&self, ty: &Ty, depth: usize, query: &mut ContractQuery) -> Option<Vec<BoundSignature>> {
+        if depth >= super::MAX_DEPTH as usize { return None }
+        query.take(1)?;
+        match ty {
+            Ty::Named(symbol, actuals) => {
+                if query.seen.iter().any(|seen| seen.same_identity(ty)) { return Some(Vec::new()) }
+                let mut signatures = Vec::new();
+                for &reference in symbol.iter() {
+                    let summary = self.summary_of(reference.file)?;
+                    let declaration = &summary.decls[reference.decl as usize];
+                    query.take(declaration.members.len() + declaration.type_params.len())?;
+                    let own: Vec<_> = declaration.members.iter().filter(|member| member.kind == MemberKind::Call)
+                        .flat_map(|member| member.sigs.iter().cloned()).collect();
+                    let bases = self.bases(declaration);
+                    if own.is_empty() && bases.is_empty() { continue }
+                    query.take(own.len())?;
+                    let mut env = self.decl_env(reference);
+                    env.tparams = self.bind_tparams(&declaration.type_params, actuals.clone(), &env);
+                    let env = Arc::new(env);
+                    signatures.extend(super::Callable::new(own, env.clone(), None).sigs);
+                    if !bases.is_empty() && !query.seen.iter().any(|seen| seen.same_identity(ty)) { query.seen.push(ty.clone()); }
+                    for base in bases {
+                        signatures.extend(self.inherited_call_signatures(&self.eval(base, &env), depth + 1, query)?);
+                    }
+                }
+                Some(signatures)
+            }
+            Ty::Fn(callable) => {
+                query.take(callable.sigs.len())?;
+                Some(callable.sigs.clone())
+            }
+            Ty::Obj(members, env) => {
+                query.take(members.len())?;
+                let signatures: Vec<_> = members.iter().filter(|member| member.kind == MemberKind::Call)
+                    .flat_map(|member| member.sigs.iter().cloned()).collect();
+                query.take(signatures.len())?;
+                Some(super::Callable::new(signatures, env.clone(), None).sigs)
+            }
+            Ty::Union(parts) | Ty::Inter(parts) => {
+                let mut signatures = Vec::new();
+                for part in parts { signatures.extend(self.inherited_call_signatures(part, depth + 1, query)?); }
+                Some(signatures)
+            }
+            _ => Some(Vec::new()),
         }
     }
 
@@ -437,8 +502,14 @@ impl Checker<'_> {
 
     /// Parameter contracts from every visible signature, independent of overload selection.
     pub fn argument_contract_parameters(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>, construct: bool) -> Option<Vec<(Vec<Ty>, bool)>> {
-        let mut query = ContractQuery { remaining: Self::CONTRACT_WORK_LIMIT, seen: Vec::new() };
+        let mut query = ContractQuery::new(ContractParameters::Inferred);
         self.contract_parameters_at(callee, args, targs, construct, 0, &mut query)
+    }
+
+    /// All visible call signatures, without inferring from call arguments.
+    pub fn call_signature_parameters(&self, ty: &Ty, constrained: bool) -> Option<Vec<(Vec<Ty>, bool)>> {
+        let mut query = ContractQuery::new(ContractParameters::Declared { constrained });
+        self.contract_parameters_at(ty, &[], Vec::new(), false, 0, &mut query)
     }
 
     fn contract_parameters_at(&self, callee: &Ty, args: &[Ty], targs: Vec<Ty>, construct: bool, depth: usize, query: &mut ContractQuery) -> Option<Vec<(Vec<Ty>, bool)>> {
@@ -486,6 +557,12 @@ impl Checker<'_> {
             }
             Ty::Fn(callable) if !construct =>
                 self.parameter_contract_groups(vec![callable.sigs.clone()], args, targs, query),
+            Ty::Obj(members, env) if !construct => {
+                query.take(members.len())?;
+                let signatures = members.iter().filter(|member| member.kind == MemberKind::Call)
+                    .flat_map(|member| member.sigs.iter().cloned()).collect();
+                self.parameter_contract_groups(vec![super::Callable::new(signatures, env.clone(), None).sigs], args, targs, query)
+            }
             Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_) => None,
             _ => Some(Vec::new()),
         }
@@ -500,9 +577,15 @@ impl Checker<'_> {
                 let signature = &bound.syntax;
                 if overloaded && signature.body_at.is_some() || !targs.is_empty() && signature.type_params.len() != targs.len() { continue }
                 query.take(signature.params.len() + signature.type_params.len())?;
-                let env = self.signature_env(signature, &bound.env, args, targs.clone());
-                contracts.push((signature.params.iter().map(|parameter| parameter.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect(),
-                    signature.params.last().is_some_and(|parameter| parameter.rest)));
+                contracts.push(match query.parameters {
+                    ContractParameters::Inferred => {
+                        let env = self.signature_env(signature, &bound.env, args, targs.clone());
+                        (signature.params.iter().map(|parameter| parameter.ty.as_ref().map_or(Ty::Unknown, |ty| self.eval(ty, &env))).collect(),
+                            signature.params.last().is_some_and(|parameter| parameter.rest))
+                    }
+                    ContractParameters::Declared { constrained } =>
+                        self.context_parameter_types(signature, (*bound.env).clone(), targs.clone(), constrained),
+                });
             }
         }
         Some(contracts)
@@ -651,6 +734,66 @@ mod tests {
     use crate::native::ts::facts::NativeFile;
     use crate::native::ts::modules::DeclRef;
     use super::Ty;
+
+    #[test]
+    fn inherited_call_signatures_keep_own_and_base_overloads() {
+        with_native_file(r#"
+            interface Base { (value: string): string; }
+            interface Derived extends Base { (value: number): number; }
+            declare const callback: Derived;
+            const first = /*@*/callback("value");
+            const second = /*@*/callback(1);
+        "#, |file, nodes| {
+            assert!(matches!(file.type_of(nodes[0]), Ty::Prim("string")), "own overload hid inherited overload");
+            assert!(matches!(file.type_of(nodes[1]), Ty::Prim("number")), "inherited overload hid own overload");
+        });
+    }
+
+    #[test]
+    fn inherited_call_signatures_supply_callability_and_results() {
+        with_native_file(r#"
+            interface Base<T> { (value: T): T; }
+            interface Callback extends Base<string> {}
+            interface Cycle extends Cycle {}
+            declare const callback: Callback;
+            declare const cycle: Cycle;
+            const first = /*@*/callback;
+            const result = /*@*/callback("value");
+            const second = /*@*/cycle;
+        "#, |file, nodes| {
+            let checker = &file.typing().checker;
+            let callback = file.type_of(nodes[0]);
+            assert!(checker.callable_type(&callback), "inherited call signature was not callable");
+            assert!(checker.has_call_signature(&callback));
+            assert!(matches!(file.type_of(nodes[1]), Ty::Prim("string")), "inherited generic call result unresolved");
+            assert!(!checker.callable_type(&file.type_of(nodes[2])), "cyclic heritage invented a call signature");
+        });
+    }
+
+    #[test]
+    fn object_call_signatures_supply_callability_and_results() {
+        with_native_file(r#"
+            declare const callable: { (value: number): string };
+            declare const plain: { value: number };
+            declare const mixed: typeof callable | null;
+            const first = /*@*/callable;
+            const second = /*@*/plain;
+            const third = /*@*/mixed;
+            const result = /*@*/callable(1);
+        "#, |file, nodes| {
+            let checker = &file.typing().checker;
+            let callable = file.type_of(nodes[0]);
+            assert!(checker.callable_type(&callable), "object call signature was not callable");
+            assert!(checker.has_call_signature(&callable));
+            let plain = file.type_of(nodes[1]);
+            assert!(!checker.callable_type(&plain));
+            assert!(!checker.has_call_signature(&plain));
+            let mixed = file.type_of(nodes[2]);
+            assert!(!checker.callable_type(&mixed), "nullable callable became safe to call");
+            assert!(checker.has_call_signature(&mixed), "nullable callable lost its callable arm");
+            assert!(matches!(file.type_of(nodes[3]), Ty::Prim("string")), "object call result unresolved");
+        });
+    }
 
     fn merged_function(file: &NativeFile<'_>, name: &str) -> Ty {
         let checker = &file.typing().checker;

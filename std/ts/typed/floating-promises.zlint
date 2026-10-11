@@ -3,6 +3,7 @@
 define {
 
 in ts_node let floating_promise_type type_structure([], ["kind", "parts", "declarations", "callable"])
+in ts_node let floating_thenable_type type_structure(["then"], ["kind", "parts", "declarations", "member_types", "call_signatures", "callable"])
 fn floating_rejection_handler(n) = {
   value callee: unparenthesised_node(n.callee.node)
   value handler: if callee.static_name == "catch" then first(n.argument.nodes)
@@ -19,28 +20,42 @@ fn floating_promise_leaves(n) = {
   filter (part) part not (ts_parenthesized, ts_sequence, ts_logical, ts_conditional)
     && !(part is ts_call && part.callee.node.static_name == "finally")
 }
-fn floating_unhandled_promise(n) = {
+fn floating_unhandled_promise(n, check_thenables) = {
   value floating_promise_leaves(n)
   any (part) part not (ts_assignment, ts_await)
-    && floating_promise_element(part.floating_promise_type)
+    && {
+      value part_type: if check_thenables then part.floating_thenable_type else part.floating_promise_type
+      value floating_promise_element(part_type, check_thenables)
+    }
     && !(part is ts_call && floating_rejection_handler(part))
 }
 in ts_expression_statement.expression rule no-floating-promises {
-  when floating_unhandled_promise(node)
+  option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"
+  when floating_unhandled_promise(node, checkThenables)
   warn "Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator."
 }
 
-fn floating_promise_element(t) =
-  if contains(["union", "intersection"], t.kind) then any(t.parts, part => floating_promise_element(part))
+fn floating_callable_arm(t) =
+  if t.kind == "union" then any(t.parts, part => floating_callable_arm(part)) else t.callable
+fn floating_promise_element(t, check_thenables) =
+  if contains(["union", "intersection"], t.kind) then any(t.parts, part => floating_promise_element(part, check_thenables))
   else any(t.declarations, declaration => declaration.name == "Promise" && declaration.from == "lib")
-fn floating_promise_array(t) =
-  if t.kind == "union" then any(t.parts, part => floating_promise_array(part))
-  else contains(["array", "tuple"], t.kind) && any(t.parts, part => floating_promise_element(part))
+    || check_thenables && any(t.member_types, member => member.name == "then"
+      && any(member.type.call_signatures, signature => count(signature.parameters) >= 2
+        && {
+          value signature.parameters
+          slice 0 2
+          all (parameter) floating_callable_arm(parameter)
+        }))
+fn floating_promise_array(t, check_thenables) =
+  if t.kind == "union" then any(t.parts, part => floating_promise_array(part, check_thenables))
+  else contains(["array", "tuple"], t.kind) && any(t.parts, part => floating_promise_element(part, check_thenables))
 
 in ts_expression_statement.expression rule no-floating-promises:array {
+  option checkThenables boolean = false "Check promise-like types with fulfilment and rejection callbacks"
   when not (ts_assignment, ts_await) && !(is ts_unary && node.operator == "void")
-  let floating_type type_structure([], ["kind", "parts", "declarations"])
-  when floating_promise_array(floating_type)
+  let floating_type if checkThenables then node.floating_thenable_type else type_structure([], ["kind", "parts", "declarations"])
+  when floating_promise_array(floating_type, checkThenables)
   report at parent.node
   warn "An array of Promises may be unintentional. Consider handling the promises' fulfillment or rejection with Promise.all or similar, or explicitly marking the expression as ignored with the `void` operator."
 }
