@@ -1,5 +1,6 @@
 # .ts/style/imports: internal part of .ts/style.
 import .ts/expression-fixes
+import .ts/style/type-imports
 
 define {
 
@@ -30,47 +31,6 @@ in ts_export rule no-useless-empty-export {
   when !re_test(file, /\.d\.[cm]?ts$/) && empty_module_export && parent.has_module_item
   warn "Empty export does nothing and can be removed."
   fix at node if expression_fix_retains_comments(node, "") as ""
-}
-
-# ---- consistent-type-imports ------------------------------------------------
-# Every imported binding is unused, used only as a type (type positions,
-# `typeof x` in types), or used as a value.
-# A list of quoted names as eslint words it: "a", "b" and "c".
-fn word_list(xs) = if count(xs) == 1 then first(xs) else { value xs; slice 0 -1; join ', ' } " and " last(xs)
-in ts_program let import_decorator_metadata compiler_options.experimentalDecorators == true && compiler_options.emitDecoratorMetadata == true && { value descendants(ts_decorator); count } > 0
-in ts_identifier {
-  let import_use if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
-  let type_only_name if import_use == "type" then '"' text '"' else null
-}
-in ts_import_specifier {
-  let import_use if kind != null then "inline" else if local != null then local.import_use else imported.import_use
-  let type_only_name if kind != null then null else if local != null then local.type_only_name else imported.type_only_name
-}
-in ts_import {
-  let import_uses compact([default_import.import_use, namespace.import_use] specifier.import_use)
-  let type_only_names compact([default_import.type_only_name, namespace.type_only_name] specifier.type_only_name)
-}
-in ts_import rule consistent-type-imports {
-  option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
-  option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
-  option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
-  when prefer == "no-type-imports" && kind == "type" || prefer == "type-imports" && kind == null && contains(import_uses, "type")
-  when prefer == "no-type-imports" || !ts_program.import_decorator_metadata
-  warn if prefer == "no-type-imports" then "Use an `import` instead of an `import type`." else if !contains(import_uses, "value") && !contains(import_uses, "unused") then "All imports in the declaration are only used as types. Use `import type`." else "Imports {word_list(type_only_names)} are only used as type."
-}
-in ts_import_specifier rule consistent-type-imports:inline {
-  option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
-  option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
-  option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
-  when prefer == "no-type-imports" && kind == "type"
-  warn "Use an `import` instead of an `import type`."
-}
-in ts_import_type rule consistent-type-imports:annotation {
-  option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
-  option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
-  option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
-  when disallowTypeAnnotations
-  warn "`import()` type annotations are forbidden."
 }
 
 # n/no-sync: `fooSync()` inside functions (top-level code may block).

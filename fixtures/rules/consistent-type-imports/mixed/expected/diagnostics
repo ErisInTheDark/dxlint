@@ -1,0 +1,3 @@
+input.ts:1:1-1:33 consistent-type-imports#2
+input.ts:2:1-2:46 consistent-type-imports#2
+input.ts:3:1-3:48 consistent-type-imports#2

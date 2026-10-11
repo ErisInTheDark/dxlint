@@ -1,0 +1,163 @@
+# .ts/style/type-imports: import binding policy and atomic byte edits.
+import .ts/expression-fixes
+import .ts/import-attributes
+
+define {
+
+fn word_list(xs) = if count(xs) == 1 then first(xs) else { value xs; slice 0 -1; join ', ' } " and " last(xs)
+in ts_program let import_decorator_metadata compiler_options.experimentalDecorators == true && compiler_options.emitDecoratorMetadata == true && { value descendants(ts_decorator); count } > 0
+group import_jsx_node ts_jsx_element, ts_jsx_fragment
+in ts_program let import_has_jsx { value descendants(import_jsx_node); count } > 0
+in ts_identifier {
+  let import_use if uses == null then null else if uses == 0 then "unused" else if value_uses == 0 then "type" else "value"
+  let type_only_name if import_use == "type" then '"' text '"' else null
+}
+in ts_import_specifier {
+  let import_use if kind != null then "inline" else if local != null then local.import_use else imported.import_use
+  let type_only_name if kind != null then null else if local != null then local.type_only_name else imported.type_only_name
+}
+in ts_import {
+  let import_uses compact([default_import.import_use, namespace.import_use] specifier.import_use)
+  let type_only_names compact([default_import.type_only_name, namespace.type_only_name] specifier.type_only_name)
+  let import_named_open {
+    value overlapping(ts_open_brace, first_token.end, from.offset)
+    find (token) token.paired_token.end <= from.offset
+  }
+  let import_named_close import_named_open.paired_token
+  let import_type_named kind == "type" && default_import == null && namespace == null && import_named_open != null
+  let import_has_attributes { value overlapping(ts_import_attributes, offset, end_offset); count } > 0
+}
+fn import_remove_type(source, n) = {
+  value gap: byte_slice(source, n.kind.end_offset, n.end_offset)
+  value whitespace: re_find(gap, /^\s*/)
+  value { start: n.kind.offset, end: n.kind.end_offset + byte_len(whitespace), text: "" }
+}
+fn import_inline_edits(items) = map(items, item => { start: item.offset, end: item.offset, text: "type " })
+fn import_whole_edits(source, n) = {
+  value inline: filter(n.specifier.nodes, item => item.kind == "type")
+  value removals: map(inline, item => import_remove_type(source, item))
+  value [{ start: n.first_token.end, end: n.first_token.end, text: " type" }] removals
+}
+fn import_named_run(n, first_item, last_item, items) = {
+  value before: first_item.token_neighbours.before
+  value after: last_item.token_neighbours.after
+  value {
+    start: if before.text == "," then before.start else before.end,
+    end: if (first_item == first(items) || last_item == last(items)) && after.text == "," then after.end else last_item.end_offset,
+    text_start: before.end,
+    text_end: after.start
+  }
+}
+fn import_named_runs(n, items, moving) = if count(moving) == 0 then [] else if count(items) == count(moving) then [{
+  start: n.default_import.token_neighbours.after.start,
+  end: n.import_named_close.end,
+  text_start: n.import_named_open.end_offset,
+  text_end: n.import_named_close.start
+}] else {
+  value starts: filter(moving, item => item.previous.import_use != "type")
+  value ends: filter(moving, item => item.next.import_use != "type")
+  value starts
+  zip ends (a, b) import_named_run(n, a, b, items)
+}
+fn import_named_text(source, runs) = { value runs; map (run) byte_slice(source, run.text_start, run.text_end); join "," }
+fn import_named_removals(runs) = map(runs, run => { start: run.start, end: run.end, text: "" })
+fn import_default_remove(source, n) = {
+  value comma: n.default_import.token_neighbours.after
+  value gap: byte_slice(source, comma.end, n.from.offset)
+  value whitespace: re_find(gap, /^\s*/)
+  value { start: n.default_import.offset, end: comma.end + byte_len(whitespace), text: "" }
+}
+fn import_default_text(source, n) = {
+  value byte_slice(source, n.default_import.offset, n.default_import.token_neighbours.after.start)
+  trim_end
+}
+fn import_merge_target(n) = {
+  value n.parent.body.nodes
+  find (other) other is ts_import && other != n && other.import_type_named && !other.import_has_attributes && other.from.literal_value.value == n.from.literal_value.value
+}
+fn import_merge_edit(target, text) = {
+  value before: target.import_named_close
+  value needs_comma: count(target.specifier) > 0 && last(target.specifier.nodes).token_neighbours.after.text != ","
+  value { start: before.start, end: before.start, text: (if needs_comma then "," else "") text }
+}
+fn import_split_edits(source, n, style) = {
+  value items: n.specifier.nodes
+  value moving: filter(items, item => item.import_use == "type")
+  value runs: import_named_runs(n, items, moving)
+  value named_text: import_named_text(source, runs)
+  value newline: if contains(source, "\r\n") then "\r\n" else "\n"
+  value target: if style == "separate-type-imports" && count(moving) > 0 then import_merge_target(n) else null
+  value named_prefix: if count(moving) == 0 || target != null then "" else
+    (if style == "inline-type-imports" then {
+      value moving
+      map (item) "type " item.text
+      join ", "
+      then (text) "import {{" text "}} from " n.from.text ";" newline
+    } else "import type {{" named_text "}} from " n.from.text ";" newline)
+  value namespace_type: n.namespace.import_use == "type"
+  value namespace_text: if namespace_type then { value byte_slice(source, n.default_import.token_neighbours.after.end, n.from.token_neighbours.before.start); trim } else ""
+  value namespace_prefix: if namespace_type then "import type " namespace_text " from " n.from.text ";" newline else ""
+  value all_type: !contains(n.import_uses, "value") && !contains(n.import_uses, "unused") && !contains(n.import_uses, "inline")
+  value default_type: n.default_import.import_use == "type"
+  value default_prefix: if default_type && !all_type then "import type " import_default_text(source, n) " from " n.from.text ";" newline else ""
+  value prefix: named_prefix namespace_prefix default_prefix
+  value edits: ((if prefix != "" then [{ start: n.offset, end: n.offset, text: prefix }] else [])
+    import_named_removals(runs)
+    (if target != null then [import_merge_edit(target, named_text)] else [])
+    (if namespace_type then [{ start: n.default_import.token_neighbours.after.start, end: n.namespace.end_offset, text: "" }] else [])
+    (if default_type then (if all_type then [{ start: n.first_token.end, end: n.first_token.end, text: " type" }] else [import_default_remove(source, n)]) else []))
+  value edits
+}
+fn import_policy_edits(source, n, style, preference) = if preference == "no-type-imports" then [import_remove_type(source, n)]
+  else if n.namespace != null && n.default_import == null then import_whole_edits(source, n)
+  else if n.default_import != null && count(n.specifier) == 0 && n.namespace == null then {
+    value edits: import_whole_edits(source, n)
+    value edits (if n.import_named_open != null then [{ start: n.default_import.token_neighbours.after.start, end: n.import_named_close.end, text: "" }] else [])
+  }
+  else if style == "inline-type-imports" && (n.default_import == null || n.default_import.import_use != "type") && n.namespace == null then {
+    value moving: filter(n.specifier.nodes, item => item.import_use == "type")
+    value import_inline_edits(moving)
+  }
+  else if n.default_import == null && n.namespace == null && all(n.specifier.nodes, item => item.import_use == "type") then import_whole_edits(source, n)
+  else import_split_edits(source, n, style)
+fn import_policy_fix(source, n, style, preference) =
+  if preference == "type-imports" && (n.import_has_attributes || n.parent.import_has_jsx) then null else {
+    value edits: import_policy_edits(source, n, style, preference)
+    value from: { value edits; map (edit) edit.start; min }
+    value until: { value edits; map (edit) edit.end; max }
+    value start: min(n.offset, from)
+    value end: max(n.end_offset, until)
+    value region: byte_slice(source, start, end)
+    value text: expression_fix_edits(region, start, edits)
+    value owner: { offset: start, end_offset: end, text: region }
+    value if count(edits) == 0 || !expression_fix_retains_comments(owner, text) then null else { target: { start: start, end: end }, text: text }
+  }
+
+in ts_import rule consistent-type-imports {
+  option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
+  option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
+  option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
+  when prefer == "no-type-imports" && kind == "type" || prefer == "type-imports" && kind == null && contains(import_uses, "type")
+  when prefer == "no-type-imports" || !ts_program.import_decorator_metadata
+  let import_fix import_policy_fix(source, node, fixStyle, prefer)
+  warn if prefer == "no-type-imports" then "Use an `import` instead of an `import type`." else if !contains(import_uses, "value") && !contains(import_uses, "unused") then "All imports in the declaration are only used as types. Use `import type`." else "Imports {word_list(type_only_names)} are only used as type."
+  fix at import_fix.target if import_fix != null as import_fix.text
+}
+in ts_import_specifier rule consistent-type-imports:inline {
+  option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
+  option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
+  option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
+  when prefer == "no-type-imports" && kind == "type"
+  let edit import_remove_type(source, node)
+  warn "Use an `import` instead of an `import type`."
+  fix at { start: edit.start, end: edit.end } as ""
+}
+in ts_import_type rule consistent-type-imports:annotation {
+  option disallowTypeAnnotations boolean = true "Disallow import() type annotations."
+  option fixStyle ("inline-type-imports" | "separate-type-imports") = "separate-type-imports" "Preferred fix style."
+  option prefer ("type-imports" | "no-type-imports") = "type-imports" "Preferred import kind."
+  when disallowTypeAnnotations
+  warn "`import()` type annotations are forbidden."
+}
+
+}
