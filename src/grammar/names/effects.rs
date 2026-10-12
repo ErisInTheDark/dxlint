@@ -7,12 +7,28 @@ pub mod build;
 pub use build::Control;
 mod controller;
 mod source;
-pub use controller::{DeclaredEffect, Effects, ExecutedEffect};
+pub use controller::{Creation, DeclaredEffect, Effects, ExecutedEffect};
 pub(crate) use controller::State;
 
 pub type Path = Vec<u16>;
 pub type StepId = u32;
 pub type EffectId = u16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectRole {
+    Control(Control),
+    Proof,
+    Event,
+}
+
+impl EffectRole {
+    fn control(self) -> Option<Control> {
+        match self {
+            Self::Control(control) => Some(control),
+            Self::Proof | Self::Event => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum Flow {

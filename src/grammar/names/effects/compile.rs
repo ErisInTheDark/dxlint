@@ -15,8 +15,14 @@ pub enum Item {
     Labels(Path),
 }
 
-pub fn controls(vocabulary: &crate::grammar::names::Vocabulary) -> Vec<Option<super::Control>> {
-    vocabulary.effects.iter().map(|name| super::Control::named(name)).collect()
+pub fn effect_roles(vocabulary: &crate::grammar::names::Vocabulary) -> Vec<super::EffectRole> {
+    vocabulary.effects.iter().map(|name| {
+        match super::Control::named(name) {
+            Some(control) => super::EffectRole::Control(control),
+            None if name == "truthy" => super::EffectRole::Proof,
+            None => super::EffectRole::Event,
+        }
+    }).collect()
 }
 
 pub fn lower(
@@ -85,7 +91,7 @@ pub fn validate(names: &Names, errors: &mut Vec<ConfigError>) {
     };
     for named in &names.kinds {
         let terminators: Vec<_> = named.unwraps.iter().filter(|item| item.when.is_none() && !item.possible
-            && item.effect.and_then(|id| names.controls.get(id as usize)).copied().flatten().is_some()).collect();
+            && item.effect.and_then(|id| names.effect_roles.get(id as usize)).copied().and_then(super::EffectRole::control).is_some()).collect();
         for item in terminators.iter().skip(1) {
             if item.item != terminators[0].item {
                 if let Some(span) = item.span {
@@ -138,6 +144,13 @@ mod tests {
         assert!(errors.is_empty(), "execution declarations must parse: {errors:?}");
         Grammar::build(&config, &mut errors);
         errors.is_empty()
+    }
+
+    #[test]
+    #[ignore = "RED until `assigned .. with` parses"]
+    fn assignments_accept_shared_value_recipes_and_plain_targets() {
+        assert!(valid("assigned block with handler ?? finalizer"));
+        assert!(valid("assigned block"));
     }
 
     #[test]

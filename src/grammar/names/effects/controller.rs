@@ -31,7 +31,37 @@ pub struct ExecutedEffect {
     pub value: Option<Leaf>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Creation {
+    pub entry: Leaf,
+    pub site: Leaf,
+}
+
 impl Effects<'_> {
+    pub fn enclosing(&self, entry: Leaf) -> Known<Option<Creation>> {
+        if entry.frame != super::super::question::FrameId::ROOT { return Known::Unknown }
+        let Target::Node(node) = entry.target else { return Known::Unknown };
+        let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
+        if tree.nodes.get(node.node as usize).is_none() { return Known::Unknown }
+        if self.entry_for(entry) != Known::Yes(entry) { return Known::Unknown }
+        let runtime = super::source::Runtime { semantic: self.semantic };
+        let mut owner = Some(node.node);
+        while let Some(id) = owner {
+            if !self.semantic.question.budget.step() { return Known::Unknown }
+            let site = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..entry };
+            if let Some(kind) = self.semantic.tables.kinds.get(tree.node(id).matcher as usize) {
+                let Some(entries) = runtime.enabled(site, &kind.execution.entries).known() else { return Known::Unknown };
+                if entries.iter().any(|entry| crate::grammar::names::follow(tree, id, &entry.item).contains(&node.node)) {
+                    if site == entry { return Known::Unknown }
+                    let Some(outer) = self.entry_for(site).known() else { return Known::Unknown };
+                    return Known::Yes(Some(Creation { entry: outer, site }));
+                }
+            }
+            owner = tree.parent(id);
+        }
+        if node.node == tree.root { Known::Yes(None) } else { Known::Unknown }
+    }
+
     pub fn entry_for(&self, at: Leaf) -> Known<Leaf> {
         let Target::Node(node) = at.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
@@ -185,6 +215,30 @@ mod tests {
     }
 
     #[test]
+    fn enclosing_tracks_the_compiled_creation_path_not_the_body_parent() {
+        let world = TestWorld::new();
+        let mut tables = tables();
+        tables.kinds[1].execution.entries.push(conditional(vec![2, 3], None));
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.effects().enclosing(leaf(3)), Known::Yes(Some(Creation {
+            entry: leaf(0), site: leaf(1),
+        })));
+        assert_eq!(semantic.effects().enclosing(leaf(0)), Known::Yes(None));
+    }
+
+    #[test]
+    fn enclosing_does_not_invent_a_capture_from_the_callers_frame() {
+        let world = TestWorld::new();
+        let mut tables = tables();
+        tables.kinds[1].execution.entries.push(conditional(vec![2, 3], None));
+        let question = QueryContext::default();
+        let frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, None);
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.effects().enclosing(Leaf { frame, ..leaf(3) }), Known::Unknown);
+    }
+
+    #[test]
     fn nearest_separate_entry_does_not_run_in_its_declaration() {
         let world = TestWorld::new();
         let mut tables = tables();
@@ -208,7 +262,7 @@ mod tests {
         tables.kinds[0].execution.runs.push(conditional(Flow::Nothing, Some(0)));
         let question = QueryContext::default();
         let framed = Leaf {
-            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(1)), None),
+            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None),
             ..leaf(0)
         };
         let semantic = Semantic::new(&world, &tables, &question);
@@ -228,7 +282,7 @@ mod tests {
         tables.kinds[0].execution.runs.extend([first, second]);
         let question = QueryContext::default();
         let entry = Leaf {
-            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(1)), None),
+            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None),
             ..leaf(0)
         };
         let semantic = Semantic::new(&world, &tables, &question);
@@ -253,7 +307,7 @@ mod tests {
         tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
             effects: vec!["returned".into()], ..Default::default()
         });
-        tables.controls = super::super::compile::controls(&tables.vocabulary);
+        tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
         tables.kinds[4].execution.runs.push(conditional(Flow::Nothing, None));
         tables.kinds[4].execution.entries.push(conditional(vec![5], None));
         for kind in [1, 2, 5] {
@@ -262,7 +316,7 @@ mod tests {
             });
         }
         let question = QueryContext::default();
-        let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(1)), None);
+        let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None);
         let entry = Leaf { frame, ..leaf(0) };
         let at = |node| Leaf { frame, ..leaf(node) };
         let semantic = Semantic::new(&world, &tables, &question);
@@ -291,7 +345,7 @@ mod tests {
         tables.kinds[0].execution.after.extend([first, second]);
         let question = QueryContext::default();
         let entry = Leaf {
-            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(1)), None),
+            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None),
             ..leaf(0)
         };
         let semantic = Semantic::new(&world, &tables, &question);
@@ -312,7 +366,7 @@ mod tests {
         tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
             effects: vec!["returned".into()], scope_classes: vec!["function".into()], ..Default::default()
         });
-        tables.controls = super::super::compile::controls(&tables.vocabulary);
+        tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
         for (kind, within) in [(0, Vec::new()), (1, vec![2])] {
             tables.kinds[kind].scopes.push(crate::grammar::names::OpenScope { classes: 1, within, when: None });
         }
@@ -333,7 +387,33 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "RED until active items are selected before payloads"]
+    fn proof_effects_do_not_enter_execution_or_declared_events() {
+        for targets in [false, true] {
+            let world = TestWorld::new();
+            let mut tables = tables();
+            tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+                effects: vec!["truthy".into()], ..Default::default()
+            });
+            tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
+            tables.kinds[0].unwraps.push(crate::grammar::names::Unwrapping {
+                effect: Some(0),
+                value: Some(crate::grammar::names::Value::Excludes { traits: 1, from: None }),
+                ..Default::default()
+            });
+            if targets {
+                tables.kinds[0].effects.push(crate::grammar::names::Effect {
+                    effect: 0, path: vec![1], when: None,
+                });
+            }
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            assert_eq!(semantic.effects().normal(leaf(0)), Known::Yes(true));
+            assert_eq!(semantic.effects().declared(leaf(0), 0), Known::Yes(Vec::new()));
+            assert_eq!(semantic.effects().exits(leaf(0)), Known::Yes(Vec::new()));
+        }
+    }
+
+    #[test]
     fn conflicting_conditional_terminators_report_their_item() {
         for unavailable_payload in [false, true] {
             let world = TestWorld::new();
@@ -341,7 +421,7 @@ mod tests {
             tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
                 effects: vec!["returned".into(), "thrown".into()], ..Default::default()
             });
-            tables.controls = super::super::compile::controls(&tables.vocabulary);
+            tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
             for effect in [0, 1] {
                 tables.kinds[0].unwraps.push(crate::grammar::names::Unwrapping {
                     effect: Some(effect), item: effect as u32, when: Some(0),
@@ -351,7 +431,7 @@ mod tests {
             }
             let question = QueryContext::default();
             let entry = Leaf {
-                frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(1)), None),
+                frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None),
                 ..leaf(0)
             };
             let semantic = Semantic::new(&world, &tables, &question);

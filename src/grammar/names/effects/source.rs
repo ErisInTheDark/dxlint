@@ -1,4 +1,4 @@
-use super::{Conditional, DeclaredEffect, EffectId, Event, EventKind, Flow, Phase};
+use super::{Conditional, DeclaredEffect, EffectId, EffectRole, Event, EventKind, Flow, Phase};
 use super::build::{Control, Effect, Shape, Source};
 use crate::fx_hash::FxHashSet;
 use crate::grammar::names::question::{Known, Leaf, NodeRef, QueryContext, Target};
@@ -9,7 +9,6 @@ pub(super) struct Runtime<'a> {
 }
 
 pub(super) struct Emission {
-    pub item: u32,
     pub effect: EffectId,
     pub possible: bool,
     pub declared: DeclaredEffect,
@@ -38,12 +37,13 @@ impl Runtime<'_> {
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         let Some(syntax) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
         let Some(kind) = self.semantic.tables.kinds.get(syntax.matcher as usize) else { return Known::Yes(Vec::new()) };
-        if kind.effects.iter().any(|item| self.control(item.effect).is_none()
+        if kind.effects.iter().any(|item| self.role(item.effect) == Some(EffectRole::Event)
             && effect.is_none_or(|effect| item.effect == effect)) { return Known::Unknown }
-        let mut declared = Vec::new();
+        let mut active = Vec::new();
         let mut seen = FxHashSet::default();
         for unwrap in &kind.unwraps {
             let Some(id) = unwrap.effect else { continue };
+            if self.role(id) == Some(EffectRole::Proof) { continue }
             if effect.is_some_and(|effect| id != effect) { continue }
             if !self.semantic.question.budget.step() { return Known::Unknown }
             if let Some(condition) = unwrap.when {
@@ -54,6 +54,17 @@ impl Runtime<'_> {
                 }
             }
             if !seen.insert(unwrap.item) { continue }
+            active.push(unwrap);
+        }
+        let terminators: Vec<_> = active.iter().filter(|item| !item.possible
+            && item.effect.and_then(|effect| self.control(effect)).is_some()).collect();
+        if terminators.len() > 1 {
+            self.semantic.defect(terminators[1].item, at, "more than one active terminating effect");
+            return Known::Unknown;
+        }
+        let mut declared = Vec::new();
+        for unwrap in active {
+            let Some(id) = unwrap.effect else { continue };
             let Some(target) = self.nearest(at, unwrap.nearest).known() else { return Known::Unknown };
             let value = match &unwrap.value {
                 Some(value) => {
@@ -68,14 +79,18 @@ impl Runtime<'_> {
                 return Known::Unknown;
             }
             declared.push(Emission {
-                item: unwrap.item, effect: id, possible: unwrap.possible, declared: DeclaredEffect { site: at, target, value },
+                effect: id, possible: unwrap.possible, declared: DeclaredEffect { site: at, target, value },
             });
         }
         Known::Yes(declared)
     }
 
     fn control(&self, effect: EffectId) -> Option<Control> {
-        self.semantic.tables.controls.get(effect as usize).copied().flatten()
+        self.role(effect).and_then(EffectRole::control)
+    }
+
+    fn role(&self, effect: EffectId) -> Option<EffectRole> {
+        self.semantic.tables.effect_roles.get(effect as usize).copied()
     }
 
     fn nearest(&self, at: Leaf, classes: u64) -> Known<Option<NodeRef>> {
@@ -103,7 +118,7 @@ impl Source for Runtime<'_> {
         let Some(kind) = self.semantic.tables.kinds.get(syntax.matcher as usize) else {
             return Known::Yes(Shape { flow: Flow::Children, effects: Vec::new(), catches: Vec::new(), after: Vec::new() });
         };
-        if kind.effects.iter().any(|item| self.control(item.effect).is_none()) { return Known::Unknown }
+        if kind.effects.iter().any(|item| self.role(item.effect) == Some(EffectRole::Event)) { return Known::Unknown }
         let Some(runs) = self.enabled(at, &kind.execution.runs).known() else { return Known::Unknown };
         if runs.len() > 1 {
             self.semantic.defect(runs[1].item_id, at, "more than one active execution shape");
@@ -133,11 +148,6 @@ impl Source for Runtime<'_> {
             }
         }
         let Some(declared) = self.declarations(at, None).known() else { return Known::Unknown };
-        let terminators: Vec<_> = declared.iter().filter(|item| !item.possible && self.control(item.effect).is_some()).collect();
-        if terminators.len() > 1 {
-            self.semantic.defect(terminators[1].item, at, "more than one active terminating effect");
-            return Known::Unknown;
-        }
         let mut effects = Vec::new();
         for emission in declared {
             let value = match emission.declared.value {

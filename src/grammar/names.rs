@@ -193,7 +193,7 @@ type PathOf<'a> = dyn Fn(&mut Vec<ConfigError>, &[Name]) -> Option<Vec<u16>> + '
 /// The tables, per matcher (empty when the config has no name items).
 #[derive(Default)]
 pub struct Names {
-    pub controls: Vec<Option<effects::Control>>,
+    pub effect_roles: Vec<effects::EffectRole>,
     pub vocabulary: std::sync::Arc<Vocabulary>,
     pub kinds: Vec<KindNames>,
     pub conditions: Vec<Condition>,
@@ -543,7 +543,7 @@ impl Names {
         names.exclusive = values::exclusive_groups(config, &mut vocab, &names.kinds, errors);
         names.module_resolutions = modules::compile::profiles(config, g, &vocab, errors, &mut |definition, mode| names.mode_operand(definition, mode));
         names.vocabulary = std::sync::Arc::new(vocab);
-        names.controls = effects::compile::controls(&names.vocabulary);
+        names.effect_roles = effects::compile::effect_roles(&names.vocabulary);
         effects::compile::validate(&names, errors);
         names
     }
