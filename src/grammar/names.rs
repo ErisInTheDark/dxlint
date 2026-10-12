@@ -64,7 +64,11 @@ pub enum Value {
     Union(Vec<Value>),
     Intersection(Vec<Value>),
     Spread { intersection: bool, path: Vec<u16> },
-    From(Box<Value>, Box<Value>),
+    /// The member `key` of what the first value unwraps to, among scopes of
+    /// these classes (0: the leaf kind's [`KindNames::member_defaults`]).
+    From(Box<Value>, Box<Value>, u64),
+    /// The scopes of these classes the nodes reached open.
+    Scope { classes: u64, from: Box<Value> },
     Not(Box<Value>),
     /// Trait bits ([`Vocabulary::traits`]), and of what (default: the node).
     Excludes { traits: u64, from: Option<Box<Value>> },
@@ -121,6 +125,8 @@ pub struct KindNames {
     pub propagates: Vec<(Vec<u16>, Value, Option<u32>)>,
     /// Execution shapes (`runs`, `catches`, `runs after`, `labels`).
     pub execution: effects::KindEffects,
+    /// `members`: scope classes `from x at key` searches on this kind.
+    pub member_defaults: u64,
     /// `targets`: when a declaration or effect targets this node, it
     /// targets what these lead to instead; per group, the first alternative
     /// that leads to anything.
@@ -176,14 +182,10 @@ fn intern(list: &mut Vec<String>, name: &str) -> usize {
 type PathOf<'a> = dyn Fn(&mut Vec<ConfigError>, &[Name]) -> Option<Vec<u16>> + 'a;
 
 /// An `unwraps` value with its field paths as labels.
-fn lower_value(
-    v: &crate::config::ast::Unwrap,
-    path: &PathOf<'_>,
-    traits: &mut Vec<String>,
-    errors: &mut Vec<ConfigError>,
-) -> Option<Value> {
+fn lower_value(v: &crate::config::ast::Unwrap, path: &PathOf<'_>, vocab: &mut Vocabulary, errors: &mut Vec<ConfigError>) -> Option<Value> {
     use crate::config::ast::Unwrap as U;
-    let lower = |v: &U, traits: &mut Vec<String>, errors: &mut Vec<ConfigError>| lower_value(v, path, traits, errors);
+    let lower = |v: &U, vocab: &mut Vocabulary, errors: &mut Vec<ConfigError>| lower_value(v, path, vocab, errors);
+    let traits = vocab;
     Some(match v {
         U::Path(p) => Value::Path(path(errors, p)?),
         U::Text(t) => Value::Text(t.as_str().into()),
@@ -191,12 +193,19 @@ fn lower_value(
         U::Union(parts) => Value::Union(parts.iter().map(|p| lower(p, traits, errors)).collect::<Option<_>>()?),
         U::Intersection(parts) => Value::Intersection(parts.iter().map(|p| lower(p, traits, errors)).collect::<Option<_>>()?),
         U::Spread { intersection, path: p } => Value::Spread { intersection: *intersection, path: path(errors, p)? },
-        U::From(of, key) => Value::From(Box::new(lower(of, traits, errors)?), Box::new(lower(key, traits, errors)?)),
+        U::From(of, key, classes) => {
+            let bits = class_bits(&mut traits.scope_classes, classes, errors)?;
+            Value::From(Box::new(lower(of, traits, errors)?), Box::new(lower(key, traits, errors)?), bits)
+        }
+        U::Scope { classes, from } => {
+            let bits = class_bits(&mut traits.scope_classes, classes, errors)?;
+            Value::Scope { classes: bits, from: Box::new(lower(from, traits, errors)?) }
+        }
         U::Not(a) => Value::Not(Box::new(lower(a, traits, errors)?)),
         U::Excludes { traits: names, from } => {
             let mut bits = 0u64;
             for t in names {
-                let i = intern(traits, &t.text);
+                let i = intern(&mut traits.traits, &t.text);
                 if i >= 64 {
                     errors.push(ConfigError::new(t.span, "at most 64 traits"));
                     return None;
@@ -319,10 +328,11 @@ impl Names {
                         (None, "it") => Ok(IT),
                         (None, "through") => Ok(THROUGH),
                         (None, "definition") => Ok(DECLARATION),
+                        (None, "position") => Ok(POSITION),
                         (None, _) => {
                             errors.push(
                                 ConfigError::new(f.span, format!("no layer has a field `{}`", f.text))
-                                    .note("path steps are fields, or `parent`, `it`, `through`, `definition`"),
+                                    .note("path steps are fields, or `parent`, `it`, `through`, `definition`, `position`"),
                             );
                             Err(())
                         }
@@ -378,7 +388,7 @@ impl Names {
                     let Some(near) = class_bits(&mut vocab.scope_classes, nearest, errors) else { continue };
                     asked.extend(nearest.iter().map(|n| (n, true)));
                     let value = match value {
-                        Some(v) => match lower_value(v, &path, &mut vocab.traits, errors) {
+                        Some(v) => match lower_value(v, &path, &mut vocab, errors) {
                             Some(v) => Some(v),
                             None => continue,
                         },
@@ -402,6 +412,13 @@ impl Names {
                         names.add(g, m, |k| k.execution.push(item.clone(), when));
                     }
                 }
+                NameItem::Members(classes) => {
+                    let Some(bits) = class_bits(&mut vocab.scope_classes, classes, errors) else { continue };
+                    asked.extend(classes.iter().map(|n| (n, true)));
+                    for &m in &targets {
+                        names.add(g, m, |k| k.member_defaults |= bits);
+                    }
+                }
                 NameItem::Fits(traits) => {
                     let bits = traits.iter().fold(0u64, |all, t| all | 1 << intern(&mut vocab.traits, &t.text).min(63));
                     for (&m, &when) in targets.iter().zip(&when) {
@@ -410,7 +427,7 @@ impl Names {
                 }
                 NameItem::Propagates { field, value } => {
                     let Some(field) = path(errors, field) else { continue };
-                    let Some(value) = lower_value(value, &path, &mut vocab.traits, errors) else { continue };
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
                         let p = (field.clone(), value.clone(), when);
                         names.add(g, m, |k| k.propagates.push(p.clone()));
@@ -643,6 +660,9 @@ const PARENT: u16 = u16::MAX;
 pub const IT: u16 = u16::MAX - 1;
 pub const THROUGH: u16 = u16::MAX - 2;
 pub const DECLARATION: u16 = u16::MAX - 3;
+/// The node's index among its parent's nodes in the same field (a type
+/// parameter's position, for `from through.type_argument at position`).
+pub const POSITION: u16 = u16::MAX - 4;
 
 /// The nodes `path` (field labels, or [`PARENT`]) leads to from `from`.
 fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
@@ -652,7 +672,7 @@ fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
             PARENT => nodes.into_iter().filter_map(|n| tree.parent(n)).collect(),
             IT => nodes,
             // Unwrapping steps: not names' business.
-            THROUGH | DECLARATION => Vec::new(),
+            THROUGH | DECLARATION | POSITION => Vec::new(),
             _ => nodes.into_iter().flat_map(|n| tree.fields(n, label)).collect(),
         };
     }

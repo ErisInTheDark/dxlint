@@ -25,7 +25,7 @@ Seven items, written in a node's own block (`match x ... { }`, or
 | `resolves <class>` | the node's text uses a name; the engine looks it up |
 | `targets <field> ?? <field>, ...` | a declaration, use or effect aimed at this node (a pattern, a destructuring literal, a qualified name) passes on to these fields; per group the first that reaches anything |
 
-Field paths are field names joined by `.`. Special steps (a field of the same name wins): `parent` (the node's parent: `declares value parent.parameter`), `it` (the node), `through` (the reference it was reached through), `definition` (the declaration a name resolves to).
+Field paths are field names joined by `.`. Special steps (a field of the same name wins): `parent` (the node's parent: `declares value parent.parameter`), `it` (the node), `through` (the reference it was reached through), `definition` (the declaration a name resolves to), `position` (the node's index among its parent's nodes in the same field).
 | `unwraps <value>` / `unwraps <effect> ...` / `unwraps { ... }` | what the node stands for, and what evaluating it does |
 | `fits <trait>, ... [when <expr>]` | the node directly has these traits |
 | `in <field> propagates <x>` | `x` applies throughout that field's subtree (narrowing tests, and any other context) |

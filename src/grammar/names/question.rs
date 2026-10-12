@@ -86,24 +86,41 @@ impl FrameId {
     pub const ROOT: FrameId = FrameId(0);
 }
 
+/// Arguments a frame binds that were already evaluated (inferred call
+/// arguments, library instantiations): interned in a [`QueryContext`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ArgsId(pub u32);
+
+/// One instantiation of a generic declaration (`owner`): through a
+/// reference whose ordered type arguments are read in `parent`, or with
+/// evaluated `args` (no syntax: inferred or library instantiations).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Frame {
     pub parent: FrameId,
-    /// The reference (`Box<string>`, a call) this frame instantiates through.
-    pub through: NodeRef,
+    pub through: Option<NodeRef>,
+    pub owner: NodeRef,
+    pub args: Option<ArgsId>,
 }
 
-/// A leaf of a value: a node that fits traits, seen through a frame.
+/// What a leaf stands for: a node, or a scope (a module namespace).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Target {
+    Node(NodeRef),
+    Scope(ScopeRef),
+}
+
+/// A leaf of a value: a node that fits traits (or a namespace scope), seen
+/// through a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Leaf {
-    pub node: NodeRef,
+    pub target: Target,
     pub frame: FrameId,
 }
 
 /// What a value unwraps to, in disjunctive form: one of the alternatives
 /// (`|`), each all of its leaves at once (`&`). Unknown when the budget ran
 /// out or something could not be read.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NodeValue {
     Alternatives(Vec<Vec<Leaf>>),
     Unknown,
@@ -118,6 +135,35 @@ impl NodeValue {
     }
 }
 
+/// The files a question can see, for every type-layer engine: file 0 is
+/// the linted file; others come in as declarations or module resolution
+/// reach them (the engine owns reading, parsing and recorded reads).
+pub trait World {
+    fn grammar(&self) -> &crate::grammar::Grammar;
+    fn tree(&self, file: u32) -> Option<&crate::grammar::Tree>;
+    fn text(&self, file: u32) -> Option<&str>;
+    /// The file's resolved names (scopes, declarations, references).
+    fn names(&self, file: u32) -> Option<&super::Resolved>;
+    /// The scope a module specifier names from `importer` (a file's root
+    /// scope or an ambient module); `Yes(None)` when nothing matches.
+    fn module(&self, importer: u32, specifier: &str, question: &QueryContext) -> Known<Option<ScopeRef>>;
+    /// Whether item condition `condition` ([`super::Names::conditions`])
+    /// holds at `at` (run on the VM in that node's file; nested questions
+    /// see its frame and view).
+    fn condition(&self, at: Leaf, condition: u32, question: &QueryContext) -> Known<bool>;
+    /// The `let` attribute `name` on `node` (`flow_truth`), run on the VM in
+    /// that node's file; `Yes(Null)` when the node's layer has none.
+    fn attribute(&self, node: NodeRef, name: &str, question: &QueryContext) -> Known<crate::expr::Value<'static>>;
+}
+
+/// A scope in some file (a module's root scope, an ambient module, a
+/// namespace body): `scope` indexes that file's [`super::Resolved::scopes`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScopeRef {
+    pub file: u32,
+    pub scope: u32,
+}
+
 /// One linted file's question state, shared by every type-layer engine
 /// (values, calls, effects, narrowing, modules): the frame arena and the
 /// work budget of the question being answered. Memos keyed by
@@ -125,24 +171,50 @@ impl NodeValue {
 /// context; there is no second budget or cycle guard anywhere.
 #[derive(Default)]
 pub struct QueryContext {
-    frames: std::cell::RefCell<Vec<Frame>>,
+    frames: std::cell::RefCell<Interner<Frame>>,
+    args: std::cell::RefCell<Interner<Vec<NodeValue>>>,
     pub budget: Budget,
 }
 
-impl QueryContext {
-    /// The frame for reaching through `through` from `parent` (interned).
-    pub fn frame(&self, parent: FrameId, through: NodeRef) -> FrameId {
-        let mut frames = self.frames.borrow_mut();
-        let frame = Frame { parent, through };
-        if let Some(at) = frames.iter().position(|f| *f == frame) {
-            return FrameId(at as u32 + 1);
+/// Values numbered in arrival order, each once.
+struct Interner<T> {
+    items: Vec<T>,
+    ids: crate::fx_hash::FxHashMap<T, u32>,
+}
+
+impl<T> Default for Interner<T> {
+    fn default() -> Self {
+        Interner { items: Vec::new(), ids: crate::fx_hash::FxHashMap::default() }
+    }
+}
+
+impl<T: Clone + Eq + std::hash::Hash> Interner<T> {
+    fn intern(&mut self, item: T) -> u32 {
+        if let Some(&id) = self.ids.get(&item) {
+            return id;
         }
-        frames.push(frame);
-        FrameId(frames.len() as u32)
+        let id = self.items.len() as u32;
+        self.items.push(item.clone());
+        self.ids.insert(item, id);
+        id
+    }
+}
+
+impl QueryContext {
+    /// The frame instantiating `owner` through `through` (syntax arguments
+    /// read in `parent`) or with evaluated `args`; interned.
+    pub fn bind(&self, parent: FrameId, owner: NodeRef, through: Option<NodeRef>, args: Option<Vec<NodeValue>>) -> FrameId {
+        let args = args.map(|args| ArgsId(self.args.borrow_mut().intern(args)));
+        FrameId(self.frames.borrow_mut().intern(Frame { parent, through, owner, args }) + 1)
     }
 
     /// The frame `id` stands for; `None` for [`FrameId::ROOT`].
     pub fn get(&self, id: FrameId) -> Option<Frame> {
-        id.0.checked_sub(1).and_then(|at| self.frames.borrow().get(at as usize).copied())
+        id.0.checked_sub(1).and_then(|at| self.frames.borrow().items.get(at as usize).copied())
+    }
+
+    /// A frame's evaluated arguments.
+    pub fn arguments(&self, id: ArgsId) -> Option<Vec<NodeValue>> {
+        self.args.borrow().items.get(id.0 as usize).cloned()
     }
 }

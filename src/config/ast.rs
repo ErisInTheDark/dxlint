@@ -145,6 +145,9 @@ pub enum NameItem {
     Execution(effects::Item),
     /// `fits trait, ...`: the node directly has these traits.
     Fits(Vec<Name>),
+    /// `members <scope class>, ...`: where `from x at key` looks on this
+    /// kind's nodes by default.
+    Members(Vec<Name>),
     /// `in <field> propagates <value>`: the value's `truthy` effects (or the
     /// value itself) hold throughout that field's subtree.
     Propagates { field: Vec<Name>, value: Unwrap },
@@ -170,8 +173,14 @@ pub enum Unwrap {
     Intersection(Vec<Unwrap>),
     /// `| ...types` / `& ...types`: every node a path leads to, joined.
     Spread { intersection: bool, path: Vec<Name> },
-    /// `from x at key`: the member `key` of what `x` unwraps to.
-    From(Box<Unwrap>, Box<Unwrap>),
+    /// `from x at key [in <scope class>, ...]`: the member `key` of what `x`
+    /// unwraps to, among those scope classes (default: the leaf kind's
+    /// `members`).
+    From(Box<Unwrap>, Box<Unwrap>, Vec<Name>),
+    /// `scope <scope class>, ... from x`: the scopes of those classes the
+    /// nodes `x` reaches open (a class's statics or instance members),
+    /// without unwrapping those nodes.
+    Scope { classes: Vec<Name>, from: Box<Unwrap> },
     /// `!x` (truth unwraps).
     Not(Box<Unwrap>),
     /// `excludes trait, ... [from x]`: under `truthy`, `x` (default: the

@@ -32,7 +32,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "runs", "labels"];
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -486,6 +486,13 @@ impl<'a> Parser<'a> {
                     None => return,
                 }
             }
+            "members" => {
+                let classes = self.name_list("a scope class");
+                if classes.is_empty() {
+                    return;
+                }
+                NameItem::Members(classes)
+            }
             "fits" => {
                 let traits = self.name_list("a trait name");
                 if traits.is_empty() {
@@ -655,7 +662,7 @@ impl<'a> Parser<'a> {
         let first = self.ts.peek_raw(0).cloned()?;
         let next = self.ts.peek_raw(1).map(|t| t.kind);
         let effect = (first.kind == Tk::Ident
-            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has")
+            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope")
             && matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen)))
         .then(|| {
             self.ts.next_raw();
@@ -772,7 +779,18 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 let key = self.unwrap_primary()?;
-                Some(Unwrap::From(Box::new(of), Box::new(key)))
+                let classes = if self.word("in") { self.name_list("a scope class") } else { Vec::new() };
+                Some(Unwrap::From(Box::new(of), Box::new(key), classes))
+            }
+            Tk::Ident if &*t.text == "scope" => {
+                self.ts.next_raw();
+                let classes = self.name_list("a scope class");
+                if classes.is_empty() || !self.word("from") {
+                    self.error_here("expected `scope <class> from <value>`: `scope members from name.definition`");
+                    return None;
+                }
+                let from = Box::new(self.unwrap_unary()?);
+                Some(Unwrap::Scope { classes, from })
             }
             Tk::Ident if matches!(&*t.text, "includes" | "has") => {
                 self.ts.next_raw();
