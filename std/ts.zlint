@@ -36,12 +36,6 @@ group closer ts_close_paren, ts_close_bracket, ts_close_brace, ts_close_angle
 group ts_token ts_comma, ts_semicolon, ts_colon, ts_dot, ts_question, ts_ellipsis, ts_equals, opener,
   closer, ts_keyword, ts_punctuator
 define {
-  # Comments: children of the code layer whose text they sit in (between
-  # its other children, so never inside a string, regex or template text).
-  in ts_code {
-    match ts_line_comment like core_line_comment @core_line_comment_pattern
-    match ts_block_comment like core_block_comment @core_block_comment_pattern
-  }
   # Each line, its line break included (the last may have none): over the
   # file, across whatever nodes it runs through.
   in .js layer lines match ts_line like core_line @core_line_pattern
@@ -50,9 +44,18 @@ define {
     any (template) any(template.quasi.node, quasi => offset >= quasi.offset && end_offset <= quasi.end_offset)
   }
 }
-group ts_comment ts_line_comment, ts_block_comment
-
+import .ts/comments
 import .ts/names
+import .ts/effects
+import .ts/values
+import .ts/calls
+import .ts/modules
+import .ts/globals
+import .ts/suggestions/globals
+import .ts/suggestions/accessors
+import .ts/constants
+import .ts/narrowing
+import .ts/regex
 import .ts/format
 import .ts/license
 import .ts/scopes
