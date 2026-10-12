@@ -148,6 +148,13 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             let _ = condition.expr.set(e);
         }
     }
+    for operand in &grammar.names.modules.operands {
+        let Some(source) = operand.source(&config) else { continue };
+        let scope = Scope { fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
+        if let Some(e) = scope.compile(source, &mut errors) {
+            let _ = operand.expr.set(e);
+        }
+    }
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);

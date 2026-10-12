@@ -245,6 +245,11 @@ impl Linter {
                 let _ = condition.lowered.set(crate::vm::lower(e, functions, values));
             }
         }
+        for operand in &self.grammar.names.modules.operands {
+            if let Some(e) = operand.expr.get() {
+                let _ = operand.lowered.set(crate::vm::lower(e, functions, values));
+            }
+        }
         let fields = self.shape_records();
         if self.attrs.vm_stats {
             eprintln!("zlint vm: {fields} record fields");

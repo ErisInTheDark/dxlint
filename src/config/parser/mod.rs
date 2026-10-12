@@ -4,6 +4,7 @@
 mod effects;
 mod expr;
 mod language;
+mod modules;
 mod pattern;
 mod schema;
 mod syntax;
@@ -33,7 +34,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels"];
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels", "exports", "globals", "uses"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -300,6 +301,12 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "parser") => self.syntax_parser(),
             (Tk::Ident, "exclusive") => self.exclusive_item(ctx),
+            (Tk::Ident, "module_resolution") => {
+                self.bump();
+                if let Some(definition) = self.module_resolution() {
+                    self.config.module_resolutions.push(definition);
+                }
+            }
             (Tk::Ident, "in") if ctx.is_some() && self.field_item_ahead() => self.name_item(ctx),
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
@@ -525,6 +532,10 @@ impl<'a> Parser<'a> {
                 let Some(item) = self.execution_item(&what) else { return };
                 NameItem::Execution(item)
             }
+            "exports" | "globals" | "uses" => {
+                let Some(item) = self.module_item(&what) else { return };
+                NameItem::Module(item)
+            }
             "targets" => {
                 let mut groups = Vec::new();
                 loop {
@@ -566,6 +577,9 @@ impl<'a> Parser<'a> {
     fn class_item(&mut self, what: &str, classes: Vec<Name>) -> Option<NameItem> {
         Some(match what {
             "scope" => {
+                if self.word("named") {
+                    return self.module_scope(classes).map(NameItem::Module);
+                }
                 let within = if self.word("within") { self.name_list("a field the scope covers") } else { Vec::new() };
                 NameItem::Scope { classes, within }
             }
@@ -601,22 +615,16 @@ impl<'a> Parser<'a> {
                 NameItem::Declares { classes, path, implicit, nearest, enclosing, hoisted }
             }
             _ => {
+                if self.module_resolves_ahead() {
+                    return self.module_resolves(classes).map(NameItem::Module);
+                }
                 self.skip(false, true);
-                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident && &*t.text != "in") {
+                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident) {
                     self.name_path("the field holding the used name")?
                 } else {
                     Vec::new()
                 };
-                let module = if self.word("in") {
-                    if !self.word("module") {
-                        self.error_here("expected `in module <field>`: `resolves value imported in module source`");
-                        return None;
-                    }
-                    Some(self.name_path("the field naming the module")?)
-                } else {
-                    None
-                };
-                NameItem::Resolves { classes, path, module }
+                NameItem::Resolves { classes, path }
             }
         })
     }

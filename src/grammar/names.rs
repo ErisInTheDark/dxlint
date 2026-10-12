@@ -49,9 +49,6 @@ pub struct Resolve {
     pub classes: u64,
     /// Labels from the node to the using name; empty: the node itself.
     pub path: Vec<u16>,
-    /// `in module <path>`: looked up among the exports of the file that
-    /// path's text names.
-    pub module: Option<Vec<u16>>,
     pub when: Option<u32>,
 }
 
@@ -132,6 +129,8 @@ pub struct KindNames {
     /// targets what these lead to instead; per group, the first alternative
     /// that leads to anything.
     pub targets: Vec<(Vec<Vec<u16>>, Option<u32>)>,
+    /// Module publications and cross-file lookups.
+    pub modules: modules::compile::KindModules,
 }
 
 /// A `when` condition of one item on one layer; the engine compiles it
@@ -236,6 +235,8 @@ pub struct Names {
     pub vocabulary: std::sync::Arc<Vocabulary>,
     pub kinds: Vec<KindNames>,
     pub conditions: Vec<Condition>,
+    /// Module item operands, compiled like [`Names::conditions`].
+    pub modules: modules::compile::Tables,
 }
 
 /// One tree's resolved names.
@@ -421,7 +422,7 @@ impl Names {
                     }
                 }
                 NameItem::Fits(traits) => {
-                    let bits = traits.iter().fold(0u64, |all, t| all | 1 << intern(&mut vocab.traits, &t.text).min(63));
+                    let Some(bits) = class_bits(&mut vocab.traits, traits, errors) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
                         names.add(g, m, |k| k.fits.push((bits, when)));
                     }
@@ -434,20 +435,32 @@ impl Names {
                         names.add(g, m, |k| k.propagates.push(p.clone()));
                     }
                 }
-                NameItem::Resolves { classes, path: p, module } => {
+                NameItem::Resolves { classes, path: p } => {
                     let Some(bits) = class_bits(&mut vocab.declaration_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|c| (c, false)));
                     let Some(p) = path(errors, p) else { continue };
-                    let module = match module {
-                        Some(m) => match path(errors, m) {
-                            Some(m) => Some(m),
-                            None => continue,
-                        },
-                        None => None,
-                    };
                     for (&m, &when) in targets.iter().zip(&when) {
-                        let r = Resolve { classes: bits, path: p.clone(), module: module.clone(), when };
+                        let r = Resolve { classes: bits, path: p.clone(), when };
                         names.add(g, m, |k| k.resolves.push(r.clone()));
+                    }
+                }
+                NameItem::Module(module) => {
+                    let scope = matches!(module, crate::config::ast::modules::Item::Scope { .. });
+                    let classes = module.classes();
+                    let list = if scope { &mut vocab.scope_classes } else { &mut vocab.declaration_classes };
+                    let Some(bits) = class_bits(list, classes, errors) else { continue };
+                    if scope {
+                        opened |= bits;
+                    } else {
+                        asked.extend(classes.iter().map(|c| (c, false)));
+                    }
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        if scope {
+                            let open = OpenScope { classes: bits, within: Vec::new(), when };
+                            names.add(g, m, |k| k.scopes.push(open.clone()));
+                        }
+                        let lowered = names.modules.lower(module, item, m, bits, when);
+                        names.add(g, m, |k| k.modules.items.push(lowered.clone()));
                     }
                 }
             }
@@ -476,9 +489,11 @@ impl Names {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    /// Nothing for [`Names::resolve`] to do: no item opens scopes,
+    /// declares, uses or writes names (type-layer items are answered on
+    /// demand, not here).
+    fn resolves_nothing(&self) -> bool {
         self.kinds.iter().all(|k| k.scopes.is_empty() && k.declares.is_empty() && k.resolves.is_empty() && k.effects.is_empty() && k.targets.is_empty())
-            && self.kinds.iter().all(|k| k.unwraps.is_empty() && k.fits.is_empty() && k.propagates.is_empty())
     }
 
     /// What a declaration or effect targeting `node` reaches: the node
@@ -517,7 +532,7 @@ impl Names {
     /// `when` condition on a node.
     pub fn resolve<'t>(&self, tree: &Tree, text: &'t str, key: &dyn Fn(&'t str) -> Cow<'t, str>, when: &dyn Fn(u32, u32) -> bool) -> Resolved {
         let mut out = Resolved { vocabulary: self.vocabulary.clone(), ..Resolved::default() };
-        if self.is_empty() {
+        if self.resolves_nothing() {
             return out;
         }
         let holds = |node: u32, c: Option<u32>| c.is_none_or(|c| when(node, c));

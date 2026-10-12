@@ -6,6 +6,7 @@ use crate::expr::Value;
 use crate::pattern::Pat;
 
 pub mod effects;
+pub mod modules;
 pub mod syntax;
 pub mod values;
 pub use syntax::ParserDecl;
@@ -38,6 +39,8 @@ pub struct Config {
     pub parsers: Vec<ParserDecl>,
     /// `exclusive a, b, ...`: traits no possible value has together.
     pub exclusive: Vec<Exclusive>,
+    /// `module_resolution name { ... }`: how module specifiers find files.
+    pub module_resolutions: Vec<modules::Definition>,
     /// `schema name T`: option schemas rules share.
     pub schemas: Vec<SchemaDef>,
     /// Names removed by `drop`: anything still using one is an error at
@@ -136,10 +139,12 @@ pub enum NameItem {
     /// field (`declares value "arguments" ...`) declares that name
     /// implicitly, with the node itself as its declaration.
     Declares { classes: Vec<Name>, path: Vec<Name>, implicit: Option<String>, nearest: Vec<Name>, enclosing: bool, hoisted: bool },
-    /// `resolves value [path] [in module <path>]`: the node (or what `path`
-    /// leads to) uses a name; with `in module`, among the exports of the
-    /// file that path's text names.
-    Resolves { classes: Vec<Name>, path: Vec<Name>, module: Option<Vec<Name>> },
+    /// `resolves value [path]`: the node (or what `path` leads to) uses a
+    /// name.
+    Resolves { classes: Vec<Name>, path: Vec<Name> },
+    /// `exports`, `globals`, `uses module_resolution`, `scope .. named`,
+    /// `resolves .. in module`: module publications ([`modules`]).
+    Module(modules::Item),
     /// `unwraps <value>` or `unwraps [maybe] <effect> [<value>] [nearest
     /// <scope>]`: what the node stands for, or what evaluating it does
     /// (`maybe`: possibly, beside completing normally).

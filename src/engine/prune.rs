@@ -160,6 +160,9 @@ fn prune_config(config: &mut Config, runtime: bool) {
         if let Some(when) = &n.when {
             expr_names(when, &mut needed);
         }
+        if let crate::config::ast::NameItem::Module(item) = &n.item {
+            item.exprs().for_each(|e| expr_names(e, &mut needed));
+        }
     }
     if runtime {
         for c in &config.configs {
