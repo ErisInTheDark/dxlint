@@ -15,6 +15,7 @@ impl Parser<'_> {
                 let result = self.unwrap_value()?;
                 Some(Item::Signature { parameters, result })
             }
+            "signatures" => self.unwrap_value().map(Item::Sources),
             "calls" | "constructs" => {
                 let callee = self.unwrap_value()?;
                 if !self.word("with") {
@@ -52,5 +53,9 @@ impl Parser<'_> {
 
     pub(super) fn call_expected(&mut self, field: Path) -> Option<Item> {
         self.unwrap_value().map(|value| Item::Expected { field, value })
+    }
+
+    pub(super) fn generics_item(&mut self) -> Option<Path> {
+        self.name_path("the generic declaration's ordered formal field")
     }
 }

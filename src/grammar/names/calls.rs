@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use crate::config::ast::calls::Variance;
 use crate::fx_hash::FxHashMap;
 
-use super::question::{Known, NodeValue};
+use super::question::{Known, Leaf, NodeValue};
 use super::semantic::Semantic;
 use super::Value;
 
@@ -43,6 +43,7 @@ pub struct Expected {
 #[derive(Clone, Debug, Default)]
 pub struct KindCalls {
     pub signatures: Vec<Conditional<Signature>>,
+    pub sources: Vec<Conditional<Value>>,
     pub invokes: Vec<Conditional<Invoke>>,
     pub expected: Vec<Conditional<Expected>>,
     pub discards: Vec<Option<u32>>,
@@ -51,10 +52,17 @@ pub struct KindCalls {
     pub variances: Vec<Conditional<Variance>>,
 }
 
+/// A value question's answer: `Yes(None)` when there is none to ask about.
+type ValueAnswer = Known<Option<NodeValue>>;
+
 #[derive(Default)]
 pub(crate) struct State {
     pub(super) acceptance: RefCell<FxHashMap<(NodeValue, NodeValue), Known<bool>>>,
+    values: RefCell<FxHashMap<(Leaf, ValueQuestion), ValueAnswer>>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ValueQuestion { Result, Expected, Inferred }
 
 pub struct Calls<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
@@ -79,6 +87,32 @@ impl Calls<'_> {
         self.semantic.calls.acceptance.borrow_mut().insert(key.clone(), Known::Unknown);
         let answer = accepts::accepts(expected, actual, &self.semantic.values());
         self.semantic.calls.acceptance.borrow_mut().insert(key, answer);
+        answer
+    }
+
+    pub fn result(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        self.value(at, ValueQuestion::Result)
+    }
+
+    pub fn expected(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        self.value(at, ValueQuestion::Expected)
+    }
+
+    pub fn inferred(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        self.value(at, ValueQuestion::Inferred)
+    }
+
+    fn value(&self, at: Leaf, question: ValueQuestion) -> Known<Option<NodeValue>> {
+        let key = (at, question);
+        if let Some(answer) = self.semantic.calls.values.borrow().get(&key) {
+            return answer.clone();
+        }
+        if !self.question.budget.step() {
+            return Known::Unknown;
+        }
+        self.semantic.calls.values.borrow_mut().insert(key, Known::Unknown);
+        let answer = Known::Unknown;
+        self.semantic.calls.values.borrow_mut().insert(key, answer.clone());
         answer
     }
 }

@@ -133,6 +133,8 @@ pub struct KindNames {
     pub modules: modules::compile::KindModules,
     /// Signatures, invocations, expectations and comparison metadata.
     pub calls: calls::KindCalls,
+    /// `generics`: paths to the ordered formal type parameters.
+    pub generics: Vec<(Vec<u16>, Option<u32>)>,
 }
 
 /// A `when` condition of one item on one layer; the engine compiles it
@@ -505,6 +507,12 @@ impl Names {
                     for (&m, &when) in targets.iter().zip(&when) {
                         let r = Resolve { classes: bits, path: p.clone(), when };
                         names.add(g, m, |k| k.resolves.push(r.clone()));
+                    }
+                }
+                NameItem::Generics(p) => {
+                    let Some(p) = path(errors, p) else { continue };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |k| k.generics.push((p.clone(), when)));
                     }
                 }
                 NameItem::Calls(call) => {

@@ -36,7 +36,7 @@ const RESERVED: &[&str] = &[
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
 const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels", "exports", "globals", "uses",
-    "signature", "calls", "constructs", "discards", "identity", "optional", "variance"];
+    "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "variance", "generics"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -541,7 +541,11 @@ impl<'a> Parser<'a> {
                 let Some(item) = self.module_item(&what) else { return };
                 NameItem::Module(item)
             }
-            "signature" | "calls" | "constructs" | "discards" | "identity" | "optional" | "variance" => {
+            "generics" => {
+                let Some(path) = self.generics_item() else { return };
+                NameItem::Generics(path)
+            }
+            "signature" | "signatures" | "calls" | "constructs" | "discards" | "identity" | "optional" | "variance" => {
                 let Some(item) = self.call_item(&what) else { return };
                 // `optional when <cond>`: conditional like a `when` block.
                 if self.word("when") {

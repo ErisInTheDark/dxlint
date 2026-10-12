@@ -9,6 +9,7 @@ use crate::grammar::names::Value;
 #[derive(Clone, Debug)]
 pub enum Item {
     Signature(Signature),
+    Sources(Value),
     Invoke(Invoke),
     Expected(Expected),
     DiscardsResult,
@@ -29,6 +30,7 @@ pub fn lower(
             parameters: path(parameters, errors)?,
             result: value(result, errors)?,
         }),
+        ParsedItem::Sources(source) => Item::Sources(value(source, errors)?),
         ParsedItem::Invoke { callee, arguments, construct } => Item::Invoke(Invoke {
             callee: value(callee, errors)?,
             arguments: path(arguments, errors)?,
@@ -49,6 +51,7 @@ impl KindCalls {
     pub fn push(&mut self, item: Item, when: Option<u32>) {
         match item {
             Item::Signature(item) => self.signatures.push(Conditional { item, when }),
+            Item::Sources(item) => self.sources.push(Conditional { item, when }),
             Item::Invoke(item) => self.invokes.push(Conditional { item, when }),
             Item::Expected(item) => self.expected.push(Conditional { item, when }),
             Item::DiscardsResult => self.discards.push(when),

@@ -7,6 +7,7 @@ pub type Path = Vec<Name>;
 #[derive(Clone, Debug)]
 pub enum Item {
     Signature { parameters: Path, result: Unwrap },
+    Sources(Unwrap),
     Invoke { callee: Unwrap, arguments: Path, construct: bool },
     Expected { field: Path, value: Unwrap },
     DiscardsResult,

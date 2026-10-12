@@ -150,6 +150,9 @@ pub enum NameItem {
     /// result`, `identity`, `optional`, `variance`: calls and structural
     /// comparison ([`calls`]).
     Calls(calls::Item),
+    /// `generics <path>`: the declaration's ordered formal type parameters
+    /// (what inferred and explicit instantiations bind by position).
+    Generics(Vec<Name>),
     /// `unwraps <value>` or `unwraps [maybe] <effect> [<value>] [nearest
     /// <scope>]`: what the node stands for, or what evaluating it does
     /// (`maybe`: possibly, beside completing normally).
