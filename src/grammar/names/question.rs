@@ -117,12 +117,12 @@ impl FrameId {
 pub struct ArgsId(pub u32);
 
 /// One instantiation of a generic declaration (`owner`): through a
-/// reference whose ordered type arguments are read in `parent`, or with
+/// reference whose ordered type arguments are read in its own frame, or with
 /// evaluated `args` (no syntax: inferred or library instantiations).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Frame {
     pub parent: FrameId,
-    pub through: Option<NodeRef>,
+    pub through: Option<Leaf>,
     pub owner: NodeRef,
     pub args: Option<ArgsId>,
 }
@@ -247,8 +247,8 @@ impl<T: Clone + Eq + std::hash::Hash> Interner<T> {
 
 impl QueryContext {
     /// The frame instantiating `owner` through `through` (syntax arguments
-    /// read in `parent`) or with evaluated `args`; interned.
-    pub fn bind(&self, parent: FrameId, owner: NodeRef, through: Option<NodeRef>, args: Option<Vec<NodeValue>>) -> FrameId {
+    /// read in that leaf's frame) or with evaluated `args`; interned.
+    pub fn bind(&self, parent: FrameId, owner: NodeRef, through: Option<Leaf>, args: Option<Vec<NodeValue>>) -> FrameId {
         let args = args.map(|args| ArgsId(self.args.borrow_mut().intern(args)));
         FrameId(self.frames.borrow_mut().intern(Frame { parent, through, owner, args }) + 1)
     }

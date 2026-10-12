@@ -322,7 +322,7 @@ impl Values<'_> {
                                 return Known::Unknown;
                             }
                             if let Some(through) = binding.through {
-                                next.push(Leaf { target: Target::Node(through), frame: binding.parent });
+                                next.push(through);
                                 break;
                             }
                             frame = binding.parent;
@@ -333,7 +333,7 @@ impl Values<'_> {
                         if let Some(&name) = names.declaration.get(&node.node) {
                             let declaring = names.declared.get(&name).map_or(name, |&(_, item, ..)| item);
                             let owner = NodeRef { file: node.file, node: declaring };
-                            let through = match at.target { Target::Node(node) => Some(node), Target::Scope(_) => None };
+                            let through = match at.target { Target::Node(_) => Some(at), Target::Scope(_) => None };
                             let frame = self.question.bind(leaf.frame, owner, through, None);
                             next.push(Leaf { target: Target::Node(owner), frame });
                         }

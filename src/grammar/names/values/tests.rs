@@ -60,7 +60,7 @@ fn attributes_project_ordered_nodes_without_losing_the_binding_frame() {
     ].into()))];
     let tables = tables();
     let question = QueryContext::default();
-    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(2)), None);
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(2)), None);
     let at = Leaf { frame, ..leaf(0) };
     let semantic = Semantic::new(&world, &tables, &question);
     assert_eq!(semantic.values().follow(at, &[super::super::ATTR_STEP]), Known::Yes(vec![
@@ -139,7 +139,7 @@ fn a_new_instantiation_never_steals_an_older_matching_owners_arguments() {
             Some(args) if !args.is_empty() => Known::Yes(Some(NodeValue::Unknown)),
             _ => Known::Yes(None),
         };
-        let inner = question.bind(outer, NodeRef::here(0), Some(NodeRef::here(3)), args);
+        let inner = question.bind(outer, NodeRef::here(0), Some(leaf(3)), args);
         let semantic = Semantic::new(&world, &tables, &question);
         assert_eq!(semantic.values().bound_argument(Leaf { frame: inner, ..leaf(1) }), expected);
     }
@@ -171,7 +171,7 @@ fn raw_sites_do_not_expand_the_reached_declarations() {
         value: Some(Value::Path(vec![8])), ..Default::default()
     });
     let question = QueryContext::default();
-    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(3)), None);
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(3)), None);
     let semantic = Semantic::new(&world, &tables, &question);
     let at = Leaf { frame, ..leaf(0) };
     assert_eq!(semantic.values().sites(at, &Value::Path(vec![7])), Known::Yes(vec![
