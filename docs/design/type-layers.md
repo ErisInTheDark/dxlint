@@ -173,6 +173,7 @@ Engine effects (reserved; the engine acts on them):
 | `broken nearest <scope class>` / `continued nearest <scope class>` | `break` / `continue` | reachability |
 | `truthy <unwrap>` | when the node is truthy, this holds | narrowing |
 | `assigned <x>` | `x` is overwritten without reading it (`x = 1`, `for (x of xs)`) | a write; ends narrowing of `x` |
+| `assigned <x> with <value>` | same, storing `<value>` (a values recipe, e.g. `with right`) | a write; narrowing of `x` restarts from its declared value reduced to what `<value>` could be |
 | `mutated <x>` | `x` is read, then changed (`x += 1`, `x++`) | a read and a write; ends narrowing of `x` |
 | `awaited <x>`, `yielded <x>` | waits on / yields `x` | async and generator rules |
 
@@ -298,6 +299,11 @@ One engine owner, `engine/world.rs`; type-layer engines see only the
   `member` / `accepts`. A query outside any question opens a root
   `Semantic`. First cut: answers holding nodes of other files or non-root
   frames are `null`; an opaque VM leaf handle comes after.
+- A `Value::Node` names a node of the file whose `Ctx` evaluates it; it
+  never carries a file. Rust receiving values from `condition` / `operand`
+  / `attribute` reads them relative to the file it asked, and never feeds
+  them into another file's `Ctx`. Cross-file nodes reach rules only as the
+  opaque leaf handle (file + frame).
 
 ## Build order
 
