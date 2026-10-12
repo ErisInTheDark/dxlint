@@ -9,6 +9,18 @@ pub enum Control {
     Continued,
 }
 
+impl Control {
+    pub(super) fn named(name: &str) -> Option<Self> {
+        match name {
+            "returned" => Some(Self::Returned),
+            "thrown" => Some(Self::Thrown),
+            "broken" => Some(Self::Broken),
+            "continued" => Some(Self::Continued),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Effect {
     pub event: Event,
@@ -164,7 +176,8 @@ impl<S: Source> Builder<'_, S> {
         for effect in ordered {
             if !self.question.budget.step() { return None }
             let at = self.point(node, Point::Event(effect.event));
-            self.connect(&fragment.normal, at);
+            let mut before = std::mem::take(&mut fragment.normal);
+            self.connect(&before, at);
             if let Some(control) = effect.control {
                 let super::EventKind::Effect(kind) = effect.event.kind else { return None };
                 fragment.pending.push(Pending {
@@ -172,11 +185,17 @@ impl<S: Source> Builder<'_, S> {
                     exit: Exit { effect: kind, site: effect.event.site, target: effect.target, value: effect.event.value },
                 });
                 if !effect.possible {
-                    fragment.normal.clear();
                     continue;
                 }
+                fragment.normal = before;
+                continue;
             }
-            fragment.normal = vec![at];
+            if effect.possible {
+                before.push(at);
+                fragment.normal = before;
+            } else {
+                fragment.normal = vec![at];
+            }
         }
         Some(())
     }
@@ -433,7 +452,9 @@ pub fn execution(source: &impl Source, entry: Leaf, question: &QueryContext) -> 
     if builder.run().is_none() { return Known::Unknown }
     let fragment = builder.take(out);
     let Some(entry) = fragment.entry else { return Known::Unknown };
-    Known::Yes(super::Execution::new(entry, builder.steps, builder.edges))
+    Known::Yes(super::Execution::new(entry, builder.steps, builder.edges).with_completion(
+        fragment.normal, fragment.pending.into_iter().map(|pending| (pending.at, pending.exit)).collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -523,6 +544,10 @@ mod tests {
         let graph = built(&language);
         assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(false));
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
+            Exit { effect: 0, site: NodeRef::here(1), target: Some(NodeRef::here(0)), value: None },
+        ]));
     }
 
     #[test]
@@ -656,7 +681,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "RED until the compiled truth path lands"]
     fn a_compiled_test_path_executes_its_prefix_and_reads_its_terminal_attribute() {
         use crate::config::ast::effects::{Flow as ParsedFlow, Item};
         use crate::config::ast::Name;
@@ -783,6 +807,8 @@ mod tests {
         assert_eq!(graph.reachable(NodeRef::here(7), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(8), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(true));
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(Vec::new()));
     }
 
     #[test]
@@ -791,6 +817,10 @@ mod tests {
         assert_eq!(graph.reachable(NodeRef::here(7), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(false));
         assert_eq!(graph.reachable(NodeRef::here(8), &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(false));
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
+            Exit { effect: 0, site: NodeRef::here(7), target: Some(NodeRef::here(0)), value: None },
+        ]));
     }
 
     #[test]
@@ -799,6 +829,10 @@ mod tests {
         assert_eq!(graph.reachable(NodeRef::here(7), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(false));
         assert_eq!(graph.reachable(NodeRef::here(8), &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(false));
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
+            Exit { effect: 0, site: NodeRef::here(6), target: Some(NodeRef::here(0)), value: None },
+        ]));
     }
 
     #[test]
@@ -807,6 +841,10 @@ mod tests {
         possible.shape.effects[0].possible = true;
         let graph = built(&Language(vec![node(Flow::Children, &[1, 2]), possible, node(Flow::Nothing, &[])]));
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(true));
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
+            Exit { effect: 1, site: NodeRef::here(1), target: None, value: None },
+        ]));
     }
 
     #[test]
@@ -827,5 +865,42 @@ mod tests {
         let tail = graph.sites(NodeRef::here(6), Phase::Enter).next().expect("following statement");
         assert_eq!(graph.reaches(returned, tail, &[], &Budget::default()), Known::Yes(false));
         assert_eq!(graph.reaches(normal, tail, &[], &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(true));
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
+            Exit { effect: 0, site: NodeRef::here(4), target: Some(NodeRef::here(0)), value: None },
+        ]));
+    }
+
+    #[test]
+    fn dead_control_events_are_not_exits_and_exhaustion_is_not_completion() {
+        let graph = built(&Language(vec![
+            node(Flow::Children, &[1, 2]),
+            control_node(1, Control::Returned),
+            control_node(2, Control::Thrown),
+        ]));
+        assert_eq!(graph.exits(&Budget::new(0)), Known::Unknown);
+        assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
+            Exit { effect: 0, site: NodeRef::here(1), target: Some(NodeRef::here(0)), value: None },
+        ]));
+        assert_eq!(graph.exits(&Budget::new(0)), Known::Unknown);
+        assert_eq!(graph.normal(&Budget::new(0)), Known::Unknown);
+        assert_eq!(graph.normal(&Budget::default()), Known::Yes(false));
+        assert_eq!(graph.normal(&Budget::new(0)), Known::Unknown);
+    }
+
+    #[test]
+    fn a_possible_user_effect_has_both_an_event_path_and_a_bypass() {
+        let mut possible = control_node(1, Control::Thrown);
+        possible.shape.effects[0].event.kind = EventKind::Effect(9);
+        possible.shape.effects[0].control = None;
+        possible.shape.effects[0].target = None;
+        possible.shape.effects[0].possible = true;
+        let graph = built(&Language(vec![node(Flow::Children, &[1, 2]), possible, node(Flow::Nothing, &[])]));
+        let event = graph.steps().find_map(|(id, step)| {
+            step.event().filter(|event| event.kind == EventKind::Effect(9)).map(|_| id)
+        }).expect("possible event");
+        let tail = graph.sites(NodeRef::here(2), Phase::Enter).next().expect("following use");
+        assert_eq!(graph.reaches(graph.entry(), tail, &[event], &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reaches_through(graph.entry(), tail, &[], |event| event.kind == EventKind::Effect(9), &Budget::default()), Known::Yes(true));
     }
 }

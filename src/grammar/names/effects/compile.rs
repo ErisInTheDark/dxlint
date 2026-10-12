@@ -15,6 +15,10 @@ pub enum Item {
     Labels(Path),
 }
 
+pub fn controls(vocabulary: &crate::grammar::names::Vocabulary) -> Vec<Option<super::Control>> {
+    vocabulary.effects.iter().map(|name| super::Control::named(name)).collect()
+}
+
 pub fn lower(
     item: &ParsedItem,
     path: &mut impl FnMut(&[Name]) -> Option<Path>,
@@ -79,8 +83,17 @@ pub fn validate(names: &Names, errors: &mut Vec<ConfigError>) {
             errors.push(ConfigError::new(span, message));
         }
     };
-    for kind in &names.kinds {
-        let kind = &kind.execution;
+    for named in &names.kinds {
+        let terminators: Vec<_> = named.unwraps.iter().filter(|item| item.when.is_none() && !item.possible
+            && item.effect.and_then(|id| names.controls.get(id as usize)).copied().flatten().is_some()).collect();
+        for item in terminators.iter().skip(1) {
+            if item.item != terminators[0].item {
+                if let Some(span) = item.span {
+                    report(item.item, span, "more than one unconditional terminating effect");
+                }
+            }
+        }
+        let kind = &named.execution;
         let runs: Vec<_> = kind.runs.iter().filter(|item| item.when.is_none()).collect();
         for run in runs.iter().skip(1) {
             if run.item_id != runs[0].item_id {
@@ -88,6 +101,12 @@ pub fn validate(names: &Names, errors: &mut Vec<ConfigError>) {
             }
         }
         let catches: Vec<_> = kind.catches.iter().filter(|item| item.when.is_none()).collect();
+        let after: Vec<_> = kind.after.iter().filter(|item| item.when.is_none()).collect();
+        for finalizer in after.iter().skip(1) {
+            if finalizer.item_id != after[0].item_id {
+                report(finalizer.item_id, finalizer.span, "more than one unconditional finalizer");
+            }
+        }
         for (index, catch) in catches.iter().enumerate() {
             if catches[..index].iter().any(|previous| previous.item_id != catch.item_id
                 && previous.item.source == catch.item.source
@@ -98,7 +117,7 @@ pub fn validate(names: &Names, errors: &mut Vec<ConfigError>) {
         let Some(run) = runs.first() else { continue };
         let Some(mut sources) = run.item.sources() else { continue };
         sources.extend(catches.iter().map(|catch| catch.item.handler.clone()));
-        for after in kind.after.iter().filter(|item| item.when.is_none()) {
+        for after in after {
             if sources.iter().any(|source| !after.item.sources.contains(source)) {
                 report(after.item_id, after.span, "`runs after` must cover the whole execution and its handlers");
             }
@@ -138,5 +157,18 @@ mod tests {
         assert!(!valid("runs block\nin handler catches thrown from block\nin finalizer runs after block"));
         assert!(!valid("runs block then handler\nin finalizer runs after block"));
         assert!(valid("runs block\nin handler catches thrown from block\nin finalizer runs after block, handler"));
+    }
+
+    #[test]
+    fn conflicting_unconditional_finalizers_are_configuration_errors() {
+        assert!(!valid("runs block\nin handler runs after block\nin finalizer runs after block"));
+        assert!(valid("runs block\nwhen true { in handler runs after block }\nwhen false { in finalizer runs after block }"));
+    }
+
+    #[test]
+    fn conflicting_terminating_effects_are_configuration_errors() {
+        assert!(valid("runs block\nunwraps returned block"));
+        assert!(!valid("runs block\nunwraps returned block\nunwraps thrown block"));
+        assert!(valid("runs block\nunwraps returned block\nunwraps maybe thrown block"));
     }
 }

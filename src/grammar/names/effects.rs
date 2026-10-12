@@ -4,6 +4,7 @@ use std::cell::OnceCell;
 
 pub mod compile;
 pub mod build;
+pub use build::Control;
 mod controller;
 mod source;
 pub use controller::{DeclaredEffect, Effects, ExecutedEffect};
@@ -112,7 +113,7 @@ pub struct Event {
     pub phase: Phase,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Exit {
     pub effect: EffectId,
     pub site: NodeRef,
@@ -151,6 +152,12 @@ pub struct Execution {
     sites: FxHashMap<NodeRef, Vec<StepId>>,
     fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>>,
     reachable: OnceCell<Vec<bool>>,
+    completion: Option<Completion>,
+}
+
+struct Completion {
+    normal: Vec<StepId>,
+    exits: Vec<(StepId, Exit)>,
 }
 
 enum Walk {
@@ -176,7 +183,12 @@ impl Execution {
                 _ => {}
             }
         }
-        Execution { entry, steps, edges, sites, fields, reachable: OnceCell::new() }
+        Execution { entry, steps, edges, sites, fields, reachable: OnceCell::new(), completion: None }
+    }
+
+    fn with_completion(mut self, normal: Vec<StepId>, exits: Vec<(StepId, Exit)>) -> Self {
+        self.completion = Some(Completion { normal, exits });
+        self
     }
 
     pub fn entry(&self) -> StepId {
@@ -205,7 +217,29 @@ impl Execution {
         self.fields.get(&node).and_then(|fields| fields.get(path)).map_or(&[], Vec::as_slice)
     }
 
-    pub fn reachable(&self, node: NodeRef, budget: &Budget) -> Known<bool> {
+    pub(crate) fn normal(&self, budget: &Budget) -> Known<bool> {
+        let Some(completion) = &self.completion else { return Known::Unknown };
+        let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
+        for &at in &completion.normal {
+            if !budget.step() { return Known::Unknown }
+            if seen[at as usize] { return Known::Yes(true) }
+        }
+        Known::Yes(false)
+    }
+
+    pub(crate) fn exits(&self, budget: &Budget) -> Known<Vec<Exit>> {
+        let Some(completion) = &self.completion else { return Known::Unknown };
+        let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
+        let mut exits = Vec::new();
+        let mut unique = crate::fx_hash::FxHashSet::default();
+        for &(at, exit) in &completion.exits {
+            if !budget.step() { return Known::Unknown }
+            if seen[at as usize] && unique.insert(exit) { exits.push(exit) }
+        }
+        Known::Yes(exits)
+    }
+
+    fn reachable_steps(&self, budget: &Budget) -> Known<&[bool]> {
         if !budget.step() { return Known::Unknown }
         let seen = match self.reachable.get() {
             Some(seen) => seen,
@@ -214,6 +248,11 @@ impl Execution {
                 _ => return Known::Unknown,
             },
         };
+        Known::Yes(seen)
+    }
+
+    pub fn reachable(&self, node: NodeRef, budget: &Budget) -> Known<bool> {
+        let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
         Known::Yes(self.sites.get(&node).is_some_and(|sites| sites.iter().any(|&step| seen[step as usize])))
     }
 
