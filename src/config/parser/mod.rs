@@ -35,7 +35,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels", "exports", "globals", "uses",
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "member", "runs", "labels", "exports", "globals", "uses",
     "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "variance", "generics"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
@@ -497,28 +497,24 @@ impl<'a> Parser<'a> {
                     None => return,
                 }
             }
-            "members" => {
-                let classes = self.name_list("a scope class");
-                if classes.is_empty() {
-                    return;
-                }
-                NameItem::Members { classes, inherits: None }
-            }
+            "members" => match self.members_item() { Some(item) => item, None => return },
+            "member" => match self.member_item() { Some(item) => item, None => return },
             "fits" => {
                 let traits = self.name_list("a trait name");
                 if traits.is_empty() {
                     return;
                 }
+                let views = if self.word("in") { self.name_list("a scope class") } else { Vec::new() };
                 // `fits thenable when <cond>`: conditional like a `when` block.
                 if self.word("when") {
                     let Some(cond) = self.expr() else { return };
                     self.end_of_item();
                     self.conditions.push(cond);
-                    self.name_def(ctx, kw.span, &what, NameItem::Fits(traits));
+                    self.name_def(ctx, kw.span, &what, NameItem::Fits { traits, views });
                     self.conditions.pop();
                     return;
                 }
-                NameItem::Fits(traits)
+                NameItem::Fits { traits, views }
             }
             "in" => {
                 let Some(field) = self.name_path("a field") else { return };
@@ -696,7 +692,7 @@ impl<'a> Parser<'a> {
         // After `maybe` the word is always the effect (`unwraps maybe thrown`:
         // no payload).
         let effect = (first.kind == Tk::Ident
-            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope")
+            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance")
             && (possible || matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen))))
         .then(|| {
             self.ts.next_raw();
@@ -803,7 +799,11 @@ impl<'a> Parser<'a> {
             }
             Tk::Num => {
                 self.ts.next_raw();
-                Some(Unwrap::Text(t.text.to_string()))
+                self.ordinal_value(&t.text, t.span)
+            }
+            Tk::Ident if &*t.text == "instance" => {
+                self.ts.next_raw();
+                self.instance_value()
             }
             Tk::Ident if &*t.text == "from" => {
                 self.ts.next_raw();

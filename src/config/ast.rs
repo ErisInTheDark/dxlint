@@ -11,7 +11,7 @@ pub mod modules;
 pub mod syntax;
 pub mod values;
 pub use syntax::ParserDecl;
-pub use values::Exclusive;
+pub use values::{Exclusive, Unwrap};
 
 #[derive(Clone, Debug)]
 pub struct Name {
@@ -161,7 +161,7 @@ pub enum NameItem {
     /// shapes ([`effects`]).
     Execution(effects::Item),
     /// `fits trait, ...`: the node directly has these traits.
-    Fits(Vec<Name>),
+    Fits { traits: Vec<Name>, views: Vec<Name> },
     /// `members <scope class>, ... [inherits <value>]`: where `from x at key`
     /// looks on this kind's nodes by default, then in the members of what
     /// `inherits` unwraps to.
@@ -184,52 +184,10 @@ impl NameItem {
     pub fn operand(&self, part: u8) -> Option<&Expr> {
         match self {
             NameItem::Calls(item) => item.operand(part),
+            NameItem::Module(item) => item.operand(part),
             _ => None,
         }
     }
-}
-
-/// The value form of `unwraps`, `propagates` and effects
-/// (docs/design/type-layers.md).
-#[derive(Clone, Debug)]
-pub enum Unwrap {
-    /// A field path (`callee.result`, `through.arguments`, `it`).
-    Path(Vec<Name>),
-    /// A member key written as text (`from it at "then"`).
-    Text(String),
-    /// `a ?? b`: the first that exists.
-    Either(Box<Unwrap>, Box<Unwrap>),
-    /// `a | b`: one of them.
-    Union(Vec<Unwrap>),
-    /// `a & b`: both at once.
-    Intersection(Vec<Unwrap>),
-    /// `| ...types` / `& ...types`: every node a path leads to, joined.
-    Spread { intersection: bool, path: Vec<Name> },
-    /// `from x at key [in <scope class>, ...]`: the member `key` of what `x`
-    /// unwraps to, among those scope classes (default: the leaf kind's
-    /// `members`).
-    From(Box<Unwrap>, Box<Unwrap>, Vec<Name>),
-    /// `scope <scope class>, ... from x`: the scopes of those classes the
-    /// nodes `x` reaches open (a class's statics or instance members),
-    /// without unwrapping those nodes.
-    Scope { classes: Vec<Name>, from: Box<Unwrap> },
-    /// `!x` (truth unwraps).
-    Not(Box<Unwrap>),
-    /// `excludes trait, ... [from x]`: under `truthy`, `x` (default: the
-    /// node) cannot be these.
-    Excludes { traits: Vec<Name>, from: Option<Box<Unwrap>> },
-    /// `includes v [from x]`: under `truthy`, `x` is one of its
-    /// alternatives that `v` could be (`x === "a"`, `x instanceof C`).
-    Includes { value: Box<Unwrap>, from: Option<Box<Unwrap>> },
-    /// `has key [from x]`: under `truthy`, `x` is one of its alternatives
-    /// with that member (`"key" in x`).
-    Has { key: Box<Unwrap>, from: Option<Box<Unwrap>> },
-    /// A positional key (`at 0`): a type argument or tuple slot.
-    Ordinal(u32),
-    /// `instance "<global>" [in <class>] [of v, ...]`: the global
-    /// declaration of that class (default `type`) instantiated with these
-    /// arguments by position (`instance "Promise" of returned`).
-    Instance { name: Name, class: Name, arguments: Vec<Unwrap> },
 }
 
 /// A rule's `indent X by n` / `indent in X by n`: the indentation structure

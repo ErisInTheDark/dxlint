@@ -9,6 +9,7 @@ use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
 use super::semantic::Semantic;
 use super::Value;
 
+pub mod compile;
 mod eval;
 
 pub(super) fn exclusive_groups(
@@ -18,7 +19,7 @@ pub(super) fn exclusive_groups(
     errors: &mut Vec<crate::config::error::ConfigError>,
 ) -> Vec<u64> {
     use crate::config::error::ConfigError;
-    let fitted = kinds.iter().flat_map(|kind| &kind.fits).fold(0, |all, &(bits, _)| all | bits);
+    let fitted = kinds.iter().flat_map(|kind| &kind.fits).fold(0, |all, &(bits, _, _)| all | bits);
     let mut groups = Vec::new();
     for group in &config.exclusive {
         let Some(bits) = super::class_bits(&mut vocabulary.traits, &group.traits, errors) else { continue };
@@ -112,12 +113,19 @@ impl Values<'_> {
         let Some(node_data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
         let Some(kind) = self.tables.kinds.get(node_data.matcher as usize) else { return Known::Yes(false) };
         let mut unknown = false;
-        for &(bits, when) in &kind.fits {
+        for &(bits, views, when) in &kind.fits {
             if !self.question.budget.step() {
                 return Known::Unknown;
             }
             if bits & (1 << trait_id) == 0 {
                 continue;
+            }
+            if views != 0 {
+                let Target::Scope(scope) = leaf.target else { continue };
+                let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
+                    return Known::Unknown;
+                };
+                if info.classes & views == 0 { continue }
             }
             match when.map_or(Known::Yes(true), |condition| self.world.condition(leaf, condition, self.semantic)) {
                 Known::Yes(true) => return Known::Yes(true),
@@ -290,6 +298,25 @@ impl Values<'_> {
                         }
                     }
                     super::POSITION => return Known::Unknown,
+                    _ if super::attribute_step(label).is_some() => {
+                        use crate::expr::Value as Expression;
+                        let Some(attribute_id) = super::attribute_step(label) else { unreachable!() };
+                        let Known::Yes(attribute) = self.world.attribute(leaf, attribute_id, self.semantic) else {
+                            return Known::Unknown;
+                        };
+                        let items = match &attribute {
+                            Expression::Null => &[][..],
+                            Expression::List(items) => items.as_ref(),
+                            Expression::Node(..) => std::slice::from_ref(&attribute),
+                            _ => return Known::Unknown,
+                        };
+                        for item in items {
+                            if !self.question.budget.step() { return Known::Unknown }
+                            let Expression::Node(child, _) = item else { return Known::Unknown };
+                            if tree.nodes.get(*child as usize).is_none() { return Known::Unknown }
+                            next.push(Leaf { target: Target::Node(NodeRef { file: node.file, node: *child }), frame: leaf.frame });
+                        }
+                    }
                     _ => {
                         for child in super::follow(tree, node.node, &[label]) {
                             if !self.question.budget.step() {

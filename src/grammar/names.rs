@@ -52,32 +52,8 @@ pub struct Resolve {
     pub when: Option<u32>,
 }
 
-/// An `unwraps` / `propagates` value with fields as labels
-/// ([`crate::config::ast::Unwrap`]).
-#[derive(Clone, Debug)]
-pub enum Value {
-    Path(Vec<u16>),
-    Text(Box<str>),
-    Either(Box<Value>, Box<Value>),
-    Union(Vec<Value>),
-    Intersection(Vec<Value>),
-    Spread { intersection: bool, path: Vec<u16> },
-    /// The member `key` of what the first value unwraps to, among scopes of
-    /// these classes (0: the leaf kind's [`KindNames::member_defaults`]).
-    From(Box<Value>, Box<Value>, u64),
-    /// The scopes of these classes the nodes reached open.
-    Scope { classes: u64, from: Box<Value> },
-    Not(Box<Value>),
-    /// Trait bits ([`Vocabulary::traits`]), and of what (default: the node).
-    Excludes { traits: u64, from: Option<Box<Value>> },
-    Includes { value: Box<Value>, from: Option<Box<Value>> },
-    Has { key: Box<Value>, from: Option<Box<Value>> },
-    /// A positional key: a type argument or tuple slot.
-    Ordinal(u32),
-    /// A global declaration of these classes, instantiated with these
-    /// arguments by position.
-    Instance { name: Box<str>, classes: u64, arguments: Vec<Value> },
-}
+pub use values::compile::Value;
+use values::compile::lower_value;
 
 /// One `unwraps` item: what the node stands for (no effect), or what
 /// evaluating it does.
@@ -123,7 +99,7 @@ pub struct KindNames {
     pub effects: Vec<Effect>,
     pub unwraps: Vec<Unwrapping>,
     /// Traits (bits) the node directly has, each under its condition.
-    pub fits: Vec<(u64, Option<u32>)>,
+    pub fits: Vec<(u64, u64, Option<u32>)>,
     /// `in <field> propagates <value>`.
     pub propagates: Vec<(Vec<u16>, Value, Option<u32>)>,
     /// Execution shapes (`runs`, `catches`, `runs after`, `labels`).
@@ -209,60 +185,6 @@ fn intern(list: &mut Vec<String>, name: &str) -> usize {
 /// Resolves a field path to labels, reporting unknown fields.
 type PathOf<'a> = dyn Fn(&mut Vec<ConfigError>, &[Name]) -> Option<Vec<u16>> + 'a;
 
-/// An `unwraps` value with its field paths as labels.
-fn lower_value(v: &crate::config::ast::Unwrap, path: &PathOf<'_>, vocab: &mut Vocabulary, errors: &mut Vec<ConfigError>) -> Option<Value> {
-    use crate::config::ast::Unwrap as U;
-    let lower = |v: &U, vocab: &mut Vocabulary, errors: &mut Vec<ConfigError>| lower_value(v, path, vocab, errors);
-    let traits = vocab;
-    Some(match v {
-        U::Path(p) => Value::Path(path(errors, p)?),
-        U::Text(t) => Value::Text(t.as_str().into()),
-        U::Either(a, b) => Value::Either(Box::new(lower(a, traits, errors)?), Box::new(lower(b, traits, errors)?)),
-        U::Union(parts) => Value::Union(parts.iter().map(|p| lower(p, traits, errors)).collect::<Option<_>>()?),
-        U::Intersection(parts) => Value::Intersection(parts.iter().map(|p| lower(p, traits, errors)).collect::<Option<_>>()?),
-        U::Spread { intersection, path: p } => Value::Spread { intersection: *intersection, path: path(errors, p)? },
-        U::From(of, key, classes) => {
-            let bits = class_bits(&mut traits.scope_classes, classes, errors)?;
-            Value::From(Box::new(lower(of, traits, errors)?), Box::new(lower(key, traits, errors)?), bits)
-        }
-        U::Scope { classes, from } => {
-            let bits = class_bits(&mut traits.scope_classes, classes, errors)?;
-            Value::Scope { classes: bits, from: Box::new(lower(from, traits, errors)?) }
-        }
-        U::Not(a) => Value::Not(Box::new(lower(a, traits, errors)?)),
-        U::Excludes { traits: names, from } => {
-            let mut bits = 0u64;
-            for t in names {
-                let i = intern(&mut traits.traits, &t.text);
-                if i >= 64 {
-                    errors.push(ConfigError::new(t.span, "at most 64 traits"));
-                    return None;
-                }
-                bits |= 1 << i;
-            }
-            let from = match from {
-                Some(f) => Some(Box::new(lower(f, traits, errors)?)),
-                None => None,
-            };
-            Value::Excludes { traits: bits, from }
-        }
-        U::Includes { value, from } | U::Has { key: value, from } => {
-            let value = Box::new(lower(value, traits, errors)?);
-            let from = match from {
-                Some(f) => Some(Box::new(lower(f, traits, errors)?)),
-                None => None,
-            };
-            if matches!(v, U::Includes { .. }) { Value::Includes { value, from } } else { Value::Has { key: value, from } }
-        }
-        U::Ordinal(n) => Value::Ordinal(*n),
-        U::Instance { name, class, arguments } => {
-            let classes = class_bits(&mut traits.declaration_classes, std::slice::from_ref(class), errors)?;
-            let arguments = arguments.iter().map(|a| lower(a, traits, errors)).collect::<Option<_>>()?;
-            Value::Instance { name: name.text.as_str().into(), classes, arguments }
-        }
-    })
-}
-
 /// The tables, per matcher (empty when the config has no name items).
 #[derive(Default)]
 pub struct Names {
@@ -271,8 +193,6 @@ pub struct Names {
     pub conditions: Vec<Condition>,
     /// Every item expression evaluated on nodes ([`Operand`]).
     pub operands: Vec<Operand>,
-    /// Module item operands, compiled like [`Names::conditions`].
-    pub modules: modules::compile::Tables,
     /// `exclusive` groups: trait bits no possible value has together.
     pub exclusive: Vec<u64>,
 }
@@ -383,6 +303,7 @@ impl Names {
         let mut declared = 0u64;
         let mut opened = 0u64;
         let mut asked: Vec<(&Name, bool)> = Vec::new();
+        let mut requested_classes = Vec::new();
         for (item, def) in config.names.iter().enumerate() {
             let targets: Vec<u32> = def
                 .targets
@@ -410,7 +331,7 @@ impl Names {
                         (None, "definition") => Ok(DECLARATION),
                         (None, "position") => Ok(POSITION),
                         (None, name) => match attrs.get(name) {
-                            Some(attr) if attr < POSITION - ATTR_STEP => Ok(ATTR_STEP | attr),
+                            Some(attr) if attr < WIDENED - ATTR_STEP => Ok(ATTR_STEP | attr),
                             _ => {
                                 errors.push(
                                     ConfigError::new(f.span, format!("no layer has a field or attribute `{}`", f.text))
@@ -471,7 +392,7 @@ impl Names {
                     let Some(near) = class_bits(&mut vocab.scope_classes, nearest, errors) else { continue };
                     asked.extend(nearest.iter().map(|n| (n, true)));
                     let value = match value {
-                        Some(v) => match lower_value(v, &path, &mut vocab, errors) {
+                        Some(v) => match lower_value(v, &path, &mut vocab, errors, &mut requested_classes) {
                             Some(v) => Some(v),
                             None => continue,
                         },
@@ -487,19 +408,19 @@ impl Names {
                         names.add(g, m, |k| k.unwraps.push(u.clone()));
                     }
                 }
-                NameItem::Execution(item) => {
-                    let Some(item) = effects::compile::lower(item, &mut |p| path(errors, p), &mut |e| u16::try_from(intern(&mut vocab.effects, &e.text)).ok()) else {
+                NameItem::Execution(execution) => {
+                    let Some(lowered) = effects::compile::lower(execution, &mut |p| path(errors, p), &mut |e| u16::try_from(intern(&mut vocab.effects, &e.text)).ok()) else {
                         continue;
                     };
                     for (&m, &when) in targets.iter().zip(&when) {
-                        names.add(g, m, |k| k.execution.push(item.clone(), when));
+                        names.add(g, m, |k| k.execution.push(lowered.clone(), when, item as u32, def.targets[0].span));
                     }
                 }
                 NameItem::Members { classes, inherits } => {
                     let Some(bits) = class_bits(&mut vocab.scope_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|n| (n, true)));
                     let inherits = match inherits {
-                        Some(v) => match lower_value(v, &path, &mut vocab, errors) {
+                        Some(v) => match lower_value(v, &path, &mut vocab, errors, &mut requested_classes) {
                             Some(v) => Some(v),
                             None => continue,
                         },
@@ -515,22 +436,24 @@ impl Names {
                 NameItem::Member { classes, key, value } => {
                     let Some(bits) = class_bits(&mut vocab.scope_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|n| (n, true)));
-                    let Some(key) = lower_value(key, &path, &mut vocab, errors) else { continue };
-                    let Some(value) = lower_value(value, &path, &mut vocab, errors) else { continue };
+                    let Some(key) = lower_value(key, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
                         let link = (bits, key.clone(), value.clone(), when);
                         names.add(g, m, |k| k.member_links.push(link.clone()));
                     }
                 }
-                NameItem::Fits(traits) => {
+                NameItem::Fits { traits, views } => {
                     let Some(bits) = class_bits(&mut vocab.traits, traits, errors) else { continue };
+                    let Some(views_mask) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
+                    asked.extend(views.iter().map(|name| (name, true)));
                     for (&m, &when) in targets.iter().zip(&when) {
-                        names.add(g, m, |k| k.fits.push((bits, when)));
+                        names.add(g, m, |k| k.fits.push((bits, views_mask, when)));
                     }
                 }
                 NameItem::Propagates { field, value } => {
                     let Some(field) = path(errors, field) else { continue };
-                    let Some(value) = lower_value(value, &path, &mut vocab, errors) else { continue };
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
                         let p = (field.clone(), value.clone(), when);
                         names.add(g, m, |k| k.propagates.push(p.clone()));
@@ -556,7 +479,7 @@ impl Names {
                         let lowered = calls::compile::lower(
                             call,
                             &mut |p, errors| path(errors, p),
-                            &mut |v, errors| lower_value(v, &path, &mut vocab, errors),
+                            &mut |v, errors| lower_value(v, &path, &mut vocab, errors, &mut requested_classes),
                             &mut |part| names.operand(item, m, part),
                             errors,
                         );
@@ -574,18 +497,27 @@ impl Names {
                     } else {
                         asked.extend(classes.iter().map(|c| (c, false)));
                     }
+                    let asks = match module.asking() {
+                        None => 0,
+                        Some(crate::config::ast::modules::Asking::All) => u64::MAX,
+                        Some(crate::config::ast::modules::Asking::Classes(classes)) => {
+                            asked.extend(classes.iter().map(|class| (class, false)));
+                            let Some(bits) = class_bits(&mut vocab.declaration_classes, classes, errors) else { continue };
+                            bits
+                        }
+                    };
                     for (&m, &when) in targets.iter().zip(&when) {
                         if scope {
                             let open = OpenScope { classes: bits, within: Vec::new(), when };
                             names.add(g, m, |k| k.scopes.push(open.clone()));
                         }
-                        let lowered = names.modules.lower(module, item, m, bits, when);
+                        let lowered = modules::compile::lower(module, bits, asks, when, &mut |part| names.operand(item, m, part));
                         names.add(g, m, |k| k.modules.items.push(lowered.clone()));
                     }
                 }
             }
         }
-        for (name, scope) in asked {
+        for (name, scope) in asked.into_iter().chain(requested_classes.iter().map(|name| (name, false))) {
             let (list, have, what) = if scope {
                 (&vocab.scope_classes, opened, "no layer opens a scope of class")
             } else {
@@ -597,6 +529,7 @@ impl Names {
             }
         }
         names.exclusive = values::exclusive_groups(config, &mut vocab, &names.kinds, errors);
+        effects::compile::validate(&names, errors);
         names.vocabulary = std::sync::Arc::new(vocab);
         names
     }
@@ -806,9 +739,18 @@ pub const DECLARATION: u16 = u16::MAX - 3;
 /// The node's index among its parent's nodes in the same field (a type
 /// parameter's position, for `from through.type_argument at position`).
 pub const POSITION: u16 = u16::MAX - 4;
+pub const RESULT: u16 = u16::MAX - 5;
+pub const EXPECTED: u16 = u16::MAX - 6;
+pub const INFERRED: u16 = u16::MAX - 7;
+pub const RETURNED: u16 = u16::MAX - 8;
+pub const WIDENED: u16 = u16::MAX - 9;
 /// `ATTR_STEP | id`: the node a `let` attribute (by engine attribute id)
 /// holds; fields are numbered below it, the special steps above.
 pub const ATTR_STEP: u16 = 0x8000;
+
+pub fn attribute_step(step: u16) -> Option<u16> {
+    (ATTR_STEP..WIDENED).contains(&step).then_some(step & !ATTR_STEP)
+}
 
 /// The nodes a structural `path` (field labels, [`PARENT`], [`IT`]) leads to
 /// from `from` in one tree. Semantic steps ([`THROUGH`], [`DECLARATION`],

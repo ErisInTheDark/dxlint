@@ -44,7 +44,7 @@ impl<'a, 'world> Run<'a, 'world> {
                 Task::Leaf(leaf) => self.leaf(leaf),
                 Task::Save(leaf) => {
                     if let Some(answer) = self.answers.last_mut() {
-                        answer.value = self.values.normalize(answer.value.clone());
+                        answer.value = self.values.normalize(self.values.semantic.narrowing().refine(leaf, answer.value.clone()));
                         self.values.semantic.values.values.borrow_mut().insert(leaf, answer.value.clone());
                     }
                 }
