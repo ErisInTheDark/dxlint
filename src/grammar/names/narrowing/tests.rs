@@ -100,3 +100,23 @@ fn missing_paths_and_exhaustion_do_not_create_a_guard_proof() {
     assert_eq!(guarded(&flow, &[1], 2, writes_binding(10), &exhausted), Known::Unknown);
     assert_eq!(guarded(&flow, &[1], 99, writes_binding(10), &question), Known::Unknown);
 }
+
+#[test]
+fn writes_invalidate_only_the_same_runtime_root_and_descendant_member_paths() {
+    use crate::grammar::names::question::{FrameId, Target as ValueTarget};
+    let root = Leaf { target: ValueTarget::Node(NodeRef::here(10)), frame: FrameId::ROOT };
+    let base = Place { root, path: vec![] };
+    let member = Place { root, path: vec![Key::Text("payload".into())] };
+    let child = Place { root, path: vec![Key::Text("payload".into()), Key::Text("kind".into())] };
+    let sibling = Place { root, path: vec![Key::Text("other".into())] };
+    let separate = Place {
+        root: Leaf { target: ValueTarget::Node(NodeRef::here(11)), ..root },
+        ..child.clone()
+    };
+    assert!(base.invalidates(&child));
+    assert!(member.invalidates(&child));
+    assert!(child.invalidates(&child));
+    assert!(!child.invalidates(&member));
+    assert!(!sibling.invalidates(&child));
+    assert!(!separate.invalidates(&child));
+}
