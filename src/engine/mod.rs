@@ -257,15 +257,6 @@ impl Linter {
                 errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
-        for operand in &self.grammar.names.modules.operands {
-            if let Some(e) = operand.expr.get() {
-                let body = crate::vm::lower(e, functions, values);
-                let failed = values.take_lowering_errors("module operand");
-                if failed.is_empty() { let _ = operand.lowered.set(body); }
-                let span = operand.source(config).expect("compiled module operand").span;
-                errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
-            }
-        }
         for operand in &self.grammar.names.operands {
             if let Some(e) = operand.expr.get() {
                 let body = crate::vm::lower(e, functions, values);
