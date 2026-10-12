@@ -22,7 +22,10 @@ Seven items, written in a node's own block (`match x ... { }`, or
 |---|---|
 | `scope <class>, ...` | the node opens a scope of these classes; several `scope` items nest, outermost first |
 | `declares <class>, ... <name> in nearest <scope class>, ... [hoisted]` | the node declares `name` (a field) into the nearest enclosing scope of one of those classes; a text (`"arguments"`) declares that name implicitly, the node itself its declaration, yielding to explicit ones |
+| `in <declaration kind> { merges <class>, ... }` (module item, may be conditional) | declarations of that kind in those classes merge across files (augmentations, `lib` interfaces); only they consult merged scopes and program inputs, other direct publications answer from their own module; an undecidable condition is unknown |
+| `declares ... <name> [keyed <expr>] [where <expr>] in ...` | per target after the path expands (`node` = declaring node, `it` = target; implicit names use the declaring node as `it`): `keyed` gives the target's key, `where` must be boolean and `false` skips that target; an error or non-boolean skips it and reports one engine warning |
 | `resolves <class>` | the node's text uses a name; the engine looks it up |
+| `resolves <class> ... outside <node expr>` | same lookup start and nested locals, but skips the scopes opened by the selected local ancestor (`node` = item owner, `it` = reference), e.g. parameter decorators resolving outside their method; a null, non-ancestor, scope-less or failing expression is a Names failure (no fallback to ordinary lookup); `resolve`, visibility and `name_scopes(reference)` share it |
 | `targets <field> ?? <field>, ...` | a declaration, use or effect aimed at this node (a pattern, a destructuring literal, a qualified name) passes on to these fields; per group the first that reaches anything |
 
 Field paths are field names joined by `.`. Special steps (a field of the same name wins): `parent` (the node's parent: `declares value parent.parameter`), `it` (the node), `through` (the reference it was reached through), `definition` (the declaration a name resolves to), `position` (the node's index among its parent's nodes in the same field).
@@ -98,6 +101,25 @@ struct, signature or literal type is the type; nothing is constructed.
 | `excludes t, ... [from x]` / `includes v [from x]` / `has key [from x]` | under `truthy`: `x`'s alternatives without these traits / that `v` could be (`===`, `instanceof`) / with that member (`in`) |
 | `unwraps maybe <effect> ...` | the effect may happen, or the node completes normally (calls that may throw) |
 | `through` | in a node reached by unwrapping a reference, that reference |
+| `trait t, ...` | a closed, nodeless value with exactly the listed traits; no identity, syntax or declaration (`trait void, undefined` implies nothing else) |
+| `returned default v` | the declared valued returns, unioned with `v` for bare returns or normal completion; no returns and no normal completion is never |
+| `carries [<ordered argument path> [using v]] as <description>` (per kind) | the nominal carrier a value instantiates (generic declaration + its ordered arguments + a language description for display/policy); without a path it has zero arguments (enums); rules compare carriers, not assignability |
+| `select <check> against <pattern> then <yes> else <no> [distribute <sites>] [dynamic both]` (value recipe) | conditional value: the shared matcher proves yes/no and binds the owner's `generics` (infer slots; unbound = known absent); undecidable is unknown, never a guessed union. `distribute` splits the check's whole DNF arms (empty union = never) and rebinds the naked formal per arm. `dynamic both` (with a `when check always any` guard): infer first; a top-bound pattern picks yes only, otherwise yes \| no |
+| `product <shape> <items> fits <traits> as <constant record> [inherits v] [readonly inherits v] [optional v]` (language) | an ordered product shape (tuples, rest packs): traits, carrier description, member base (readonly products use `readonly inherits`) and the optional-element payload |
+| `unwraps product <shape> of <sites> [using v] [optional <path>] [repeated <path>] [readonly <path>]` | the node is a product: one element per site (real values and frames, `using` per element), optional/repeated read at each site, readonly at the node; a missing flag is false, an unreadable one unknown |
+| `pack <shape>` (on a rest parameter kind) | rest arguments are captured as an ordered product of that shape |
+| `constrains <value>` (on a generic formal) | the formal's bound, evaluated in the bound frame (so dependent bounds see real arguments); inferred candidates violating a known bound fall back to it, explicit ones reject the candidate |
+| `defines <value>` (on a syntax owner) | the raw definition sites the node selects (qualified names: the member, not the left side); without it, name bindings decide. A closed scope proving the member absent yields no sites so `??` falls through; incomplete selection stays unknown; selected frames, files and classes are kept |
+| `unwraps <value> for <declaration classes>` | class-specific view of a dual declaration (enum type vs runtime object) used during real definition/instance binding; qualified first, default `unwraps` as fallback; ordered arguments, file, `through` and frame kept |
+| `arguments <path>` (per kind) | the ordered type arguments a reference supplies, read in the caller's frame |
+| `top <trait>` / `dynamic <trait>` (language) | `top` (TS `unknown`): universal target, meet identity, absorbs joins; `dynamic` (TS `any`): the same plus universal source, and wins joins over `top`. An ordinary unknown answer stays epistemic, never `top` |
+| `indexed [repeated] <path> [<strings>] [using v] [in views]`, `...<path> [using v]`, `&...<path> [using v]` | per-slot / spread recipes evaluated lazily at each real source site and frame, keeping order and unknown slots |
+| `keys text\|ordinal\|symbol <traits>` (language) | which traits a key value must have to belong to each key domain |
+| `indexed text\|ordinal\|symbol <path> [using v] [in views]` | an index signature: an unbounded, lookup-only member inventory for that key domain |
+| `indexed keyed <path> by <key value> [using v] [in views]` | computed members with finite keys evaluated per site (Known keys cached per canonical leaf and path, keeping the frame) |
+| `fits T, ... [in views] open` | the listed traits are known; traits not listed are uncertain (not false) for that view (`any`, `unknown`); `when` and scope views apply as for `fits` |
+| `members <views> closed [inherits v]` | the scope's named-member list is complete (presence proofs may drop absent keys); every active base view must be closed too, and unresolved members or heritage never prove closed |
+| `widens v` (per kind) | the recipe `.widened` uses; without one, `.widened` is the normal value, keeping union/intersection structure |
 
 Precedence follows TS: `a | b & c` is `a | (b & c)`.
 
@@ -120,8 +142,10 @@ member's annotation `T`, which resolves to the type parameter, which unwraps
 so `T` stands for `string | undefined` there and for something else through
 another reference.
 
-**Built-in types** (`number`, `Promise`) resolve to declarations in the
-language's library files (`lib.d.ts`), read like any other file.
+**Named library types** (`Promise`, `Array`) resolve to declarations in the
+language's library files (`lib.d.ts`), read like any other file. Primitive
+and default values (`number`, a bare `return`) are language-declared
+`trait` recipes, never fake declarations.
 
 ## Calls and signatures
 
@@ -139,7 +163,9 @@ in ts_declarator { in init expects type }
 - `signature <field> returns <value>`: a callable's parameters (the
   field's nodes in order; one that `fits rest` takes the remaining
   arguments) and result. `returned` is the union of the values of the
-  `returned` effects aimed at the node's scope.
+  `returned` effects aimed at the node's scope. Optional `receiver <path>`
+  (between parameters and `returns`) names the declared `this` parameter:
+  no item = unknown, a path reaching none = known to have none.
 - `calls <callee> with <field>` / `constructs ...`: the callee unwraps to
   candidates; those that fit `callable` (or `constructible`) with a
   signature are overloads, tried in declaration order: the first whose
@@ -148,7 +174,26 @@ in ts_declarator { in init expects type }
 - `expected` (path step): the node's contextual value: an `in <field>
   expects <value>` of its parent; an argument's matching parameter of the
   chosen signature; a parameter's counterpart in its function's expected
-  callable.
+  callable. `in <field> expects each <value>` evaluates `<value>` on each
+  matched child instead (its own file, frame, parent and position; the
+  condition and field selection stay on the owner), e.g.
+  `in ts_array { in element expects each from parent.expected at position }`.
+- `receiver` (path step, e.g. `it.expected.receiver`): the declared
+  receiver values of every callable header the value reaches, without
+  projecting results. No declared receivers = absent (`??` falls through);
+  unknown metadata or a mix of present and absent = unknown; never stays
+  never.
+- `self` (value primary): the raw current leaf, same file and frame, not
+  expanded (`it` keeps normal expansion). `unwraps self & constraint`
+  keeps the declaration's own traits and carriers alongside the
+  constraint.
+- `overloads infer last [when <expr>]` (on a callable layer): inference
+  (conditional `infer`, generic capture) uses the last signature; `accepts`
+  still searches any compatible one; unset keeps the compatible search; an
+  undecidable condition is unknown.
+- Demand-specific queries (`call_parameters`, `call_results`) project only
+  the requested side; unrelated unresolved signature parts never erase
+  known answers.
 - Generic inference: a type parameter reached through a call with no
   explicit argument unwraps to `inferred`: what the arguments give the
   parameter positions mentioning it (engine-owned).
@@ -175,6 +220,7 @@ Engine effects (reserved; the engine acts on them):
 | `assigned <x>` | `x` is overwritten without reading it (`x = 1`, `for (x of xs)`) | a write; ends narrowing of `x` |
 | `assigned <x> with <value>` | same, storing `<value>` (a values recipe, e.g. `with right`) | a write; narrowing of `x` restarts from its declared value reduced to what `<value>` could be |
 | `mutated <x>` | `x` is read, then changed (`x += 1`, `x++`) | a read and a write; ends narrowing of `x` |
+| `read <x>` | the binding `x` resolves to is read here (evaluated when the owner is entered) | indexed per binding; `flow_value_used` |
 | `awaited <x>`, `yielded <x>` | waits on / yields `x` | async and generator rules |
 
 User effects: any other participle (`unwraps logged argument`). The engine
@@ -184,6 +230,11 @@ engine effect is a config error.
 
 A block whose every path has `returned`, `thrown`, `broken` or `continued`
 unwraps to never; code after it is unreachable.
+
+Within each phase, ordinary effects and possible controls keep declaration
+order; the certain terminating control runs last. A selected entry (a
+`switch` case) enters and leaves around its selected body only; falling
+through never re-runs later tests.
 
 ## Traits
 
@@ -280,7 +331,12 @@ One engine owner, `engine/world.rs`; type-layer engines see only the
   units past the lint.
 - Module resolution: policy is zlint data (`module_resolution`, Daisy's
   resolver); the engine implements the resolver's `Host` (path, text,
-  is_file, root scope, ambient module) over units and reads.
+  is_file, root scope, ambient module) over units and reads. Program
+  settings (config, path mappings, base, libraries, types, project roots,
+  program inputs) are anchored at the lint's root program and computed once
+  per program, never re-derived from a visited foreign file; relative
+  imports and packages stay anchored at the importing file. Templates may
+  transform a placeholder (`{name:lower}`); an unknown transform is an error.
 - One `Semantic` per root question, `Budget::DEFAULT`; nested engines
   reuse it. `condition` / `operand` / `attribute` run on the VM in the
   target node's file.

@@ -355,8 +355,9 @@ exist on all of them. Dotted paths through a known field (`name.offset`,
 `name.unparen_offset`) instead read that field on the current node; a missing
 field yields `null`.
 
-`in K.link rule` also targets nodes reached through a registered node link
-from nodes of matcher `K`. Links can return one node or many:
+`in K.link rule` also targets nodes reached from nodes of matcher `K`
+through a node-valued attribute (one node, a list, or null) or a registered
+native link:
 
 ```zlint
 in ts_program.binding_declarations rule declarations info "{text}"
@@ -366,12 +367,14 @@ in ts_identifier.declaration rule bindings info "{text}"
 The body runs on the reached node, not `K`: `text`, attributes, facts,
 rule locals, report ranges and fixes belong to that node. Nodes are checked
 in document order, once per rule even when several owners or links reach
-them. An unresolved link, or a file without the native front end, selects
-nothing. Links do not depend on rule options. A real grammar field takes
-precedence over a link of the same name; unlike a known field's target,
-a link infers no child fields for the body (use explicit node paths).
-`binding_declarations` includes merged declarations, named expressions and
-identifier enum members, not referencing identifiers.
+them. A null or unresolved target selects nothing; an attribute that fails,
+or yields anything but a node, a list of nodes or null, reports an engine
+error. Targets do not depend on
+rule options. A real grammar field takes precedence over an attribute or link
+of the same name; unlike a known field's target, they infer no child fields
+for the body (use explicit node paths). `binding_declarations` (`.ts/names`)
+includes merged declarations, named expressions and identifier enum members,
+not referencing identifiers.
 
 **Severity and message.** The severity keyword (`off`, `hint`, `info`, `warn`,
 `error`) comes first and the message follows it, on the rule's line or as a
@@ -519,7 +522,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 
 **Fallbacks.** `a ?? b` evaluates `a` once and evaluates `b` only when `a` is `null`. Unlike truthiness, it preserves `false`, `0`, `""`, `[]` and `{}`. Use `a.nonempty ?? b` when empty text, lists or records should also fall back. `.nonempty` and `.nodes` are reserved suffixes; read record keys with those names using `get(record, "nonempty")` or `get(record, "nodes")`. Grammar fields cannot use these names.
 
-**Calls.** A call's arguments must be simple: names, literals, dot reads, operators over those, or a stage lambda. Do not nest calls within arguments; name an intermediate value with `let` or use a pipeline. `count(params) > max` and `"{count(all)}"` remain valid. Calls inside a lambda body follow the same rule independently.
+**Calls.** Arguments may be any expression, including nested calls, conditionals, templates and pipelines. Lambdas keep their own parameter scope.
 
 | syntax | meaning |
 |---|---|
@@ -541,7 +544,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 | `node`, `right.node`, `parent.node` | the node itself as a node value (it reads as its text) |
 | `right.nodes`, `n.callee.nodes` | the field's node values, always a list, including for zero or one match |
 | `overlapping(layer)`, `overlapping(layer, from, to)` | the nodes of a layer or group anywhere in the file whose span overlaps the node's (or bytes `from..to`), in source order: on a `ts_line`, `overlapping(ts_comment)` |
-| `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the node, in source order: `descendants(ts_export)` |
+| `descendants(layer)` | the nodes of a layer or group (specialisations too) inside the current node, in source order: `descendants(ts_export)`. Always the node being evaluated, never a piped or `value` result; for another node use `walk` over `children` |
 | `walk(roots, n => next)` | the nodes reachable from `roots` by `next` (nodes or lists of them), each once, roots first: `walk(references.nodes, n => n.writer.right.node)` |
 | `f(a, b)` | function call |
 | `a b` | join: values side by side join as text (`text "="`), or as lists if either is one (`[a] [b]`) |
@@ -551,6 +554,7 @@ Item stages may omit the second parameter. `i` is the original input index, incl
 | `a ?? b` | lazy fallback for `null` only |
 | `value ~ pattern-item` | does the whole value match? (`text ~ /[a-z_]+/`, `text ~ snake`) |
 | `is a`, `x is a`, `x is (a, b)`, `x not (a, b)` | is the node (`x` alone: this node; or a field, `parent`, `previous`, a link, a node value) of one of these kinds: itself, a specialisation, or a group member (`not`: none of them) |
+| `x could t`, `x always (t, u)` | type traits: could some / does every value `x` unwraps to fit every listed trait (docs/design/type-layers.md); `x` must be a node of this file, else null; unknown answers are false in rules (inside a name or trait condition they stay unknown) |
 | `is a.field` | does the node sit in that field of a node of kind `a` (`is ts_if.alternate`) |
 | `is layer name`, `is .lang` | is the node in that named layer; is the file in that language |
 | `/regex/` elsewhere | the regex source as text, for the `re_*` functions |
@@ -883,6 +887,15 @@ other opening tags checked. Read tag bounds from `opening.offset`,
 `opening.end_offset`, `closing.offset` and `closing.end_offset`, and tag
 fields from their tag owner rather than the enclosing element.
 
+**Name attributes** (`.ts/names`, null elsewhere):
+
+| name | value |
+|---|---|
+| `binding_declarations`, `declaration`, `declarations`, `references` | node-valued binding links (usable as rule targets, `in K.attr rule`) |
+| `declaration_kind` | on a binding's canonical first declaring identifier: its syntax kind (`const`, `let`, `var`, `parameter`, `type_parameter`, `function`, `function_name`, `class`, `class_name`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, `using`) |
+| `declaration_kinds` | on any declaring identifier: the syntax kinds of every declaration merged into its binding, in source order; null on references |
+| `reference_kind` | on a referencing identifier: the syntax kind of its binding's canonical first declaration; null when unresolved |
+
 **Facts.** Native layers add builtins (null elsewhere): properties of the
 code any rule may ask about. What a rule makes of them (its options, what
 is wrong, messages) is written in the rule. A fact taking arguments is called (`type_structure(["then"])`); on another node, call it there: `source.node.type_structure(names)` asks about `source`, with `names` read where the call is written.
@@ -891,14 +904,9 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 |---|---|
 | `uses`, `value_uses` | on a declaring identifier: how often its name is used, and how many of those uses need the runtime value (type positions, and `typeof x` or `[x]` keys inside types, do not) |
 | `self_uses`, `writes` | uses inside its own function, and assignments to it |
-| `declaration_kind` | `const`, `let`, `var`, `parameter`, `type_parameter`, `function`, `class`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, ... |
 | `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
-| `symbol_spaces` | the spaces (`type`, `value`, `namespace`) the resolved declaration occupies |
-| `module_exports` | a module's publications by space, and whether the list is complete |
-| `imported_from` | on an identifier that is or refers to an import: the module it comes from |
-| `declaration_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
 | `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.zlint` decides deprecation |
-| `resolved`, `reference_kind` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file), and the `declaration_kind` of what it refers to |
+| `resolved` | on a referencing identifier: `local`, `import` or `global` (declared nowhere in the file) |
 | `type` | the expression's type as text (`Promise<void>`, `never`, `NodeJS.Timeout`), null when unknown |
 | `type_flags` | what the type is made of: `any`, `never`, `string`, `number`, `boolean`, `bigint`, `symbol`, `literal`, `enum`, `array`, `tuple`, `promise`, `function`, `object`, `null`, `undefined`, `nullable`, `union`, and `unknown` for parts zlint cannot read |
 | `type_literal_values` | literal union/intersection constituents as type/value records; excludes nonliteral constituents; bigint values retain literal text |
@@ -912,7 +920,6 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `could_be_error` | expression syntax permits an Error-valued result through a possible value branch; does not require type analysis |
 | `error_value` | constrained value category (`error`, `any`, `unknown`, `undefined`, `other`), caught-binding provenance (`rethrown`), and unparenthesised byte `offset` |
 | `argument_transfers` | calls, constructions and tagged templates: any/generic argument and spread transfer rows `{offset, mode, error, sender, receiver}`; modes `argument`, `spread`, `array`, `tuple`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
-| `assignment_transfers` | assignments, initialisers, properties and destructuring: any/generic transfer rows `{offset, mode, error, sender, receiver}`; modes `any`, `generic`, `array`, `tuple`, `object`, `spread`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `return_transfer` | returns and expression arrow bodies: transfer record `{mode, error, sender, receiver}` or null; modes `value`, `array`, `promise`, `generic`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `builtin_type(name)`, `builtin_constructor(name)` | standard-library type identity through instance heritage, or constructor value identity through class heritage; names alone do not identify user-defined types |
 | `type_members` | member names of that type, inherited ones included (`then`, `[Symbol.dispose]`) |
@@ -923,13 +930,45 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `type_flow(site, source)` | source/expected type relation records at declared, contextual, argument, return, indexed-key and heritage sites: union domains and enum identities, tri-state assignability, aligned generic/index/property children, typed operands and receiver enum names; call receivers retain declared generic bounds or explicit type arguments, not inference from the checked value; `complete: false` marks traversal limits |
 | `type_awaitability` | structural thenable union facts `{any, all, union_equivalent, complete}`; `all` requires every non-never arm to be known thenable, `any` needs one; `union_equivalent` is mutual assignability between awaited and ordinary arms of a known mixed union, or null |
 | `callable_contracts(site, source, member_path?, fields?)` | callable transfer rows `{origin, source, target, heritage, member_path, complete}`; source/target contain return arms `{kind, thenable}`. Origins are `argument`, `return`, `declared`, `contextual`, `heritage` or `resource`; heritage is a direct base node or null. The optional string-list path selects exactly one member chain; omitted or `[]` selects the root. Argument contracts include every visible overload, not only the selected one; unresolved signatures or work limits mark rows incomplete. The optional fourth string-list argument adds `contextual_returns`: raw recursive `{kind, parts}` return profiles at the selected member path, retaining unions, intersections and open signature parameters without argument inference; `[]` means known non-callable, null means unavailable, opaque or work-limited. Omitted fields do no extra contextual lookup and keep the original row shape. Example: `callable_contracts(node, node, [], ["contextual_returns"])` |
+| `syntax_tree(node, name, input)` | parses a declared grammar over `{ text, flags?, spans?, offset, end_offset }` in `node`'s file; returns `{ ok, root, nodes, error }`. `spans` maps each Unicode scalar to an absolute `{ offset, end_offset }` byte span; omitted/null maps every node to the whole extent. Nodes are plain id/parent/kind/text/raw/children/fields records with local `start`/`end` and mapped offsets; invalid parser/input/syntax returns `ok: false`, unavailable answers return null |
+| `js_string_parts(text)` | decodes a quoted string or substitution-free template to `{ text, spans, units }`; spans map Unicode scalars and units keep UTF-16 values, both with byte offsets inside the literal. Null for invalid syntax; lone surrogate units stay distinct while scalar text uses U+FFFD |
+| `re_valid(pattern)` | whether a pattern compiles in the same regex dialect and cache as `re_test`; false for invalid syntax (not JavaScript regexp validation) |
+| `environment` | the file's raw lint environment settings in config order, `{settings: [{name, value}]}` (`ecmaVersion`, `sourceType`, `globals`, ...); languages fold and normalise them |
+| `name_scopes(node, role)` | the scope chain for `node` in `role` (`declaration`, `reference` or `lexical`), innermost first, as `{id, owner, classes}` rows; `id` is an opaque scope identity |
+| `name_scope_declarations(node, scope, key)` | the declarations of `key` in scope `scope` (an id from `name_scopes`), in source order |
+| `name_binding(node)` | the explicit binding `node` declares or uses, as `{node, key, scope, declarations, references}`: `node` is the canonical (first) declaration, `scope` a `name_scopes` row, lists in source order; null when unbound, not a binding, or implicit; unknown when incomplete or over budget |
+| `name_role_classes(node, role)` | the declaration classes `node` takes in `role`. For the `name_*` queries, a valid node simply lacking the role answers null (known absent); an invalid role/scope id, failed names or an exhausted budget is unknown |
+| `name_classes(node, key, source)` | per declaration class, does `key` (looked up from `node`, or in module `source` when given) declare a name of that class: `true` / `false` / `null` when unknown, independently per class |
+| `module_exports(node, source)` | the complete publications of module `source` as `{name, classes}` rows (`classes`: per class `true`/`false`/`null`); null when the inventory is incomplete or cyclic |
+| `value_constituents(node)` | the node's value as nested union/intersection lists of `{traits, uncertain_traits, identity, identity_known}` records (type layers); `null` when unknown; `[]` is never |
+| `value_at(node, keys)`, `value_expected_at(node, keys)` | the `value_constituents` shape after an ordered member lookup (text or non-negative integer keys; `[]` is the node itself), through the value or through the expected (contextual) value; null when invalid or unknown |
+| `value_member(node, key)` | one member's value, in the `value_constituents` shape |
+| `value_expected(node)` | the contextual value: null when unknown, `{present: false}` when known absent, `{present: true, value}` otherwise |
+| `value_widened(node)` | the widened value (`widens` recipe), in the `value_constituents` shape |
+| `value_origin(node)` | the nearest instantiating reference `{file, node, kind}`; null when absent or unknown |
+| `global_declarations(node, name, class)` | the global declarations of `name` in `class` as `{file, node}` rows; `[]` known absent, null unknown |
+| `declaration_identity(node)` | the canonical declaration `{file, node}` a name or value comes from; null when unknown |
+| `member_call_parameters(node, key)` | the resolved member `key`'s call parameters only (like `call_parameters`), without results or receivers; null when unknown |
+| `call_parameters(node)` | the call signatures' parameters only (`{parameters, parameters_known}` per overload), without evaluating results or receivers |
+| `call_results(node)` | the call signatures' results only (`{result, result_known}` per header, `result` as `value_constituents` rows or null), without parameters or receivers; null when the callables are unknown |
+| `value_lookup(node, key)` | the member `key` of `node`'s value: `{value_known, value, alternatives: [{matched, required, sources: [{kind, domain}]}]}`; `kind` is `named`, `ordinal`, `repeated` or `indexer` (`domain` on indexers only). `key` is text, an ordinal, a node (its evaluated key) or a `{global, class, path}` recipe (`{global: "Symbol", class: "value", path: ["asyncIterator"]}`). Named members win over index signatures; looks up the value as given (no optional-chain stripping) |
+| `value_has_member(node, key)` | true when any alternative has a named member `key` (optional members count: declared, not guaranteed at runtime); false only when every alternative is closed and lacks it; null when unknown, open, indexer-only or the key is unresolved |
+| `call_signatures(node)` | the node's call signatures as records with parameter, result and receiver constituents and their knownness (type layers); `null` when unknown |
+| `flow_entry(node)` | the execution entry (body) holding `node` |
+| `flow_normal(entry)` | can `entry` complete normally: `true` / `false`, `null` when unknown |
+| `flow_declared_effects(entry, effect)` | the `effect` events declared in `entry` (records with `site`, `target`, `value`) |
+| `flow_exits(entry, effect)` | the reachable `effect` completions leaving `entry` (records with `site`, `target`, `value`), unlike declared events |
+| `flow_prior(node, effect)` | does some path from the entry reach `node` after an `effect` |
+| `flow_required(node, effect)` | does every reachable path to `node` pass an `effect` (unreachable: `false`) |
+| `flow_complete_without(entry, effect, exits)`, `flow_complete_with(...)` | can `entry` complete normally or through one of the `exits` effects on a path avoiding / passing `effect` |
+| `flow_crosses(entry, starts, observations, effects, barriers)` | is there a reachable route start → one of the `effects` → an observation, with no barrier entered after the effect (barriers before it don't cut); null when unknown |
+| `flow_has_reads(binding)` | does `binding` have any declared reads anywhere in the file (indexed) |
+| `flow_value_used(target)` | is a write to `target` consumed by a declared read (`unwraps read`) before the same binding is overwritten; reads from another entry count as used |
 | `type_structure(names, fields?, constrained?, member_path?)` | constrained recursive `{kind, parts, names, generic_names, aliases, members}`: array/tuple elements or union/intersection parts; optional tuple slots include undefined. Explicit `unknown`, open `parameter` and `unresolved` are distinct. `names` includes printed base types; `generic_names` contains root generic declaration names. `aliases` contains retained root-annotation alias names, not aliases propagated through inferred values or calls. Queried members contain winning `{owner, kind, signature, key_symbol}` declarations; owner is `{name, kind, from}` or null, and `key_symbol` verifies standard-library Symbol computed-key identity. The second argument selects the recursive fields returned (default: the six above); opt-in fields: `declarations` (`{name, kind, from, inherited}`), `callable`, `constructor` (declared construct signatures or class values), `symbol_constructor` (a named type's constructible value side), `class_value`, `property_names` (without signature markers or apparent function prototype members), `iterable` (null when unresolved), `arguments` (resolved generic type arguments, each with the selected fields; not callable parameters), `member_types` (selected names → `{name, type}` records; resolved inherited/generic members; nested descriptors keep selected fields), `call_signatures` (all visible declared call contracts → `{parameters: [type descriptors], rest}`; declared count, no call-argument inference; constrained mode resolves bounds, raw mode keeps open parameters; `[]` means known non-callable, null means opaque/work limit; parameter and receiver descriptors omit `members`, `member_types`, `call_signatures`, `member_metadata`, `call_signature_metadata`), `member_metadata` (selected names → winning declarations `{owner, kind, is_static, initializer_kind, provenance, signatures}`; `initializer_kind` is the raw function/arrow/other/null syntax), `call_signature_metadata` (visible declaration headers `{receiver}`; receiver null (no explicit `this` parameter) or `{name, annotation: {kind, keyword} | null, type}`; null metadata means opaque/work limit, `[]` known non-callable) and, on the root, `property_writes` (property names assigned through the binding). The fourth argument `member_path` follows the selected member names before reflection (finite; opaque on depth/work exhaustion). The third argument (default `true`) constrains; `false` keeps open type parameters and named wrappers (`Readonly<T>`) unpeeled: `type_structure([], ["kind", "parts", "declarations", "arguments"], false)`. Example selected member and callable structure: `type_structure(["then"], ["kind", "parts", "member_types", "call_signatures", "callable"])` |
-| `type_parameter_defaults`, `type_parameters_inferred` | on a call, `new`, type reference or class with type arguments: each type parameter's default, and what the arguments infer, printed |
+| `type_parameter_defaults` | on a call, `new`, type reference or class with type arguments: each type parameter's default, printed |
 | `type_argument_redundant` | on the last type argument: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types assignable both ways count as the same, as for typescript-eslint) |
-| `member_reads`, `member_writes`, `member_constructor_writes` | on a class property, method or parameter property: reads through `this` (or `x.#name`, or another instance's `private` member) inside the class, writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
-| `own_returns` | on a program, function, arrow or method: its return nodes in source order, excluding nested functions, classes and static blocks; reads no types |
-| `uses_this`, `uses_arguments`, `has_yield` | on a function or method: what its own body does (arrows inside count, nested functions do not) |
-| `super_calls` | on a constructor: `all`, `some` or `none` of the paths that leave it normally call `super()` |
+| `member_writes`, `member_constructor_writes` | on a class property, method or parameter property: writes outside the constructor (`=`, `++`, `delete`, destructuring, `this.x.y = v`), and writes in it |
+| `uses_this`, `uses_arguments` | on a function or method: what its own body does (arrows inside count, nested functions do not) |
 | `regex_problems` | on a regex literal or the pattern string of `RegExp(...)`: one problem per line: `empty_class`, `spaces:N`, `backref:<kind>:<backref>:<group>`, `misleading:<kind>` |
 | `regex_error` | on the pattern string of `RegExp(...)`: the syntax error (or bad flags) as ESLint words it |
 | `precision_lost` | on a number literal: not exactly representable as a double |
@@ -1203,10 +1242,38 @@ and `final-newline`.
 | `.ts/typed/nullish-coalescing` | stable nullish replacements, primitive exclusions and context selection, imported by `.ts/typed`; diagnostic-only |
 | `.ts/typed/template-expressions` | unnecessary template interpolation checks and raw-escape-preserving, precedence-safe fixes, imported by `.ts/typed` |
 | `.ts/typed/floating-promises` | floating promises, including discarded arrays and tuples with immediate promise elements, imported by `.ts/typed` |
-| `.ts/names` | JS/TS scopes, declarations, references and writes (`scope`, `declares`, `resolves`, `targets`, `unwraps` items); native name facts answer from them; imported by `.ts` |
+| `.ts/comments` | JS/TS comment layers (`ts_line_comment`, `ts_block_comment`, group `ts_comment`) under the code layer; imported by `.ts` and by modules that read comments |
+| `.ts/names` | JS/TS scopes, declarations and references (`scope`, `declares`, `resolves`, `targets` items); native name facts answer from them; imported by `.ts` |
+| `.ts/effects` | JS/TS evaluation order, separate bodies and control, write and suspension effects; imported by `.ts` |
+| `.ts/values` | JS/TS value and type declarations (`unwraps`, `fits`) and traits for `could` / `always`; imported by `.ts` |
+| `.ts/values/enums` | enum type and runtime views, real declaration origins, member values and widening; imported by `.ts/values` |
+| `.ts/calls` | JS/TS call and construct signatures, invocation arguments, result annotations and parameter contracts; imported by `.ts` |
+| `.ts/modules` | JS/TS publications, import links, namespaces, globals and module-resolution profiles; imported by `.ts` |
+| `.ts/globals` | lint environment globals: per-edition builtin lists, CommonJS globals, configured settings and `/* global */` comment entries; imported by `.ts` |
+| `.ts/suggestions/globals` | configured-global helpers: global value aliases and methods, constructor/prototype policy, `Object.hasOwn`, label visibility; imported by `.ts` |
+| `.ts/suggestions/accessors` | accessor facts: `accessor_pair`, `property_descriptor`, `accessor`, `enclosing_accessor`; imported by `.ts` |
+| `.ts/directives` | ECMAScript edition, source environment, directive prologues and strict-code policy over the lint environment; imported by `.ts` |
+| `.ts/constants` | constant-expression evaluation and policy helpers for JS/TS; imported by `.ts` |
+| `.ts/narrowing` | JS/TS narrowing: where tests apply (`propagates`) and what they prove (`truthy`, `excludes`, `includes`, `has`); imported by `.ts` |
+| `.ts/scoping/atomic` | read–suspension–write race policy over the shared execution graph; imported by `.ts/scoping` |
+| `.ts/scoping/bindings` | shared binding, lexical execution context and reference helpers; imported by `.ts/scoping` |
+| `.ts/scoping/constness` | prefer-const policy over bindings and writes; imported by `.ts/scoping` |
+| `.ts/scoping/globals` | implicit and redeclared global policy over the lint environment; imported by `.ts/scoping` |
+| `.ts/scoping/shadowing` | shadowing and redeclaration policy over opaque scopes and the environment; imported by `.ts/scoping` |
+| `.ts/scoping/loops` | iteration captures and grouped/unmodified loop condition policy; imported by `.ts/scoping` |
+| `.ts/scoping/receivers` | lexical receiver contexts, receiver-bound destinations and own-body receiver use; imported by `.ts/scoping` |
+| `.ts/scoping/usage` | unused binding policy (`unused_var`, `unused_globals`) over `name_binding` declarations and references; imported by `.ts/scoping` |
+| `.ts/regex` | declared regexp grammar and mapped literal/constructor views, validation and finding policy; imported by `.ts` |
+| `.ts/regex/grammar` | regexp pattern grammar; flag-selected Unicode and Unicode-set goals |
+| `.ts/regex/values` | shared string decoding, source maps and semantic regexp views |
+| `.ts/regex/checks` | regexp validation and constructor error policy |
+| `.ts/regex/suggestions` | regexp escape, unnamed capture and Unicode flag policy |
+| `.ts/regex/findings` | control characters, empty classes, space runs, backreferences and misleading class sequences |
 | `.ts/parentheses` | expression/type parenthesis policy and IIFE wrapping, imported by `.ts/structure` |
 | `.ts/structure/padding` | statement padding policies and comment-aware blank-line fixes, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
+| `.ts/typed/assignments` | unsafe assignment, destructuring and spread policy; imported by `.ts/typed` |
+| `.ts/typed/awaitability` | own async syntax (`await`, `for await`, `await using`) and Values decisions for `require-await`'s missing-await check; imported by `.ts/typed` |
 | `.ts/typed/unbound-method` | receiver-preserving method extraction, including destructuring and ignoreStatic; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; imported by `.ts/typed` |
 | `.ts/typed/strict-void-return` | non-void values flowing into void-returning callback contexts, with `allowReturnAny`; imported by `.ts/typed`, diagnostic-only |
