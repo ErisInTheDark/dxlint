@@ -162,9 +162,13 @@ pub enum NameItem {
     Execution(effects::Item),
     /// `fits trait, ...`: the node directly has these traits.
     Fits(Vec<Name>),
-    /// `members <scope class>, ...`: where `from x at key` looks on this
-    /// kind's nodes by default.
-    Members(Vec<Name>),
+    /// `members <scope class>, ... [inherits <value>]`: where `from x at key`
+    /// looks on this kind's nodes by default, then in the members of what
+    /// `inherits` unwraps to.
+    Members { classes: Vec<Name>, inherits: Option<Unwrap> },
+    /// `member <scope class> <key> unwraps <value>`: a member the kind's
+    /// scope of that class has without declaring it (`prototype`).
+    Member { classes: Vec<Name>, key: Unwrap, value: Unwrap },
     /// `in <field> propagates <value>`: the value's `truthy` effects (or the
     /// value itself) hold throughout that field's subtree.
     Propagates { field: Vec<Name>, value: Unwrap },

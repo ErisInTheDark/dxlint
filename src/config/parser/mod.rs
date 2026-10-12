@@ -502,7 +502,7 @@ impl<'a> Parser<'a> {
                 if classes.is_empty() {
                     return;
                 }
-                NameItem::Members(classes)
+                NameItem::Members { classes, inherits: None }
             }
             "fits" => {
                 let traits = self.name_list("a trait name");

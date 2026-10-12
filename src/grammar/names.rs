@@ -135,6 +135,11 @@ pub struct KindNames {
     pub calls: calls::KindCalls,
     /// `generics`: paths to the ordered formal type parameters.
     pub generics: Vec<(Vec<u16>, Option<u32>)>,
+    /// `members .. inherits`: scope classes and where inherited members
+    /// come from, searched after the kind's own.
+    pub member_bases: Vec<(u64, Value, Option<u32>)>,
+    /// `member`: undeclared members (scope classes, key, value).
+    pub member_links: Vec<(u64, Value, Value, Option<u32>)>,
 }
 
 /// A `when` condition of one item on one layer; the engine compiles it
@@ -479,11 +484,31 @@ impl Names {
                         names.add(g, m, |k| k.execution.push(item.clone(), when));
                     }
                 }
-                NameItem::Members(classes) => {
+                NameItem::Members { classes, inherits } => {
                     let Some(bits) = class_bits(&mut vocab.scope_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|n| (n, true)));
-                    for &m in &targets {
+                    let inherits = match inherits {
+                        Some(v) => match lower_value(v, &path, &mut vocab, errors) {
+                            Some(v) => Some(v),
+                            None => continue,
+                        },
+                        None => None,
+                    };
+                    for (&m, &when) in targets.iter().zip(&when) {
                         names.add(g, m, |k| k.member_defaults |= bits);
+                        if let Some(base) = &inherits {
+                            names.add(g, m, |k| k.member_bases.push((bits, base.clone(), when)));
+                        }
+                    }
+                }
+                NameItem::Member { classes, key, value } => {
+                    let Some(bits) = class_bits(&mut vocab.scope_classes, classes, errors) else { continue };
+                    asked.extend(classes.iter().map(|n| (n, true)));
+                    let Some(key) = lower_value(key, &path, &mut vocab, errors) else { continue };
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors) else { continue };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        let link = (bits, key.clone(), value.clone(), when);
+                        names.add(g, m, |k| k.member_links.push(link.clone()));
                     }
                 }
                 NameItem::Fits(traits) => {
