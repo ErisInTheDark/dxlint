@@ -151,6 +151,10 @@ pub trait World {
     /// holds at `at` (run on the VM in that node's file; nested questions
     /// see its frame and view).
     fn condition(&self, at: Leaf, condition: u32, semantic: &super::semantic::Semantic<'_>) -> Known<bool>;
+    /// The value of module item operand `operand`
+    /// ([`super::modules::compile::Tables::operands`]) at `at`, run on the
+    /// VM in that node's file like [`World::condition`].
+    fn operand(&self, at: Leaf, operand: u32, semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>>;
     /// The `let` attribute `name` on `node` (`flow_truth`), run on the VM in
     /// that node's file; `Yes(Null)` when the node's layer has none.
     fn attribute(&self, node: NodeRef, name: &str, question: &QueryContext) -> Known<crate::expr::Value<'static>>;

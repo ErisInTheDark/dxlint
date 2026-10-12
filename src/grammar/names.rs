@@ -237,6 +237,8 @@ pub struct Names {
     pub conditions: Vec<Condition>,
     /// Module item operands, compiled like [`Names::conditions`].
     pub modules: modules::compile::Tables,
+    /// `exclusive` groups: trait bits no possible value has together.
+    pub exclusive: Vec<u64>,
 }
 
 /// One tree's resolved names.
@@ -265,6 +267,40 @@ pub struct Resolved {
     pub implicit: FxHashMap<u32, Vec<Box<str>>>,
     /// Using name -> the scope it is looked up from and the classes asked.
     pub asked: FxHashMap<u32, (u32, u64)>,
+    /// Declarations by scope and name, built on first ask ([`Resolved::index`]).
+    index: std::sync::OnceLock<ScopeIndex>,
+}
+
+/// What a name's text means as a key (a language's escapes):
+/// [`crate::engine::frontend::Frontend::name_key`].
+pub type NameKey<'k> = dyn for<'a> Fn(&'a str) -> Cow<'a, str> + 'k;
+
+/// One resolved tree's declarations by scope and name, and the scopes each
+/// node opens: what type questions look members up in.
+#[derive(Default)]
+pub struct ScopeIndex {
+    /// Scope -> name key -> declaring nodes in document order (implicit
+    /// declarations under their text, see [`Resolved::implicit`]).
+    declared: Vec<FxHashMap<Box<str>, Vec<u32>>>,
+    /// Node -> the scopes it opens, outermost first.
+    opened: FxHashMap<u32, (u32, u32)>,
+}
+
+impl ScopeIndex {
+    /// The scopes `node` opens, outermost first.
+    pub fn opened(&self, node: u32) -> std::ops::Range<u32> {
+        self.opened.get(&node).map_or(0..0, |&(first, end)| first..end)
+    }
+
+    /// What declares `key` in `scope`, in document order.
+    pub fn declared(&self, scope: u32, key: &str) -> &[u32] {
+        self.declared.get(scope as usize).and_then(|names| names.get(key)).map_or(&[], Vec::as_slice)
+    }
+
+    /// Every name declared in `scope`, with its declarations.
+    pub fn names(&self, scope: u32) -> impl Iterator<Item = (&str, &[u32])> {
+        self.declared.get(scope as usize).into_iter().flat_map(|names| names.iter().map(|(key, decls)| (&**key, decls.as_slice())))
+    }
 }
 
 /// One scope of a resolved tree.
@@ -302,7 +338,7 @@ impl Names {
     /// opened is an error, like an unknown matcher.
     pub fn build(config: &Config, g: &Grammar, errors: &mut Vec<ConfigError>) -> Names {
         let mut names = Names { kinds: vec![KindNames::default(); g.matchers.len()], ..Names::default() };
-        if config.names.is_empty() {
+        if config.names.is_empty() && config.exclusive.is_empty() {
             return names;
         }
         let mut vocab = Vocabulary::default();
@@ -730,36 +766,57 @@ fn visible(decls: &[Declared], start: u32, want: u64) -> Option<u32> {
 }
 
 impl Resolved {
+    /// The tree's declarations by scope and name. `key` must be the file's
+    /// name key: the index is built once, with the first caller's.
+    pub fn index(&self, tree: &Tree, text: &str, key: &NameKey<'_>) -> &ScopeIndex {
+        self.index.get_or_init(|| {
+            let mut index = ScopeIndex { declared: vec![FxHashMap::default(); self.scopes.len()], opened: FxHashMap::default() };
+            for (i, scope) in self.scopes.iter().enumerate() {
+                let i = i as u32;
+                index.opened.entry(scope.node).or_insert((i, i)).1 = i + 1;
+            }
+            for (&name, &(scope, ..)) in &self.declared {
+                let Some(names) = index.declared.get_mut(scope as usize) else { continue };
+                match self.implicit.get(&name) {
+                    Some(texts) => texts.iter().for_each(|t| names.entry(t.clone()).or_default().push(name)),
+                    None => {
+                        let n = tree.node(name);
+                        names.entry(key(&text[n.start as usize..n.end as usize]).into()).or_default().push(name);
+                    }
+                }
+            }
+            for names in &mut index.declared {
+                names.values_mut().for_each(|decls| decls.sort_by_key(|&d| (tree.node(d).start, d)));
+            }
+            index
+        })
+    }
+
     /// The declaration `name` (a name's key) means at `at`, searching the
     /// scopes around it outward for one of `classes`.
-    pub fn visible(&self, tree: &Tree, text: &str, key: &dyn Fn(&str) -> String, at: u32, name: &str, classes: u64) -> Option<u32> {
+    pub fn visible(&self, tree: &Tree, text: &str, key: &NameKey<'_>, at: u32, name: &str, classes: u64) -> Option<u32> {
+        let index = self.index(tree, text, key);
         let start = tree.node(at).start;
         let mut node = Some(at);
         let mut scope = None;
         while let (None, Some(n)) = (scope, node) {
-            scope = self.scopes.iter().rposition(|s| s.node == n);
+            scope = index.opened(n).last();
             node = tree.parent(n);
         }
         let mut scope = scope.or((!self.scopes.is_empty()).then_some(0));
         while let Some(s) = scope {
-            let mut decls: Vec<Declared> = self
-                .declared
+            let decls: Vec<Declared> = index
+                .declared(s, name)
                 .iter()
-                .filter(|&(_, &(ds, ..))| ds as usize == s)
-                .filter(|&(&d, _)| match self.implicit.get(&d) {
-                    Some(implicit) => implicit.iter().any(|n| &**n == name),
-                    None => {
-                        let n = tree.node(d);
-                        key(&text[n.start as usize..n.end as usize]) == name
-                    }
+                .map(|&d| {
+                    let (_, _, classes, hoisted) = self.declared[&d];
+                    Declared { name: d, start: tree.node(d).start, classes, hoisted, implicit: self.implicit.contains_key(&d) }
                 })
-                .map(|(&d, &(_, _, classes, hoisted))| Declared { name: d, start: tree.node(d).start, classes, hoisted, implicit: self.implicit.contains_key(&d) })
                 .collect();
-            decls.sort_by_key(|d| d.start);
             if let Some(found) = visible(&decls, start, classes) {
                 return Some(found);
             }
-            scope = self.scopes[s].parent.map(|p| p as usize);
+            scope = self.scopes[s as usize].parent;
         }
         None
     }

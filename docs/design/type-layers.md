@@ -251,6 +251,33 @@ Three declarations and one engine rule:
   unwrapper and trait checks are engine Rust reading those tables. Purity
   also keeps ahead-of-time compilation possible later.
 
+## World: files behind questions
+
+One engine owner, `engine/world.rs`; type-layer engines see only the
+`World` trait (`grammar/names/question.rs`).
+
+- File 0 is the linted file (its tree, names and VM context come from the
+  lint). Other files are **units**: path, text, tree, `Resolved` names.
+  Loaded on demand when module resolution reaches them, never eagerly.
+- Units are shared by every lint of a run (project cache keyed by path,
+  dropped by `Linter::invalidate` for changed paths). Each lint that uses
+  a unit records a read of its text (`engine/reads.rs`), so `.zlintcache`
+  replays only while the text holds. Directory and package lookups go
+  through registered `Discovery`s, never raw filesystem calls.
+- A unit's tree holds only the layers name tables and their conditions
+  need (computed at config build); its names resolve once at load, with
+  conditions on the VM in a context over that unit. Native facts for a
+  unit are built per lint when a condition or operand reads them.
+- Per lint, a file table numbers the units a question reached (`u32`,
+  0 = self); `NodeRef`, `ScopeRef` index into it. Questions never hold
+  units past the lint.
+- Module resolution: policy is zlint data (`module_resolution`, Daisy's
+  resolver); the engine implements the resolver's `Host` (path, text,
+  is_file, root scope, ambient module) over units and reads.
+- One `Semantic` per root question, `Budget::DEFAULT`; nested engines
+  reuse it. `condition` / `operand` / `attribute` run on the VM in the
+  target node's file.
+
 ## Build order
 
 Each step is accepted only when its facts are byte-identical to the native

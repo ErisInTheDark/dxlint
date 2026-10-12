@@ -671,9 +671,11 @@ impl<'a> Parser<'a> {
         }
         let first = self.ts.peek_raw(0).cloned()?;
         let next = self.ts.peek_raw(1).map(|t| t.kind);
+        // After `maybe` the word is always the effect (`unwraps maybe thrown`:
+        // no payload).
         let effect = (first.kind == Tk::Ident
             && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope")
-            && matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen)))
+            && (possible || matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen))))
         .then(|| {
             self.ts.next_raw();
             Name { text: first.text.to_string(), span: first.span }

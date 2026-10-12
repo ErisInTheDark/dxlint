@@ -298,8 +298,7 @@ impl Bindings {
     /// `Object` is the global one.
     pub fn visible(&self, s: &Syntax, at: u32, name: &str, value: bool) -> Option<u32> {
         let classes = if value { self.value } else { self.value | self.type_ };
-        let key = |text: &str| decoded_name(text).into_owned();
-        let found = self.names.visible(s.tree, s.src, &key, at, &decoded_name(name), classes)?;
+        let found = self.names.visible(s.tree, s.src, &decoded_name, at, &decoded_name(name), classes)?;
         (!self.names.implicit.contains_key(&found)).then_some(found)
     }
 }
