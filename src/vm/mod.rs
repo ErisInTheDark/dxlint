@@ -925,6 +925,22 @@ impl<'h, H: Host> Session<'h, H> {
         Some(self.runtime.unpack(v))
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by module resolution modes (units layer)"))]
+    fn import_item(&self, item: &Value) -> Option<V> {
+        if let Some(vm) = self.runtime.host.file_vm() { vm.clear_error(); }
+        self.runtime.pack(item)
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by module resolution modes (units layer)"))]
+    pub fn holds_with(&self, e: &VExpr, item: &Value) -> Option<bool> {
+        self.holds(e, Some(self.import_item(item)?))
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by module resolution modes (units layer)"))]
+    pub fn value_with(&self, e: &VExpr, item: &Value) -> Option<Value<'_>> {
+        self.value(e, Some(self.import_item(item)?))
+    }
+
     /// The items of the rule's `each` list.
     pub fn items(&self, e: &VExpr) -> Option<Vec<V>> {
         let v = self.run(e, None)?;
@@ -2030,6 +2046,16 @@ mod tests {
         let view = values::View { config: &host.values, scratch: &scratch, file: &persistent };
         let V::Record(shape, handle) = escaped else { panic!("record"); };
         assert_eq!(view.key(shape, handle, "size"), V::Num(3.0));
+        let session = Session::new(&host, 0, &[]);
+        let enabled = VExpr::Key(Box::new(VExpr::Bound(0)), "enabled".into());
+        let context = |enabled| Value::record(vec![
+            ("enabled".into(), Value::Bool(enabled)),
+            ("conditions".into(), Value::list(vec![Value::from("module")])),
+        ]);
+        assert_eq!(session.holds_with(&enabled, &context(false)), Some(false));
+        assert_eq!(session.holds_with(&enabled, &context(true)), Some(true));
+        let conditions = VExpr::Key(Box::new(VExpr::Bound(0)), "conditions".into());
+        assert_eq!(session.value_with(&conditions, &context(true)), Some(Value::list(vec![Value::from("module")])));
     }
 
     #[test]
