@@ -3,6 +3,7 @@ use crate::fx_hash::FxHashMap;
 use std::cell::OnceCell;
 
 pub mod compile;
+pub mod build;
 
 pub type Path = Vec<u16>;
 pub type StepId = u32;
@@ -90,10 +91,27 @@ pub struct Exit {
 }
 
 #[derive(Clone, Debug)]
+pub enum Point {
+    Enter,
+    Leave,
+    Field(Path),
+    Event(Event),
+    Join,
+}
+
+#[derive(Clone, Debug)]
 pub struct Step {
     pub node: NodeRef,
-    pub phase: Phase,
-    pub event: Option<Event>,
+    pub point: Point,
+}
+
+impl Step {
+    pub fn event(&self) -> Option<&Event> {
+        match &self.point {
+            Point::Event(event) => Some(event),
+            _ => None,
+        }
+    }
 }
 
 pub struct Execution {
@@ -101,6 +119,7 @@ pub struct Execution {
     steps: Vec<Step>,
     edges: Vec<Vec<StepId>>,
     sites: FxHashMap<NodeRef, Vec<StepId>>,
+    fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>>,
     reachable: OnceCell<Vec<bool>>,
 }
 
@@ -109,13 +128,51 @@ enum Walk {
     Seen(Vec<bool>),
 }
 
+#[derive(Clone, Copy, Default)]
+struct ThroughVisit {
+    without_event: bool,
+    with_event: bool,
+    barrier: bool,
+}
+
 impl Execution {
-    pub fn new(entry: StepId, steps: Vec<Step>, edges: Vec<Vec<StepId>>) -> Execution {
+    pub(crate) fn new(entry: StepId, steps: Vec<Step>, edges: Vec<Vec<StepId>>) -> Execution {
         let mut sites: FxHashMap<NodeRef, Vec<StepId>> = FxHashMap::default();
+        let mut fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>> = FxHashMap::default();
         for (index, step) in steps.iter().enumerate() {
-            sites.entry(step.node).or_default().push(index as u32);
+            match &step.point {
+                Point::Enter | Point::Leave => sites.entry(step.node).or_default().push(index as u32),
+                Point::Field(path) => fields.entry(step.node).or_default().entry(path.clone()).or_default().push(index as u32),
+                _ => {}
+            }
         }
-        Execution { entry, steps, edges, sites, reachable: OnceCell::new() }
+        Execution { entry, steps, edges, sites, fields, reachable: OnceCell::new() }
+    }
+
+    pub fn entry(&self) -> StepId {
+        self.entry
+    }
+
+    pub fn step(&self, id: StepId) -> Option<&Step> {
+        self.steps.get(id as usize)
+    }
+
+    pub fn steps(&self) -> impl Iterator<Item = (StepId, &Step)> {
+        self.steps.iter().enumerate().map(|(id, step)| (id as StepId, step))
+    }
+
+    pub fn successors(&self, id: StepId) -> Option<&[StepId]> {
+        self.edges.get(id as usize).map(Vec::as_slice)
+    }
+
+    pub fn sites(&self, node: NodeRef, phase: Phase) -> impl Iterator<Item = StepId> + '_ {
+        self.sites.get(&node).into_iter().flatten().copied().filter(move |&id| {
+            matches!((&self.steps[id as usize].point, phase), (Point::Enter, Phase::Enter) | (Point::Leave, Phase::Leave))
+        })
+    }
+
+    pub fn field_entries(&self, node: NodeRef, path: &[u16]) -> &[StepId] {
+        self.fields.get(&node).and_then(|fields| fields.get(path)).map_or(&[], Vec::as_slice)
     }
 
     pub fn reachable(&self, node: NodeRef, budget: &Budget) -> Known<bool> {
@@ -137,6 +194,33 @@ impl Execution {
             Known::Yes(Walk::Seen(_)) => Known::Yes(false),
             Known::Unknown => Known::Unknown,
         }
+    }
+
+    pub fn reaches_through(&self, from: StepId, to: StepId, barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {
+        if from as usize >= self.steps.len() || to as usize >= self.steps.len() { return Known::Unknown }
+        let mut seen = vec![ThroughVisit::default(); self.steps.len()];
+        for &barrier in barriers {
+            if !budget.step() || barrier as usize >= self.steps.len() { return Known::Unknown }
+            seen[barrier as usize].barrier = true;
+        }
+        let mut pending = vec![(from, false)];
+        let mut initial = true;
+        while let Some((step, matched)) = pending.pop() {
+            if !budget.step() { return Known::Unknown }
+            let starts_here = std::mem::take(&mut initial);
+            if !starts_here && seen[step as usize].barrier { continue }
+            let matched = matched || self.steps[step as usize].event().is_some_and(&event);
+            let visit = if matched { &mut seen[step as usize].with_event } else { &mut seen[step as usize].without_event };
+            if *visit { continue }
+            *visit = true;
+            if step == to && matched { return Known::Yes(true) }
+            let Some(edges) = self.edges.get(step as usize) else { return Known::Unknown };
+            for &next in edges {
+                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
+                pending.push((next, matched));
+            }
+        }
+        Known::Yes(false)
     }
 
     fn walk(&self, from: StepId, avoiding: &[StepId], found: impl Fn(StepId) -> bool, budget: &Budget) -> Known<Walk> {
@@ -169,7 +253,7 @@ mod tests {
 
     fn graph(edges: &[&[StepId]]) -> Execution {
         Execution::new(0,
-            (0..edges.len()).map(|node| Step { node: NodeRef::here(node as u32), phase: Phase::Enter, event: None }).collect(),
+            (0..edges.len()).map(|node| Step { node: NodeRef::here(node as u32), point: Point::Enter }).collect(),
             edges.iter().map(|edges| edges.to_vec()).collect(),
         )
     }
@@ -207,5 +291,46 @@ mod tests {
         assert_eq!(graph.reaches(0, 2, &[], &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::new(1)), Known::Unknown);
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+    }
+
+    fn with_write(graph: Execution, step: StepId) -> Execution {
+        let mut steps = graph.steps;
+        steps[step as usize].point = Point::Event(Event {
+            kind: EventKind::Write,
+            site: NodeRef::here(step),
+            target: Some(Target { value: NodeRef::here(99), binding: Some(NodeRef::here(99)) }),
+            value: None,
+            phase: Phase::Leave,
+        });
+        Execution::new(graph.entry, steps, graph.edges)
+    }
+
+    #[test]
+    fn a_write_on_an_unrelated_arm_is_not_between_guard_and_use() {
+        let graph = with_write(graph(&[&[1, 2], &[3], &[4], &[], &[]]), 2);
+        assert_eq!(graph.reaches_through(0, 3, &[], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.reaches_through(0, 4, &[], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(true));
+    }
+
+    #[test]
+    fn a_later_round_write_can_reach_a_use_already_seen_without_it() {
+        let graph = with_write(graph(&[&[1], &[2, 3], &[1], &[]]), 2);
+        assert_eq!(graph.reaches_through(0, 3, &[], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reaches_through(0, 3, &[], |event| event.kind == EventKind::Read, &Budget::default()), Known::Yes(false));
+    }
+
+    #[test]
+    fn an_exhausted_event_path_search_is_not_a_proof_of_no_write() {
+        let graph = with_write(graph(&[&[1], &[]]), 1);
+        assert_eq!(graph.reaches_through(0, 1, &[], |_| true, &Budget::new(0)), Known::Unknown);
+        assert_eq!(graph.reaches_through(0, 1, &[], |_| true, &Budget::default()), Known::Yes(true));
+    }
+
+    #[test]
+    fn fresh_guard_stops_writes_from_an_earlier_loop_round() {
+        let graph = with_write(graph(&[&[1], &[2], &[0]]), 2);
+        assert_eq!(graph.reaches_through(0, 1, &[0], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.reaches_through(0, 1, &[], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reaches_through(0, 2, &[0], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(true));
     }
 }
