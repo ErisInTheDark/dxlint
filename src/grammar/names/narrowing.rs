@@ -82,6 +82,15 @@ impl Narrowing<'_> {
                 }
             }
             if names.declared.contains_key(&node.node) {
+                match self.semantic.calls().argument_sites(at) {
+                    Known::Yes(Some(sites)) => {
+                        let [argument] = sites.as_slice() else { return Known::Unknown };
+                        at = *argument;
+                        continue;
+                    }
+                    Known::Unknown => return Known::Unknown,
+                    Known::Yes(None) => {}
+                }
                 path.reverse();
                 return Known::Yes(Place { root: at, path });
             }

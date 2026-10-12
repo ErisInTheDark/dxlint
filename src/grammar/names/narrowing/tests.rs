@@ -279,6 +279,139 @@ mod places {
         tables
     }
 
+    fn predicate_call() -> (TestWorld, Names) {
+        use crate::grammar::names::calls::{Conditional, Invoke, Signature};
+        let mut world = TestWorld::new();
+        let mut nodes = world.tree.nodes.clone();
+        nodes.extend([8, 9, 10, 0, 0, 11].map(|matcher| Node { matcher, start: 0, end: 0, children: vec![] }));
+        nodes[15].children = vec![Edge { label: 8, node: 16 }, Edge { label: 9, node: 17 }];
+        nodes[16].children.push(Edge { label: 10, node: 18 });
+        nodes[17].children = vec![Edge { label: 11, node: 19 }, Edge { label: 12, node: 11 }];
+        nodes[18].children.push(Edge { label: 2, node: 11 });
+        nodes[20].children = vec![Edge { label: 13, node: 15 }, Edge { label: 14, node: 3 }];
+        world.tree = Tree::from_native(nodes, 20);
+        world.names.declaration.insert(19, 18);
+        world.names.declared.insert(18, (0, 15, 1, false));
+        let mut tables = tables();
+        tables.kinds.resize_with(12, KindNames::default);
+        tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+            effects: vec!["truthy".into()],
+            traits: ["nullable", "string", "falsy", "literal", "callable"].map(str::to_owned).to_vec(),
+            ..Default::default()
+        });
+        tables.effect_roles = crate::grammar::names::effects::compile::effect_roles(&tables.vocabulary);
+        tables.kinds[0].unwraps.push(Unwrapping { value: Some(Value::Path(vec![2])), ..Default::default() });
+        tables.kinds[8].fits.push((1 << 4, 0, None));
+        tables.kinds[8].calls.signatures.push(Conditional {
+            item: Signature { parameters: vec![8], result: Value::Path(vec![9]) }, when: None,
+        });
+        tables.kinds[9].targets.push((vec![vec![10]], None));
+        tables.kinds[9].unwraps.push(Unwrapping { value: Some(Value::Path(vec![10, 2])), ..Default::default() });
+        tables.kinds[10].unwraps.push(Unwrapping {
+            effect: Some(0),
+            value: Some(Value::Includes { value: Box::new(Value::Path(vec![12])), from: Some(Box::new(Value::Path(vec![11]))) }),
+            ..Default::default()
+        });
+        tables.kinds[11].calls.invokes.push(Conditional {
+            item: Invoke { callee: Value::Path(vec![13]), arguments: vec![14], construct: false }, when: None,
+        });
+        (world, tables)
+    }
+
+    #[test]
+    fn selected_predicate_parameters_resolve_to_the_caller_place_not_type_argument_slots() {
+        let (world, tables) = predicate_call();
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let Known::Yes(Some(selection)) = semantic.calls().selection(leaf(20)) else { panic!("selected predicate header") };
+        assert!(!selection.uncertain);
+        let frame = selection.choices[0].header.site.frame;
+        assert_eq!(semantic.calls().argument_sites(Leaf { frame, ..leaf(18) }), Known::Yes(Some(vec![leaf(3)])));
+        assert_eq!(semantic.narrowing().place(Leaf { frame, ..leaf(19) }), Known::Yes(Place { root: leaf(1), path: vec![] }));
+    }
+
+    #[test]
+    fn selected_signature_truthy_proofs_refine_both_sides_of_a_predicate_call() {
+        let (world, tables) = predicate_call();
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let Known::Yes(Some(selection)) = semantic.calls().selection(leaf(20)) else { panic!("selected predicate header") };
+        assert!(!selection.uncertain);
+        let subject = Place { root: leaf(1), path: vec![] };
+        let proof = Value::Path(vec![]);
+        let positive = semantic.narrowing().apply(leaf(20), &proof, &subject, candidates());
+        let negative = semantic.narrowing().apply(leaf(20), &Value::Not(Box::new(proof)), &subject, candidates());
+        assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
+        assert_eq!(semantic.values().could(&positive, 1 << 0), Known::Yes(false));
+        assert_eq!(semantic.values().always(&negative, 1 << 0), Known::Yes(true));
+    }
+
+    #[test]
+    fn possible_predicate_signatures_remain_alternatives_on_both_sides() {
+        let (mut world, mut tables) = predicate_call();
+        let mut nodes = world.tree.nodes.clone();
+        nodes.extend([8, 9, 10, 0, 0].map(|matcher| Node { matcher, start: 0, end: 0, children: vec![] }));
+        nodes[21].children = vec![Edge { label: 8, node: 22 }, Edge { label: 9, node: 23 }];
+        nodes[22].children.push(Edge { label: 10, node: 24 });
+        nodes[23].children = vec![Edge { label: 11, node: 25 }, Edge { label: 12, node: 12 }];
+        nodes[24].children.push(Edge { label: 2, node: 11 });
+        nodes[20].children.push(Edge { label: 15, node: 21 });
+        world.tree = Tree::from_native(nodes, 20);
+        world.names.declaration.insert(25, 24);
+        world.names.declared.insert(24, (0, 21, 1, false));
+        tables.kinds[11].calls.invokes[0].item.callee = Value::Union(vec![Value::Path(vec![13]), Value::Path(vec![15])]);
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let Known::Yes(Some(selection)) = semantic.calls().selection(leaf(20)) else { panic!("both predicate alternatives selected") };
+        assert!(!selection.uncertain);
+        assert_eq!(selection.choices.len(), 2);
+        let subject = Place { root: leaf(1), path: vec![] };
+        for proof in [Value::Path(vec![]), Value::Not(Box::new(Value::Path(vec![])))] {
+            let refined = semantic.narrowing().apply(leaf(20), &proof, &subject, candidates());
+            assert_eq!(semantic.values().could(&refined, 1 << 0), Known::Yes(true));
+            assert_eq!(semantic.values().could(&refined, 1 << 1), Known::Yes(true));
+        }
+    }
+
+    #[test]
+    fn uncertain_selected_signatures_do_not_prove_positive_or_negative_guards() {
+        let (world, mut tables) = predicate_call();
+        tables.kinds[9].unwraps.clear();
+        tables.kinds[9].fits.push((1 << 1, 0, Some(0)));
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let Known::Yes(Some(selection)) = semantic.calls().selection(leaf(20)) else { panic!("uncertain signature retained") };
+        assert!(selection.uncertain);
+        let subject = Place { root: leaf(1), path: vec![] };
+        for proof in [Value::Path(vec![]), Value::Not(Box::new(Value::Path(vec![])))] {
+            let refined = semantic.narrowing().apply(leaf(20), &proof, &subject, candidates());
+            assert_eq!(semantic.values().could(&refined, 1 << 0), Known::Yes(true));
+            assert_eq!(semantic.values().could(&refined, 1 << 1), Known::Yes(true));
+        }
+    }
+
+    #[test]
+    fn runtime_branch_proofs_read_truthy_views_without_turning_them_into_events() {
+        let world = TestWorld::branches();
+        let truthy = tables().kinds[0].unwraps.clone();
+        let mut tables = branch_tables();
+        tables.kinds[0].unwraps = truthy;
+        tables.effect_roles = crate::grammar::names::effects::compile::effect_roles(&tables.vocabulary);
+        tables.kinds[8].propagates = vec![
+            (vec![5], Value::Path(vec![4]), None),
+            (vec![6], Value::Not(Box::new(Value::Path(vec![4]))), None),
+        ];
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert!(semantic.effects().execution(leaf(0)).known().is_some());
+        let consequent = semantic.narrowing().refine(leaf(16), candidates());
+        let alternate = semantic.narrowing().refine(leaf(17), candidates());
+        assert_eq!(semantic.values().always(&consequent, 1 << 1), Known::Yes(true));
+        assert_eq!(semantic.values().could(&consequent, 1 << 2), Known::Yes(false));
+        assert_eq!(semantic.values().always(&alternate, 1 << 2), Known::Yes(true));
+        assert_eq!(semantic.values().could(&alternate, 1 << 0), Known::Yes(true));
+    }
+
     #[test]
     fn only_a_definite_early_exit_carries_the_surviving_branch_proof_after_the_join() {
         for possible in [false, true] {
@@ -293,7 +426,7 @@ mod places {
                 traits: tables.vocabulary.traits.clone(),
                 ..Default::default()
             });
-            tables.controls = crate::grammar::names::effects::compile::controls(&tables.vocabulary);
+            tables.effect_roles = crate::grammar::names::effects::compile::effect_roles(&tables.vocabulary);
             tables.kinds[10].unwraps.push(Unwrapping {
                 effect: Some(1), possible, ..Default::default()
             });

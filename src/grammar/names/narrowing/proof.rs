@@ -2,8 +2,11 @@ use super::*;
 
 enum Work<'a> {
     Apply { at: Leaf, proof: &'a Value, negative: bool, input: NodeValue },
+    Test { at: Leaf, negative: bool, input: NodeValue },
     Compose { at: Leaf, parts: Vec<&'a Value>, conjunction: bool, negative: bool, input: NodeValue },
     Then { at: Leaf, parts: Vec<&'a Value>, negative: bool },
+    Choices { sites: Vec<Leaf>, negative: bool, input: NodeValue },
+    AfterCall(Vec<Leaf>),
     Union(usize),
 }
 
@@ -30,45 +33,77 @@ impl Narrowing<'_> {
                             results.push(input);
                             continue;
                         };
-                        let Target::Node(node) = site.target else {
-                            results.push(input);
-                            continue;
-                        };
-                        let Some(kind) = self.semantic.world.tree(node.file)
-                            .and_then(|tree| tree.nodes.get(node.node as usize))
-                            .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize)) else {
-                            results.push(input);
-                            continue;
-                        };
-                        let Some(truthy) = self.semantic.tables.vocabulary.effect("truthy") else {
-                            results.push(input);
-                            continue;
-                        };
-                        let mut parts = Vec::new();
-                        let mut opaque = false;
-                        for item in &kind.unwraps {
-                            if !self.semantic.question.budget.step() { return NodeValue::Unknown }
-                            if item.effect != Some(truthy) { continue }
-                            match item.when.map_or(Known::Yes(true), |condition| self.semantic.world.condition(*site, condition, self.semantic)) {
-                                Known::Yes(false) => continue,
-                                Known::Unknown => { opaque = true; continue }
-                                Known::Yes(true) => {}
-                            }
-                            match &item.value {
-                                Some(value) => parts.push(value),
-                                None => opaque = true,
-                            }
-                        }
-                        if negative && opaque {
-                            results.push(input);
-                        } else {
-                            pending.push(Work::Compose { at: *site, parts, conjunction: !negative, negative, input });
-                        }
+                        pending.push(Work::Test { at: *site, negative, input });
                     }
                     Value::Excludes { traits, from } => results.push(self.excludes(at, from.as_deref(), subject, input, *traits, negative)),
                     Value::Includes { value, from } => results.push(self.includes(at, from.as_deref(), subject, input, value, negative)),
                     _ => results.push(input),
                 },
+                Work::Test { at, negative, input } => {
+                    let Target::Node(node) = at.target else {
+                        results.push(input);
+                        continue;
+                    };
+                    let Some(kind) = self.semantic.world.tree(node.file)
+                        .and_then(|tree| tree.nodes.get(node.node as usize))
+                        .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize)) else {
+                        results.push(input);
+                        continue;
+                    };
+                    let Some(truthy) = self.semantic.tables.vocabulary.effect("truthy") else {
+                        results.push(input);
+                        continue;
+                    };
+                    let mut parts = Vec::new();
+                    let mut opaque = false;
+                    for item in &kind.unwraps {
+                        if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+                        if item.effect != Some(truthy) { continue }
+                        match item.when.map_or(Known::Yes(true), |condition| self.semantic.world.condition(at, condition, self.semantic)) {
+                            Known::Yes(false) => continue,
+                            Known::Unknown => { opaque = true; continue }
+                            Known::Yes(true) => {}
+                        }
+                        match &item.value {
+                            Some(value) => parts.push(value),
+                            None => opaque = true,
+                        }
+                    }
+                    let calls = if kind.calls.invokes.is_empty() { Known::Yes(None) } else { self.predicate_sites(at) };
+                    let sites = match calls {
+                        Known::Yes(sites) => sites,
+                        Known::Unknown => { opaque = true; None }
+                    };
+                    if negative && opaque {
+                        results.push(input);
+                    } else if let Some(sites) = sites {
+                        if negative {
+                            if parts.is_empty() {
+                                pending.push(Work::Choices { sites, negative, input });
+                            } else {
+                                pending.push(Work::Union(2));
+                                pending.push(Work::Choices { sites, negative, input: input.clone() });
+                                pending.push(Work::Compose { at, parts, conjunction: false, negative, input });
+                            }
+                        } else {
+                            pending.push(Work::AfterCall(sites));
+                            pending.push(Work::Compose { at, parts, conjunction: true, negative, input });
+                        }
+                    } else {
+                        pending.push(Work::Compose { at, parts, conjunction: !negative, negative, input });
+                    }
+                },
+                Work::Choices { sites, negative, input } => {
+                    pending.push(Work::Union(sites.len()));
+                    for at in sites.into_iter().rev() {
+                        if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+                        pending.push(Work::Test { at, negative, input: input.clone() });
+                    }
+                }
+                Work::AfterCall(sites) => {
+                    let input = results.pop().expect("the caller proof produced a value");
+                    pending.push(Work::Choices { sites, negative: false, input });
+                }
                 Work::Compose { at, mut parts, conjunction, negative, input } => {
                     if parts.is_empty() {
                         results.push(input);
@@ -106,6 +141,28 @@ impl Narrowing<'_> {
             }
         }
         results.pop().expect("the proof produced a value")
+    }
+
+    fn predicate_sites(&self, at: Leaf) -> Known<Option<Vec<Leaf>>> {
+        let selection = match self.semantic.calls().selection(at) {
+            Known::Yes(Some(selection)) if !selection.uncertain => selection,
+            Known::Yes(None) => return Known::Yes(None),
+            _ => return Known::Unknown,
+        };
+        let mut sites = Vec::new();
+        for chosen in selection.choices {
+            if !self.semantic.question.budget.step() { return Known::Unknown }
+            let header = chosen.header;
+            let Target::Node(node) = header.site.target else { return Known::Unknown };
+            let Some(signature) = self.semantic.world.tree(node.file)
+                .and_then(|tree| tree.nodes.get(node.node as usize))
+                .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize))
+                .and_then(|kind| kind.calls.signatures.get(header.signature as usize)) else { return Known::Unknown };
+            let Known::Yes(results) = self.semantic.values().sites(header.site, &signature.item.result) else { return Known::Unknown };
+            if results.is_empty() { return Known::Unknown }
+            sites.extend(results);
+        }
+        if sites.is_empty() { Known::Unknown } else { Known::Yes(Some(sites)) }
     }
 
     fn projection(&self, at: Leaf, from: Option<&Value>, subject: &Place) -> Known<Vec<Key>> {
