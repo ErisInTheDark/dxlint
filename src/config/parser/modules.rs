@@ -1,4 +1,4 @@
-use super::super::ast::modules::{Definition, Item, Mode, Setting, SettingValue};
+use super::super::ast::modules::{Asking, Definition, Item, Mode, Setting, SettingValue};
 use super::super::ast::{Expr, ExprKind, Name};
 use super::super::lexer::{decode_escapes, Tk};
 use super::Parser;
@@ -12,7 +12,8 @@ impl Parser<'_> {
             }
             return Some(Item::Uses(self.ident("a module resolution name")?));
         }
-        let all = what == "exports" && self.word("all");
+        let first = what == "globals" && self.word("first");
+        let all = self.word("all");
         let classes = if all && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("from")) {
             Vec::new()
         } else {
@@ -22,9 +23,6 @@ impl Parser<'_> {
             return None;
         }
         let target = if all { None } else { Some(self.module_operand()?) };
-        if what == "globals" {
-            return Some(Item::Globals { classes, target: target? });
-        }
         let module = if self.word("from") {
             if !self.word("module") {
                 self.error_here("expected `from module <source>`");
@@ -35,11 +33,19 @@ impl Parser<'_> {
             None
         };
         if all && module.is_none() {
-            self.error_here("expected `exports all [classes] from module <source>`");
+            self.error_here(format!("expected `{what} all [classes] from module <source>`"));
             return None;
         }
         let alias = if self.word("as") { Some(self.module_operand()?) } else { None };
-        Some(Item::Exports { classes, target, module, alias })
+        let asking = self.module_asking()?;
+        if what == "globals" {
+            if alias.is_some() {
+                self.error_here("globals do not take an alias");
+                return None;
+            }
+            return Some(Item::Globals { first, classes, target, module, asking });
+        }
+        Some(Item::Exports { classes, target, module, alias, asking })
     }
 
     pub(super) fn module_scope(&mut self, classes: Vec<Name>) -> Option<Item> {
@@ -54,7 +60,16 @@ impl Parser<'_> {
         }
         let module = self.module_operand()?;
         let imported = if self.word("as") { Some(self.module_operand()?) } else { None };
-        Some(Item::Resolves { classes, binding, module, imported })
+        let asking = self.module_asking()?;
+        Some(Item::Resolves { classes, binding, module, imported, asking })
+    }
+
+    fn module_asking(&mut self) -> Option<Option<Asking>> {
+        if !self.word("asking") { return Some(None) }
+        if self.word("all") { return Some(Some(Asking::All)) }
+        let classes = self.name_list("a source declaration class");
+        if classes.is_empty() { return None }
+        Some(Some(Asking::Classes(classes)))
     }
 
     pub(super) fn module_resolves_ahead(&mut self) -> bool {

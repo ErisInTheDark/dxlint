@@ -7,16 +7,21 @@ pub enum Item {
         target: Option<Expr>,
         module: Option<Expr>,
         alias: Option<Expr>,
+        asking: Option<Asking>,
     },
     Globals {
+        first: bool,
         classes: Vec<Name>,
-        target: Expr,
+        target: Option<Expr>,
+        module: Option<Expr>,
+        asking: Option<Asking>,
     },
     Resolves {
         classes: Vec<Name>,
         binding: Expr,
         module: Expr,
         imported: Option<Expr>,
+        asking: Option<Asking>,
     },
     Scope {
         classes: Vec<Name>,
@@ -30,7 +35,7 @@ impl Item {
     pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
         let (a, b, c) = match self {
             Item::Exports { target, module, alias, .. } => (target.as_ref(), module.as_ref(), alias.as_ref()),
-            Item::Globals { target, .. } => (Some(target), None, None),
+            Item::Globals { target, module, .. } => (target.as_ref(), module.as_ref(), None),
             Item::Resolves { binding, module, imported, .. } => (Some(binding), Some(module), imported.as_ref()),
             Item::Scope { name, .. } => (Some(name), None, None),
             Item::Uses(_) => (None, None, None),
@@ -44,6 +49,41 @@ impl Item {
             Item::Uses(_) => &[],
         }
     }
+
+    pub fn asking(&self) -> Option<&Asking> {
+        match self {
+            Item::Exports { asking, .. } | Item::Globals { asking, .. } | Item::Resolves { asking, .. } => asking.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn operand(&self, part: u8) -> Option<&Expr> {
+        match (self, part) {
+            (Item::Exports { target, .. } | Item::Globals { target, .. }, operand::TARGET) => target.as_ref(),
+            (Item::Exports { module, .. } | Item::Globals { module, .. }, operand::MODULE) => module.as_ref(),
+            (Item::Exports { alias, .. }, operand::ALIAS) => alias.as_ref(),
+            (Item::Resolves { binding, .. }, operand::BINDING) => Some(binding),
+            (Item::Resolves { module, .. }, operand::MODULE) => Some(module),
+            (Item::Resolves { imported, .. }, operand::IMPORTED) => imported.as_ref(),
+            (Item::Scope { name, .. }, operand::SCOPE_NAME) => Some(name),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Asking {
+    All,
+    Classes(Vec<Name>),
+}
+
+pub mod operand {
+    pub const TARGET: u8 = 0;
+    pub const MODULE: u8 = 1;
+    pub const ALIAS: u8 = 2;
+    pub const BINDING: u8 = 3;
+    pub const IMPORTED: u8 = 4;
+    pub const SCOPE_NAME: u8 = 5;
 }
 
 #[derive(Clone, Debug)]
