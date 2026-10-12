@@ -8,6 +8,8 @@ pub mod queries;
 mod metadata;
 mod configuration;
 mod profiles;
+mod context;
+mod inputs;
 
 #[derive(Clone, Debug)]
 pub enum Entry {

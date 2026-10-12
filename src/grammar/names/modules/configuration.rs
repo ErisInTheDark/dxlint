@@ -13,7 +13,10 @@ pub struct OptionValue {
 
 #[derive(Clone, Default)]
 pub struct Configuration {
+    pub path: Option<PathBuf>,
     pub options: BTreeMap<String, OptionValue>,
+    pub fields: BTreeMap<String, OptionValue>,
+    pub references: Vec<PathBuf>,
 }
 
 impl Configuration {
@@ -30,6 +33,11 @@ impl Configuration {
         Ok(Self::default())
     }
 
+    pub fn at<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, question: &QueryContext) -> Result<Self, ()> {
+        let metadata = resolver.metadata(&path, question)?.ok_or(())?;
+        Self::inherit(resolver, path, metadata, question)
+    }
+
     fn inherit<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
         let mut memo = BTreeMap::<PathBuf, Option<Self>>::new();
         memo.insert(path.clone(), None);
@@ -41,6 +49,7 @@ impl Configuration {
                 match memo.get(path) {
                     Some(Some(config)) => {
                         frame.merged.options.extend(config.options.clone());
+                        frame.merged.fields.extend(config.fields.clone());
                         frame.parents.pop();
                     }
                     Some(None) => return Err(()),
@@ -55,6 +64,9 @@ impl Configuration {
             }
             let mut frame = stack.pop().ok_or(())?;
             frame.merged.options.extend(frame.own);
+            frame.merged.fields.extend(frame.fields);
+            frame.merged.path = Some(frame.path.clone());
+            frame.merged.references = frame.references;
             memo.insert(frame.path, Some(frame.merged));
         }
         memo.remove(&root).flatten().ok_or(())
@@ -72,11 +84,14 @@ struct Frame {
     path: PathBuf,
     parents: Vec<PathBuf>,
     own: BTreeMap<String, OptionValue>,
+    fields: BTreeMap<String, OptionValue>,
+    references: Vec<PathBuf>,
     merged: Configuration,
 }
 
 impl Frame {
     fn new<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
+        if !matches!(metadata, Json::Object(_)) { return Err(()) }
         let directory = path.parent().ok_or(())?;
         let mut parents = Vec::new();
         if let Some(extends) = metadata.get(&resolver.settings.config.extends) {
@@ -115,6 +130,15 @@ impl Frame {
             None => BTreeMap::new(),
             _ => return Err(()),
         };
-        Ok(Self { path, parents, own, merged: Configuration::default() })
+        let config = &resolver.settings.config;
+        let fields = [&config.source_files, &config.include, &config.exclude].into_iter().filter(|key| !key.is_empty()).filter_map(|key| {
+            metadata.get(key).map(|value| (key.to_string(), OptionValue { value: value.clone(), directory: directory.to_path_buf() }))
+        }).collect();
+        let references = if resolver.settings.globals.references {
+            metadata.project(&resolver.settings.config.references, question)?.into_iter().map(|value| {
+                value.text().map(|text| clean(&directory.join(text))).ok_or(())
+            }).collect::<Result<_, _>>()?
+        } else { Vec::new() };
+        Ok(Self { path, parents, own, fields, references, merged: Configuration::default() })
     }
 }

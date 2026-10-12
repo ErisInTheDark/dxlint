@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use super::super::question::{Known, QueryContext, ScopeRef};
 use super::metadata::{self, Json};
 use super::configuration::Configuration;
+pub use super::inputs::program_inputs;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DiscoveryRequest {
@@ -89,6 +90,10 @@ pub struct Resolver<'a, H: ?Sized> {
 }
 
 impl<H: Host + ?Sized> Resolver<'_, H> {
+    pub fn context(&self, importer: u32, question: &QueryContext) -> Known<crate::expr::Value<'static>> {
+        super::context::context(self, importer, question)
+    }
+
     pub fn resolve(&self, importer: u32, specifier: &str, conditions: &[&str], question: &QueryContext) -> Known<Option<ScopeRef>> {
         match self.resolve_inner(importer, specifier, conditions, question) {
             Ok(scope) => Known::Yes(scope),
@@ -260,7 +265,7 @@ pub(super) fn clean(path: &Path) -> PathBuf {
     result
 }
 
-fn expand(template: &str, values: &[(&str, &str)]) -> Result<String, ()> {
+pub(super) fn expand(template: &str, values: &[(&str, &str)]) -> Result<String, ()> {
     let mut output = String::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
