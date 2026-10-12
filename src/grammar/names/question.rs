@@ -262,4 +262,13 @@ impl QueryContext {
     pub fn arguments(&self, id: ArgsId) -> Option<Vec<NodeValue>> {
         self.args.borrow().items.get(id.0 as usize).cloned()
     }
+
+    /// One of a frame's evaluated arguments: `Yes(None)` past the last,
+    /// unknown for an id this context never interned.
+    pub fn argument(&self, id: ArgsId, position: usize) -> Known<Option<NodeValue>> {
+        match self.args.borrow().items.get(id.0 as usize) {
+            Some(args) => Known::Yes(args.get(position).cloned()),
+            None => Known::Unknown,
+        }
+    }
 }
