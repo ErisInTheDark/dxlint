@@ -1404,7 +1404,7 @@ mod tests {
             ("declare const value: { item: { inner: number } | null } | null; value !== null && value?.item !== null && /*@*/value?.item?.inner;", false, false),
             ("declare const value: (() => number) | null; value !== null && /*@*/value?.();", false, false),
             ("let value: { item: number } | null; if (value !== null) { value = null; const result = /*@*/value?.item; }", true, false),
-            ("declare const value: { item: number } | null; if (value !== null) { function later() { const result = /*@*/value?.item; } }", true, false),
+            ("declare const value: { item: number } | null; if (value !== null) { function later() { const result = /*@*/value?.item; } }", false, false),
         ] {
             with_native_file(source, |file, nodes| {
                 let flags = file.type_flags(nodes[0]).unwrap_or_default();

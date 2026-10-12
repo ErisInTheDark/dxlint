@@ -1,0 +1,6 @@
+input.ts:18:11-18:34 prefer-destructuring#0
+input.ts:21:11-21:37 prefer-destructuring#0
+input.ts:24:11-24:35 prefer-destructuring#0
+input.ts:28:11-28:34 prefer-destructuring#0
+input.ts:46:11-46:35 prefer-destructuring#0
+input.ts:9:7-9:41 prefer-destructuring#0

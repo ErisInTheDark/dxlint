@@ -1,8 +1,9 @@
 //! Control flow, as far as rules need it, asked lazily per question:
 //!
 //! - narrowing: a reference's declared type refined by the conditions that
-//!   guard it in the same function (`if (x)`, `x && x.y`, `typeof`,
+//!   guard it (`if (x)`, `x && x.y`, `typeof`,
 //!   `=== null`, `instanceof`, `Array.isArray`, early `return`/`throw`).
+//!   Only unwritten const bindings keep enclosing guards inside callbacks.
 //!   Any other test leaves the type alone; an assignment to the reference
 //!   between a guard and the use cancels the guards above it.
 //! - completion: whether a statement always leaves its block (code paths
@@ -25,8 +26,11 @@ impl NativeFile<'_> {
             return t;
         }
         let Some(key) = self.ref_key(id) else { return t };
-        let guards = self.guards(id, &key);
-        guards.iter().rev().fold(t, |t, g| self.apply(g.test, g.sense, t, &key))
+        let binding = if self.syntax.is(id, K::Ident) {
+            self.decl_of(id).filter(|&decl| self.binding(decl).is_some_and(|b| b.kind == "const" && b.writes == 0))
+        } else { None };
+        let guards = self.guards(id, &key, binding);
+        guards.iter().rev().fold(t, |t, g| self.apply(g.test, g.sense, t, &key, binding))
     }
 
     /// The text a reference is narrowed under: `x`, `this.a.b`.
@@ -51,13 +55,13 @@ impl NativeFile<'_> {
         (s.is(p, K::Assign) && s.field(id) == Some(F::Left)) || s.is(p, K::Update)
     }
 
-    /// Guards on the way up from `id` to its function, innermost first.
+    /// Guards up to the binding's function (or the use's), innermost first.
     ///
     /// An assignment to the reference cancels every guard tested before it.
     /// Statements are only searched for assignments where a guard above
     /// would depend on it (most references have none, and scanning every
     /// earlier statement of a long block for each would be quadratic).
-    fn guards(&self, id: u32, key: &str) -> Vec<Guard> {
+    fn guards(&self, id: u32, key: &str, binding: Option<u32>) -> Vec<Guard> {
         let s = &self.syntax;
         // Each guard, and the statement ranges (`block`, `from..to` child
         // indices) an assignment in would cancel it and every guard above.
@@ -72,7 +76,13 @@ impl NativeFile<'_> {
         while let Some(node) = s.parent(child) {
             let field = s.field(child);
             match s.kind(node) {
-                Some(K::Function | K::Arrow | K::Method | K::StaticBlock | K::ClassProp) | None => break,
+                Some(K::Function | K::Arrow | K::Method) => {
+                    let Some(decl) = binding else { break };
+                    let frame = s.tree.node(node);
+                    let declaration = s.tree.node(decl);
+                    if frame.start <= declaration.start && declaration.end <= frame.end { break }
+                }
+                Some(K::StaticBlock | K::ClassProp) | None => break,
                 Some(K::If | K::Conditional) => match (field, s.get(node, F::Test)) {
                     (Some(F::Consequent), Some(test)) => steps.push(Step::Guard(Guard { test, sense: true })),
                     (Some(F::Alternate), Some(test)) => steps.push(Step::Guard(Guard { test, sense: false })),
@@ -126,8 +136,9 @@ impl NativeFile<'_> {
                     out.push(g);
                     remaining -= 1;
                 }
-                // Only worth scanning when guards remain above it.
-                Step::Region(node, from, to) if remaining > 0 => {
+                // The binding proof already excludes every write to a const;
+                // text scans here could mistake a string or shadow for one.
+                Step::Region(node, from, to) if remaining > 0 && binding.is_none() => {
                     let written = if from == usize::MAX {
                         self.writes(node, key)
                     } else {
@@ -137,7 +148,7 @@ impl NativeFile<'_> {
                         break;
                     }
                 }
-                Step::Before(node, child) if remaining > 0 => {
+                Step::Before(node, child) if remaining > 0 && binding.is_none() => {
                     if s.all(node, F::Body).take_while(|&st| st != child).any(|st| self.writes(st, key)) {
                         break;
                     }
@@ -204,18 +215,19 @@ impl NativeFile<'_> {
     }
 
     /// `t` where `test` evaluated to `sense`.
-    fn apply(&self, test: u32, sense: bool, t: Ty, key: &str) -> Ty {
+    fn apply(&self, test: u32, sense: bool, t: Ty, key: &str, binding: Option<u32>) -> Ty {
         let s = &self.syntax;
-        let is_key = |n: u32| self.ref_key(n).as_deref() == Some(key);
+        let is_key = |n: u32| self.ref_key(n).as_deref() == Some(key)
+            && binding.is_none_or(|decl| self.bindings().visible(s, n, key, true) == Some(decl));
         match s.kind(test) {
-            Some(K::Paren) => s.get(test, F::Expr).map_or(t.clone(), |e| self.apply(e, sense, t, key)),
-            Some(K::Unary) if s.word(test, F::Op) == Some("!") => s.get(test, F::Arg).map_or(t.clone(), |a| self.apply(a, !sense, t, key)),
+            Some(K::Paren) => s.get(test, F::Expr).map_or(t.clone(), |e| self.apply(e, sense, t, key, binding)),
+            Some(K::Unary) if s.word(test, F::Op) == Some("!") => s.get(test, F::Arg).map_or(t.clone(), |a| self.apply(a, !sense, t, key, binding)),
             Some(K::Logical) => {
                 let (Some(l), Some(r)) = (s.get(test, F::Left), s.get(test, F::Right)) else { return t };
                 match (s.word(test, F::Op), sense) {
                     (Some("&&"), true) | (Some("||"), false) => {
-                        let t = self.apply(l, sense, t, key);
-                        self.apply(r, sense, t, key)
+                        let t = self.apply(l, sense, t, key, binding);
+                        self.apply(r, sense, t, key, binding)
                     }
                     _ => t,
                 }
@@ -277,7 +289,7 @@ impl NativeFile<'_> {
                     }
                     return self.keep(t, |m| matches!(m, Ty::Array(_) | Ty::Tuple(_)), sense);
                 }
-                if let Some(target) = self.predicate_type(test, key) {
+                if let Some(target) = self.predicate_type(test, key, binding) {
                     return predicate(t, &target, sense, &self.typing().checker);
                 }
                 t
@@ -287,7 +299,7 @@ impl NativeFile<'_> {
     }
 
     /// Narrow only the local immutable nongeneric guard route already supported.
-    fn predicate_type(&self, call: u32, key: &str) -> Option<Ty> {
+    fn predicate_type(&self, call: u32, key: &str, binding: Option<u32>) -> Option<Ty> {
         let s = &self.syntax;
         let callee = s.unparen(s.get(call, F::Callee)?);
         if !s.is(callee, K::Ident) { return None }
@@ -298,6 +310,7 @@ impl NativeFile<'_> {
             || matches!(self.type_of(callee), Ty::Fn(callable) if callable.sigs.len() > 1) { return None }
         let (argument, predicate) = self.resolved_predicate(call)?;
         if predicate.asserts || self.ref_key(argument).as_deref() != Some(key) { return None }
+        if binding.is_some_and(|decl| self.bindings().visible(s, argument, key, true) != Some(decl)) { return None }
         let ty = predicate.target?;
         (!matches!(ty, Ty::Unknown | Ty::IntrinsicUnknown | Ty::Param(_))).then_some(ty)
     }
@@ -384,66 +397,5 @@ pub(super) fn truthy(t: Ty, sense: bool, ck: &Checker<'_>) -> Ty {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::tests::with_native_file;
-
-    #[test]
-    fn known_union_arms_narrow_without_resolving_opaque_members() {
-        with_native_file("", |file, _| {
-            let ck = &file.typing().checker;
-            let opaque = [
-                Ty::Param("T".into()), Ty::Unknown, Ty::IntrinsicUnknown,
-                Ty::Inter(vec![Ty::Param("T".into()), Ty::Prim("object")]),
-            ];
-            for member in opaque {
-                let nullable = Ty::Union(vec![member.clone(), Ty::Null]);
-                let known_non_null = Ty::union(vec![member.clone()]);
-                let positive = truthy(nullable.clone(), true, ck);
-                let negative = truthy(nullable.clone(), false, ck);
-                let compared = file.keep(nullable, |part| matches!(part, Ty::Null), false);
-                if known_non_null.is_unknown() {
-                    assert!(positive.is_unknown() && compared.is_unknown());
-                    assert!(!matches!(negative, Ty::Never | Ty::Null));
-                } else {
-                    assert!(positive.same_identity(&known_non_null));
-                    assert!(negative.same_identity(&Ty::union(vec![member, Ty::Null])));
-                    assert!(compared.same_identity(&known_non_null));
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn generic_guards_refine_known_null_arms_on_each_guard_route() {
-        let source = r#"
-            function truth<T>(x: T | null) { if (x) { void /*@*/x; } }
-            function early<T>(x: T | null) { if (!x) return; void /*@*/x; }
-            function equal<T>(x: T | null) { if (x !== null) { void /*@*/x; } }
-            function exit<T>(x: T | null) { if (x === null) return; void /*@*/x; }
-            function falsy<T>(x: T | null) { if (!x) { void /*@*/x; } }
-        "#;
-        with_native_file(source, |file, marks| {
-            let parameter = Ty::Param("T".into());
-            for &mark in &marks[..4] {
-                assert!(file.type_of(mark).same_identity(&parameter));
-            }
-            assert!(file.type_of(marks[4]).same_identity(&Ty::union(vec![parameter, Ty::Null])));
-        });
-    }
-
-    #[test]
-    fn guard_refinement_does_not_cross_writes_functions_or_other_references() {
-        let source = r#"
-            function written<T>(x: T | null) { if (!x) return; x = null; void /*@*/x; }
-            function nested<T>(x: T | null) { if (!x) return; const child = () => /*@*/x; }
-            function other<T>(x: T | null, y: T | null) { if (!y) return; void /*@*/x; }
-        "#;
-        with_native_file(source, |file, marks| {
-            let nullable = Ty::union(vec![Ty::Param("T".into()), Ty::Null]);
-            for &mark in marks {
-                assert!(file.type_of(mark).same_identity(&nullable));
-            }
-        });
-    }
-}
+#[path = "flow/tests.rs"]
+mod tests;
