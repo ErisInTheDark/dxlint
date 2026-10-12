@@ -1,0 +1,7 @@
+a.ts:1:1-3:2 namespace-field#0 syntax declaration
+a.ts:2:10-2:26 declaration-field#0 one syntax declaration
+a.ts:2:16-2:25 empty-type#0 no syntax annotation
+a.ts:4:1-4:18 declaration-field#0 one syntax declaration
+a.ts:4:7-4:17 empty-type#0 no syntax annotation
+a.ts:5:1-5:17 type-field#0 syntax type
+a.ts:6:1-6:7 declaration-link#0 binding declaration

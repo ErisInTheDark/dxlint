@@ -1,0 +1,34 @@
+import .ts
+fn namespace_runtime(n) = {
+  value n.body.node
+  value descendants(ts_export)
+  any (item) item.declaration != null
+}
+in ts_program { scope block }
+in ts_namespace {
+  when namespace_runtime(node) { declares value name in nearest block hoisted }
+  rule namespace-field {
+    when namespace_runtime(node)
+    warn "syntax declaration"
+  }
+}
+in ts_variable_declaration rule declaration-field {
+  when count(node.declaration.nodes) == 1
+  warn "one syntax declaration"
+}
+fn syntax_annotation(x) = x.type.node
+fn declaration_value(value) = value.declaration
+in ts_type_alias rule type-field {
+  when syntax_annotation(node) is ts_type_keyword
+  when declaration_value({ declaration: "record" }) == "record"
+  warn "syntax type"
+}
+in ts_declarator rule empty-type {
+  when node.type == null
+  warn "no syntax annotation"
+}
+in ts_identifier rule declaration-link {
+  when text == "single" && parent is ts_expression_statement
+  when count(node.declaration.nodes) == 1
+  warn "binding declaration"
+}

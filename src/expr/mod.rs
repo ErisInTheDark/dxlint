@@ -636,7 +636,7 @@ impl<'a> Scope<'a> {
         if let Some(projected) = project_fact(&base, Some(&key.text)) {
             return projected;
         }
-        CExpr::Member(Box::new(base), key.text.clone().into(), self.node_part(key).map(Box::new))
+        CExpr::Member(Box::new(base), key.text.clone().into(), self.relative_path(key, &[]).ok().map(Box::new))
     }
 
     /// `base.a.b...`: on records the keys; on node values the whole rest
@@ -1440,40 +1440,49 @@ impl Scope<'_> {
     }
 
     fn fallback_path(&self, first: &crate::config::ast::Name, rest: &[crate::config::ast::Name], errors: &mut Vec<ConfigError>) -> Option<CExpr> {
-        match self.node_part(first)? {
-            CExpr::Field(label) => {
-                self.note(first.span, Resolved::Field(first.text.clone()));
-                let (second, tail) = rest.split_first()?;
-                Some(CExpr::OnField(label, Box::new(self.reported(self.relative_path(second, tail), errors)?)))
-            }
-            value => Some(self.member_path(value, rest)),
-        }
+        self.reported(self.part_path(first, rest, self.node_part(first)?), errors)
     }
 
     /// The path `first.rest...`, read on some node: field labels walk into
     /// their nodes; anything else is read there, then `.key`s. `Err` is the
     /// part nothing on a node matched ([`Self::reported`] says so).
     fn relative_path<'n>(&self, first: &'n crate::config::ast::Name, rest: &'n [crate::config::ast::Name]) -> Result<CExpr, &'n crate::config::ast::Name> {
-        let Some((second, tail)) = rest.split_first() else {
-            return self.node_part(first).ok_or(first);
-        };
-        // `n.parent.x`, `n.previous.x`: step to that node, read the rest there.
-        if first.text == "parent" && self.grammar.matcher("parent").is_none() {
-            return Ok(CExpr::OnParent(Box::new(self.relative_path(second, tail)?)));
-        }
-        if let Some(rel) = Relative::named(&first.text) {
-            return Ok(CExpr::Relative(rel, Box::new(self.relative_path(second, tail)?)));
-        }
-        match self.node_part(first) {
-            Some(CExpr::Field(label)) => Ok(CExpr::OnField(label, Box::new(self.relative_path(second, tail)?))),
-            // `n.index.node`: a builtin is a plain value with nothing to read
-            // on, so a field of that name is meant (`index`, `kind`...).
-            Some(CExpr::Builtin(_)) if self.grammar.labels.get(&first.text).is_some() => {
-                let label = self.grammar.labels.get(&first.text).expect("checked");
-                Ok(CExpr::OnField(label, Box::new(self.relative_path(second, tail)?)))
+        if let Some((second, tail)) = rest.split_first() {
+            if first.text == "parent" && self.grammar.matcher("parent").is_none() {
+                return Ok(CExpr::OnParent(Box::new(self.relative_path(second, tail)?)));
             }
-            Some(value) => Ok(self.member_path(value, rest)),
-            None => Err(first),
+            if let Some(rel) = Relative::named(&first.text) {
+                return Ok(CExpr::Relative(rel, Box::new(self.relative_path(second, tail)?)));
+            }
+        }
+        self.part_path(first, rest, self.node_part(first).ok_or(first)?)
+    }
+
+    fn part_path<'n>(&self, first: &'n crate::config::ast::Name, rest: &'n [crate::config::ast::Name], value: CExpr) -> Result<CExpr, &'n crate::config::ast::Name> {
+        let field_read = |label| match rest.split_first() {
+            Some((second, tail)) => Ok(CExpr::OnField(label, Box::new(self.relative_path(second, tail)?))),
+            None => Ok(CExpr::Field(label)),
+        };
+        let label = self.grammar.labels.get(&first.text);
+        match value {
+            CExpr::Field(label) => {
+                self.note(first.span, Resolved::Field(first.text.clone()));
+                field_read(label)
+            }
+            CExpr::Builtin(_) if !rest.is_empty() && label.is_some() => field_read(label.expect("checked")),
+            CExpr::Fact(..) | CExpr::Link(_) if label.is_some() => {
+                let kinds: Vec<_> = self.grammar.matchers.iter().enumerate()
+                    .filter(|(_, matcher)| matcher.labels().contains(&first.text))
+                    .map(|(kind, _)| kind as u32).collect();
+                if kinds.is_empty() { return Ok(self.member_path(value, rest)); }
+                self.note(first.span, Resolved::Field(first.text.clone()));
+                Ok(CExpr::If(
+                    Box::new(CExpr::Is(Box::new(CExpr::Builtin(Builtin::Node)), vec![IsTest::Kind(kinds)])),
+                    Box::new(field_read(label.expect("checked"))?),
+                    Box::new(self.member_path(value, rest)),
+                ))
+            }
+            value => Ok(self.member_path(value, rest)),
         }
     }
 }
