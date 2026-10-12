@@ -49,7 +49,17 @@ impl Parser<'_> {
     }
 
     pub(super) fn module_scope(&mut self, classes: Vec<Name>) -> Option<Item> {
-        Some(Item::Scope { classes, name: self.module_operand()? })
+        let name = self.module_operand()?;
+        let module = if self.word("from") {
+            if !self.word("module") {
+                self.error_here("expected `from module <source>`");
+                return None;
+            }
+            Some(self.module_operand()?)
+        } else {
+            None
+        };
+        Some(Item::Scope { classes, name, module })
     }
 
     pub(super) fn module_resolves(&mut self, classes: Vec<Name>) -> Option<Item> {

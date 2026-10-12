@@ -17,7 +17,7 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    pub fn load<H: Host>(resolver: &Resolver<'_, H>, directory: &Path, question: &QueryContext) -> Result<Self, ()> {
+    pub fn load<H: Host + ?Sized>(resolver: &Resolver<'_, H>, directory: &Path, question: &QueryContext) -> Result<Self, ()> {
         for ancestor in directory.ancestors() {
             spend(question)?;
             for name in &resolver.settings.config.files {
@@ -30,7 +30,7 @@ impl Configuration {
         Ok(Self::default())
     }
 
-    fn inherit<H: Host>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
+    fn inherit<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
         let mut memo = BTreeMap::<PathBuf, Option<Self>>::new();
         memo.insert(path.clone(), None);
         let root = path.clone();
@@ -76,7 +76,7 @@ struct Frame {
 }
 
 impl Frame {
-    fn new<H: Host>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
+    fn new<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
         let directory = path.parent().ok_or(())?;
         let mut parents = Vec::new();
         if let Some(extends) = metadata.get(&resolver.settings.config.extends) {

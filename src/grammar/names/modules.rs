@@ -7,6 +7,7 @@ pub mod resolution;
 pub mod queries;
 mod metadata;
 mod configuration;
+mod profiles;
 
 #[derive(Clone, Debug)]
 pub enum Entry {

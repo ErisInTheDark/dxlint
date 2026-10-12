@@ -4,12 +4,23 @@ use super::super::question::{Known, QueryContext, ScopeRef};
 use super::metadata::{self, Json};
 use super::configuration::Configuration;
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DiscoveryRequest {
+    pub root: PathBuf,
+    pub include: Vec<Box<str>>,
+    pub exclude: Vec<Box<str>>,
+    pub extensions: Vec<Box<str>>,
+}
+
 pub trait Host {
     fn path(&self, file: u32) -> Known<PathBuf>;
     fn text(&self, path: &Path, question: &QueryContext) -> Known<Option<String>>;
     fn is_file(&self, path: &Path, question: &QueryContext) -> Known<bool>;
     fn scope(&self, path: &Path, question: &QueryContext) -> Known<Option<ScopeRef>>;
-    fn ambient(&self, importer: u32, name: &str, question: &QueryContext) -> Known<Option<ScopeRef>>;
+    fn ambient(&self, importer: u32, name: &str, classes: u64, question: &QueryContext) -> Known<Option<ScopeRef>>;
+    fn discover(&self, _: &DiscoveryRequest, _: &QueryContext) -> Known<Vec<PathBuf>> {
+        Known::Unknown
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +35,9 @@ pub enum Search {
 #[derive(Clone, Debug, Default)]
 pub struct Config {
     pub files: Vec<Box<str>>,
+    pub source_files: Box<str>,
+    pub include: Box<str>,
+    pub exclude: Box<str>,
     pub extends: Box<str>,
     pub references: Box<str>,
     pub options: Box<str>,
@@ -49,6 +63,7 @@ pub struct Globals {
     pub library_option: Box<str>,
     pub default_libraries: Vec<Box<str>>,
     pub types_option: Box<str>,
+    pub type_roots_option: Box<str>,
     pub type_directories: Vec<Box<str>>,
     pub project_files: Vec<Box<str>>,
     pub references: bool,
@@ -57,6 +72,7 @@ pub struct Globals {
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
     pub search: Vec<Search>,
+    pub ambient_scopes: u64,
     pub extensions: Vec<Box<str>>,
     pub substitutions: Vec<(Box<str>, Vec<Box<str>>)>,
     pub candidates: Vec<Box<str>>,
@@ -67,12 +83,12 @@ pub struct Settings {
     pub star_excludes: Vec<Box<str>>,
 }
 
-pub struct Resolver<'a, H> {
+pub struct Resolver<'a, H: ?Sized> {
     pub host: &'a H,
     pub settings: &'a Settings,
 }
 
-impl<H: Host> Resolver<'_, H> {
+impl<H: Host + ?Sized> Resolver<'_, H> {
     pub fn resolve(&self, importer: u32, specifier: &str, conditions: &[&str], question: &QueryContext) -> Known<Option<ScopeRef>> {
         match self.resolve_inner(importer, specifier, conditions, question) {
             Ok(scope) => Known::Yes(scope),
@@ -98,7 +114,7 @@ impl<H: Host> Resolver<'_, H> {
                         _ => self.paths(config, base.as_deref(), specifier, question)?,
                     }
                 }
-                Search::Ambient if !relative => self.host.ambient(importer, specifier, question).known().ok_or(())?,
+                Search::Ambient if !relative => self.host.ambient(importer, specifier, self.settings.ambient_scopes, question).known().ok_or(())?,
                 Search::Packages if !relative => match self.packages(dir, specifier, conditions, question)? {
                     Probe::Found(scope) => Some(scope),
                     Probe::Blocked => return Ok(None),
@@ -300,7 +316,7 @@ mod tests {
         fn scope(&self, path: &Path, _: &QueryContext) -> Known<Option<ScopeRef>> {
             Known::Yes(self.paths.get(path).map(|(file, _)| ScopeRef { file: *file, scope: 0 }))
         }
-        fn ambient(&self, _: u32, _: &str, _: &QueryContext) -> Known<Option<ScopeRef>> {
+        fn ambient(&self, _: u32, _: &str, _: u64, _: &QueryContext) -> Known<Option<ScopeRef>> {
             Known::Yes(None)
         }
     }

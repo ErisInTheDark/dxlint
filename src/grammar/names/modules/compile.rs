@@ -1,11 +1,25 @@
 use crate::config::ast::modules::{operand, Item};
+pub use super::profiles::compile as profiles;
+
+#[derive(Clone, Debug)]
+pub struct Profile {
+    pub name: Box<str>,
+    pub settings: super::resolution::Settings,
+    pub modes: Vec<Mode>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Mode {
+    pub when: u32,
+    pub settings: super::resolution::Settings,
+}
 
 #[derive(Clone, Debug)]
 pub enum Action {
     Exports { classes: u64, asks: u64, target: Option<u32>, module: Option<u32>, alias: Option<u32> },
     Globals { first: bool, classes: u64, asks: u64, target: Option<u32>, module: Option<u32> },
     Resolves { classes: u64, asks: u64, binding: u32, module: u32, imported: Option<u32> },
-    Scope { classes: u64, name: u32 },
+    Scope { classes: u64, name: u32, module: Option<u32> },
     Uses(Box<str>),
 }
 
@@ -43,7 +57,11 @@ pub fn lower(item: &Item, classes: u64, asks: u64, when: Option<u32>, operand: &
             module: operand(operand::MODULE),
             imported: imported.as_ref().map(|_| operand(operand::IMPORTED)),
         },
-        Item::Scope { .. } => Action::Scope { classes, name: operand(operand::SCOPE_NAME) },
+        Item::Scope { module, .. } => Action::Scope {
+            classes,
+            name: operand(operand::SCOPE_NAME),
+            module: module.as_ref().map(|_| operand(operand::MODULE)),
+        },
         Item::Uses(name) => Action::Uses(name.text.clone().into()),
     };
     Conditional { action, when }

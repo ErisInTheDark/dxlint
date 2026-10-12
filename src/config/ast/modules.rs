@@ -26,6 +26,7 @@ pub enum Item {
     Scope {
         classes: Vec<Name>,
         name: Expr,
+        module: Option<Expr>,
     },
     Uses(Name),
 }
@@ -37,7 +38,7 @@ impl Item {
             Item::Exports { target, module, alias, .. } => (target.as_ref(), module.as_ref(), alias.as_ref()),
             Item::Globals { target, module, .. } => (target.as_ref(), module.as_ref(), None),
             Item::Resolves { binding, module, imported, .. } => (Some(binding), Some(module), imported.as_ref()),
-            Item::Scope { name, .. } => (Some(name), None, None),
+            Item::Scope { name, module, .. } => (Some(name), module.as_ref(), None),
             Item::Uses(_) => (None, None, None),
         };
         [a, b, c].into_iter().flatten()
@@ -66,6 +67,7 @@ impl Item {
             (Item::Resolves { module, .. }, operand::MODULE) => Some(module),
             (Item::Resolves { imported, .. }, operand::IMPORTED) => imported.as_ref(),
             (Item::Scope { name, .. }, operand::SCOPE_NAME) => Some(name),
+            (Item::Scope { module, .. }, operand::MODULE) => module.as_ref(),
             _ => None,
         }
     }
