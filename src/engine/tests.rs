@@ -107,7 +107,7 @@ fn name_classes_must_be_declared_or_opened_somewhere() {
     "#);
     assert!(errors.iter().any(|e| e.contains("no layer opens a scope of class `blok`")), "{errors:?}");
     assert!(errors.iter().any(|e| e.contains("nothing declares class `valeu`")), "{errors:?}");
-    assert!(errors.iter().any(|e| e.contains("no layer has a field `x`")), "{errors:?}");
+    assert!(errors.iter().any(|e| e.contains("no layer has a field or attribute `x`")), "{errors:?}");
 }
 
 #[test]
