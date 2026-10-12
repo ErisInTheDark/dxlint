@@ -144,20 +144,25 @@ pub trait World {
     fn text(&self, file: u32) -> Option<&str>;
     /// The file's resolved names (scopes, declarations, references).
     fn names(&self, file: u32) -> Option<&super::Resolved>;
-    /// The scope a module specifier names from `importer` (a file's root
-    /// scope or an ambient module); `Yes(None)` when nothing matches.
-    fn module(&self, importer: u32, specifier: &str, question: &QueryContext) -> Known<Option<ScopeRef>>;
+    /// The file's declarations by scope and name, keyed by its front end.
+    fn index(&self, file: u32) -> Option<&super::ScopeIndex>;
+    /// What a name's text means in `file` (its front end's escapes).
+    fn name_key<'s>(&self, file: u32, text: &'s str) -> std::borrow::Cow<'s, str>;
+    /// The scope a module specifier names, asked by node `at` (its file's
+    /// resolution profile and modes decide; a file's root scope or an
+    /// ambient module); `Yes(None)` when nothing matches.
+    fn module(&self, at: Leaf, specifier: &str, semantic: &super::semantic::Semantic<'_>) -> Known<Option<ScopeRef>>;
     /// Whether item condition `condition` ([`super::Names::conditions`])
     /// holds at `at` (run on the VM in that node's file; nested questions
     /// see its frame and view).
     fn condition(&self, at: Leaf, condition: u32, semantic: &super::semantic::Semantic<'_>) -> Known<bool>;
-    /// The value of module item operand `operand`
-    /// ([`super::modules::compile::Tables::operands`]) at `at`, run on the
-    /// VM in that node's file like [`World::condition`].
+    /// The value of item expression `operand` ([`super::Names::operands`])
+    /// at `at`, run on the VM in that node's file like [`World::condition`].
     fn operand(&self, at: Leaf, operand: u32, semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>>;
-    /// The `let` attribute `name` on `node` (`flow_truth`), run on the VM in
-    /// that node's file; `Yes(Null)` when the node's layer has none.
-    fn attribute(&self, node: NodeRef, name: &str, question: &QueryContext) -> Known<crate::expr::Value<'static>>;
+    /// `let` attribute `attr` (engine attribute id, as in
+    /// [`super::ATTR_STEP`] path steps) at `at`, run on the VM in that
+    /// node's file; `Yes(Null)` when the node's layer has none.
+    fn attribute(&self, at: Leaf, attr: u16, semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>>;
 }
 
 /// A scope in some file (a module's root scope, an ambient module, a

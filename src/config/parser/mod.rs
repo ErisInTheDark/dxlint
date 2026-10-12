@@ -1,6 +1,7 @@
 //! Item-level parser. Pulls tokens from a [`Stream`], so imports and macro
 //! expansions are just more tokens arriving in place.
 
+mod calls;
 mod effects;
 mod expr;
 mod language;
@@ -34,7 +35,8 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels", "exports", "globals", "uses"];
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "runs", "labels", "exports", "globals", "uses",
+    "signature", "calls", "constructs", "discards", "identity", "optional", "variance"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -523,6 +525,9 @@ impl<'a> Parser<'a> {
                 if self.word("propagates") {
                     let Some(value) = self.unwrap_value() else { return };
                     NameItem::Propagates { field, value }
+                } else if self.word("expects") {
+                    let Some(item) = self.call_expected(field) else { return };
+                    NameItem::Calls(item)
                 } else {
                     let Some(item) = self.execution_field(field) else { return };
                     NameItem::Execution(item)
@@ -535,6 +540,19 @@ impl<'a> Parser<'a> {
             "exports" | "globals" | "uses" => {
                 let Some(item) = self.module_item(&what) else { return };
                 NameItem::Module(item)
+            }
+            "signature" | "calls" | "constructs" | "discards" | "identity" | "optional" | "variance" => {
+                let Some(item) = self.call_item(&what) else { return };
+                // `optional when <cond>`: conditional like a `when` block.
+                if self.word("when") {
+                    let Some(cond) = self.expr() else { return };
+                    self.end_of_item();
+                    self.conditions.push(cond);
+                    self.name_def(ctx, kw.span, &what, NameItem::Calls(item));
+                    self.conditions.pop();
+                    return;
+                }
+                NameItem::Calls(item)
             }
             "targets" => {
                 let mut groups = Vec::new();
@@ -839,7 +857,7 @@ impl<'a> Parser<'a> {
         let mut at = 1;
         loop {
             match self.ts.peek_raw(at) {
-                Some(t) if t.kind == Tk::Ident && at > 1 && ["propagates", "catches", "runs"].iter().any(|w| t.is_ident(w)) => return true,
+                Some(t) if t.kind == Tk::Ident && at > 1 && ["propagates", "catches", "runs", "expects"].iter().any(|w| t.is_ident(w)) => return true,
                 Some(t) if t.kind == Tk::Ident || t.kind == Tk::Dot => at += 1,
                 _ => return false,
             }

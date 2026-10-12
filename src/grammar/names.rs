@@ -131,6 +131,8 @@ pub struct KindNames {
     pub targets: Vec<(Vec<Vec<u16>>, Option<u32>)>,
     /// Module publications and cross-file lookups.
     pub modules: modules::compile::KindModules,
+    /// Signatures, invocations, expectations and comparison metadata.
+    pub calls: calls::KindCalls,
 }
 
 /// A `when` condition of one item on one layer; the engine compiles it
@@ -139,6 +141,20 @@ pub struct Condition {
     /// Index of the item in the config's name items.
     pub item: usize,
     pub matcher: u32,
+    pub expr: std::sync::OnceLock<crate::expr::CExpr>,
+    pub lowered: std::sync::OnceLock<crate::vm::VExpr>,
+}
+
+/// An expression one name item evaluates on its layer's nodes (a module
+/// specifier, a literal's identity): compiled with that layer's fields and
+/// lowered to the VM like a [`Condition`]; read through
+/// [`question::World::operand`].
+pub struct Operand {
+    /// Index of the item in the config's name items.
+    pub item: usize,
+    pub matcher: u32,
+    /// Which of the item's expressions ([`NameItem::operand`]).
+    pub part: u8,
     pub expr: std::sync::OnceLock<crate::expr::CExpr>,
     pub lowered: std::sync::OnceLock<crate::vm::VExpr>,
 }
@@ -235,6 +251,8 @@ pub struct Names {
     pub vocabulary: std::sync::Arc<Vocabulary>,
     pub kinds: Vec<KindNames>,
     pub conditions: Vec<Condition>,
+    /// Every item expression evaluated on nodes ([`Operand`]).
+    pub operands: Vec<Operand>,
     /// Module item operands, compiled like [`Names::conditions`].
     pub modules: modules::compile::Tables,
     /// `exclusive` groups: trait bits no possible value has together.
@@ -342,6 +360,8 @@ impl Names {
             return names;
         }
         let mut vocab = Vocabulary::default();
+        // Numbered as the engine numbers them (first definition order).
+        let attrs = crate::expr::AttrNames::new(config.attrs.iter().map(|d| d.name.text.as_str()));
         let mut declared = 0u64;
         let mut opened = 0u64;
         let mut asked: Vec<(&Name, bool)> = Vec::new();
@@ -358,22 +378,29 @@ impl Names {
                 })
                 .collect();
             let path = |errors: &mut Vec<ConfigError>, path: &[Name]| -> Option<Vec<u16>> {
-                // Fields win over the special steps of the same name.
+                // Fields win over the special steps, those over `let` attributes.
                 path.iter()
                     .map(|f| match (g.labels.get(&f.text), f.text.as_str()) {
-                        (Some(label), _) => Ok(label),
+                        (Some(label), _) if label < ATTR_STEP => Ok(label),
+                        (Some(_), _) => {
+                            errors.push(ConfigError::new(f.span, "too many fields for name item paths"));
+                            Err(())
+                        }
                         (None, "parent") => Ok(PARENT),
                         (None, "it") => Ok(IT),
                         (None, "through") => Ok(THROUGH),
                         (None, "definition") => Ok(DECLARATION),
                         (None, "position") => Ok(POSITION),
-                        (None, _) => {
-                            errors.push(
-                                ConfigError::new(f.span, format!("no layer has a field `{}`", f.text))
-                                    .note("path steps are fields, or `parent`, `it`, `through`, `definition`, `position`"),
-                            );
-                            Err(())
-                        }
+                        (None, name) => match attrs.get(name) {
+                            Some(attr) if attr < POSITION - ATTR_STEP => Ok(ATTR_STEP | attr),
+                            _ => {
+                                errors.push(
+                                    ConfigError::new(f.span, format!("no layer has a field or attribute `{}`", f.text))
+                                        .note("path steps are fields, `let` attributes, or `parent`, `it`, `through`, `definition`, `position`"),
+                                );
+                                Err(())
+                            }
+                        },
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .ok()
@@ -480,6 +507,19 @@ impl Names {
                         names.add(g, m, |k| k.resolves.push(r.clone()));
                     }
                 }
+                NameItem::Calls(call) => {
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        let lowered = calls::compile::lower(
+                            call,
+                            &mut |p, errors| path(errors, p),
+                            &mut |v, errors| lower_value(v, &path, &mut vocab, errors),
+                            &mut |part| names.operand(item, m, part),
+                            errors,
+                        );
+                        let Some(lowered) = lowered else { break };
+                        names.add(g, m, |k| k.calls.push(lowered.clone(), when));
+                    }
+                }
                 NameItem::Module(module) => {
                     let scope = matches!(module, crate::config::ast::modules::Item::Scope { .. });
                     let classes = module.classes();
@@ -514,6 +554,12 @@ impl Names {
         }
         names.vocabulary = std::sync::Arc::new(vocab);
         names
+    }
+
+    /// Registers expression `part` of name item `item` on `matcher`'s nodes.
+    pub fn operand(&mut self, item: usize, matcher: u32, part: u8) -> u32 {
+        self.operands.push(Operand { item, matcher, part, expr: std::sync::OnceLock::new(), lowered: std::sync::OnceLock::new() });
+        self.operands.len() as u32 - 1
     }
 
     /// Applies `f` to `m` and every matcher specialising it (`like`).
@@ -715,10 +761,13 @@ pub const DECLARATION: u16 = u16::MAX - 3;
 /// The node's index among its parent's nodes in the same field (a type
 /// parameter's position, for `from through.type_argument at position`).
 pub const POSITION: u16 = u16::MAX - 4;
+/// `ATTR_STEP | id`: the node a `let` attribute (by engine attribute id)
+/// holds; fields are numbered below it, the special steps above.
+pub const ATTR_STEP: u16 = 0x8000;
 
 /// The nodes a structural `path` (field labels, [`PARENT`], [`IT`]) leads to
 /// from `from` in one tree. Semantic steps ([`THROUGH`], [`DECLARATION`],
-/// [`POSITION`]) lead nowhere here: the values engine owns them.
+/// [`POSITION`], attributes) lead nowhere here: the values engine owns them.
 pub fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
     let mut nodes = vec![from];
     for &label in path {
@@ -727,6 +776,7 @@ pub fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
             IT => nodes,
             // Unwrapping steps: not names' business.
             THROUGH | DECLARATION | POSITION => Vec::new(),
+            _ if label >= ATTR_STEP => Vec::new(),
             _ => nodes.into_iter().flat_map(|n| tree.fields(n, label)).collect(),
         };
     }

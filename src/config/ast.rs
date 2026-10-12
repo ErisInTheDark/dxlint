@@ -5,6 +5,7 @@ use super::source::Span;
 use crate::expr::Value;
 use crate::pattern::Pat;
 
+pub mod calls;
 pub mod effects;
 pub mod modules;
 pub mod syntax;
@@ -145,6 +146,10 @@ pub enum NameItem {
     /// `exports`, `globals`, `uses module_resolution`, `scope .. named`,
     /// `resolves .. in module`: module publications ([`modules`]).
     Module(modules::Item),
+    /// `signature`, `calls`, `constructs`, `in <field> expects`, `discards
+    /// result`, `identity`, `optional`, `variance`: calls and structural
+    /// comparison ([`calls`]).
+    Calls(calls::Item),
     /// `unwraps <value>` or `unwraps [maybe] <effect> [<value>] [nearest
     /// <scope>]`: what the node stands for, or what evaluating it does
     /// (`maybe`: possibly, beside completing normally).
@@ -164,6 +169,17 @@ pub enum NameItem {
     /// pattern, a destructuring literal) passes it on to these fields; per
     /// comma-separated group, the first path that leads anywhere.
     Targets(Vec<Vec<Vec<Name>>>),
+}
+
+impl NameItem {
+    /// Expression `part` the item evaluates on its nodes
+    /// ([`crate::grammar::names::Operand`]).
+    pub fn operand(&self, part: u8) -> Option<&Expr> {
+        match self {
+            NameItem::Calls(item) => item.operand(part),
+            _ => None,
+        }
+    }
 }
 
 /// The value form of `unwraps`, `propagates` and effects
