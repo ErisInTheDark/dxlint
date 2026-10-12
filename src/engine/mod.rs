@@ -217,9 +217,13 @@ pub struct Linter {
 static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
 
 impl Linter {
-    /// Lowers every enabled rule's expressions to the VM (lowering is total:
-    /// parts without a native form run as interpreter leaves).
-    pub(crate) fn lower_conditions(&mut self) {
+    /// Lowers every enabled rule's expressions and reports config errors.
+    pub(crate) fn lower_conditions(&mut self, config: &crate::config::ast::Config) -> Vec<crate::config::error::ConfigError> {
+        use crate::config::error::ConfigError;
+        let mut errors: Vec<_> = std::mem::take(&mut self.attrs.lowering_errors).into_iter().map(|(name, error)| {
+            let span = config.attrs.iter().find(|attr| attr.name.text == name).expect("compiled attribute").name.span;
+            ConfigError::new(span, error)
+        }).collect();
         let functions = &self.grammar.functions;
         let values = &mut self.attrs.values;
         for rule in self.rules.iter_mut().filter(|rule| rule.severity != Severity::Off) {
@@ -239,21 +243,33 @@ impl Linter {
             rule.report_at_vm = rule.report_at.as_ref().map(|e| lower(e, item));
             rule.message_vm = rule.message_plan.as_ref().zip(rule.message.as_ref())
                 .map(|(plan, message)| lower(&plan.indexed(message, u16::from(item)), item));
+            let failed = values.take_lowering_errors(&format!("rule `{}`", rule.name));
+            if !failed.is_empty() { rule.severity = Severity::Off; }
+            errors.extend(failed.into_iter().map(|error| ConfigError::new(rule.span, error)));
         }
         for condition in &self.grammar.names.conditions {
             if let Some(e) = condition.expr.get() {
-                let _ = condition.lowered.set(crate::vm::lower(e, functions, values));
+                let body = crate::vm::lower(e, functions, values);
+                let failed = values.take_lowering_errors("name condition");
+                if failed.is_empty() { let _ = condition.lowered.set(body); }
+                let span = config.names[condition.item].when.as_ref().expect("compiled name condition").span;
+                errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
         for operand in &self.grammar.names.modules.operands {
             if let Some(e) = operand.expr.get() {
-                let _ = operand.lowered.set(crate::vm::lower(e, functions, values));
+                let body = crate::vm::lower(e, functions, values);
+                let failed = values.take_lowering_errors("module operand");
+                if failed.is_empty() { let _ = operand.lowered.set(body); }
+                let span = operand.source(config).expect("compiled module operand").span;
+                errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
         let fields = self.shape_records();
         if self.attrs.vm_stats {
             eprintln!("zlint vm: {fields} record fields");
         }
+        errors
     }
 
     /// Sizes each node kind's VM record from what the enabled rules read on
@@ -300,53 +316,15 @@ impl Linter {
         self.attrs.shape_records(g, roots)
     }
 
-    /// Whether a rule's `i`th condition (of `exprs`, lowered as `vm`) holds.
-    fn condition_holds(&self, ctx: &Ctx, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>, exprs: &[CExpr], vm: &[crate::vm::VExpr], i: usize) -> Result<bool, String> {
-        let interpreted = || ctx.eval(&exprs[i]).map(|v| v.truthy());
-        let mode = crate::vm::mode();
-        let Some(lowered) = vm.get(i).filter(|_| mode != crate::vm::Mode::Off) else { return interpreted() };
-        // `None`: an error, which the interpreter reports with its message.
-        match session.holds(lowered, item) {
-            None => {
-                if crate::vm::stats() {
-                    let rule = ctx.locals.and_then(|(fi, ..)| self.rules.get(fi as usize)).map_or("?", |rule| rule.name.as_str());
-                    crate::vm::note_fallback(&format!("condition error: {rule}#{i}"));
-                } else {
-                    crate::vm::note_fallback("condition error");
-                }
-                Self::bind_item(ctx, session, item);
-                interpreted()
-            }
-            Some(holds) if mode == crate::vm::Mode::On => Ok(holds),
-            Some(holds) => {
-                let expected = interpreted();
-                if expected.as_ref().ok() != Some(&holds) {
-                    eprintln!("zlint vm mismatch: {} condition {:?} on node {}: vm {holds}, interpreter {expected:?}", ctx.file, exprs[i], ctx.node);
-                }
-                expected
-            }
-        }
+    /// Whether a rule's `i`th condition holds.
+    fn condition_holds(&self, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>, vm: &[crate::vm::VExpr], i: usize) -> Result<bool, String> {
+        vm.get(i).and_then(|lowered| session.holds(lowered, item)).ok_or_else(|| session.error())
     }
-    /// A rule clause's value: through the VM when on, else (or on an error,
-    /// which it reports) the interpreter.
-    fn clause(&self, ctx: &Ctx, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>, e: &CExpr, vm: Option<&crate::vm::VExpr>) -> Result<Value<'static>, String> {
-        if crate::vm::mode() == crate::vm::Mode::On {
-            if let Some(value) = vm.and_then(|vm| session.value(vm, item)) {
-                return Ok(value.into_static());
-            }
-            crate::vm::note_fallback(if vm.is_some() { "clause error" } else { "clause not lowered" });
-            Self::bind_item(ctx, session, item);
-        }
-        ctx.eval(e).map(Value::into_static)
+    /// A rule clause's VM value.
+    fn clause(&self, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>, vm: Option<&crate::vm::VExpr>) -> Result<Value<'static>, String> {
+        vm.and_then(|vm| session.value(vm, item)).map(Value::into_static).ok_or_else(|| session.error())
     }
 
-    /// A fallback to the interpreter needs the `each` item in its form
-    /// (VM items are bound as null until then).
-    fn bind_item(ctx: &Ctx, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>) {
-        if let Some(item) = item {
-            ctx.set_rule_item(session.item_value(item).into_static());
-        }
-    }
 
     /// Limit parallel rule groups per file; zero selects serial evaluation.
     pub fn set_rule_jobs(&mut self, jobs: usize) {
@@ -699,7 +677,7 @@ impl Linter {
                         reindented: &reindented[fi],
                         attrs: &self.attrs,
                         memo: &memo,
-                        locals: Some((fi as u32, &self.rules[fi].locals, &self.rules[fi].target_layers)),
+                        locals: Some((fi as u32, &self.rules[fi].locals_vm, &self.rules[fi].target_layers)),
                         native,
                         indents: &self.rules[fi].indents,
                         indent_reset: self.rules[fi].indent_reset.as_ref(),
@@ -743,7 +721,7 @@ impl Linter {
     fn apply_each(&self, f: &Rule, ctx: &Ctx) -> Vec<Diagnostic> {
         // Rule `let`s never read the item: one session serves every item.
         let session = crate::vm::Session::new(ctx, ctx.node, &f.locals_vm);
-        let Some(list) = &f.each else { return self.apply(f, ctx, &session).into_iter().collect() };
+        if f.each.is_none() { return self.apply(f, ctx, &session).into_iter().collect() }
         let failed = |e: String| {
             let node = ctx.tree.node(ctx.node);
             let message = format!("rule `{}` failed here: {e}", f.name);
@@ -752,14 +730,14 @@ impl Linter {
         if !f.node_when.is_empty() {
             // Guard lambdas are compiled after the rule's item slot even
             // though these guards do not read that item yet.
-            let ready = ctx.with_rule_item(Value::Null, || {
+            let ready = (|| {
                 for i in 0..f.node_when.len() {
-                    if !self.condition_holds(ctx, &session, Some(crate::vm::V::Null), &f.node_when, &f.node_when_vm, i)? {
+                    if !self.condition_holds(&session, Some(crate::vm::V::Null), &f.node_when_vm, i)? {
                         return Ok(false);
                     }
                 }
                 Ok(true)
-            });
+            })();
             match ready {
                 Ok(true) => {}
                 Ok(false) => return Vec::new(),
@@ -767,29 +745,15 @@ impl Linter {
             }
         }
         let mut out = Vec::new();
-        // The VM's items stay VM values for the VM's clauses; the interpreter
-        // (messages, errors) sees each as its value.
-        let vm_on = crate::vm::mode() == crate::vm::Mode::On;
-        let vm_items = vm_on.then(|| f.each_vm.as_ref().and_then(|e| session.items(e))).flatten();
+        let vm_items = f.each_vm.as_ref().and_then(|e| session.items(e));
         match vm_items {
             Some(items) => {
-                // The interpreter's form of an item is built only for a
-                // fallback that reads it ([`Self::bind_item`]).
                 for item in items {
-                    out.extend(ctx.with_rule_item(Value::Null, || self.apply_item(f, ctx, &session, Some(item))));
+                    out.extend(self.apply_item(f, ctx, &session, Some(item)));
                 }
             }
             None => {
-                if vm_on && crate::vm::stats() {
-                    crate::vm::note_fallback(&format!("each not lowered: {}", f.name));
-                }
-                let items = match ctx.eval(list) {
-                    Ok(v) => v,
-                    Err(e) => return failed(e),
-                };
-                for item in items.item_slice() {
-                    out.extend(ctx.with_rule_item(item.clone(), || self.apply_item(f, ctx, &session, None)));
-                }
+                return failed(session.error());
             }
         }
         out
@@ -799,12 +763,8 @@ impl Linter {
         self.apply_item(f, ctx, session, None)
     }
 
-    /// One report: `item` is the `each` item as a VM value (`None` without
-    /// `each`, or when the interpreter built the list: the VM clauses then
-    /// fall back to the interpreter, which holds the item).
+    /// One report, optionally bound to an `each` item.
     fn apply_item(&self, f: &Rule, ctx: &Ctx, session: &crate::vm::Session<'_, Ctx>, item: Option<crate::vm::V>) -> Option<Diagnostic> {
-        // Without the item as a VM value, item-reading VM forms can't run.
-        let vm_ready = item.is_some() || f.each.is_none();
         let node = ctx.tree.node(ctx.node);
         let (start, end) = (node.start as usize, node.end as usize);
         let failed = |e: String| Diagnostic {
@@ -816,27 +776,26 @@ impl Linter {
             end,
             fix: None,
         };
-        let when_vm: &[crate::vm::VExpr] = if vm_ready { &f.when_vm } else { &[] };
         for i in 0..f.when.len() {
-            match self.condition_holds(ctx, session, item, &f.when, when_vm, i) {
+            match self.condition_holds(session, item, &f.when_vm, i) {
                 Ok(true) => {}
                 Ok(false) => return None,
                 Err(e) => return Some(failed(e)),
             }
         }
         let fix_enabled = match &f.fix_when {
-            Some(cond) => match self.clause(ctx, session, item, cond, f.fix_when_vm.as_ref().filter(|_| vm_ready)) {
+            Some(_) => match self.clause(session, item, f.fix_when_vm.as_ref()) {
                 Ok(v) => v.truthy(),
                 Err(e) => return Some(failed(e)),
             },
             None => true,
         };
         let fix = match (&f.fix, fix_enabled) {
-            (Some(expr), true) => match self.clause(ctx, session, item, expr, f.fix_vm.as_ref().filter(|_| vm_ready)) {
+            (Some(_), true) => match self.clause(session, item, f.fix_vm.as_ref()) {
                 Ok(v) => {
                     let want = v.text();
                     let (from, to) = match &f.fix_at {
-                        Some(at) => match self.clause(ctx, session, item, at, f.fix_at_vm.as_ref().filter(|_| vm_ready)).and_then(|value| explicit_fix_region(ctx, value)) {
+                        Some(_) => match self.clause(session, item, f.fix_at_vm.as_ref()).and_then(|value| explicit_fix_region(ctx, value)) {
                             Ok(span) => span,
                             Err(e) => return Some(failed(e)),
                         },
@@ -858,7 +817,7 @@ impl Linter {
         };
         // Offsets locate points; only records and nodes select a span.
         let (start, end) = match &f.report_at {
-            Some(at) => {
+            Some(_) => {
                 let boundary = |n: f64| {
                     let mut at = (n.max(0.0) as usize).min(ctx.source.len());
                     while !ctx.source.is_char_boundary(at) {
@@ -866,7 +825,7 @@ impl Linter {
                     }
                     at
                 };
-                let span = self.clause(ctx, session, item, at, f.report_at_vm.as_ref().filter(|_| vm_ready)).and_then(|v| match v {
+                let span = self.clause(session, item, f.report_at_vm.as_ref()).and_then(|v| match v {
                     Value::Node(id, _) => {
                         let n = ctx.tree.node(id);
                         Ok((n.start as usize, n.end as usize))
@@ -892,23 +851,14 @@ impl Linter {
             None => (start, end),
         };
         // Through the VM: `[index, text]` in one expression.
-        let message_vm = f.message_vm.as_ref().filter(|_| vm_ready && crate::vm::mode() == crate::vm::Mode::On);
+        let message_vm = f.message_vm.as_ref();
         let lowered = message_vm.and_then(|vm| match session.value(vm, item)? {
             Value::List(pair) => Some((pair.get(1)?.text().into_owned(), pair.first()?.num().ok()? as usize)),
             _ => None,
         });
         let (message, message_index) = match (&f.message, lowered) {
             (Some(_), Some((text, index))) => (text, Some(index)),
-            (Some(m), None) => {
-                if crate::vm::mode() == crate::vm::Mode::On {
-                    crate::vm::note_fallback(if message_vm.is_some() { "message error" } else { "message not lowered" });
-                    Self::bind_item(ctx, session, item);
-                }
-                match f.message_plan.as_ref().expect("indexed message").eval(m, ctx) {
-                    Ok((v, index)) => (v.text().into_owned(), Some(index)),
-                    Err(e) => return Some(failed(e)),
-                }
-            }
+            (Some(_), None) => return Some(failed(session.error())),
             (None, _) => (f.name.clone(), Some(0)),
         };
         Some(Diagnostic { rule: f.name.clone(), severity: f.severity, message, message_index, start, end, fix })

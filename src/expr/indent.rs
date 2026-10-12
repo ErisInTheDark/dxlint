@@ -324,23 +324,17 @@ impl<'a> Ctx<'a> {
         Ok(None)
     }
 
-    /// An indent expression's value on `on.node`, through the VM when on (an
-    /// error falls back to the interpreter, which reports it).
-    pub(super) fn indent_eval(on: &Ctx<'a>, e: &CExpr, lowered: Option<&VExpr>) -> Result<Value<'a>, String> {
-        if crate::vm::mode() == crate::vm::Mode::On {
-            if let Some(v) = lowered.and_then(|vm| crate::vm::eval(on, on.node, vm)) {
-                return Ok(v.value(on, on.source));
-            }
-            crate::vm::note_fallback("indent");
-        }
-        on.eval(e)
+    /// An indent expression's VM value on `on.node`.
+    pub(super) fn indent_eval(on: &Ctx<'a>, lowered: Option<&VExpr>) -> Result<Value<'a>, String> {
+        lowered.and_then(|vm| crate::vm::eval(on, on.node, vm)).map(|v| v.value(on, on.source))
+            .ok_or_else(|| on.memo.vm.error())
     }
 
     fn indent_reset_at(&self, node: u32) -> Result<bool, String> {
         match self.indent_reset {
-            Some(reset) => {
+            Some(_) => {
                 let on = Ctx { node, indents: &EMPTY, indent_reset: None, locals: None, ..*self };
-                Ok(Self::indent_eval(&on, reset, self.indents.reset.as_ref())?.truthy())
+                Ok(Self::indent_eval(&on, self.indents.reset.as_ref())?.truthy())
             }
             None => Ok(false),
         }
@@ -353,7 +347,7 @@ impl<'a> Ctx<'a> {
     /// itself; null means the default.
     fn indent_anchor_at(&self, id: u32, i: usize, in_form: bool) -> Result<AnchorAt, String> {
         let from = match self.indents[i].from.as_ref() {
-            Some(from) => match Self::indent_eval(&Ctx { node: id, indents: &EMPTY, indent_reset: None, ..*self }, from, self.indents.lowered.get(i).and_then(|l| l.0.as_ref()))? {
+            Some(_) => match Self::indent_eval(&Ctx { node: id, indents: &EMPTY, indent_reset: None, ..*self }, self.indents.lowered.get(i).and_then(|l| l.0.as_ref()))? {
                 Value::Node(n, _) => Some(AnchorAt::Offset(self.tree.node(n).start as usize)),
                 Value::Null => None,
                 Value::Str(text) => Some(AnchorAt::Text(text.to_string())),
@@ -412,7 +406,7 @@ impl<'a> Ctx<'a> {
                 }
                 let levels = match (&rule.by, counts) {
                     (_, false) => 0.0,
-                    (Some(by), true) => Self::indent_eval(&Ctx { node: id, ..*self }, by, self.indents.lowered.get(i).and_then(|l| l.1.as_ref()))?.num()?,
+                    (Some(_), true) => Self::indent_eval(&Ctx { node: id, ..*self }, self.indents.lowered.get(i).and_then(|l| l.1.as_ref()))?.num()?,
                     (None, true) => 1.0,
                 };
                 let levels = if rule.dedent { -levels } else { levels };

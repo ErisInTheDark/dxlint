@@ -1,4 +1,4 @@
-use crate::expr::{CExpr, Ctx, Value};
+use crate::expr::{CExpr, Value};
 use crate::grammar::UserFn;
 
 /// Message branches remain structural even when their options are constant.
@@ -61,26 +61,6 @@ impl Plan {
         }
     }
 
-    pub(super) fn eval<'a>(&self, expr: &CExpr, ctx: &Ctx<'a>) -> Result<(Value<'a>, usize), String> {
-        match (self, expr) {
-            (Self::Leaf(index), expr) => Ok((ctx.eval(expr)?, *index)),
-            (Self::If(yes, no), CExpr::If(condition, a, b)) => {
-                if ctx.eval(condition)?.truthy() { yes.eval(a, ctx) } else { no.eval(b, ctx) }
-            }
-            (Self::Nullish(left, right), CExpr::Nullish(a, b)) => {
-                let result = left.eval(a, ctx)?;
-                if matches!(result.0, Value::Null) { right.eval(b, ctx) } else { Ok(result) }
-            }
-            (Self::Bind(body), CExpr::Bind(value, _, expr)) => {
-                ctx.push_param(ctx.eval(value)?);
-                let result = body.eval(expr, ctx);
-                ctx.pop_param();
-                result
-            }
-            (Self::Hole(body), CExpr::Hole(expr, _)) => body.eval(expr, ctx),
-            _ => unreachable!("message structure is preserved after indexing"),
-        }
-    }
 }
 
 /// Moves every parameter slot from `from` up by one, for a binding

@@ -1,6 +1,6 @@
 //! File-local interval queries over a selector's sorted syntax nodes.
 
-use super::{value, CExpr, Ctx, NodeSel, Value};
+use super::{Ctx, NodeSel};
 use crate::engine::Query;
 
 pub(super) struct LayerSpans {
@@ -145,21 +145,6 @@ impl<'a> Ctx<'a> {
         self.query(Query::Descendants, || sel.descendants(self.grammar, self.tree, self.node), Vec::len)
     }
 
-    pub(super) fn containing(&self, sel: &NodeSel) -> Value<'a> {
-        match self.containing_id(sel) {
-            Some(id) => Value::Node(id, value::Text::Borrowed(self.node_text(id))),
-            None => Value::Null,
-        }
-    }
-
-    pub(super) fn overlapping(&self, sel: &NodeSel, range: Option<&(CExpr, CExpr)>) -> Result<Value<'a>, String> {
-        let range = match range {
-            Some((from, to)) => Some((self.eval(from)?.num()?, self.eval(to)?.num()?)),
-            None => None,
-        };
-        Ok(Value::list(self.overlapping_ids(sel, range).into_iter()
-            .map(|id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect()))
-    }
 }
 
 #[cfg(test)]

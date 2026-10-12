@@ -85,13 +85,8 @@ mod tests {
     #[test]
     fn first_use_bindings_keep_vm_field_coercion_and_parameter_frames() {
         use super::{bind, CExpr, Value};
-        use crate::expr::functions;
         use crate::expr::Each;
         use crate::expr::pipeline::Stage;
-        let call = |name, args| CExpr::Call(functions::lookup(name).unwrap(), args);
-        let field = CExpr::OnField(0, Box::new(CExpr::Builtin(crate::expr::Builtin::EndOffset)));
-        let last = bind(field, 0, call("last", vec![CExpr::Param(0)]));
-        assert!(!matches!(crate::vm::lower(&last, &[], &mut crate::vm::Values::default()), crate::vm::VExpr::Interp { .. }), "a field projection still coerces to its whole list");
         let indexed = CExpr::Each(Box::new(Stage {
             kind: Each::Map, depth: 1, arity: 2, input: CExpr::Param(0), args: vec![],
             body: CExpr::Binary(crate::config::ast::BinOp::Add, Box::new(CExpr::Param(1)), Box::new(CExpr::Param(2))),

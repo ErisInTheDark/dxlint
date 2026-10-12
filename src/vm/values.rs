@@ -127,18 +127,14 @@ impl Arena {
 /// One registry is shared by all lowered attributes and rule conditions.
 #[derive(Default, Debug)]
 pub struct Config {
+    pub(crate) lowering_errors: Vec<String>,
     shapes: Vec<Box<[Key]>>,
     shape_ids: crate::fx_hash::FxHashMap<Vec<String>, u16>,
     pub(super) constants: Arena,
     fact_shapes: crate::fx_hash::FxHashMap<usize, FactShape>,
-    /// [`super::VExpr::Interp`] sites by name, with their runs under
-    /// `ZLINT_VM_STATS`.
-    interp_sites: Vec<(String, std::sync::atomic::AtomicU64)>,
-    interp_ids: crate::fx_hash::FxHashMap<String, u32>,
     /// Lowered `fn` bodies by index (`None` while being lowered).
     functions: crate::fx_hash::FxHashMap<u32, Option<super::VExpr>>,
-    /// `fn`s whose record shapes and facts are registered.
-    shaped_functions: crate::fx_hash::FxHashSet<u32>,
+    function_errors: crate::fx_hash::FxHashMap<u32, String>,
     /// Shapes first met while linting (a native fact's records, say), ids
     /// from [`RUNTIME_SHAPE`]: records always pack. Append-only, shared by
     /// the lint threads.
@@ -178,6 +174,9 @@ enum FactShape {
 }
 
 impl Config {
+    pub(crate) fn take_lowering_errors(&mut self, owner: &str) -> Vec<String> {
+        self.lowering_errors.drain(..).map(|error| format!("{owner}: {error}")).collect()
+    }
     pub(super) fn register_fact(&mut self, fact: usize) -> Option<()> {
         fn register(config: &mut Config, shape: crate::expr::facts::Shape) -> Option<FactShape> {
             Some(match shape {
@@ -240,7 +239,7 @@ impl Config {
         self.value_into(value, scratch, Region::Scratch, source)
     }
 
-    /// An interpreter value packed into `arena` (scratch or the file's).
+    /// A value packed into `arena` (scratch or the file's).
     pub(super) fn value_into(&self, value: &Value, arena: &mut Arena, region: Region, source: &str) -> Option<V> {
         Some(match value {
             Value::Str(text) => V::Text(arena.text(text, source)? | if region == Region::Scratch { SCRATCH_TEXT } else { 0 }),
@@ -270,38 +269,20 @@ impl Config {
         self.functions.insert(i, Some(body));
     }
 
+    pub(super) fn reject_function(&mut self, i: u32, name: &str, start: usize) {
+        let message = format!("fn `{name}`: {}", self.lowering_errors[start..].join("; "));
+        self.lowering_errors.truncate(start);
+        self.lowering_errors.push(message.clone());
+        self.function_errors.insert(i, message);
+    }
+
+    pub(super) fn function_error(&self, i: u32) -> Option<&str> {
+        self.function_errors.get(&i).map(String::as_str)
+    }
+
     /// `fn` `i`'s lowered body.
     pub(super) fn function(&self, i: u32) -> Option<&super::VExpr> {
         self.functions.get(&i)?.as_ref()
-    }
-
-    /// Claims registering `fn` `i`'s shapes: false when already done.
-    pub(super) fn shape_function(&mut self, i: u32) -> bool {
-        self.shaped_functions.insert(i)
-    }
-
-    /// The site counter for delegated expressions named `name`.
-    pub(super) fn interp_site(&mut self, name: String) -> u32 {
-        if let Some(&id) = self.interp_ids.get(&name) { return id; }
-        let id = self.interp_sites.len() as u32;
-        self.interp_ids.insert(name.clone(), id);
-        self.interp_sites.push((name, Default::default()));
-        id
-    }
-
-    pub(super) fn interp_hit(&self, site: u32) {
-        if let Some((_, count)) = self.interp_sites.get(site as usize) {
-            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    /// Delegated runs since the last call, by site name, most first.
-    pub fn take_interp_hits(&self) -> Vec<(&str, u64)> {
-        let mut hits: Vec<_> = self.interp_sites.iter()
-            .map(|(name, count)| (name.as_str(), count.swap(0, std::sync::atomic::Ordering::Relaxed)))
-            .filter(|&(_, count)| count > 0).collect();
-        hits.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        hits
     }
 
     /// A shape's keys.
@@ -417,18 +398,6 @@ impl View<'_> {
         }
     }
 
-    pub fn same(&self, value: V, expected: &Value, tree: &crate::grammar::Tree, source: &str) -> bool {
-        match (value, expected) {
-            (V::List(handle), Value::List(items)) => self.len(handle) == items.len()
-                && items.iter().enumerate().all(|(at, v)| self.same(self.item(handle, at), v, tree, source)),
-            (V::Record(shape, handle), Value::Record(entries)) => self.len(handle) == entries.len()
-                && self.config.shape_keys(shape).iter().zip(entries.iter()).enumerate()
-                    .all(|(at, (key, (expected_key, v)))| key == expected_key && self.same(self.item(handle, at), v, tree, source)),
-            (V::Text(handle), Value::Str(text)) => self.pooled(handle, source) == &**text,
-            (scalar, expected) => scalar.same(expected, tree, source),
-        }
-    }
-
     pub fn value<'s>(&self, value: V, tree: &crate::grammar::Tree, source: &'s str) -> Value<'s> {
         match value {
             V::List(handle) => Value::list((0..self.len(handle)).map(|at| self.value(self.item(handle, at), tree, source)).collect()),
@@ -474,7 +443,7 @@ mod tests {
         let view = View { config: &config, scratch: &scratch, file: &file };
         assert_eq!(view.text(V::Text(borrowed), &tree, source), Some(&source[1..5]));
         assert!(matches!(view.value(V::Text(borrowed), &tree, source), Value::Str(crate::expr::value::Text::Borrowed(_))));
-        assert!(view.same(V::Text(owned), &Value::from("5.5"), &tree, source));
+        assert_eq!(view.value(V::Text(owned), &tree, source), Value::from("5.5"));
         assert!(view.equal(V::Text(owned), V::Num(5.5), &tree, source));
         assert!(!view.truthy(V::Text(empty), &tree));
         assert!(view.equal(V::Text(empty), V::Null, &tree, source));

@@ -3,7 +3,6 @@
 use super::{AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
 use crate::vm::{self, Begin, KindSet, VExpr, V};
-use std::collections::hash_map::Entry as MapEntry;
 
 /// A `let` attribute: its expression on each layer that defines it.
 pub struct Attr {
@@ -13,6 +12,7 @@ pub struct Attr {
 }
 
 pub struct Attributes {
+    pub(crate) lowering_errors: Vec<(String, String)>,
     pub(crate) vm_stats: bool,
     pub(crate) values: vm::Values,
     attrs: Vec<CompiledAttr>,
@@ -47,18 +47,14 @@ enum Route {
     Forward(u16),
 }
 
-pub(super) enum Entry<'a> {
-    Busy,
-    Ready(Value<'a>),
-}
-
 impl Attributes {
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
         let stats = vm::stats();
         if attrs.is_empty() {
-            return Self { vm_stats: stats, values: Default::default(), attrs: Vec::new(), layout: Vec::new() };
+            return Self { lowering_errors: Vec::new(), vm_stats: stats, values: Default::default(), attrs: Vec::new(), layout: Vec::new() };
         }
         let mut values = vm::Values::default();
+        let mut lowering_errors = Vec::new();
         let ancestors: Vec<Vec<usize>> = (0..grammar.matchers.len()).map(|kind| {
             let mut chain = Vec::new();
             let mut at = Some(kind as u32);
@@ -72,11 +68,18 @@ impl Attributes {
         for (index, &(matcher, attr, label)) in forwards.iter().enumerate() {
             by_attr[attr as usize].push((matcher, index, label));
         }
-        let attrs = attrs.into_iter().zip(by_attr).map(|(attr, forwards)| {
-            let lowered: Vec<Lowered> = attr.defs.iter().map(|(_, expr)| match vm::lower(expr, &grammar.functions, &mut values) {
-                lowered if lowered.is_direct() => Lowered::Direct(lowered),
-                lowered => Lowered::Cached(lowered),
-            }).collect();
+        let attrs = attrs.into_iter().zip(by_attr).map(|(mut attr, forwards)| {
+            let mut lowered = Vec::new();
+            attr.defs.retain(|(_, expr)| {
+                let body = vm::lower(expr, &grammar.functions, &mut values);
+                let errors = values.take_lowering_errors(&format!("attribute `{}`", attr.name));
+                if !errors.is_empty() {
+                    lowering_errors.extend(errors.into_iter().map(|error| (attr.name.clone(), error)));
+                    return false;
+                }
+                lowered.push(if body.is_direct() { Lowered::Direct(body) } else { Lowered::Cached(body) });
+                true
+            });
             let mut routes = Vec::new();
             if !attr.defs.is_empty() || !forwards.is_empty() {
                 let mut definitions = vec![u32::MAX; grammar.matchers.len()];
@@ -103,18 +106,11 @@ impl Attributes {
             }
         }).collect();
         let layout = vec![0; grammar.matchers.len()];
-        Self { vm_stats: stats, values, attrs, layout }
+        Self { lowering_errors, vm_stats: stats, values, attrs, layout }
     }
 
     pub(crate) fn report_vm_stats(&self, memo: &AttrMemo<'_>, tree: &crate::grammar::Tree, file: &str) {
         if !self.vm_stats { return; }
-        let attrs = memo.attributes.borrow();
-        let lowered = attrs.keys().filter(|&&(node, attr)| {
-            matches!(self.route(tree.node(node).matcher, attr), Route::Defined(_, slot) if slot != NO_SLOT)
-        }).count();
-        // Inline payload estimate only: hash-table controls, spare buckets
-        // and shared list/record/string allocations are not included.
-        let entry_bytes = std::mem::size_of::<((u32, u16), Entry<'_>)>();
         memo.vm.report_stats(tree, &self.layout, file);
         let mut owners = crate::fx_hash::FxHashMap::default();
         for (attr, def) in self.attrs.iter().enumerate() {
@@ -135,14 +131,6 @@ impl Attributes {
         for ((attr, index), count) in failures.into_iter().take(15) {
             eprintln!("zlint vm gave up: {file} {count} {}#{index}", self.attrs[attr].name);
         }
-        for (site, count) in self.values.take_interp_hits() {
-            eprintln!("zlint vm interp: {file} {count} {site}");
-        }
-        for (route, count) in vm::take_fallbacks() {
-            eprintln!("zlint vm fallback: {file} {count} {route}");
-        }
-        eprintln!("zlint vm memo: {file} entries={} capacity={} inline_capacity_approx_bytes={} lowered_entries={lowered} lowered_inline_bytes={}",
-            attrs.len(), attrs.capacity(), attrs.capacity() * entry_bytes, lowered * entry_bytes);
     }
 
     /// Lays out each node kind's VM record: exactly the lowered attributes
@@ -374,7 +362,22 @@ impl vm::Host for Ctx<'_> {
     }
 
     fn builtin(&self, node: u32, builtin: super::Builtin) -> Option<Value<'_>> {
-        Ctx { node, ..*self }.builtin(builtin).ok()
+        match (Ctx { node, ..*self }).builtin(builtin) {
+            Ok(value) => Some(value),
+            Err(error) => { self.memo.vm.fail(error); None }
+        }
+    }
+
+    fn option(&self, index: usize) -> Option<Value<'_>> { self.options.get(index).cloned() }
+
+    fn debug(&self, node: u32, label: &str, value: &Value) {
+        let start = self.tree.node(node).start as usize;
+        let (line, col) = self.lines.line_col(self.source, start);
+        let layer = match self.tree.node(node).matcher {
+            ROOT | TEXT => "",
+            matcher => self.grammar.matchers[matcher as usize].name.as_str(),
+        };
+        eprintln!("{}:{}:{} {layer} {label} = {}", self.file, line + 1, col + 1, super::show(value));
     }
 
     fn position(&self, offset: f64) -> Option<super::Position> {
@@ -412,12 +415,15 @@ impl vm::Host for Ctx<'_> {
     fn attr(&self, node: u32, attr: u16) -> Option<V> {
         match self.attrs.route(self.tree.node(node).matcher, attr) {
             Route::Missing => Some(V::Null),
-            // A forward reads the field's node: nothing, or its one value
-            // (several build a list, which the interpreter answers).
             Route::Forward(label) => match self.tree.fields(node, label).as_slice() {
                 [] => Some(V::Null),
                 [one] => vm::Host::attr(self, *one, attr),
-                _ => None,
+                many => {
+                    let items = many.iter()
+                        .map(|&id| vm::Host::attr(self, id, attr).map(|value| value.to_value(self, self.source)))
+                        .collect::<Option<Vec<_>>>()?;
+                    self.memo.vm.pack(&Value::list(items), &self.attrs.values, self.source)
+                }
             },
             Route::Defined(index, slot) => self.vm_attr(node, attr, index, slot),
         }
@@ -436,14 +442,7 @@ impl vm::Host for Ctx<'_> {
         Some(self.test_value(test, &Value::from(text)))
     }
 
-    fn interp(&self, node: u32, e: &CExpr, params: Vec<Value<'static>>) -> Option<Value<'_>> {
-        let on = Ctx { node, ..*self };
-        let mut params: Vec<Value<'_>> = params;
-        on.with_params(&mut params, || on.eval(e)).ok()
-    }
-
     fn fact(&self, node: u32, fact: usize, projection: Option<usize>, of: super::FactOf) -> Option<V> {
-        // Same reads and memo as the interpreter's (recorded reads included).
         let on = Ctx { node, ..*self };
         let value = on.fact_value(fact, projection, of);
         let key = {
@@ -467,92 +466,59 @@ impl vm::Host for Ctx<'_> {
         }
         packed
     }
+
+    fn fact_call(&self, node: u32, fact: usize, args: Vec<Value<'static>>) -> Option<V> {
+        let Some(native) = self.native_facts() else { return Some(V::Null) };
+        let compute = || super::facts::with_args(args, || super::facts::read(native, fact, node));
+        let value = match self.profile {
+            Some(profile) => profile.time_fact(fact, compute),
+            None => compute(),
+        };
+        self.memo.vm.pack(&value, &self.attrs.values, self.source)
+    }
+
+    fn facts_available(&self) -> bool { self.native_facts().is_some() }
+
+    fn local(&self, node: u32, local: u16) -> Option<V> {
+        match (Ctx { node, ..*self }).local(local) {
+            Ok(value) => self.memo.vm.pack(&value, &self.attrs.values, self.source),
+            Err(error) => { self.memo.vm.fail(error); None }
+        }
+    }
 }
 
 impl<'a> Ctx<'a> {
     /// An attribute through the VM, from the node's record when it has a
-    /// field there (computed on first read); `None` on an error or a cycle
-    /// (the interpreter reports it).
+    /// field there (computed on first read); `None` on an error or a cycle.
     fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
         let lowered = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
             Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
             Lowered::Cached(body) if slot != NO_SLOT => body,
             // No record field on this kind: memoised beside the records.
             Lowered::Cached(body) => {
-                return self.memo.vm.memo(node, attr, || vm::eval(self, node, body).and_then(|v| v.persist(&self.memo.vm)));
+                let value = self.memo.vm.memo(node, attr, || vm::eval(self, node, body).and_then(|v| v.persist(&self.memo.vm)));
+                if value.is_none() {
+                    self.memo.vm.attr_failure(node, attr, &self.attrs.attrs[attr as usize].name);
+                    self.memo.vm.remember_attr_failure(node, attr);
+                }
+                return value;
             }
         };
         match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
             Begin::Ready(v) => Some(v),
-            Begin::GiveUp => None,
+            Begin::GiveUp => {
+                self.memo.vm.attr_failure(node, attr, &self.attrs.attrs[attr as usize].name);
+                None
+            }
             Begin::Compute(at) => {
                 let v = vm::eval(self, node, lowered).and_then(|v| v.persist(&self.memo.vm));
                 self.memo.vm.finish(at, v);
+                if v.is_none() { self.memo.vm.remember_attr_failure(node, attr); }
                 v
             }
         }
     }
 
-    pub(super) fn attr(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
-        if self.memo.params.borrow().len() == self.memo.param_base.get() {
-            self.attr_unbound(node, attr)
-        } else {
-            self.unbound(|| self.attr_unbound(node, attr))
-        }
-    }
-
-    fn attr_unbound(&self, node: u32, attr: u16) -> Result<Value<'a>, String> {
-        // `ZLINT_VM=verify`: the VM's value, compared with the interpreter's.
-        let mut checked = None;
-        let index = match self.attrs.route(self.tree.node(node).matcher, attr) {
-            Route::Missing => return Ok(Value::Null),
-            Route::Forward(label) => {
-                let mut values = Vec::new();
-                for id in self.tree.fields(node, label) {
-                    values.push(self.attr(id, attr)?);
-                }
-                return Ok(match values.len() {
-                    0 => Value::Null,
-                    1 => values.pop().expect("one"),
-                    _ => Value::list(values),
-                });
-            }
-            Route::Defined(index, slot) => {
-                if vm::mode() != vm::Mode::Off {
-                    match self.vm_attr(node, attr, index, slot) {
-                        Some(v) if vm::mode() == vm::Mode::On => return Ok(v.to_value(self, self.source)),
-                        Some(v) => checked = Some(v),
-                        // An error or a cycle: the interpreter reports it.
-                        None => vm::note_fallback("attribute error"),
-                    }
-                }
-                index as usize
-            }
-        };
-        let def = &self.attrs.attrs[attr as usize];
-        let key = (node, attr);
-        match self.memo.attributes.borrow_mut().entry(key) {
-            MapEntry::Occupied(entry) => match entry.get() {
-                Entry::Ready(value) => return Ok(value.clone()),
-                Entry::Busy => return Err(format!("attribute `{}` depends on itself", def.name)),
-            },
-            MapEntry::Vacant(entry) => { entry.insert(Entry::Busy); }
-        }
-        let ctx = Ctx { node, options: &[], ..*self };
-        match ctx.eval(&def.defs[index]) {
-            Ok(value) => {
-                if let Some(v) = checked.filter(|v| !v.agrees(&value, self)) {
-                    eprintln!("zlint vm mismatch: {} attribute `{}` on node {node}: vm {v:?}, interpreter {value:?}", self.file, def.name);
-                }
-                self.memo.attributes.borrow_mut().insert(key, Entry::Ready(value.clone()));
-                Ok(value)
-            }
-            Err(error) => {
-                self.memo.attributes.borrow_mut().remove(&key);
-                Err(error)
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -669,7 +635,7 @@ mod tests {
                 if matches!(expected, Value::Str(_) | Value::Record(_) | Value::List(_)) {
                     let value = vm::Host::fact(&on, node, fact, None, super::super::FactOf::Node)
                         .expect("native values supported by the VM must not give up at the bridge");
-                    assert!(value.agrees(&expected, &on));
+                    assert_eq!(value.to_value(&on, source), expected);
                     let read = VExpr::Fact { fact, projection: None, of: super::super::FactOf::Node };
                     assert!(vm::eval(&on, node, &read).unwrap().value(&on, source) == expected);
                     assert_eq!(vm::eval(&on, node, &VExpr::Not(Box::new(read.clone()))).unwrap().truthy(&on), !expected.truthy());
@@ -691,7 +657,7 @@ mod tests {
             let expected = on.fact_value(fact, None, of);
             assert!(matches!(&expected, Value::List(items) if items.len() == 2), "field reads keep one fact result per argument");
             let value = vm::Host::fact(&on, call, fact, None, of).expect("a multi-field fact read adds a supported list wrapper");
-            assert!(value.agrees(&expected, &on));
+            assert_eq!(value.to_value(&on, source), expected);
         }
     }
 

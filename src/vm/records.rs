@@ -6,7 +6,7 @@ use std::cell::RefCell;
 enum Cell {
     Unset,
     Busy,
-    /// The VM gave up here once; the interpreter owns this value.
+    /// Evaluation failed here.
     GaveUp,
     Ready(V),
 }
@@ -77,6 +77,8 @@ pub(super) fn stored(cell: u64) -> V {
 /// first requesting rule root; only read blocks acquire cells.
 #[derive(Default)]
 pub struct FileVm {
+    error: RefCell<Option<String>>,
+    attr_errors: RefCell<crate::fx_hash::FxHashMap<(u32, u16), String>>,
     storage: RefCell<Storage>,
     pub(super) values: RefCell<super::values::Arena>,
     packed_facts: RefCell<crate::fx_hash::FxHashMap<FactPackKey, V>>,
@@ -152,17 +154,43 @@ const NO_RECORD: u32 = u32::MAX;
 /// What [`FileVm::begin`] found.
 pub enum Begin {
     Ready(V),
-    /// Busy, or given up before: the interpreter handles it.
+    /// Busy, or failed before.
     GiveUp,
     /// Marked busy at this cell: evaluate, then [`FileVm::finish`].
     Compute(usize),
 }
 
 impl FileVm {
+    pub(crate) fn fail(&self, message: String) {
+        let mut error = self.error.borrow_mut();
+        if error.is_none() { *error = Some(message); }
+    }
+
+    pub(crate) fn clear_error(&self) {
+        self.error.borrow_mut().take();
+    }
+
+    pub(crate) fn error(&self) -> String {
+        self.error.borrow().clone().unwrap_or_else(|| "expression evaluation failed".into())
+    }
+
+    pub(crate) fn attr_failure(&self, node: u32, attr: u16, name: &str) {
+        let error = self.attr_errors.borrow().get(&(node, attr)).cloned()
+            .unwrap_or_else(|| format!("attribute `{name}` depends on itself"));
+        self.fail(error);
+    }
+
+    pub(crate) fn remember_attr_failure(&self, node: u32, attr: u16) {
+        self.attr_errors.borrow_mut().insert((node, attr), self.error());
+    }
+
+    pub(crate) fn pack(&self, value: &crate::expr::Value, config: &super::Values, source: &str) -> Option<V> {
+        config.value_into(value, &mut self.values.borrow_mut(), super::values::Region::File, source)
+    }
     /// An attribute on a node kind without a record field for it: computed
     /// once per (node, attribute) by `compute` (persisted to the file arena).
     /// A read while it is being computed (a cycle) or after it failed is
-    /// `None`, which the interpreter reports.
+    /// `None`.
     pub(crate) fn memo(&self, node: u32, attr: u16, compute: impl FnOnce() -> Option<V>) -> Option<V> {
         if let Some(&kept) = self.kept.borrow().get(&(node, attr)) { return kept; }
         self.kept.borrow_mut().insert((node, attr), None);
@@ -286,7 +314,7 @@ impl FileVm {
     }
 
     /// Publishes a value, or marks the cell given up so later reads go
-    /// straight to the interpreter.
+    /// return the stored failure.
     pub fn finish(&self, at: usize, value: Option<V>) {
         self.storage.borrow_mut().cells.set(at, value.map_or(GAVE_UP, encode));
     }

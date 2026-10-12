@@ -90,7 +90,7 @@ impl<'a> Ctx<'a> {
                 Some(IndentHit { rule: Some(i), node, extra, .. }) => {
                     let rule = &self.indents[i];
                     let levels = match &rule.by {
-                        Some(by) => Ctx::indent_eval(&Ctx { node, ..*self }, by, self.indents.lowered_by(i))?.num()?,
+                        Some(_) => Ctx::indent_eval(&Ctx { node, ..*self }, self.indents.lowered_by(i))?.num()?,
                         None => 1.0,
                     };
                     Value::Num(extra + if rule.dedent { -levels } else { levels })
@@ -217,11 +217,9 @@ impl<'a> Ctx<'a> {
             let names = &self.grammar.names;
             // One VM session serves every condition in the tree.
             let session = crate::vm::Session::new(self, self.node, &[]);
-            let holds = |node: u32, e: &crate::vm::VExpr| {
-                session.holds_on(node, e).unwrap_or_else(|| {
-                    crate::vm::note_fallback("name condition error");
-                    false
-                })
+            let holds = |node: u32, e: &crate::vm::VExpr| match session.holds_on(node, e) {
+                Some(held) => held,
+                None => { self.memo.vm.clear_error(); false }
             };
             let when = |node: u32, condition: u32| {
                 let Some(e) = names.conditions[condition as usize].lowered.get() else { return false };

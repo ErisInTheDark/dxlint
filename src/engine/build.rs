@@ -313,7 +313,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         attrs,
         fingerprint,
     };
-    linter.lower_conditions();
+    errors.extend(linter.lower_conditions(&config));
     Built { linter: Some(linter), errors, sources, symbols }
 }
 
