@@ -41,30 +41,46 @@ fn format_lexical_loop(n) = {
   walk (current) if current is (ts_program, ts_function_like, ts_static_block) then null else current.parent.node
   any (current) current is (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while)
 }
-fn format_lexical_catch(declarator) = {
-  value declarator.parent.node
+fn format_lexical_catch(binding) = {
+  value binding.parent.node
   walk (current) if current is (ts_program, ts_function_like, ts_static_block) then null else current.parent.node
   any (current) current is ts_try && current.parameter.nonempty
-    && declarator.offset >= current.handler.offset && declarator.end_offset <= current.handler.end_offset
+    && binding.offset >= current.handler.offset && binding.end_offset <= current.handler.end_offset
     && {
       value overlapping(ts_identifier, current.parameter.offset, current.parameter.end_offset)
-      any (identifier) identifier.identifier_name == declarator.name.identifier_name
+      any (identifier) identifier.identifier_name == binding.identifier_name
     }
 }
-fn format_lexical_binding(declarator, container) =
-  declarator.name is ts_identifier
-  && !contains(["let", "arguments"], declarator.name.identifier_name)
-  && declarator.name.ambient != true
-  && count(declarator.name.declarations) == 1
-  && declarator.name.scope.format_script_global != true
-  && !declarator.name.scope.format_lexical_dynamic
-  && !format_lexical_catch(declarator)
-  && all(declarator.name.references, reference => reference.scoping_definition_use != null
-    && !reference.scoping_definition_use.before && !reference.scoping_definition_use.separate
+fn format_lexical_declarator(n) = {
+  value n.parent.node
+  walk (current) if current is ts_declarator then null else current.parent.node
+  last
+}
+fn format_lexical_binding(binding, declarator, container) = {
+  value initializer: declarator.init.structure_unwrapped
+  value recursive: initializer is (ts_function, ts_arrow) && !format_lexical_loop(declarator)
+  value !contains(["let", "arguments"], binding.identifier_name)
+  && binding.ambient != true
+  && count(binding.declarations) == 1
+  && binding.scope.format_script_global != true
+  && !binding.scope.format_lexical_dynamic
+  && !format_lexical_catch(binding)
+  && all(binding.references, reference => reference.scoping_definition_use != null
+    && !reference.scoping_definition_use.before
+    && (!reference.scoping_definition_use.separate || recursive
+      && reference.offset >= initializer.offset && reference.end_offset <= initializer.end_offset)
     && reference.offset >= container.offset && reference.end_offset <= container.end_offset)
+}
 in ts_variable_declaration let format_lexical_bindings {
   value container: format_lexical_container(node)
-  value count(declaration) > 0 && all(declaration.nodes, declarator => format_lexical_binding(declarator, container))
+  value count(declaration) > 0 && all(declaration.nodes, declarator => {
+    value bindings: {
+      value overlapping(ts_identifier, declarator.name.offset, declarator.name.end_offset)
+      filter (binding) binding.declaration.node == binding && binding.declaration_kind == "var"
+        && format_lexical_declarator(binding) == declarator
+    }
+    value count(bindings) > 0 && all(bindings, binding => format_lexical_binding(binding, declarator, container))
+  })
 }
 in ts_variable_declaration let format_lexical_initialized all(declaration.nodes, declarator => count(declarator.init.nodes) > 0)
 in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or const instead." {
