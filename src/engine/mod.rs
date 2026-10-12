@@ -13,6 +13,7 @@ mod prune;
 pub mod reads;
 mod suppress;
 pub mod symbols;
+pub mod world;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -262,6 +263,15 @@ impl Linter {
                 let failed = values.take_lowering_errors("module operand");
                 if failed.is_empty() { let _ = operand.lowered.set(body); }
                 let span = operand.source(config).expect("compiled module operand").span;
+                errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
+            }
+        }
+        for operand in &self.grammar.names.operands {
+            if let Some(e) = operand.expr.get() {
+                let body = crate::vm::lower(e, functions, values);
+                let failed = values.take_lowering_errors("item expression");
+                if failed.is_empty() { let _ = operand.lowered.set(body); }
+                let span = config.names[operand.item].item.operand(operand.part).expect("compiled item expression").span;
                 errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
@@ -626,6 +636,7 @@ impl Linter {
             indents: &NO_INDENTS,
             indent_reset: None,
             profile: self.profile.as_ref(),
+            world: None,
         }
     }
 
@@ -638,6 +649,7 @@ impl Linter {
         let memo = AttrMemo::default();
         let no_reindent = RefCell::default();
         let tree_ctx = self.tree_ctx(run.lang, tree, (run.text, run.lines, run.file), &memo, &no_reindent, native);
+        let world = world::LintWorld::new(tree_ctx);
         // Resolve reachability before dispatch: a reference may select a
         // declaration earlier in the tree, and several owners can reach it.
         let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
@@ -682,6 +694,7 @@ impl Linter {
                         indents: &self.rules[fi].indents,
                         indent_reset: self.rules[fi].indent_reset.as_ref(),
                         profile: self.profile.as_ref(),
+                        world: Some(&world),
                     };
                     let found = match &self.profile {
                         Some(profile) => profile.time_rule(fi, || self.apply_each(&self.rules[fi], &ctx)),

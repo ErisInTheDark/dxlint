@@ -625,7 +625,7 @@ mod tests {
             grammar: g, lang: 0, tree: &tree, node: tree.root, source, lines: &lines,
             file: "/root/test.ts", options: &[], reindented: &reindented, attrs: &attrs,
             memo: &memo, locals: None, native: Some(&native), indents: &super::super::IndentPlan::EMPTY,
-            indent_reset: None, profile: None,
+            indent_reset: None, profile: None, world: None,
         };
         for (fact, matcher) in reads {
             let mut represented = 0;

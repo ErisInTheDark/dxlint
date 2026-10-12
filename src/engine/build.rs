@@ -155,6 +155,13 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             let _ = operand.expr.set(e);
         }
     }
+    for operand in &grammar.names.operands {
+        let Some(source) = config.names.get(operand.item).and_then(|def| def.item.operand(operand.part)) else { continue };
+        let scope = Scope { fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
+        if let Some(e) = scope.compile(source, &mut errors) {
+            let _ = operand.expr.set(e);
+        }
+    }
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);

@@ -1548,6 +1548,8 @@ pub struct Ctx<'a> {
     pub indent_reset: Option<&'a CExpr>,
     /// `--profile`: where fact time is added up.
     pub profile: Option<&'a crate::engine::Profile>,
+    /// The lint's files behind type questions ([`crate::engine::world`]).
+    pub world: Option<&'a crate::engine::world::LintWorld<'a>>,
 }
 
 impl<'a> Ctx<'a> {

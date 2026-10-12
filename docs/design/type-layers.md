@@ -152,6 +152,12 @@ in ts_declarator { in init expects type }
 - Generic inference: a type parameter reached through a call with no
   explicit argument unwraps to `inferred`: what the arguments give the
   parameter positions mentioning it (engine-owned).
+- Explicit arguments read through the reference win; a present unknown
+  slot blocks defaults and constraints.
+- Inferred slots fill missing explicit arguments; declaration-only headers
+  bind an empty inferred vector.
+- A frame with no through reference and evaluated arguments is a
+  synthetic library instance; never search a parent reference.
 
 ## Unwrapping: effects
 
@@ -277,6 +283,21 @@ One engine owner, `engine/world.rs`; type-layer engines see only the
 - One `Semantic` per root question, `Budget::DEFAULT`; nested engines
   reuse it. `condition` / `operand` / `attribute` run on the VM in the
   target node's file.
+- Mechanics: `engine/world.rs` `LintWorld` per lint holds file 0's views
+  (tree, text, names, native, attribute memo) plus an append-only arena of
+  loaded units (shared `Arc` data: text, tree, names; per-lint memo + `Ctx`
+  built on first use). `Ctx` carries `world`; the `Semantic` in progress
+  lives in the world's active-question slot (set by a guard around each
+  `condition` / `operand` / `attribute` run, restored on drop), so a
+  condition that asks a type question nests in the same question. `Ctx`
+  cannot hold it directly: `Ctx<'a>` is invariant (its memo holds
+  `Value<'a>`), and questions are shorter-lived than the lint.
+- Rules reach engines through a query registry (`expr/queries.rs`, like
+  `FUNCTIONS` but given the host): `flow_normal(entry)`,
+  `flow_declared_effects(entry, effect)`, later `could` / `always` /
+  `member` / `accepts`. A query outside any question opens a root
+  `Semantic`. First cut: answers holding nodes of other files or non-root
+  frames are `null`; an opaque VM leaf handle comes after.
 
 ## Build order
 
