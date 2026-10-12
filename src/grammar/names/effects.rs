@@ -4,6 +4,10 @@ use std::cell::OnceCell;
 
 pub mod compile;
 pub mod build;
+mod controller;
+mod source;
+pub use controller::{DeclaredEffect, Effects, ExecutedEffect};
+pub(crate) use controller::State;
 
 pub type Path = Vec<u16>;
 pub type StepId = u32;
@@ -20,16 +24,42 @@ pub enum Flow {
     Repeat {
         body: Box<Flow>,
         test: Option<Path>,
+        truth: Option<u16>,
         next: Option<Box<Flow>>,
         first: bool,
     },
     Select { entries: Path, test: Path, body: Path },
 }
 
+impl Flow {
+    pub(crate) fn sources(&self) -> Option<crate::fx_hash::FxHashSet<Path>> {
+        let mut sources = crate::fx_hash::FxHashSet::default();
+        let mut pending = vec![self];
+        while let Some(flow) = pending.pop() {
+            match flow {
+                Self::Children => return None,
+                Self::Nothing => {}
+                Self::Field(path) => { sources.insert(path.clone()); }
+                Self::Then(parts) | Self::Or(parts) => pending.extend(parts),
+                Self::Maybe(flow) => pending.push(flow),
+                Self::Repeat { body, test, next, .. } => {
+                    pending.push(body);
+                    if let Some(test) = test { sources.insert(test.clone()); }
+                    if let Some(next) = next { pending.push(next); }
+                }
+                Self::Select { entries, .. } => { sources.insert(entries.clone()); }
+            }
+        }
+        Some(sources)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Conditional<T> {
     pub item: T,
     pub when: Option<u32>,
+    pub item_id: u32,
+    pub span: crate::config::source::Span,
 }
 
 #[derive(Clone, Debug)]

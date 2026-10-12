@@ -29,7 +29,7 @@ pub trait Source {
     fn shape(&self, node: Leaf, question: &QueryContext) -> Known<Shape>;
     fn children(&self, node: Leaf, question: &QueryContext) -> Known<Vec<Leaf>>;
     fn path(&self, node: Leaf, path: &[u16], question: &QueryContext) -> Known<Vec<Leaf>>;
-    fn truth(&self, node: Leaf, question: &QueryContext) -> Known<Option<bool>>;
+    fn truth(&self, node: Leaf, attribute: u16, question: &QueryContext) -> Known<Option<bool>>;
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +56,7 @@ enum Task {
     Alternative { node: NodeRef, parts: Vec<Slot>, optional: bool, out: Slot },
     Field { node: NodeRef, path: Vec<u16>, body: Slot, out: Slot },
     Repeat { node: NodeRef, body: Slot, test: Slot, next: Slot, truth: Option<bool>, first: bool, out: Slot },
+    Select { node: NodeRef, parts: Vec<(Option<Slot>, Slot)>, out: Slot },
     Catch { source: Slot, handlers: Vec<(Vec<u16>, Slot)>, out: Slot },
     After { node: Leaf, source: Slot, path: Vec<u16>, out: Slot },
     FinishAfter { source: Fragment, normal: Slot, pending: Vec<(Pending, Slot)>, out: Slot },
@@ -132,8 +133,35 @@ impl<S: Source> Builder<'_, S> {
         Some(parts)
     }
 
+    fn field(&mut self, node: Leaf, path: &[u16], catches: &[Catch], out: Slot) -> Option<Slot> {
+        let Target::Node(id) = node.target else { return None };
+        let body = self.slot();
+        self.tasks.push(Task::Field { node: id, path: path.to_vec(), body, out });
+        let matching: Vec<_> = catches.iter().filter(|catch| catch.source == path).collect();
+        if matching.is_empty() { return Some(body) }
+        let source = self.slot();
+        let mut handlers = Vec::new();
+        let mut effects = crate::fx_hash::FxHashSet::default();
+        for catch in &matching {
+            for &effect in &catch.effects {
+                if !effects.insert(effect) { return None }
+            }
+            if !self.question.budget.step() { return None }
+            handlers.push((catch.effects.clone(), self.slot()));
+        }
+        self.tasks.push(Task::Catch { source, handlers: handlers.clone(), out: body });
+        for (catch, (_, out)) in matching.into_iter().zip(handlers).rev() {
+            self.tasks.push(Task::Flow { node, flow: Flow::Field(catch.handler.clone()), catches: Vec::new(), out });
+        }
+        Some(source)
+    }
+
     fn effects(&mut self, node: NodeRef, fragment: &mut Fragment, effects: &[Effect], phase: Phase) -> Option<()> {
-        for effect in effects.iter().filter(|effect| effect.event.phase == phase) {
+        let at_phase = || effects.iter().filter(|effect| effect.event.phase == phase);
+        let ordered = at_phase().filter(|effect| effect.control.is_none())
+            .chain(at_phase().filter(|effect| effect.control.is_some() && effect.possible))
+            .chain(at_phase().filter(|effect| effect.control.is_some() && !effect.possible));
+        for effect in ordered {
             if !self.question.budget.step() { return None }
             let at = self.point(node, Point::Event(effect.event));
             self.connect(&fragment.normal, at);
@@ -206,28 +234,8 @@ impl<S: Source> Builder<'_, S> {
                         }
                         Flow::Field(path) => {
                             let nodes = self.source.path(node, &path, self.question).known()?;
-                            let body = self.slot();
-                            self.tasks.push(Task::Field { node: id, path: path.clone(), body, out });
-                            let matching: Vec<_> = catches.iter().filter(|catch| catch.source == path).collect();
-                            if matching.is_empty() {
-                                self.nodes(id, nodes, body)?;
-                            } else {
-                                let source = self.slot();
-                                let mut handlers = Vec::new();
-                                let mut effects = crate::fx_hash::FxHashSet::default();
-                                for catch in &matching {
-                                    for &effect in &catch.effects {
-                                        if !effects.insert(effect) { return None }
-                                    }
-                                    if !self.question.budget.step() { return None }
-                                    handlers.push((catch.effects.clone(), self.slot()));
-                                }
-                                self.tasks.push(Task::Catch { source, handlers: handlers.clone(), out: body });
-                                for (catch, (_, out)) in matching.into_iter().zip(handlers).rev() {
-                                    self.tasks.push(Task::Flow { node, flow: Flow::Field(catch.handler.clone()), catches: Vec::new(), out });
-                                }
-                                self.nodes(id, nodes, source)?;
-                            }
+                            let body = self.field(node, &path, &catches, out)?;
+                            self.nodes(id, nodes, body)?;
                         }
                         Flow::Then(flows) => {
                             let at = self.tasks.len();
@@ -244,20 +252,41 @@ impl<S: Source> Builder<'_, S> {
                             let parts = self.flows(node, vec![*flow], &catches)?;
                             self.tasks.insert(at, Task::Alternative { node: id, parts, optional: true, out });
                         }
-                        Flow::Repeat { body, test, next, first } => {
-                            let (test_flow, truth) = match test {
-                                Some(path) => {
-                                    let nodes = self.source.path(node, &path, self.question).known()?;
-                                    let truth = self.source.truth(nodes.last().copied().unwrap_or(node), self.question).known()?;
-                                    (Flow::Field(path), truth)
+                        Flow::Repeat { body, test, truth, next, first } => {
+                            let truth = match truth {
+                                Some(attribute) => {
+                                    let at = match &test {
+                                        Some(path) if !path.is_empty() => self.source.path(node, path, self.question).known()?
+                                            .last().copied().unwrap_or(node),
+                                        _ => node,
+                                    };
+                                    self.source.truth(at, attribute, self.question).known()?
                                 }
-                                None => (Flow::Nothing, None),
+                                None => None,
                             };
+                            let test_flow = test.filter(|path| !path.is_empty()).map_or(Flow::Nothing, Flow::Field);
                             let at = self.tasks.len();
                             let parts = self.flows(node, vec![*body, test_flow, next.map_or(Flow::Nothing, |next| *next)], &catches)?;
                             self.tasks.insert(at, Task::Repeat { node: id, body: parts[0], test: parts[1], next: parts[2], truth, first, out });
                         }
-                        Flow::Select { .. } => return None,
+                        Flow::Select { entries, test, body } => {
+                            let nodes = self.source.path(node, &entries, self.question).known()?;
+                            let out = self.field(node, &entries, &catches, out)?;
+                            let at = self.tasks.len();
+                            let mut parts = Vec::new();
+                            for node in nodes {
+                                if !self.question.budget.step() { return None }
+                                let tests = self.source.path(node, &test, self.question).known()?;
+                                let flows = if tests.is_empty() {
+                                    vec![Flow::Field(body.clone())]
+                                } else {
+                                    vec![Flow::Field(test.clone()), Flow::Field(body.clone())]
+                                };
+                                let slots = self.flows(node, flows, &[])?;
+                                parts.push(if tests.is_empty() { (None, slots[0]) } else { (Some(slots[0]), slots[1]) });
+                            }
+                            self.tasks.insert(at, Task::Select { node: id, parts, out });
+                        }
                     }
                 }
                 Task::Sequence { node, parts, out } => {
@@ -311,6 +340,38 @@ impl<S: Source> Builder<'_, S> {
                             pending.push(exit);
                         }
                     }
+                    self.slots[out] = Some(Fragment { entry: Some(entry), normal: vec![end], pending });
+                }
+                Task::Select { node, parts, out } => {
+                    let entry = self.point(node, Point::Join);
+                    let end = self.point(node, Point::Join);
+                    let mut tests = Vec::new();
+                    let mut bodies = Vec::new();
+                    let mut fallback = None;
+                    let mut pending = Vec::new();
+                    for (test, body) in parts {
+                        let body = self.take(body);
+                        if let Some(test) = test {
+                            let test = self.take(test);
+                            tests.push((test, body.entry?));
+                        } else if fallback.replace(body.entry?).is_some() {
+                            return None;
+                        }
+                        bodies.push(body);
+                    }
+                    for pair in bodies.windows(2) {
+                        self.connect(&pair[0].normal, pair[1].entry?);
+                    }
+                    if let Some(last) = bodies.last() { self.connect(&last.normal, end); }
+                    let mut failed = vec![entry];
+                    for (test, body) in tests {
+                        self.connect(&failed, test.entry?);
+                        self.connect(&test.normal, body);
+                        failed = test.normal;
+                        pending.extend(test.pending);
+                    }
+                    self.connect(&failed, fallback.unwrap_or(end));
+                    for body in bodies { pending.extend(body.pending); }
                     self.slots[out] = Some(Fragment { entry: Some(entry), normal: vec![end], pending });
                 }
                 Task::Catch { source, handlers, out } => {
@@ -384,6 +445,7 @@ mod tests {
     struct Node {
         shape: Shape,
         children: Vec<u32>,
+        fields: crate::fx_hash::FxHashMap<u16, Vec<u32>>,
         truth: Option<bool>,
     }
 
@@ -399,7 +461,7 @@ mod tests {
     }
 
     fn node(flow: Flow, children: &[u32]) -> Node {
-        Node { shape: Shape { flow, effects: Vec::new(), catches: Vec::new(), after: Vec::new() }, children: children.to_vec(), truth: None }
+        Node { shape: Shape { flow, effects: Vec::new(), catches: Vec::new(), after: Vec::new() }, children: children.to_vec(), fields: crate::fx_hash::FxHashMap::default(), truth: None }
     }
 
     fn returned() -> Node {
@@ -431,13 +493,20 @@ mod tests {
         fn path(&self, node: Leaf, path: &[u16], _: &QueryContext) -> Known<Vec<Leaf>> {
             let mut nodes = vec![node];
             for &field in path {
-                nodes = nodes.into_iter().filter_map(|node| self.0[index(node)].children.get(field as usize).copied().map(leaf)).collect();
+                nodes = nodes.into_iter().flat_map(|node| {
+                    let node = &self.0[index(node)];
+                    node.fields.get(&field).map_or_else(
+                        || node.children.get(field as usize).copied().map(leaf).into_iter().collect(),
+                        |children| children.iter().copied().map(leaf).collect::<Vec<_>>(),
+                    )
+                }).collect();
             }
             Known::Yes(nodes)
         }
 
-        fn truth(&self, node: Leaf, _: &QueryContext) -> Known<Option<bool>> {
-            Known::Yes(self.0[index(node)].truth)
+        fn truth(&self, node: Leaf, attribute: u16, _: &QueryContext) -> Known<Option<bool>> {
+            let truth = self.0[index(node)].truth;
+            Known::Yes(if attribute == 0 { truth } else { truth.map(|truth| !truth) })
         }
     }
 
@@ -454,6 +523,36 @@ mod tests {
         let graph = built(&language);
         assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(false));
+    }
+
+    #[test]
+    fn same_phase_user_effect_happens_before_exit_in_either_registration_order() {
+        for reversed in [false, true] {
+            let mut returning = returned();
+            returning.shape.effects.push(Effect {
+                event: Event {
+                    kind: EventKind::Effect(9),
+                    site: NodeRef::here(1),
+                    target: None,
+                    value: None,
+                    phase: Phase::Leave,
+                },
+                control: None,
+                target: None,
+                possible: false,
+            });
+            if reversed { returning.shape.effects.reverse() }
+            let language = Language(vec![node(Flow::Children, &[1, 2]), returning, node(Flow::Nothing, &[])]);
+            let graph = built(&language);
+            let exit = graph.steps().find_map(|(id, step)| {
+                step.event().filter(|event| event.kind == EventKind::Effect(0)).map(|_| id)
+            }).expect("return event");
+            assert_eq!(
+                graph.reaches_through(graph.entry(), exit, &[], |event| event.kind == EventKind::Effect(9), &Budget::default()),
+                Known::Yes(true),
+            );
+            assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(false));
+        }
     }
 
     #[test]
@@ -505,7 +604,7 @@ mod tests {
         guard.truth = Some(false);
         let language = Language(vec![
             node(Flow::Then(vec![
-                Flow::Repeat { body: Box::new(Flow::Field(vec![0])), test: Some(vec![1]), next: None, first: false },
+                Flow::Repeat { body: Box::new(Flow::Field(vec![0])), test: Some(vec![1]), truth: Some(0), next: None, first: false },
                 Flow::Field(vec![2]),
             ]), &[1, 2, 3]),
             returned(),
@@ -516,6 +615,139 @@ mod tests {
         assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(false));
         assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(true));
+    }
+
+    #[test]
+    fn a_guard_without_a_truth_attribute_does_not_prove_either_edge_absent() {
+        let mut guard = node(Flow::Nothing, &[]);
+        guard.truth = Some(false);
+        let language = Language(vec![
+            node(Flow::Then(vec![
+                Flow::Repeat { body: Box::new(Flow::Field(vec![0])), test: Some(vec![1]), truth: None, next: None, first: false },
+                Flow::Field(vec![2]),
+            ]), &[1, 2, 3]),
+            node(Flow::Nothing, &[]),
+            guard,
+            node(Flow::Nothing, &[]),
+        ]);
+        let graph = built(&language);
+        assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(true));
+    }
+
+    #[test]
+    fn a_repeat_uses_the_requested_truth_attribute() {
+        let mut guard = node(Flow::Nothing, &[]);
+        guard.truth = Some(false);
+        let language = Language(vec![
+            node(Flow::Then(vec![
+                Flow::Repeat { body: Box::new(Flow::Field(vec![0])), test: Some(vec![1]), truth: Some(7), next: None, first: false },
+                Flow::Field(vec![2]),
+            ]), &[1, 2, 3]),
+            node(Flow::Nothing, &[]),
+            guard,
+            node(Flow::Nothing, &[]),
+        ]);
+        let graph = built(&language);
+        assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(false));
+    }
+
+    #[test]
+    #[ignore = "RED until the compiled truth path lands"]
+    fn a_compiled_test_path_executes_its_prefix_and_reads_its_terminal_attribute() {
+        use crate::config::ast::effects::{Flow as ParsedFlow, Item};
+        use crate::config::ast::Name;
+        use crate::config::source::{FileId, Span};
+
+        let name = |text: &str| Name { text: text.into(), span: Span::new(FileId(0), 0, 1) };
+        let parsed = Item::Runs(ParsedFlow::Repeat {
+            body: Box::new(ParsedFlow::Field(vec![name("body")])),
+            test: Some(vec![name("test"), name("truth")]),
+            next: None,
+            first: false,
+        });
+        let lowered = super::super::compile::lower(&parsed, &mut |names| {
+            Some(match names[0].text.as_str() {
+                "body" => vec![0],
+                "test" => vec![1, crate::grammar::names::ATTR_STEP | 7],
+                _ => unreachable!(),
+            })
+        }, &mut |_| None).expect("execution path compiles");
+        let super::super::compile::Item::Runs(flow) = lowered else { panic!("runs declaration") };
+        let mut guard = node(Flow::Nothing, &[]);
+        guard.truth = Some(false);
+        let language = Language(vec![
+            node(Flow::Then(vec![flow, Flow::Field(vec![2])]), &[1, 2, 3]),
+            node(Flow::Nothing, &[]),
+            guard,
+            node(Flow::Nothing, &[]),
+        ]);
+        let graph = built(&language);
+        assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(3), &Budget::default()), Known::Yes(false));
+    }
+
+    #[test]
+    fn an_owner_truth_attribute_does_not_execute_the_owner_as_its_test() {
+        let mut owner = node(Flow::Then(vec![
+            Flow::Repeat { body: Box::new(Flow::Field(vec![0])), test: Some(vec![]), truth: Some(0), next: None, first: false },
+            Flow::Field(vec![1]),
+        ]), &[1, 2]);
+        owner.truth = Some(false);
+        let language = Language(vec![owner, node(Flow::Nothing, &[]), node(Flow::Nothing, &[])]);
+        let graph = built(&language);
+        assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+    }
+
+    fn selection(language: &Language, from: u32, to: u32) -> Known<bool> {
+        let graph = built(language);
+        let from = graph.sites(NodeRef::here(from), Phase::Enter).next().expect("selection source");
+        let to = graph.sites(NodeRef::here(to), Phase::Enter).next().expect("selection destination");
+        graph.reaches(from, to, &[], &Budget::default())
+    }
+
+    #[test]
+    fn selected_body_falls_through_without_running_later_tests() {
+        let mut owner = node(Flow::Select { entries: vec![9], test: vec![0], body: vec![1] }, &[1, 2]);
+        owner.fields.insert(9, vec![1, 2]);
+        let language = Language(vec![
+            owner,
+            node(Flow::Nothing, &[3, 4]),
+            node(Flow::Nothing, &[5, 6]),
+            node(Flow::Nothing, &[]),
+            node(Flow::Nothing, &[]),
+            node(Flow::Nothing, &[]),
+            node(Flow::Nothing, &[]),
+        ]);
+        assert_eq!(selection(&language, 3, 5), Known::Yes(true));
+        assert_eq!(selection(&language, 4, 5), Known::Yes(false));
+        assert_eq!(selection(&language, 4, 6), Known::Yes(true));
+    }
+
+    #[test]
+    fn fallback_before_a_test_runs_only_after_all_tests_fail() {
+        let mut owner = node(Flow::Select { entries: vec![9], test: vec![0], body: vec![1] }, &[1, 2]);
+        owner.fields.insert(9, vec![1, 2]);
+        let mut fallback = node(Flow::Nothing, &[4]);
+        fallback.fields.insert(0, vec![]);
+        fallback.fields.insert(1, vec![4]);
+        let language = Language(vec![
+            owner,
+            fallback,
+            node(Flow::Nothing, &[5, 6]),
+            node(Flow::Nothing, &[]),
+            node(Flow::Nothing, &[]),
+            node(Flow::Nothing, &[]),
+            node(Flow::Nothing, &[]),
+        ]);
+        assert_eq!(selection(&language, 5, 4), Known::Yes(true));
+        assert_eq!(selection(&language, 6, 4), Known::Yes(false));
+        assert_eq!(selection(&language, 4, 6), Known::Yes(true));
     }
 
     fn control_node(id: u32, control: Control) -> Node {

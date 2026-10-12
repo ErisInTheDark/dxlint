@@ -1,0 +1,116 @@
+# .ts/effects: evaluation order and separate execution entries.
+
+in ts_program, ts_block, ts_case, ts_namespace { runs body }
+in ts_expression_statement, ts_export_assignment, ts_decorator, ts_computed_key,
+  ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion,
+  ts_instantiation, ts_jsx_expression { runs expression }
+in ts_variable_declaration { runs declaration }
+in ts_declarator { runs init then name }
+in ts_parameter { runs init then name }
+in ts_return { runs argument; unwraps returned argument nearest function }
+in ts_throw { runs argument; unwraps thrown argument }
+in ts_break { runs nothing; unwraps broken label nearest breakable }
+in ts_continue { runs nothing; unwraps continued label nearest loop }
+in ts_await { runs argument; unwraps awaited argument }
+in ts_yield { runs argument; unwraps yielded argument }
+in ts_call, ts_new, ts_member, ts_index, ts_yield, ts_import_call { unwraps maybe thrown }
+in ts_block { when is ts_try.block { unwraps maybe thrown } }
+in ts_if, ts_conditional { runs test then (consequent or alternate) }
+in ts_logical { runs left then maybe right }
+
+in ts_function, ts_arrow {
+  runs nothing
+  in body runs separately
+}
+in ts_method {
+  runs decorator then key
+  in body runs separately
+}
+in ts_class { runs decorator then extends then member }
+in ts_static_block {
+  runs body
+  in body runs separately
+}
+in ts_class_property {
+  when contains([] modifier, "static") { runs decorator then key then init }
+  when !contains([] modifier, "static") { runs decorator then key }
+  in init runs separately
+}
+
+in ts_while {
+  scope loop, breakable
+  runs repeat body while test.flow_truth
+}
+in ts_do_while {
+  scope loop, breakable
+  runs repeat body while test.flow_truth first
+}
+in ts_for {
+  scope loop, breakable
+  runs init then (repeat body while test.flow_truth next update)
+}
+in ts_for_in, ts_for_of {
+  scope loop, breakable
+  runs right then repeat (left then body)
+}
+in ts_switch {
+  scope breakable
+  runs discriminant then (enter one of case testing test then body)
+}
+in ts_labeled { labels label; runs body }
+in ts_try {
+  runs block
+  in handler catches thrown from block
+  in finalizer runs after block, handler
+}
+in ts_with { runs object then body }
+
+in ts_assignment {
+  when contains(["&&=", "||=", "??="], operator) { runs left then maybe right }
+  when !contains(["&&=", "||=", "??="], operator) { runs right then left }
+}
+in ts_assignment_pattern { runs maybe right then left }
+in ts_object_pattern { runs property then rest }
+in ts_array_pattern, ts_array { runs element }
+in ts_pattern_property { runs key then value }
+in ts_rest, ts_spread, ts_jsx_spread_attribute { runs argument }
+in ts_object { runs property }
+in ts_property { runs key then value }
+in ts_binary { runs left then right }
+in ts_unary, ts_update, ts_import_call { runs argument }
+in ts_member { runs object }
+in ts_index {
+  when optional == null { runs object then index }
+  when optional != null { runs object then maybe index }
+}
+in ts_call {
+  when optional == null { runs callee then argument }
+  when optional != null { runs callee then maybe argument }
+}
+in ts_new { runs callee then argument }
+in ts_sequence, ts_template { runs expression }
+in ts_tagged_template { runs tag then quasi }
+in ts_export { runs declaration then expression }
+in ts_enum { runs member }
+in ts_enum_member { runs init }
+in ts_jsx_element, ts_jsx_fragment { runs opening then body }
+in ts_jsx_opening { runs property }
+in ts_jsx_attribute { runs value }
+
+in ts_import, ts_import_specifier, ts_import_equals, ts_export_specifier,
+  ts_interface, ts_type_alias, ts_index_signature, ts_type_reference,
+  ts_type_parameter, ts_union, ts_intersection, ts_array_type, ts_tuple_type,
+  ts_tuple_member, ts_function_type, ts_type_literal, ts_property_signature,
+  ts_method_signature, ts_call_signature, ts_type_query, ts_type_operator,
+  ts_indexed_access, ts_conditional_type, ts_infer, ts_mapped_type,
+  ts_parenthesized_type, ts_template_type, ts_type_predicate, ts_import_type,
+  ts_literal_type { runs nothing }
+
+in ts_boolean let flow_truth node == "true"
+in ts_null let flow_truth false
+in ts_number let flow_truth js_number({ type: "number", value: node }) != 0
+in ts_string let flow_truth len(node) > 2
+in ts_template let flow_truth if expression == null then len(node) > 2 else null
+in ts_regex let flow_truth true
+in ts_bigint let flow_truth node != "0n"
+in ts_for let flow_truth if test == null then true else null

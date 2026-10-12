@@ -1,6 +1,10 @@
 use super::{After, Catch, Conditional, Flow, KindEffects, Path};
 use crate::config::ast::Name;
 use crate::config::ast::effects::{Flow as ParsedFlow, Item as ParsedItem};
+use crate::config::error::ConfigError;
+use crate::config::source::Span;
+use crate::fx_hash::FxHashSet;
+use crate::grammar::names::Names;
 
 #[derive(Clone, Debug)]
 pub enum Item {
@@ -39,24 +43,100 @@ fn flow(value: &ParsedFlow, path: &mut impl FnMut(&[Name]) -> Option<Path>) -> O
         ParsedFlow::Then(parts) => Flow::Then(parts.iter().map(|part| flow(part, path)).collect::<Option<_>>()?),
         ParsedFlow::Or(parts) => Flow::Or(parts.iter().map(|part| flow(part, path)).collect::<Option<_>>()?),
         ParsedFlow::Maybe(value) => Flow::Maybe(Box::new(flow(value, path)?)),
-        ParsedFlow::Repeat { body, test, next, first } => Flow::Repeat {
-            body: Box::new(flow(body, path)?),
-            test: match test { Some(test) => Some(path(test)?), None => None },
-            next: match next { Some(next) => Some(Box::new(flow(next, path)?)), None => None },
-            first: *first,
+        ParsedFlow::Repeat { body, test, next, first } => {
+            let mut test = match test { Some(test) => Some(path(test)?), None => None };
+            let truth = test.as_ref().and_then(|path| path.last()).copied()
+                .and_then(crate::grammar::names::attribute_step);
+            if truth.is_some() { test.as_mut()?.pop(); }
+            Flow::Repeat {
+                body: Box::new(flow(body, path)?),
+                test,
+                truth,
+                next: match next { Some(next) => Some(Box::new(flow(next, path)?)), None => None },
+                first: *first,
+            }
         },
         ParsedFlow::Select { entries, test, body } => Flow::Select { entries: path(entries)?, test: path(test)?, body: path(body)? },
     })
 }
 
 impl KindEffects {
-    pub fn push(&mut self, item: Item, when: Option<u32>) {
+    pub fn push(&mut self, item: Item, when: Option<u32>, item_id: u32, span: Span) {
         match item {
-            Item::Runs(item) => self.runs.push(Conditional { item, when }),
-            Item::Entry(item) => self.entries.push(Conditional { item, when }),
-            Item::Catches(item) => self.catches.push(Conditional { item, when }),
-            Item::After(item) => self.after.push(Conditional { item, when }),
-            Item::Labels(item) => self.labels.push(Conditional { item, when }),
+            Item::Runs(item) => self.runs.push(Conditional { item, when, item_id, span }),
+            Item::Entry(item) => self.entries.push(Conditional { item, when, item_id, span }),
+            Item::Catches(item) => self.catches.push(Conditional { item, when, item_id, span }),
+            Item::After(item) => self.after.push(Conditional { item, when, item_id, span }),
+            Item::Labels(item) => self.labels.push(Conditional { item, when, item_id, span }),
         }
+    }
+}
+
+pub fn validate(names: &Names, errors: &mut Vec<ConfigError>) {
+    let mut reported = FxHashSet::default();
+    let mut report = |item: u32, span: Span, message: &'static str| {
+        if reported.insert((item, message)) {
+            errors.push(ConfigError::new(span, message));
+        }
+    };
+    for kind in &names.kinds {
+        let kind = &kind.execution;
+        let runs: Vec<_> = kind.runs.iter().filter(|item| item.when.is_none()).collect();
+        for run in runs.iter().skip(1) {
+            if run.item_id != runs[0].item_id {
+                report(run.item_id, run.span, "more than one unconditional execution shape");
+            }
+        }
+        let catches: Vec<_> = kind.catches.iter().filter(|item| item.when.is_none()).collect();
+        for (index, catch) in catches.iter().enumerate() {
+            if catches[..index].iter().any(|previous| previous.item_id != catch.item_id
+                && previous.item.source == catch.item.source
+                && previous.item.effects.iter().any(|effect| catch.item.effects.contains(effect))) {
+                report(catch.item_id, catch.span, "handlers for this source catch the same effect");
+            }
+        }
+        let Some(run) = runs.first() else { continue };
+        let Some(mut sources) = run.item.sources() else { continue };
+        sources.extend(catches.iter().map(|catch| catch.item.handler.clone()));
+        for after in kind.after.iter().filter(|item| item.when.is_none()) {
+            if sources.iter().any(|source| !after.item.sources.contains(source)) {
+                report(after.item_id, after.span, "`runs after` must cover the whole execution and its handlers");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::grammar::Grammar;
+
+    fn valid(items: &str) -> bool {
+        let source = format!(
+            "lang demo \"*.demo\"\nin .demo match unit /a/\nin .demo match owner /</ block:unit handler:unit finalizer:unit />/\nin owner {{\n{items}\n}}\n"
+        );
+        let loaded = crate::config::load_text("effects.zlint", &source, &crate::config::source::Disk);
+        let (config, mut errors) = (loaded.config, loaded.errors);
+        assert!(errors.is_empty(), "execution declarations must parse: {errors:?}");
+        Grammar::build(&config, &mut errors);
+        errors.is_empty()
+    }
+
+    #[test]
+    fn conflicting_unconditional_flows_are_configuration_errors() {
+        assert!(!valid("runs block\nruns handler"));
+        assert!(valid("when true { runs block }\nwhen false { runs handler }"));
+    }
+
+    #[test]
+    fn overlapping_handlers_for_one_source_are_configuration_errors() {
+        assert!(!valid("runs block\nin handler catches thrown from block\nin finalizer catches thrown from block"));
+        assert!(valid("runs block\nin handler catches thrown from block\nin finalizer catches returned from block"));
+    }
+
+    #[test]
+    fn finalizers_must_cover_execution_and_its_handlers() {
+        assert!(!valid("runs block\nin handler catches thrown from block\nin finalizer runs after block"));
+        assert!(!valid("runs block then handler\nin finalizer runs after block"));
+        assert!(valid("runs block\nin handler catches thrown from block\nin finalizer runs after block, handler"));
     }
 }
