@@ -7,7 +7,9 @@ use crate::pattern::Pat;
 
 pub mod effects;
 pub mod syntax;
+pub mod values;
 pub use syntax::ParserDecl;
+pub use values::Exclusive;
 
 #[derive(Clone, Debug)]
 pub struct Name {
@@ -34,6 +36,8 @@ pub struct Config {
     pub names: Vec<NameDef>,
     /// `parser name in lang { ... }`: structured grammars.
     pub parsers: Vec<ParserDecl>,
+    /// `exclusive a, b, ...`: traits no possible value has together.
+    pub exclusive: Vec<Exclusive>,
     /// `schema name T`: option schemas rules share.
     pub schemas: Vec<SchemaDef>,
     /// Names removed by `drop`: anything still using one is an error at

@@ -7,6 +7,7 @@ mod language;
 mod pattern;
 mod schema;
 mod syntax;
+mod values;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -298,6 +299,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "language") => self.language_options(),
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "parser") => self.syntax_parser(),
+            (Tk::Ident, "exclusive") => self.exclusive_item(ctx),
             (Tk::Ident, "in") if ctx.is_some() && self.field_item_ahead() => self.name_item(ctx),
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
