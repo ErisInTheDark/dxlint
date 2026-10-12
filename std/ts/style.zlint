@@ -26,3 +26,4 @@ import .ts/style/signatures
 import .ts/style/returns
 import .ts/style/expressions
 import .ts/style/imports
+import .ts/style/type-exports

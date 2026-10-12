@@ -10,10 +10,20 @@ use super::super::summary::{DeclKind, MemberKind};
 use super::super::types::{Checker, Ty};
 use super::typed::specifiers::file_gate;
 
+mod spaces;
+
 pub const FACTS: &[Fact] = &[Fact { shape: Fact::SCALAR.shape,
     name: "symbol_metadata",
     doc: "native layers: resolved declaration and alias docs, kinds and provenance, plus the selected call signature",
     get: |f, n| f.with_file(metadata, n),
+}, Fact { shape: Fact::SCALAR.shape,
+    name: "symbol_spaces",
+    doc: "native layers: resolved identifier or export specifier type, value and namespace spaces; null when unresolved",
+    get: |f, n| f.with_file(spaces::symbol, n),
+}, Fact { shape: Fact::SCALAR.shape,
+    name: "module_exports",
+    doc: "native layers: resolved import/export module exports with symbol spaces and completeness",
+    get: |f, n| f.with_file(spaces::module, n),
 }];
 
 fn origin(ck: &Checker<'_>, declaration: DeclRef, name: &str) -> Value<'static> {
@@ -167,7 +177,13 @@ fn metadata(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let mut alias_target_declarations = Vec::new();
     let property = property(file, node);
     let name = property.as_ref().map_or_else(|| s.text(node).to_string(), |(_, name)| name.clone());
-    if let Some((object, name)) = property {
+    if let Some((source, local)) = spaces::remote_export(file, node) {
+        if let Some(module) = file.project.resolve(ck.file, &source) {
+            let resolved = file.project.export_resolution(module, &local);
+            declarations.extend(resolved.declarations.into_iter().filter_map(|declaration_ref| declaration(ck, declaration_ref)));
+            aliases.extend(resolved.aliases.iter().map(|resolved| alias(file, resolved)));
+        }
+    } else if let Some((object, name)) = property {
         let object = match object {
             Ty::Module(module) => {
                 alias_target_declarations.extend(ck.module_alias_target(module, &name).into_iter().filter_map(|d| declaration(ck, d)));

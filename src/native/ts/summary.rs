@@ -221,6 +221,8 @@ pub enum DeclKind {
 pub struct Decl {
     pub name: Box<str>,
     pub kind: DeclKind,
+    pub type_only: bool,
+    pub namespace_value: bool,
     pub type_params: Vec<TParam>,
     /// Class or interface inheritance, not class `implements`.
     pub extends: Vec<TypeSyn>,
@@ -248,7 +250,7 @@ pub struct Decl {
 impl Hash for Decl {
     fn hash<H: Hasher>(&self, h: &mut H) {
         (&self.name, &self.kind, &self.type_params, &self.extends, &self.members, &self.sigs, &self.ty, &self.init, &self.doc).hash(h);
-        (&self.scope, self.ambient, self.parent, self.module).hash(h);
+        (&self.scope, self.ambient, self.parent, self.module, self.type_only, self.namespace_value).hash(h);
         self.implements.hash(h);
     }
 }
@@ -287,12 +289,24 @@ pub enum Export {
     Namespace(Box<str>),
 }
 
+#[derive(Debug, Clone, Hash)]
+pub struct ExportBinding {
+    pub target: Export,
+    pub type_only: bool,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct StarExport {
+    pub from: Box<str>,
+    pub type_only: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct Module {
-    pub exports: HashMap<Box<str>, Export>,
+    pub exports: HashMap<Box<str>, ExportBinding>,
     pub export_docs: HashMap<Box<str>, Box<str>>,
     /// `export * from "x"`
-    pub stars: Vec<Box<str>>,
+    pub stars: Vec<StarExport>,
     /// `export = name` or a qualified namespace path, resolved after declarations.
     pub equals: Option<Box<[Box<str>]>>,
 }
@@ -752,6 +766,8 @@ impl<V: View> Builder<'_, V> {
         Decl {
             name: name.into(),
             kind,
+            type_only: false,
+            namespace_value: false,
             type_params: type_params(self.v, id),
             extends: Vec::new(),
             implements: Vec::new(),
@@ -965,7 +981,7 @@ impl<V: View> Builder<'_, V> {
                             // Ambient module bodies export everything.
                             for id in declared {
                                 let name = self.out.decls[id as usize].name.clone();
-                                if let Export::Decls(list) = m.exports.entry(name).or_insert_with(|| Export::Decls(Vec::new())) {
+                                if let Export::Decls(list) = &mut m.exports.entry(name).or_insert_with(|| ExportBinding { target: Export::Decls(Vec::new()), type_only: false }).target {
                                     if !list.contains(&id) {
                                         list.push(id);
                                     }
@@ -995,6 +1011,7 @@ impl<V: View> Builder<'_, V> {
                 let mut children: Vec<u32> = (first as u32..members_end as u32).filter(|&i| self.out.decls[i as usize].parent.is_none()).collect();
                 for (depth, name) in path.iter().enumerate().rev() {
                     let mut decl = self.base(s, name, DeclKind::Namespace, ambient);
+                    decl.namespace_value = body.is_some_and(|body| namespace_value(v, body));
                     decl.type_params.clear();
                     decl.scope = Some(inner);
                     // Namespaces merge.
@@ -1005,6 +1022,7 @@ impl<V: View> Builder<'_, V> {
                     };
                     let id = match merged {
                         Some(prev) => {
+                            self.out.decls[prev as usize].namespace_value |= decl.namespace_value;
                             let add = decl.scope.take().unwrap_or_default();
                             if let Some(sc) = self.out.decls[prev as usize].scope.as_mut() {
                                 for (k, list) in add.names {
@@ -1035,23 +1053,25 @@ impl<V: View> Builder<'_, V> {
             }
             Some(K::Import) => {
                 let from: Box<str> = v.get(s, F::From).map_or("".into(), |f| v.text(f).trim_matches(|c| c == '"' || c == '\'').into());
-                let mut add = |b: &mut Self, local: u32, name: &str| {
+                let type_only = v.get(s, F::Kind).is_some_and(|kind| v.text(kind) == "type");
+                let mut add = |b: &mut Self, local: u32, name: &str, type_only: bool| {
                     let mut decl = b.base(s, v.text(local), DeclKind::Import { from: from.clone(), name: name.into() }, ambient);
+                    decl.type_only = type_only;
                     decl.type_params.clear();
                     decl.doc = None;
                     b.push(scope, decl);
                 };
                 if let Some(d) = v.get(s, F::DefaultImport) {
-                    add(self, d, "default");
+                    add(self, d, "default", type_only);
                 }
                 if let Some(n) = v.get(s, F::Namespace) {
-                    add(self, n, "*");
+                    add(self, n, "*", type_only);
                 }
                 for spec in v.all(s, F::Specifier) {
                     let Some(imported) = v.get(spec, F::Imported) else { continue };
                     let local = v.get(spec, F::Local).unwrap_or(imported);
                     let name = key_name(v, imported);
-                    add(self, local, &name);
+                    add(self, local, &name, type_only || v.get(spec, F::Kind).is_some_and(|kind| v.text(kind) == "type"));
                 }
             }
             Some(K::ImportEquals) => {
@@ -1066,10 +1086,12 @@ impl<V: View> Builder<'_, V> {
                     None => return ids,
                 };
                 let mut decl = self.base(s, v.text(n), kind, ambient);
+                decl.type_only = v.get(s, F::Kind).is_some_and(|kind| v.text(kind) == "type");
                 decl.type_params.clear();
                 ids.push(self.push(scope, decl));
             }
             Some(K::Export) => {
+                let type_only = v.get(s, F::Kind).is_some_and(|kind| v.text(kind) == "type");
                 let doc = leading_doc(v.src(), v.start(s) as usize).map(String::into_boxed_str);
                 let default = v.get(s, F::Kind).is_some_and(|k| v.text(k) == "default");
                 let from = v.get(s, F::From).map(|f| -> Box<str> { v.text(f).trim_matches(|c| c == '"' || c == '\'').into() });
@@ -1101,9 +1123,9 @@ impl<V: View> Builder<'_, V> {
                         if v.is(e, K::Ident) {
                             let local: Vec<u32> = scope.get(v.text(e)).to_vec();
                             // Declared later: resolved below by name.
-                            m.exports.insert("default".into(), Export::Reexport { from: "".into(), name: v.text(e).into() });
+                            m.exports.insert("default".into(), ExportBinding { target: Export::Reexport { from: "".into(), name: v.text(e).into() }, type_only: false });
                             if !local.is_empty() {
-                                m.exports.insert("default".into(), Export::Decls(local));
+                                m.exports.insert("default".into(), ExportBinding { target: Export::Decls(local), type_only: false });
                             }
                         } else {
                             let mut decl = self.base(s, "default", DeclKind::Var, ambient);
@@ -1111,7 +1133,7 @@ impl<V: View> Builder<'_, V> {
                             decl.init = Some(init(v, e));
                             let id = self.out.decls.len() as u32;
                             self.out.decls.push(decl);
-                            m.exports.insert("default".into(), Export::Decls(vec![id]));
+                            m.exports.insert("default".into(), ExportBinding { target: Export::Decls(vec![id]), type_only: false });
                         }
                     }
                 } else if let Some(m) = module.as_deref_mut() {
@@ -1121,9 +1143,9 @@ impl<V: View> Builder<'_, V> {
                             Some(ns) => {
                                 let name = key_name(v, ns);
                                 if let Some(doc) = &doc { m.export_docs.insert(name.clone(), doc.clone()); }
-                                m.exports.insert(name, Export::Namespace(from.clone()));
+                                m.exports.insert(name, ExportBinding { target: Export::Namespace(from.clone()), type_only });
                             }
-                            None => m.stars.push(from.clone()),
+                            None => m.stars.push(StarExport { from: from.clone(), type_only }),
                         },
                         _ => {}
                     }
@@ -1136,7 +1158,8 @@ impl<V: View> Builder<'_, V> {
                         if let Some(doc) = leading_doc(v.src(), v.start(spec) as usize).map(String::into_boxed_str).or_else(|| doc.clone()) {
                             m.export_docs.insert(exported.clone(), doc);
                         }
-                        m.exports.insert(exported, Export::Reexport { from, name: local });
+                        let type_only = type_only || v.get(spec, F::Kind).is_some_and(|kind| v.text(kind) == "type");
+                        m.exports.insert(exported, ExportBinding { target: Export::Reexport { from, name: local }, type_only });
                     }
                 }
             }
@@ -1153,8 +1176,20 @@ impl<V: View> Builder<'_, V> {
     }
 }
 
+fn namespace_value(v: &impl View, node: u32) -> bool {
+    match v.kind(node) {
+        Some(K::Interface | K::TypeAlias | K::Empty) => false,
+        Some(K::Block) => v.all(node, F::Body).into_iter().any(|child| namespace_value(v, child)),
+        Some(K::Namespace) => v.get(node, F::Body).is_some_and(|body| namespace_value(v, body)),
+        Some(K::Import) => false,
+        Some(K::ImportEquals) => !v.get(node, F::Kind).is_some_and(|kind| v.text(kind) == "type"),
+        Some(K::Export) => v.get(node, F::Decl).is_some_and(|decl| namespace_value(v, decl)),
+        _ => true,
+    }
+}
+
 fn add_export(m: &mut Module, name: &str, id: u32) {
-    match m.exports.entry(name.into()).or_insert_with(|| Export::Decls(Vec::new())) {
+    match &mut m.exports.entry(name.into()).or_insert_with(|| ExportBinding { target: Export::Decls(Vec::new()), type_only: false }).target {
         Export::Decls(list) => list.push(id),
         other => *other = Export::Decls(vec![id]),
     }
@@ -1164,7 +1199,7 @@ impl FileSummary {
     /// The declarations behind export `name` that are local to this file
     /// (`export { a as b }` and late `export default a` resolved by name).
     pub fn local_export<'a>(&'a self, module: &'a Module, scope: &'a Scope, name: &str) -> Option<LocalExport<'a>> {
-        match module.exports.get(name) {
+        match module.exports.get(name).map(|binding| &binding.target) {
             Some(Export::Decls(ids)) => Some(LocalExport::Decls(ids.clone())),
             Some(Export::Reexport { from, name: inner }) if from.is_empty() => {
                 let ids = scope.get(inner);

@@ -17,6 +17,10 @@ use super::summary::{summarise, Export, FileSummary, Module, Scope, Summary};
 use super::view::Raw;
 use crate::config::source::normalize_path;
 
+#[path = "modules/symbol-spaces.rs"]
+mod symbol_spaces;
+pub use symbol_spaces::{ModuleSymbols, SymbolSpaces};
+
 /// Re-exports followed before giving up (cycles, very deep barrels).
 const MAX_HOPS: usize = 16;
 
@@ -58,7 +62,7 @@ impl ExportResolution {
 }
 
 /// Where a module specifier leads.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ModRef {
     File(FileId),
     /// `declare module "x"` number `index` in a file.
@@ -425,7 +429,7 @@ impl Project {
                 return ExportResolution { declarations: self.export_assignment(file, &s, at, eq, hops - 1), aliases: Vec::new() };
             }
         }
-        match module.exports.get(name) {
+        match module.exports.get(name).map(|binding| &binding.target) {
             Some(Export::Decls(ids)) => {
                 let mut result = refs(ids);
                 if METADATA && module.export_docs.contains_key(name) { result.aliases.push(alias()); }
@@ -471,7 +475,7 @@ impl Project {
                 .stars
                 .iter()
                 .find_map(|from| {
-                    let found = self.resolve(file, from).map(|m| self.export_hops::<METADATA>(m, name, hops - 1)).unwrap_or_default();
+                    let found = self.resolve(file, &from.from).map(|m| self.export_hops::<METADATA>(m, name, hops - 1)).unwrap_or_default();
                     (!found.declarations.is_empty()).then_some(found)
                 })
                 .unwrap_or_default(),

@@ -889,6 +889,8 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `self_uses`, `writes` | uses inside its own function, and assignments to it |
 | `declaration_kind` | `const`, `let`, `var`, `parameter`, `type_parameter`, `function`, `class`, `import`, `type`, `interface`, `enum`, `namespace`, `catch`, ... |
 | `exported`, `ambient` | declared by an `export`ed statement; inside `declare` |
+| `symbol_spaces` | the spaces (`type`, `value`, `namespace`) the resolved declaration occupies |
+| `module_exports` | a module's publications by space, and whether the list is complete |
 | `imported_from` | on an identifier that is or refers to an import: the module it comes from |
 | `declaration_doc` | the JSDoc of the declaration an identifier refers to, followed through imports, re-exports and `export *` |
 | `symbol_metadata` | `{name, own_doc, declarations, aliases, selected_signature}`; raw declaration and alias docs, overload `signature_docs`, declaration kinds and file/lib/package provenance gates. Alias rows retain lookup order, path and module; `selected_signature` is null or `{doc, kind}` (`call`/`construct`). Ambient package gates retain ordinary file provenance. Rust exposes docs and origins; `.zlint` decides deprecation |
@@ -1178,6 +1180,7 @@ and `final-newline`.
 | `.ts/layout/shared` | shared value-only spacing helpers and comment pattern for the layout topics; no rules |
 | `.ts/template-fixes` | shared raw-escape-preserving template fix helpers |
 | `.ts/style/type-imports` | consistent type import policy, usage and safe autofixes |
+| `.ts/style/type-exports` | consistent type export policy and safe autofixes |
 | `.ts/suggestions/object-shorthand` | object member short/long syntax policy and source-preserving fixes |
 | `.ts/suggestions/curly` | control-body brace policy and statement-safe fixes |
 | `.ts/suggestions/renames` | redundant import, export and destructuring aliases; comment-safe fixes |
