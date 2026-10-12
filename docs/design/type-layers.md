@@ -15,14 +15,17 @@ Parsing context-sensitive syntax stays native (see AGENTS.md).
 
 ## Items
 
-Six items, written in a node's own block (`match x ... { }`, or
+Seven items, written in a node's own block (`match x ... { }`, or
 `in ts_kind { }` for native kinds), like `let` and `indent`:
 
 | item | meaning |
 |---|---|
-| `scope <class>, ...` | the node opens a scope of these classes |
-| `declares <class>, ... <name> in nearest <scope class>, ... [hoisted]` | the node declares `name` (a field) into the nearest enclosing scope of one of those classes |
+| `scope <class>, ...` | the node opens a scope of these classes; several `scope` items nest, outermost first |
+| `declares <class>, ... <name> in nearest <scope class>, ... [hoisted]` | the node declares `name` (a field) into the nearest enclosing scope of one of those classes; a text (`"arguments"`) declares that name implicitly, the node itself its declaration, yielding to explicit ones |
 | `resolves <class>` | the node's text uses a name; the engine looks it up |
+| `targets <field> ?? <field>, ...` | a declaration, use or effect aimed at this node (a pattern, a destructuring literal, a qualified name) passes on to these fields; per group the first that reaches anything |
+
+Field paths are field names joined by `.`. Special steps (a field of the same name wins): `parent` (the node's parent: `declares value parent.parameter`), `it` (the node), `through` (the reference it was reached through), `definition` (the declaration a name resolves to).
 | `unwraps <value>` / `unwraps <effect> ...` / `unwraps { ... }` | what the node stands for, and what evaluating it does |
 | `fits <trait>, ... [when <expr>]` | the node directly has these traits |
 | `in <field> propagates <x>` | `x` applies throughout that field's subtree (narrowing tests, and any other context) |
@@ -55,7 +58,7 @@ lang rust "*.rs" {
   }
   match rs_path_expression path:identifier {
     resolves value
-    unwraps declaration
+    unwraps definition
   }
 }
 ```
@@ -98,7 +101,7 @@ Precedence follows TS: `a | b & c` is `a | (b & c)`.
 
 ```zlint
 in ts_declarator { unwraps annotation ?? init }
-in ts_identifier { unwraps declaration }
+in ts_identifier { unwraps definition }
 in ts_member { unwraps from object at property }
 in ts_call { unwraps callee.result }
 in ts_conditional { unwraps consequent | alternate }
@@ -118,6 +121,36 @@ another reference.
 **Built-in types** (`number`, `Promise`) resolve to declarations in the
 language's library files (`lib.d.ts`), read like any other file.
 
+## Calls and signatures
+
+```zlint
+in ts_function, ts_arrow, ts_method, ts_function_type, ts_call_signature, ts_method_signature {
+  fits callable
+  signature parameter returns return_type ?? returned
+}
+in ts_parameter { unwraps type ?? expected ?? init }
+in ts_call { calls callee with argument; unwraps result }
+in ts_new { constructs callee with argument; unwraps result }
+in ts_declarator { in init expects type }
+```
+
+- `signature <field> returns <value>`: a callable's parameters (the
+  field's nodes in order; one that `fits rest` takes the remaining
+  arguments) and result. `returned` is the union of the values of the
+  `returned` effects aimed at the node's scope.
+- `calls <callee> with <field>` / `constructs ...`: the callee unwraps to
+  candidates; those that fit `callable` (or `constructible`) with a
+  signature are overloads, tried in declaration order: the first whose
+  arity fits and whose parameters `could` take the arguments. `result` is
+  the chosen signature's result, unwrapped `through` the call.
+- `expected` (path step): the node's contextual value: an `in <field>
+  expects <value>` of its parent; an argument's matching parameter of the
+  chosen signature; a parameter's counterpart in its function's expected
+  callable.
+- Generic inference: a type parameter reached through a call with no
+  explicit argument unwraps to `inferred`: what the arguments give the
+  parameter positions mentioning it (engine-owned).
+
 ## Unwrapping: effects
 
 Labelled lines in `unwraps { }` are effects: what evaluating the node does.
@@ -131,7 +164,8 @@ Engine effects (reserved; the engine acts on them):
 | `thrown <x>` | throws `x`, leaving the nearest `try` or function | never, `could` over thrown values |
 | `broken nearest <scope class>` / `continued nearest <scope class>` | `break` / `continue` | reachability |
 | `truthy <unwrap>` | when the node is truthy, this holds | narrowing |
-| `mutated <x>` | `x` now holds something else | ends narrowing of `x` |
+| `assigned <x>` | `x` is overwritten without reading it (`x = 1`, `for (x of xs)`) | a write; ends narrowing of `x` |
+| `mutated <x>` | `x` is read, then changed (`x += 1`, `x++`) | a read and a write; ends narrowing of `x` |
 | `awaited <x>`, `yielded <x>` | waits on / yields `x` | async and generator rules |
 
 User effects: any other participle (`unwraps logged argument`). The engine
@@ -248,16 +282,48 @@ speed is within noise of native. Slower is a problem to solve, not a verdict.
 - Check: a config rule reporting `ts_identifier` nodes where
   `scope_declaration` differs from the native `declaration`, run on
   wayward; zero reports and equal speed is the bar.
-- Done: `declares through` (patterns pass a declaration to their fields;
+- Done: `targets` (patterns pass a declaration to their fields;
   per group the first alternative that declares anything), merging of
   hoisted declarations across classes, first lookup of a name wins (a
   parent's `resolves type name` before the name's own `resolves value`).
-- Wayward check: 17 of 661,376 references differ from native; 10 are a
-  function body's declarations seen from parameter annotations (`typeof x`;
-  TS puts body declarations in the function scope), which needs `when`.
-- Next: conditional items (`when <expr> { items }`, conditions compiled with
-  rule expressions and evaluated per node during resolution), then
-  `propagates` for type-position context, implicit names (`arguments`).
+- `when cond { items }` (conditions compiled with the layer's fields,
+  lowered to the VM; one session per tree runs them all) and
+  `in enclosing <class>`.
+- Wayward check (`scratch/names-proto/`): 0 of 661,376 native references
+  resolve differently; 37 identifiers resolve where native says none or
+  self. Lint wall +7% vs native on a names-only config, mostly the
+  per-identifier `when` excluding name-only fields.
+- Effects on targets: `unwraps <effect> <field>` (effects only so far)
+  records the effect and its site on what the field reaches through
+  `targets`, intermediate nodes included (`[a, b] = c` marks the array,
+  `a` and `b`); builtins `scope_effect`, `scope_effect_site`. Counts
+  (`uses`, `writes`) are derived by rules from `scope_references` and
+  `scope_effect`, not stored.
+- Next: check access and write sites against native on wayward; then
+  `bind.rs` consumers move over and it goes. Also `propagates` for
+  type-position context, implicit names (`arguments`), escaped names.
+
+## Step 1 cutover (bind.rs goes)
+
+- `std/ts/names.zlint` (from the prototype) imported by `.ts`: scopes,
+  declarations, resolutions, targets, write effects for TS. Approximations
+  in the prototype become exact (named function/class expression scopes,
+  ES5 block functions, catch scope, root function scope).
+- Engine owns one `Resolved` per tree (attribute memo). Native files get it
+  from the engine before their first fact read; name conditions may read
+  fields, kinds, text, options and name-free facts only.
+- `Resolved` adds: scope table (opening node, classes, parent); declaring
+  item node per declared name; classes asked per reference; references
+  found nowhere; `visible(at, name, classes)`.
+- Name keys: the front end normalizes identifier text (TS decodes escapes).
+- Implicit names: `declares <class> "text" in nearest <scope>` declares a
+  name whose declaration is the item's node (`arguments`).
+- `bind.rs` becomes `Bindings::from_names(syntax, resolved)`: same fields
+  for the ~37 consumers. Declaration kind, exported, ambient and self uses
+  come from the declaring node's syntax; counts from references, asked
+  classes and effects; this/yield/arguments flags move to a syntax pass.
+- Accept: fixtures, full corpus vs the accepted baseline, wayward native
+  facts identical where compared; speed within noise.
 
 ## Open
 

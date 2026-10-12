@@ -1,4 +1,5 @@
 lang js "*.ts"
 native ts
+import .ts/names
 group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
 in ts_program.binding_declarations rule names info text

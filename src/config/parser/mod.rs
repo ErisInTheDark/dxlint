@@ -28,6 +28,10 @@ const RESERVED: &[&str] = &[
     "warn", "error", "native", "let", "drop", "override", "amend", "forward", "is", "define", "schema", "each", "language",
 ];
 
+/// Items about names and effects (docs/design/type-layers.md); words only
+/// in item position on a layer.
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits"];
+
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
 #[derive(Clone)]
@@ -291,13 +295,14 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "language") => self.language_options(),
             (Tk::Ident, "group") => self.group(),
+            (Tk::Ident, "in") if ctx.is_some() && self.propagates_ahead() => self.name_item(ctx),
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
             (Tk::Ident, "rule") => self.rule(ctx),
             (Tk::Ident, "indent") => self.indent(ctx),
             (Tk::Ident, "let") => self.attr(ctx),
             (Tk::Ident, "forward") => self.forward(ctx),
-            (Tk::Ident, "scope" | "declares" | "resolves") if ctx.is_some() => self.name_item(ctx),
+            (Tk::Ident, word) if ctx.is_some() && NAME_ITEMS.contains(&word) => self.name_item(ctx),
             (Tk::Ident, "when") if ctx.is_some() => self.when_block(ctx.expect("checked")),
             (Tk::Ident, "native") => self.native(),
             (Tk::Ident, "set") => self.old_set(),
@@ -363,12 +368,12 @@ impl<'a> Parser<'a> {
             Some(t) if t.is_ident("indent") => self.indent(Some(&ctx)),
             Some(t) if t.is_ident("let") => self.attr(Some(&ctx)),
             Some(t) if t.is_ident("forward") => self.forward(Some(&ctx)),
-            Some(t) if t.is_ident("scope") || t.is_ident("declares") || t.is_ident("resolves") => self.name_item(Some(&ctx)),
+            Some(t) if NAME_ITEMS.iter().any(|w| t.is_ident(w)) => self.name_item(Some(&ctx)),
             other => {
                 let span = other.map(|t| t.span).or(self.ts.last_span);
                 self.errors.push(ConfigError::new(
                     span,
-                    format!("expected `match`, `rule`, `indent`, `let`, `forward`, `scope`, `declares`, `resolves` or `{{` after `{} ...`", kw.text),
+                    format!("expected `match`, `rule`, `indent`, `let`, `forward`, `scope`, `declares`, `resolves`, `targets`, `unwraps` or `{{` after `{} ...`", kw.text),
                 ));
             }
         }
@@ -461,22 +466,54 @@ impl<'a> Parser<'a> {
     /// `in a, b forward x, y from field`: those attributes, where these
     /// layers lack them, come from that field's node.
     /// `scope c, ...`, `declares c, ... path in nearest s, ... [hoisted]`,
-    /// `resolves c, ... [path]`: names on the context's layers.
+    /// `resolves c, ... [path]`, `targets a ?? b, c`, `unwraps effect
+    /// path`: names and effects on the context's layers.
     fn name_item(&mut self, ctx: Option<&Context>) {
         let kw = self.bump().expect("peeked");
         let what = kw.text.to_string();
-        let through = what == "declares" && self.word("through");
-        let classes = if through { Vec::new() } else { self.name_list("a class name") };
-        if classes.is_empty() && !through {
-            return;
-        }
         let item = match what.as_str() {
-            _ if through => {
+            "unwraps" => {
+                self.skip(false, true);
+                if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+                    self.unwraps_block(ctx, kw.span);
+                    return;
+                }
+                match self.unwrap_line() {
+                    Some(item) => item,
+                    None => return,
+                }
+            }
+            "fits" => {
+                let traits = self.name_list("a trait name");
+                if traits.is_empty() {
+                    return;
+                }
+                // `fits thenable when <cond>`: conditional like a `when` block.
+                if self.word("when") {
+                    let Some(cond) = self.expr() else { return };
+                    self.end_of_item();
+                    self.conditions.push(cond);
+                    self.name_def(ctx, kw.span, &what, NameItem::Fits(traits));
+                    self.conditions.pop();
+                    return;
+                }
+                NameItem::Fits(traits)
+            }
+            "in" => {
+                let Some(field) = self.name_path("a field") else { return };
+                if !self.word("propagates") {
+                    self.error_here("expected `propagates`: `in consequent propagates test`");
+                    return;
+                }
+                let Some(value) = self.unwrap_value() else { return };
+                NameItem::Propagates { field, value }
+            }
+            "targets" => {
                 let mut groups = Vec::new();
                 loop {
                     let mut alternatives = Vec::new();
                     loop {
-                        let Some(path) = self.name_path("a field holding declared names") else { return };
+                        let Some(path) = self.name_path("a field the target passes to") else { return };
                         alternatives.push(path);
                         self.skip(false, true);
                         if !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Nullish) {
@@ -491,11 +528,45 @@ impl<'a> Parser<'a> {
                     }
                     self.ts.next_raw();
                 }
-                NameItem::Through(groups)
+                NameItem::Targets(groups)
             }
-            "scope" => NameItem::Scope(classes),
+            _ => {
+                let classes = self.name_list("a class name");
+                if classes.is_empty() {
+                    return;
+                }
+                match self.class_item(&what, classes) {
+                    Some(item) => item,
+                    None => return,
+                }
+            }
+        };
+        self.end_of_item();
+        self.name_def(ctx, kw.span, &what, item);
+    }
+
+    /// The rest of a `scope`, `declares` or `resolves` item after its classes.
+    fn class_item(&mut self, what: &str, classes: Vec<Name>) -> Option<NameItem> {
+        Some(match what {
+            "scope" => {
+                let within = if self.word("within") { self.name_list("a field the scope covers") } else { Vec::new() };
+                NameItem::Scope { classes, within }
+            }
             "declares" => {
-                let Some(path) = self.name_path("the field holding the declared name") else { return };
+                self.skip(false, true);
+                let (path, implicit) = match self.ts.peek_raw(0).cloned() {
+                    Some(t) if t.kind == Tk::Str => {
+                        self.ts.next_raw();
+                        match super::lexer::decode_escapes(&t.text, t.span) {
+                            Ok(text) => (Vec::new(), Some(text)),
+                            Err(e) => {
+                                self.errors.push(e);
+                                return None;
+                            }
+                        }
+                    }
+                    _ => (self.name_path("the field holding the declared name")?, None),
+                };
                 let at = self.word("in");
                 let enclosing = if at && self.word("nearest") {
                     false
@@ -503,29 +574,226 @@ impl<'a> Parser<'a> {
                     true
                 } else {
                     self.error_here("expected `in nearest <scope class>` or `in enclosing <scope class>`: `declares value name in nearest block`");
-                    return;
+                    return None;
                 };
                 let nearest = self.name_list("a scope class");
                 if nearest.is_empty() {
-                    return;
+                    return None;
                 }
                 let hoisted = self.word("hoisted");
-                NameItem::Declares { classes, path, nearest, enclosing, hoisted }
+                NameItem::Declares { classes, path, implicit, nearest, enclosing, hoisted }
             }
             _ => {
                 self.skip(false, true);
-                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident) {
-                    match self.name_path("the field holding the used name") {
-                        Some(path) => path,
-                        None => return,
-                    }
+                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident && &*t.text != "in") {
+                    self.name_path("the field holding the used name")?
                 } else {
                     Vec::new()
                 };
-                NameItem::Resolves { classes, path }
+                let module = if self.word("in") {
+                    if !self.word("module") {
+                        self.error_here("expected `in module <field>`: `resolves value imported in module source`");
+                        return None;
+                    }
+                    Some(self.name_path("the field naming the module")?)
+                } else {
+                    None
+                };
+                NameItem::Resolves { classes, path, module }
             }
+        })
+    }
+
+    /// `unwraps { line; line }`: one item per line.
+    fn unwraps_block(&mut self, ctx: Option<&Context>, kw: Span) {
+        let open = self.ts.next_raw().expect("peeked `{`");
+        loop {
+            self.skip(true, true);
+            match self.ts.peek_raw(0) {
+                None => {
+                    self.errors.push(ConfigError::new(open.span, "unclosed `{`"));
+                    return;
+                }
+                Some(t) if t.kind == Tk::RBrace => {
+                    self.ts.next_raw();
+                    self.end_of_item();
+                    return;
+                }
+                Some(_) => {
+                    let before = self.errors.len();
+                    if let Some(item) = self.unwrap_line() {
+                        self.end_of_item();
+                        self.name_def(ctx, kw, "unwraps", item);
+                    }
+                    if self.errors.len() > before {
+                        self.recover_if_mid_line();
+                    }
+                }
+            }
+        }
+    }
+
+    /// One `unwraps` line: `<value>`, or `<effect> [<value>] [nearest <scope>, ...]`.
+    /// An effect is a word with more after it on the line (`thrown argument`,
+    /// `returned nearest function`); a value starts any other way
+    /// (`declaration`, `left | right`, `from object at property`).
+    fn unwrap_line(&mut self) -> Option<NameItem> {
+        self.skip(false, true);
+        let first = self.ts.peek_raw(0).cloned()?;
+        let next = self.ts.peek_raw(1).map(|t| t.kind);
+        let effect = (first.kind == Tk::Ident
+            && !matches!(&*first.text, "from" | "excludes")
+            && matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen)))
+        .then(|| {
+            self.ts.next_raw();
+            Name { text: first.text.to_string(), span: first.span }
+        });
+        self.skip(false, true);
+        let ends = |t: Option<&Token>| t.is_none_or(|t| matches!(t.kind, Tk::Newline | Tk::RBrace) || t.is_ident("nearest"));
+        let value = if effect.is_some() && ends(self.ts.peek_raw(0)) { None } else { Some(self.unwrap_value()?) };
+        let nearest = if self.word("nearest") { self.name_list("a scope class") } else { Vec::new() };
+        Some(NameItem::Unwraps { effect, value, nearest })
+    }
+
+    /// `a ?? b`, lowest precedence.
+    fn unwrap_value(&mut self) -> Option<Unwrap> {
+        let mut value = self.unwrap_union()?;
+        while self.on_line(Tk::Nullish) {
+            self.ts.next_raw();
+            value = Unwrap::Either(Box::new(value), Box::new(self.unwrap_union()?));
+        }
+        Some(value)
+    }
+
+    /// `a | b`, or a leading `| ...types`.
+    fn unwrap_union(&mut self) -> Option<Unwrap> {
+        let leading = self.on_line(Tk::Pipe);
+        if leading {
+            self.ts.next_raw();
+        }
+        let mut parts = vec![self.unwrap_intersection()?];
+        while self.on_line(Tk::Pipe) {
+            self.ts.next_raw();
+            parts.push(self.unwrap_intersection()?);
+        }
+        Some(if parts.len() == 1 && !leading { parts.pop().expect("one") } else { Unwrap::Union(parts) })
+    }
+
+    /// `a & b`, or a leading `& ...types`; `&` binds tighter than `|`.
+    fn unwrap_intersection(&mut self) -> Option<Unwrap> {
+        let leading = self.on_line(Tk::Amp);
+        if leading {
+            self.ts.next_raw();
+        }
+        let mut parts = vec![self.unwrap_unary()?];
+        while self.on_line(Tk::Amp) {
+            self.ts.next_raw();
+            parts.push(self.unwrap_unary()?);
+        }
+        if parts.len() == 1 && !leading {
+            return parts.pop();
+        }
+        for part in &mut parts {
+            if let Unwrap::Spread { intersection, .. } = part {
+                *intersection = true;
+            }
+        }
+        Some(Unwrap::Intersection(parts))
+    }
+
+    fn unwrap_unary(&mut self) -> Option<Unwrap> {
+        if self.on_line(Tk::Bang) {
+            self.ts.next_raw();
+            return Some(Unwrap::Not(Box::new(self.unwrap_unary()?)));
+        }
+        self.unwrap_primary()
+    }
+
+    fn unwrap_primary(&mut self) -> Option<Unwrap> {
+        self.skip(false, true);
+        let Some(t) = self.ts.peek_raw(0).cloned() else {
+            self.error_here("expected a value: a field, `from x at key`, `a | b`, ...");
+            return None;
         };
-        self.end_of_item();
+        match t.kind {
+            Tk::Dot => {
+                for _ in 0..3 {
+                    if !self.on_line(Tk::Dot) {
+                        self.error_here("expected `...` before a field to spread");
+                        return None;
+                    }
+                    self.ts.next_raw();
+                }
+                let path = self.name_path("the field to spread")?;
+                Some(Unwrap::Spread { intersection: false, path })
+            }
+            Tk::LParen => {
+                self.ts.next_raw();
+                let value = self.unwrap_value()?;
+                self.expect(Tk::RParen, "`)`")?;
+                Some(value)
+            }
+            Tk::Str => {
+                self.ts.next_raw();
+                match super::lexer::decode_escapes(&t.text, t.span) {
+                    Ok(text) => Some(Unwrap::Text(text)),
+                    Err(e) => {
+                        self.errors.push(e);
+                        None
+                    }
+                }
+            }
+            Tk::Num => {
+                self.ts.next_raw();
+                Some(Unwrap::Text(t.text.to_string()))
+            }
+            Tk::Ident if &*t.text == "from" => {
+                self.ts.next_raw();
+                let of = self.unwrap_unary()?;
+                if !self.word("at") {
+                    self.error_here("expected `at <key>`: `from object at property`");
+                    return None;
+                }
+                let key = self.unwrap_primary()?;
+                Some(Unwrap::From(Box::new(of), Box::new(key)))
+            }
+            Tk::Ident if &*t.text == "excludes" => {
+                self.ts.next_raw();
+                let traits = self.name_list("a trait name");
+                if traits.is_empty() {
+                    return None;
+                }
+                let from = if self.word("from") { Some(Box::new(self.unwrap_unary()?)) } else { None };
+                Some(Unwrap::Excludes { traits, from })
+            }
+            Tk::Ident => Some(Unwrap::Path(self.name_path("a field")?)),
+            _ => {
+                self.error_here(format!("expected a value, found {}", t.describe()));
+                None
+            }
+        }
+    }
+
+    /// The next token on this line is `kind`.
+    fn on_line(&mut self, kind: Tk) -> bool {
+        self.skip(false, true);
+        self.ts.peek_raw(0).is_some_and(|t| t.kind == kind)
+    }
+
+    /// `in <field>[.<field>] propagates`: a `propagates` item, not a context.
+    fn propagates_ahead(&mut self) -> bool {
+        let mut at = 1;
+        loop {
+            match self.ts.peek_raw(at) {
+                Some(t) if t.kind == Tk::Ident && t.is_ident("propagates") && at > 1 => return true,
+                Some(t) if t.kind == Tk::Ident || t.kind == Tk::Dot => at += 1,
+                _ => return false,
+            }
+        }
+    }
+
+    /// Records a name item on the context's layers.
+    fn name_def(&mut self, ctx: Option<&Context>, kw: Span, what: &str, item: NameItem) {
         let targets: Vec<Name> = ctx
             .filter(|c| c.layer.is_none())
             .map(|c| {
@@ -543,7 +811,7 @@ impl<'a> Parser<'a> {
             .unwrap_or_default();
         if targets.is_empty() {
             if ctx.is_none_or(|c| c.layer.is_some()) {
-                self.errors.push(ConfigError::new(kw.span, format!("`{what}` needs a layer: `in <layer> {{ {what} ... }}`")));
+                self.errors.push(ConfigError::new(kw, format!("`{what}` needs a layer: `in <layer> {{ {what} ... }}`")));
             }
             return;
         }
@@ -573,10 +841,12 @@ impl<'a> Parser<'a> {
                     self.bump();
                     break;
                 }
-                Some(t) if matches!(&*t.text, "scope" | "declares" | "resolves" | "when") && t.kind == Tk::Ident => self.item(Some(ctx)),
+                Some(t) if t.kind == Tk::Ident && (&*t.text == "when" || NAME_ITEMS.contains(&&*t.text) || &*t.text == "in" && self.propagates_ahead()) => {
+                    self.item(Some(ctx))
+                }
                 Some(t) => {
                     self.errors.push(
-                        ConfigError::new(t.span, format!("only `scope`, `declares` and `resolves` can be conditional, found {}", t.describe()))
+                        ConfigError::new(t.span, format!("only name and type items (`scope`, `declares`, `resolves`, `targets`, `unwraps`, `fits`, `in .. propagates`) can be conditional, found {}", t.describe()))
                             .related(kw.span, "in this `when`"),
                     );
                     self.recover();

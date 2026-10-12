@@ -1,6 +1,0 @@
-import .ts
-language .js { set sourceType "script"
-set ecmaVersion 5
-}
-rule no-undef
-rule no-use-before-define

@@ -139,6 +139,14 @@ impl Native for NativeFile<'_> {
         // JSX text is content laid out by its own lines, not one token.
         after.checked_sub(1).map(|i| &tokens.0[i]).is_some_and(|token| token.end as usize > at && matches!(token.tok, Tok::Template | Tok::Str | Tok::P("/*")))
     }
+
+    fn name_key<'s>(&self, text: &'s str) -> std::borrow::Cow<'s, str> {
+        super::bind::decoded_name(text)
+    }
+
+    fn set_names(&self, names: std::rc::Rc<crate::grammar::names::Resolved>) {
+        NativeFile::set_names(self, names);
+    }
 }
 
 impl frontend::Project for Project {

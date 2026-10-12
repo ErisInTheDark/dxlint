@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::expr::Value;
 
-use super::bind::{bind, Binding, Bindings};
+use super::bind::{Binding, Bindings};
 use super::check::Typing;
 use super::comments::{comments, Comment};
 use super::docs::leading_doc;
@@ -473,6 +473,8 @@ pub struct NativeFile<'t> {
     pub path: &'t Path,
     pub project: &'t Project,
     pub(super) environment: super::environment::Environment,
+    /// The engine's resolved names ([`crate::engine::frontend::Native::set_names`]).
+    names: OnceCell<Rc<crate::grammar::names::Resolved>>,
     bindings: OnceCell<Bindings>,
     comments: OnceCell<Vec<Comment>>,
     globals: OnceCell<Globals>,
@@ -492,6 +494,7 @@ impl<'t> NativeFile<'t> {
             path,
             project,
             environment: Default::default(),
+            names: OnceCell::new(),
             bindings: OnceCell::new(),
             comments: OnceCell::new(),
             globals: OnceCell::new(),
@@ -605,8 +608,17 @@ impl<'t> NativeFile<'t> {
         Some(out)
     }
 
+    /// The file's names: the engine gives them before the first fact read
+    /// (name conditions may not read name facts).
     pub fn bindings(&self) -> &Bindings {
-        self.bindings.get_or_init(|| bind(&self.syntax, self.root_function_scope(), self.environment.ecma_version))
+        self.bindings.get_or_init(|| {
+            let names = self.names.get().expect("the engine resolves a file's names before its facts read them");
+            Bindings::from_names(&self.syntax, names.clone())
+        })
+    }
+
+    pub(super) fn set_names(&self, names: Rc<crate::grammar::names::Resolved>) {
+        let _ = self.names.set(names);
     }
 
     pub(super) fn root_function_scope(&self) -> bool {

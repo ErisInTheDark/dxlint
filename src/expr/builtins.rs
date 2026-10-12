@@ -64,6 +64,8 @@ builtins! {
     Node = "node": "the node itself as a node value (reads as its text): for `walk`, `report at`, and `.x` reads later (`right.node`, `parent.node`)",
     ScopeDeclaration = "scope_declaration": "on a name a `resolves` item looks up: the name node that declares it (through `scope` and `declares` items); null when nothing does",
     ScopeReferences = "scope_references": "on a declared name: the names resolving to it, in order",
+    ScopeEffect = "scope_effect": "the effect an `unwraps <effect> <field>` item has on this node (`assigned`, `mutated`, ...), reached through `targets`; null when none",
+    ScopeEffectSite = "scope_effect_site": "the node whose `unwraps` item has that effect (the assignment, the update); null when none",
 }
 
 impl Builtin {
@@ -194,17 +196,68 @@ impl<'a> Ctx<'a> {
                     .map(|refs| refs.iter().map(|&id| Value::Node(id, value::Text::Borrowed(self.node_text(id)))).collect())
                     .unwrap_or_default(),
             ),
+            Builtin::ScopeEffect => match self.names().effects.get(&self.node) {
+                Some(&(effect, _)) => Value::from(self.grammar.names.vocabulary.effects[effect as usize].as_str()),
+                None => Value::Null,
+            },
+            Builtin::ScopeEffectSite => match self.names().effects.get(&self.node) {
+                Some(&(_, site)) => Value::Node(site, value::Text::Borrowed(self.node_text(site))),
+                None => Value::Null,
+            },
         })
     }
 
-    /// This tree's names, resolved on first use.
-    fn names(&self) -> &'a crate::grammar::names::Resolved {
-        self.memo.names.get_or_init(|| {
+    /// This tree's names, resolved on first use and given to its native
+    /// front end.
+    pub(crate) fn names(&self) -> &'a crate::grammar::names::Resolved {
+        let mut fresh = false;
+        let resolved = self.memo.names.get_or_init(|| {
+            fresh = true;
+            self.memo.resolving_names.set(true);
             let names = &self.grammar.names;
-            let when = |node: u32, condition: u32| {
-                names.conditions[condition as usize].expr.get().is_some_and(|e| Ctx { node, ..*self }.eval(e).is_ok_and(|v| v.truthy()))
+            // One VM session serves every condition in the tree.
+            let session = crate::vm::Session::new(self, self.node, &[]);
+            let holds = |node: u32, e: &crate::vm::VExpr| {
+                session.holds_on(node, e).unwrap_or_else(|| {
+                    crate::vm::note_fallback("name condition error");
+                    false
+                })
             };
-            names.resolve(self.tree, self.source, &when)
-        })
+            let when = |node: u32, condition: u32| {
+                let Some(e) = names.conditions[condition as usize].lowered.get() else { return false };
+                match self.profile {
+                    Some(profile) => profile.time_name_condition(|| holds(node, e)),
+                    None => holds(node, e),
+                }
+            };
+            let key = |text: &'a str| match self.native {
+                Some(native) => native.name_key(text),
+                None => std::borrow::Cow::Borrowed(text),
+            };
+            let resolve = || names.resolve(self.tree, self.source, &key, &when);
+            let resolved = std::rc::Rc::new(match self.profile {
+                Some(profile) => profile.time_names(resolve),
+                None => resolve(),
+            });
+            self.memo.resolving_names.set(false);
+            resolved
+        });
+        if fresh {
+            if let Some(native) = self.native {
+                native.set_names(resolved.clone());
+            }
+        }
+        resolved
+    }
+
+    /// The tree's native facts, given the tree's names first (front ends
+    /// answer name questions from them). While names are being resolved,
+    /// as-is: name conditions read only name-free facts.
+    pub(crate) fn native_facts(&self) -> Option<&'a (dyn crate::engine::frontend::Native + 'a)> {
+        let native = self.native?;
+        if !self.memo.resolving_names.get() && self.memo.names.get().is_none() {
+            self.names();
+        }
+        Some(native)
     }
 }

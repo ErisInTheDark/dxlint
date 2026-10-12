@@ -353,7 +353,9 @@ pub struct AttrMemo<'a> {
     /// Indentation queries shared only within the active rule invocation.
     indent_hits: RefCell<FxHashMap<u32, Option<IndentHit>>>,
     /// The tree's names resolved (`scope_declaration`), on first read.
-    names: std::cell::OnceCell<crate::grammar::names::Resolved>,
+    names: std::cell::OnceCell<std::rc::Rc<crate::grammar::names::Resolved>>,
+    /// Names are being resolved: native reads meanwhile get no names.
+    resolving_names: std::cell::Cell<bool>,
 }
 
 struct ParamFrame<'m, 'a> {
@@ -427,7 +429,7 @@ impl NodeSel {
 /// `position(offset)`: 1-based line and column, by line breaks and by
 /// JavaScript line terminators (UTF-16 columns), of a byte offset.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Position {
+pub struct Position {
     pub line: usize,
     pub column: usize,
     pub js_line: usize,
@@ -1680,7 +1682,7 @@ impl<'a> Ctx<'a> {
             Some(read) => read.key.map_or_else(|| Value::Bool(!matches!(value, Value::Null)), |key| value.key(key)),
             None => value,
         };
-        let Some(native) = self.native else { return project(Value::Null) };
+        let Some(native) = self.native_facts() else { return project(Value::Null) };
         let get = |node| {
             if read.is_some() {
                 if let Some(value) = self.cached_fact(node, fact) {
@@ -1914,7 +1916,7 @@ impl<'a> Ctx<'a> {
                 self.fact_value(facts::FIELD_READS[*read].fact, Some(*read), *of)
             }
             CExpr::Link(i) => {
-                let Some(native) = self.native else { return Ok(Value::Null) };
+                let Some(native) = self.native_facts() else { return Ok(Value::Null) };
                 let link = &facts::LINKS[*i];
                 let nodes = facts::follow(native, *i, self.node);
                 let node = |id: u32| {
@@ -1962,7 +1964,7 @@ impl<'a> Ctx<'a> {
                 })?
             }
             CExpr::FactCall(i, args, receiver) => {
-                let Some(native) = self.native else { return Ok(Value::Null) };
+                let Some(native) = self.native_facts() else { return Ok(Value::Null) };
                 let node = match receiver {
                     None => self.node,
                     Some(receiver) => match self.eval(receiver)? {

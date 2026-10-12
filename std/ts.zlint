@@ -52,6 +52,7 @@ define {
 }
 group ts_comment ts_line_comment, ts_block_comment
 
+import .ts/names
 import .ts/format
 import .ts/license
 import .ts/scopes

@@ -428,7 +428,7 @@ impl vm::Host for Ctx<'_> {
     }
 
     fn link(&self, node: u32, link: usize) -> Option<(Vec<u32>, bool)> {
-        let targets = self.native.map_or_else(Vec::new, |native| super::facts::follow(native, link, node));
+        let targets = self.native_facts().map_or_else(Vec::new, |native| super::facts::follow(native, link, node));
         Some((targets, super::facts::LINKS[link].many))
     }
 
@@ -616,6 +616,7 @@ mod tests {
         let tree = crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root);
         let project = Project::default();
         let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/probe.ts"), &project);
+        crate::engine::tests::give_names(&native, &tree, source);
         for (index, fact) in FACTS.iter().enumerate().filter(|(_, fact)| !matches!(fact.shape, Shape::Scalar)) {
             for &node in &tree.order {
                 let value = crate::expr::facts::read(&native, index, node);

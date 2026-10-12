@@ -26,6 +26,13 @@ pub trait Native {
     /// Byte `at` lies strictly inside one token or comment (a line of a
     /// multi-line string or block comment starts there).
     fn inside_token(&self, at: usize) -> bool;
+    /// What a name's text means for name resolution (escapes decoded).
+    fn name_key<'s>(&self, text: &'s str) -> std::borrow::Cow<'s, str> {
+        std::borrow::Cow::Borrowed(text)
+    }
+    /// The engine's resolved names for this file ([`crate::grammar::names`]),
+    /// given before the first fact read that needs them.
+    fn set_names(&self, _names: std::rc::Rc<crate::grammar::names::Resolved>) {}
 }
 
 /// Which node kinds may fill a field of one node kind.

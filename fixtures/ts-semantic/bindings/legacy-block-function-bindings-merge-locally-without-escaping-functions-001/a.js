@@ -1,1 +1,0 @@
-function outer() { a(); { function a() {} } { function a() {} } a(); } a();

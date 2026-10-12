@@ -87,12 +87,11 @@ fn dynamic_import_values_and_imported_initializers_share_module_types() {
         reads::set_buffer(&path, text);
         Buffer(path)
     }).collect();
-    let front = crate::engine::tests::native_front();
-    let parsed = crate::native::ts::parse(source, false).unwrap();
-    let tree = crate::grammar::Tree::from_native(parsed.nodes, parsed.root);
-    let project = Project::default();
     let path = dir.join("main.ts");
-    let file = NativeFile::new(Syntax::new(&tree, source, &front), &path, &project);
+    let (tree, front) = crate::engine::tests::ts_tree(source, &path);
+    let project = Project::default();
+    let file = NativeFile::new(Syntax::new(&tree, source, front), &path, &project);
+    crate::engine::tests::give_names(&file, &tree, source);
     let checker = &file.typing().checker;
     let mut failures = Vec::new();
     for node in tree.order.iter().copied().filter(|&node| file.syntax.is(node, Kind::Ident) && file.syntax.parent(node).is_some_and(|owner| file.syntax.is(owner, Kind::Unary))) {

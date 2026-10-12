@@ -1,0 +1,119 @@
+# .ts/names: JavaScript and TypeScript scopes, declarations, references and
+# writes (docs/design/type-layers.md). The engine resolves them; native
+# facts about names (`declaration`, `references`, `resolved`, `access`,
+# `uses`, `write_site`, ...) answer from them.
+
+# Where a function or class is a declaration (else an expression).
+fn ts_declared_statement(node) = node is (ts_program.body, ts_block.body, ts_case.body, ts_export.declaration, ts_labeled.body)
+
+# Scopes; several on one node nest, outermost first. A function's body
+# shares the function's scope (parameters and body declarations together,
+# as TypeScript binds them); a function expression's name sits just outside.
+in ts_program {
+  scope module, function, block
+  # CommonJS and `globalReturn` scripts run inside a function.
+  when source_environment.root_function {
+    scope function, block
+    declares value "arguments" in nearest function hoisted
+  }
+}
+in ts_function { when !ts_declared_statement(node) { scope function_name } }
+in ts_function, ts_arrow, ts_method, ts_static_block { scope function, block }
+in ts_function_type, ts_method_signature, ts_call_signature { scope function }
+in ts_block {
+  when !(parent is (ts_function, ts_arrow, ts_method, ts_static_block) || is (ts_try.handler, ts_namespace.body)) { scope block }
+  # `namespace N { var x }`: `var` lands in the namespace body.
+  when is ts_namespace.body { scope function, block }
+  # A catch clause: its parameter (on the `try`) and body share one scope.
+  when is ts_try.handler {
+    scope catch, block
+    declares value parent.parameter in nearest catch hoisted
+  }
+}
+in ts_for, ts_for_in, ts_for_of, ts_switch { scope block }
+in ts_class { scope class }
+in ts_interface, ts_type_alias { scope type_parameters }
+# `infer X` names reach the true branch only.
+in ts_conditional_type { scope conditional within check, extends, consequent }
+in ts_mapped_type { scope mapped }
+
+# Declarations. Patterns pass a declaration on to the names they bind.
+in ts_variable_declaration {
+  when kind == "var" { declares value declaration in nearest function hoisted }
+  when kind != "var" { declares value declaration in nearest block hoisted }
+}
+in ts_declarator { targets name }
+in ts_object_pattern { targets property, rest }
+in ts_pattern_property { targets value ?? key }
+in ts_array_pattern { targets element }
+in ts_assignment_pattern { targets left }
+in ts_rest { targets argument }
+
+in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
+  declares value parameter in nearest function hoisted
+}
+in ts_parameter { targets name }
+in ts_function, ts_method { declares value "arguments" in nearest function hoisted }
+# A declaration's name lands in the enclosing block; an expression's only
+# inside it.
+in ts_function {
+  when ts_declared_statement(node) { declares value name in enclosing block hoisted }
+  when !ts_declared_statement(node) { declares value name in nearest function_name hoisted }
+}
+in ts_class {
+  when ts_declared_statement(node) { declares value, type name in enclosing block hoisted }
+  when !ts_declared_statement(node) { declares value, type name in nearest class hoisted }
+}
+in ts_interface, ts_type_alias { declares type name in nearest block hoisted }
+in ts_enum, ts_namespace { declares value, type name in nearest block hoisted }
+# `namespace A.B {}` declares `A`.
+in ts_qualified_name { targets left }
+in ts_type_parameter { declares type name in nearest function, class, type_parameters, conditional, mapped hoisted }
+# `infer X` declares for the whole conditional.
+in ts_infer { declares type type_parameter.name in nearest conditional hoisted }
+
+in ts_import {
+  declares value, type default_import in nearest module hoisted
+  declares value, type namespace in nearest module hoisted
+  declares value, type specifier in nearest module hoisted
+}
+in ts_import_specifier { targets local ?? imported }
+in ts_import_equals { declares value, type name in nearest block hoisted }
+
+# References: identifiers, except where they only name something (member
+# and key names, labels, the far side of a rename).
+in ts_identifier {
+  when !(is (ts_member.property, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key,
+      ts_enum_member.name, ts_pattern_property.key, ts_import_specifier.imported, ts_export_specifier.local,
+      ts_export_specifier.exported, ts_labeled.label, ts_break.label, ts_continue.label, ts_jsx_attribute.name,
+      ts_tuple_member.name, ts_qualified_name.right)
+    || is ts_property.key && parent.value != null
+    # `[key: string]: T` names nothing.
+    || is ts_parameter.name && parent is ts_index_signature.parameter) {
+    resolves value
+  }
+}
+in ts_type_reference { resolves type name }
+# `export { x }` uses `x`; `export { x } from "m"` does not.
+in ts_export_specifier { when parent.from == null { resolves value, type local } }
+in ts_qualified_name { resolves value, type left }
+in ts_export { resolves value, type expression }
+in ts_export_assignment { resolves value, type expression }
+
+# Writes: `assigned` overwrites, `mutated` reads then changes. Assignment
+# targets are expressions: literals pass writes on.
+in ts_assignment {
+  when operator == "=" {
+    unwraps assigned left
+    targets left
+  }
+  when operator != "=" { unwraps mutated left }
+}
+in ts_update { unwraps mutated argument }
+in ts_unary { when operator == "delete" { unwraps deleted argument } }
+in ts_for_of, ts_for_in { unwraps assigned left }
+in ts_array { targets element }
+in ts_object { targets property }
+in ts_property { targets value ?? key }
+in ts_spread { targets argument }
+in ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion { targets expression }

@@ -214,6 +214,8 @@ pub struct Linter {
     rule_jobs: usize,
 }
 
+static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
+
 impl Linter {
     /// Lowers every enabled rule's expressions to the VM (lowering is total:
     /// parts without a native form run as interpreter leaves).
@@ -237,6 +239,11 @@ impl Linter {
             rule.report_at_vm = rule.report_at.as_ref().map(|e| lower(e, item));
             rule.message_vm = rule.message_plan.as_ref().zip(rule.message.as_ref())
                 .map(|(plan, message)| lower(&plan.indexed(message, u16::from(item)), item));
+        }
+        for condition in &self.grammar.names.conditions {
+            if let Some(e) = condition.expr.get() {
+                let _ = condition.lowered.set(crate::vm::lower(e, functions, values));
+            }
         }
         let fields = self.shape_records();
         if self.attrs.vm_stats {
@@ -608,6 +615,37 @@ impl Linter {
         groups
     }
 
+    /// A context on `tree`'s root outside any rule: for the tree's names,
+    /// which native facts answer name questions from.
+    pub(super) fn tree_ctx<'a>(
+        &'a self,
+        lang: usize,
+        tree: &'a Tree,
+        (source, lines, file): (&'a str, &'a crate::line_index::LineIndex, &'a str),
+        memo: &'a AttrMemo<'a>,
+        reindented: &'a RefCell<HashMap<usize, String>>,
+        native: Option<&'a (dyn Native + 'a)>,
+    ) -> Ctx<'a> {
+        Ctx {
+            grammar: &self.grammar,
+            lang,
+            tree,
+            node: tree.root,
+            source,
+            lines,
+            file,
+            options: &[],
+            reindented,
+            attrs: &self.attrs,
+            memo,
+            locals: None,
+            native,
+            indents: &NO_INDENTS,
+            indent_reset: None,
+            profile: self.profile.as_ref(),
+        }
+    }
+
     /// Runs every active rule on the nodes of `tree` they target.
     fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>) {
         // Nodes run in document order, so a rule's indentation fix of a line
@@ -615,10 +653,13 @@ impl Linter {
         // fixes never changes what another sees, so rules can run apart.
         let reindented: Vec<RefCell<HashMap<usize, String>>> = self.rules.iter().map(|_| RefCell::default()).collect();
         let memo = AttrMemo::default();
+        let no_reindent = RefCell::default();
+        let tree_ctx = self.tree_ctx(run.lang, tree, (run.text, run.lines, run.file), &memo, &no_reindent, native);
         // Resolve reachability before dispatch: a reference may select a
         // declaration earlier in the tree, and several owners can reach it.
         let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
-        if let Some(native) = native.filter(|_| self.by_link.values().flatten().any(|(_, rules)| rules.iter().any(|&fi| run.active[fi]))) {
+        let links_needed = self.by_link.values().flatten().any(|(_, rules)| rules.iter().any(|&fi| run.active[fi]));
+        if let Some(native) = native.filter(|_| links_needed).and_then(|_| tree_ctx.native_facts()) {
             for &owner in &tree.order {
                 let Some(links) = self.by_link.get(&tree.node(owner).matcher) else { continue };
                 for (link, rules) in links {

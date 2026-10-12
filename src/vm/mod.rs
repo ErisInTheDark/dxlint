@@ -231,6 +231,9 @@ pub enum VExpr {
     Is { parent: bool, kinds: Box<[u32]> },
     /// The node fills this field of one of these matchers.
     InField(Box<[u32]>, u16),
+    /// The node fills one of these fields (each of its matchers): one
+    /// label and owner read for a whole `is (a.x, b.y, ...)`.
+    InFields(Box<[(u16, Box<[u32]>)]>),
     FieldPresent(u16),
     FieldCount(u16),
     Attr(u16),
@@ -348,7 +351,7 @@ impl VExpr {
             *remaining = left;
             match e {
                 VExpr::Const(_) | VExpr::Node | VExpr::Text | VExpr::Parent | VExpr::Offset | VExpr::EndOffset
-                | VExpr::Index | VExpr::Line | VExpr::FieldPresent(_) | VExpr::Is { .. } | VExpr::InField(..) => true,
+                | VExpr::Index | VExpr::Line | VExpr::FieldPresent(_) | VExpr::Is { .. } | VExpr::InField(..) | VExpr::InFields(_) => true,
                 VExpr::Not(a) | VExpr::Neg(a) | VExpr::IsNull(a) | VExpr::NonEmpty(a) => cost(a, remaining),
                 VExpr::Binary(_, a, b) | VExpr::Coalesce(a, b) => cost(a, remaining) && cost(b, remaining),
                 VExpr::If(a, b, c) => cost(a, remaining) && cost(b, remaining) && cost(c, remaining),
@@ -747,12 +750,20 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
                 && tests.iter().all(|t| matches!(t, IsTest::Kind(_)) || matches!(t, IsTest::Field(..)) && matches!(&**subject, CExpr::Builtin(Builtin::Node))) =>
         {
             let parent = matches!(&**subject, CExpr::Builtin(Builtin::Parent));
-            let parts = tests.iter().map(|test| match test {
-                IsTest::Kind(ids) => VExpr::Is { parent, kinds: ids.clone().into() },
-                IsTest::Field(ids, label) => VExpr::InField(ids.clone().into(), *label),
-                _ => unreachable!("matched"),
-            });
-            parts.reduce(|a, b| VExpr::Binary(BinOp::Or, Box::new(a), Box::new(b))).ok_or(e)?
+            let kinds: Vec<u32> = tests.iter().flat_map(|t| match t { IsTest::Kind(ids) => ids.clone(), _ => Vec::new() }).collect();
+            let fields: Vec<(u16, Box<[u32]>)> =
+                tests.iter().filter_map(|t| match t { IsTest::Field(ids, label) => Some((*label, ids.clone().into())), _ => None }).collect();
+            let kinds = (!kinds.is_empty()).then(|| VExpr::Is { parent, kinds: kinds.into() });
+            let fields = match fields.len() {
+                0 => None,
+                1 => fields.into_iter().next().map(|(label, ids)| VExpr::InField(ids, label)),
+                _ => Some(VExpr::InFields(fields.into())),
+            };
+            match (kinds, fields) {
+                (Some(a), Some(b)) => VExpr::Binary(BinOp::Or, Box::new(a), Box::new(b)),
+                (Some(one), None) | (None, Some(one)) => one,
+                (None, None) => return Err(e),
+            }
         }
         CExpr::Is(subject, tests) => VExpr::IsTests(boxed(subject)?, tests.clone().into()),
         CExpr::Link(link) => VExpr::Link(*link),
@@ -1016,6 +1027,17 @@ impl<'h, H: Host> Session<'h, H> {
     pub fn holds(&self, e: &VExpr, item: Option<V>) -> Option<bool> {
         let v = self.run(e, item)?;
         Some(self.runtime.truthy(v))
+    }
+
+    /// Whether `e` holds on `node`, for one session serving many nodes
+    /// (name conditions): its scratch is cleared after each.
+    pub fn holds_on(&self, node: u32, e: &VExpr) -> Option<bool> {
+        let mut f = self.frame.take();
+        f.clear();
+        let held = ev(&self.runtime, node, e, &mut f).map(|v| self.runtime.truthy(v));
+        self.frame.replace(f);
+        self.runtime.scratch.borrow_mut().clear();
+        held
     }
 
     /// `e`'s value on the rule's node, as the interpreter's value.
@@ -1483,6 +1505,10 @@ fn ev<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) -> Opti
         VExpr::InField(kinds, label) => V::Bool(
             tree.label(node) == Some(*label) && tree.owner(node).is_some_and(|o| is_a(h.grammar(), tree.node(o).matcher, kinds)),
         ),
+        VExpr::InFields(fields) => V::Bool(tree.label(node).is_some_and(|label| {
+            let owner = tree.owner(node).map(|o| tree.node(o).matcher);
+            fields.iter().any(|(l, kinds)| *l == label && owner.is_some_and(|m| is_a(h.grammar(), m, kinds)))
+        })),
         VExpr::FieldPresent(label) => V::Bool(tree.field_one(node, *label) != FieldOne::None),
         VExpr::FieldCount(label) => {
             let mut count = 0u32;
@@ -1913,7 +1939,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             h.pack(&Value::from(text))?
         }
         VExpr::Const(_) | VExpr::Bound(_) | VExpr::Attr(_) | VExpr::ParentAttr(_) | VExpr::Fact { .. } | VExpr::Inlined(_) | VExpr::Is { .. }
-        | VExpr::InField(..) | VExpr::FieldPresent(_) | VExpr::FieldCount(_) | VExpr::OnParent(_) | VExpr::OnSibling(..)
+        | VExpr::InField(..) | VExpr::InFields(_) | VExpr::FieldPresent(_) | VExpr::FieldCount(_) | VExpr::OnParent(_) | VExpr::OnSibling(..)
         | VExpr::OnAncestor(..) | VExpr::Not(_) | VExpr::Neg(_) | VExpr::If(..) | VExpr::Binary(..) | VExpr::IsNull(_)
         | VExpr::NonEmpty(_) | VExpr::Coalesce(..) | VExpr::Nullish(..) | VExpr::Node | VExpr::Text | VExpr::Parent
         | VExpr::Offset | VExpr::EndOffset => unreachable!("ev evaluates these itself"),

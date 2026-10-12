@@ -39,6 +39,8 @@ pub enum Tk {
     OrOr,
     Bang,
     Pipe,
+    /// `&`: an intersection in `unwraps a & b`.
+    Amp,
     Question,
     Nullish,
     Star,
@@ -257,6 +259,7 @@ pub fn lex(file: FileId, text: &str, base: usize, errors: &mut Vec<ConfigError>)
                     (b'>', _) => (Tk::Gt, 1),
                     (b'!', _) => (Tk::Bang, 1),
                     (b'|', _) => (Tk::Pipe, 1),
+                    (b'&', _) => (Tk::Amp, 1),
                     (b'?', Some(b'?')) => (Tk::Nullish, 2),
                     (b'?', _) => (Tk::Question, 1),
                     (b'*', _) => (Tk::Star, 1),

@@ -158,18 +158,39 @@ pub(crate) fn native_front() -> crate::grammar::NativeFront {
     }
 }
 
-/// Runs `f` on `text` parsed as `/root/a.ts`, with the node of each `/*@*/`
+/// The library's `.ts` linter, shared by native owner tests.
+pub(crate) fn ts_linter() -> &'static Linter {
+    static LINTER: std::sync::OnceLock<Linter> = std::sync::OnceLock::new();
+    LINTER.get_or_init(|| native_linter(""))
+}
+
+/// `text` parsed at `path` with the library grammar's node ids, and the
+/// front end to build its [`crate::native::ts::syntax::Syntax`] with.
+pub(crate) fn ts_tree(text: &str, path: &Path) -> (crate::grammar::Tree, &'static crate::grammar::NativeFront) {
+    let front = &ts_linter().grammar.natives[0];
+    let parsed = front.frontend.parse(text, path).expect("parses");
+    (crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root), front)
+}
+
+/// Gives `file` (on a [`ts_tree`]) its names, as linting does before facts.
+pub(crate) fn give_names(file: &crate::native::ts::facts::NativeFile, tree: &crate::grammar::Tree, text: &str) {
+    let linter = ts_linter();
+    let lang = linter.grammar.lang_for(Path::new("a.ts")).expect("ts files are linted");
+    let (lines, memo, reindented) = (crate::line_index::LineIndex::new(text), Default::default(), Default::default());
+    linter.tree_ctx(lang, tree, (text, &lines, "a.ts"), &memo, &reindented, Some(file)).native_facts();
+}
+
+/// Runs `f` on `text` parsed as `/root/a.ts` with the library's `.ts`
+/// (its names resolved, as linting does), with the node of each `/*@*/`
 /// marker (the node starting right after it, outermost first): native
 /// owners test their queries directly with this.
 pub(crate) fn with_native_file<T>(text: &str, f: impl FnOnce(&crate::native::ts::facts::NativeFile, &[u32]) -> T) -> T {
-    use crate::grammar::Tree;
     use crate::native::ts::{facts::NativeFile, modules::Project, syntax::Syntax};
-    let front = native_front();
-    let parsed = crate::native::ts::parse(text, false).expect("parses");
-    let tree = Tree::from_native(parsed.nodes, parsed.root);
     let path = Path::new("/root/a.ts");
+    let (tree, front) = ts_tree(text, path);
     let project = Project::default();
-    let file = NativeFile::new(Syntax::new(&tree, text, &front), path, &project);
+    let file = NativeFile::new(Syntax::new(&tree, text, front), path, &project);
+    give_names(&file, &tree, text);
     let marks: Vec<u32> = text.match_indices("/*@*/").map(|(at, m)| {
         let start = at + m.len() + text[at + m.len()..].len() - text[at + m.len()..].trim_start().len();
         tree.order.iter().copied().find(|&n| tree.node(n).start as usize == start && n != tree.root).expect("a node at the marker")

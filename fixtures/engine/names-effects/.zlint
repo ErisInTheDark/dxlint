@@ -1,0 +1,26 @@
+# The native layers only: no library names beside these.
+lang js "*.ts"
+native ts
+
+# Writes: `assigned` overwrites, `mutated` reads then changes; a user
+# effect (`deleted`) works the same way. Destructuring targets pass the
+# effect on through `targets`.
+in ts_assignment {
+  when operator == "=" {
+    unwraps assigned left
+    targets left
+  }
+  when operator != "=" { unwraps mutated left }
+}
+in ts_update { unwraps mutated argument }
+in ts_unary { when operator == "delete" { unwraps deleted argument } }
+in ts_for_of, ts_for_in { unwraps assigned left }
+in ts_array { targets element }
+in ts_object { targets property }
+in ts_property { targets value ?? key }
+in ts_assignment_pattern { targets left }
+in ts_spread { targets argument }
+in ts_parenthesized, ts_as, ts_non_null { targets expression }
+
+in ts_identifier rule effect warn "{text} {scope_effect} at {scope_effect_site.column}" { when scope_effect != null }
+in ts_member rule member-effect warn "{text} {scope_effect}" { when scope_effect != null }

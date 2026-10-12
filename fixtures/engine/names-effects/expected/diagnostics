@@ -1,0 +1,12 @@
+input.ts:1:1-1:2 effect#0 x assigned at 1
+input.ts:2:1-2:2 effect#0 x mutated at 1
+input.ts:3:1-3:2 effect#0 y mutated at 1
+input.ts:4:2-4:3 effect#0 x assigned at 1
+input.ts:4:8-4:9 effect#0 y assigned at 1
+input.ts:5:10-5:11 effect#0 y assigned at 2
+input.ts:5:7-5:8 effect#0 x assigned at 2
+input.ts:6:4-6:5 effect#0 x assigned at 2
+input.ts:7:3-7:4 effect#0 x assigned at 1
+input.ts:8:1-8:4 member-effect#0 o.a assigned
+input.ts:8:17-8:20 member-effect#0 o.b deleted
+input.ts:9:6-9:7 effect#0 x assigned at 1

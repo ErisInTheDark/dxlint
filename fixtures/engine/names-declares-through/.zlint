@@ -1,12 +1,14 @@
-import .ts
+# The native layers only: no library names beside these.
+lang js "*.ts"
+native ts
 
 in ts_program { scope block }
 in ts_variable_declaration { declares value declaration in nearest block hoisted }
-in ts_declarator { declares through name }
-in ts_object_pattern { declares through property }
+in ts_declarator { targets name }
+in ts_object_pattern { targets property }
 # `d = 1` has no `left`: the value declares nothing, so the key does.
-in ts_pattern_property { declares through value ?? key }
-in ts_assignment_pattern { declares through left }
+in ts_pattern_property { targets value ?? key }
+in ts_assignment_pattern { targets left }
 in ts_identifier {
   resolves value
   rule found warn "{text} -> {scope_declaration.column}" { when scope_declaration != null }

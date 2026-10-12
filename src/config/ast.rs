@@ -117,17 +117,56 @@ pub struct NameDef {
 
 #[derive(Clone, Debug)]
 pub enum NameItem {
-    /// `scope block, function`: the node opens a scope of these classes.
-    Scope(Vec<Name>),
+    /// `scope block, function [within field, ...]`: the node opens a scope
+    /// of these classes, covering only those fields when given (a
+    /// conditional type's `infer` names reach its true branch, not `else`).
+    Scope { classes: Vec<Name>, within: Vec<Name> },
     /// `declares value, type name in nearest block [hoisted]`; `in enclosing
-    /// block` skips the scopes the node opens itself.
-    Declares { classes: Vec<Name>, path: Vec<Name>, nearest: Vec<Name>, enclosing: bool, hoisted: bool },
-    /// `resolves value [path]`: the node (or what `path` leads to) uses a name.
-    Resolves { classes: Vec<Name>, path: Vec<Name> },
-    /// `declares through a ?? b, c`: a node something declares (a pattern)
-    /// passes the declaration on to these fields; per comma-separated group,
-    /// the first path that leads anywhere.
-    Through(Vec<Vec<Vec<Name>>>),
+    /// block` skips the scopes the node opens itself. A text instead of a
+    /// field (`declares value "arguments" ...`) declares that name
+    /// implicitly, with the node itself as its declaration.
+    Declares { classes: Vec<Name>, path: Vec<Name>, implicit: Option<String>, nearest: Vec<Name>, enclosing: bool, hoisted: bool },
+    /// `resolves value [path] [in module <path>]`: the node (or what `path`
+    /// leads to) uses a name; with `in module`, among the exports of the
+    /// file that path's text names.
+    Resolves { classes: Vec<Name>, path: Vec<Name>, module: Option<Vec<Name>> },
+    /// `unwraps <value>` or `unwraps <effect> [<value>] [nearest <scope>]`:
+    /// what the node stands for, or what evaluating it does.
+    Unwraps { effect: Option<Name>, value: Option<Unwrap>, nearest: Vec<Name> },
+    /// `fits trait, ...`: the node directly has these traits.
+    Fits(Vec<Name>),
+    /// `in <field> propagates <value>`: the value's `truthy` effects (or the
+    /// value itself) hold throughout that field's subtree.
+    Propagates { field: Vec<Name>, value: Unwrap },
+    /// `targets a ?? b, c`: a node a `declares` or effect targets (a
+    /// pattern, a destructuring literal) passes it on to these fields; per
+    /// comma-separated group, the first path that leads anywhere.
+    Targets(Vec<Vec<Vec<Name>>>),
+}
+
+/// The value form of `unwraps`, `propagates` and effects
+/// (docs/design/type-layers.md).
+#[derive(Clone, Debug)]
+pub enum Unwrap {
+    /// A field path (`callee.result`, `through.arguments`, `it`).
+    Path(Vec<Name>),
+    /// A member key written as text (`from it at "then"`).
+    Text(String),
+    /// `a ?? b`: the first that exists.
+    Either(Box<Unwrap>, Box<Unwrap>),
+    /// `a | b`: one of them.
+    Union(Vec<Unwrap>),
+    /// `a & b`: both at once.
+    Intersection(Vec<Unwrap>),
+    /// `| ...types` / `& ...types`: every node a path leads to, joined.
+    Spread { intersection: bool, path: Vec<Name> },
+    /// `from x at key`: the member `key` of what `x` unwraps to.
+    From(Box<Unwrap>, Box<Unwrap>),
+    /// `!x` (truth unwraps).
+    Not(Box<Unwrap>),
+    /// `excludes trait, ... [from x]`: under `truthy`, `x` (default: the
+    /// node) cannot be these.
+    Excludes { traits: Vec<Name>, from: Option<Box<Unwrap>> },
 }
 
 /// A rule's `indent X by n` / `indent in X by n`: the indentation structure

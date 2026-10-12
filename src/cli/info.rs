@@ -260,6 +260,15 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         ms(Profile::get(&p.layer_nanos)),
         ms(Profile::get(&p.rules_nanos))
     ));
+    if Profile::get(&p.names_trees) > 0 {
+        output.err(format_args!(
+            "  names {:.1} ms {DIM}({} trees; `when` conditions {:.1} ms over {} runs){DIM:#}",
+            ms(Profile::get(&p.names_nanos)),
+            Profile::get(&p.names_trees),
+            ms(Profile::get(&p.name_condition_nanos)),
+            Profile::get(&p.name_conditions)
+        ));
+    }
     let mut matchers: Vec<(u64, u64, &str)> = linter
         .grammar
         .matchers

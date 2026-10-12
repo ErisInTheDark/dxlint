@@ -1,0 +1,37 @@
+# Every type-layer item form loads (docs/design/type-layers.md); the
+# engine answers them later. No library names beside these.
+lang js "*.ts"
+native ts
+
+in ts_program { scope block }
+in ts_variable_declaration { declares value declaration in nearest block }
+in ts_declarator { targets name }
+in ts_identifier { resolves value }
+in ts_import_specifier { resolves value imported in module parent.from }
+in ts_declarator { unwraps type ?? init }
+in ts_conditional { unwraps consequent | alternate }
+in ts_union { unwraps | ...type }
+in ts_intersection { unwraps & ...type }
+in ts_member { unwraps from object at property }
+in ts_call { unwraps from callee at "then" }
+in ts_throw { unwraps thrown argument }
+in ts_return { unwraps returned nearest block }
+in ts_logical {
+  when operator == "&&" {
+    unwraps {
+      left | right
+      truthy left & right
+    }
+    in right propagates left
+  }
+  when operator == "||" { in right propagates !left }
+}
+in ts_if {
+  in consequent propagates test
+  in alternate propagates !test
+}
+in ts_binary { when operator == "!=" { unwraps truthy excludes nullable from left } }
+in ts_null { fits nullable }
+in ts_arrow { fits callable when parameter == null }
+
+in ts_identifier rule never warn "never" { when false }

@@ -36,6 +36,12 @@ pub struct Profile {
     pub layer_nanos: AtomicU64,
     /// Time spent running rules, all together.
     pub rules_nanos: AtomicU64,
+    /// Resolving trees' names, and running name items' `when` conditions
+    /// within that.
+    pub names_nanos: AtomicU64,
+    pub names_trees: AtomicU64,
+    pub name_condition_nanos: AtomicU64,
+    pub name_conditions: AtomicU64,
     /// Node queries by [`Query`]: nanoseconds (inside the rules' time),
     /// calls and nodes returned.
     pub query_nanos: [AtomicU64; Query::ALL.len()],
@@ -62,6 +68,23 @@ impl Query {
             Query::Descendants => "descendants",
         }
     }
+}
+
+/// Work shared by every rule (a native fact, a tree's names): its time and
+/// calls, and when outermost, this thread's fact clock, which rule time
+/// leaves out.
+fn shared<T>(nanos: &AtomicU64, calls: &AtomicU64, compute: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    FACT_TIME.with(|time| time.set((time.get().0, time.get().1 + 1)));
+    let value = compute();
+    let elapsed = started.elapsed();
+    FACT_TIME.with(|time| {
+        let (total, depth) = time.get();
+        time.set((if depth == 1 { total + elapsed.as_nanos() as u64 } else { total }, depth - 1));
+    });
+    Profile::add_time(nanos, elapsed);
+    Profile::add(calls, 1);
+    value
 }
 
 fn counters(n: usize) -> Vec<AtomicU64> {
@@ -98,16 +121,20 @@ impl Profile {
     /// Computes one native fact, counting its time against the fact and,
     /// when outermost, against this thread's fact clock.
     pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
+        shared(&self.fact_nanos[fact], &self.fact_calls[fact], compute)
+    }
+
+    /// Resolves one tree's names: shared by every rule, so outside their time.
+    pub fn time_names<T>(&self, compute: impl FnOnce() -> T) -> T {
+        shared(&self.names_nanos, &self.names_trees, compute)
+    }
+
+    /// Runs one name item's `when` condition (inside the names' time).
+    pub fn time_name_condition<T>(&self, run: impl FnOnce() -> T) -> T {
         let started = Instant::now();
-        FACT_TIME.with(|time| time.set((time.get().0, time.get().1 + 1)));
-        let value = compute();
-        let elapsed = started.elapsed();
-        FACT_TIME.with(|time| {
-            let (total, depth) = time.get();
-            time.set((if depth == 1 { total + elapsed.as_nanos() as u64 } else { total }, depth - 1));
-        });
-        Profile::add_time(&self.fact_nanos[fact], elapsed);
-        Profile::add(&self.fact_calls[fact], 1);
+        let value = run();
+        Profile::add_time(&self.name_condition_nanos, started.elapsed());
+        Profile::add(&self.name_conditions, 1);
         value
     }
 

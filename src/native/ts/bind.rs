@@ -1,21 +1,22 @@
-//! Scopes and name resolution for one file. Values and types live in
-//! separate namespaces (TypeScript's declaration spaces), so `const x` does
-//! not hide an imported type `x`. Every declaring identifier gets use
-//! counts, split by whether the use needs the runtime value: `typeof x` and
-//! computed keys inside types do not.
+//! Names for one file, as the TypeScript front end's consumers read them.
+//! The engine resolves scopes, declarations and references from the
+//! language's name items (`std/ts/names.zlint`, docs/design/type-layers.md);
+//! this view adds what TypeScript code asks about bindings: declaration
+//! kinds, use counts split by whether a use needs the runtime value
+//! (`typeof x` and computed keys inside types do not), and write sites.
 
-// Keyed by node ids and names, built for every file: the fast hasher.
+// Keyed by node ids, built for every file: the fast hasher.
 use crate::fx_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use crate::grammar::names::Resolved;
 use std::borrow::Cow;
 use std::cell::OnceCell;
+use std::rc::Rc;
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
 
-const VALUE: u8 = 1;
-const TYPE: u8 = 2;
-
-fn decoded_name(text: &str) -> Cow<'_, str> {
+/// A name's text as TypeScript means it: escapes decoded.
+pub fn decoded_name(text: &str) -> Cow<'_, str> {
     if text.contains('\\') {
         Cow::Owned(super::statics::identifier_name(text))
     } else {
@@ -26,9 +27,9 @@ fn decoded_name(text: &str) -> Cow<'_, str> {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct Binding {
     /// What declares it: `var`, `let`, `const`, `using`, `function`,
-    /// `class`, `param`, `catch`, `import`, `type`, `interface`, `enum`,
-    /// `namespace`, `type_param`, or `function_name`/`class_name` for the
-    /// names of function and class expressions.
+    /// `class`, `parameter`, `catch`, `import`, `type`, `interface`, `enum`,
+    /// `namespace`, `type_parameter`, or `function_name`/`class_name` for
+    /// the names of function and class expressions.
     pub kind: &'static str,
     /// Declared by an `export`ed statement.
     pub exported: bool,
@@ -45,6 +46,9 @@ pub struct Binding {
 
 #[derive(Default)]
 pub struct Bindings {
+    names: Rc<Resolved>,
+    value: u64,
+    type_: u64,
     /// Declaring identifier -> its uses.
     pub decls: HashMap<u32, Binding>,
     /// Referencing identifier -> the identifier that declares it.
@@ -74,6 +78,8 @@ pub struct Bindings {
     /// overloads, `class X` + `interface X`) -> the first, which owns the
     /// binding.
     pub merged: HashMap<u32, u32>,
+    /// `arguments` reference -> the function whose implicit binding it reads.
+    arguments: HashMap<u32, u32>,
     index: OnceCell<BindingIndex>,
 }
 
@@ -83,7 +89,174 @@ struct BindingIndex {
     references: HashMap<u32, Vec<u32>>,
 }
 
+pub const USES_THIS: u8 = 1;
+pub const USES_ARGUMENTS: u8 = 2;
+pub const HAS_YIELD: u8 = 4;
+
+/// A scope: indexes into [`Bindings::scopes`]; the first is the file's.
+#[derive(Clone, Copy, Debug)]
+pub struct ScopeInfo {
+    pub parent: Option<usize>,
+    /// Where `var` lands: the file, a function (or method, arrow), a static
+    /// block or a namespace body.
+    pub function: bool,
+    /// What opens it: the program, a function-like, block, class, `for`,
+    /// `switch`, catch clause, namespace body or type construct.
+    pub node: u32,
+}
+
+/// How a reference uses its name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Use {
+    Value,
+    Type,
+    /// A value read that only matters to the type checker.
+    TypeOnly,
+    Write,
+    ReadWrite,
+    /// The left of `A.B` in a type or `import x = A.B`: any meaning.
+    Namespace,
+    /// `export { x }`, `export default x`, `export = x`: any meaning, and
+    /// a value use when it is a value.
+    Export,
+    /// `export type { x }`, `export { type x }`: any meaning, never a
+    /// value use.
+    TypeExport,
+}
+
 impl Bindings {
+    /// The view of the engine's `names` for `s`'s file.
+    pub fn from_names(s: &Syntax, names: Rc<Resolved>) -> Bindings {
+        let v = &names.vocabulary;
+        let (value, type_) = (v.declaration_class("value"), v.declaration_class("type"));
+        let function_scope = v.scope_class("function");
+        let (assigned, mutated, deleted) = (v.effect("assigned"), v.effect("mutated"), v.effect("deleted"));
+        let mut b = Bindings { value, type_, ..Bindings::default() };
+        b.scopes = names
+            .scopes
+            .iter()
+            .map(|sc| ScopeInfo { parent: sc.parent.map(|p| p as usize), function: sc.classes & function_scope != 0, node: sc.node })
+            .collect();
+
+        // Declarations in document order: merged kinds keep it.
+        let mut declared: Vec<(u32, u32, u32)> =
+            names.declared.iter().filter(|(d, _)| !names.implicit.contains_key(d)).map(|(&d, &(scope, site, ..))| (d, scope, site)).collect();
+        declared.sort_by_key(|&(d, ..)| s.tree.node(d).start);
+        // Declaring identifier -> the function its uses inside count as self uses.
+        let mut owners: HashMap<u32, u32> = HashMap::default();
+        for (d, scope, site) in declared {
+            if !s.is(d, K::Ident) {
+                continue;
+            }
+            b.decl_scope.insert(d, scope as usize);
+            let kind = declaration_kind(s, d, site);
+            let (exported, ambient) = statement_flags(s, d, site, kind);
+            if let Some(&first) = names.merged.get(&d) {
+                b.merged.insert(d, first);
+                b.declaration_kinds.entry(first).or_default().push(kind);
+                if let Some(binding) = b.decls.get_mut(&first) {
+                    binding.exported |= exported;
+                    binding.ambient &= ambient;
+                }
+                continue;
+            }
+            b.declaration_kinds.insert(d, vec![kind]);
+            b.decls.insert(d, Binding { kind, exported, ambient, ..Binding::default() });
+            if let Some(owner) = self_use_owner(s, d, site, kind) {
+                owners.insert(d, owner);
+            }
+        }
+        let merged_kinds: Vec<(u32, Vec<&'static str>)> =
+            b.merged.iter().map(|(&d, first)| (d, b.declaration_kinds.get(first).cloned().unwrap_or_default())).collect();
+        b.declaration_kinds.extend(merged_kinds);
+
+        // Function bodies: `this` and `yield`.
+        for &id in &s.tree.order {
+            match s.kind(id) {
+                Some(K::This) => {
+                    if let Some(f) = this_owner(s, id) {
+                        *b.functions.entry(f).or_default() |= USES_THIS;
+                    }
+                }
+                Some(K::Yield) => {
+                    if let Some(f) = this_owner(s, id) {
+                        *b.functions.entry(f).or_default() |= HAS_YIELD;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (&node, &(effect, site)) in &names.effects {
+            let effect = Some(effect);
+            let written = effect == assigned || effect == mutated;
+            let target = matches!(s.kind(node), Some(K::Ident | K::Member | K::Index | K::Array | K::Object));
+            if written && target || effect == deleted && matches!(s.kind(node), Some(K::Member | K::Index)) {
+                b.write_sites.insert(node, site);
+            }
+        }
+
+        for (&r, &(scope, want)) in &names.asked {
+            if !s.is(r, K::Ident) {
+                continue;
+            }
+            b.ref_scope.insert(r, scope as usize);
+            let effect = names.effects.get(&r).map(|&(e, _)| Some(e));
+            let use_ = match effect {
+                Some(e) if e == assigned => Use::Write,
+                Some(e) if e == mutated => Use::ReadWrite,
+                _ => classify(s, r, want, value, type_),
+            };
+            b.access.insert(
+                r,
+                match use_ {
+                    Use::Value | Use::Namespace | Use::Export => "read",
+                    Use::Write => "write",
+                    Use::ReadWrite => "read_write",
+                    Use::Type | Use::TypeOnly | Use::TypeExport => "type",
+                },
+            );
+            let Some(&decl) = names.declaration.get(&r) else {
+                if !matches!(use_, Use::Type | Use::TypeOnly | Use::TypeExport) {
+                    b.unresolved.insert(r);
+                }
+                continue;
+            };
+            if names.implicit.contains_key(&decl) {
+                b.arguments.insert(r, decl);
+                if !matches!(use_, Use::TypeOnly | Use::TypeExport) {
+                    *b.functions.entry(decl).or_default() |= USES_ARGUMENTS;
+                }
+                continue;
+            }
+            let decl = b.merged.get(&decl).copied().unwrap_or(decl);
+            let inside = owners.get(&decl).is_some_and(|&o| {
+                let (n, r) = (s.tree.node(o), s.tree.node(r));
+                n.start <= r.start && r.end <= n.end
+            });
+            let binding = b.decls.entry(decl).or_default();
+            if inside && use_ != Use::Write {
+                binding.self_uses += 1;
+            }
+            match use_ {
+                Use::Value | Use::Namespace | Use::Export => {
+                    binding.uses += 1;
+                    binding.value_uses += u32::from(use_ != Use::Namespace);
+                }
+                Use::Type | Use::TypeOnly | Use::TypeExport => binding.uses += 1,
+                Use::Write => binding.writes += 1,
+                Use::ReadWrite => {
+                    binding.uses += 1;
+                    binding.value_uses += 1;
+                    binding.writes += 1;
+                }
+            }
+            b.refs.insert(r, decl);
+        }
+        b.names = names;
+        b
+    }
+
     fn index(&self, s: &Syntax) -> &BindingIndex {
         self.index.get_or_init(|| {
             let mut index = BindingIndex::default();
@@ -113,171 +286,140 @@ impl Bindings {
         self.index(s).references.get(&declaration).map(Vec::as_slice).unwrap_or_default()
     }
 
-    /// Implicit `arguments` has an owning scope, but no declaring identifier.
-    pub fn arguments_owner(&self, s: &Syntax, reference: u32) -> Option<u32> {
-        if decoded_name(s.text(reference)) != "arguments" || self.refs.contains_key(&reference) || self.unresolved.contains(&reference) {
-            return None;
-        }
-        // Unresolved type names also lack a declaration; only the value
-        // namespace gets implicit arguments (`typeof arguments` does too).
-        let mut name = reference;
-        while let Some(parent) = s.parent(name).filter(|&parent| s.is(parent, K::Member)) {
-            name = parent;
-        }
-        if s.parent(name).is_some_and(|parent| s.is(parent, K::TypeRef)) {
-            return None;
-        }
-        let mut scope = Some(*self.ref_scope.get(&reference)?);
-        while let Some(index) = scope {
-            let info = &self.scopes[index];
-            if info.owns_arguments(s) {
-                return Some(info.node);
-            }
-            scope = info.parent;
-        }
-        None
+    /// Implicit `arguments` has an owning function, but no declaring identifier.
+    pub fn arguments_owner(&self, _s: &Syntax, reference: u32) -> Option<u32> {
+        self.arguments.get(&reference).copied()
     }
 
-    /// The declaration `name` means at `at` (a value, or a type when
+    /// The declaration `name` means at `at` (a value, or any meaning when
     /// `value` is false), searching the scopes around it outward; `None`
     /// for a global, unknown name or implicit binding with no declaration.
-    /// For names no reference spells out:
-    /// `{}.hasOwnProperty` asks whether `Object` is the global one.
+    /// For names no reference spells out: `{}.hasOwnProperty` asks whether
+    /// `Object` is the global one.
     pub fn visible(&self, s: &Syntax, at: u32, name: &str, value: bool) -> Option<u32> {
-        let name = decoded_name(name);
-        let mut scope = None;
-        let mut node = Some(at);
-        while let (None, Some(n)) = (scope, node) {
-            scope = self.scopes.iter().rposition(|sc| sc.node == n);
-            node = s.parent(n);
+        let classes = if value { self.value } else { self.value | self.type_ };
+        let key = |text: &str| decoded_name(text).into_owned();
+        let found = self.names.visible(s.tree, s.src, &key, at, &decoded_name(name), classes)?;
+        (!self.names.implicit.contains_key(&found)).then_some(found)
+    }
+}
+
+/// How reference `r`, looked up in `want` classes, uses its name.
+fn classify(s: &Syntax, r: u32, want: u64, value: u64, type_: u64) -> Use {
+    if want == type_ {
+        return Use::Type;
+    }
+    // A value read inside a type (`typeof x`, `typeof A.B`, a computed key)
+    // matters only to the type checker.
+    let mut at = s.parent(r);
+    while let Some(n) = at {
+        if s.kind(n).is_some_and(|k| k as u16 >= K::TypeRef as u16) {
+            return Use::TypeOnly;
         }
-        let mut scope = scope.or((!self.scopes.is_empty()).then_some(0));
-        let type_only = |d: u32| {
-            let kinds = self.declaration_kinds.get(&d).map(Vec::as_slice).unwrap_or_default();
-            let kind = self.decls.get(&d).map_or("", |b| b.kind);
-            std::iter::once(kind).chain(kinds.iter().copied()).all(|k| matches!(k, "type" | "interface" | "type_param"))
+        at = s.parent(n);
+    }
+    if want == value | type_ {
+        let parent = s.parent(r);
+        return match parent.and_then(|p| s.kind(p)) {
+            Some(K::ExportSpec) => {
+                let specifier = parent.expect("matched");
+                let statement = s.parent(specifier);
+                let type_only = s.word(specifier, F::Kind) == Some("type") || statement.is_some_and(|e| s.word(e, F::Kind) == Some("type"));
+                if type_only { Use::TypeExport } else { Use::Export }
+            }
+            Some(K::Export | K::ExportAssign | K::Paren) => Use::Export,
+            _ => Use::Namespace,
         };
-        while let Some(sc) = scope {
-            let found = self.decl_scope.iter()
-                .filter(|&(&d, &ds)| ds == sc && decoded_name(s.text(d)) == name && (!value || !type_only(self.merged.get(&d).copied().unwrap_or(d))))
-                .map(|(&d, _)| self.merged.get(&d).copied().unwrap_or(d))
-                .min_by_key(|&d| s.tree.node(d).start);
-            if found.is_some() {
-                return found;
-            }
-            if value && name == "arguments" && self.scopes[sc].owns_arguments(s) {
-                return None;
-            }
-            scope = self.scopes[sc].parent;
+    }
+    Use::Value
+}
+
+/// What declares `name`, whose `declares` item sits on `site`.
+fn declaration_kind(s: &Syntax, name: u32, site: u32) -> &'static str {
+    match s.kind(site) {
+        Some(K::Var) => match s.word(site, F::Kind).unwrap_or("var") {
+            "let" => "let",
+            "const" => "const",
+            "var" => "var",
+            _ => "using",
+        },
+        Some(K::Function | K::Arrow | K::Method | K::FnType | K::CallSig | K::MethodSig) if in_parameter(s, name, site) => "parameter",
+        Some(K::Function) if is_statement(s, site) => "function",
+        Some(K::Function) => "function_name",
+        Some(K::Class) if is_statement(s, site) => "class",
+        Some(K::Class) => "class_name",
+        // A catch clause declares its parameter from its block.
+        Some(K::Block) if s.parent(site).is_some_and(|p| s.is(p, K::Try)) => "catch",
+        Some(K::Interface) => "interface",
+        Some(K::TypeAlias) => "type",
+        Some(K::Enum) => "enum",
+        Some(K::Namespace) => "namespace",
+        Some(K::TypeParam | K::Infer) => "type_parameter",
+        Some(K::Import | K::ImportEquals) => "import",
+        _ => "",
+    }
+}
+
+/// `name` sits in one of `site`'s parameters.
+fn in_parameter(s: &Syntax, name: u32, site: u32) -> bool {
+    let mut at = Some(name);
+    while let Some(n) = at.filter(|&n| n != site) {
+        if s.is(n, K::Param) {
+            return true;
         }
-        None
+        at = s.parent(n);
     }
+    false
 }
 
-pub const USES_THIS: u8 = 1;
-pub const USES_ARGUMENTS: u8 = 2;
-pub const HAS_YIELD: u8 = 4;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Use {
-    Value,
-    Type,
-    /// A value read that only matters to the type checker.
-    TypeOnly,
-    Write,
-    ReadWrite,
-    /// The left of `A.B` in a type or `import x = A.B`: any meaning.
-    Namespace,
-    /// `export { x }`, `export default x`, `export = x`: any meaning, and
-    /// a value use when it is a value.
-    Export,
-    /// `export type { x }`, `export { type x }`: any meaning, never a
-    /// value use.
-    TypeExport,
+/// Is this function or class a declaration (rather than an expression)?
+fn is_statement(s: &Syntax, id: u32) -> bool {
+    matches!(s.field(id), Some(F::Body | F::Decl))
+        && s.parent(id).and_then(|p| s.kind(p)).is_some_and(|k| matches!(k, K::Program | K::Block | K::Case | K::Export | K::Labeled))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Value,
-    Type,
-    TypeOnly,
-}
-
-/// A scope: indexes into [`Bindings::scopes`]; the first is the file's.
-#[derive(Clone, Copy, Debug)]
-pub struct ScopeInfo {
-    pub parent: Option<usize>,
-    /// Where `var` lands: the file, a function (or method, arrow), a static
-    /// block or a namespace body.
-    pub function: bool,
-    /// What opens it: the program, a function-like, block, class, `for`,
-    /// `switch`, catch clause, namespace body or type construct.
-    pub node: u32,
-}
-
-impl ScopeInfo {
-    fn owns_arguments(&self, s: &Syntax) -> bool {
-        self.function && (matches!(s.kind(self.node), Some(K::Function | K::Method))
-            || self.node == s.root() && self.parent.is_some())
-    }
-}
-
-struct Scope<'t> {
-    info: ScopeInfo,
-    names: HashMap<Cow<'t, str>, Vec<(u32, u8)>>,
-}
-
-struct Binder<'s, 't> {
-    s: &'s Syntax<'t>,
-    scopes: Vec<Scope<'t>>,
-    refs: Vec<(u32, usize, Use)>,
-    decls: HashMap<u32, Binding>,
-    /// Declaring identifier -> the function it names (uses inside it are
-    /// self uses).
-    owners: HashMap<u32, u32>,
-    /// Later declarations of a merged name -> the first.
-    merged: HashMap<u32, u32>,
-    /// What the next declarations are: their kind and declaring node.
-    current: (&'static str, u32),
-    functions: HashMap<u32, u8>,
-    write_sites: HashMap<u32, u32>,
-    /// The assignment (or update, `for`) whose target is being walked.
-    site: u32,
-    /// First declaration of a name -> the kinds of all its declarations.
-    merged_kinds: HashMap<u32, Vec<&'static str>>,
-    decl_scope: HashMap<u32, usize>,
-    /// Inside a conditional type's `extends`: where `infer X` declares.
-    infer_scope: Option<usize>,
-    ecma_version: u16,
-}
-
-pub fn bind(s: &Syntax, root_function: bool, ecma_version: u16) -> Bindings {
-    let mut b = Binder {
-        s,
-        scopes: Vec::new(),
-        refs: Vec::new(),
-        decls: HashMap::default(),
-        owners: HashMap::default(),
-        merged: HashMap::default(),
-        current: ("", 0),
-        functions: HashMap::default(),
-        write_sites: HashMap::default(),
-        site: 0,
-        merged_kinds: HashMap::default(),
-        decl_scope: HashMap::default(),
-        infer_scope: None,
-        ecma_version,
+/// Whether the statement declaring `name` is `export`ed, and whether it is
+/// ambient (inside `declare`).
+fn statement_flags(s: &Syntax, name: u32, site: u32, kind: &str) -> (bool, bool) {
+    // A parameter's statement is the parameter itself.
+    let statement = if kind == "parameter" {
+        let mut at = name;
+        while !s.is(at, K::Param) {
+            at = s.parent(at).unwrap_or(site);
+            if at == site {
+                break;
+            }
+        }
+        at
+    } else {
+        site
     };
-    let global = b.scope(None, true, s.root());
-    let module = if root_function { b.scope(Some(global), true, s.root()) } else { global };
-    for st in s.all(s.root(), F::Body).collect::<Vec<_>>() {
-        b.walk(st, module, Mode::Value);
+    let exported = s.parent(statement).is_some_and(|p| s.is(p, K::Export));
+    let mut at = Some(statement);
+    while let Some(n) = at {
+        if s.has_word(n, F::Modifier, "declare") {
+            return (exported, true);
+        }
+        at = s.parent(n);
     }
-    b.resolve()
+    (exported, false)
 }
 
-/// The function whose own `this` a node at `id` sees: the
-/// nearest non-arrow function, method or class body.
+/// The function whose uses inside count as self uses of `name` (as ESLint
+/// counts them): a function's own body, or a function initializer.
+fn self_use_owner(s: &Syntax, name: u32, site: u32, kind: &str) -> Option<u32> {
+    match kind {
+        "function" => Some(site),
+        "var" | "let" | "const" | "using" => {
+            let declarator = s.parent(name).filter(|&d| s.is(d, K::Declarator) && s.get(d, F::Name) == Some(name))?;
+            s.get(declarator, F::Init).filter(|&i| matches!(s.kind(i), Some(K::Function | K::Arrow)))
+        }
+        _ => None,
+    }
+}
+
+/// The function whose own `this` a node at `id` sees: the nearest
+/// non-arrow function, method or class body.
 fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
     let mut child = id;
     while let Some(n) = s.parent(child) {
@@ -292,795 +434,12 @@ fn this_owner(s: &Syntax, id: u32) -> Option<u32> {
     None
 }
 
-impl<'t> Binder<'_, 't> {
-    fn scope(&mut self, parent: Option<usize>, function: bool, node: u32) -> usize {
-        self.scopes.push(Scope { info: ScopeInfo { parent, function, node }, names: HashMap::default() });
-        self.scopes.len() - 1
-    }
-
-    fn function_scope(&self, mut scope: usize) -> usize {
-        while !self.scopes[scope].info.function {
-            match self.scopes[scope].info.parent {
-                Some(p) => scope = p,
-                None => break,
-            }
-        }
-        scope
-    }
-
-    /// Sets what the following declarations are.
-    fn as_(&mut self, kind: &'static str, owner: u32) {
-        self.current = (kind, owner);
-    }
-
-    fn declare(&mut self, scope: usize, ident: u32, space: u8) {
-        let s = self.s;
-        if !s.is(ident, K::Ident) {
-            return;
-        }
-        let names = self.scopes[scope].names.entry(decoded_name(s.text(ident))).or_default();
-        let first = names.first().map(|&(d, _)| d).filter(|&d| d != ident);
-        names.push((ident, space));
-        self.decl_scope.insert(ident, scope);
-        let (kind, owner) = self.current;
-        // The statement: a declarator's `var`, or the declaration itself.
-        let stmt = if s.is(owner, K::Declarator) { s.parent(owner).unwrap_or(owner) } else { owner };
-        let exported = s.parent(stmt).is_some_and(|p| s.is(p, K::Export));
-        let mut ambient = false;
-        let mut at = Some(stmt);
-        while let Some(n) = at {
-            if s.has_word(n, F::Modifier, "declare") {
-                ambient = true;
-                break;
-            }
-            at = s.parent(n);
-        }
-        // Merged declarations (`interface X` + `const X`, overloads) are one
-        // binding: the first.
-        if let Some(first) = first {
-            self.merged.insert(ident, first);
-            self.merged_kinds.entry(first).or_default().push(kind);
-            if let Some(b) = self.decls.get_mut(&first) {
-                b.exported |= exported;
-                b.ambient &= ambient;
-            }
-            return;
-        }
-        self.merged_kinds.insert(ident, vec![kind]);
-        self.decls.insert(ident, Binding { kind, exported, ambient, ..Binding::default() });
-        // Uses inside the function a name declares are not uses (as ESLint
-        // counts them): a function's own body, or a function initializer.
-        let own = if s.is(owner, K::Function) {
-            Some(owner)
-        } else if s.is(owner, K::Declarator) {
-            s.get(owner, F::Init).filter(|&i| matches!(s.kind(i), Some(K::Function | K::Arrow)))
-        } else {
-            None
-        };
-        if let Some(own) = own {
-            self.owners.insert(ident, own);
-        }
-    }
-
-    fn reference(&mut self, ident: u32, scope: usize, use_: Use) {
-        if self.s.is(ident, K::Ident) {
-            self.refs.push((ident, scope, use_));
-        }
-    }
-
-    /// Declares every name a binding pattern introduces.
-    fn declare_pattern(&mut self, pat: u32, scope: usize, space: u8) {
-        let s = self.s;
-        match s.kind(pat) {
-            Some(K::Ident) => self.declare(scope, pat, space),
-            Some(K::ObjectPattern) => {
-                for p in s.all(pat, F::Property).collect::<Vec<_>>() {
-                    match s.get(p, F::Value) {
-                        Some(v) if !(s.is(v, K::AssignPattern) && s.get(v, F::Left).is_none()) => self.declare_pattern(v, scope, space),
-                        _ => {
-                            if let Some(k) = s.get(p, F::Key) {
-                                self.declare(scope, k, space);
-                            }
-                        }
-                    }
-                }
-                if let Some(r) = s.get(pat, F::Rest) {
-                    self.declare_pattern(r, scope, space);
-                }
-            }
-            Some(K::ArrayPattern) => {
-                for e in s.all(pat, F::Element).collect::<Vec<_>>() {
-                    self.declare_pattern(e, scope, space);
-                }
-            }
-            Some(K::AssignPattern) => {
-                if let Some(l) = s.get(pat, F::Left) {
-                    self.declare_pattern(l, scope, space);
-                }
-            }
-            Some(K::Rest) => {
-                if let Some(a) = s.get(pat, F::Arg) {
-                    self.declare_pattern(a, scope, space);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// The expressions inside a binding pattern: defaults, computed keys and
-    /// annotations.
-    fn pattern_exprs(&mut self, pat: u32, scope: usize) {
-        let s = self.s;
-        match s.kind(pat) {
-            Some(K::ObjectPattern) => {
-                for p in s.all(pat, F::Property).collect::<Vec<_>>() {
-                    if let Some(k) = s.get(p, F::Key).filter(|&k| s.is(k, K::Computed)) {
-                        self.walk(k, scope, Mode::Value);
-                    }
-                    if let Some(v) = s.get(p, F::Value) {
-                        self.pattern_exprs(v, scope);
-                    }
-                }
-                if let Some(r) = s.get(pat, F::Rest) {
-                    self.pattern_exprs(r, scope);
-                }
-            }
-            Some(K::ArrayPattern) => {
-                for e in s.all(pat, F::Element).collect::<Vec<_>>() {
-                    self.pattern_exprs(e, scope);
-                }
-            }
-            Some(K::AssignPattern) => {
-                if let Some(l) = s.get(pat, F::Left) {
-                    self.pattern_exprs(l, scope);
-                }
-                if let Some(r) = s.get(pat, F::Right) {
-                    self.walk(r, scope, Mode::Value);
-                }
-            }
-            Some(K::Rest) => {
-                if let Some(a) = s.get(pat, F::Arg) {
-                    self.pattern_exprs(a, scope);
-                }
-            }
-            _ => {}
-        }
-        if let Some(t) = s.get(pat, F::Type) {
-            self.walk(t, scope, Mode::Type);
-        }
-    }
-
-    fn type_params(&mut self, owner: u32, scope: usize) {
-        let s = self.s;
-        let params: Vec<u32> = s.all(owner, F::TypeParam).collect();
-        for &tp in &params {
-            if let Some(n) = s.get(tp, F::Name) {
-                self.as_("type_parameter", tp);
-                self.declare(scope, n, TYPE);
-            }
-        }
-        for tp in params {
-            self.walk_fields(tp, scope, Mode::Type, &[F::Constraint, F::Default]);
-        }
-    }
-
-    fn walk_fields(&mut self, id: u32, scope: usize, mode: Mode, fields: &[F]) {
-        for (f, c) in self.s.kids(id).collect::<Vec<_>>() {
-            if f.is_some_and(|f| fields.contains(&f)) {
-                self.walk(c, scope, mode);
-            }
-        }
-    }
-
-    /// Is this function or class a declaration (rather than an expression)?
-    fn is_declaration(&self, id: u32) -> bool {
-        let s = self.s;
-        matches!(s.field(id), Some(F::Body | F::Decl))
-            && s.parent(id).and_then(|p| s.kind(p)).is_some_and(|k| matches!(k, K::Program | K::Block | K::Case | K::Export | K::Labeled))
-    }
-
-    /// Type parameters, parameters, return type and body of anything callable.
-    fn function_parts(&mut self, id: u32, scope: usize) {
-        let s = self.s;
-        self.type_params(id, scope);
-        for d in s.all(id, F::Decorator).collect::<Vec<_>>() {
-            self.walk(d, scope, Mode::Value);
-        }
-        for p in s.all(id, F::Param).collect::<Vec<_>>() {
-            // A parameter's decorators run outside the function.
-            let outer = self.scopes[scope].info.parent.unwrap_or(scope);
-            for d in s.all(p, F::Decorator).collect::<Vec<_>>() {
-                self.walk(d, outer, Mode::Value);
-            }
-            if let Some(n) = s.get(p, F::Name) {
-                self.as_("parameter", p);
-                self.declare_pattern(n, scope, VALUE);
-                self.pattern_exprs(n, scope);
-            }
-            self.walk_fields(p, scope, Mode::Type, &[F::Type]);
-            self.walk_fields(p, scope, Mode::Value, &[F::Init]);
-        }
-        self.walk_fields(id, scope, Mode::Type, &[F::ReturnType]);
-        if let Some(body) = s.get(id, F::Body) {
-            if s.is(body, K::Block) {
-                for st in s.all(body, F::Body).collect::<Vec<_>>() {
-                    self.walk(st, scope, Mode::Value);
-                }
-            } else {
-                self.walk(body, scope, Mode::Value);
-            }
-        }
-    }
-
-    fn key(&mut self, owner: u32, scope: usize, mode: Mode) {
-        if let Some(k) = self.s.get(owner, F::Key).filter(|&k| self.s.is(k, K::Computed)) {
-            let mode = if mode == Mode::Type { Mode::TypeOnly } else { mode };
-            self.walk(k, scope, mode);
-        }
-    }
-
-    /// The target of `=`: names written, member objects read.
-    fn assign_target(&mut self, id: u32, scope: usize) {
-        let s = self.s;
-        match s.kind(id) {
-            Some(K::Ident) => {
-                self.write_sites.insert(id, self.site);
-                self.reference(id, scope, Use::Write)
-            }
-            Some(K::Member | K::Index) => {
-                self.write_sites.insert(id, self.site);
-                self.walk(id, scope, Mode::Value)
-            }
-            Some(K::Array) => {
-                self.write_sites.insert(id, self.site);
-                for e in s.all(id, F::Element).collect::<Vec<_>>() {
-                    self.assign_target(e, scope);
-                }
-            }
-            Some(K::Object) => {
-                self.write_sites.insert(id, self.site);
-                for p in s.all(id, F::Property).collect::<Vec<_>>() {
-                    match (s.kind(p), s.get(p, F::Value)) {
-                        (Some(K::Prop), Some(v)) if !(s.is(v, K::AssignPattern) && s.get(v, F::Left).is_none()) => {
-                            self.key(p, scope, Mode::Value);
-                            self.assign_target(v, scope);
-                        }
-                        (Some(K::Prop), v) => {
-                            if let Some(k) = s.get(p, F::Key) {
-                                if s.is(k, K::Ident) {
-                                    self.write_sites.insert(k, self.site);
-                                }
-                                self.reference(k, scope, Use::Write);
-                            }
-                            if let Some(r) = v.and_then(|v| s.get(v, F::Right)) {
-                                self.walk(r, scope, Mode::Value);
-                            }
-                        }
-                        _ => self.assign_target(p, scope),
-                    }
-                }
-            }
-            Some(K::Spread | K::Rest) => {
-                if let Some(a) = s.get(id, F::Arg) {
-                    self.assign_target(a, scope);
-                }
-            }
-            // `[x = 1] = y`: a default, written as an assignment.
-            Some(K::AssignPattern) | Some(K::Assign) if s.word(id, F::Op).is_none_or(|op| op == "=") => {
-                if let Some(l) = s.get(id, F::Left) {
-                    self.assign_target(l, scope);
-                }
-                let site = self.site;
-                self.walk_fields(id, scope, Mode::Value, &[F::Right]);
-                self.site = site;
-            }
-            Some(K::Paren | K::NonNull | K::As | K::Satisfies) => {
-                if let Some(e) = s.get(id, F::Expr) {
-                    self.assign_target(e, scope);
-                }
-                self.walk_fields(id, scope, Mode::Type, &[F::Type]);
-            }
-            _ => self.walk(id, scope, Mode::Value),
-        }
-    }
-
-    /// `id` without the parentheses, `!`, `as` and `satisfies` around it.
-    fn unwrapped(&self, mut id: u32) -> u32 {
-        while matches!(self.s.kind(id), Some(K::Paren | K::NonNull | K::As | K::Satisfies | K::TypeAssertion)) {
-            match self.s.get(id, F::Expr) {
-                Some(e) => id = e,
-                None => break,
-            }
-        }
-        id
-    }
-
-    /// The leftmost identifier of `A.B.C` (a qualified name or member chain).
-    fn leftmost(&self, mut id: u32) -> u32 {
-        loop {
-            match self.s.kind(id) {
-                Some(K::QualifiedName) => id = self.s.get(id, F::Left).unwrap_or(id),
-                Some(K::Member) => id = self.s.get(id, F::Object).unwrap_or(id),
-                _ => return id,
-            }
-        }
-    }
-
-    fn walk(&mut self, id: u32, scope: usize, mode: Mode) {
-        let s = self.s;
-        let Some(kind) = s.kind(id) else { return };
-        match kind {
-            K::Ident => match mode {
-                Mode::Value => self.reference(id, scope, Use::Value),
-                Mode::TypeOnly => self.reference(id, scope, Use::TypeOnly),
-                Mode::Type => {}
-            },
-            K::Var => {
-                let word = s.word(id, F::Kind).unwrap_or("var");
-                let target = if word == "var" { self.function_scope(scope) } else { scope };
-                let kind = match word {
-                    "let" => "let",
-                    "const" => "const",
-                    "var" => "var",
-                    _ => "using",
-                };
-                for d in s.all(id, F::Decl).collect::<Vec<_>>() {
-                    if let Some(n) = s.get(d, F::Name) {
-                        self.as_(kind, d);
-                        self.declare_pattern(n, target, VALUE);
-                        self.pattern_exprs(n, scope);
-                    }
-                    self.walk_fields(d, scope, Mode::Type, &[F::Type]);
-                    self.walk_fields(d, scope, Mode::Value, &[F::Init]);
-                }
-            }
-            K::Function => {
-                let decl = self.is_declaration(id);
-                let name = s.get(id, F::Name);
-                if decl {
-                    if let Some(n) = name {
-                        self.as_("function", id);
-                        let target = if self.ecma_version < 2015 { self.function_scope(scope) } else { scope };
-                        self.declare(target, n, VALUE);
-                    }
-                }
-                let parent = if let Some(n) = name.filter(|_| !decl) {
-                    let names = self.scope(Some(scope), false, id);
-                    self.as_("function_name", id);
-                    self.declare(names, n, VALUE);
-                    names
-                } else { scope };
-                let inner = self.scope(Some(parent), true, id);
-                self.function_parts(id, inner);
-            }
-            K::Arrow | K::FnType | K::CallSig => {
-                let inner = self.scope(Some(scope), true, id);
-                self.function_parts(id, inner);
-            }
-            K::Method | K::MethodSig => {
-                for d in s.all(id, F::Decorator).collect::<Vec<_>>() {
-                    self.walk(d, scope, Mode::Value);
-                }
-                let key_mode = if kind == K::MethodSig { Mode::Type } else { Mode::Value };
-                self.key(id, scope, key_mode);
-                let inner = self.scope(Some(scope), true, id);
-                self.function_parts(id, inner);
-            }
-            K::Class => {
-                let decl = self.is_declaration(id);
-                let name = s.get(id, F::Name);
-                if decl {
-                    if let Some(n) = name {
-                        self.as_("class", id);
-                        self.declare(scope, n, VALUE | TYPE);
-                    }
-                }
-                for d in s.all(id, F::Decorator).collect::<Vec<_>>() {
-                    self.walk(d, scope, Mode::Value);
-                }
-                let inner = self.scope(Some(scope), false, id);
-                if !decl {
-                    if let Some(n) = name {
-                        self.as_("class_name", id);
-                        self.declare(inner, n, VALUE | TYPE);
-                    }
-                }
-                self.type_params(id, inner);
-                self.walk_fields(id, inner, Mode::Value, &[F::Extends]);
-                self.walk_fields(id, inner, Mode::Type, &[F::TypeArg, F::Implements]);
-                for m in s.all(id, F::Member).collect::<Vec<_>>() {
-                    self.walk(m, inner, Mode::Value);
-                }
-            }
-            K::ClassProp => {
-                for d in s.all(id, F::Decorator).collect::<Vec<_>>() {
-                    self.walk(d, scope, Mode::Value);
-                }
-                self.key(id, scope, Mode::Value);
-                self.walk_fields(id, scope, Mode::Type, &[F::Type]);
-                self.walk_fields(id, scope, Mode::Value, &[F::Init]);
-            }
-            K::Block | K::StaticBlock => {
-                let inner = self.scope(Some(scope), kind == K::StaticBlock, id);
-                let body: Vec<u32> = if kind == K::Block {
-                    s.all(id, F::Body).collect()
-                } else {
-                    s.get(id, F::Body).map(|b| s.all(b, F::Body).collect()).unwrap_or_default()
-                };
-                for st in body {
-                    self.walk(st, inner, Mode::Value);
-                }
-            }
-            K::For | K::ForIn | K::ForOf => {
-                let inner = self.scope(Some(scope), false, id);
-                for (f, c) in s.kids(id).collect::<Vec<_>>() {
-                    match f {
-                        Some(F::Left) if !s.is(c, K::Var) => {
-                            self.site = id;
-                            self.assign_target(c, inner)
-                        }
-                        Some(F::Modifier) => {}
-                        _ => self.walk(c, inner, Mode::Value),
-                    }
-                }
-            }
-            K::Switch => {
-                self.walk_fields(id, scope, Mode::Value, &[F::Discriminant]);
-                let inner = self.scope(Some(scope), false, id);
-                for c in s.all(id, F::Case).collect::<Vec<_>>() {
-                    for (_, x) in s.kids(c).collect::<Vec<_>>() {
-                        self.walk(x, inner, Mode::Value);
-                    }
-                }
-            }
-            K::Try => {
-                self.walk_fields(id, scope, Mode::Value, &[F::Block, F::Finalizer]);
-                if let Some(h) = s.get(id, F::Handler) {
-                    let inner = self.scope(Some(scope), false, h);
-                    if let Some(p) = s.get(id, F::Param) {
-                        self.as_("catch", p);
-                        self.declare_pattern(p, inner, VALUE);
-                        self.pattern_exprs(p, inner);
-                    }
-                    for st in s.all(h, F::Body).collect::<Vec<_>>() {
-                        self.walk(st, inner, Mode::Value);
-                    }
-                }
-            }
-            K::Interface | K::TypeAlias => {
-                if let Some(n) = s.get(id, F::Name) {
-                    self.as_(if kind == K::Interface { "interface" } else { "type" }, id);
-                    self.declare(scope, n, TYPE);
-                }
-                let inner = self.scope(Some(scope), false, id);
-                self.type_params(id, inner);
-                for (f, c) in s.kids(id).collect::<Vec<_>>() {
-                    if matches!(f, Some(F::Extends | F::Member | F::Type)) {
-                        self.walk(c, inner, Mode::Type);
-                    }
-                }
-            }
-            K::Enum => {
-                if let Some(n) = s.get(id, F::Name) {
-                    self.as_("enum", id);
-                    self.declare(scope, n, VALUE | TYPE);
-                }
-                for m in s.all(id, F::Member).collect::<Vec<_>>() {
-                    self.walk_fields(m, scope, Mode::Value, &[F::Init]);
-                }
-            }
-            K::Namespace => {
-                if let Some(n) = s.get(id, F::Name) {
-                    let n = self.leftmost(n);
-                    self.as_("namespace", id);
-                    self.declare(scope, n, VALUE | TYPE);
-                }
-                if let Some(b) = s.get(id, F::Body) {
-                    let inner = self.scope(Some(scope), true, b);
-                    for st in s.all(b, F::Body).collect::<Vec<_>>() {
-                        self.walk(st, inner, Mode::Value);
-                    }
-                }
-            }
-            K::Import => {
-                self.as_("import", id);
-                for (f, c) in s.kids(id).collect::<Vec<_>>() {
-                    match f {
-                        Some(F::DefaultImport | F::Namespace) => self.declare(scope, c, VALUE | TYPE),
-                        Some(F::Specifier) => {
-                            if let Some(local) = s.get(c, F::Local).or_else(|| s.get(c, F::Imported)) {
-                                self.declare(scope, local, VALUE | TYPE);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            K::ImportEquals => {
-                if let Some(n) = s.get(id, F::Name) {
-                    self.as_("import", id);
-                    self.declare(scope, n, VALUE | TYPE);
-                }
-                if let Some(v) = s.get(id, F::Value) {
-                    if matches!(s.kind(v), Some(K::Ident | K::Member)) {
-                        let l = self.leftmost(v);
-                        self.reference(l, scope, Use::Namespace);
-                    } else {
-                        self.walk(v, scope, Mode::Value);
-                    }
-                }
-            }
-            K::Export => {
-                let reexport = s.get(id, F::From).is_some();
-                for (f, c) in s.kids(id).collect::<Vec<_>>() {
-                    match f {
-                        // `export default X` and `export { X }` export any
-                        // meaning of `X` (a type too).
-                        Some(F::Expr) if s.is(s.unparen(c), K::Ident) => self.reference(s.unparen(c), scope, Use::Export),
-                        Some(F::Decl | F::Expr) => self.walk(c, scope, Mode::Value),
-                        Some(F::Specifier) if !reexport => {
-                            if let Some(l) = s.get(c, F::Local) {
-                                let type_only = s.word(id, F::Kind) == Some("type") || s.word(c, F::Kind) == Some("type");
-                                self.reference(l, scope, if type_only { Use::TypeExport } else { Use::Export });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            K::ExportAssign => match s.get(id, F::Expr).map(|e| s.unparen(e)) {
-                Some(e) if s.is(e, K::Ident) => self.reference(e, scope, Use::Export),
-                _ => self.walk_fields(id, scope, Mode::Value, &[F::Expr]),
-            },
-            K::Labeled => self.walk_fields(id, scope, Mode::Value, &[F::Body]),
-            K::Break | K::Continue | K::MetaProperty | K::QualifiedName => {}
-            K::Prop => {
-                let value = s.get(id, F::Value);
-                match (s.get(id, F::Key), value) {
-                    (Some(k), None) if s.is(k, K::Ident) => self.reference(k, scope, Use::Value),
-                    _ => self.key(id, scope, Mode::Value),
-                }
-                if let Some(v) = value {
-                    self.walk(v, scope, Mode::Value);
-                }
-            }
-            K::Member => {
-                self.walk_fields(id, scope, mode, &[F::Object]);
-            }
-            K::This => {
-                if let Some(f) = this_owner(s, id) {
-                    *self.functions.entry(f).or_default() |= USES_THIS;
-                }
-            }
-            K::Yield => {
-                if let Some(f) = this_owner(s, id) {
-                    *self.functions.entry(f).or_default() |= HAS_YIELD;
-                }
-                self.walk_fields(id, scope, mode, &[F::Arg]);
-            }
-            K::Assign => {
-                let compound = s.word(id, F::Op) != Some("=");
-                if let Some(l) = s.get(id, F::Left) {
-                    let target = self.unwrapped(l);
-                    if compound && matches!(s.kind(target), Some(K::Ident | K::Member | K::Index)) {
-                        self.write_sites.insert(target, id);
-                    }
-                    if compound && s.is(target, K::Ident) {
-                        self.reference(target, scope, Use::ReadWrite);
-                    } else if compound {
-                        self.walk(l, scope, Mode::Value);
-                    } else {
-                        self.site = id;
-                        self.assign_target(l, scope);
-                    }
-                }
-                self.walk_fields(id, scope, Mode::Value, &[F::Right]);
-            }
-            K::Update => match s.get(id, F::Arg).map(|a| (a, self.unwrapped(a))) {
-                Some((_, a)) if s.is(a, K::Ident) => {
-                    self.write_sites.insert(a, id);
-                    self.reference(a, scope, Use::ReadWrite)
-                }
-                Some((a, target)) => {
-                    if matches!(s.kind(target), Some(K::Member | K::Index)) {
-                        self.write_sites.insert(target, id);
-                    }
-                    self.walk(a, scope, Mode::Value)
-                }
-                None => {}
-            },
-            K::Unary if s.word(id, F::Op) == Some("delete") => {
-                if let Some(a) = s.get(id, F::Arg) {
-                    let target = self.unwrapped(a);
-                    if matches!(s.kind(target), Some(K::Member | K::Index)) {
-                        self.write_sites.insert(target, id);
-                    }
-                    self.walk(a, scope, mode);
-                }
-            }
-            K::TypeRef => {
-                if let Some(n) = s.get(id, F::Name) {
-                    // `foo.Foo` looks `foo` up as a namespace, which a
-                    // plain value (a parameter `foo`) does not hide.
-                    let named = if s.is(n, K::Ident) { n } else { self.leftmost(n) };
-                    self.reference(named, scope, Use::Type);
-                }
-                self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
-            }
-            K::TypeQuery => {
-                if let Some(n) = s.get(id, F::Name) {
-                    let l = self.leftmost(n);
-                    self.reference(l, scope, Use::TypeOnly);
-                }
-                self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
-            }
-            K::ImportType => self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]),
-            // `x is T` names parameter `x` (only the checker needs it).
-            K::TypePredicate => {
-                if let Some(n) = s.get(id, F::Name).filter(|&n| s.is(n, K::Ident)) {
-                    self.reference(n, scope, Use::TypeOnly);
-                }
-                self.walk_fields(id, scope, Mode::Type, &[F::Type]);
-            }
-            K::TupleMember => self.walk_fields(id, scope, Mode::Type, &[F::Type]),
-            K::Infer => {
-                if let Some(tp) = s.get(id, F::TypeParam) {
-                    if let Some(n) = s.get(tp, F::Name) {
-                        self.as_("type_parameter", tp);
-                        self.declare(self.infer_scope.unwrap_or(scope), n, TYPE);
-                    }
-                    self.walk_fields(tp, scope, Mode::Type, &[F::Constraint]);
-                }
-            }
-            // `infer X` anywhere in `extends` (even inside a function type)
-            // declares `X` for the true branch.
-            K::ConditionalType => {
-                let inner = self.scope(Some(scope), false, id);
-                self.walk_fields(id, inner, Mode::Type, &[F::Check]);
-                let outer_infer = self.infer_scope.replace(inner);
-                self.walk_fields(id, inner, Mode::Type, &[F::Extends]);
-                self.infer_scope = outer_infer;
-                self.walk_fields(id, inner, Mode::Type, &[F::Consequent]);
-                self.walk_fields(id, scope, Mode::Type, &[F::Alternate]);
-            }
-            K::Mapped => {
-                let inner = self.scope(Some(scope), false, id);
-                if let Some(tp) = s.get(id, F::TypeParam) {
-                    if let Some(n) = s.get(tp, F::Name) {
-                        self.as_("type_parameter", tp);
-                        self.declare(inner, n, TYPE);
-                    }
-                    self.walk_fields(tp, scope, Mode::Type, &[F::Constraint]);
-                }
-                self.walk_fields(id, inner, Mode::Type, &[F::Name, F::Type]);
-            }
-            K::PropSig => {
-                self.key(id, scope, Mode::Type);
-                self.walk_fields(id, scope, Mode::Type, &[F::Type]);
-            }
-            K::Computed => self.walk_fields(id, scope, mode, &[F::Expr]),
-            // The opening name is a use (components); the closing one not.
-            K::JsxElement | K::JsxFragment => self.walk_fields(id, scope, Mode::Value, &[F::Opening, F::Body]),
-            K::JsxOpening => {
-                self.walk_fields(id, scope, Mode::Value, &[F::Name, F::Property]);
-                self.walk_fields(id, scope, Mode::Type, &[F::TypeArg]);
-            }
-            K::JsxClosing => {}
-            _ => {
-                let type_kind = kind as u16 >= K::TypeRef as u16;
-                for (f, c) in s.kids(id).collect::<Vec<_>>() {
-                    let Some(f) = f else { continue };
-                    // A member's `.property` is a name, not a use; object
-                    // literal and pattern properties are code.
-                    let member_name = f == F::Property && kind == K::Member;
-                    // A tagged template's `quasi` is a whole template.
-                    let text = f == F::Quasi && !s.is(c, K::Template);
-                    if member_name || text || matches!(f, F::Key | F::Name | F::Label | F::Imported | F::Exported | F::Op | F::Kind | F::Modifier | F::Optional) {
-                        continue;
-                    }
-                    let child_mode = if type_kind
-                        || matches!(f, F::Type | F::ReturnType | F::TypeArg | F::TypeParam | F::Implements | F::Constraint | F::Default | F::Check)
-                    {
-                        Mode::Type
-                    } else {
-                        mode
-                    };
-                    self.walk(c, scope, child_mode);
-                }
-            }
-        }
-    }
-
-    fn resolve(self) -> Bindings {
-        let Binder { s, scopes, refs, mut decls, owners, merged, mut functions, write_sites, merged_kinds, decl_scope, .. } = self;
-        let mut out_refs = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
-        let mut unresolved = HashSet::default();
-        let mut access = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
-        let mut ref_scope = HashMap::with_capacity_and_hasher(refs.len(), Default::default());
-        for (ident, scope, use_) in refs {
-            ref_scope.insert(ident, scope);
-            let name = decoded_name(s.text(ident));
-            access.insert(
-                ident,
-                match use_ {
-                    Use::Value | Use::Namespace | Use::Export => "read",
-                    Use::Write => "write",
-                    Use::ReadWrite => "read_write",
-                    Use::Type | Use::TypeOnly | Use::TypeExport => "type",
-                },
-            );
-            let want = match use_ {
-                Use::Type => TYPE,
-                Use::Namespace | Use::Export | Use::TypeExport => VALUE | TYPE,
-                _ => VALUE,
-            };
-            let mut at = Some(scope);
-            let mut found = None;
-            let mut arguments = None;
-            while let Some(sc) = at {
-                let implicit = name == "arguments" && want & VALUE != 0 && scopes[sc].info.owns_arguments(s);
-                if let Some(list) = scopes[sc].names.get(name.as_ref()) {
-                    if let Some(&(decl, _)) = list.iter().find(|(_, space)| space & want != 0) {
-                        found = Some(decl);
-                        break;
-                    }
-                }
-                if implicit {
-                    arguments = Some(scopes[sc].info.node);
-                    break;
-                }
-                at = scopes[sc].info.parent;
-            }
-            if let Some(owner) = arguments {
-                if !matches!(use_, Use::TypeOnly | Use::TypeExport) {
-                    *functions.entry(owner).or_default() |= USES_ARGUMENTS;
-                }
-                continue;
-            }
-            let Some(decl) = found.map(|d| merged.get(&d).copied().unwrap_or(d)) else {
-                if !matches!(use_, Use::Type | Use::TypeOnly | Use::TypeExport) {
-                    unresolved.insert(ident);
-                }
-                continue;
-            };
-            if decl == ident {
-                continue;
-            }
-            let inside = owners.get(&decl).is_some_and(|&o| {
-                let (n, r) = (s.tree.node(o), s.tree.node(ident));
-                n.start <= r.start && r.end <= n.end
-            });
-            let b = decls.entry(decl).or_default();
-            if inside && use_ != Use::Write {
-                b.self_uses += 1;
-            }
-            match use_ {
-                Use::Value | Use::Namespace | Use::Export => {
-                    b.uses += 1;
-                    b.value_uses += u32::from(use_ != Use::Namespace);
-                }
-                Use::Type | Use::TypeOnly | Use::TypeExport => b.uses += 1,
-                Use::Write => b.writes += 1,
-                Use::ReadWrite => {
-                    b.uses += 1;
-                    b.value_uses += 1;
-                    b.writes += 1;
-                }
-            }
-            out_refs.insert(ident, decl);
-        }
-        let declaration_kinds = merged.iter().map(|(&d, first)| (d, merged_kinds.get(first).cloned().unwrap_or_default())).chain(merged_kinds.clone()).collect();
-        let scopes = scopes.into_iter().map(|sc| sc.info).collect();
-        Bindings { decls, refs: out_refs, unresolved, access, write_sites, declaration_kinds, functions, scopes, decl_scope, ref_scope, merged, index: OnceCell::new() }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
     fn escaped_names_share_bindings_and_keep_scope_boundaries() {
         crate::engine::tests::with_native_file(
-            r"let \u0061; void /*@*/a; { let a; void /*@*/\u{61}; } void /*@*/\u0061; var b; var \u0062; void /*@*/b;",
+            r"let a; void /*@*/a; { let a; void /*@*/\u{61}; } void /*@*/a; var b; var b; void /*@*/b;",
             |file, nodes| {
                 let outer = file.decl_of(nodes[0]).expect("decoded outer binding");
                 assert_ne!(file.decl_of(nodes[1]), Some(outer), "block binding shadows");
@@ -1096,7 +455,7 @@ mod tests {
     #[test]
     fn escaped_arguments_still_use_the_implicit_function_binding() {
         use crate::native::ts::facts::Facts;
-        crate::engine::tests::with_native_file(r"function f() { return /*@*/\u0061rguments; }", |file, nodes| {
+        crate::engine::tests::with_native_file(r"function f() { return /*@*/arguments; }", |file, nodes| {
             assert_eq!(file.resolved(nodes[0]), Some("local"));
             assert!(file.bindings().arguments_owner(&file.syntax, nodes[0]).is_some());
         });
@@ -1105,7 +464,7 @@ mod tests {
     #[test]
     fn escaped_type_names_do_not_shadow_value_names() {
         crate::engine::tests::with_native_file(
-            r"const T = 1; function f() { type \u0054 = number; void /*@*/T; let value: /*@*/T; }",
+            r"const T = 1; function f() { type T = number; void /*@*/T; let value: /*@*/T; }",
             |file, nodes| {
                 let value = file.decl_of(nodes[0]).expect("outer value");
                 let type_name = file.syntax.get(nodes[1], super::F::Name).unwrap_or(nodes[1]);

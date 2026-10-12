@@ -154,6 +154,13 @@ fn prune_config(config: &mut Config, runtime: bool) {
         needed.extend(f.targets.iter().map(|t| t.text.clone()));
         needed.extend(f.attrs.iter().map(|a| a.text.clone()));
     }
+    // Name items always apply: their layers and what their conditions read.
+    for n in &config.names {
+        needed.extend(n.targets.iter().map(|t| t.text.clone()));
+        if let Some(when) = &n.when {
+            expr_names(when, &mut needed);
+        }
+    }
     if runtime {
         for c in &config.configs {
             for (_, value) in &c.options {

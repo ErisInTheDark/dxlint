@@ -40,11 +40,15 @@ impl Linter {
                         options: &[],
                         state: parsed.state,
                     });
+                    let (lines, memo, reindented) = (crate::line_index::LineIndex::new(text), Default::default(), Default::default());
+                    let rel = rel.to_string_lossy();
+                    let ctx = self.tree_ctx(lang, &tree, (text, &lines, &rel), &memo, &reindented, Some(&*file));
+                    let file = ctx.native_facts()?;
                     let known: Vec<String> = facts::FACTS
                         .iter()
                         .enumerate()
                         .filter_map(|(i, f)| {
-                            let v = facts::read(&*file, i, node);
+                            let v = facts::read(file, i, node);
                             (!matches!(v, crate::expr::Value::Null)).then(|| format!("`{}` = {}", f.name, short(&show(&v))))
                         })
                         .collect();
