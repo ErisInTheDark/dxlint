@@ -5,8 +5,9 @@ use std::cell::RefCell;
 
 use crate::fx_hash::FxHashMap;
 
-use super::question::{Known, Leaf, NodeRef, NodeValue, QueryContext, Target, World};
-use super::{Names, Value};
+use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
+use super::semantic::Semantic;
+use super::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
@@ -17,45 +18,51 @@ pub enum Key {
 
 /// One root question. Nested value, call and narrowing queries use this
 /// controller and its context rather than opening another work budget.
-pub struct Values<'a> {
-    pub world: &'a dyn World,
-    pub tables: &'a Names,
-    pub question: &'a QueryContext,
+#[derive(Default)]
+pub(crate) struct State {
     values: RefCell<FxHashMap<Leaf, NodeValue>>,
     traits: RefCell<FxHashMap<(Leaf, u16), Known<bool>>>,
 }
 
-impl<'a> Values<'a> {
-    pub fn new(world: &'a dyn World, tables: &'a Names, question: &'a QueryContext) -> Self {
-        Self { world, tables, question, values: RefCell::default(), traits: RefCell::default() }
-    }
+pub struct Values<'a> {
+    pub(crate) semantic: &'a Semantic<'a>,
+}
 
+impl<'a> std::ops::Deref for Values<'a> {
+    type Target = Semantic<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        self.semantic
+    }
+}
+
+impl Values<'_> {
     pub fn values(&self, leaf: Leaf) -> NodeValue {
-        if let Some(value) = self.values.borrow().get(&leaf) {
+        if let Some(value) = self.semantic.values.values.borrow().get(&leaf) {
             return value.clone();
         }
         if !self.question.budget.step() {
             return NodeValue::Unknown;
         }
         let value = NodeValue::leaf(leaf);
-        self.values.borrow_mut().insert(leaf, value.clone());
+        self.semantic.values.values.borrow_mut().insert(leaf, value.clone());
         value
     }
 
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
-        if let Some(&answer) = self.traits.borrow().get(&(leaf, trait_id)) {
+        if let Some(&answer) = self.semantic.values.traits.borrow().get(&(leaf, trait_id)) {
             return answer;
         }
         if trait_id >= 64 || !self.question.budget.step() {
             return Known::Unknown;
         }
         // A pending question cuts recursion without a separate cycle set.
-        self.traits.borrow_mut().insert((leaf, trait_id), Known::Unknown);
+        self.semantic.values.traits.borrow_mut().insert((leaf, trait_id), Known::Unknown);
         let answer = match leaf.target {
             Target::Scope(_) => Known::Yes(false),
             Target::Node(node) => self.direct_fits(leaf, node, trait_id),
         };
-        self.traits.borrow_mut().insert((leaf, trait_id), answer);
+        self.semantic.values.traits.borrow_mut().insert((leaf, trait_id), answer);
         answer
     }
 
@@ -71,7 +78,7 @@ impl<'a> Values<'a> {
             if bits & (1 << trait_id) == 0 {
                 continue;
             }
-            match when.map_or(Known::Yes(true), |condition| self.world.condition(leaf, condition, self.question)) {
+            match when.map_or(Known::Yes(true), |condition| self.world.condition(leaf, condition, self.semantic)) {
                 Known::Yes(true) => return Known::Yes(true),
                 Known::Unknown => unknown = true,
                 Known::Yes(false) => {}
@@ -101,6 +108,18 @@ impl<'a> Values<'a> {
     }
 
     pub fn key(&self, _at: Leaf, _expression: &Value) -> Known<Key> {
+        Known::Unknown
+    }
+
+    pub fn sites(&self, _at: Leaf, _expression: &Value) -> Known<Vec<Leaf>> {
+        Known::Unknown
+    }
+
+    pub fn arguments(&self, _at: Leaf, _path: &[u16]) -> Known<Vec<NodeValue>> {
+        Known::Unknown
+    }
+
+    pub fn follow(&self, _at: Leaf, _path: &[u16]) -> Known<Vec<Leaf>> {
         Known::Unknown
     }
 }

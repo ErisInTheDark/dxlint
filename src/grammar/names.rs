@@ -16,6 +16,7 @@ pub mod effects;
 pub mod modules;
 pub mod narrowing;
 pub mod question;
+pub mod semantic;
 pub mod values;
 use crate::config::error::ConfigError;
 use crate::fx_hash::FxHashMap;
@@ -664,8 +665,10 @@ pub const DECLARATION: u16 = u16::MAX - 3;
 /// parameter's position, for `from through.type_argument at position`).
 pub const POSITION: u16 = u16::MAX - 4;
 
-/// The nodes `path` (field labels, or [`PARENT`]) leads to from `from`.
-fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
+/// The nodes a structural `path` (field labels, [`PARENT`], [`IT`]) leads to
+/// from `from` in one tree. Semantic steps ([`THROUGH`], [`DECLARATION`],
+/// [`POSITION`]) lead nowhere here: the values engine owns them.
+pub fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
     let mut nodes = vec![from];
     for &label in path {
         nodes = match label {

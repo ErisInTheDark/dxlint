@@ -150,7 +150,7 @@ pub trait World {
     /// Whether item condition `condition` ([`super::Names::conditions`])
     /// holds at `at` (run on the VM in that node's file; nested questions
     /// see its frame and view).
-    fn condition(&self, at: Leaf, condition: u32, question: &QueryContext) -> Known<bool>;
+    fn condition(&self, at: Leaf, condition: u32, semantic: &super::semantic::Semantic<'_>) -> Known<bool>;
     /// The `let` attribute `name` on `node` (`flow_truth`), run on the VM in
     /// that node's file; `Yes(Null)` when the node's layer has none.
     fn attribute(&self, node: NodeRef, name: &str, question: &QueryContext) -> Known<crate::expr::Value<'static>>;
