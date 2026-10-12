@@ -23,11 +23,24 @@ impl Parser<'_> {
     }
 
     pub(super) fn ordinal_value(&mut self, text: &str, span: Span) -> Option<Unwrap> {
-        match text.parse::<f64>() {
-            Ok(value) if value >= 0.0 && value <= u32::MAX as f64 && value.fract() == 0.0 => {
-                Some(Unwrap::Ordinal(value as u32))
-            }
-            _ => {
+        // Float rounding or underflow can turn a fractional value into a slot.
+        let exact = (|| {
+            let (mantissa, exponent) = text.split_once(['e', 'E']).unwrap_or((text, "0"));
+            let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+            let digits = format!("{integer}{fraction}");
+            let digits = digits.trim_start_matches('0');
+            if digits.is_empty() { return Some(0) }
+            let significant = digits.trim_end_matches('0');
+            let trailing = digits.len() - significant.len();
+            let power = exponent.parse::<i64>().ok()?.checked_sub(fraction.len() as i64)?.checked_add(trailing as i64)?;
+            if !(0..=10).contains(&power) || significant.len() + power as usize > 10 { return None }
+            let mut value = significant.parse::<u32>().ok()?;
+            for _ in 0..power { value = value.checked_mul(10)? }
+            Some(value)
+        })();
+        match exact {
+            Some(value) => Some(Unwrap::Ordinal(value)),
+            None => {
                 self.errors.push(ConfigError::new(span, "a positional key must be a non-negative integer fitting u32"));
                 None
             }
@@ -102,6 +115,22 @@ mod tests {
         for index in ["-1", "1.25", "4294967296"] {
             let (_, errors, _) = parse_str(&format!("in container {{ unwraps from slots at {index} }}\n"));
             assert!(!errors.is_empty(), "invalid positional index was accepted");
+        }
+    }
+
+    #[test]
+    fn positional_keys_do_not_round_fractional_or_tiny_values_to_integer_slots() {
+        for index in ["4294967295.0000001", "1e-1000"] {
+            let (_, errors, _) = parse_str(&format!("in container {{ unwraps from slots at {index} }}\n"));
+            assert!(!errors.is_empty(), "an inexact positional index was rounded into a slot");
+        }
+        for (index, expected) in [("1.5e1", 15), ("1.000", 1), ("4294967295", u32::MAX)] {
+            let (config, errors, _) = parse_str(&format!("in container {{ unwraps from slots at {index} }}\n"));
+            assert!(errors.is_empty(), "{errors:?}");
+            let NameItem::Unwraps { value: Some(Unwrap::From(_, key, _)), .. } = &config.names[0].item else {
+                panic!("positional projection was lost");
+            };
+            assert!(matches!(&**key, Unwrap::Ordinal(value) if *value == expected));
         }
     }
 

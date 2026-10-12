@@ -13,6 +13,7 @@ pub struct Semantic<'a> {
     pub(crate) values: State,
     pub(crate) calls: super::calls::State,
     pub(crate) effects: super::effects::State,
+    pub(crate) modules: super::modules::queries::State,
     defects: RefCell<Vec<Defect>>,
 }
 
@@ -24,7 +25,7 @@ pub struct Defect {
 
 impl<'a> Semantic<'a> {
     pub fn new(world: &'a dyn World, tables: &'a Names, question: &'a QueryContext) -> Self {
-        Self { world, tables, question, values: State::default(), calls: super::calls::State::default(), effects: super::effects::State::default(), defects: RefCell::default() }
+        Self { world, tables, question, values: State::default(), calls: super::calls::State::default(), effects: super::effects::State::default(), modules: super::modules::queries::State::default(), defects: RefCell::default() }
     }
 
     pub fn values(&self) -> Values<'_> {

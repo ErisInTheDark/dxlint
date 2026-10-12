@@ -68,6 +68,7 @@ pub struct Member {
 pub(crate) struct State {
     values: RefCell<FxHashMap<Leaf, NodeValue>>,
     traits: RefCell<FxHashMap<(Leaf, u16), Known<bool>>>,
+    bound_arguments: RefCell<FxHashMap<Leaf, Known<Option<NodeValue>>>>,
 }
 
 pub struct Values<'a> {
@@ -244,12 +245,52 @@ impl Values<'_> {
         Known::Unknown
     }
 
-    pub fn sites(&self, _at: Leaf, _expression: &Value) -> Known<Vec<Leaf>> {
-        Known::Unknown
+    pub fn sites(&self, at: Leaf, expression: &Value) -> Known<Vec<Leaf>> {
+        eval::sites(self, at, expression)
     }
 
     pub fn arguments(&self, _at: Leaf, _path: &[u16]) -> Known<Vec<NodeValue>> {
         Known::Unknown
+    }
+
+    pub fn bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
+        if let Some(answer) = self.semantic.values.bound_arguments.borrow().get(&formal) {
+            return answer.clone();
+        }
+        self.semantic.values.bound_arguments.borrow_mut().insert(formal, Known::Unknown);
+        let answer = self.find_bound_argument(formal);
+        self.semantic.values.bound_arguments.borrow_mut().insert(formal, answer.clone());
+        answer
+    }
+
+    fn find_bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
+        if !self.question.budget.step() { return Known::Unknown }
+        let mut frame = formal.frame;
+        while frame != super::question::FrameId::ROOT {
+            if !self.question.budget.step() { return Known::Unknown }
+            let Some(binding) = self.question.get(frame) else { return Known::Unknown };
+            let Some(tree) = self.world.tree(binding.owner.file) else { return Known::Unknown };
+            let Some(node) = tree.nodes.get(binding.owner.node as usize) else { return Known::Unknown };
+            if let Some(kind) = self.tables.kinds.get(node.matcher as usize) {
+                let owner = Leaf { target: Target::Node(binding.owner), frame };
+                for (path, when) in &kind.generics {
+                    match when.map_or(Known::Yes(true), |condition| self.world.condition(owner, condition, self.semantic)) {
+                        Known::Yes(false) => continue,
+                        Known::Unknown => return Known::Unknown,
+                        Known::Yes(true) => {}
+                    }
+                    let Known::Yes(parameters) = self.follow(owner, path) else { return Known::Unknown };
+                    for (position, parameter) in parameters.iter().enumerate() {
+                        if !self.question.budget.step() { return Known::Unknown }
+                        if parameter.target != formal.target { continue }
+                        let Some(arguments) = binding.args else { return Known::Yes(None) };
+                        return self.question.argument(arguments, position);
+                    }
+                }
+            }
+            frame = binding.parent;
+        }
+        Known::Yes(None)
     }
 
     pub fn follow(&self, at: Leaf, path: &[u16]) -> Known<Vec<Leaf>> {

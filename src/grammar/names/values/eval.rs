@@ -34,6 +34,31 @@ pub(super) fn evaluate(values: &Values<'_>, at: Leaf, expression: &Value) -> Nod
     Run { values, tasks: vec![Task::Expression(at, expression)], answers: Vec::new() }.run()
 }
 
+pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Known<Vec<Leaf>> {
+    let mut fallbacks = Vec::new();
+    loop {
+        if !values.question.budget.step() { return Known::Unknown }
+        match expression {
+            Value::Either(left, right) => {
+                fallbacks.push(&**right);
+                expression = left;
+            }
+            Value::Path(path) => {
+                let answer = values.follow(at, path);
+                if matches!(&answer, Known::Yes(leaves) if leaves.is_empty()) {
+                    if let Some(right) = fallbacks.pop() {
+                        expression = right;
+                        continue;
+                    }
+                }
+                return answer;
+            }
+            Value::Spread { path, .. } => return values.follow(at, path),
+            _ => return Known::Unknown,
+        }
+    }
+}
+
 impl<'a, 'world> Run<'a, 'world> {
     fn run(mut self) -> NodeValue {
         while let Some(task) = self.tasks.pop() {
@@ -44,7 +69,10 @@ impl<'a, 'world> Run<'a, 'world> {
                 Task::Leaf(leaf) => self.leaf(leaf),
                 Task::Save(leaf) => {
                     if let Some(answer) = self.answers.last_mut() {
-                        answer.value = self.values.normalize(self.values.semantic.narrowing().refine(leaf, answer.value.clone()));
+                        answer.value = match self.values.question.budget.nest() {
+                            Some(_nested) => self.values.normalize(self.values.semantic.narrowing().refine(leaf, answer.value.clone())),
+                            None => NodeValue::Unknown,
+                        };
                         self.values.semantic.values.values.borrow_mut().insert(leaf, answer.value.clone());
                     }
                 }

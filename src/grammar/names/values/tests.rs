@@ -39,6 +39,7 @@ impl World for TestWorld {
         match condition {
             1 => semantic.values().fits(at, 0),
             2 => Known::Yes(matches!(at.target, Target::Scope(_))),
+            3 => Known::Yes(false),
             _ => Known::Unknown,
         }
     }
@@ -101,6 +102,111 @@ fn tables() -> Names {
     }
 }
 
+fn generic_world() -> (TestWorld, Names) {
+    let mut world = TestWorld::new();
+    world.tree = Tree::from_native(vec![
+        Node { matcher: 0, start: 0, end: 0, children: vec![Edge { label: 7, node: 1 }, Edge { label: 7, node: 2 }] },
+        Node { matcher: 1, start: 0, end: 0, children: Vec::new() },
+        Node { matcher: 1, start: 0, end: 0, children: Vec::new() },
+        Node { matcher: 2, start: 0, end: 0, children: Vec::new() },
+    ], 0);
+    let mut tables = tables();
+    tables.kinds[0].generics.push((vec![7], None));
+    (world, tables)
+}
+
+#[test]
+fn generic_slots_skip_unrelated_owners_and_keep_the_actual_value_frames() {
+    let (world, tables) = generic_world();
+    let question = QueryContext::default();
+    let actual = NodeValue::Alternatives(vec![vec![leaf(0), leaf(3)], vec![leaf(2)]]);
+    let owner = question.bind(FrameId::ROOT, NodeRef::here(0), None, Some(vec![NodeValue::Unknown, actual.clone()]));
+    let unrelated = question.bind(owner, NodeRef::here(3), None, Some(vec![NodeValue::never()]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.values().bound_argument(Leaf { frame: unrelated, ..leaf(2) }), Known::Yes(Some(actual)));
+    assert_eq!(semantic.values().bound_argument(Leaf {
+        target: Target::Node(NodeRef { file: 1, node: 2 }), frame: unrelated,
+    }), Known::Yes(None));
+}
+
+#[test]
+fn a_new_instantiation_never_steals_an_older_matching_owners_arguments() {
+    let (world, tables) = generic_world();
+    for args in [None, Some(Vec::new()), Some(vec![NodeValue::Unknown])] {
+        let question = QueryContext::default();
+        let outer = question.bind(FrameId::ROOT, NodeRef::here(0), None, Some(vec![NodeValue::leaf(leaf(3))]));
+        let expected = match &args {
+            Some(args) if !args.is_empty() => Known::Yes(Some(NodeValue::Unknown)),
+            _ => Known::Yes(None),
+        };
+        let inner = question.bind(outer, NodeRef::here(0), Some(NodeRef::here(3)), args);
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.values().bound_argument(Leaf { frame: inner, ..leaf(1) }), expected);
+    }
+}
+
+#[test]
+fn generic_slot_lookup_uses_the_shared_budget_and_conditional_owner_role() {
+    let (world, mut tables) = generic_world();
+    tables.kinds[0].generics[0].1 = Some(0);
+    let question = QueryContext::default();
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), None, Some(vec![NodeValue::never()]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.values().bound_argument(Leaf { frame, ..leaf(1) }), Known::Unknown);
+    tables.kinds[0].generics[0].1 = Some(3);
+    let question = QueryContext::default();
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), None, Some(vec![NodeValue::never()]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.values().bound_argument(Leaf { frame, ..leaf(1) }), Known::Yes(None));
+    let mut question = QueryContext::default();
+    question.budget = Budget::new(0);
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.values().bound_argument(leaf(1)), Known::Unknown);
+}
+
+#[test]
+fn raw_sites_do_not_expand_the_reached_declarations() {
+    let (world, mut tables) = generic_world();
+    tables.kinds[1].unwraps.push(super::super::Unwrapping {
+        value: Some(Value::Path(vec![8])), ..Default::default()
+    });
+    let question = QueryContext::default();
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(NodeRef::here(3)), None);
+    let semantic = Semantic::new(&world, &tables, &question);
+    let at = Leaf { frame, ..leaf(0) };
+    assert_eq!(semantic.values().sites(at, &Value::Path(vec![7])), Known::Yes(vec![
+        Leaf { frame, ..leaf(1) }, Leaf { frame, ..leaf(2) },
+    ]));
+}
+
+#[test]
+fn raw_sites_fallback_distinguishes_missing_paths_from_unknown_and_empty_spreads() {
+    let (mut world, tables) = generic_world();
+    world.attributes = vec![Known::Unknown];
+    for (left, expected) in [
+        (Value::Path(vec![8]), Known::Yes(vec![leaf(1), leaf(2)])),
+        (Value::Path(vec![super::super::ATTR_STEP]), Known::Unknown),
+        (Value::Spread { intersection: false, path: vec![8] }, Known::Yes(Vec::new())),
+    ] {
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.values().sites(leaf(0), &Value::Either(Box::new(left), Box::new(Value::Path(vec![7])))), expected);
+    }
+}
+
+#[test]
+fn value_refinement_respects_the_shared_engine_nesting_limit() {
+    let world = TestWorld::new();
+    let tables = tables();
+    let question = QueryContext::default();
+    let guards: Vec<_> = std::iter::from_fn(|| question.budget.nest()).collect();
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.values().values(leaf(0)), NodeValue::Unknown);
+    drop(guards);
+    let fresh = Semantic::new(&world, &tables, &question);
+    assert_eq!(fresh.values().values(leaf(0)), NodeValue::leaf(leaf(0)));
+}
+
 #[test]
 fn alternatives_require_every_branch_but_intersections_can_prove_a_trait() {
     let world = TestWorld::new();
@@ -149,8 +255,8 @@ fn unwrapping_a_list_keeps_its_union_alternatives() {
     ], 0);
     let mut tables = tables();
     tables.kinds[0].unwraps.push(super::super::Unwrapping {
-        effect: None, possible: false, value: Some(super::super::Value::Spread { intersection: false, path: vec![7] }),
-        nearest: 0, when: None,
+        value: Some(super::super::Value::Spread { intersection: false, path: vec![7] }),
+        ..Default::default()
     });
     let question = QueryContext::default();
     let semantic = Semantic::new(&world, &tables, &question);
@@ -166,8 +272,8 @@ fn cyclic_unwrapping_returns_unknown_instead_of_a_partly_resolved_leaf() {
     ], 0);
     let mut tables = tables();
     tables.kinds[0].unwraps.push(super::super::Unwrapping {
-        effect: None, possible: false, value: Some(super::super::Value::Path(Vec::new())),
-        nearest: 0, when: None,
+        value: Some(super::super::Value::Path(Vec::new())),
+        ..Default::default()
     });
     let question = QueryContext::default();
     assert_eq!(Semantic::new(&world, &tables, &question).values().values(leaf(0)), NodeValue::Unknown);
@@ -250,9 +356,8 @@ fn intersections_of_exclusive_domains_are_never() {
     tables.exclusive = vec![1 | 2];
     tables.kinds.push(KindNames {
         unwraps: vec![super::super::Unwrapping {
-            effect: None, possible: false,
             value: Some(Value::Intersection(vec![Value::Path(vec![7]), Value::Path(vec![8])])),
-            nearest: 0, when: None,
+            ..Default::default()
         }],
         ..KindNames::default()
     });
