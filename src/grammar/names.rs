@@ -552,6 +552,7 @@ impl Names {
                 errors.push(ConfigError::new(name.span, format!("{what} `{}`", name.text)).suggest(&name.text, list.iter().map(String::as_str)));
             }
         }
+        names.exclusive = values::exclusive_groups(config, &mut vocab, &names.kinds, errors);
         names.vocabulary = std::sync::Arc::new(vocab);
         names
     }

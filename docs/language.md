@@ -707,6 +707,8 @@ or backreferences there): `re_test(text, re)`, `re_find(text, re)` (first
 match or `null`), `re_count(text, re)`, `re_replace(text, re, with)` (`$1`
 for groups) and `re_escape(text)` to build patterns from text.
 
+If an expression has several independent failures, evaluation reports one real cause; which cause is reported is unspecified.
+
 ## Debugging rules
 
 - **`zlint describe <name>`** explains any name in the config: a rule (final
