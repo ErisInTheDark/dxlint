@@ -919,6 +919,18 @@ impl<'h, H: Host> Session<'h, H> {
         held
     }
 
+    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by keyed name operands"))]
+    pub fn value_on(&self, node: u32, e: &VExpr, item: Option<u32>) -> Option<Value<'static>> {
+        if let Some(vm) = self.runtime.host.file_vm() { vm.clear_error(); }
+        let mut frame = self.frame.take();
+        frame.clear();
+        frame.extend(item.map(V::Node));
+        let value = ev(&self.runtime, node, e, &mut frame).map(|value| self.runtime.unpack(value).into_owned());
+        self.frame.replace(frame);
+        self.runtime.scratch.borrow_mut().clear();
+        value
+    }
+
     /// `e`'s value on the rule's node.
     pub fn value(&self, e: &VExpr, item: Option<V>) -> Option<Value<'_>> {
         let v = self.run(e, item)?;
@@ -2021,6 +2033,7 @@ mod tests {
         let lowered = lower(&children, &[], &mut host.values);
         assert_eq!(eval(&host, 4, &lowered).map(|v| v.value), Some(V::Num(2.0)), "children keep nested lists");
         let fallback = CExpr::Binary(BinOp::Rem, Box::new(num(1.0)), Box::new(num(0.0)));
+        let invalid = lower(&fallback, &[], &mut host.values);
         let field_else = lower(&CExpr::FieldElse(0, Box::new(fallback)), &[], &mut host.values);
         for (node, expected) in [
             (1, Value::from("x")),
@@ -2046,7 +2059,14 @@ mod tests {
         let view = values::View { config: &host.values, scratch: &scratch, file: &persistent };
         let V::Record(shape, handle) = escaped else { panic!("record"); };
         assert_eq!(view.key(shape, handle, "size"), V::Num(3.0));
+        let owned_list = lower(&CExpr::List(vec![CExpr::Builtin(Builtin::Text)]), &[], &mut host.values);
+        let target = lower_condition(&CExpr::List(vec![CExpr::Builtin(Builtin::Text), CExpr::Param(0)]), &[], &[], &mut host.values, true);
         let session = Session::new(&host, 0, &[]);
+        assert_eq!(session.value_on(0, &target, Some(5)), Some(Value::list(vec![Value::from("x"), Value::Node(5, "".into())])));
+        let first = session.value_on(0, &owned_list, None).expect("owned result");
+        assert_eq!(session.value_on(0, &invalid, None), None);
+        assert_eq!(session.value_on(5, &owned_list, None), Some(Value::list(vec![Value::from("")])));
+        assert_eq!(first, Value::list(vec![Value::from("x")]));
         let enabled = VExpr::Key(Box::new(VExpr::Bound(0)), "enabled".into());
         let context = |enabled| Value::record(vec![
             ("enabled".into(), Value::Bool(enabled)),
