@@ -1,0 +1,3 @@
+import .ts
+import .ts/typed/strict-void-return
+rule strict-void-return { set allowReturnAny true }

@@ -1,0 +1,18 @@
+declare function consume(cb: () => void): void;
+declare const bad: () => number;
+consume(bad);
+consume(() => 1);
+consume(async () => {});
+consume(function () { return 1; });
+consume(() => undefined);
+consume(() => { throw new Error(); });
+declare const arbitrary: () => any;
+consume(arbitrary);
+declare function choose(cb: () => void): void;
+declare function choose(cb: () => number): void;
+choose(() => 1);
+declare function permissive(cb: (() => void) | (() => any)): void;
+permissive(bad);
+consume(() => { function nested() { return 1; } });
+declare function pure<Cb extends (...args: any[]) => void>(cb: Cb): void;
+pure(() => 1);

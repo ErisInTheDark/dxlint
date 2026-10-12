@@ -5,12 +5,14 @@ use std::sync::Arc;
 #[cfg(test)]
 thread_local! {
     static CONTEXTUAL_RETURN_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DECLARED_TARGET_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 struct Contract {
     origin: &'static str,
     sender: Ty,
     receiver: Ty,
+    declared_receiver: Option<Ty>,
     heritage: Option<u32>,
     path: Vec<String>,
 }
@@ -28,14 +30,25 @@ pub(super) fn contracts(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let source = args.get(1).and_then(node_id).unwrap_or(node);
     let path: Vec<_> = args.get(2).map(|value| value.items().iter().map(ToString::to_string).collect()).unwrap_or_default();
     let arguments = file.argument_contract_types(source);
+    let requested = |name| args.get(3).is_some_and(|fields|
+        fields.items().iter().any(|field| matches!(field, Value::Str(field) if field.as_ref() == name)));
+    let argument_source = arguments.is_some();
+    let declared = (requested("declared_target") && argument_source).then(|| {
+        #[cfg(test)]
+        DECLARED_TARGET_QUERIES.with(|count| count.set(count.get() + 1));
+        file.declared_argument_contract_types(source)
+    });
     let mut projection = Projection { remaining: 4096, complete: !matches!(&arguments, Some(Err(()))), rows: Vec::new() };
     if let Some(Ok(pairs)) = arguments {
-        for (sender, receiver) in pairs {
-            projection.at_path(file, Contract { origin: "argument", sender, receiver, heritage: None, path: Vec::new() }, &path);
+        let targets = declared.as_ref().and_then(|answer| answer.as_ref()).and_then(|answer| answer.as_ref().ok())
+            .filter(|targets| targets.len() == pairs.len() && targets.iter().zip(&pairs).all(|((left, _), (right, _))| left.same_identity(right)));
+        for (index, (sender, receiver)) in pairs.into_iter().enumerate() {
+            let declared_receiver = targets.and_then(|targets| targets.get(index)).map(|(_, receiver)| receiver.clone());
+            projection.at_path(file, Contract { origin: "argument", sender, receiver, declared_receiver, heritage: None, path: Vec::new() }, &path);
         }
     } else if let Some(pairs) = file.return_types(source) {
         for (sender, receiver) in pairs {
-            projection.at_path(file, Contract { origin: "return", sender, receiver, heritage: None, path: Vec::new() }, &path);
+            projection.at_path(file, Contract { origin: "return", sender, receiver, declared_receiver: None, heritage: None, path: Vec::new() }, &path);
         }
     } else {
         let sender = source_type(file, source);
@@ -43,33 +56,38 @@ pub(super) fn contracts(file: &NativeFile<'_>, node: u32) -> Value<'static> {
         if matches!(file.syntax.kind(site), Some(Kind::Method | Kind::Prop)) {
             if let Some(member) = file.object_member_contract(site) { receiver = member }
         }
-        projection.at_path(file, Contract { origin, sender: sender.clone(), receiver, heritage: None, path: Vec::new() }, &path);
+        projection.at_path(file, Contract { origin, sender: sender.clone(), receiver, declared_receiver: None, heritage: None, path: Vec::new() }, &path);
         if file.syntax.is(site, Kind::Declarator) {
             let kind = file.syntax.parent(site).and_then(|owner| file.syntax.word(owner, Field::Kind));
             if matches!(kind, Some("using" | "await using")) {
                 let receiver = file.typing().checker.global_named("Disposable", Vec::new());
-                projection.at_path(file, Contract { origin: "resource", sender: sender.clone(), receiver, heritage: None, path: Vec::new() }, &path);
+                projection.at_path(file, Contract { origin: "resource", sender: sender.clone(), receiver, declared_receiver: None, heritage: None, path: Vec::new() }, &path);
             }
         }
         if matches!(file.syntax.kind(site), Some(Kind::Method | Kind::MethodSig | Kind::ClassProp | Kind::PropSig)) {
             for (heritage, receiver) in file.inherited_contracts(site) {
-                projection.at_path(file, Contract { origin: "heritage", sender: sender.clone(), receiver, heritage: Some(heritage), path: Vec::new() }, &path);
+                projection.at_path(file, Contract { origin: "heritage", sender: sender.clone(), receiver, declared_receiver: None, heritage: Some(heritage), path: Vec::new() }, &path);
             }
         }
     }
-    let contextual = (!projection.rows.is_empty() && args.get(3).is_some_and(|fields|
-        fields.items().iter().any(|field| matches!(field, Value::Str(name) if name.as_ref() == "contextual_returns"))))
+    let contextual = (!projection.rows.is_empty() && requested("contextual_returns"))
         .then(|| contextual_returns(file, source, &path));
     Value::list(projection.rows.into_iter().map(|contract| {
+        let target = returns(file, &contract.receiver);
+        let declared_target = requested("declared_target").then(|| if argument_source {
+            contract.declared_receiver.as_ref().and_then(|receiver| file.typing().checker.call_signature_returns(receiver))
+                .map_or(Value::Null, |types| return_values(file, types))
+        } else if contract.receiver.is_opaque() { Value::Null } else { target.clone() });
         let mut row = vec![
             ("origin".into(), Value::from(contract.origin)),
             ("source".into(), returns(file, &contract.sender)),
-            ("target".into(), returns(file, &contract.receiver)),
+            ("target".into(), target),
             ("heritage".into(), contract.heritage.map_or(Value::Null, |node| Value::Node(node, file.syntax.text(node).to_owned().into()))),
             ("member_path".into(), Value::list(contract.path.into_iter().map(Value::from).collect())),
             ("complete".into(), Value::Bool(projection.complete)),
         ];
         if let Some(contextual) = &contextual { row.push(("contextual_returns".into(), contextual.clone())); }
+        if let Some(declared_target) = declared_target { row.push(("declared_target".into(), declared_target)); }
         Value::record(row)
     }).collect())
 }
@@ -94,6 +112,8 @@ impl Projection {
         let checker = &file.typing().checker;
         for name in path {
             if !file.member_keys_match(&contract.sender, &contract.receiver, name, true) { return }
+            contract.declared_receiver = contract.declared_receiver.take().and_then(|receiver|
+                file.member_keys_match(&contract.sender, &receiver, name, true).then(|| checker.member(&receiver, name)));
             contract.sender = checker.member(&contract.sender, name);
             contract.receiver = checker.member(&contract.receiver, name);
             contract.path.push(name.clone());
@@ -120,6 +140,10 @@ fn source_type(file: &NativeFile<'_>, source: u32) -> Ty {
 }
 
 fn returns(file: &NativeFile<'_>, ty: &Ty) -> Value<'static> {
+    return_values(file, file.callable_return_types(ty))
+}
+
+fn return_values(file: &NativeFile<'_>, types: Vec<Ty>) -> Value<'static> {
     fn arms(file: &NativeFile<'_>, ty: &Ty, values: &mut Vec<Value<'static>>) {
         if let Ty::Union(parts) | Ty::Inter(parts) = ty {
             for part in parts { arms(file, part, values) }
@@ -142,7 +166,7 @@ fn returns(file: &NativeFile<'_>, ty: &Ty) -> Value<'static> {
         ]));
     }
     let mut values = Vec::new();
-    for ty in file.callable_return_types(ty) { arms(file, &ty, &mut values) }
+    for ty in types { arms(file, &ty, &mut values) }
     Value::list(values)
 }
 
@@ -156,6 +180,76 @@ mod tests {
         let mut args = vec![value.clone(), value, Value::list(Vec::new())];
         if requested { args.push(Value::list(vec![Value::from("contextual_returns")])); }
         crate::expr::facts::with_args(args, || super::contracts(file, node))
+    }
+
+    fn declared(file: &NativeFile<'_>, node: u32, path: &[&str]) -> Value<'static> {
+        let value = Value::Node(node, file.syntax.text(node).to_owned().into());
+        crate::expr::facts::with_args(vec![
+            value.clone(), value,
+            Value::list(path.iter().map(|name| Value::from((*name).to_owned())).collect()),
+            Value::list(vec![Value::from("declared_target")]),
+        ], || super::contracts(file, node))
+    }
+
+    #[test]
+    fn declared_targets_keep_callback_bounds_separate_from_inference_and_default_work() {
+        with_native_file("declare function accept<Cb extends () => void>(cb: Cb): void; accept(/*@*/() => 1);", |file, marks| {
+            DECLARED_TARGET_QUERIES.with(|count| count.set(0));
+            let legacy = project(file, marks[0], false);
+            assert_eq!(DECLARED_TARGET_QUERIES.with(|count| count.get()), 0);
+            assert_eq!(legacy.items()[0].key("target").items()[0].key("kind"), Value::from("number"));
+            let result = declared(file, marks[0], &[]);
+            let target = result.items()[0].key("declared_target");
+            assert_eq!(target.items().len(), 1, "callback declaration bound was lost to argument inference");
+            assert_eq!(target.items()[0].key("kind"), Value::from("void"));
+            assert_eq!(DECLARED_TARGET_QUERIES.with(|count| count.get()), 1);
+            let stripped = Value::list(result.items().iter().map(|row| {
+                let Value::Record(entries) = row else { panic!("expected a contract") };
+                Value::record(entries.iter().filter(|(key, _)| key.as_ref() != "declared_target").cloned().collect::<Vec<_>>())
+            }).collect());
+            assert_eq!(stripped, legacy, "declaration projection changed inferred contracts");
+            assert_eq!(project(file, marks[0], false), legacy);
+            assert_eq!(DECLARED_TARGET_QUERIES.with(|count| count.get()), 1, "default caller queried declarations");
+        });
+    }
+
+    #[test]
+    fn declared_targets_preserve_overloads_constructors_rest_and_selected_members() {
+        for (source, path, expected) in [
+            ("declare function accept(cb: () => void): void; declare function accept(cb: () => number): void; accept(/*@*/() => 1);", &[][..], &["void", "number"][..]),
+            ("declare class Holder { constructor(cb: () => void) } new Holder(/*@*/() => 1);", &[][..], &["void"][..]),
+            ("declare class Holder<Cb extends () => void> { constructor(cb: Cb) } new Holder(/*@*/() => 1);", &[][..], &["void"][..]),
+            ("declare class Holder<Cb extends () => void> { constructor(cb: Cb) } new Holder<() => number>(/*@*/() => 1);", &[][..], &["number"][..]),
+            ("declare function accept<Cb extends () => void>(cb: Cb): void; accept<() => number>(/*@*/() => 1);", &[][..], &["number"][..]),
+            ("declare function accept<T extends void>(...cb: (() => T)[]): void; accept(() => {}, /*@*/() => 1);", &[][..], &["void"][..]),
+            ("declare function accept(...cb: [() => number, () => void]): void; accept(() => 1, /*@*/() => 1);", &[][..], &["void"][..]),
+            ("declare function accept<T extends void>(object: {callback: () => T}): void; accept(/*@*/{callback: () => 1});", &["callback"][..], &["void"][..]),
+            ("const callback: () => void = /*@*/() => 1;", &[][..], &["void"][..]),
+        ] {
+            with_native_file(source, |file, marks| {
+                let result = declared(file, marks[0], path);
+                assert_eq!(result.items().len(), 1, "{source}");
+                let target = result.items()[0].key("declared_target");
+                let kinds: Vec<_> = target.items().iter().map(|part| part.key("kind").to_string()).collect();
+                assert_eq!(kinds, expected, "{source}");
+            });
+        }
+    }
+
+    #[test]
+    fn declared_targets_do_not_turn_unavailable_or_bounded_out_contracts_into_empty_proofs() {
+        let mut bounded = "interface Context { (cb: () => void): void;".to_owned();
+        for index in 0..=Checker::CONTRACT_WORK_LIMIT {
+            bounded.push_str(&format!(" property{index}: number;"));
+        }
+        bounded.push_str(" } declare const accept: Context; accept(/*@*/() => 1);");
+        for source in ["declare const accept: Unknown; accept(/*@*/() => 1);", bounded.as_str()] {
+            with_native_file(source, |file, marks| {
+                let result = declared(file, marks[0], &[]);
+                assert!(!result.items().is_empty(), "{source}");
+                assert_eq!(result.items()[0].key("declared_target"), Value::Null);
+            });
+        }
     }
 
     #[test]

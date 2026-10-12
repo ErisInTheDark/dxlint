@@ -13,12 +13,15 @@ struct PositionWork(Cell<usize>);
 
 type Transfers = HashMap<u32, Vec<(Ty, Ty)>>;
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ContractView { Inferred, Declared }
+
 #[derive(Default)]
 struct Contexts {
     types: RefCell<HashMap<(u32, bool), Ty>>,
     arrays: RefCell<HashMap<u32, HashMap<u32, Option<usize>>>>,
     calls: RefCell<HashMap<u32, Transfers>>,
-    contracts: RefCell<HashMap<u32, Option<Transfers>>>,
+    contracts: RefCell<HashMap<(u32, ContractView), Option<Transfers>>>,
 }
 
 impl NativeFile<'_> {
@@ -263,6 +266,15 @@ impl NativeFile<'_> {
 
     /// All callable parameter contracts at a position, without choosing an overload.
     pub fn argument_contract_types(&self, value: u32) -> Option<Result<Vec<(Ty, Ty)>, ()>> {
+        self.argument_contract_types_at(value, ContractView::Inferred)
+    }
+
+    /// The same transfer positions before inferring from supplied arguments.
+    pub fn declared_argument_contract_types(&self, value: u32) -> Option<Result<Vec<(Ty, Ty)>, ()>> {
+        self.argument_contract_types_at(value, ContractView::Declared)
+    }
+
+    fn argument_contract_types_at(&self, value: u32, view: ContractView) -> Option<Result<Vec<(Ty, Ty)>, ()>> {
         let s = &self.syntax;
         let owner = s.parent(value)?;
         let (call, tagged) = if s.field(value) == Some(F::Arg) && matches!(s.kind(owner), Some(K::Call | K::New)) {
@@ -273,14 +285,20 @@ impl NativeFile<'_> {
             (call, true)
         } else { return None };
         let contexts = self.cached(|_| Contexts::default());
-        if let Some(transfers) = contexts.contracts.borrow().get(&call) {
+        if let Some(transfers) = contexts.contracts.borrow().get(&(call, view)) {
             return Some(transfers.as_ref().map(|pairs| pairs.get(&value).cloned().unwrap_or_default()).ok_or(()));
         }
         let args: Vec<_> = if tagged { s.all(owner, F::Expr).collect() } else { s.all(call, F::Arg).collect() };
         let callee = s.get(call, if tagged { F::Tag } else { F::Callee })?;
-        let actuals: Vec<_> = args.iter().map(|&argument| self.type_of(argument)).collect();
-        let Some(candidates) = self.ck().argument_contract_parameters(&self.type_of(callee), &actuals, self.type_args(call), s.is(call, K::New)) else {
-            contexts.contracts.borrow_mut().insert(call, None);
+        let candidates = match view {
+            ContractView::Inferred => {
+                let actuals: Vec<_> = args.iter().map(|&argument| self.type_of(argument)).collect();
+                self.ck().argument_contract_parameters(&self.type_of(callee), &actuals, self.type_args(call), s.is(call, K::New))
+            }
+            ContractView::Declared => self.ck().declared_argument_contract_parameters(&self.type_of(callee), self.type_args(call), s.is(call, K::New)),
+        };
+        let Some(candidates) = candidates else {
+            contexts.contracts.borrow_mut().insert((call, view), None);
             return Some(Err(()));
         };
         let mut receivers: HashMap<u32, Vec<(Ty, Vec<Ty>)>> = HashMap::new();
@@ -302,7 +320,7 @@ impl NativeFile<'_> {
             argument, pairs.into_iter().map(|(sender, receivers)| (sender, Ty::union(receivers))).collect(),
         )).collect();
         let result = transfers.get(&value).cloned().unwrap_or_default();
-        contexts.contracts.borrow_mut().insert(call, Some(transfers));
+        contexts.contracts.borrow_mut().insert((call, view), Some(transfers));
         Some(Ok(result))
     }
 
@@ -391,8 +409,6 @@ mod tests {
 
     #[test]
     fn intrinsic_jsx_callbacks_use_declared_props_without_value_binding_fallback() {
-        use crate::engine::tests::native_front;
-        use crate::grammar::Tree;
         use crate::native::ts::{facts::NativeFile, kinds::Kind, modules::Project, summary::TypeSyn, syntax::Syntax};
         let source = r#"
 declare namespace JSX {
@@ -405,11 +421,11 @@ const b = <X-widget onClick={() => 1} />;
 const c = <Component onClick={() => 1} />;
 const d = <missing onClick={() => 1} />;
 "#;
-        let front = native_front();
-        let parsed = crate::native::ts::parse(source, true).expect("JSX parses");
-        let tree = Tree::from_native(parsed.nodes, parsed.root);
+        let path = std::path::Path::new("/root/a.tsx");
+        let (tree, front) = crate::engine::tests::ts_tree(source, path);
         let project = Project::default();
-        let file = NativeFile::new(Syntax::new(&tree, source, &front), std::path::Path::new("/root/a.tsx"), &project);
+        let file = NativeFile::new(Syntax::new(&tree, source, front), path, &project);
+        crate::engine::tests::give_names(&file, &tree, source);
         let callbacks: Vec<_> = tree.order.iter().copied().filter(|&node| file.syntax.is(node, Kind::Arrow)).collect();
         assert_eq!(callbacks.len(), 4);
         let checker = &file.typing().checker;

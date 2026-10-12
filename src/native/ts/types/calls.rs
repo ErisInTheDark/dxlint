@@ -20,6 +20,7 @@ struct ContractQuery {
 enum ContractParameters {
     Inferred,
     Declared { constrained: bool },
+    BoundReceivers,
 }
 
 impl ContractQuery {
@@ -506,6 +507,12 @@ impl Checker<'_> {
         self.contract_parameters_at(callee, args, targs, construct, 0, &mut query)
     }
 
+    /// Declared receivers with open parameters at their bounds, without argument inference.
+    pub fn declared_argument_contract_parameters(&self, callee: &Ty, targs: Vec<Ty>, construct: bool) -> Option<Vec<(Vec<Ty>, bool)>> {
+        let mut query = ContractQuery::new(ContractParameters::BoundReceivers);
+        self.contract_parameters_at(callee, &[], targs, construct, 0, &mut query)
+    }
+
     /// All visible call signatures, without inferring from call arguments.
     pub fn call_signature_parameters(&self, ty: &Ty, constrained: bool) -> Option<Vec<(Vec<Ty>, bool)>> {
         let mut query = ContractQuery::new(ContractParameters::Declared { constrained });
@@ -596,7 +603,12 @@ impl Checker<'_> {
                     let declaration = &summary.decls[reference.decl as usize];
                     query.take(declaration.members.len() + declaration.type_params.len())?;
                     let mut env = self.decl_env(reference);
-                    env.tparams = self.bind_tparams(&declaration.type_params, actuals.clone(), &env);
+                    match query.parameters {
+                        ContractParameters::Inferred | ContractParameters::Declared { .. } =>
+                            env.tparams = self.bind_tparams(&declaration.type_params, actuals.clone(), &env),
+                        ContractParameters::BoundReceivers =>
+                            self.context_parameters(&declaration.type_params, actuals.clone(), true, &mut env),
+                    }
                     let signatures = declaration.members.iter().filter(|member| member.kind == kind)
                         .flat_map(|member| member.sigs.iter().cloned()).collect();
                     for base in self.bases(declaration) {
@@ -612,7 +624,12 @@ impl Checker<'_> {
                 let summary = self.summary_of(reference.file)?;
                 let declaration = &summary.decls[reference.decl as usize];
                 let mut env = self.decl_env(reference);
-                env.tparams = self.bind_tparams(&declaration.type_params, targs, &env);
+                match query.parameters {
+                    ContractParameters::Inferred | ContractParameters::Declared { .. } =>
+                        env.tparams = self.bind_tparams(&declaration.type_params, targs, &env),
+                    ContractParameters::BoundReceivers =>
+                        self.context_parameters(&declaration.type_params, targs, true, &mut env),
+                }
                 self.parameter_contract_groups(vec![super::Callable::new(declaration.sigs.clone(), Arc::new(env), None).sigs], args, Vec::new(), query)
             }
             Ty::Fn(callable) if !construct =>
@@ -645,6 +662,8 @@ impl Checker<'_> {
                     }
                     ContractParameters::Declared { constrained } =>
                         self.context_parameter_types(signature, (*bound.env).clone(), targs.clone(), constrained),
+                    ContractParameters::BoundReceivers =>
+                        self.context_parameter_types(signature, (*bound.env).clone(), targs.clone(), true),
                 });
             }
         }
@@ -913,12 +932,11 @@ mod tests {
         for ((_, text), path) in inputs.iter().zip(&buffers.0) {
             crate::native::ts::reads::set_buffer(path, text);
         }
-        let front = crate::engine::tests::native_front();
-        let parsed = crate::native::ts::parse(source, false).expect("parses");
-        let tree = crate::grammar::Tree::from_native(parsed.nodes, parsed.root);
-        let project = crate::native::ts::modules::Project::default();
         let path = dir.join("main.ts");
-        let file = NativeFile::new(crate::native::ts::syntax::Syntax::new(&tree, source, &front), &path, &project);
+        let (tree, front) = crate::engine::tests::ts_tree(source, &path);
+        let project = crate::native::ts::modules::Project::default();
+        let file = NativeFile::new(crate::native::ts::syntax::Syntax::new(&tree, source, front), &path, &project);
+        crate::engine::tests::give_names(&file, &tree, source);
         let calls = tree.order.iter().copied().filter(|&node| file.syntax.is(node, crate::native::ts::kinds::Kind::Call)).collect::<Vec<_>>();
         let checker = &file.typing().checker;
         assert!(checker.is_thenable(&checker.global_named("Promise", vec![Ty::Prim("number")])));
