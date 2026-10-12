@@ -72,6 +72,11 @@ pub enum Value {
     Excludes { traits: u64, from: Option<Box<Value>> },
     Includes { value: Box<Value>, from: Option<Box<Value>> },
     Has { key: Box<Value>, from: Option<Box<Value>> },
+    /// A positional key: a type argument or tuple slot.
+    Ordinal(u32),
+    /// A global declaration of these classes, instantiated with these
+    /// arguments by position.
+    Instance { name: Box<str>, classes: u64, arguments: Vec<Value> },
 }
 
 /// One `unwraps` item: what the node stands for (no effect), or what
@@ -248,6 +253,12 @@ fn lower_value(v: &crate::config::ast::Unwrap, path: &PathOf<'_>, vocab: &mut Vo
                 None => None,
             };
             if matches!(v, U::Includes { .. }) { Value::Includes { value, from } } else { Value::Has { key: value, from } }
+        }
+        U::Ordinal(n) => Value::Ordinal(*n),
+        U::Instance { name, class, arguments } => {
+            let classes = class_bits(&mut traits.declaration_classes, std::slice::from_ref(class), errors)?;
+            let arguments = arguments.iter().map(|a| lower(a, traits, errors)).collect::<Option<_>>()?;
+            Value::Instance { name: name.text.as_str().into(), classes, arguments }
         }
     })
 }

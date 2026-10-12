@@ -224,6 +224,12 @@ pub enum Unwrap {
     /// `has key [from x]`: under `truthy`, `x` is one of its alternatives
     /// with that member (`"key" in x`).
     Has { key: Box<Unwrap>, from: Option<Box<Unwrap>> },
+    /// A positional key (`at 0`): a type argument or tuple slot.
+    Ordinal(u32),
+    /// `instance "<global>" [in <class>] [of v, ...]`: the global
+    /// declaration of that class (default `type`) instantiated with these
+    /// arguments by position (`instance "Promise" of returned`).
+    Instance { name: Name, class: Name, arguments: Vec<Unwrap> },
 }
 
 /// A rule's `indent X by n` / `indent in X by n`: the indentation structure

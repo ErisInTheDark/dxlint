@@ -123,7 +123,7 @@ impl<'a, 'world> Run<'a, 'world> {
             }
             // Member, scope and truth questions have their own owners.
             Value::Text(_) | Value::From(..) | Value::Scope { .. } | Value::Not(_) | Value::Excludes { .. }
-                | Value::Includes { .. } | Value::Has { .. } => self.answers.push(Answer::unknown()),
+                | Value::Includes { .. } | Value::Has { .. } | Value::Ordinal(_) | Value::Instance { .. } => self.answers.push(Answer::unknown()),
         }
     }
 
