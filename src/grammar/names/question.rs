@@ -40,18 +40,43 @@ impl<T> Known<T> {
 /// One question's work budget: every step (an unwrap, a lookup, a graph
 /// edge) spends one unit; when it is gone the question's answer is
 /// [`Known::Unknown`]. One owner: questions never nest budgets, a nested
-/// step spends from the same one.
+/// step spends from the same one. It also bounds how deeply engines call
+/// into each other ([`Budget::nest`]), so a long chain of results through
+/// distinct frames ends in unknown instead of exhausting the Rust stack.
 pub struct Budget {
     left: Cell<u32>,
+    depth: Cell<u32>,
+}
+
+/// Holds one level of [`Budget::nest`]; leaving it returns the level.
+pub struct Nested<'b>(&'b Cell<u32>);
+
+impl Drop for Nested<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
 }
 
 impl Budget {
     /// The work one question may do. Generous for real code; it exists to
     /// stop cycles and pathological types, not to tune results.
     pub const DEFAULT: u32 = 100_000;
+    /// How deeply engines may call into each other in one question.
+    pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
-        Budget { left: Cell::new(units) }
+        Budget { left: Cell::new(units), depth: Cell::new(0) }
+    }
+
+    /// Enters one more level of engine-to-engine calls; `None` (answer
+    /// unknown) past [`Budget::DEPTH`]. Engines call it where they recurse
+    /// into another engine's question, never per step.
+    pub fn nest(&self) -> Option<Nested<'_>> {
+        let depth = self.depth.get();
+        (depth < Self::DEPTH).then(|| {
+            self.depth.set(depth + 1);
+            Nested(&self.depth)
+        })
     }
 
     /// Spends one unit; `false` when the budget is gone.
