@@ -141,19 +141,40 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         // A function's node parameters can hold tokens of any kind.
         function_reads[i] = ReadDependencies::collect(&grammar, &attr_names, function_uses, layer_reads.into_inner(), children || siblings);
     }
+    let mut name_reads = ReadDependencies::default();
+    for def in &config.names {
+        for name in &def.targets {
+            if let Some((targets, _)) = resolve_target(&AstTarget::Matcher(name.clone()), &grammar, &mut Vec::new()) {
+                name_reads.layers.extend(targets.into_iter().filter_map(|target| match target { Target::Matcher(layer) => Some(layer), _ => None }));
+            }
+        }
+    }
     for condition in &grammar.names.conditions {
         let Some(when) = &config.names[condition.item].when else { continue };
-        let scope = Scope { fields: target_fields(&grammar, Target::Matcher(condition.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
+        let layers = RefCell::default();
+        let before = uses.borrow().len();
+        let scope = Scope { uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(condition.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
         if let Some(e) = scope.compile(when, &mut errors) {
             let _ = condition.expr.set(e);
         }
+        let recorded = uses.borrow();
+        let recorded = &recorded[before..];
+        let (children, siblings) = reads_neighbours(recorded);
+        name_reads.extend(ReadDependencies::collect(&grammar, &attr_names, recorded, layers.into_inner(), children || siblings));
     }
     for operand in &grammar.names.operands {
-        let Some(source) = config.names.get(operand.item).and_then(|def| def.item.operand(operand.part)) else { continue };
-        let scope = Scope { fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
+        let Some(source) = config.operand(operand.of, operand.part) else { continue };
+        let layers = RefCell::default();
+        let before = uses.borrow().len();
+        let params = if matches!(operand.of, crate::config::ast::OperandOf::Mode { .. }) { vec!["resolution".to_owned()] } else { Vec::new() };
+        let scope = Scope { params, uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
         if let Some(e) = scope.compile(source, &mut errors) {
             let _ = operand.expr.set(e);
         }
+        let recorded = uses.borrow();
+        let recorded = &recorded[before..];
+        let (children, siblings) = reads_neighbours(recorded);
+        name_reads.extend(ReadDependencies::collect(&grammar, &attr_names, recorded, layers.into_inner(), children || siblings));
     }
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
     helper_reads.extend(function_reads);
@@ -161,6 +182,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     for &(matcher, attr, _) in &forwards {
         helper_reads[attr as usize].requires_native |= is_native_layer(&grammar, matcher);
     }
+    let unit_reads = name_reads.resolve(&helper_reads);
     let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &schemas, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -293,9 +315,17 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         }
     }
     let attrs = Attributes::new(attrs, &forwards, &grammar);
+    let reach = grammar.reach();
+    let unit_overlays = reach.iter().map(|reachable| unit_reads.layers.iter().any(|&layer| reachable[layer as usize])).collect();
     let mut linter = Linter {
+        units: Default::default(),
+        discoveries: Default::default(),
+        unit_overlays,
+        unit_tokens: unit_reads.all_tokens || unit_reads.own_tokens || unit_reads.layers.iter().any(|&layer| {
+            grammar.native_kind(layer).is_some_and(|kind| kind.is_token()) || grammar.native_hosts[layer as usize].iter().any(|&host| grammar.native_kind(host).is_some_and(|kind| kind.is_token()))
+        }),
         projects: super::frontend::Projects::new(&grammar.natives),
-        reach: grammar.reach(),
+        reach,
         profile: None,
         split_at: 128 * 1024,
         rule_jobs: std::thread::available_parallelism().map_or(1, |n| n.get()),

@@ -1,6 +1,8 @@
 //! The linter: a compiled grammar plus rules, run over files.
 
 mod build;
+mod arena;
+mod units;
 pub mod cache;
 pub mod diagnostic;
 mod fix;
@@ -184,6 +186,10 @@ pub struct InertRule {
 }
 
 pub struct Linter {
+    units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
+    discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
+    unit_overlays: Vec<bool>,
+    unit_tokens: bool,
     pub grammar: Grammar,
     language_options: language_options::LanguageOptions,
     pub rules: Vec<Rule>,
@@ -259,10 +265,11 @@ impl Linter {
         }
         for operand in &self.grammar.names.operands {
             if let Some(e) = operand.expr.get() {
-                let body = crate::vm::lower(e, functions, values);
+                let mode = matches!(operand.of, crate::config::ast::OperandOf::Mode { .. });
+                let body = crate::vm::lower_condition(e, functions, &[], values, mode);
                 let failed = values.take_lowering_errors("item expression");
                 if failed.is_empty() { let _ = operand.lowered.set(body); }
-                let span = config.names[operand.item].item.operand(operand.part).expect("compiled item expression").span;
+                let span = config.operand(operand.of, operand.part).expect("compiled item expression").span;
                 errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
@@ -367,17 +374,24 @@ impl Linter {
     }
 
     pub fn holds(&self, dep: &Dep) -> bool {
-        self.projects.holds(dep)
+        match dep {
+            Dep::Summary(..) => self.projects.holds(dep),
+            _ => dep.holds(|_| reads::MISSING),
+        }
     }
 
     /// Forgets what the `changed` files said (see `Project::invalidate`);
     /// [`Linter::is_stale`] then tells which recorded deps they broke.
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
+        self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
+        self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
         self.projects.invalidate(changed)
     }
 
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        self.projects.is_stale(stale, reads)
+        self.projects.is_stale(stale, reads) || reads.any(&mut |dep| {
+            !matches!(dep, Dep::Summary(..)) && stale.changed.iter().any(|path| dep.touches(path)) && !self.holds(dep)
+        })
     }
 
     /// One parsed file's native facts, from front end `front`.
@@ -469,10 +483,9 @@ impl Linter {
                 }
             }
         }
-        let wants_tokens = token_kinds.iter().any(|&k| k);
         let lines = LineIndex::new(text);
         let file = rel.to_string_lossy().replace('\\', "/");
-        let run = Run { lang, text, lines: &lines, file: &file, active: &active };
+        let run = Run { path, lang, text, lines: &lines, file: &file, active: &active };
         let mut out = Vec::new();
 
         let overlays: Vec<bool> = self.reach.iter().map(|r| r.iter().zip(&targets).any(|(r, t)| *r && *t)).collect();
@@ -484,29 +497,12 @@ impl Linter {
         };
         let mut pattern_tree = wants_layers;
         let mut fallback_active = None;
-        if let Some((index, front)) = front {
-            let parse_started = std::time::Instant::now();
-            let mut parsed = front.frontend.parse(text, path);
-            let native_done = std::time::Instant::now();
-            // Token layers cost a node per token: only the kinds rules use.
-            if let (true, Ok(parsed)) = (wants_tokens, parsed.as_mut()) {
-                front.frontend.attach_tokens(text, parsed, &token_kinds);
-            }
-            let tokens_done = std::time::Instant::now();
+        if let Some((index, _)) = front {
+            let parsed = self.parse(path, text, units::ParsePlan { lang, front: Some(index), layers: wants_layers, overlays: &overlays, tokens: &token_kinds });
             match parsed {
                 Ok(parsed) => {
-                    let nodes = front.remap(parsed.nodes);
-                    let tree = match wants_layers {
-                        true => Tree::graft(&self.grammar, lang, text, nodes, parsed.root, Some(&overlays), self.profile.as_ref()),
-                        false => Tree::from_native(nodes, parsed.root),
-                    };
+                    let tree = parsed.tree;
                     let rules_started = std::time::Instant::now();
-                    if let Some(p) = &self.profile {
-                        Profile::add_time(&p.parse_nanos, rules_started - parse_started);
-                        Profile::add_time(&p.native_nanos, native_done - parse_started);
-                        Profile::add_time(&p.token_nanos, tokens_done - native_done);
-                        Profile::add_time(&p.layer_nanos, rules_started - tokens_done);
-                    }
                     let groups = self.rule_groups(&active, text.len());
                     if groups.len() <= 1 {
                         let facts = self.native_facts(index, &tree, &run, (path, &rel), parsed.state);
@@ -560,13 +556,8 @@ impl Linter {
 
         if pattern_tree {
             let run = Run { active: fallback_active.as_deref().unwrap_or(&active), ..run };
-            let parse_started = std::time::Instant::now();
-            let tree = Tree::parse_with(&self.grammar, lang, text, Some(&overlays), self.profile.as_ref());
+            let tree = self.parse(path, text, units::ParsePlan { lang, front: None, layers: true, overlays: &overlays, tokens: &[] }).expect("pattern parse").tree;
             let rules_started = std::time::Instant::now();
-            if let Some(p) = &self.profile {
-                Profile::add_time(&p.parse_nanos, rules_started - parse_started);
-                Profile::add_time(&p.layer_nanos, rules_started - parse_started);
-            }
             self.check_tree(&tree, &run, None, &mut out);
             if tree.too_deep {
                 out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));
@@ -618,6 +609,7 @@ impl Linter {
             source,
             lines,
             file,
+            file_id: 0,
             options: &[],
             reindented,
             attrs: &self.attrs,
@@ -640,7 +632,7 @@ impl Linter {
         let memo = AttrMemo::default();
         let no_reindent = RefCell::default();
         let tree_ctx = self.tree_ctx(run.lang, tree, (run.text, run.lines, run.file), &memo, &no_reindent, native);
-        let world = world::LintWorld::new(tree_ctx);
+        let world = world::LintWorld::new(self, run.path, tree_ctx);
         // Resolve reachability before dispatch: a reference may select a
         // declaration earlier in the tree, and several owners can reach it.
         let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
@@ -676,6 +668,7 @@ impl Linter {
                         source: run.text,
                         lines: run.lines,
                         file: run.file,
+                        file_id: 0,
                         options: &[],
                         reindented: &reindented[fi],
                         attrs: &self.attrs,
@@ -871,6 +864,7 @@ impl Linter {
 
 /// What every rule run over one file shares.
 struct Run<'a> {
+    path: &'a Path,
     lang: usize,
     text: &'a str,
     lines: &'a LineIndex,

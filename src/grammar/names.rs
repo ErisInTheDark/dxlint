@@ -57,7 +57,7 @@ use values::compile::lower_value;
 
 /// One `unwraps` item: what the node stands for (no effect), or what
 /// evaluating it does.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Unwrapping {
     /// Index into [`Vocabulary::effects`].
     pub effect: Option<u16>,
@@ -67,6 +67,11 @@ pub struct Unwrapping {
     /// Scope classes of `nearest` (`returned nearest function`).
     pub nearest: u64,
     pub when: Option<u32>,
+    /// The item it came from (index in the config's name items), for
+    /// conflict errors and runtime defects.
+    pub item: u32,
+    /// Where that item's layer is named in the config.
+    pub span: Option<crate::config::source::Span>,
 }
 
 /// One effect on a field path, for the effects names already answer
@@ -138,8 +143,8 @@ pub struct Condition {
 /// lowered to the VM like a [`Condition`]; read through
 /// [`question::World::operand`].
 pub struct Operand {
-    /// Index of the item in the config's name items.
-    pub item: usize,
+    /// Source item or resolution mode.
+    pub of: crate::config::ast::OperandOf,
     pub matcher: u32,
     /// Which of the item's expressions ([`NameItem::operand`]).
     pub part: u8,
@@ -188,6 +193,7 @@ type PathOf<'a> = dyn Fn(&mut Vec<ConfigError>, &[Name]) -> Option<Vec<u16>> + '
 /// The tables, per matcher (empty when the config has no name items).
 #[derive(Default)]
 pub struct Names {
+    pub controls: Vec<Option<effects::Control>>,
     pub vocabulary: std::sync::Arc<Vocabulary>,
     pub kinds: Vec<KindNames>,
     pub conditions: Vec<Condition>,
@@ -195,6 +201,8 @@ pub struct Names {
     pub operands: Vec<Operand>,
     /// `exclusive` groups: trait bits no possible value has together.
     pub exclusive: Vec<u64>,
+    /// `module_resolution` profiles, compiled.
+    pub module_resolutions: Vec<modules::compile::Profile>,
 }
 
 /// One tree's resolved names.
@@ -225,6 +233,9 @@ pub struct Resolved {
     pub asked: FxHashMap<u32, (u32, u64)>,
     /// Declarations by scope and name, built on first ask ([`Resolved::index`]).
     index: std::sync::OnceLock<ScopeIndex>,
+    /// Node -> the innermost scope it sits in (its own when it opens one),
+    /// `within` fields respected; [`NO_SCOPE`] outside every scope.
+    scope_of: Vec<u32>,
 }
 
 /// What a name's text means as a key (a language's escapes):
@@ -404,7 +415,8 @@ impl Names {
                             let e = Effect { effect, path: p.clone(), when };
                             names.add(g, m, |k| k.effects.push(e.clone()));
                         }
-                        let u = Unwrapping { effect, possible: *possible, value: value.clone(), nearest: near, when };
+                        let span = def.targets.first().map(|t| t.span);
+                        let u = Unwrapping { effect, possible: *possible, value: value.clone(), nearest: near, when, item: item as u32, span };
                         names.add(g, m, |k| k.unwraps.push(u.clone()));
                     }
                 }
@@ -529,15 +541,23 @@ impl Names {
             }
         }
         names.exclusive = values::exclusive_groups(config, &mut vocab, &names.kinds, errors);
-        effects::compile::validate(&names, errors);
+        names.module_resolutions = modules::compile::profiles(config, g, &vocab, errors, &mut |definition, mode| names.mode_operand(definition, mode));
         names.vocabulary = std::sync::Arc::new(vocab);
+        names.controls = effects::compile::controls(&names.vocabulary);
+        effects::compile::validate(&names, errors);
         names
     }
 
     /// Registers expression `part` of name item `item` on `matcher`'s nodes.
     pub fn operand(&mut self, item: usize, matcher: u32, part: u8) -> u32 {
-        self.operands.push(Operand { item, matcher, part, expr: std::sync::OnceLock::new(), lowered: std::sync::OnceLock::new() });
+        self.operands.push(Operand { of: crate::config::ast::OperandOf::Item(item), matcher, part, expr: std::sync::OnceLock::new(), lowered: std::sync::OnceLock::new() });
         self.operands.len() as u32 - 1
+    }
+
+    pub fn mode_operand(&mut self, definition: usize, mode: usize) -> u32 {
+        let id = self.operands.len() as u32;
+        self.operands.push(Operand { of: crate::config::ast::OperandOf::Mode { definition, mode }, matcher: super::ROOT, part: 0, expr: std::sync::OnceLock::new(), lowered: std::sync::OnceLock::new() });
+        id
     }
 
     /// Applies `f` to `m` and every matcher specialising it (`like`).
@@ -585,6 +605,25 @@ impl Names {
         if out.len() == reached {
             passed.truncate(passing);
         }
+    }
+
+    /// What a declaration or effect aimed at `node` reaches through
+    /// `targets` (the node itself where none apply); unknown when a
+    /// `targets` condition cannot be decided.
+    pub fn targets_of(&self, tree: &Tree, node: u32, holds: &dyn Fn(u32, u32) -> question::Known<bool>) -> question::Known<Vec<u32>> {
+        let unknown = std::cell::Cell::new(false);
+        let decide = |at: u32, condition: Option<u32>| {
+            condition.is_none_or(|c| match holds(at, c) {
+                question::Known::Yes(held) => held,
+                question::Known::Unknown => {
+                    unknown.set(true);
+                    false
+                }
+            })
+        };
+        let (mut out, mut passed) = (Vec::new(), Vec::new());
+        self.targets(tree, node, &decide, &mut out, &mut passed, 0);
+        if unknown.get() { question::Known::Unknown } else { question::Known::Yes(out) }
     }
 
     /// Resolves every name `tree` uses. `key` turns a name's text into what
@@ -725,6 +764,7 @@ impl Names {
         for refs in out.references.values_mut() {
             refs.sort_by_key(|&r| tree.node(r).start);
         }
+        out.scope_of = scope_of;
         out
     }
 }
@@ -803,6 +843,13 @@ fn visible(decls: &[Declared], start: u32, want: u64) -> Option<u32> {
 }
 
 impl Resolved {
+    /// The innermost scope `node` sits in (its own when it opens one),
+    /// respecting `within`. Names are syntax-only, so this holds in every
+    /// generic frame.
+    pub fn scope_of(&self, node: u32) -> Option<u32> {
+        self.scope_of.get(node as usize).copied().filter(|&s| s != NO_SCOPE)
+    }
+
     /// The tree's declarations by scope and name. `key` must be the file's
     /// name key: the index is built once, with the first caller's.
     pub fn index(&self, tree: &Tree, text: &str, key: &NameKey<'_>) -> &ScopeIndex {

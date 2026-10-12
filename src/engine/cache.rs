@@ -24,7 +24,7 @@ use super::reads::{hash_bytes, Dep, Reads};
 
 pub const FILE_NAME: &str = ".zlintcache";
 /// Bumped whenever the encoding changes.
-const MAGIC: &[u8; 4] = b"ZLC4";
+const MAGIC: &[u8; 4] = b"ZLC5";
 
 /// Deps and groups, by index into the tables.
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
@@ -383,6 +383,7 @@ impl Writer<'_> {
             Dep::List(_, h) => (3, *h, None),
             Dep::Summary(_, content, fingerprint) => (4, *content, Some(*fingerprint)),
             Dep::Discovered(_, _, h) => (5, *h, None),
+            Dep::Requested(_, _, hash) => (6, *hash, None),
         };
         self.out.push(tag);
         self.path(d.path());
@@ -392,6 +393,13 @@ impl Writer<'_> {
         }
         if let Dep::Discovered(name, ..) = d {
             self.str(name);
+        }
+        if let Dep::Requested(name, request, _) = d {
+            self.str(name);
+            for list in [&request.include, &request.exclude, &request.extensions] {
+                self.var(list.len() as u64);
+                for value in list { self.str(value); }
+            }
         }
     }
 
@@ -529,8 +537,18 @@ impl<'a> Reader<'a> {
             4 => Dep::Summary(path, a, self.u64()?),
             // An unknown discovery (another build's front end) drops the entry.
             5 => Dep::Discovered(super::reads::discovery_name(&self.str()?)?, path, a),
+            6 => {
+                let name = super::reads::discovery_name(&self.str()?)?;
+                Dep::Requested(name, crate::grammar::names::modules::resolution::DiscoveryRequest { root: path, include: self.string_list()?, exclude: self.string_list()?, extensions: self.string_list()? }, a)
+            }
             _ => return None,
         })
+    }
+
+    fn string_list(&mut self) -> Option<Vec<Box<str>>> {
+        let count = usize::try_from(self.var()?).ok()?;
+        if count > self.bytes.len().saturating_sub(self.at) { return None; }
+        (0..count).map(|_| self.str().map(String::into_boxed_str)).collect()
     }
 
     fn diag(&mut self) -> Option<Diagnostic> {
@@ -575,5 +593,23 @@ mod tests {
         let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
         let cached: Vec<_> = (0..diagnostics.len()).map(|_| reader.diag().expect("cached diagnostic")).collect();
         assert_eq!(crate::engine::apply_fixes("abc", &cached), ("abX".into(), 1));
+    }
+    #[test]
+    fn requested_discovery_keeps_its_replay_policy_when_saved() {
+        let root = Path::new("/root/cached-engine-inputs");
+        let first = root.join("src/first.ts");
+        super::super::reads::set_buffer(&first, "");
+        let request = crate::grammar::names::modules::resolution::DiscoveryRequest { root: root.to_owned(), include: vec!["src/**".into()], exclude: vec!["generated/**".into()], extensions: vec![".ts".into()] };
+        let (_, reads) = super::super::reads::track(|| super::super::reads::requested(&request));
+        let mut writer = Writer { out: Vec::new(), root, strings: Vec::new(), string_ids: HashMap::new() };
+        writer.dep(&reads.deps[0]);
+        let mut reader = Reader { bytes: &writer.out, at: 0, root, strings: writer.strings };
+        let dep = reader.dep().expect("cached discovery");
+        assert!(dep.holds(|_| 0));
+        let added = root.join("src/second.ts");
+        super::super::reads::set_buffer(&added, "");
+        assert!(!dep.holds(|_| 0));
+        super::super::reads::drop_buffer(&first);
+        super::super::reads::drop_buffer(&added);
     }
 }

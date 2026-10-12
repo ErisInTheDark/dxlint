@@ -1539,6 +1539,7 @@ pub struct Ctx<'a> {
     pub source: &'a str,
     pub lines: &'a LineIndex,
     pub file: &'a str,
+    pub file_id: u32,
     pub options: &'a [Value<'static>],
     /// Lines whose indentation a fix already changes: line -> its leading
     /// whitespace after the fix. Builtins reading lines above the node see

@@ -129,7 +129,10 @@ pub trait Project: Send + Sync {
 }
 
 /// What changed files broke, per front end ([`super::Linter::invalidate`]).
-pub struct Stale(Vec<Box<dyn Any + Send + Sync>>);
+pub struct Stale {
+    fronts: Vec<Box<dyn Any + Send + Sync>>,
+    pub(super) changed: Vec<PathBuf>,
+}
 
 /// Every front end this build has.
 pub fn all() -> &'static [&'static dyn Frontend] {
@@ -163,10 +166,10 @@ impl Projects {
     }
 
     pub(super) fn invalidate(&self, changed: &[PathBuf]) -> Stale {
-        Stale(self.0.iter().map(|project| project.invalidate(changed)).collect())
+        Stale { fronts: self.0.iter().map(|project| project.invalidate(changed)).collect(), changed: changed.to_vec() }
     }
 
     pub(super) fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
-        self.0.iter().zip(&stale.0).any(|(project, stale)| project.is_stale(&**stale, reads))
+        self.0.iter().zip(&stale.fronts).any(|(project, stale)| project.is_stale(&**stale, reads))
     }
 }

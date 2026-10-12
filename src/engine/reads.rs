@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
+use crate::grammar::names::modules::resolution::DiscoveryRequest;
 
 /// One thing a lint read, with what it read.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -26,12 +27,15 @@ pub enum Dep {
     Summary(PathBuf, u64, u64),
     /// The files below a directory a [`Discovery`] (by name) finds.
     Discovered(&'static str, PathBuf, u64),
+    /// A policy-filtered discovery, retaining its request for cache replay.
+    Requested(&'static str, DiscoveryRequest, u64),
 }
 
 impl Dep {
     pub fn path(&self) -> &Path {
         match self {
             Dep::Text(p, _) | Dep::IsFile(p, _) | Dep::IsDir(p, _) | Dep::List(p, _) | Dep::Summary(p, ..) | Dep::Discovered(_, p, _) => p,
+            Dep::Requested(_, request, _) => &request.root,
         }
     }
 
@@ -40,6 +44,7 @@ impl Dep {
     pub fn touches(&self, changed: &Path) -> bool {
         match self {
             Dep::List(dir, _) | Dep::IsDir(dir, _) | Dep::Discovered(_, dir, _) => changed.starts_with(dir),
+            Dep::Requested(_, request, _) => changed.starts_with(&request.root),
             dep => dep.path() == changed,
         }
     }
@@ -55,6 +60,7 @@ impl Dep {
             Dep::List(p, h) => listing(p).1 == *h,
             Dep::Summary(p, content_hash, f) => content(p).1 == *content_hash || fingerprint(p) == *f,
             Dep::Discovered(name, p, h) => discovery(name).is_some_and(|d| walk(d, p, 1).1 == *h),
+            Dep::Requested(name, request, hash) => *name == PROGRAM_FILES.name && request_walk(request).map_or(MISSING, |(_, current)| current) == *hash,
         }
     }
 }
@@ -324,7 +330,56 @@ pub struct Discovery {
 }
 
 fn discovery(name: &str) -> Option<&'static Discovery> {
-    super::frontend::all().iter().flat_map(|front| front.discoveries().iter().copied()).find(|d| d.name == name)
+    std::iter::once(&PROGRAM_FILES).chain(super::frontend::all().iter().flat_map(|front| front.discoveries().iter().copied())).find(|d| d.name == name)
+}
+
+static PROGRAM_FILES: Discovery = Discovery { name: "engine:program-inputs", wanted: |_| true, matches: |_, _| true };
+
+pub(crate) fn requested(request: &DiscoveryRequest) -> Option<Vec<PathBuf>> {
+    let found = request_walk(request);
+    let hash = found.as_ref().map_or(MISSING, |(_, hash)| *hash);
+    note(Dep::Requested(PROGRAM_FILES.name, request.clone(), hash));
+    found.map(|(paths, _)| paths)
+}
+
+fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
+    let include = crate::path_globs::PathGlobs::new(request.include.iter().map(|glob| &**glob)).ok()?;
+    let exclude = crate::path_globs::PathGlobs::new(request.exclude.iter().flat_map(|glob| [Some(&**glob), glob.strip_suffix("/**")].into_iter().flatten())).ok()?;
+    let wanted = |path: &Path| {
+        let Some(rel) = path.strip_prefix(&request.root).ok() else { return false };
+        let extension = request.extensions.is_empty() || request.extensions.iter().any(|ext| path.to_string_lossy().ends_with(&**ext));
+        extension && (include.is_empty() || include.matches(rel)) && !exclude.matches(rel)
+    };
+    let root = request.root.clone();
+    let dirs_excluded = exclude.clone();
+    let mut walker = ignore::WalkBuilder::new(&request.root);
+    let mut overrides = ignore::overrides::OverrideBuilder::new(&request.root);
+    for glob in &request.include {
+        let prefix = glob.split('/').take_while(|part| !part.contains(['*', '?', '[', '{'])).collect::<Vec<_>>().join("/");
+        if !prefix.is_empty() {
+            overrides.add(&format!("{prefix}/**")).ok()?;
+        }
+    }
+    walker.overrides(overrides.build().ok()?);
+    walker.filter_entry(move |entry| entry.path().strip_prefix(&root).is_ok_and(|rel| !dirs_excluded.matches(rel)));
+    let mut found = Vec::new();
+    match std::fs::metadata(&request.root) {
+        Ok(metadata) if metadata.is_dir() => {
+            for entry in walker.build() {
+                let entry = entry.ok()?;
+                if entry.file_type().is_some_and(|kind| kind.is_file()) && wanted(entry.path()) { found.push(entry.into_path()); }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return None,
+    }
+    let buffers = buffers().read().ok()?;
+    found.extend(buffers.files_under(&request.root).into_iter().filter(|path| wanted(path)));
+    found.sort_unstable();
+    found.dedup();
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    found.hash(&mut hash);
+    Some((found, hash.finish().max(1)))
 }
 
 /// A registered discovery's name with its `'static` lifetime (decoding a
@@ -400,6 +455,26 @@ pub fn discovery_changed(d: &Discovery, changed: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requested_discovery_replays_its_filters_and_tracks_membership() {
+        let root = PathBuf::from("/root/engine-requested-inputs");
+        let included = root.join("src/first.ts");
+        let excluded = root.join("src/generated/skip.ts");
+        let other = root.join("src/skip.json");
+        let outside = root.join("outside/skip.ts");
+        for path in [&included, &excluded, &other, &outside] { set_buffer(path, ""); }
+        let request = DiscoveryRequest { root, include: vec!["src/**".into()], exclude: vec!["src/generated/**".into()], extensions: vec![".ts".into()] };
+        let (paths, reads) = track(|| requested(&request).unwrap());
+        assert_eq!(paths, vec![included.clone()]);
+        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        set_buffer(&included, "changed text, same membership");
+        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        let added = request.root.join("src/second.ts");
+        set_buffer(&added, "");
+        assert!(reads.deps.iter().any(|dep| !dep.holds(|_| 0)));
+        for path in [&included, &excluded, &other, &outside, &added] { drop_buffer(path); }
+    }
 
     #[test]
     fn buffered_directories_merge_with_disk_and_invalidate_reads() {

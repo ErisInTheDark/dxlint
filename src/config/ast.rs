@@ -55,6 +55,21 @@ pub struct Config {
     pub uses: Vec<Use>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperandOf {
+    Item(usize),
+    Mode { definition: usize, mode: usize },
+}
+
+impl Config {
+    pub fn operand(&self, of: OperandOf, part: u8) -> Option<&Expr> {
+        match of {
+            OperandOf::Item(item) => self.names.get(item)?.item.operand(part),
+            OperandOf::Mode { definition, mode } => Some(&self.module_resolutions.get(definition)?.modes.get(mode)?.when),
+        }
+    }
+}
+
 /// `fn name(a, b) = body`: computes a value from its arguments alone.
 #[derive(Clone, Debug)]
 pub struct FnDef {

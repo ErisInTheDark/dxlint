@@ -623,7 +623,7 @@ mod tests {
         let reindented = std::cell::RefCell::default();
         let ctx = Ctx {
             grammar: g, lang: 0, tree: &tree, node: tree.root, source, lines: &lines,
-            file: "/root/test.ts", options: &[], reindented: &reindented, attrs: &attrs,
+            file: "/root/test.ts", file_id: 0, options: &[], reindented: &reindented, attrs: &attrs,
             memo: &memo, locals: None, native: Some(&native), indents: &super::super::IndentPlan::EMPTY,
             indent_reset: None, profile: None, world: None,
         };
