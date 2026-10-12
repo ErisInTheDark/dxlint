@@ -662,11 +662,13 @@ the neighbour itself with `is` (`previous is ts_comma`).
 `split`, `lines`, `join`, `sort`, `unique`, `reverse`, `first`, `last`,
 `compact`, `sum`, `any`,
 `count`, `slice`, `str`, `num`, `nonempty`, `min`, `max`, `abs`, `round`,
-`compare_text`, `js_compare`, `js_number`, `js_re_test`.
+`compare_text`, `js_compare`, `js_number`, `js_string`, `js_bigint`, `js_re_test`.
 
 | function | value |
 |---|---|
 | `js_number(value)` | JavaScript Number conversion of primitives or `literal_value` records; NaN for nonnumeric strings, null for unsupported values (including symbols) |
+| `js_string(text)` | decodes a quoted JavaScript string literal, including escapes and line continuations; null for invalid syntax. Lone surrogates become U+FFFD (distinct lone surrogates can therefore coincide) |
+| `js_bigint(text)` | a JavaScript bigint literal as exact decimal text, including radix prefixes and separators; null for invalid syntax |
 | `js_re_test(text, pattern, flags?)` | stateless JavaScript regex matching (`flags` defaults to empty); unsupported syntax and work exhaustion fail the rule. `re_test` keeps its existing regex dialect |
 
 `js_re_test` uses a bounded JavaScript subset with `i`, `m`, `s`, `u` flags and flat positive/negative lookaheads. Nested assertions, lookbehind, backreferences, named groups, control escapes and Unicode case-insensitive word boundaries fail explicitly. Multiline anchors recognise LF, CR, U+2028 and U+2029, including positions inside CRLF. Legacy `i` supports ordinary Unicode folding; characters in fold groups that differ from JavaScript's non-`u` uppercase canonicalisation (such as Kelvin sign, long s and astral case pairs) fail explicitly in patterns or values. Use `u` for those groups. Strings cannot preserve lone surrogates, and non-`u` astral matching uses Unicode scalars rather than UTF-16 units.

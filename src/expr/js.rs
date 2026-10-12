@@ -5,6 +5,8 @@
 use std::cmp::Ordering;
 use std::sync::OnceLock;
 
+pub mod strings;
+
 /// A numeric literal's value: decimal, `0x`/`0o`/`0b`, legacy octal and
 /// `_` separators.
 pub fn number(text: &str) -> Option<f64> {
@@ -24,6 +26,32 @@ pub fn number(text: &str) -> Option<f64> {
 }
 
 /// A bigint literal's value in decimal (`0x10n` is `16`), exactly.
+pub fn bigint_literal(text: &str) -> Option<String> {
+    let payload = text.strip_suffix('n')?;
+    let (radix, digits) = match payload.get(..2) {
+        Some("0x" | "0X") => (16, &payload[2..]),
+        Some("0o" | "0O") => (8, &payload[2..]),
+        Some("0b" | "0B") => (2, &payload[2..]),
+        _ => (10, payload),
+    };
+    if digits.is_empty() || (radix == 10 && digits.len() > 1 && digits.starts_with('0')) {
+        return None;
+    }
+    let mut previous_digit = false;
+    for ch in digits.chars() {
+        if ch == '_' {
+            if !previous_digit { return None }
+            previous_digit = false;
+        } else {
+            ch.to_digit(radix)?;
+            previous_digit = true;
+        }
+    }
+    if !previous_digit { return None }
+    bigint_decimal(payload)
+}
+
+/// Decode a validated bigint payload; callers may omit the literal suffix.
 pub fn bigint_decimal(text: &str) -> Option<String> {
     let digits = text.trim_end_matches('n').replace('_', "");
     let (radix, body) = match digits.get(..2).map(str::to_ascii_lowercase).as_deref() {
@@ -163,6 +191,17 @@ mod tests {
         assert_eq!(number("017"), Some(15.0));
         assert_eq!(number("1_000"), Some(1000.0));
         assert_eq!(number(".5"), Some(0.5));
+    }
+
+    #[test]
+    fn bigint_literals_preserve_exact_values_without_accepting_broken_syntax() {
+        let value = bigint_literal("9007199254740993n").expect("valid literal");
+        assert_eq!(bigint_literal("9_007_199_254_740_993n"), Some(value.clone()));
+        assert_eq!(bigint_literal("0x20000000000001n"), Some(value.clone()));
+        assert_ne!(bigint_literal("9007199254740992n"), Some(value));
+        for text in ["", "n", "1", "-1n", "01n", "0xn", "0x_1n", "1__0n", "1_n", "0_1n", "2.0n"] {
+            assert_eq!(bigint_literal(text), None, "{text}");
+        }
     }
 
     #[test]

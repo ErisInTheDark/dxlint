@@ -281,6 +281,22 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "js_string",
+        signature: "js_string(text)",
+        doc: "Decode a quoted JavaScript string literal, including escapes and line continuations; null for invalid syntax. Lone surrogates become U+FFFD",
+        min: 1,
+        max: 1,
+        call: |a| Ok(super::js::strings::decode(&a[0].text()).map_or(Value::Null, Value::from)),
+    },
+    Function {
+        name: "js_bigint",
+        signature: "js_bigint(text)",
+        doc: "A JavaScript bigint literal as exact decimal text, including radix prefixes and separators; null for invalid syntax",
+        min: 1,
+        max: 1,
+        call: |a| Ok(super::js::bigint_literal(&a[0].text()).map_or(Value::Null, Value::from)),
+    },
+    Function {
         name: "js_number",
         signature: "js_number(value)",
         doc: "JavaScript Number conversion of primitive values or literal_value records; NaN for non-numeric strings, null for unsupported values (including symbols)",
