@@ -148,6 +148,11 @@ pub(crate) fn native_linter(rules: &str) -> Linter {
     built.linter.expect("no errors")
 }
 
+pub(crate) fn native_linter_parts(rules: &str) -> (crate::grammar::Grammar, crate::expr::Attributes) {
+    let linter = native_linter(rules);
+    (linter.grammar, linter.attrs)
+}
+
 /// Native-only trees keep the parser's kind and field ids.
 pub(crate) fn native_front() -> crate::grammar::NativeFront {
     crate::grammar::NativeFront {
@@ -616,12 +621,22 @@ fn all_std_rules_and_rulesets_compile_without_inert_targets() {
           rule no-dbg warn "no dbg"
         }
     "#;
+    let located = |built: &super::Built| -> String {
+        built.errors.iter().map(|error| match error.span {
+            Some(span) => {
+                let file = built.sources.get(span.file);
+                let line = file.text[..span.start as usize].matches('\n').count() + 1;
+                format!("{}:{line}: {}", file.name, error.message)
+            }
+            None => error.message.clone(),
+        }).collect::<Vec<_>>().join("\n")
+    };
     let built = build(config::load_text("test.zlint", src, &Disk), PathBuf::from("/root"));
-    assert!(built.errors.is_empty(), "{:#?}", built.errors);
+    assert!(built.errors.is_empty(), "{}", located(&built));
     // Every built-in rule and ruleset compiles when turned on.
     let all = format!("{src}\nimport rules:correctness\nimport rules:suspicious\nimport rules:conventions\nimport rules:format\nimport rules:types\nimport rules:recommended\nrule *\n");
     let built = build(config::load_text("test.zlint", &all, &Disk), PathBuf::from("/root"));
-    assert!(built.errors.is_empty(), "{:#?}", built.errors);
+    assert!(built.errors.is_empty(), "{}", located(&built));
     let l = built.linter.unwrap();
     for rule in &l.inert {
         for target in rule.target_text.split(',') {
