@@ -7,6 +7,7 @@ pub mod compile;
 pub mod dfa;
 pub mod prefilter;
 pub mod regex;
+pub mod syntax;
 
 use class::CharClass;
 

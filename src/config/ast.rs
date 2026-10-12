@@ -5,6 +5,10 @@ use super::source::Span;
 use crate::expr::Value;
 use crate::pattern::Pat;
 
+pub mod effects;
+pub mod syntax;
+pub use syntax::ParserDecl;
+
 #[derive(Clone, Debug)]
 pub struct Name {
     pub text: String,
@@ -26,8 +30,10 @@ pub struct Config {
     pub natives: Vec<Name>,
     pub attrs: Vec<AttrDef>,
     pub forwards: Vec<ForwardDef>,
-    /// `scope`, `declares` and `resolves` items.
+    /// Name and type-layer items (`scope`, `declares`, `unwraps`, ...).
     pub names: Vec<NameDef>,
+    /// `parser name in lang { ... }`: structured grammars.
+    pub parsers: Vec<ParserDecl>,
     /// `schema name T`: option schemas rules share.
     pub schemas: Vec<SchemaDef>,
     /// Names removed by `drop`: anything still using one is an error at
@@ -130,9 +136,13 @@ pub enum NameItem {
     /// leads to) uses a name; with `in module`, among the exports of the
     /// file that path's text names.
     Resolves { classes: Vec<Name>, path: Vec<Name>, module: Option<Vec<Name>> },
-    /// `unwraps <value>` or `unwraps <effect> [<value>] [nearest <scope>]`:
-    /// what the node stands for, or what evaluating it does.
-    Unwraps { effect: Option<Name>, value: Option<Unwrap>, nearest: Vec<Name> },
+    /// `unwraps <value>` or `unwraps [maybe] <effect> [<value>] [nearest
+    /// <scope>]`: what the node stands for, or what evaluating it does
+    /// (`maybe`: possibly, beside completing normally).
+    Unwraps { effect: Option<Name>, possible: bool, value: Option<Unwrap>, nearest: Vec<Name> },
+    /// `runs`, `labels`, `in <field> catches|runs after ...`: execution
+    /// shapes ([`effects`]).
+    Execution(effects::Item),
     /// `fits trait, ...`: the node directly has these traits.
     Fits(Vec<Name>),
     /// `in <field> propagates <value>`: the value's `truthy` effects (or the
@@ -167,6 +177,12 @@ pub enum Unwrap {
     /// `excludes trait, ... [from x]`: under `truthy`, `x` (default: the
     /// node) cannot be these.
     Excludes { traits: Vec<Name>, from: Option<Box<Unwrap>> },
+    /// `includes v [from x]`: under `truthy`, `x` is one of its
+    /// alternatives that `v` could be (`x === "a"`, `x instanceof C`).
+    Includes { value: Box<Unwrap>, from: Option<Box<Unwrap>> },
+    /// `has key [from x]`: under `truthy`, `x` is one of its alternatives
+    /// with that member (`"key" in x`).
+    Has { key: Box<Unwrap>, from: Option<Box<Unwrap>> },
 }
 
 /// A rule's `indent X by n` / `indent in X by n`: the indentation structure

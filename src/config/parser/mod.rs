@@ -1,10 +1,12 @@
 //! Item-level parser. Pulls tokens from a [`Stream`], so imports and macro
 //! expansions are just more tokens arriving in place.
 
+mod effects;
 mod expr;
 mod language;
 mod pattern;
 mod schema;
+mod syntax;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -30,7 +32,7 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits"];
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "runs", "labels"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -295,7 +297,8 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "lang") => self.lang(),
             (Tk::Ident, "language") => self.language_options(),
             (Tk::Ident, "group") => self.group(),
-            (Tk::Ident, "in") if ctx.is_some() && self.propagates_ahead() => self.name_item(ctx),
+            (Tk::Ident, "parser") => self.syntax_parser(),
+            (Tk::Ident, "in") if ctx.is_some() && self.field_item_ahead() => self.name_item(ctx),
             (Tk::Ident, "in") => self.context_item(),
             (Tk::Ident, "match") => self.matcher(ctx),
             (Tk::Ident, "rule") => self.rule(ctx),
@@ -501,12 +504,17 @@ impl<'a> Parser<'a> {
             }
             "in" => {
                 let Some(field) = self.name_path("a field") else { return };
-                if !self.word("propagates") {
-                    self.error_here("expected `propagates`: `in consequent propagates test`");
-                    return;
+                if self.word("propagates") {
+                    let Some(value) = self.unwrap_value() else { return };
+                    NameItem::Propagates { field, value }
+                } else {
+                    let Some(item) = self.execution_field(field) else { return };
+                    NameItem::Execution(item)
                 }
-                let Some(value) = self.unwrap_value() else { return };
-                NameItem::Propagates { field, value }
+            }
+            "runs" | "labels" => {
+                let Some(item) = self.execution_item(&what) else { return };
+                NameItem::Execution(item)
             }
             "targets" => {
                 let mut groups = Vec::new();
@@ -639,10 +647,15 @@ impl<'a> Parser<'a> {
     /// (`declaration`, `left | right`, `from object at property`).
     fn unwrap_line(&mut self) -> Option<NameItem> {
         self.skip(false, true);
+        // `maybe thrown x`: the effect may happen, or the node completes.
+        let possible = self.ts.peek_raw(0).is_some_and(|t| t.is_ident("maybe")) && self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::Ident);
+        if possible {
+            self.ts.next_raw();
+        }
         let first = self.ts.peek_raw(0).cloned()?;
         let next = self.ts.peek_raw(1).map(|t| t.kind);
         let effect = (first.kind == Tk::Ident
-            && !matches!(&*first.text, "from" | "excludes")
+            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has")
             && matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen)))
         .then(|| {
             self.ts.next_raw();
@@ -652,7 +665,11 @@ impl<'a> Parser<'a> {
         let ends = |t: Option<&Token>| t.is_none_or(|t| matches!(t.kind, Tk::Newline | Tk::RBrace) || t.is_ident("nearest"));
         let value = if effect.is_some() && ends(self.ts.peek_raw(0)) { None } else { Some(self.unwrap_value()?) };
         let nearest = if self.word("nearest") { self.name_list("a scope class") } else { Vec::new() };
-        Some(NameItem::Unwraps { effect, value, nearest })
+        if possible && effect.is_none() {
+            self.error_here("`maybe` belongs before an effect: `unwraps maybe thrown it`");
+            return None;
+        }
+        Some(NameItem::Unwraps { effect, possible, value, nearest })
     }
 
     /// `a ?? b`, lowest precedence.
@@ -757,6 +774,12 @@ impl<'a> Parser<'a> {
                 let key = self.unwrap_primary()?;
                 Some(Unwrap::From(Box::new(of), Box::new(key)))
             }
+            Tk::Ident if matches!(&*t.text, "includes" | "has") => {
+                self.ts.next_raw();
+                let what = Box::new(self.unwrap_unary()?);
+                let from = if self.word("from") { Some(Box::new(self.unwrap_unary()?)) } else { None };
+                Some(if &*t.text == "includes" { Unwrap::Includes { value: what, from } } else { Unwrap::Has { key: what, from } })
+            }
             Tk::Ident if &*t.text == "excludes" => {
                 self.ts.next_raw();
                 let traits = self.name_list("a trait name");
@@ -780,12 +803,13 @@ impl<'a> Parser<'a> {
         self.ts.peek_raw(0).is_some_and(|t| t.kind == kind)
     }
 
-    /// `in <field>[.<field>] propagates`: a `propagates` item, not a context.
-    fn propagates_ahead(&mut self) -> bool {
+    /// `in <field>[.<field>] propagates|catches|runs ...`: an item about a
+    /// field of the node, not a context.
+    fn field_item_ahead(&mut self) -> bool {
         let mut at = 1;
         loop {
             match self.ts.peek_raw(at) {
-                Some(t) if t.kind == Tk::Ident && t.is_ident("propagates") && at > 1 => return true,
+                Some(t) if t.kind == Tk::Ident && at > 1 && ["propagates", "catches", "runs"].iter().any(|w| t.is_ident(w)) => return true,
                 Some(t) if t.kind == Tk::Ident || t.kind == Tk::Dot => at += 1,
                 _ => return false,
             }
@@ -841,7 +865,7 @@ impl<'a> Parser<'a> {
                     self.bump();
                     break;
                 }
-                Some(t) if t.kind == Tk::Ident && (&*t.text == "when" || NAME_ITEMS.contains(&&*t.text) || &*t.text == "in" && self.propagates_ahead()) => {
+                Some(t) if t.kind == Tk::Ident && (&*t.text == "when" || NAME_ITEMS.contains(&&*t.text) || &*t.text == "in" && self.field_item_ahead()) => {
                     self.item(Some(ctx))
                 }
                 Some(t) => {

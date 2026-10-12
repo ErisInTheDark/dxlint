@@ -5,6 +5,7 @@ pub mod names;
 mod parse;
 mod shapes;
 mod states;
+pub mod syntax;
 mod text;
 mod tree;
 

@@ -11,7 +11,12 @@ use std::borrow::Cow;
 
 use crate::config::ast::{Config, Name, NameItem};
 
+pub mod calls;
+pub mod effects;
+pub mod modules;
+pub mod narrowing;
 pub mod question;
+pub mod values;
 use crate::config::error::ConfigError;
 use crate::fx_hash::FxHashMap;
 
@@ -63,6 +68,8 @@ pub enum Value {
     Not(Box<Value>),
     /// Trait bits ([`Vocabulary::traits`]), and of what (default: the node).
     Excludes { traits: u64, from: Option<Box<Value>> },
+    Includes { value: Box<Value>, from: Option<Box<Value>> },
+    Has { key: Box<Value>, from: Option<Box<Value>> },
 }
 
 /// One `unwraps` item: what the node stands for (no effect), or what
@@ -71,6 +78,8 @@ pub enum Value {
 pub struct Unwrapping {
     /// Index into [`Vocabulary::effects`].
     pub effect: Option<u16>,
+    /// `maybe`: the effect may happen, or the node completes normally.
+    pub possible: bool,
     pub value: Option<Value>,
     /// Scope classes of `nearest` (`returned nearest function`).
     pub nearest: u64,
@@ -110,6 +119,8 @@ pub struct KindNames {
     pub fits: Vec<(u64, Option<u32>)>,
     /// `in <field> propagates <value>`.
     pub propagates: Vec<(Vec<u16>, Value, Option<u32>)>,
+    /// Execution shapes (`runs`, `catches`, `runs after`, `labels`).
+    pub execution: effects::KindEffects,
     /// `targets`: when a declaration or effect targets this node, it
     /// targets what these lead to instead; per group, the first alternative
     /// that leads to anything.
@@ -197,6 +208,14 @@ fn lower_value(
                 None => None,
             };
             Value::Excludes { traits: bits, from }
+        }
+        U::Includes { value, from } | U::Has { key: value, from } => {
+            let value = Box::new(lower(value, traits, errors)?);
+            let from = match from {
+                Some(f) => Some(Box::new(lower(f, traits, errors)?)),
+                None => None,
+            };
+            if matches!(v, U::Includes { .. }) { Value::Includes { value, from } } else { Value::Has { key: value, from } }
         }
     })
 }
@@ -354,7 +373,7 @@ impl Names {
                         names.add(g, m, |k| k.targets.extend(passes.iter().map(|group| (group.clone(), when))));
                     }
                 }
-                NameItem::Unwraps { effect, value, nearest } => {
+                NameItem::Unwraps { effect, possible, value, nearest } => {
                     let effect = effect.as_ref().map(|e| intern(&mut vocab.effects, &e.text) as u16);
                     let Some(near) = class_bits(&mut vocab.scope_classes, nearest, errors) else { continue };
                     asked.extend(nearest.iter().map(|n| (n, true)));
@@ -371,8 +390,16 @@ impl Names {
                             let e = Effect { effect, path: p.clone(), when };
                             names.add(g, m, |k| k.effects.push(e.clone()));
                         }
-                        let u = Unwrapping { effect, value: value.clone(), nearest: near, when };
+                        let u = Unwrapping { effect, possible: *possible, value: value.clone(), nearest: near, when };
                         names.add(g, m, |k| k.unwraps.push(u.clone()));
+                    }
+                }
+                NameItem::Execution(item) => {
+                    let Some(item) = effects::compile::lower(item, &mut |p| path(errors, p), &mut |e| u16::try_from(intern(&mut vocab.effects, &e.text)).ok()) else {
+                        continue;
+                    };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |k| k.execution.push(item.clone(), when));
                     }
                 }
                 NameItem::Fits(traits) => {
