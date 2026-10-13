@@ -1,5 +1,9 @@
 import .ts
-in ts_identifier rule d info "{text}: {declaration_doc}" { when imported_from != null && declaration_doc != null }
+in ts_identifier rule d {
+  let declaration first(symbol_metadata.declarations)
+  when imported_name != null && declaration.doc != null
+  info "{text}: {declaration.doc}"
+}
 
 # Project inputs remain readable, but the original Rust test linted only this main file.
 ignore "a.ts"
