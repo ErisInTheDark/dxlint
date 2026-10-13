@@ -1,8 +1,11 @@
 import .ts
 in ts_throw rule probe {
   let caught catch_throw
-  each property in (last(caught.arguments).properties.nonempty ?? [])
-  when property.kind == "ts_spread" || property.name == "cause" && property.value.name == get(caught, "parameter").name && get(property.value, "binding") != { value caught; get "parameter"; get "binding" }
+  each property in (last(caught.arguments).property.nodes ?? [])
+  when property is ts_spread || {
+    value operand: caught_throw_property_value(property)
+    value property.static_name == "cause" && operand is ts_identifier && operand.text == get(caught, "parameter").text && operand.declaration.node != get(caught, "parameter")
+  }
   report at property.offset
   warn "binding"
 }
