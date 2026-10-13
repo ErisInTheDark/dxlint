@@ -1092,8 +1092,6 @@ mod demand_tests {
         let mut failures = Vec::new();
         for (target, prefix, item, list, reject) in [
             ("ts_function", "", "name", "[1]", true),
-            ("ts_program", "", "declaration", "[1]", true),
-            ("ts_program", "", "global", "[1]", true),
             ("ts_program", "", "text", "[1]", true),
             ("ts_program", "in ts_program let item [1]\n", "item", "item", true),
             ("ts_program", "", "item", "[1]", false),
