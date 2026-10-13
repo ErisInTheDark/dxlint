@@ -15,7 +15,7 @@ fn floating_promise_subject_checked(n, ignore_iife) = {
   && !(ignore_iife && n.parent.node is ts_expression_statement
     && expression is ts_call && callee is (ts_function, ts_arrow))
 }
-fn floating_rejection_handler(n, check_thenables) = {
+fn floating_rejection_handler(n) = {
   value callee: unparenthesised_node(n.callee.node)
   value position: if callee.static_name == "catch" then 0
     else if callee.static_name == "then" then 1 else -1
@@ -24,8 +24,7 @@ fn floating_rejection_handler(n, check_thenables) = {
   value checked_count: position + 1
   value preceding: slice(n.argument.nodes, 0, checked_count)
   value handler != null && !any(preceding, argument => argument is ts_spread)
-    && (if check_thenables then handler could callable && handler always callable
-      else handler.floating_promise_type.callable)
+    && handler.floating_promise_type.callable
 }
 fn floating_promise_nonnull(n) = {
   value arms: value_constituents(n)
@@ -57,9 +56,8 @@ fn floating_promise_failure(n, check_thenables, ignore_void) = {
       value allowed: part.floating_promise_allowed_types
       value if floating_promise_array(part_type, check_thenables, allowed) then "array"
         else if part not ts_await
-          && (if check_thenables then !contains(allowed, part_type) && part could thenable
-            else floating_promise_element(part_type, false, allowed))
-          && !(part is ts_call && floating_rejection_handler(part, check_thenables)) then "promise" else null
+          && floating_promise_element(part_type, check_thenables, allowed)
+          && !(part is ts_call && floating_rejection_handler(part)) then "promise" else null
     }
   filter (failure) failure != null
   first
