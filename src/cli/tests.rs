@@ -168,6 +168,54 @@ fn conformance_bad_frames_restore_overlays_before_the_next_request() {
 }
 
 #[test]
+fn conformance_large_frames_survive_partial_writes() {
+    struct Partial(Capture);
+    impl Write for Partial {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.write(&bytes[..bytes.len().min(8192)])
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
+    }
+
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("conformance-large-frames");
+    let config_path = dir.join(".zlint");
+    let id = format!("{}{}", "x".repeat(8184),
+        "\u{e9}\u{fc}\u{1f989}\u{009b}\u{2028}\u{2029} quotes \" slash \\ newline\nreturn\r".repeat(4096));
+    let text = "LOUD ".repeat(128);
+    let frames = [
+        serde_json::json!({ "id": id, "config": RULES, "sources": [{ "path": dir.join("a.t"), "text": text }] }),
+        serde_json::json!({ "id": "next", "config": RULES, "sources": [] }),
+    ];
+    let input = frames.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    let stdout = Capture::default();
+    let stderr = Capture::default();
+    let code = super::run(
+        ["zlint", "conformance", "--config", config_path.to_str().unwrap()],
+        &dir,
+        io::Cursor::new(input.into_bytes()),
+        anstream::AutoStream::new(
+            Box::new(Partial(stdout.clone())) as Box<dyn Write + Send>,
+            anstream::ColorChoice::Auto,
+        ),
+        stderr.clone(),
+    );
+    assert_eq!(code, 0);
+    assert!(stderr.0.lock().unwrap().is_empty());
+    let bytes = stdout.0.lock().unwrap();
+    let output = std::str::from_utf8(&bytes).unwrap();
+    let replies: Vec<serde_json::Value> = output.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[0]["id"], id);
+    let diagnostics: Vec<serde_json::Value> = replies[0]["stdout"].as_str().unwrap().lines()
+        .map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(diagnostics.iter().filter(|record| record["kind"] != "fix-preview").count(), 128);
+    assert_eq!(replies[1]["id"], "next");
+    assert_eq!(replies[1]["stdout"], "");
+}
+
+#[test]
 fn jsonl_profile_counts_emitted_reports_and_includes_unfired_rules() {
     let dir = project("jsonl-profile", &[
         (".zlint", "lang t \"*.t\"\nin .t match letter /[a-z]/ {\nrule hit warn \"hit\"\nrule quiet warn \"quiet\" { when false }\n}\n"),
