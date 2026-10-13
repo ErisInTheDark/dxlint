@@ -607,14 +607,12 @@ in ts_identifier rule no-implicit-globals:leak {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
   let setting ts_global_setting(scoping_program, identifier_name)
   when ts_source_type(scoping_program) != "module" && !scoping_strict_code && resolved == "global" && (setting == null || setting == "off") && access == "write"
-  report at scoping_pattern_write_owner
   warn "Global variable leak, declare the variable if it is intended to be local."
 }
 in ts_identifier rule no-implicit-globals:readonly {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
   when ts_source_type(scoping_program) != "module" && resolved == "global"
     && ts_global_setting(scoping_program, identifier_name) == "readonly" && access == "write"
-  report at scoping_pattern_write_owner
   warn "Unexpected assignment to read-only global variable."
 }
 
