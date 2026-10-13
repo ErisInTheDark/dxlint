@@ -71,7 +71,6 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   when parent not ts_assignment || contains(["=", "&&=", "||=", "??="], parent.operator)
   when parent not ts_jsx_expression || parent.parent is ts_jsx_attribute
   when not ts_method || node.body != null
-  when not ts_method || node.kind != "get" && node.kind != "set"
   when !(is ts_method && parent is ts_object && node.key.token_neighbours.before.text == "[")
   let actual strict_void_source(node)
   when actual could callable

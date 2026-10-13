@@ -1,0 +1,2 @@
+interface Array<T> {}
+interface Promise<T> { then(callback: (value: T) => unknown): unknown }

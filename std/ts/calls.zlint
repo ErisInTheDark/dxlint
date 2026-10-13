@@ -105,6 +105,11 @@ define {
       walk (current) current.parent.node
       find (current) current is (ts_function, ts_arrow, ts_method)
     }
-    in argument expects calls_return_function.return_type ?? calls_return_function.expected.result
+    when calls_return_function is ts_method && calls_return_function.kind == "get" {
+      in argument expects calls_return_function.return_type
+    }
+    when !(calls_return_function is ts_method && calls_return_function.kind == "get") {
+      in argument expects calls_return_function.return_type ?? calls_return_function.expected.result
+    }
   }
 }
