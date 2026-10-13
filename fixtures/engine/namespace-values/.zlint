@@ -8,10 +8,10 @@ fn namespace_scalar(n, expected) = {
 in ts_identifier rule namespace-runtime {
   when text == "NS" && is ts_member.object
   when !(node always object) || !(node always truthy)
-    || value_has_member(node, "present") != true
-    || value_has_member(node, "privateName") != false
-    || value_has_member(node, "TypeOnly") != false
-    || value_has_member(node, "missing") != false
+    || value_has_member(node, "present", null) != true
+    || value_has_member(node, "privateName", null) != false
+    || value_has_member(node, "TypeOnly", null) != false
+    || value_has_member(node, "missing", null) != false
   warn "a module namespace lost published values or exposed private/type-only names"
 }
 in ts_member rule selected-value {
@@ -22,17 +22,17 @@ in ts_member rule selected-value {
 }
 in ts_member rule nested-visibility {
   when text == "NS.Nested"
-  when value_has_member(node, "leaf") != true || value_has_member(node, "hidden") != false
+  when value_has_member(node, "leaf", null) != true || value_has_member(node, "hidden", null) != false
   warn "a nested namespace exposed a private declaration"
 }
 in ts_identifier rule incomplete-publication {
   when text == "Missing" && is ts_member.object
-  when value_has_member(node, "present") != null
+  when value_has_member(node, "present", null) != null
   warn "an unresolved namespace pretended its exports were known"
 }
 in ts_index rule dynamic-publication {
   when object == "NS"
-  when value_has_member(object.node, index.node) != null
+  when value_has_member(object.node, index.node, null) != null
   warn "a dynamic namespace key pretended its export presence was known"
 }
 in ts_type_reference rule qualified-type-selection {

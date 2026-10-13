@@ -376,6 +376,60 @@ fn absent_members_are_false_only_when_the_inventory_is_proven_closed() {
 }
 
 #[test]
+fn closed_indexer_domains_prove_disjoint_absence_without_listing_infinite_members() {
+    use crate::config::ast::values::KeyDomain;
+    for domain in [KeyDomain::Text, KeyDomain::Ordinal, KeyDomain::Symbol] {
+        for inherited in [false, true] {
+            let mut world = TestWorld::new();
+            world.tree.nodes[0].children.push(Edge { label: 7, node: 1 });
+            let mut tables = tables();
+            for node in [0, 1] {
+                world.names.scopes.push(ScopeInfo { node, classes: 1, parent: None });
+                tables.kinds[node as usize].member_defaults = 1;
+                tables.kinds[node as usize].member_closed.push((1, None));
+            }
+            let owner = usize::from(inherited);
+            tables.kinds[owner].indexed.push(IndexedRecipe {
+                path: vec![super::super::IT], mode: IndexedMode::Domain(domain),
+                views: 1, value: Some(Value::Traits(8)), when: None,
+            });
+            if inherited { tables.kinds[0].member_bases.push((1, Value::Path(vec![7]), None)); }
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            let values = semantic.values();
+            let value = NodeValue::leaf(leaf(0));
+            assert_eq!(values.members(&value), Known::Unknown);
+            assert_eq!(values.closed(&value), Known::Yes(true), "{domain:?}, inherited={inherited}");
+            let expected = if domain == KeyDomain::Text { Known::Unknown } else { Known::Yes(false) };
+            assert_eq!(values.has_member(&value, &Key::Text("then".into())), expected);
+            assert_eq!(values.has_member(&value, &Key::Domain(domain)), Known::Unknown);
+            assert_eq!(values.members(&value), Known::Unknown);
+        }
+    }
+}
+
+#[test]
+fn closure_keeps_failed_indexer_conditions_and_unresolved_named_keys_unknown() {
+    use crate::config::ast::values::KeyDomain;
+    for (mode, when) in [
+        (IndexedMode::Domain(KeyDomain::Ordinal), Some(0)),
+        (IndexedMode::Keyed(Value::Unknown), None),
+    ] {
+        let mut world = TestWorld::new();
+        world.names.scopes.push(ScopeInfo { node: 0, classes: 1, parent: None });
+        let mut tables = tables();
+        tables.kinds[0].member_defaults = 1;
+        tables.kinds[0].member_closed.push((1, None));
+        tables.kinds[0].indexed.push(IndexedRecipe {
+            path: vec![super::super::IT], mode, views: 1, value: None, when,
+        });
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.values().closed(&NodeValue::leaf(leaf(0))), Known::Unknown);
+    }
+}
+
+#[test]
 fn symbol_keys_need_the_declared_domain_and_keep_real_declaration_identity() {
     use crate::config::ast::values::KeyDomain;
     use crate::grammar::names::calls::Conditional;

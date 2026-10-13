@@ -1,0 +1,20 @@
+import .ts
+
+fn global_presence(n, name, key) = value_has_member(n, key, { global: name, class: "type", path: [] })
+in ts_string rule member-presence {
+  when global_presence(node, "Numeric", "then") != false
+    || global_presence(node, "Numeric", "present") != true
+    || global_presence(node, "Numeric", "0") != null
+    || global_presence(node, "Textual", "then") != null
+    || global_presence(node, "UnknownDomain", "then") != null
+    || global_presence(node, "MixedDomain", "then") != null
+    || global_presence(node, "Symbolic", "then") != false
+    || global_presence(node, "ComputedSymbol", "then") != false
+    || global_presence(node, "UnresolvedSymbol", "then") != null
+    || global_presence(node, "UnresolvedKey", "then") != null
+    || global_presence(node, "LiteralKey", "then") != true
+    || global_presence(node, "Absent", "then") != null
+    || value_has_member(node, "then", 1) != null
+    || value_has_member(node, "then", null) != null
+  warn "member presence lost its named-key or domain proof"
+}

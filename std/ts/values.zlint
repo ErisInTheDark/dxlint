@@ -159,7 +159,9 @@ in ts_node let ts_value_preserved_element {
   }
 }
 fn ts_value_closed_type_members(items) = all(items, member => member is ts_call_signature
-  || member not ts_index_signature && ts_value_key(member.key.node) != null)
+  || (if member is ts_index_signature then member.parameter.type always number || member.parameter.type always symbol
+    else ts_value_key(member.key.node) != null
+      || member.key is ts_computed_key && member.key.expression.node always symbol))
 fn ts_value_then_headers(signatures) = {
   value headers: { value signatures ?? []; flat_map (arm) arm }
   value callbacks: { value headers; flat_map (header) first(header.parameters) ?? []; flat_map (arm) arm }
@@ -426,6 +428,10 @@ in ts_interface, ts_type_literal, ts_class {
     value ts_value_then_headers(signatures)
   }
   fits thenable in members when ts_value_then_shape.thenable
+}
+in ts_type_literal {
+  fits nonthenable in members when ts_value_closed_type_members(member.nodes)
+    && ts_value_then_shape.known && !ts_value_then_shape.thenable
 }
 in ts_property {
   declares member key keyed ts_value_key(it) in nearest members hoisted

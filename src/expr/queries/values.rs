@@ -14,7 +14,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "member_call_parameters", arity: 2, call: member_parameters },
     QueryFunction { name: "value_member", arity: 2, call: member },
     QueryFunction { name: "value_lookup", arity: 2, call: lookup },
-    QueryFunction { name: "value_has_member", arity: 2, call: has_member },
+    QueryFunction { name: "value_has_member", arity: 3, call: has_member },
     QueryFunction { name: "value_at", arity: 2, call: path },
     QueryFunction { name: "value_expected_at", arity: 2, call: expected_path },
     QueryFunction { name: "value_expected", arity: 1, call: expected },
@@ -121,12 +121,18 @@ fn query_key(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known
         };
         return values.value_key(&values.values(Leaf { target: Target::Node(NodeRef { file, node: *node }), frame: at.frame }));
     }
+    let Known::Yes(value) = global_value(semantic, at, value) else { return Known::Unknown };
+    values.value_key(&value)
+}
+
+fn global_value(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known<NodeValue> {
     let Value::Record(fields) = value else { return Known::Unknown };
     let field = |name: &str| fields.iter().find(|(key, _)| &**key == name).map(|(_, value)| value);
     let (Some(Value::Str(name)), Some(Value::Str(class)), Some(Value::List(path))) =
         (field("global"), field("class"), field("path")) else { return Known::Unknown };
     let classes = semantic.tables.vocabulary.declaration_class(class);
     if classes == 0 { return Known::Unknown }
+    let values = semantic.values();
     let mut value = values.evaluate(at, &crate::grammar::names::Value::Instance {
         name: (&**name).into(), classes, arguments: Vec::new(),
     });
@@ -135,14 +141,22 @@ fn query_key(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Known
         let Some(key) = member_key(key) else { return Known::Unknown };
         value = values.member(&value, &key);
     }
-    values.value_key(&value)
+    Known::Yes(value)
 }
 
 fn has_member(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let Some(argument) = args.first() else { return Known::Unknown };
     let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
     let values = semantic.values();
-    match values.has_member(&values.values(at), &key) {
+    let receiver = match args.get(1) {
+        Some(Value::Null) => values.values(at),
+        Some(source) => match global_value(semantic, at, source) {
+            Known::Yes(value) => value,
+            Known::Unknown => return Known::Unknown,
+        },
+        None => return Known::Unknown,
+    };
+    match values.has_member(&receiver, &key) {
         Known::Yes(value) => Known::Yes(Value::Bool(value)),
         Known::Unknown => Known::Unknown,
     }

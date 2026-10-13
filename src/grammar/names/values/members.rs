@@ -1,4 +1,5 @@
 use super::{eval, Key, Known, Leaf, Member, MemberSource, NodeRef, NodeValue, Target, Values};
+use super::indexed::MemberRequest;
 
 impl Values<'_> {
     pub fn member_shape(&self, at: Leaf) -> Known<bool> {
@@ -138,7 +139,7 @@ impl Values<'_> {
                 Known::Yes(true) => {}
             }
         }
-        if unknown || matches!(self.leaf_members(at), Known::Unknown) { Known::Unknown } else { Known::Yes(true) }
+        if unknown || matches!(self.direct_members(at, MemberRequest::Coverage), Known::Unknown) { Known::Unknown } else { Known::Yes(true) }
     }
 
     pub fn member(&self, value: &NodeValue, key: &Key) -> NodeValue {
@@ -214,7 +215,7 @@ impl Values<'_> {
         let request = (at, key.clone());
         if let Some(answer) = self.semantic.values.member_keys.get(&request) { return answer }
         self.semantic.values.member_keys.insert(self.semantic.epoch, request.clone(), Known::Unknown);
-        let answer = match self.direct_members(at, Some(key)) {
+        let answer = match self.direct_members(at, MemberRequest::Key(key)) {
             Known::Yes(mut members) => Known::Yes(members.pop()),
             Known::Unknown => Known::Unknown,
         };
@@ -251,7 +252,7 @@ impl Values<'_> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.members.get(&at) { return answer }
         self.semantic.values.members.insert(self.semantic.epoch, at, Known::Unknown);
-        let answer = self.direct_members(at, None);
+        let answer = self.direct_members(at, MemberRequest::Listing);
         self.semantic.values.members.insert(self.semantic.epoch, at, answer.clone());
         answer
     }
@@ -269,7 +270,8 @@ impl Values<'_> {
         }
     }
 
-    fn direct_members(&self, at: Leaf, wanted: Option<&Key>) -> Known<Vec<Member>> {
+    fn direct_members(&self, at: Leaf, request: MemberRequest<'_>) -> Known<Vec<Member>> {
+        let wanted = request.key();
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) { return self.product_members(at, wanted) }
         if matches!(at.target, Target::Traits(_)) { return Known::Yes(Vec::new()) }
@@ -284,9 +286,9 @@ impl Values<'_> {
         let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
         let mut members = Vec::new();
         if kind.member_defaults == 0 && !kind.indexed.is_empty() {
-            let Known::Yes(mut named) = self.indexed_members(at, wanted, true) else { return Known::Unknown };
+            let Known::Yes(mut named) = self.indexed_members(at, request, true) else { return Known::Unknown };
             if wanted.is_some() && !named.is_empty() { return Known::Yes(named) }
-            let Known::Yes(indexed) = self.indexed_members(at, wanted, false) else { return Known::Unknown };
+            let Known::Yes(indexed) = self.indexed_members(at, request, false) else { return Known::Unknown };
             for member in indexed { Self::merge_member(&mut named, member); }
             return Known::Yes(named);
         }
@@ -355,35 +357,37 @@ impl Values<'_> {
         if wanted.is_some_and(|wanted| members.iter().any(|member| &member.key == wanted)) {
             return Known::Yes(members);
         }
-        let Known::Yes(keyed) = self.indexed_members(at, wanted, true) else { return Known::Unknown };
+        let Known::Yes(keyed) = self.indexed_members(at, request, true) else { return Known::Unknown };
         for member in keyed { Self::merge_member(&mut members, member); }
         if wanted.is_some() && !members.is_empty() { return Known::Yes(members) }
-        let own: Vec<_> = members.iter().map(|member| member.key.clone()).collect();
-        for (views, base, when) in &kind.member_bases {
-            if classes & views == 0 { continue }
-            if !self.question.budget.step() { return Known::Unknown }
-            match when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
-                Known::Yes(false) => continue,
-                Known::Unknown => return Known::Unknown,
-                Known::Yes(true) => {}
-            }
-            let base = self.evaluate(at, base);
-            match wanted {
-                Some(key) => {
-                    let Known::Yes(mut rows) = self.keyed_members(&base, key) else { return Known::Unknown };
-                    if rows.len() != 1 { return Known::Unknown }
-                    if let Some(member) = rows.pop().flatten() { Self::merge_member(&mut members, member) }
+        if !matches!(request, MemberRequest::Coverage) {
+            let own: Vec<_> = members.iter().map(|member| member.key.clone()).collect();
+            for (views, base, when) in &kind.member_bases {
+                if classes & views == 0 { continue }
+                if !self.question.budget.step() { return Known::Unknown }
+                match when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
+                    Known::Yes(false) => continue,
+                    Known::Unknown => return Known::Unknown,
+                    Known::Yes(true) => {}
                 }
-                None => {
-                    let Known::Yes(mut rows) = self.members(&base) else { return Known::Unknown };
-                    if rows.len() != 1 { return Known::Unknown }
-                    for member in rows.pop().unwrap_or_default() {
-                        if !own.contains(&member.key) { Self::merge_member(&mut members, member) }
+                let base = self.evaluate(at, base);
+                match wanted {
+                    Some(key) => {
+                        let Known::Yes(mut rows) = self.keyed_members(&base, key) else { return Known::Unknown };
+                        if rows.len() != 1 { return Known::Unknown }
+                        if let Some(member) = rows.pop().flatten() { Self::merge_member(&mut members, member) }
+                    }
+                    None => {
+                        let Known::Yes(mut rows) = self.members(&base) else { return Known::Unknown };
+                        if rows.len() != 1 { return Known::Unknown }
+                        for member in rows.pop().unwrap_or_default() {
+                            if !own.contains(&member.key) { Self::merge_member(&mut members, member) }
+                        }
                     }
                 }
             }
         }
-        let Known::Yes(indexed) = self.indexed_members(at, wanted, false) else { return Known::Unknown };
+        let Known::Yes(indexed) = self.indexed_members(at, request, false) else { return Known::Unknown };
         for member in indexed { Self::merge_member(&mut members, member); }
         Known::Yes(members)
     }

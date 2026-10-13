@@ -1,8 +1,25 @@
 use super::{IndexedMode, Key, Known, Leaf, Member, MemberOrigin, MemberSource, Values};
 use crate::config::ast::values::KeyDomain;
 
+#[derive(Clone, Copy)]
+pub(super) enum MemberRequest<'a> {
+    Listing,
+    Coverage,
+    Key(&'a Key),
+}
+
+impl<'a> MemberRequest<'a> {
+    pub(super) fn key(self) -> Option<&'a Key> {
+        match self {
+            Self::Key(key) => Some(key),
+            Self::Listing | Self::Coverage => None,
+        }
+    }
+}
+
 impl Values<'_> {
-    pub(super) fn indexed_members(&self, at: Leaf, wanted: Option<&Key>, named: bool) -> Known<Vec<Member>> {
+    pub(super) fn indexed_members(&self, at: Leaf, request: MemberRequest<'_>, named: bool) -> Known<Vec<Member>> {
+        let wanted = request.key();
         let Known::Yes((node, view)) = self.member_context(at) else { return Known::Unknown };
         let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
         let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
@@ -40,6 +57,7 @@ impl Values<'_> {
                 IndexedMode::Slots { repeated, strings } => (*repeated, *strings),
                 IndexedMode::Domain(domain) => {
                     if sites.is_empty() { continue }
+                    if matches!(request, MemberRequest::Coverage) { continue }
                     let Some(key) = wanted else { return Known::Unknown };
                     Self::merge_member(&mut members, Member {
                         key: key.clone(),
@@ -68,8 +86,9 @@ impl Values<'_> {
                 },
             };
             if repeated {
-                let Some(key) = wanted.cloned() else { return Known::Unknown };
                 if sites.len() != 1 { return Known::Unknown }
+                if matches!(request, MemberRequest::Coverage) { continue }
+                let Some(key) = wanted.cloned() else { return Known::Unknown };
                 Self::merge_member(&mut members, Member {
                     key,
                     sources: sites.into_iter().map(|site| MemberSource {

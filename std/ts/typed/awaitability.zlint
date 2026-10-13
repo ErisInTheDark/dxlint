@@ -25,7 +25,7 @@ fn ts_missing_await(n) = {
           || any(sites, site => site is ts_return && ts_awaitable_result(site.argument.node)
             || generator && site is ts_yield && site.argument != null
               && (if site.operator == "*" then value_has_member(site.argument.node,
-                { global: "Symbol", class: "value", path: ["asyncIterator"] }) == true
+                { global: "Symbol", class: "value", path: ["asyncIterator"] }, null) == true
                 else ts_awaitable_result(site.argument.node))))
         value if asynchronous then null else {
           value name: n.function_name ?? "async function"
