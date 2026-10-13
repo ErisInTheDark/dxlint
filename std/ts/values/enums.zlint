@@ -26,6 +26,16 @@ in ts_enum {
   unwraps ...member for type
   unwraps scope statics from it
 }
+in ts_namespace {
+  let ts_value_namespace_enum_members {
+    value name_binding(name.node).declarations
+    filter (site) site.parent is ts_enum
+    flat_map (site) site.parent.member.nodes
+  }
+  when count(ts_value_namespace_enum_members) > 0 {
+    unwraps ...ts_value_namespace_enum_members for type
+  }
+}
 in ts_enum_member {
   declares member name keyed ts_value_key(it) in nearest statics hoisted
   let ts_value_enum_previous {
