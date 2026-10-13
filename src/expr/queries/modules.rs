@@ -80,14 +80,16 @@ mod tests {
     #[test]
     fn class_filters_keep_selected_answers_and_reject_invalid_requests() {
         let linter = linter(r#"
+            match value_name /x/
+            match type_name /y/
             in .t match document /[\s\S]+/ { scope outer }
-            in document match declaration name:/x/ /;/ {
+            in document match declaration name:value_name /;/ {
                 declares value name in nearest outer hoisted
             }
-            in document match type_declaration name:/y/ /;/ {
+            in document match type_declaration name:type_name /;/ {
                 declares type name in nearest outer hoisted
             }
-            in document match reference name:/x/ /!/ {
+            in document match reference name:value_name /!/ {
                 resolves value name
                 let selected name_classes(name.node, "x", null, ["value", "value"])
                 let all_classes name_classes(name.node, "x", null, null)
