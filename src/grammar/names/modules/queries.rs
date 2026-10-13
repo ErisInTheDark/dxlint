@@ -30,7 +30,8 @@ pub(crate) struct State {
 /// Module queries timed in `--profile` (inclusive, nested calls overlap).
 pub(crate) const PROFILE_QUERIES: &[&str] = &[
     "modules.definition", "modules.global", "modules.publication", "modules.condition", "modules.operand", "modules.targets",
-    "modules.entries", "modules.prepare", "modules.scopes", "modules.roots", "modules.resolve",
+    "modules.entries", "modules.prepare", "modules.scopes", "modules.roots", "modules.resolve", "modules.resolve.unknown",
+    "modules.scopes.catalog", "modules.scopes.named", "modules.scopes.augmentations",
 ];
 
 pub struct Queries<'a> {
@@ -136,7 +137,10 @@ impl<'a> Queries<'a> {
     }
 
     fn resolve(&self, at: NodeRef, specifier: &str) -> Known<Option<ScopeRef>> {
-        self.profiled("modules.resolve", || self.semantic.world.module(leaf(at), specifier, self.semantic))
+        let answer = self.profiled("modules.resolve", || self.semantic.world.module(leaf(at), specifier, self.semantic));
+        // Unknown resolutions are never memoised: count them apart.
+        if answer == Known::Unknown { self.profiled("modules.resolve.unknown", || ()) }
+        answer
     }
 
     fn profiled<T>(&self, query: &'static str, run: impl FnOnce() -> T) -> T {

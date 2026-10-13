@@ -524,7 +524,9 @@ mod places {
     #[test]
     fn only_binding_replacements_block_guards_in_a_separate_body() {
         use crate::grammar::names::effects::{Conditional, Creation};
-        for (write, captured_guard) in [(None, true), (Some(0), false), (Some(1), true), (Some(2), true), (Some(3), false)] {
+        // 0: the binding itself; 1: a property of it; 2: another binding;
+        // 3: a name nothing declares; 4: a target that is no name at all.
+        for (write, captured_guard) in [(None, true), (Some(0), false), (Some(1), true), (Some(2), true), (Some(3), false), (Some(4), true)] {
             let mut world = TestWorld::branches();
             let mut nodes = world.tree.nodes.clone();
             nodes[16].matcher = 10;
@@ -549,6 +551,7 @@ mod places {
                     0 => { world.names.declaration.insert(21, 1); }
                     1 => { world.names.declaration.insert(22, 1); }
                     2 => { world.names.declaration.insert(21, 2); }
+                    3 => { world.names.keys.insert(21, None); }
                     _ => {}
                 }
                 world.tree = Tree::from_native(nodes, 0);

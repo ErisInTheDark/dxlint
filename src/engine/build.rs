@@ -316,7 +316,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     let attrs = Attributes::new(attrs, &forwards, &grammar);
     let reach = grammar.reach();
-    let unit_overlays = reach.iter().map(|reachable| unit_reads.layers.iter().any(|&layer| reachable[layer as usize])).collect();
+    let unit_overlays: Vec<bool> = reach.iter().map(|reachable| unit_reads.layers.iter().any(|&layer| reachable[layer as usize])).collect();
     let mut linter = Linter {
         invalidation: Default::default(),
         units: Default::default(),

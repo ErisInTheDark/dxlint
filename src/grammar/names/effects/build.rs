@@ -4,6 +4,9 @@ use crate::grammar::names::question::{Known, Leaf, QueryContext, Target};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Control {
     Returned,
+    /// Leaves its target like `returned` but carries no returned value
+    /// (an iterator closed from outside).
+    Exited,
     Thrown,
     Broken,
     Continued,
@@ -32,6 +35,7 @@ impl Control {
     pub(super) fn named(name: &str) -> Option<Self> {
         match name {
             "returned" => Some(Self::Returned),
+            "exited" => Some(Self::Exited),
             "thrown" => Some(Self::Thrown),
             "broken" => Some(Self::Broken),
             "continued" => Some(Self::Continued),

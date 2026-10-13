@@ -1,6 +1,6 @@
 use std::hash::Hash;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::ThreadId;
 
 use crate::grammar::names::question::Known;
@@ -16,7 +16,9 @@ pub(super) struct Context {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct CatalogKey {
-    pub context: Context,
+    pub settings: usize,
+    /// The program's identity: a hash of its input paths.
+    pub program: u64,
     pub outside: Option<PathBuf>,
     pub classes: u64,
 }
@@ -103,11 +105,20 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
             match entries.get(&key) {
                 Some(Entry::Ready(answer)) => {
                     if let Some(profile) = profile { Profile::add(&profile.catalogue_read_validations, 1); }
-                    if accepts(answer) {
+                    // Validation can read every source: never under the lock.
+                    let answer = answer.clone();
+                    drop(entries);
+                    if accepts(&answer) {
                         return Known::Yes(answer.get());
                     }
-                    entries.insert(key.clone(), Entry::Building(owner));
-                    break;
+                    entries = self.entries.lock().expect("program cache");
+                    match entries.get(&key) {
+                        Some(Entry::Ready(current)) if Arc::ptr_eq(&current.reads, &answer.reads) => {
+                            entries.insert(key.clone(), Entry::Building(owner));
+                            break;
+                        }
+                        _ => continue,
+                    }
                 }
                 Some(Entry::Building(thread)) if *thread == owner => return Known::Unknown,
                 Some(Entry::Building(_)) => {
@@ -193,11 +204,15 @@ impl Programs {
 pub(super) struct Snapshot {
     paths: Memo<(u64, Context), Arc<Vec<PathBuf>>>,
     catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
-    units: Mutex<FxHashMap<PathBuf, (u64, Arc<UnitSlot>)>>,
-    modules: Mutex<FxHashMap<ModuleKey, Cached<Arc<[StableTarget]>>>>,
+    // Read-mostly maps every lint thread consults: read locks on hits.
+    units: RwLock<FxHashMap<PathBuf, (u64, Arc<UnitSlot>)>>,
+    modules: RwLock<FxHashMap<ModuleKey, Cached<Arc<[StableTarget]>>>>,
+    /// Per program and scope classes, the augmentations each module scope
+    /// (by path and scope) receives.
+    augmentations: RwLock<FxHashMap<ModuleKey, Cached<Arc<Augmentations>>>>,
     /// Module resolution's file probes and reads, once per path and revision.
-    probes: Mutex<FxHashMap<PathBuf, (u64, bool)>>,
-    texts: Mutex<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
+    probes: RwLock<FxHashMap<PathBuf, (u64, bool)>>,
+    texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
 }
 
 /// A shared module question ([`crate::grammar::names::modules::SharedQuestion`])
@@ -206,6 +221,8 @@ pub(super) struct Snapshot {
 pub(super) struct ModuleKey {
     pub revision: u64,
     pub settings: usize,
+    /// The program's identity: a hash of its input paths.
+    pub program: u64,
     /// The linted file when it is outside the program's inputs.
     pub outside: Option<PathBuf>,
     pub question: StableQuestion,
@@ -219,7 +236,12 @@ pub(super) enum StableQuestion {
     Scopes { path: PathBuf, scope: u32 },
     /// The module scope `specifier` names, imported from `path`.
     Resolve { path: PathBuf, specifier: Box<str> },
+    /// Every augmentation of the program's module scopes in `classes`.
+    Augmentations { classes: u64 },
 }
+
+/// Module scope (path, scope) -> the scopes that augment it.
+pub(super) type Augmentations = FxHashMap<(PathBuf, u32), Vec<(PathBuf, u32)>>;
 
 /// A module answer's target with its file by path.
 #[derive(Clone)]
@@ -236,8 +258,10 @@ impl Snapshot {
     /// several lint threads ask at the same time (the others wait).
     pub(super) fn unit(&self, revision: u64, path: &std::path::Path,
         load: impl FnOnce() -> (u64, Option<Arc<super::units::Unit>>)) -> (u64, Option<Arc<super::units::Unit>>) {
-        let slot = {
-            let mut units = self.units.lock().expect("run units");
+        let known = self.units.read().expect("run units").get(path)
+            .filter(|(at, _)| *at == revision).map(|(_, slot)| slot.clone());
+        let slot = known.unwrap_or_else(|| {
+            let mut units = self.units.write().expect("run units");
             match units.get(path) {
                 Some((at, slot)) if *at == revision => slot.clone(),
                 _ => {
@@ -246,38 +270,46 @@ impl Snapshot {
                     slot
                 }
             }
-        };
+        });
         slot.get_or_init(load).clone()
     }
 
     /// Whether `path` is a file, probed once per revision; the caller
     /// records the read.
     pub(super) fn is_file(&self, revision: u64, path: &std::path::Path) -> bool {
-        if let Some(&(at, found)) = self.probes.lock().expect("run probes").get(path) {
+        if let Some(&(at, found)) = self.probes.read().expect("run probes").get(path) {
             if at == revision { return found }
         }
         let found = reads::is_file_unrecorded(path);
-        self.probes.lock().expect("run probes").insert(path.to_owned(), (revision, found));
+        self.probes.write().expect("run probes").insert(path.to_owned(), (revision, found));
         found
     }
 
     /// `path`'s text and hash, read once per revision; the caller records
     /// the read.
     pub(super) fn text(&self, revision: u64, path: &std::path::Path) -> (Option<Arc<str>>, u64) {
-        if let Some((at, text, hash)) = self.texts.lock().expect("run texts").get(path) {
+        if let Some((at, text, hash)) = self.texts.read().expect("run texts").get(path) {
             if *at == revision { return (text.clone(), *hash) }
         }
         let (text, hash) = reads::read_unrecorded(path);
-        self.texts.lock().expect("run texts").insert(path.to_owned(), (revision, text.clone(), hash));
+        self.texts.write().expect("run texts").insert(path.to_owned(), (revision, text.clone(), hash));
         (text, hash)
     }
 
+    pub(super) fn augmentations(&self, key: &ModuleKey) -> Option<Cached<Arc<Augmentations>>> {
+        self.augmentations.read().expect("run augmentations").get(key).cloned()
+    }
+
+    pub(super) fn keep_augmentations(&self, key: ModuleKey, answer: Cached<Arc<Augmentations>>) {
+        self.augmentations.write().expect("run augmentations").insert(key, answer);
+    }
+
     pub(super) fn module_answer(&self, key: &ModuleKey) -> Option<Cached<Arc<[StableTarget]>>> {
-        self.modules.lock().expect("run modules").get(key).cloned()
+        self.modules.read().expect("run modules").get(key).cloned()
     }
 
     pub(super) fn keep_module_answer(&self, key: ModuleKey, answer: Cached<Arc<[StableTarget]>>) {
-        self.modules.lock().expect("run modules").insert(key, answer);
+        self.modules.write().expect("run modules").insert(key, answer);
     }
 
     pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {
@@ -351,10 +383,7 @@ mod tests {
         reads::set_buffer(library, "one");
         let programs = Programs::default();
         let profile = Profile::new(0, 0);
-        let key = CatalogKey {
-            context: Context { directory: main.parent().unwrap().into(), settings: 0 },
-            outside: None, classes: 1,
-        };
+        let key = CatalogKey { settings: 0, program: 0, outside: None, classes: 1 };
         let snapshot = Snapshot::default();
         let hash = reads::hash_bytes(b"main");
         let load = |snapshot: &Snapshot, revision| snapshot.catalog(revision, key.clone(), main, hash, || {

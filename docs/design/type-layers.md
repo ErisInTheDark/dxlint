@@ -214,6 +214,7 @@ Engine effects (reserved; the engine acts on them):
 | effect | meaning | engine use |
 |---|---|---|
 | `returned nearest <scope class>` | control leaves that scope (`return`) | never, reachability |
+| `exited nearest <scope class>` | control leaves that scope without a returned value (an iterator closed from outside at `yield`) | never, reachability; not a `returned` payload |
 | `thrown <x>` | throws `x`, leaving the nearest `try` or function | never, `could` over thrown values |
 | `broken nearest <scope class>` / `continued nearest <scope class>` | `break` / `continue` | reachability |
 | `truthy <unwrap>` | when the node is truthy, this holds | narrowing |
@@ -228,7 +229,7 @@ does not interpret them; it propagates them (out of blocks, from callee
 bodies to calls) so rules can ask about them. A user effect named like an
 engine effect is a config error.
 
-A block whose every path has `returned`, `thrown`, `broken` or `continued`
+A block whose every path has `returned`, `exited`, `thrown`, `broken` or `continued`
 unwraps to never; code after it is unreachable.
 
 Within each phase, ordinary effects and possible controls keep declaration

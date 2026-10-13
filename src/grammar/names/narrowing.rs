@@ -25,12 +25,7 @@ impl Narrowing<'_> {
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
         let mut contexts = vec![(entry, at)];
-        if subject.path.is_empty() && effects.unwritten(subject.root, &|target| {
-            match self.place(target) {
-                Known::Yes(written) => Known::Yes(written.root == subject.root && written.path.is_empty()),
-                Known::Unknown => Known::Unknown,
-            }
-        }) == Known::Yes(true) {
+        if subject.path.is_empty() && effects.unwritten(subject.root, &|target| self.writes_binding(target, subject.root)) == Known::Yes(true) {
             let mut cursor = entry;
             loop {
                 if !self.semantic.question.budget.step() { return NodeValue::Unknown }
@@ -123,6 +118,27 @@ impl Narrowing<'_> {
         match self.place(at) {
             Known::Yes(written) => written.invalidates(tested),
             Known::Unknown => true,
+        }
+    }
+
+    /// Whether a write to `target` replaces binding `root`. Lexical: a write
+    /// replaces a binding only through a name that resolves to it, never as
+    /// a property write and never through call arguments.
+    fn writes_binding(&self, target: Leaf, root: Leaf) -> Known<bool> {
+        // A subject rooted elsewhere (a parameter read through its call's
+        // argument) is no lexical binding to compare against.
+        let Target::Node(bound) = root.target else { return Known::Unknown };
+        if !self.semantic.world.names(bound.file).is_some_and(|names| names.declared.contains_key(&bound.node)) { return Known::Unknown }
+        let Known::Yes(at) = self.semantic.leaf(target) else { return Known::Unknown };
+        let Target::Node(node) = at.target else { return Known::Yes(false) };
+        let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
+        let declaration = names.merged.get(&node.node).or_else(|| names.declaration.get(&node.node)).copied()
+            .or_else(|| names.declared.contains_key(&node.node).then_some(node.node));
+        match declaration {
+            Some(declaration) => Known::Yes(root.target == Target::Node(NodeRef { node: declaration, ..node })),
+            // A name nothing declares could still be this binding.
+            None if names.keys.contains_key(&node.node) || names.asked.contains_key(&node.node) => Known::Unknown,
+            None => Known::Yes(false),
         }
     }
 

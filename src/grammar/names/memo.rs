@@ -55,6 +55,19 @@ impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
         entries.insert(key, Entry { epoch, value });
     }
 
+    /// Forgets `key` (undone like an insert if the root fails).
+    pub(super) fn remove(&self, epoch: Epoch, key: &K) {
+        let mut entries = self.entries.borrow_mut();
+        let mut writes = self.writes.borrow_mut();
+        if writes.epoch != epoch {
+            writes.undo.clear();
+            writes.epoch = epoch;
+        }
+        if let Some(previous) = entries.remove(key) {
+            if previous.epoch != epoch { writes.undo.push((key.clone(), Some(previous))) }
+        }
+    }
+
     pub(super) fn finish(&self, epoch: Epoch, failed: bool) -> u64 {
         let mut writes = self.writes.borrow_mut();
         if writes.epoch != epoch { return 0 }

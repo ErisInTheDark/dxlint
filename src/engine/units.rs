@@ -84,6 +84,23 @@ impl Linter {
         unit
     }
 
+    /// Loads the run's units for `paths` on several threads, so a following
+    /// sequential pass (which records the reads) finds them ready.
+    pub(super) fn prefetch_units(&self, paths: &[std::path::PathBuf], run: &super::program::Snapshot) {
+        let workers = self.rule_jobs.min(paths.len());
+        if workers <= 1 { return }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(path) = paths.get(index) else { break };
+                    self.unit(path, Some(run));
+                });
+            }
+        });
+    }
+
     /// Reads `path` (its text hash, [`reads::MISSING`] when unreadable) and
     /// its unit, reusing the previous run's unit while it still holds.
     fn load_unit(&self, path: &Path) -> (u64, Option<Arc<Unit>>) {
@@ -102,7 +119,8 @@ impl Linter {
                 let frontend = self.grammar.natives[index].frontend;
                 (0..frontend.kinds().len()).map(|kind| self.unit_tokens && frontend.is_token(kind as u16)).collect::<Vec<_>>()
             }).unwrap_or_default();
-            let parsed = self.parse(path, &text, ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens }).ok()?;
+            let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens };
+            let parsed = self.parse(path, &text, plan).ok()?;
             let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new(), lines: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
             Some(unit)

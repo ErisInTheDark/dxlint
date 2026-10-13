@@ -146,12 +146,31 @@ fn global_value(semantic: &Semantic<'_>, at: Leaf, value: &Value<'static>) -> Kn
     Known::Yes(value)
 }
 
+/// The node's value for member questions. A node that is its own shape (a
+/// declaration, or one unwrapping to its own member scope) is read without
+/// classifying it as a whole: its trait conditions ask these questions, and
+/// normalising it here (which asks those traits) would cycle. Other nodes
+/// (expressions) keep their full, narrowed value.
+fn own_value(semantic: &Semantic<'_>, at: Leaf) -> Known<NodeValue> {
+    use crate::grammar::names::Value as Recipe;
+    let values = semantic.values();
+    match values.unwrap_recipe(at) {
+        Known::Yes(None | Some(Recipe::Current)) => Known::Yes(NodeValue::leaf(at)),
+        Known::Yes(Some(recipe @ Recipe::Scope { .. })) => Known::Yes(values.evaluate(at, recipe)),
+        Known::Yes(Some(_)) => Known::Yes(values.values(at)),
+        Known::Unknown => Known::Unknown,
+    }
+}
+
 fn has_member(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let Some(argument) = args.first() else { return Known::Unknown };
     let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
     let values = semantic.values();
     let receiver = match args.get(1) {
-        Some(Value::Null) => values.values(at),
+        Some(Value::Null) => match own_value(semantic, at) {
+            Known::Yes(value) => value,
+            Known::Unknown => return Known::Unknown,
+        },
         Some(source) => match global_value(semantic, at, source) {
             Known::Yes(value) => value,
             Known::Unknown => return Known::Unknown,
@@ -382,7 +401,10 @@ fn member_parameters(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>])
     let Some(argument) = args.first() else { return Known::Unknown };
     let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
     let values = semantic.values();
-    let member = values.member(&values.values(at), &key);
+    let Known::Yes(receiver) = own_value(semantic, at) else { return Known::Unknown };
+    // A member a closed shape proves absent has no signatures at all.
+    if values.has_member(&receiver, &key) == Known::Yes(false) { return Known::Yes(Value::list(Vec::new())) }
+    let member = values.member(&receiver, &key);
     signature_values(semantic, &member, SignatureFields::Parameters)
 }
 

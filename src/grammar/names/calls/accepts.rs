@@ -300,7 +300,7 @@ impl<'a, 'world> Run<'a, 'world> {
     }
 
     fn members(&mut self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
-        let Known::Yes(rows) = self.values.members(expected) else { return Known::Unknown };
+        let Known::Yes(rows) = self.values.shape_members(expected) else { return Known::Unknown };
         let mut unknown = false;
         for member in rows.into_iter().flatten() {
             let Known::Yes(available) = self.values.keyed_members(actual, &member.key) else { return Known::Unknown };

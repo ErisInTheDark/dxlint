@@ -32,19 +32,33 @@ impl<'a> Arena<'a> {
         id
     }
 
+    /// The view of file `id`, without its native front-end view: trees,
+    /// texts and paths need none.
     pub fn get<'v>(&'v self, id: u32) -> Option<&'v UnitView<'v>> {
         let item = self.items.borrow().get(id as usize).map(|item| &**item as *const UnitView<'static>)?;
         // SAFETY: boxes never move, are removed or replaced. Stored lifetimes
         // are erased only inside this owner; borrowers see the arena lifetime.
-        // Only this method builds native views, borrowing the owned unit and
+        // Only `with_native` builds native views, borrowing the owned unit and
         // the linter held by the arena. Native and memo drop before their unit;
         // the linter outlives the arena. No erased reference can escape.
-        let view = unsafe { &*item.cast::<UnitView<'v>>() };
+        Some(unsafe { &*item.cast::<UnitView<'v>>() })
+    }
+
+    /// The view of file `id` with its native front-end view built, for
+    /// running expressions on it.
+    pub fn with_native<'v>(&'v self, id: u32) -> Option<&'v UnitView<'v>> {
+        let view = self.get(id)?;
         view.native.get_or_init(|| {
-            let unit = &view.unit;
-            let front = unit.parsed.front?;
-            let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[] };
-            Some(self.linter.native_facts(front, &unit.parsed.tree, &run, (&unit.path, std::path::Path::new(&unit.rel)), unit.parsed.state.clone()))
+            let build = || {
+                let unit = &view.unit;
+                let front = unit.parsed.front?;
+                let run = Run { path: &unit.path, lang: unit.lang, text: &unit.text, lines: unit.lines(), file: &unit.rel, active: &[] };
+                Some(self.linter.native_facts(front, &unit.parsed.tree, &run, (&unit.path, std::path::Path::new(&unit.rel)), unit.parsed.state.clone()))
+            };
+            match &self.linter.profile {
+                Some(profile) => profile.time_semantic_query("units.native", build),
+                None => build(),
+            }
         });
         Some(view)
     }

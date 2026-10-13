@@ -3,7 +3,10 @@ use crate::config::ast::values::KeyDomain;
 
 #[derive(Clone, Copy)]
 pub(super) enum MemberRequest<'a> {
+    /// Every member, by concrete key; unknown with an indexer.
     Listing,
+    /// Every member, with indexers by their key domain (structural shape).
+    Shape,
     Coverage,
     Key(&'a Key),
 }
@@ -12,6 +15,17 @@ impl<'a> MemberRequest<'a> {
     pub(super) fn key(self) -> Option<&'a Key> {
         match self {
             Self::Key(key) => Some(key),
+            Self::Listing | Self::Shape | Self::Coverage => None,
+        }
+    }
+
+    /// The key and requirement an indexer over `domain` lists under:
+    /// `Shape` names it by its domain (no key required); a plain listing
+    /// cannot enumerate it.
+    fn indexer(self, domain: KeyDomain) -> Option<(Key, Known<bool>)> {
+        match self {
+            Self::Key(key) => Some((key.clone(), Known::Unknown)),
+            Self::Shape => Some((Key::Domain(domain), Known::Yes(false))),
             Self::Listing | Self::Coverage => None,
         }
     }
@@ -58,13 +72,13 @@ impl Values<'_> {
                 IndexedMode::Domain(domain) => {
                     if sites.is_empty() { continue }
                     if matches!(request, MemberRequest::Coverage) { continue }
-                    let Some(key) = wanted else { return Known::Unknown };
+                    let Some((key, required)) = request.indexer(*domain) else { return Known::Unknown };
                     Self::merge_member(&mut members, Member {
-                        key: key.clone(),
+                        key,
                         sources: sites.into_iter().map(|site| MemberSource {
                             site, value: recipe.value.clone(), origin: MemberOrigin::Indexer(*domain),
                         }).collect(),
-                        required: Known::Unknown,
+                        required,
                     });
                     continue;
                 },
@@ -88,13 +102,13 @@ impl Values<'_> {
             if repeated {
                 if sites.len() != 1 { return Known::Unknown }
                 if matches!(request, MemberRequest::Coverage) { continue }
-                let Some(key) = wanted.cloned() else { return Known::Unknown };
+                let Some((key, required)) = request.indexer(KeyDomain::Ordinal) else { return Known::Unknown };
                 Self::merge_member(&mut members, Member {
                     key,
                     sources: sites.into_iter().map(|site| MemberSource {
                         site, value: recipe.value.clone(), origin: MemberOrigin::Ordinal { repeated: true },
                     }).collect(),
-                    required: Known::Unknown,
+                    required,
                 });
                 continue;
             }

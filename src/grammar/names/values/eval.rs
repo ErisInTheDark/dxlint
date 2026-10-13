@@ -113,7 +113,8 @@ impl<'a, 'world> Run<'a, 'world> {
                             Some(_nested) => self.values.normalize(self.values.semantic.narrowing().refine(leaf, answer.value.clone())),
                             None => NodeValue::Unknown,
                         };
-                        self.values.semantic.values.values.insert(self.values.semantic.epoch, leaf, answer.value.clone());
+                        let value = answer.value.clone();
+                        self.settle(leaf, value);
                     }
                 }
                 Task::Expression(at, expression) => self.expression(at, expression),
@@ -143,11 +144,16 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer::unknown());
             return;
         };
-        if let Some(value) = self.values.semantic.values.values.get(&leaf) {
+        let state = &self.values.semantic.values;
+        if let Some(value) = state.values.get(&leaf) {
+            if value == NodeValue::Unknown && state.evaluating.borrow().iter().any(|&(active, _)| active == leaf) {
+                state.cycle_reads.set(state.cycle_reads.get() + 1);
+            }
             self.answers.push(Answer { exists: true, value });
             return;
         }
-        self.values.semantic.values.values.insert(self.values.semantic.epoch, leaf, NodeValue::Unknown);
+        state.values.insert(self.values.semantic.epoch, leaf, NodeValue::Unknown);
+        state.evaluating.borrow_mut().push((leaf, state.cycle_reads.get()));
         let Target::Node(_) = leaf.target else {
             self.answers.push(Answer { exists: true, value: NodeValue::leaf(leaf) });
             self.tasks.push(Task::Save(leaf));
@@ -155,6 +161,7 @@ impl<'a, 'world> Run<'a, 'world> {
         };
         match self.values.unwrap_recipe(leaf) {
             Known::Unknown => {
+                self.settle(leaf, NodeValue::Unknown);
                 self.answers.push(Answer::unknown());
                 return;
             }
@@ -167,6 +174,30 @@ impl<'a, 'world> Run<'a, 'world> {
         }
         self.answers.push(Answer { exists: true, value: NodeValue::leaf(leaf) });
         self.tasks.push(Task::Save(leaf));
+    }
+
+    /// Ends `leaf`'s evaluation with `value`: kept, unless it is unknown
+    /// after reading a leaf still being evaluated. That unknown may only be
+    /// the unfinished cycle, so a later ask evaluates it afresh.
+    fn settle(&self, leaf: Leaf, value: NodeValue) {
+        let state = &self.values.semantic.values;
+        let started = {
+            let mut evaluating = state.evaluating.borrow_mut();
+            match evaluating.iter().rposition(|&(active, _)| active == leaf) {
+                Some(index) => {
+                    let started = evaluating[index].1;
+                    evaluating.truncate(index);
+                    Some(started)
+                }
+                None => None,
+            }
+        };
+        let cyclic = started.is_none_or(|started| state.cycle_reads.get() > started);
+        if value == NodeValue::Unknown && cyclic {
+            state.values.remove(self.values.semantic.epoch, &leaf);
+        } else {
+            state.values.insert(self.values.semantic.epoch, leaf, value);
+        }
     }
 
     fn expression(&mut self, at: Leaf, expression: &'a Value) {

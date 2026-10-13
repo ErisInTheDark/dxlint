@@ -174,6 +174,16 @@ impl Values<'_> {
     }
 
     pub fn members(&self, value: &NodeValue) -> Known<Vec<Vec<Member>>> {
+        self.member_rows(value, false)
+    }
+
+    /// Like [`Values::members`], but indexers are listed once by their key
+    /// domain, for structural comparison of open shapes (arrays, records).
+    pub fn shape_members(&self, value: &NodeValue) -> Known<Vec<Vec<Member>>> {
+        self.member_rows(value, true)
+    }
+
+    fn member_rows(&self, value: &NodeValue, shape: bool) -> Known<Vec<Vec<Member>>> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         let NodeValue::Alternatives(alternatives) = value else { return Known::Unknown };
         let mut rows = Vec::new();
@@ -182,7 +192,11 @@ impl Values<'_> {
             let mut row = Vec::new();
             for &leaf in alternative {
                 if !self.question.budget.step() { return Known::Unknown }
-                let Known::Yes(members) = self.leaf_members(leaf) else { return Known::Unknown };
+                let members = if shape {
+                    let Known::Yes(at) = self.semantic.leaf(leaf) else { return Known::Unknown };
+                    self.direct_members(at, MemberRequest::Shape)
+                } else { self.leaf_members(leaf) };
+                let Known::Yes(members) = members else { return Known::Unknown };
                 for member in members { Self::merge_member(&mut row, member) }
             }
             rows.push(row);
@@ -378,7 +392,8 @@ impl Values<'_> {
                         if let Some(member) = rows.pop().flatten() { Self::merge_member(&mut members, member) }
                     }
                     None => {
-                        let Known::Yes(mut rows) = self.members(&base) else { return Known::Unknown };
+                        let rows = if matches!(request, MemberRequest::Shape) { self.shape_members(&base) } else { self.members(&base) };
+                        let Known::Yes(mut rows) = rows else { return Known::Unknown };
                         if rows.len() != 1 { return Known::Unknown }
                         for member in rows.pop().unwrap_or_default() {
                             if !own.contains(&member.key) { Self::merge_member(&mut members, member) }

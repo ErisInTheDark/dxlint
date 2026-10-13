@@ -342,6 +342,7 @@ impl Profile {
                 .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
                 .chain(crate::grammar::names::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
                 .chain(crate::grammar::names::modules::queries::PROFILE_QUERIES.iter().copied())
+                .chain(["units.native", "units.view"])
                 .map(|name| (name, SemanticQueryProfile::default())).collect(),
             ..Profile::default()
         }

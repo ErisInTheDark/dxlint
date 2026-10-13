@@ -160,6 +160,13 @@ pub struct Carrier {
 #[derive(Default)]
 pub(crate) struct State {
     values: Memo<Leaf, NodeValue>,
+    /// Leaves whose values are being evaluated (outermost first), each with
+    /// [`State::cycle_reads`] when it started.
+    evaluating: std::cell::RefCell<Vec<(Leaf, u64)>>,
+    /// Reads of a leaf still being evaluated (its seed). An unknown value
+    /// computed after such a read may only reflect the unfinished cycle, so
+    /// it is not kept.
+    cycle_reads: std::cell::Cell<u64>,
     widened: Memo<Leaf, NodeValue>,
     traits: Memo<(Leaf, u16), Known<bool>>,
     optional: Memo<Leaf, Known<bool>>,
@@ -416,7 +423,9 @@ impl Values<'_> {
                 }
                 answer.map_or(Known::Unknown, Known::Yes)
             }
-            _ => Known::Unknown,
+            // Any other recipe (`from instance "Symbol" ... at "iterator"`)
+            // keys by the value it evaluates to.
+            _ => self.value_key(&self.evaluate(at, expression)),
         }
     }
 
