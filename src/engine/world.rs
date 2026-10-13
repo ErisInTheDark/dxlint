@@ -97,7 +97,7 @@ impl<'a> LintWorld<'a> {
         let view = self.views.get(file.checked_sub(1)?)?;
         let unit = &view.unit;
         unit.parsed.tree.nodes.get(node as usize)?;
-        let ctx = self.linter.tree_ctx(unit.lang, &unit.parsed.tree, (&unit.text, &view.lines, &unit.rel), &view.memo, &view.reindented, view.native());
+        let ctx = self.linter.tree_ctx(unit.lang, &unit.parsed.tree, (&unit.text, unit.lines(), &unit.rel), &view.memo, &view.reindented, view.native());
         Some(Ctx { file_id: file, node, world: Some(self), ..ctx })
     }
 

@@ -28,6 +28,14 @@ pub(super) struct Unit {
     pub hash: u64,
     pub parsed: ParsedFile,
     pub names: OnceLock<reads::Cached<Arc<crate::grammar::names::Resolved>>>,
+    lines: OnceLock<crate::line_index::LineIndex>,
+}
+
+impl Unit {
+    /// Line starts, built once on first use and shared by every world.
+    pub fn lines(&self) -> &crate::line_index::LineIndex {
+        self.lines.get_or_init(|| crate::line_index::LineIndex::new(&self.text))
+    }
 }
 
 impl Linter {
@@ -89,7 +97,7 @@ impl Linter {
                     (0..frontend.kinds().len()).map(|kind| self.unit_tokens && frontend.is_token(kind as u16)).collect::<Vec<_>>()
                 }).unwrap_or_default();
                 let parsed = self.parse(path, &text, ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens }).ok()?;
-                let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new() });
+                let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new(), lines: OnceLock::new() });
                 self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
                 unit
             }
