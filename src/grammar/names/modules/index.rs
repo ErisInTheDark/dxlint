@@ -75,8 +75,13 @@ impl Index {
         let ids = match name {
             None => return scope.all.iter().map(|&id| &self.plans[id]).collect(),
             Some((name, class)) => {
-                let mut ids = scope.named.get(name).and_then(|classes| classes.get(&class)).cloned().unwrap_or_default();
-                ids.extend(scope.computed.get(&class).into_iter().flatten().copied());
+                let matching = |classes: &FxHashMap<u64, Vec<usize>>| {
+                    if class.is_power_of_two() { return classes.get(&class).cloned().unwrap_or_default() }
+                    classes.iter().filter(|(bit, _)| **bit & class != 0)
+                        .flat_map(|(_, ids)| ids.iter().copied()).collect::<Vec<_>>()
+                };
+                let mut ids = scope.named.get(name).map(matching).unwrap_or_default();
+                ids.extend(matching(&scope.computed));
                 ids.sort_unstable();
                 ids.dedup();
                 ids

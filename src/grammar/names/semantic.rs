@@ -150,7 +150,7 @@ impl<'a> Semantic<'a> {
     }
 
     pub fn modules(&self) -> super::modules::queries::Queries<'_> {
-        super::modules::queries::Queries { semantic: self }
+        super::modules::queries::Queries::new(self)
     }
 
     pub fn narrowing(&self) -> super::narrowing::Narrowing<'_> {

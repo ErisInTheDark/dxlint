@@ -1,6 +1,7 @@
 use crate::expr::Value;
 use crate::grammar::names::question::{Known, Leaf, Target};
 use crate::grammar::names::semantic::Semantic;
+use crate::grammar::names::modules::queries::ClassAnswers;
 
 use super::QueryFunction;
 
@@ -13,9 +14,9 @@ fn classes(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
     let Target::Node(node) = at.target else { return Known::Unknown };
     let [Value::Str(name), source] = args else { return Known::Unknown };
     match source {
-        Value::Null => class_answers(semantic, |class| semantic.modules().binding_has_class(node, name, class)),
+        Value::Null => class_answers(semantic, semantic.modules().binding_classes(node, name, class_mask(semantic))),
         Value::Str(source) => match semantic.world.module(at, source, semantic) {
-            Known::Yes(Some(scope)) => class_answers(semantic, |class| semantic.modules().export_has_class(scope, name, class)),
+            Known::Yes(Some(scope)) => class_answers(semantic, semantic.modules().export_classes(scope, name, class_mask(semantic))),
             _ => Known::Unknown,
         },
         _ => Known::Unknown,
@@ -28,7 +29,7 @@ fn exports(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
     let Known::Yes(names) = semantic.modules().export_names(scope) else { return Known::Unknown };
     let mut rows = Vec::with_capacity(names.len());
     for name in names {
-        let Known::Yes(classes) = class_answers(semantic, |class| semantic.modules().export_has_class(scope, &name, class)) else { return Known::Unknown };
+        let Known::Yes(classes) = class_answers(semantic, semantic.modules().export_classes(scope, &name, class_mask(semantic))) else { return Known::Unknown };
         if let Value::Record(answers) = &classes {
             if answers.iter().all(|(_, value)| matches!(value, Value::Bool(false))) { continue }
         }
@@ -40,13 +41,16 @@ fn exports(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<
     Known::Yes(Value::list(rows))
 }
 
-fn class_answers(semantic: &Semantic<'_>, mut ask: impl FnMut(u64) -> Known<bool>) -> Known<Value<'static>> {
+fn class_mask(semantic: &Semantic<'_>) -> u64 {
+    let count = semantic.tables.vocabulary.declaration_classes.len();
+    if count == 64 { u64::MAX } else { (1u64 << count) - 1 }
+}
+
+fn class_answers(semantic: &Semantic<'_>, classes: ClassAnswers) -> Known<Value<'static>> {
     let mut answers = Vec::new();
     for (bit, name) in semantic.tables.vocabulary.declaration_classes.iter().enumerate() {
-        let value = match ask(1u64 << bit) {
-            Known::Yes(present) => Value::Bool(present),
-            Known::Unknown => Value::Null,
-        };
+        let class = 1u64 << bit;
+        let value = if classes.known & class == 0 { Value::Null } else { Value::Bool(classes.present & class != 0) };
         if semantic.question.budget.exhausted() { return Known::Unknown }
         answers.push((name.clone().into(), value));
     }

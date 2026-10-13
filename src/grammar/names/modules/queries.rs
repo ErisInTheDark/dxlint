@@ -4,11 +4,26 @@ use super::compile::{Action, Conditional};
 use super::index::PublicationKind;
 use super::{Entry, Memo, Modules, Source};
 use crate::expr::Value;
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 type Answer = Known<Option<Vec<Target>>>;
+
+#[derive(Default, Debug, PartialEq, Eq)]
+pub struct ClassAnswers {
+    pub known: u64,
+    pub present: u64,
+}
+
+impl ClassAnswers {
+    fn insert(&mut self, class: u64, answer: Known<bool>) {
+        if let Known::Yes(present) = answer {
+            self.known |= class;
+            if present { self.present |= class; }
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Request {
@@ -35,15 +50,99 @@ impl State {
 
 pub struct Queries<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
+    batch: Option<&'a Batch>,
 }
 
+#[derive(Clone)]
 struct PreparedItem {
     node: NodeRef,
     item: Conditional,
     target: Option<Value<'static>>,
 }
 
-impl Queries<'_> {
+struct BatchPlan {
+    node: u32,
+    item: Conditional,
+    prepared: OnceCell<Option<PreparedItem>>,
+}
+
+struct Batch {
+    revision: u64,
+    plans: RefCell<BTreeMap<(ScopeRef, Box<str>, PublicationKind, bool), Rc<Vec<BatchPlan>>>>,
+    conditions: RefCell<BTreeMap<(NodeRef, u32), bool>>,
+    operands: RefCell<BTreeMap<(NodeRef, u32), Value<'static>>>,
+    globals: RefCell<BTreeMap<u32, Vec<ScopeRef>>>,
+}
+
+impl Batch {
+    fn new(revision: u64) -> Self {
+        Self {
+            revision, plans: Default::default(), conditions: Default::default(),
+            operands: Default::default(), globals: Default::default(),
+        }
+    }
+
+    fn finish(&self, query: &Queries<'_>, answers: ClassAnswers) -> ClassAnswers {
+        if query.semantic.world.revision() != self.revision || query.semantic.question.budget.limited() {
+            ClassAnswers::default()
+        } else { answers }
+    }
+}
+
+impl<'a> Queries<'a> {
+    pub(crate) fn new(semantic: &'a Semantic<'a>) -> Self {
+        Self { semantic, batch: None }
+    }
+
+    pub fn binding_classes(&self, at: NodeRef, name: &str, classes: u64) -> ClassAnswers {
+        let batch = Batch::new(self.sync_revision());
+        let query = Queries { semantic: self.semantic, batch: Some(&batch) };
+        let collect = || -> Result<ClassAnswers, ()> {
+            query.spend()?;
+            let world = query.semantic.world;
+            let names = world.names(at.file).ok_or(())?;
+            let tree = world.tree(at.file).ok_or(())?;
+            let source = world.text(at.file).ok_or(())?;
+            if !names.failures.is_empty() { return Err(()) }
+            let key = world.name_key(at.file, name);
+            let mut remaining = classes;
+            let mut answers = ClassAnswers::default();
+            while let Some(declaration) = names.visible(tree, source, &|text| world.name_key(at.file, text), at.node, &key, remaining) {
+                let (_, _, declared, _) = names.declared.get(&declaration).ok_or(())?;
+                let matched = remaining & declared;
+                if matched == 0 { return Err(()) }
+                for class in (0..64).map(|bit| 1u64 << bit).filter(|class| matched & class != 0) {
+                    let answer = match query.definition(NodeRef { file: at.file, node: declaration }, class) {
+                        Known::Yes(Some(targets)) => Known::Yes(!targets.is_empty()),
+                        Known::Yes(None) => Known::Yes(true),
+                        Known::Unknown => Known::Unknown,
+                    };
+                    answers.insert(class, answer);
+                }
+                remaining &= !matched;
+                if remaining == 0 { break }
+            }
+            for class in (0..64).map(|bit| 1u64 << bit).filter(|class| remaining & class != 0) {
+                answers.insert(class, match query.global(at.file, &key, class) {
+                    Known::Yes(targets) => Known::Yes(!targets.is_empty()),
+                    Known::Unknown => Known::Unknown,
+                });
+            }
+            Ok(answers)
+        };
+        batch.finish(&query, collect().unwrap_or_default())
+    }
+
+    pub fn export_classes(&self, scope: ScopeRef, name: &str, classes: u64) -> ClassAnswers {
+        let batch = Batch::new(self.sync_revision());
+        let query = Queries { semantic: self.semantic, batch: Some(&batch) };
+        let mut answers = ClassAnswers::default();
+        for class in (0..64).map(|bit| 1u64 << bit).filter(|class| classes & class != 0) {
+            answers.insert(class, query.export_has_class(scope, name, class));
+        }
+        batch.finish(&query, answers)
+    }
+
     pub fn binding_has_class(&self, at: NodeRef, key: &str, class: u64) -> Known<bool> {
         let present = || -> Result<bool, ()> {
             self.spend()?;
@@ -218,7 +317,7 @@ impl Queries<'_> {
 
     pub fn global(&self, importer: u32, name: &str, class: u64) -> Known<Vec<Target>> {
         match self.cached(Request::Global(importer, name.into(), class), || {
-            let scopes = self.semantic.world.global_scopes(importer, self.semantic).known().ok_or(())?;
+            let scopes = self.global_scopes(importer)?;
             let mut targets = Vec::new();
             for scope in scopes {
                 for PreparedItem { node, item, target: prepared } in self.indexed_items(scope, Some((name, class)), PublicationKind::Globals, true)? {
@@ -268,17 +367,49 @@ impl Queries<'_> {
     }
 
     fn spend(&self) -> Result<(), ()> {
+        if self.batch.is_some_and(|batch| batch.revision != self.semantic.world.revision()) { return Err(()) }
         self.semantic.question.budget.step().then_some(()).ok_or(())
     }
 
     fn holds(&self, node: NodeRef, condition: Option<u32>) -> Result<bool, ()> {
+        if let (Some(batch), Some(condition)) = (self.batch, condition) {
+            if batch.revision != self.semantic.world.revision() { return Err(()) }
+            if let Some(&held) = batch.conditions.borrow().get(&(node, condition)) { return Ok(held) }
+        }
         self.spend()?;
-        condition.map_or(Ok(true), |condition| self.semantic.world.condition(leaf(node), condition, self.semantic).known().ok_or(()))
+        let held = condition.map_or(Ok(true), |condition| self.semantic.world.condition(leaf(node), condition, self.semantic).known().ok_or(()))?;
+        if let (Some(batch), Some(condition)) = (self.batch, condition) {
+            if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
+            batch.conditions.borrow_mut().insert((node, condition), held);
+        }
+        Ok(held)
     }
 
     fn operand(&self, node: NodeRef, operand: u32) -> Result<Value<'static>, ()> {
+        if let Some(batch) = self.batch {
+            if batch.revision != self.semantic.world.revision() { return Err(()) }
+            if let Some(value) = batch.operands.borrow().get(&(node, operand)) { return Ok(value.clone()) }
+        }
         self.spend()?;
-        self.semantic.world.operand(leaf(node), operand, self.semantic).known().ok_or(())
+        let value = self.semantic.world.operand(leaf(node), operand, self.semantic).known().ok_or(())?;
+        if let Some(batch) = self.batch {
+            if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
+            batch.operands.borrow_mut().insert((node, operand), value.clone());
+        }
+        Ok(value)
+    }
+
+    fn global_scopes(&self, importer: u32) -> Result<Vec<ScopeRef>, ()> {
+        if let Some(batch) = self.batch {
+            if batch.revision != self.semantic.world.revision() { return Err(()) }
+            if let Some(scopes) = batch.globals.borrow().get(&importer) { return Ok(scopes.clone()) }
+        }
+        let scopes = self.semantic.world.global_scopes(importer, self.semantic).known().ok_or(())?;
+        if let Some(batch) = self.batch {
+            if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
+            batch.globals.borrow_mut().insert(importer, scopes.clone());
+        }
+        Ok(scopes)
     }
 
     fn target_value(&self, node: NodeRef, operand: u32, prepared: Option<Value<'static>>) -> Result<Value<'static>, ()> {
@@ -327,55 +458,91 @@ impl Queries<'_> {
     }
 
     fn indexed_items(&self, scope: ScopeRef, name: Option<(&str, u64)>, publication: PublicationKind, first_globals: bool) -> Result<Vec<PreparedItem>, ()> {
+        let plans = if let (Some(batch), Some((name, _))) = (self.batch, name) {
+            if batch.revision != self.semantic.world.revision() { return Err(()) }
+            let key = (scope, name.into(), publication, first_globals);
+            let cached = batch.plans.borrow().get(&key).cloned();
+            match cached {
+                Some(plans) => plans,
+                None => {
+                    let plans = Rc::new(self.indexed_plans(scope, Some((name, u64::MAX)), publication, first_globals)?);
+                    batch.plans.borrow_mut().insert(key, plans.clone());
+                    plans
+                }
+            }
+        } else {
+            Rc::new(self.indexed_plans(scope, name, publication, first_globals)?)
+        };
+        let mut items = Vec::new();
+        for plan in &*plans {
+            let classes = match plan.item.action {
+                Action::Exports { classes, .. } | Action::Globals { classes, .. } => classes,
+                _ => continue,
+            };
+            if name.is_some_and(|(_, class)| classes != 0 && classes & class == 0) { continue }
+            let prepared = match plan.prepared.get() {
+                Some(prepared) => prepared.clone(),
+                None => {
+                    let prepared = self.prepare_item(scope, plan)?;
+                    let _ = plan.prepared.set(prepared.clone());
+                    prepared
+                }
+            };
+            if let Some(prepared) = prepared { items.push(prepared); }
+        }
+        Ok(items)
+    }
+
+    fn indexed_plans(&self, scope: ScopeRef, name: Option<(&str, u64)>, publication: PublicationKind, first_globals: bool) -> Result<Vec<BatchPlan>, ()> {
         let world = self.semantic.world;
         let names = world.names(scope.file).ok_or(())?;
         let owner = names.scopes.get(scope.scope as usize).ok_or(())?.node;
         let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;
-        let mut items = Vec::new();
         let plans = || index.plans(owner, name, publication).into_iter().filter(|plan| {
             !first_globals || matches!(plan.item.action, Action::Globals { first: true, .. })
-        }).collect::<Vec<_>>();
-        let plans = match world.profile() {
+        }).map(|plan| BatchPlan { node: plan.node, item: plan.item.clone(), prepared: OnceCell::new() }).collect::<Vec<_>>();
+        Ok(match world.profile() {
             Some(profile) => profile.time_module_plans(plans),
             None => plans(),
+        })
+    }
+
+    fn prepare_item(&self, scope: ScopeRef, plan: &BatchPlan) -> Result<Option<PreparedItem>, ()> {
+        self.spend()?;
+        let names = self.semantic.world.names(scope.file).ok_or(())?;
+        let Some(mut containing) = names.scope_of(plan.node) else { return Ok(None) };
+        let node = NodeRef { file: scope.file, node: plan.node };
+        let mut item = plan.item.clone();
+        let mut target = None;
+        let local = match item.action {
+            Action::Exports { target, module: None, .. } | Action::Globals { target, module: None, .. } => target,
+            _ => None,
         };
-        for plan in plans {
-            self.spend()?;
-            let Some(mut containing) = names.scope_of(plan.node) else { continue };
-            let node = NodeRef { file: scope.file, node: plan.node };
-            let mut item = plan.item.clone();
-            let mut target = None;
-            let local = match item.action {
-                Action::Exports { target, module: None, .. } | Action::Globals { target, module: None, .. } => target,
-                _ => None,
-            };
-            let source_scope = &names.scopes[containing as usize];
-            if source_scope.node == plan.node && source_scope.parent.is_some()
-                && self.is_publication(ScopeRef { file: scope.file, scope: containing })? {
-                if let Some(operand) = local {
-                    if !self.holds(node, item.when)? { continue }
-                    item.when = None;
-                    let value = self.operand(node, operand)?;
-                    let targets = nodes(&value);
-                    let declaring = targets.first().and_then(|target| names.declared.get(target))
-                        .filter(|(_, owner, ..)| *owner == plan.node).map(|(scope, ..)| *scope);
-                    if let Some(declaring) = declaring.filter(|&declaring| targets.iter().all(|target| {
-                        names.declared.get(target).is_some_and(|&(scope, owner, ..)| scope == declaring && owner == plan.node)
-                    })) {
-                        containing = declaring;
-                    }
-                    target = Some(value);
+        let source_scope = &names.scopes[containing as usize];
+        if source_scope.node == plan.node && source_scope.parent.is_some()
+            && self.is_publication(ScopeRef { file: scope.file, scope: containing })? {
+            if let Some(operand) = local {
+                if !self.holds(node, item.when)? { return Ok(None) }
+                item.when = None;
+                let value = self.operand(node, operand)?;
+                let targets = nodes(&value);
+                let declaring = targets.first().and_then(|target| names.declared.get(target))
+                    .filter(|(_, owner, ..)| *owner == plan.node).map(|(scope, ..)| *scope);
+                if let Some(declaring) = declaring.filter(|&declaring| targets.iter().all(|target| {
+                    names.declared.get(target).is_some_and(|&(scope, owner, ..)| scope == declaring && owner == plan.node)
+                })) {
+                    containing = declaring;
                 }
-            }
-            while !self.is_publication(ScopeRef { file: scope.file, scope: containing })? {
-                let Some(parent) = names.scopes[containing as usize].parent else { break };
-                containing = parent;
-            }
-            if containing == scope.scope && self.is_publication(scope)? {
-                items.push(PreparedItem { node, item, target });
+                target = Some(value);
             }
         }
-        Ok(items)
+        while !self.is_publication(ScopeRef { file: scope.file, scope: containing })? {
+            let Some(parent) = names.scopes[containing as usize].parent else { break };
+            containing = parent;
+        }
+        Ok(if containing == scope.scope && self.is_publication(scope)? {
+            Some(PreparedItem { node, item, target })
+        } else { None })
     }
 
     fn is_publication(&self, scope: ScopeRef) -> Result<bool, ()> {
@@ -635,12 +802,14 @@ mod tests {
         star_filter: Known<bool>,
         star_queries: std::cell::Cell<usize>,
         module_queries: std::cell::Cell<usize>,
+        global_queries: std::cell::Cell<usize>,
         merged_scopes: Known<Vec<ScopeRef>>,
         merge_queries: std::cell::Cell<usize>,
         condition: Known<bool>,
         condition_queries: std::cell::Cell<usize>,
         revision: std::cell::Cell<u64>,
         cut: std::cell::Cell<bool>,
+        drift: std::cell::Cell<bool>,
         operands: crate::fx_hash::FxHashMap<(NodeRef, u32), Known<crate::expr::Value<'static>>>,
     }
 
@@ -664,12 +833,14 @@ mod tests {
                 star_filter: Known::Yes(false),
                 star_queries: std::cell::Cell::new(0),
                 module_queries: std::cell::Cell::new(0),
+                global_queries: std::cell::Cell::new(0),
                 merged_scopes: Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]),
                 merge_queries: std::cell::Cell::new(0),
                 condition: Known::Yes(true),
                 condition_queries: std::cell::Cell::new(0),
                 revision: Default::default(),
                 cut: Default::default(),
+                drift: Default::default(),
                 operands: Default::default(),
             }
         }
@@ -702,10 +873,12 @@ mod tests {
             }
         }
         fn global_scopes(&self, _: u32, _: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
+            self.global_queries.set(self.global_queries.get() + 1);
             Known::Yes(vec![ScopeRef { file: 0, scope: 0 }, ScopeRef { file: 1, scope: 0 }])
         }
         fn condition(&self, _: Leaf, _: u32, semantic: &Semantic<'_>) -> Known<bool> {
             self.condition_queries.set(self.condition_queries.get() + 1);
+            if self.drift.replace(false) { self.revision.set(self.revision.get() + 1); }
             if self.cut.get() { while semantic.question.budget.step() {} }
             self.condition
         }
@@ -730,6 +903,62 @@ mod tests {
     }
 
     fn target(file: u32) -> Target { Target::Node(NodeRef { file, node: 1 }) }
+
+    #[test]
+    fn bulk_classes_share_publication_conditions_without_losing_unknown_meanings() {
+        let mut files = Files::new();
+        files.names[0].declared.get_mut(&1).unwrap().2 = 3;
+        files.merged_scopes = Known::Unknown;
+        let mut tables = tables(false);
+        for item in &mut tables.kinds[1].modules.items {
+            if let Action::Exports { classes, .. } = &mut item.action {
+                *classes = 3;
+                item.when = Some(0);
+            }
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().export_classes(ScopeRef { file: 0, scope: 0 }, "X", 7),
+            ClassAnswers { known: 3, present: 3 });
+        assert_eq!(files.condition_queries.get(), 1);
+    }
+
+    #[test]
+    fn bulk_binding_fallback_loads_global_scopes_once_for_all_classes() {
+        let mut files = Files::new();
+        files.names[0].declared.get_mut(&1).unwrap().2 = 3;
+        files.names[1].declared.clear();
+        files.trees[1].nodes[1].matcher = 2;
+        let mut tables = tables(false);
+        for item in &mut tables.kinds[1].modules.items {
+            if let Action::Globals { classes, .. } = &mut item.action { *classes = 3; }
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().binding_classes(NodeRef { file: 1, node: 0 }, "X", 7),
+            ClassAnswers { known: 7, present: 3 });
+        assert_eq!(files.global_queries.get(), 1);
+    }
+
+    #[test]
+    fn bulk_classes_do_not_combine_answers_across_world_revisions() {
+        let mut files = Files::new();
+        files.names[0].declared.get_mut(&1).unwrap().2 = 3;
+        files.drift.set(true);
+        let mut tables = tables(false);
+        for item in &mut tables.kinds[1].modules.items {
+            if let Action::Exports { classes, .. } = &mut item.action {
+                *classes = 3;
+                item.when = Some(0);
+            }
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&files, &tables, &question);
+        assert_eq!(semantic.modules().export_classes(ScopeRef { file: 0, scope: 0 }, "X", 3),
+            ClassAnswers::default());
+        assert_eq!(semantic.modules().export_classes(ScopeRef { file: 0, scope: 0 }, "X", 3),
+            ClassAnswers { known: 3, present: 3 });
+    }
 
     #[test]
     fn scope_opening_declarations_publish_their_names_outside_but_keep_members_inside() {
@@ -965,9 +1194,11 @@ mod tests {
         assert_eq!(semantic.modules().binding_has_class(name, "X", 1), Known::Yes(true));
         assert_eq!(semantic.modules().binding_has_class(name, "X", 2), Known::Yes(true));
         assert_eq!(semantic.modules().binding_has_class(name, "X", 4), Known::Yes(false));
+        assert_eq!(semantic.modules().binding_classes(name, "X", 7), ClassAnswers { known: 7, present: 3 });
         let scope = ScopeRef { file: 0, scope: 0 };
         assert_eq!(semantic.modules().export_has_class(scope, "X", 1), Known::Yes(true));
         assert_eq!(semantic.modules().export_has_class(scope, "X", 2), Known::Unknown);
+        assert_eq!(semantic.modules().export_classes(scope, "X", 3), ClassAnswers { known: 1, present: 1 });
         drop(semantic);
         files.names[0].failures.push((0, "unreadable declaration operand".into()));
         let semantic = Semantic::new(&files, &tables, &question);
