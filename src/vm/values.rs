@@ -209,6 +209,10 @@ enum FactShape {
 }
 
 impl Config {
+    pub(crate) fn clear_runtime(&mut self) {
+        *self.runtime_shapes.get_mut().expect("shape registry") = RuntimeShapes::default();
+    }
+
     pub(crate) fn take_lowering_errors(&mut self, owner: &str) -> Vec<String> {
         self.lowering_errors.drain(..).map(|error| format!("{owner}: {error}")).collect()
     }

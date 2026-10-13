@@ -229,6 +229,15 @@ pub struct Linter {
 static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
 
 impl Linter {
+    pub(crate) fn reset_runtime(&mut self) {
+        self.units.get_mut().expect("unit cache").clear();
+        self.discoveries.get_mut().expect("unit discoveries").clear();
+        self.projects = frontend::Projects::new(&self.grammar.natives);
+        self.profile = None;
+        *self.invalidation.get_mut() = 0;
+        self.attrs.values.clear_runtime();
+    }
+
     /// Lowers every enabled rule's expressions and reports config errors.
     pub(crate) fn lower_conditions(&mut self, config: &crate::config::ast::Config) -> Vec<crate::config::error::ConfigError> {
         use crate::config::error::ConfigError;

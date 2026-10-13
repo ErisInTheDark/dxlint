@@ -7,7 +7,7 @@ use std::time::Instant;
 use ignore::{WalkBuilder, WalkState};
 use serde::Serialize;
 
-use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Sources};
+use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Project, Sources};
 use crate::config::ast::Severity;
 use crate::engine::cache::{self, Cache};
 use crate::engine::{apply_fixes, Diagnostic, Edit, Linter};
@@ -153,10 +153,15 @@ pub(super) fn run(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, s
 
 fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Option<&Sources>) -> u8 {
     let started = Instant::now();
-    let (mut linter, config_ok, load_time, build_time) = match load_for_lint(output, config) {
-        Ok(p) => (p.linter, p.config_ok, p.load_time, p.build_time),
+    let mut project = match load_for_lint(output, config) {
+        Ok(project) => project,
         Err(code) => return code,
     };
+    prepared(output, args, &mut project, sources, started)
+}
+
+pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Project, sources: Option<&Sources>, started: Instant) -> u8 {
+    let Project { linter, config_ok, load_time, build_time, .. } = project;
     if args.profile {
         linter.enable_profile();
     }
@@ -182,7 +187,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
     let mut failed = false;
 
     std::thread::scope(|s| {
-        let linter = &mut linter;
+        let linter = &mut *linter;
         let cache = cache.as_ref();
         let explicit: Vec<PathBuf> = roots.iter().filter(|r| r.is_file()).cloned().collect();
         s.spawn(move || {
@@ -313,13 +318,13 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
         ));
         output.err(format_args!(
             "  config {:.1} ms (reading {:.1}, building {:.1})",
-            (load_time + build_time).as_secs_f64() * 1000.0,
+            (*load_time + *build_time).as_secs_f64() * 1000.0,
             load_time.as_secs_f64() * 1000.0,
             build_time.as_secs_f64() * 1000.0
         ));
     }
     // A broken config still lints with what built, but never passes.
-    if !config_ok {
+    if !*config_ok {
         2
     } else if failed || errors > 0 {
         1

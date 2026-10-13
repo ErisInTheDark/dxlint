@@ -1,5 +1,6 @@
 //! Command line interface.
 
+mod conformance;
 mod eval;
 mod fixtures;
 mod info;
@@ -37,6 +38,29 @@ struct Sources {
 }
 
 impl Sources {
+    fn from_records(records: impl IntoIterator<Item = SourceRecord>, cwd: &Path) -> Result<Self, String> {
+        let mut sources = Self::default();
+        let mut seen = HashSet::new();
+        for record in records {
+            sources.add(record, cwd, &mut seen)?;
+        }
+        Ok(sources)
+    }
+
+    fn add(&mut self, record: SourceRecord, cwd: &Path, seen: &mut HashSet<PathBuf>) -> Result<(), String> {
+        if record.path.as_os_str().is_empty() {
+            return Err("source path is empty".into());
+        }
+        let path = normalize_path(&cwd.join(&record.path));
+        if !seen.insert(path.clone()) {
+            return Err(format!("duplicate source path: {}", record.path.display()));
+        }
+        self.previous.push((path.clone(), reads::buffer(&path)));
+        self.files.push((record.text.len() as u64, path.clone()));
+        reads::set_buffer(&path, &record.text);
+        Ok(())
+    }
+
     fn load(path: &Path, cwd: &Path, input: impl Read) -> Result<Self, String> {
         if path == Path::new("-") {
             Self::read(BufReader::new(input), cwd)
@@ -53,17 +77,7 @@ impl Sources {
             let parse = || -> Result<(), String> {
                 let line = line.map_err(|error| error.to_string())?;
                 let record: SourceRecord = serde_json::from_str(&line).map_err(|error| error.to_string())?;
-                if record.path.as_os_str().is_empty() {
-                    return Err("source path is empty".into());
-                }
-                let path = normalize_path(&cwd.join(&record.path));
-                if !seen.insert(path.clone()) {
-                    return Err(format!("duplicate source path: {}", record.path.display()));
-                }
-                sources.previous.push((path.clone(), reads::buffer(&path)));
-                sources.files.push((record.text.len() as u64, path.clone()));
-                reads::set_buffer(&path, &record.text);
-                Ok(())
+                sources.add(record, cwd, &mut seen)
             };
             parse().map_err(|error| format!("sources line {}: {error}", index + 1))?;
         }
@@ -198,6 +212,8 @@ enum Command {
     },
     /// List the functions available in rule expressions
     Functions,
+    /// Lint isolated packed projects from JSONL requests on stdin
+    Conformance,
     /// Run the language server on stdio
     Lsp,
 }
@@ -240,6 +256,14 @@ where
         return crate::lsp::run(input, stdout, &mut stderr);
     }
     let mut output = Output { cwd, stdout: &mut stdout, stderr: &mut stderr };
+    if matches!(&cli.command, Some(Command::Conformance)) {
+        if cli.lint.sources.is_some() || !cli.lint.paths.is_empty() || cli.lint.fix || cli.lint.fix_preview
+            || cli.lint.jobs.is_some() || cli.lint.stats || cli.lint.profile || cli.lint.no_cache || cli.lint.format != Format::Human {
+            render::error(&mut output, "conformance accepts only --config; lint options are fixed by the worker protocol");
+            return 2;
+        }
+        return conformance::run(&mut output, &cli.config, input);
+    }
     let sources = match cli.lint.sources.as_ref().map(|path| Sources::load(path, cwd, input)).transpose() {
         Ok(sources) => sources,
         Err(error) => {
@@ -276,6 +300,7 @@ where
         },
         Some(Command::Eval { target, expr, files }) => eval::run(&mut output, config, &target, &expr, &files),
         Some(Command::Functions) => info::functions(&mut output),
+        Some(Command::Conformance) => unreachable!("conformance owns its input"),
         Some(Command::Lsp) => unreachable!("LSP owns its streams"),
     }
 }

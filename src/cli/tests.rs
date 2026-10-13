@@ -66,6 +66,107 @@ in .t match shout /\b[A-Z]{3,}\b/ {
 }
 "#;
 
+fn conformance_matches_standalone(dir: &Path, cases: &[(&str, Vec<(&Path, &str)>)]) -> Vec<serde_json::Value> {
+    let config_path = dir.join(".zlint");
+    let requests: Vec<_> = cases.iter().enumerate().map(|(id, (config, sources))| serde_json::json!({
+        "id": id.to_string(), "config": config,
+        "sources": sources.iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text })).collect::<Vec<_>>(),
+    })).collect();
+    let expected: Vec<_> = cases.iter().map(|(config, sources)| {
+        let records = std::iter::once(serde_json::json!({ "path": config_path, "text": config }))
+            .chain(sources.iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text })))
+            .map(|record| record.to_string()).collect::<Vec<_>>().join("\n");
+        zlint_input(dir, &["--sources", "-", "--no-cache", "--format", "jsonl", "--fix-preview", "--jobs", "1"], &records)
+    }).collect();
+    let input = requests.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    let actual = zlint_input(dir, &["conformance", "--config", config_path.to_str().unwrap()], &input);
+    assert_eq!(actual.code, 0, "{}", String::from_utf8_lossy(&actual.stderr));
+    assert!(actual.stderr.is_empty(), "worker output must be inside replies");
+    let replies: Vec<serde_json::Value> = stdout(&actual).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(replies.len(), expected.len());
+    for (id, (reply, expected)) in replies.iter().zip(&expected).enumerate() {
+        assert_eq!(reply["id"], id.to_string());
+        assert_eq!(reply["code"], expected.code);
+        assert_eq!(reply["stdout"], stdout(expected));
+        assert_eq!(reply["stderr"], String::from_utf8_lossy(&expected.stderr).to_string());
+    }
+    replies
+}
+
+#[test]
+fn conformance_reuses_config_without_leaking_sources_or_config_imports() {
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("conformance-config");
+    let a = dir.join("a.t");
+    let b = dir.join("b.t");
+    let base = dir.with_extension("zlint");
+    let config = format!("import \"../{}\"\n", base.file_name().unwrap().to_string_lossy());
+    let changed = format!("{config}rule no-shout error\n");
+    let replacement = RULES.replace("lower(text)", "\"quiet\"");
+    let replies = conformance_matches_standalone(&dir, &[
+        (&config, vec![(&base, RULES), (&a, "LOUD"), (&b, "BAD")]),
+        (&config, vec![(&base, RULES), (&a, "soft")]),
+        (&config, vec![(&base, &replacement), (&a, "LOUD")]),
+        (&changed, vec![(&base, RULES), (&a, "LOUD")]),
+        ("in absent rule broken\n", vec![(&a, "LOUD")]),
+        (&config, vec![(&base, RULES), (&a, "LOUD")]),
+    ]);
+    assert_ne!(replies[0]["stdout"], replies[1]["stdout"]);
+    assert_ne!(replies[2]["stdout"], replies[5]["stdout"], "changed imported rules must rebuild");
+    assert_eq!(replies[3]["code"], 1);
+    assert_eq!(replies[4]["code"], 2);
+    assert_eq!(replies[5]["code"], 0);
+    for path in [&a, &b, &base, &dir.join(".zlint")] {
+        assert!(crate::engine::reads::buffer(path).is_none(), "worker leaked {}", path.display());
+        assert!(!path.exists(), "worker wrote {}", path.display());
+    }
+}
+
+#[test]
+fn conformance_resets_imports_globals_and_project_settings() {
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("conformance-project");
+    let main = dir.join("main.ts");
+    let dep = dir.join("dep.ts");
+    let globals = dir.join("globals.d.ts");
+    let settings = dir.join("tsconfig.json");
+    let config = "import .ts\nin ts_identifier rule probe info \"{text}: {type}\" { when text == \"x\" || text == \"G\" }\n";
+    let replies = conformance_matches_standalone(&dir, &[
+        (config, vec![(&main, "import { x } from './dep';\nx;\nG;\n"),
+            (&dep, "export const x: number = 1;"), (&globals, "declare const G: boolean;"),
+            (&settings, "{\"compilerOptions\":{\"strictNullChecks\":true}}")]),
+        (config, vec![(&main, "import { x } from './dep';\nx;\nG;\n"),
+            (&dep, "export const x: string = '';"), (&settings, "{}")]),
+        (config, vec![(&main, "import { x } from './dep';\nx;\nG;\n")]),
+    ]);
+    assert_ne!(replies[0]["stdout"], replies[1]["stdout"]);
+    assert_ne!(replies[1]["stdout"], replies[2]["stdout"]);
+}
+
+#[test]
+fn conformance_bad_frames_restore_overlays_before_the_next_request() {
+    let dir = std::env::temp_dir().join("zlint-cli-tests").join("conformance-bad-frame");
+    let file = dir.join("a.t");
+    let config_path = dir.join(".zlint");
+    let source = serde_json::json!({ "path": file, "text": "LOUD" });
+    let frames = [
+        "{".to_owned(),
+        serde_json::json!({ "id": "duplicate", "config": RULES, "sources": [source.clone(), source.clone()] }).to_string(),
+        serde_json::json!({ "id": "good", "config": RULES, "sources": [source] }).to_string(),
+    ].join("\n");
+    let out = zlint_input(&dir, &["conformance", "--config", config_path.to_str().unwrap()], &frames);
+    assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
+    let replies: Vec<serde_json::Value> = stdout(&out).lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(replies.len(), 3);
+    assert_eq!(replies[0]["id"], serde_json::Value::Null);
+    assert_eq!(replies[0]["code"], 2);
+    assert_eq!(replies[1]["id"], "duplicate");
+    assert_eq!(replies[1]["code"], 2);
+    assert_eq!(replies[2]["id"], "good");
+    assert_eq!(replies[2]["code"], 0);
+    assert!(!replies[2]["stdout"].as_str().unwrap().is_empty());
+    assert!(crate::engine::reads::buffer(&file).is_none());
+    assert!(crate::engine::reads::buffer(&config_path).is_none());
+}
+
 #[test]
 fn jsonl_profile_counts_emitted_reports_and_includes_unfired_rules() {
     let dir = project("jsonl-profile", &[
@@ -142,7 +243,7 @@ fn packed_sources_resolve_virtual_projects_without_writing_files() {
     std::fs::create_dir_all(&dir).expect("empty project directory");
     let pack = [
         (".zlint", "import shared\n"),
-        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when imported_from != null }\n"),
+        ("shared.zlint", "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when reference_kind == \"import\" }\n"),
         ("dir/index.ts", "export const x: number = 1;\n"),
         ("main.ts", "import { x } from './dir';\nx;\n"),
     ].into_iter().map(|(path, text)| serde_json::json!({ "path": path, "text": text }).to_string()).collect::<Vec<_>>().join("\n");
@@ -391,7 +492,7 @@ fn relative_imports_errors_exit_codes_and_fixing() {
 
 #[test]
 fn cache_replays_results_and_relints_exactly_what_changed() {
-    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when text == \"G\" || imported_from != null }\n";
+    let rules = "import .ts\nin ts_identifier rule typed info \"{text}: {type}\" { when text == \"G\" || reference_kind == \"import\" }\n";
     let dir = project(
         "cli-cache",
         &[
@@ -404,6 +505,7 @@ fn cache_replays_results_and_relints_exactly_what_changed() {
     // b's messages, and the `--stats` line.
     let run = || {
         let out = zlint(&dir, &["--format", "jsonl", "--stats"]);
+        assert_eq!(out.code, 0, "{}", String::from_utf8_lossy(&out.stderr));
         let messages: Vec<String> = stdout(&out)
             .lines()
             .map(|l| serde_json::from_str::<serde_json::Value>(l).expect("json"))
