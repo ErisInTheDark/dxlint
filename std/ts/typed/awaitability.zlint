@@ -4,6 +4,9 @@ define {
 
 fn ts_awaitable_result(n) = n != null
   && unparenthesised_node(n) not (ts_null, ts_boolean, ts_number, ts_bigint, ts_string, ts_template)
+  && !(unparenthesised_node(n) is ts_array
+    && value_has_member(n, "then", { global: "Array", class: "type", path: [] }) == false
+    && value_has_member(n, "then", { global: "ReadonlyArray", class: "type", path: [] }) == false)
   && n could thenable
 fn ts_missing_await(n) = {
   value if !contains(n.modifier, "async") || n.body == null
