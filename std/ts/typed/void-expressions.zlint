@@ -3,22 +3,29 @@ import .ts/expression-fixes
 
 define {
 
-in ts_node let void_expression_kind type_structure([], ["kind"]).kind
 in ts_node let void_expression_return_profile type_structure([], ["kind", "parts"], false)
 in ts_node let void_expression_contextual_returns callable_contracts(node, node, [], ["contextual_returns"])
-fn void_expression_like(n) = contains(["void", "undefined"], n.void_expression_kind)
+fn void_expression_like(n) =
+  if n is (ts_call, ts_tagged_template) then n.result could undefined && n.result always undefined
+  else n could undefined && n always undefined
 fn void_expression_contains_void(profile) = profile.kind == "void"
   || profile.kind == "union" && any(profile.parts, part => void_expression_contains_void(part))
+fn void_expression_annotation_void(n) = {
+  value parts: value_constituents(n)
+  value if parts == null || any(parts, arm => any(arm, part => contains(part.uncertain_traits, "void")))
+    then void_expression_contains_void(n.void_expression_return_profile)
+    else any(parts, arm => any(arm, part => contains(part.traits, "void")))
+}
 fn void_expression_function(n) = {
   value n
   walk (current) current.parent.node
   find (current) current is (ts_function, ts_arrow, ts_method)
 }
 fn void_expression_void_returning(n) = n != null && (
-  if n.return_type != null then void_expression_contains_void(n.return_type.void_expression_return_profile)
+  if n.return_type != null then void_expression_annotation_void(n.return_type.node)
   else (n is ts_arrow || n is ts_function && !expression_fix_declaration(n))
-    && any(n.void_expression_contextual_returns, row =>
-      any(row.contextual_returns ?? [], result => void_expression_contains_void(result))))
+    && (n.expected.result could void || any(n.void_expression_contextual_returns, row =>
+      any(row.contextual_returns ?? [], result => void_expression_contains_void(result)))))
 fn void_expression_ancestor(n, arrows, operators) = {
   value p: n.parent.node
   value if p == null then null
