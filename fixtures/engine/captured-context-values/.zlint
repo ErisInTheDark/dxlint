@@ -1,0 +1,33 @@
+import .ts
+
+in ts_declarator rule captured-read {
+  let access init.node
+  when access is ts_index
+  let parts value_constituents(access.object.node)
+  when parts == null || any(parts, arm => any(arm, part => contains(part.traits, "null")))
+  warn "The captured value lost its non-null proof."
+}
+
+in ts_member rule iteration-item {
+  when object.text == "item"
+  when value_constituents(object.node) == null
+  warn "The iteration item lost its value."
+}
+
+fn fixture_trait(parts, trait) = parts != null && any(parts, arm => any(arm, part => contains(part.traits, trait)))
+in ts_declarator rule tuple-elements {
+  when name.text == "tupleName"
+  let parts value_constituents(init.node)
+  when !fixture_trait(parts, "string") || !fixture_trait(parts, "number")
+  warn "Tuple iteration lost an element alternative."
+}
+in ts_declarator rule custom-element {
+  when name.text == "customName"
+  when !fixture_trait(value_constituents(init.node), "boolean")
+  warn "Custom iteration lost its declared element."
+}
+in ts_declarator rule string-element {
+  when name.text == "character"
+  when !fixture_trait(value_constituents(init.node), "string")
+  warn "String iteration lost its element."
+}

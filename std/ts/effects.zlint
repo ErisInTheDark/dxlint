@@ -18,7 +18,7 @@ in ts_throw { runs argument; unwraps thrown argument }
 in ts_break { runs nothing; unwraps broken label nearest breakable }
 in ts_continue { runs nothing; unwraps continued label nearest loop }
 in ts_await { runs argument; unwraps awaited argument }
-in ts_yield { runs argument; unwraps yielded argument; unwraps maybe returned nearest function }
+in ts_yield { runs argument; unwraps yielded argument; unwraps maybe exited nearest function }
 in ts_call, ts_new, ts_member, ts_index, ts_yield, ts_await, ts_import_call,
   ts_tagged_template, ts_spread, ts_jsx_spread_attribute { unwraps maybe thrown }
 in ts_block { when is ts_try.block { unwraps maybe thrown } }

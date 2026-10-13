@@ -4,6 +4,7 @@ define {
 
 exclusive null, undefined, string, number, boolean, bigint, symbol, object
 exclusive falsy, truthy
+exclusive thenable, nonthenable
 top unknown
 dynamic any
 keys text string
@@ -52,6 +53,20 @@ fn ts_value_global_declaration(n, name) = {
   value targets: global_declarations(n, name, "type")
   value identity != null && targets != null
     && any(targets, target => target.file == identity.file && target.node == identity.node)
+}
+# Syntax first: only `const x = Symbol(...)` / `Symbol.for(...)` reaches the
+# semantic checks, so other declarators never ask (or wait on) them.
+fn ts_value_unique_symbol_binding(n) = n.type == null && n.name is ts_identifier && n.parent.kind == "const"
+  && n.parent.parent not (ts_for, ts_for_in, ts_for_of)
+  && ts_value_symbol_call(unparenthesised_node(n.init.node), n)
+fn ts_value_symbol_call(init, n) = init is ts_call && init.optional == null
+  && ts_value_symbol_base(if init.callee.node is ts_member && init.callee.property.text == "for"
+    then init.callee.object.node else init.callee.node, n)
+  && init always symbol
+fn ts_value_symbol_base(base, n) = base is ts_identifier && base.text == "Symbol" && {
+  value identity: declaration_identity(base)
+  value globals: global_declarations(n, "Symbol", "value")
+  value identity != null && globals != null && any(globals, global => global == identity)
 }
 fn ts_value_array_part(part, n) = {
   value carrier: part.carrier
@@ -248,10 +263,32 @@ in ts_variable_declaration {
   when count(declaration.nodes) == 1 { unwraps declaration }
   when count(declaration.nodes) != 1 { unwraps unknown }
 }
+in ts_for_of {
+  let ts_value_iteration_arguments []
+  let ts_value_iteration_string right always string
+  when modifier == null && !ts_value_iteration_string {
+    calls (from right at (from instance "Symbol" in value at "iterator")) with ts_value_iteration_arguments
+    unwraps result
+  }
+}
 in ts_declarator {
+  let ts_value_iteration_arguments []
+  let ts_value_iteration_binding name is ts_identifier && parent is ts_for_of.left && parent.parent.modifier == null
+  let ts_value_unique_symbol ts_value_unique_symbol_binding(node)
   widens type ?? init.widened
-  when name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
-  when name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
+  when ts_value_unique_symbol {
+    fits symbol, truthy, nonthenable
+    identity node
+  }
+  when ts_value_iteration_binding {
+    when parent.parent.ts_value_iteration_string { unwraps type ?? trait string, nonthenable }
+    when !parent.parent.ts_value_iteration_string {
+      calls (from parent.parent at "next") with ts_value_iteration_arguments
+      unwraps type ?? (from result at "value")
+    }
+  }
+  when !ts_value_iteration_binding && !ts_value_unique_symbol && name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
+  when !ts_value_iteration_binding && name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
   when !(name is ts_identifier) { unwraps unknown }
 }
 in ts_parameter, ts_rest {
@@ -461,11 +498,22 @@ in ts_member {
     when optional != null { unwraps (from object at ts_value_member_key) | trait undefined, nullable, falsy, nonthenable }
   }
 }
+fn ts_value_unchecked_index(n) = {
+  value lookup: value_lookup(n.object.node, n.index.node)
+  value keys: value_constituents(n.index.node)
+  value finite: keys != null && count(keys) > 0 && all(keys, arm =>
+    any(arm, part => part.identity_known && part.identity.kind == "value"))
+  value lookup != null && any(lookup.alternatives, row => row.matched && any(row.sources, source =>
+    row.required != true && contains(["indexer", "repeated"], source.kind)
+      || source.kind == "ordinal" && !finite))
+}
 in ts_index {
+  let ts_value_index_nullish optional != null
+    || (if compiler_options.noUncheckedIndexedAccess == true then ts_value_unchecked_index(node) else false)
   when object always any { unwraps object }
   when !(object always any) {
-    when optional == null { unwraps from object at index }
-    when optional != null { unwraps (from object at index) | trait undefined, nullable, falsy, nonthenable }
+    when !ts_value_index_nullish { unwraps from object at index }
+    when ts_value_index_nullish { unwraps (from object at index) | trait undefined, nullable, falsy, nonthenable }
   }
 }
 in ts_function, ts_arrow, ts_function_type, ts_method_signature, ts_call_signature {
@@ -531,6 +579,7 @@ in ts_type_predicate {
 }
 in ts_type_parameter {
   fits parameter open
+  carries as { kind: "parameter", name: name.text }
   when constraint != null { constrains constraint }
   unwraps it.inferred ?? (self & (default ?? constraint ?? trait unknown))
 }
@@ -544,7 +593,23 @@ in ts_intersection {
     unwraps self & (&...ts_value_intersection)
   }
 }
-in ts_literal_type { unwraps value }
+in ts_literal_type {
+  when !starts_with(text, "-") { unwraps value }
+  when starts_with(text, "-") && value is ts_number {
+    fits number, nonthenable, literal
+    widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+    fits falsy when value always falsy
+    fits truthy when value always truthy
+    identity -value.ts_value_number
+  }
+  when starts_with(text, "-") && value is ts_bigint {
+    fits bigint, nonthenable, literal
+    widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+    fits falsy when value always falsy
+    fits truthy when value always truthy
+    identity { type: "bigint", value: js_bigint("-" value.text) }
+  }
+}
 in ts_parenthesized_type { unwraps type }
 in ts_array_type {
   when parent is ts_type_operator && parent.operator == "readonly" { unwraps instance "ReadonlyArray" of type }
@@ -592,7 +657,10 @@ in ts_type_operator {
   }
   when operator != "readonly" && !(operator == "unique" && type.text == "symbol") { unwraps unknown }
 }
-in ts_template_type { fits string }
+in ts_template_type {
+  fits string
+  carries type as { kind: "template" }
+}
 in ts_infer { unwraps type_parameter }
 in ts_import_type, ts_mapped_type { unwraps unknown }
 in ts_type_keyword {

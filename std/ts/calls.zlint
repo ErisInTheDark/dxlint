@@ -1,11 +1,19 @@
 # .ts/calls: signatures and invocation syntax.
 
 define {
+  fn ts_calls_function_owner(n) = find(walk(n, current => current.parent.node),
+    current => current is (ts_function, ts_arrow, ts_method))
+
   in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
     overloads infer last
     let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
     let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
+    let calls_generator_yields {
+      value descendants(ts_yield)
+      filter (yielded) ts_calls_function_owner(yielded) == node
+    }
+    let calls_generator_delegates any(calls_generator_yields, yielded => yielded.operator == "*")
     let calls_discards_result if return_type is ts_type_keyword then return_type.text == "void" else {
       value parts: value_constituents(return_type.node)
       value parts != null && count(parts) > 0
@@ -20,7 +28,23 @@ define {
       signature calls_parameters receiver calls_receivers returns return_type ?? instance "Promise" of (calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable))
     }
     when contains([] node.modifier, "*") {
-      signature calls_parameters receiver calls_receivers returns return_type
+      when return_type != null {
+        signature calls_parameters receiver calls_receivers returns return_type
+      }
+      when return_type == null {
+        when !contains([] node.modifier, "async") && !calls_generator_delegates {
+          signature calls_parameters receiver calls_receivers returns instance "Generator" of (...calls_generator_yields using (argument ?? trait undefined, nullable, falsy, nonthenable)), (returned default trait void, undefined, nullable, falsy, nonthenable), (trait unknown)
+        }
+        when !contains([] node.modifier, "async") && calls_generator_delegates {
+          signature calls_parameters receiver calls_receivers returns instance "Generator" of (trait unknown), (returned default trait void, undefined, nullable, falsy, nonthenable), (trait unknown)
+        }
+        when contains([] node.modifier, "async") && !calls_generator_delegates {
+          signature calls_parameters receiver calls_receivers returns instance "AsyncGenerator" of (...calls_generator_yields using (instance "Awaited" of (argument ?? trait undefined, nullable, falsy, nonthenable))), (instance "Awaited" of (returned default trait void, undefined, nullable, falsy, nonthenable)), (trait unknown)
+        }
+        when contains([] node.modifier, "async") && calls_generator_delegates {
+          signature calls_parameters receiver calls_receivers returns instance "AsyncGenerator" of (trait unknown), (instance "Awaited" of (returned default trait void, undefined, nullable, falsy, nonthenable)), (trait unknown)
+        }
+      }
     }
     discards result when calls_discards_result
   }
@@ -105,11 +129,7 @@ define {
     when body not ts_block { in body expects return_type ?? it.expected.result }
   }
   in ts_return {
-    let calls_return_function {
-      value parent.node
-      walk (current) current.parent.node
-      find (current) current is (ts_function, ts_arrow, ts_method)
-    }
+    let calls_return_function ts_calls_function_owner(node)
     when calls_return_function is ts_method && calls_return_function.kind == "get" {
       in argument expects calls_return_function.return_type
     }
