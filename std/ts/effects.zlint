@@ -5,15 +5,22 @@ in ts_expression_statement, ts_export_assignment, ts_decorator, ts_computed_key,
   ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion,
   ts_instantiation, ts_jsx_expression { runs expression }
 in ts_variable_declaration { runs declaration }
-in ts_declarator { runs init then name }
-in ts_parameter { runs init then name }
+in ts_declarator {
+  runs init then name
+  when init != null && name is ts_identifier { assigned name with init }
+}
+in ts_parameter { runs decorator then maybe init then name }
+in ts_identifier {
+  when contains(["read", "read_write"], access) { unwraps read it }
+}
 in ts_return { runs argument; unwraps returned argument nearest function }
 in ts_throw { runs argument; unwraps thrown argument }
 in ts_break { runs nothing; unwraps broken label nearest breakable }
 in ts_continue { runs nothing; unwraps continued label nearest loop }
 in ts_await { runs argument; unwraps awaited argument }
-in ts_yield { runs argument; unwraps yielded argument }
-in ts_call, ts_new, ts_member, ts_index, ts_yield, ts_import_call { unwraps maybe thrown }
+in ts_yield { runs argument; unwraps yielded argument; unwraps maybe returned nearest function }
+in ts_call, ts_new, ts_member, ts_index, ts_yield, ts_await, ts_import_call,
+  ts_tagged_template, ts_spread, ts_jsx_spread_attribute { unwraps maybe thrown }
 in ts_block { when is ts_try.block { unwraps maybe thrown } }
 in ts_if, ts_conditional { runs test then (consequent or alternate) }
 in ts_logical { runs left then maybe right }
@@ -47,7 +54,8 @@ in ts_do_while {
 }
 in ts_for {
   scope loop, breakable
-  runs init then (repeat body while test.flow_truth next update)
+  when test != null { runs init then (repeat body while test.flow_truth next update) }
+  when test == null { runs init then (repeat body while flow_truth next update) }
 }
 in ts_for_in, ts_for_of {
   scope loop, breakable
@@ -60,16 +68,46 @@ in ts_switch {
 in ts_labeled { labels label; runs body }
 in ts_try {
   runs block
-  in handler catches thrown from block
-  in finalizer runs after block, handler
+  when handler != null { in handler catches thrown from block }
+  when finalizer != null { in finalizer runs after block, handler }
 }
 in ts_with { runs object then body }
 
-in ts_assignment {
-  when contains(["&&=", "||=", "??="], operator) { runs left then maybe right }
-  when !contains(["&&=", "||=", "??="], operator) { runs right then left }
+in ts_node let flow_assignment_scalar false
+in ts_identifier, ts_member, ts_index let flow_assignment_scalar true
+in ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion, ts_instantiation let flow_assignment_scalar expression.flow_assignment_scalar
+in ts_node let flow_destructuring_target
+  if is (ts_for_in.left, ts_for_of.left) then true
+  else if is ts_declarator.name then
+    (node.parent.init != null && flow_assignment_scalar == false)
+    || node.parent.parent is (ts_for_in.left, ts_for_of.left)
+  else if is ts_assignment.left then node.parent.flow_destructuring_target
+    || node.parent.operator == "=" && flow_assignment_scalar == false
+  else if is (ts_array.element, ts_array_pattern.element, ts_object.property, ts_object_pattern.property,
+    ts_object_pattern.rest, ts_rest.argument, ts_spread.argument, ts_assignment_pattern.left,
+    ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+    ts_type_assertion.expression, ts_instantiation.expression) then parent.flow_destructuring_target
+  else if is (ts_property.value, ts_pattern_property.value) then parent.flow_destructuring_target
+  else if is (ts_property.key, ts_pattern_property.key) && node.parent.value == null then parent.flow_destructuring_target
+  else false
+in ts_identifier, ts_member, ts_index {
+  when flow_destructuring_target { assigned it }
 }
-in ts_assignment_pattern { runs maybe right then left }
+in ts_assignment {
+  when flow_destructuring_target { runs maybe right then left }
+  when !flow_destructuring_target && contains(["&&=", "||=", "??="], operator) {
+    runs left then maybe right
+    unwraps maybe mutated left
+  }
+  when !flow_destructuring_target && !contains(["&&=", "||=", "??="], operator) && left.flow_assignment_scalar != true { runs right then left }
+  when !flow_destructuring_target && !contains(["&&=", "||=", "??="], operator) && left.flow_assignment_scalar == true { runs left then right }
+  when !flow_destructuring_target && operator == "=" && left.flow_assignment_scalar == true { assigned left with right }
+  when !flow_destructuring_target && operator != "=" && !contains(["&&=", "||=", "??="], operator) { unwraps mutated left }
+}
+in ts_assignment_pattern {
+  runs maybe right then left
+  when !flow_destructuring_target { unwraps maybe assigned left }
+}
 in ts_object_pattern { runs property then rest }
 in ts_array_pattern, ts_array { runs element }
 in ts_pattern_property { runs key then value }
@@ -78,6 +116,8 @@ in ts_object { runs property }
 in ts_property { runs key then value }
 in ts_binary { runs left then right }
 in ts_unary, ts_update, ts_import_call { runs argument }
+in ts_update { unwraps mutated argument }
+in ts_unary { when operator == "delete" { unwraps deleted argument } }
 in ts_member { runs object }
 in ts_index {
   when optional == null { runs object then index }
@@ -94,7 +134,7 @@ in ts_export { runs declaration then expression }
 in ts_enum { runs member }
 in ts_enum_member { runs init }
 in ts_jsx_element, ts_jsx_fragment { runs opening then body }
-in ts_jsx_opening { runs property }
+in ts_jsx_opening { runs name then property }
 in ts_jsx_attribute { runs value }
 
 in ts_import, ts_import_specifier, ts_import_equals, ts_export_specifier,
@@ -104,7 +144,15 @@ in ts_import, ts_import_specifier, ts_import_equals, ts_export_specifier,
   ts_method_signature, ts_call_signature, ts_type_query, ts_type_operator,
   ts_indexed_access, ts_conditional_type, ts_infer, ts_mapped_type,
   ts_parenthesized_type, ts_template_type, ts_type_predicate, ts_import_type,
-  ts_literal_type { runs nothing }
+  ts_literal_type, ts_type_keyword, ts_qualified_name { runs nothing }
+
+in ts_identifier, ts_private_name, ts_this, ts_super, ts_null, ts_boolean,
+  ts_number, ts_bigint, ts_string, ts_regex, ts_meta_property, ts_hole,
+  ts_empty, ts_debugger, ts_jsx_closing, ts_jsx_text, ts_jsx_name,
+  ts_comma, ts_semicolon, ts_colon, ts_dot, ts_question, ts_ellipsis, ts_equals,
+  ts_open_paren, ts_close_paren, ts_open_bracket, ts_close_bracket,
+  ts_open_brace, ts_close_brace, ts_open_angle, ts_close_angle,
+  ts_keyword, ts_punctuator { runs nothing }
 
 in ts_boolean let flow_truth node == "true"
 in ts_null let flow_truth false
@@ -112,5 +160,30 @@ in ts_number let flow_truth js_number({ type: "number", value: node }) != 0
 in ts_string let flow_truth len(node) > 2
 in ts_template let flow_truth if expression == null then len(node) > 2 else null
 in ts_regex let flow_truth true
-in ts_bigint let flow_truth node != "0n"
+in ts_bigint let flow_truth if js_bigint(node) == null then null else js_bigint(node) != "0"
 in ts_for let flow_truth if test == null then true else null
+
+in ts_node let flow_constructor
+  if is ts_method then if node.key == "constructor" && parent is ts_class && parent.extends != null then node else null
+  else if is (ts_program, ts_function, ts_arrow, ts_class, ts_static_block) then null
+  else parent.flow_constructor
+in ts_call {
+  when callee is ts_super && flow_constructor != null { unwraps constructed it }
+}
+in ts_return {
+  when argument != null && flow_constructor != null { unwraps constructed it }
+}
+in ts_node let flow_constructor_heritage
+  if is (ts_class, ts_function, ts_this, ts_member, ts_index, ts_call, ts_new, ts_yield, ts_tagged_template, ts_meta_property) then true
+  else if is ts_identifier then node != "undefined"
+  else if is (ts_parenthesized, ts_non_null, ts_as, ts_satisfies) then node.expression.flow_constructor_heritage
+  else if is ts_assignment then
+    if contains(["=", "&&="], node.operator) then right.flow_constructor_heritage
+    else if contains(["||=", "??="], node.operator) then left.flow_constructor_heritage == true || right.flow_constructor_heritage == true
+    else false
+  else if is ts_logical then
+    if node.operator == "&&" then right.flow_constructor_heritage
+    else left.flow_constructor_heritage == true || right.flow_constructor_heritage == true
+  else if is ts_conditional then consequent.flow_constructor_heritage == true || alternate.flow_constructor_heritage == true
+  else if is ts_sequence then { value [] node.expression.nodes; tail: last; value tail.flow_constructor_heritage }
+  else false

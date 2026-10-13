@@ -228,7 +228,7 @@ in ts_property let proto_setter static_name == "__proto__" && value != null && !
 in ts_method let proto_setter false
 in ts_property, ts_method let key_entry if !@has_static_name || proto_setter then null else { name: static_name, kind: accessor_kind }
 in ts_object let keyed [] property.key_entry
-in ts_property, ts_method let duplicate_key parent is ts_object && parent.write_site == null && key_entry != null && { value parent.keyed; slice 0 index; any (e) @duplicate_of(e) }
+in ts_property, ts_method let duplicate_key parent is ts_object && parent.flow_destructuring_target != true && key_entry != null && { value parent.keyed; slice 0 index; any (e) @duplicate_of(e) }
 # At the name: inside the brackets of a computed key.
 @macro at_key_name (offset + { value text; re_find /^\[\s*/; len })
 in ts_property.key, ts_method.key rule no-dupe-keys {
@@ -439,7 +439,8 @@ in ts_labeled.label rule no-unused-labels {
 }
 
 in ts_function, ts_method rule require-yield {
-  when contains(modifier, "*") && !has_yield && !{ value body.nonempty ?? ""; re_test /^\{\s*\}$/ }
+  let declared_yields flow_declared_effects(body.node, "yielded")
+  when contains(modifier, "*") && declared_yields != null && count(declared_yields) == 0 && !{ value body.nonempty ?? ""; re_test /^\{\s*\}$/ }
   warn "This generator function does not have 'yield'."
 }
 
@@ -449,17 +450,88 @@ in ts_number rule no-loss-of-precision {
 }
 
 # ---- code paths ------------------------------------------------------------------
+in ts_node let problem_constructor_call_count
+  if is ts_method && node.key == "constructor" then 0
+  else {
+    value count: { value [] children.problem_constructor_call_count; sum }
+    value count + (if is ts_call && node.callee is ts_super then 1 else 0)
+  }
+fn problem_never_constructed(cls) = {
+  value constructors: filter(cls.member.nodes, member => member is ts_method && member.key == "constructor")
+  value constructor: first(constructors)
+  value constructor != null && constructor.body.problem_constructor_call_count == 0
+}
+in ts_method let problem_super_calls {
+  value missing: flow_complete_without(body.node, "constructed", ["returned"])
+  value called: flow_complete_with(body.node, "constructed", ["returned"])
+  value if missing == false then "all" else if missing == true then if called == true then "some" else if called == false then "none" else null else null
+}
+in ts_node let problem_in_try
+  if is (ts_program, ts_function, ts_arrow, ts_method, ts_static_block) then false
+  else if is ts_try.block then true else parent.problem_in_try
+in ts_node let problem_assignment_export_read any(references, reference => reference is ts_export_specifier.local)
+in ts_node let problem_expression_value_used
+  if parent == null || is (ts_expression_statement.expression, ts_for.init, ts_for.update) then false
+  else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.problem_expression_value_used
+  else if is ts_sequence.expression then index == count(parent.expression) - 1 && parent.problem_expression_value_used
+  else if is (ts_logical.right, ts_conditional.consequent, ts_conditional.alternate) then parent.problem_expression_value_used
+  else if is ts_unary.argument && parent.operator == "void" then false
+  else true
+in ts_node let problem_assignment_expression
+  if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.problem_assignment_expression
+  else if is ts_assignment.left && parent.flow_destructuring_target != true && parent.left.flow_assignment_scalar == true then parent.node
+  else if is ts_update.argument then parent.node
+  else null
 group code_path_statement ts_block, ts_break, ts_class, ts_continue, ts_debugger, ts_do_while, ts_expression_statement, ts_for_in, ts_for_of, ts_for, ts_if, ts_labeled, ts_return, ts_switch, ts_throw, ts_try, ts_while, ts_with, ts_export, ts_variable_declaration, ts_class_property
-in code_path_statement rule no-unreachable {
-  when code_path == "unreachable_run"
+fn problem_unreachable_statement(n) = n not ts_class_property
+  && (n not ts_variable_declaration || n.kind != "var" || any(n.declaration.nodes, declaration => declaration.init != null))
+fn problem_unreachable_step(state, statement, dead) = {
+  value range: state.range
+  value inside: range != null && statement.offset >= range.offset && statement.end_offset <= range.end_offset
+  value adjacent: range != null && statement.token_neighbours.before.start >= range.offset && statement.token_neighbours.before.start < range.end_offset
+  value if dead && inside then state
+    else if dead && adjacent then { range: { node: range.node, offset: range.offset, end_offset: max(range.end_offset, statement.end_offset) }, reports: state.reports }
+    else {
+      range: if dead then { node: statement, offset: statement.offset, end_offset: statement.end_offset } else null,
+      reports: state.reports (if range != null then [{ start: range.offset, end: range.end_offset }] else [])
+    }
+}
+fn problem_unreachable_ranges(statements, always_dead) = {
+  value state: {
+    value statements
+    sort_by (statement) statement.offset
+    fold ({ range: null, reports: [] }) (state, statement) {
+      value dead: always_dead || reachable(statement) == false
+      value problem_unreachable_step(state, statement, dead)
+    }
+  }
+  value state.reports (if state.range != null then [{ start: state.range.offset, end: state.range.end_offset }] else [])
+}
+in ts_program let problem_unreachable_runs {
+  value statements: { value descendants(code_path_statement); filter (statement) problem_unreachable_statement(statement) }
+  value problem_unreachable_ranges(statements, false)
+}
+in ts_program rule no-unreachable {
+  each statement in problem_unreachable_runs
+  report at statement
+  warn "Unreachable code."
+}
+in ts_class rule no-unreachable:derived {
+  when extends != null && problem_never_constructed(node)
+  let statements filter(member.nodes, property => {
+    value modifiers: [] property.modifier
+    value property is ts_class_property && !contains(modifiers, "static")
+  })
+  each statement in problem_unreachable_ranges(statements, true)
+  report at statement
   warn "Unreachable code."
 }
 
 in ts_method, ts_function, ts_arrow rule getter-return {
   option allowImplicit boolean = false "a bare `return;` counts as returning"
-  when accessor == "get" && code_path == "falls_off"
+  when accessor == "get" && flow_normal(body.node) == true
   report at function_warning_site(node)
-  warn if return_values == "none" || return_values == "bare" && !allowImplicit then "Expected to return a value in {function_name}." else "Expected {function_name} to always return a value."
+  warn if count(scoping_own_returns) == 0 || !allowImplicit && all(scoping_own_returns, returned => returned.argument == null) then "Expected to return a value in {function_name}." else "Expected {function_name} to always return a value."
 }
 in ts_return rule getter-return:bare {
   option allowImplicit boolean = false "a bare `return;` counts as returning"
@@ -468,7 +540,7 @@ in ts_return rule getter-return:bare {
 }
 
 # `case` statements whose end is reachable run into the next case.
-in ts_case let case_path code_path
+in ts_case let case_path if reachable(node) == true then if flow_normal(node) == true then "falls_through" else if flow_normal(node) == false then "leaves" else null else null
 in ts_case let has_body count(body) > 0
 in ts_switch {
   let case_paths [] case.case_path
@@ -478,19 +550,23 @@ in ts_switch {
 # whose only statement is a block.
 @macro last_comment(t) re_find(t, /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/)
 @macro block_case /^\s*(?:case\b[\s\S]*?|default\s*):\s*\{([\s\S]*)\}\s*$/
-@macro previous_case_comment ({
-  value result: if { value previous_sibling.nonempty ?? ""; re_test @block_case } then re_replace(previous_sibling, @block_case, "$1") else ""
-  value @last_comment(result)
-  nonempty
-} ?? @last_comment(gap_before.nonempty ?? ""))
+in ts_case let case_comment_in_block { value previous_sibling.nonempty ?? ""; re_test @block_case }
+in ts_case let case_comment_block_source
+  if case_comment_in_block then re_replace(previous_sibling, /\}\s*$/, "")
+  else ""
+in ts_case let case_comment_in_block_text @last_comment(case_comment_block_source)
+in ts_case let case_comment_source
+  if case_comment_in_block_text != null then case_comment_block_source else gap_before.nonempty ?? ""
+in ts_case let case_comment @last_comment(case_comment_source)
+in ts_case let case_comment_offset offset - len(gap_before.nonempty ?? "") - (if case_comment_in_block_text != null then len(previous_sibling) else 0) + len(case_comment_source) - len(case_comment.nonempty ?? "")
 in ts_case rule no-fallthrough {
   option allowEmptyCase boolean = false "allow empty cases separated by blank lines"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
   let previous_path { value parent.case_paths; slice 0 index; last }
   let previous_has_body { value parent.case_bodies; slice 0 index; last }
-  let comment_body { value @previous_case_comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
-  let allowing @previous_case_comment != null && { value default: commentPattern.nonempty ?? "(?i)falls?\\s?through"; value re_test(comment_body, default) } && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
+  let comment_body { value case_comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
+  let allowing case_comment != null && { value default: commentPattern.nonempty ?? "(?i)falls?\\s?through"; value re_test(comment_body, default) } && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
   when index > 0 && previous_path == "falls_through" && (previous_has_body || !allowEmptyCase && { value gap_before.nonempty ?? ""; re_count /\n/ } >= 2)
   when !allowing
   warn "Expected a 'break' statement before '{if test == null then 'default' else 'case'}'."
@@ -498,32 +574,30 @@ in ts_case rule no-fallthrough {
 in ts_case rule no-fallthrough:unused-comment {
   option reportUnusedFallthroughComment boolean = false "report such comments where nothing falls through"
   option commentPattern regex | null = null "comments that allow falling through (default: /falls?\\s?through/i)"
-  let gap gap_before.nonempty ?? ""
-  let comment @last_comment(gap)
-  let comment_body { value comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
-  when reportUnusedFallthroughComment && index > 0 && comment != null
+  let comment_body { value case_comment.nonempty ?? ""; re_replace /^\/[*\/]|\*\/$/ ""; trim }
+  when reportUnusedFallthroughComment && index > 0 && case_comment != null
   when { value parent.case_paths; slice 0 index; last } == "leaves"
   when { value default: commentPattern.nonempty ?? "(?i)falls?\\s?through"; value re_test(comment_body, default) } && !re_test(comment_body, /^(?:eslint[- ]|(?:globals?|exported) )/)
-  report at offset - len(gap) + { value gap; re_replace /(?:\/\*[^*]*\*+(?:[^\/*][^*]*\*+)*\/|\/\/[^\r\n]*)\s*$/ ""; len }
+  report at case_comment_offset
   warn "Found a comment that would permit fallthrough, but case cannot fall through."
 }
 
 # ---- classes -------------------------------------------------------------------
 in ts_method.key rule constructor-super {
   when text == "constructor" && ts_class.extends != null
-  when parent.super_calls == "none" || parent.super_calls == "some"
-  warn if parent.super_calls == "none" then "Expected to call 'super()'." else "Lacked a call of 'super()' in some code paths."
+  when parent.problem_super_calls == "none" || parent.problem_super_calls == "some"
+  warn if parent.problem_super_calls == "none" then "Expected to call 'super()'." else "Lacked a call of 'super()' in some code paths."
 }
 in ts_call rule constructor-super:call {
-  when code_path == "duplicate_super" || code_path == "bad_super"
-  warn if code_path == "duplicate_super" then "Unexpected duplicate 'super()'." else "Unexpected 'super()' because 'super' is not a constructor."
+  when callee is ts_super && flow_constructor != null && reachable(node) == true && (flow_prior_event(node, "constructed") == true || flow_constructor.parent.extends.flow_constructor_heritage == false)
+  warn if flow_prior_event(node, "constructed") == true then "Unexpected duplicate 'super()'." else "Unexpected 'super()' because 'super' is not a constructor."
 }
 in ts_this rule no-this-before-super {
-  when code_path == "before_super"
+  when flow_constructor != null && reachable(node) == true && flow_required(node, "constructed") == false
   warn "'this' is not allowed before 'super()'."
 }
 in ts_member, ts_index rule no-this-before-super:super {
-  when code_path == "before_super"
+  when object is ts_super && flow_constructor != null && reachable(node) == true && flow_required(node, "constructed") == false
   warn "'super' is not allowed before 'super()'."
 }
 
@@ -537,7 +611,11 @@ in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no
 
 # Disallow variable assignments when the value is not used
 in ts_identifier rule no-useless-assignment {
-  when useless_assignment
+  when declaration != null && declaration.exported != true && !problem_in_try
+  when name_write_owner != null || is ts_declarator.name && parent.init != null
+  when declaration.scoping_binding_execution_scope.id != null && declaration.scoping_binding_execution_scope.id == scoping_execution_scope.id
+  when problem_assignment_expression == null || problem_assignment_expression.problem_expression_value_used != true
+  when !declaration.problem_assignment_export_read && flow_has_reads(declaration.node) == true && flow_value_used(node) == false
   warn "The value assigned to '{text}' is not used in subsequent statements."
 }
 
@@ -570,47 +648,43 @@ in ts_identifier rule no-unused-imports {
 }
 
 # ---- regular expressions ---------------------------------------------------------
-# Literals and calls of the global `RegExp` (`regex_findings`): literals
-# report themselves, calls the call, except where eslint points inside.
-group regex_site ts_regex, ts_call, ts_new
-@macro findings_of(check) ({ value regex_findings.nonempty ?? []; filter (f) f.check == check })
 fn backreference_reason(kind) = (if kind == "nested" then "from within that group" else if kind == "forward" then "which appears later in the pattern" else if kind == "backward" then "which appears before in the same lookbehind" else if kind == "disjunctive" then "which is in another alternative" else "which is in a negative lookaround")
 fn misleading_message(kind) = (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
 in ts_regex rule no-empty-character-class {
-  each f in @findings_of("empty_class")
+  each f in regexp_empty_class_findings
   warn "Empty class."
 }
 
 # On literals, and on plain string patterns of `RegExp(...)` (at the string).
-in regex_site rule no-control-regex {
-  each f in @findings_of("control")
-  when is ts_regex || regex_pattern.written == "string"
-  report at regex_pattern.offset
+in regexp_site rule no-control-regex {
+  each f in regexp_control_findings
+  when is ts_regex || regexp_input.written == "string"
+  report at regexp_input.offset
   warn "Unexpected control character(s) in regular expression: {first(f.data)}."
 }
 
-in regex_site rule no-useless-backreference {
-  each f in @findings_of("backref")
+in regexp_site rule no-useless-backreference {
+  each f in regexp_backreference_findings
   warn "Backreference '{first(f.data)}' will be ignored. It references group '{ { value f.data; slice 1; first } }'{last(f.data)} {backreference_reason(f.kind)}."
 }
 
 # Each sequence where it is written (or at the pattern when it is
 # computed). With computed flags, nothing is known.
-in regex_site let misleading_character_class_findings @findings_of("misleading")
-in regex_site rule no-misleading-character-class {
+in regexp_site let misleading_character_class_findings regexp_misleading_findings
+in regexp_site rule no-misleading-character-class {
   each f in misleading_character_class_findings
-  when type_of(regex_pattern.flags) == "str" || is ts_regex
-  report at f.offset
+  when type_of(regexp_input.flags) == "str" || is ts_regex
+  report at { start: f.offset, end: f.end }
   warn misleading_message(f.kind)
 }
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.
-in regex_site rule no-regex-spaces {
+in regexp_site rule no-regex-spaces {
   let spaces_argument if is (ts_call, ts_new) then { value argument.nodes; first; unparenthesised_node } else null
-  let spaces_fixable is ts_regex || regex_pattern.source == slice(spaces_argument.text, 1, -1)
-  each f in @findings_of("spaces")
-  when is ts_regex || regex_pattern.written == "string" && type_of(regex_flags) == "str"
+  let spaces_fixable is ts_regex || regexp_input.source == slice(spaces_argument.text, 1, -1)
+  each f in regexp_space_findings
+  when is ts_regex || regexp_input.written == "string" && type_of(regexp_flags) == "str"
   fix at { start: f.offset, end: f.end } if spaces_fixable as " {{{f.kind}}}"
   warn "Spaces are hard to count. Use {{{f.kind}}}."
 }
@@ -618,10 +692,10 @@ in regex_site rule no-regex-spaces {
 # The flags first (`RegExp` checks them first), then the pattern.
 in ts_call, ts_new rule no-invalid-regexp {
   option allowConstructorFlags string[] = [] "flags beyond the standard ones that are allowed"
-  let flags_problem if regex_flags == null then null else regex_flags_error(regex_flags, allowConstructorFlags)
+  let flags_problem if regexp_flags == null then null else regex_flags_error(regexp_flags, allowConstructorFlags)
   when callee.global_value == "RegExp"
-  when flags_problem != null || regex_pattern_error != null
-  warn "{ flags_problem.nonempty ?? regex_pattern_error }."
+  when flags_problem != null || regexp_pattern_error != null
+  warn "{ flags_problem.nonempty ?? regexp_pattern_error }."
 }
 
 # ---- whitespace and line breaks -------------------------------------------------

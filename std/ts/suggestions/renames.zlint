@@ -37,7 +37,7 @@ in useless_rename_export rule no-useless-rename:export {
 group useless_rename_destructuring ts_pattern_property, ts_property
 in useless_rename_destructuring rule no-useless-rename:destructuring {
   let original_name key.module_name_info
-  when is ts_pattern_property || parent.write_site != null
+  when is ts_pattern_property || parent.flow_destructuring_target == true
   when {
     value default: value.module_default_info.nonempty ?? value.module_name_info
     value aliases_same(original_name, default)

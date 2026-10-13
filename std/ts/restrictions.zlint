@@ -180,7 +180,7 @@ in ts_member, ts_index let restriction_numeric_parse_int object == "Number" && s
 in ts_call let restriction_numeric_radix callee.restriction_numeric_parse_int == true
 in ts_declarator let restriction_numeric_const parent.kind == "const"
 in ts_assignment {
-  let restriction_numeric_default parent is ts_array && parent.write_site != null
+  let restriction_numeric_default parent is ts_array && parent.flow_destructuring_target == true
   let restriction_numeric_object left.restriction_numeric_identifier != true
 }
 in ts_node {
@@ -603,7 +603,7 @@ in ts_object {
 in ts_property, ts_pattern_property {
   let restriction_import_options_key parent.restriction_import_options == true || parent.restriction_import_attributes == true
   let restriction_import_attribute_group parent.restriction_import_options == true && contains(["with", "assert"], static_name)
-  let restriction_name_pattern is ts_pattern_property || parent.write_site != null
+  let restriction_name_pattern is ts_pattern_property || parent.flow_destructuring_target == true
   let restriction_name_alias restriction_name_pattern && value != null && (value not ts_assignment_pattern || value.left != null)
   let restriction_name_same value != null && key == (value.left.nonempty ?? value)
 }
@@ -711,7 +711,7 @@ in ts_declarator, ts_parameter let restriction_pattern_object init.restriction_o
 in ts_assignment, ts_assignment_pattern let restriction_pattern_object right.restriction_object_name
 in ts_object_pattern, ts_object {
   let restriction_property_object parent.restriction_pattern_object
-  let restriction_property_pattern is ts_object_pattern || write_site != null
+  let restriction_property_pattern is ts_object_pattern || flow_destructuring_target == true
 }
 @macro restriction_property_body {
   option options restriction_property[] = [] "restricted object properties"

@@ -5,8 +5,8 @@ define {
 
 in ts_computed_key let computed_literal_text if (expression.unwrapped_node.nonempty ?? expression.node) is (ts_string, ts_number) then expression.unwrapped_text.nonempty ?? expression else null
 in ts_method, ts_class_property let member_static contains([] modifier, "static")
-in ts_property, ts_pattern_property let computed_exception parent is ts_object && parent.write_site == null && static_name == "__proto__"
-in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.write_site == null && static_name == "__proto__"
+in ts_property, ts_pattern_property let computed_exception parent is ts_object && parent.flow_destructuring_target != true && static_name == "__proto__"
+in ts_method let computed_exception if parent is ts_class then static_name == (if member_static then "prototype" else "constructor") else parent is ts_object && parent.flow_destructuring_target != true && static_name == "__proto__"
 in ts_class_property let computed_exception static_name == "constructor" || member_static && static_name == "prototype"
 
 in ts_property, ts_pattern_property, ts_method, ts_class_property rule no-useless-computed-key {
