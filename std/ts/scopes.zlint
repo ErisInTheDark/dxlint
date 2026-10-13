@@ -32,7 +32,7 @@ in ts_identifier rule no-unused-vars:variables {
   @unused_binding_options
   option enableAutofixRemoval { imports?: boolean } = {} "remove unused import bindings"
   @unused_binding_checks("variable", false)
-  let removal if enableAutofixRemoval.imports == true && !used_ignored then ts_usage_import_removal(node, pattern) else null
+  let removal if enableAutofixRemoval.imports == true && !used_ignored then ts_usage_import_removal(source, node, pattern) else null
   fix at removal if removal != null as ""
 }
 in ts_identifier rule no-unused-vars:parameters {

@@ -289,7 +289,15 @@ fn ts_usage_import_removable(n, pattern) = {
   value u != null && u.used == false && !u.exported && !u.silent
     && n.no_unused_vars_checked && !ts_usage_ignored(n, pattern)
 }
-fn ts_usage_import_removal(n, pattern) = {
+fn ts_usage_import_line(source, statement) = {
+  value start: position(statement.offset).js_line_start
+  value prefix: byte_slice(source, start, statement.offset)
+  value tail: re_find(byte_slice(source, statement.end_offset), /^[ \t]*(?:\r\n|[\r\n\u{2028}\u{2029}]|$)/)
+  value if re_test(prefix, /^[ \t]*$/) && tail != null
+    then { start: start, end: statement.end_offset + byte_len(tail) }
+    else statement
+}
+fn ts_usage_import_removal(source, n, pattern) = {
   value item: if n.parent is ts_import_specifier then n.parent.node else n
   value statement: item.parent.node
   value if statement not ts_import then null else {
@@ -299,7 +307,7 @@ fn ts_usage_import_removal(n, pattern) = {
     value whole: all(bindings, binding => ts_usage_import_removable(binding, pattern))
     value all_named: count(named) > 0
       && all(named, specifier => ts_usage_import_removable(ts_usage_import_name(specifier), pattern))
-    value if whole then statement
+    value if whole then ts_usage_import_line(source, statement)
       else if item is ts_import_specifier && all_named && statement.default_import != null
       then { start: statement.default_import.token_neighbours.after.start, end: statement.import_named_close.end }
       else if item is ts_import_specifier then {
