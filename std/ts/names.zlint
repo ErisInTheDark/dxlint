@@ -53,7 +53,10 @@ in ts_variable_declaration {
 }
 in ts_declarator { targets name }
 in ts_object_pattern { targets property, rest }
-in ts_pattern_property { targets value ?? key }
+in ts_pattern_property {
+  when flow_shorthand_default { targets key }
+  when !flow_shorthand_default { targets value ?? key }
+}
 in ts_array_pattern { targets element }
 in ts_assignment_pattern { targets left }
 in ts_rest { targets argument }
@@ -110,7 +113,7 @@ in ts_identifier {
       ts_export_specifier.exported, ts_labeled.label, ts_break.label, ts_continue.label, ts_jsx_attribute.name,
       ts_tuple_member.name, ts_qualified_name.right, ts_type_parameter.name, ts_type_alias.name,
       ts_interface.name, ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_equals.name)
-    || is ts_property.key && parent.value != null
+    || is ts_property.key && parent.value != null && !parent.flow_shorthand_default
     # `[key: string]: T` names nothing.
     || is ts_parameter.name && parent is ts_index_signature.parameter) {
     when ts_name_outside_method != null { resolves value outside ts_name_outside_method }
@@ -127,7 +130,10 @@ in ts_export_assignment { resolves value, type expression }
 in ts_assignment { when operator == "=" { targets left } }
 in ts_array { targets element }
 in ts_object { targets property }
-in ts_property { targets value ?? key }
+in ts_property {
+  when flow_shorthand_default { targets key }
+  when !flow_shorthand_default { targets value ?? key }
+}
 in ts_spread { targets argument }
 in ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion { targets expression }
 
@@ -212,7 +218,10 @@ in ts_identifier let references
   if ts_name_declared && ts_name_binding.node == node then ts_name_binding.references else []
 in ts_identifier let scope
   if ts_name_declared then first(name_scopes(node, "declaration")).owner
-  else if ts_name_referenced then first(name_scopes(node, "reference")).owner else null
+  else if ts_name_referenced then {
+    value name_scopes(node, "reference")
+    find (scope) any(scope.classes, class => contains(["module", "function", "block", "function_name", "class", "catch", "type_parameters", "conditional", "mapped"], class))
+  }.owner else null
 in ts_identifier let declaration_kind
   if ts_name_declared && ts_name_binding.node == node then ts_name_kind else null
 in ts_identifier let declaration_kinds

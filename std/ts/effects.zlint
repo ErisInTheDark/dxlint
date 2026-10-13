@@ -76,6 +76,7 @@ in ts_with { runs object then body }
 in ts_node let flow_assignment_scalar false
 in ts_identifier, ts_member, ts_index let flow_assignment_scalar true
 in ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion, ts_instantiation let flow_assignment_scalar expression.flow_assignment_scalar
+in ts_property, ts_pattern_property let flow_shorthand_default value is ts_assignment_pattern && value.left == null
 in ts_node let flow_destructuring_target
   if is (ts_for_in.left, ts_for_of.left) then true
   else if is ts_declarator.name then
@@ -88,7 +89,7 @@ in ts_node let flow_destructuring_target
     ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
     ts_type_assertion.expression, ts_instantiation.expression) then parent.flow_destructuring_target
   else if is (ts_property.value, ts_pattern_property.value) then parent.flow_destructuring_target
-  else if is (ts_property.key, ts_pattern_property.key) && node.parent.value == null then parent.flow_destructuring_target
+  else if is (ts_property.key, ts_pattern_property.key) && (node.parent.value == null || node.parent.flow_shorthand_default) then parent.flow_destructuring_target
   else false
 in ts_identifier, ts_member, ts_index {
   when flow_destructuring_target { assigned it }
@@ -110,10 +111,16 @@ in ts_assignment_pattern {
 }
 in ts_object_pattern { runs property then rest }
 in ts_array_pattern, ts_array { runs element }
-in ts_pattern_property { runs key then value }
+in ts_pattern_property {
+  when flow_shorthand_default { runs value then key }
+  when !flow_shorthand_default { runs key then value }
+}
 in ts_rest, ts_spread, ts_jsx_spread_attribute { runs argument }
 in ts_object { runs property }
-in ts_property { runs key then value }
+in ts_property {
+  when flow_shorthand_default { runs value then key }
+  when !flow_shorthand_default { runs key then value }
+}
 in ts_binary { runs left then right }
 in ts_unary, ts_update, ts_import_call { runs argument }
 in ts_update { unwraps mutated argument }

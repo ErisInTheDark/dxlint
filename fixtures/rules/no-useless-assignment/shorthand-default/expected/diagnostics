@@ -1,0 +1,6 @@
+input.ts:13:3-13:4 no-useless-assignment#0
+input.ts:18:11-18:12 no-useless-assignment#0
+input.ts:4:18-4:19 no-useless-assignment#0
+input.ts:4:24-4:25 no-useless-assignment#0
+input.ts:4:6-4:7 no-useless-assignment#0
+input.ts:8:6-8:7 no-useless-assignment#0
