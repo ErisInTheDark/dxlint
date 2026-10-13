@@ -215,6 +215,14 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| crate::js_regex::test(&text(&a[0]), &text(&a[1]), &a.get(2).map(text).unwrap_or_default()).map(Value::Bool),
     },
     Function {
+        name: "re_valid",
+        signature: "re_valid(pattern)",
+        doc: "can the engine compile this regex pattern?",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::Bool(super::re::compile(&text(&a[0])).is_ok())),
+    },
+    Function {
         name: "re_test",
         signature: "re_test(text, pattern)",
         doc: "does the regex match anywhere in the text?",
@@ -287,6 +295,29 @@ pub static FUNCTIONS: &[Function] = &[
         min: 1,
         max: 1,
         call: |a| Ok(super::js::strings::decode(&a[0].text()).map_or(Value::Null, Value::from)),
+    },
+    Function {
+        name: "js_string_parts",
+        signature: "js_string_parts(text)",
+        doc: "Decode a quoted string or substitution-free template to text, UTF-16 units and Unicode-scalar spans. Offsets are bytes within the literal; null for invalid syntax",
+        min: 1,
+        max: 1,
+        call: |a| {
+            let Some(decoded) = super::js::strings::decode_mapped(&a[0].text()) else { return Ok(Value::Null) };
+            let span = |source: std::ops::Range<usize>| Value::record(vec![
+                ("offset".into(), Value::Num(source.start as f64)),
+                ("end_offset".into(), Value::Num(source.end as f64)),
+            ]);
+            Ok(Value::record(vec![
+                ("text".into(), Value::from(decoded.text)),
+                ("spans".into(), Value::list(decoded.spans.into_iter().map(span).collect())),
+                ("units".into(), Value::list(decoded.units.into_iter().map(|unit| Value::record(vec![
+                    ("value".into(), Value::Num(f64::from(unit.value))),
+                    ("offset".into(), Value::Num(unit.source.start as f64)),
+                    ("end_offset".into(), Value::Num(unit.source.end as f64)),
+                ])).collect())),
+            ]))
+        },
     },
     Function {
         name: "js_bigint",

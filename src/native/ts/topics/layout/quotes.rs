@@ -28,7 +28,7 @@ pub(super) fn property_quote_sites(file: &NativeFile<'_>, node: u32) -> Value<'s
             }
             let raw = &syntax.src[key.start as usize..key.end as usize];
             let quoted = key.tok == Tok::Str;
-            let name = if quoted { crate::native::ts::regex::cook(raw).unwrap_or_else(|| raw.to_owned()) } else { raw.to_owned() };
+            let name = if quoted { crate::expr::js::strings::decode_literal(raw).unwrap_or_else(|| raw.to_owned()) } else { raw.to_owned() };
             for group in [false, true] {
                 sites.push(quote_site(name.clone(), quoted, false, key.start as usize, group));
             }
@@ -70,7 +70,7 @@ fn quote_site(name: String, quoted: bool, numeric: bool, offset: usize, group: b
     let token = lexer.next_token();
     let whole = token.start == 0 && token.end as usize == name.len() && lexer.next_token().tok == Tok::Eof;
     let redundant_number = whole && token.tok == Tok::Num && statics::number(&name).is_some_and(|n| crate::expr::value::js_number_text(n) == name);
-    let identifier = if name.contains('\\') { crate::native::ts::regex::cook(&format!("\"{name}\"")).unwrap_or_default() } else { name.clone() };
+    let identifier = if name.contains('\\') { crate::expr::js::strings::decode_literal(&format!("\"{name}\"")).unwrap_or_default() } else { name.clone() };
     let redundant = whole && token.tok == Tok::Ident && IDENTIFIER.is_match(&identifier) || redundant_number;
     let keyword = matches!(name.as_str(),
         "abstract" | "boolean" | "break" | "byte" | "case" | "catch" | "char" | "class" | "const" | "continue" | "debugger" | "default" | "delete" | "do" | "double" | "else" | "enum" | "export" | "extends" | "false" | "final" | "finally" | "float" | "for" | "function" | "goto" | "if" | "implements" | "import" | "in" | "instanceof" | "int" | "interface" | "long" | "native" | "new" | "null" | "package" | "private" | "protected" | "public" | "return" | "short" | "static" | "super" | "switch" | "synchronized" | "this" | "throw" | "throws" | "transient" | "true" | "try" | "typeof" | "var" | "void" | "volatile" | "while" | "with"

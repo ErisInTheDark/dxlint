@@ -171,7 +171,7 @@ impl<const STORED: bool> Comparison<STORED> {
             (Ty::Unknown, Ty::Unknown) if STORED => return true,
             (Ty::Prim(a), Ty::Prim(b)) => return a == b,
             (Ty::Lit(a, ap), Ty::Lit(b, bp)) if ap == bp => return if STORED { a == b } else { match *ap {
-                "string" => super::super::regex::cook(a).zip(super::super::regex::cook(b)).is_some_and(|(a, b)| a == b),
+                "string" => crate::expr::js::strings::decode_literal(a).zip(crate::expr::js::strings::decode_literal(b)).is_some_and(|(a, b)| a == b),
                 "number" => super::super::statics::number(a).zip(super::super::statics::number(b)).is_some_and(|(a, b)| a == b),
                 _ => a == b,
             } },

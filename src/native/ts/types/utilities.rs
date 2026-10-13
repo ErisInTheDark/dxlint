@@ -31,7 +31,7 @@ impl StringTransform {
     fn ty(self, ty: &Ty) -> Ty {
         match ty {
             Ty::Any | Ty::Never | Ty::Prim("string") => ty.clone(),
-            Ty::Lit(text, "string") => super::super::regex::cook(text)
+            Ty::Lit(text, "string") => crate::expr::js::strings::decode_literal(text)
                 .map_or(Ty::Unknown, |text| Ty::Lit(format!("{:?}", self.text(&text)).into(), "string")),
             Ty::Union(parts) => Ty::union(parts.iter().map(|part| self.ty(part)).collect()),
             _ => Ty::Unknown,
@@ -196,7 +196,7 @@ fn accepts_symbol(ty: &Ty) -> Option<bool> {
 pub(super) fn required_keys(ty: &Ty) -> Option<Vec<String>> {
     match ty {
         Ty::Prim("string" | "number" | "symbol") | Ty::Never => Some(Vec::new()),
-        Ty::Lit(text, "string") => Some(vec![super::super::regex::cook(text)?]),
+        Ty::Lit(text, "string") => Some(vec![crate::expr::js::strings::decode_literal(text)?]),
         Ty::Lit(text, "number") => Some(vec![crate::expr::value::js_number_text(super::super::statics::number(text)?)]),
         Ty::Union(parts) => {
             let strings = parts.iter().any(|part| matches!(part, Ty::Prim("string")));

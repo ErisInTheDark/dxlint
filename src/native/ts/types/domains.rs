@@ -57,7 +57,7 @@ impl Checker<'_> {
         if let Some(source) = self.readonly_source(ty) { return self.literal_value(source) }
         Some(match ty {
             Ty::EnumMember(member) => return self.literal_value(&member.base),
-            Ty::Lit(value, "string") => LiteralValue::String(super::super::regex::cook(value)?),
+            Ty::Lit(value, "string") => LiteralValue::String(crate::expr::js::strings::decode_literal(value)?),
             Ty::Lit(value, "number") => LiteralValue::Number(literal_number(value)?),
             Ty::Lit(value, "boolean") if &**value == "true" || &**value == "false" => LiteralValue::Boolean(&**value == "true"),
             Ty::Lit(value, "bigint") => LiteralValue::BigInt(value.clone()),

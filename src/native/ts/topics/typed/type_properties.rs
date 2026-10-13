@@ -33,7 +33,7 @@ fn collect_literals(ty: &Ty, values: &mut Vec<Value<'static>>) {
         }
         Ty::Lit(text, kind) => {
             let value = match *kind {
-                "string" => crate::native::ts::regex::cook(text).map(Value::from),
+                "string" => crate::expr::js::strings::decode_literal(text).map(Value::from),
                 "number" => crate::native::ts::statics::number(text).map(Value::from),
                 "boolean" => Some(Value::Bool(text.as_ref() == "true")),
                 "bigint" => Some(Value::from(text.to_string())),

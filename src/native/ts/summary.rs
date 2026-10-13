@@ -521,10 +521,10 @@ fn static_key_name(v: &impl View, key: u32) -> Option<Box<str>> {
     }
     match v.kind(literal) {
         Some(K::String) => {
-            if let Some(name) = super::regex::cook(v.text(literal)) { return Some(name.into()) }
+            if let Some(name) = crate::expr::js::strings::decode_literal(v.text(literal)) { return Some(name.into()) }
         }
         Some(K::Template) if v.all(literal, F::Expr).is_empty() => {
-            if let Some(name) = super::regex::cook(v.text(literal)) { return Some(name.into()) }
+            if let Some(name) = crate::expr::js::strings::decode_literal(v.text(literal)) { return Some(name.into()) }
         }
         Some(K::Number) => {
             if let Some(number) = super::statics::number(v.text(literal)) { return Some(crate::expr::value::js_number_text(number).into()) }
@@ -644,8 +644,8 @@ pub(super) fn import_specifier(v: &impl View, id: u32) -> Option<String> {
     let mut argument = v.get(id, F::Arg)?;
     while v.is(argument, K::Paren) { argument = v.get(argument, F::Expr)?; }
     match v.kind(argument) {
-        Some(K::String) => super::regex::cook(v.text(argument)),
-        Some(K::Template) if v.all(argument, F::Expr).is_empty() => super::regex::cook(v.text(argument)),
+        Some(K::String) => crate::expr::js::strings::decode_literal(v.text(argument)),
+        Some(K::Template) if v.all(argument, F::Expr).is_empty() => crate::expr::js::strings::decode_literal(v.text(argument)),
         _ => None,
     }
 }

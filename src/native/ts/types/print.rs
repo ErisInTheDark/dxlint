@@ -25,7 +25,7 @@ impl Checker<'_> {
             Ty::Undefined => "undefined".into(),
             Ty::Null => "null".into(),
             Ty::Prim(p) => (*p).into(),
-            Ty::Lit(text, "string") => super::super::regex::cook(text).and_then(|text| serde_json::to_string(&text).ok()).unwrap_or_else(|| text.to_string()),
+            Ty::Lit(text, "string") => crate::expr::js::strings::decode_literal(text).and_then(|text| serde_json::to_string(&text).ok()).unwrap_or_else(|| text.to_string()),
             Ty::Lit(text, _) => text.to_string(),
             Ty::EnumMember(member) => format!("{}.{}", self.qualified_name(&member.symbols), member.key),
             Ty::Named(sym, args) => {

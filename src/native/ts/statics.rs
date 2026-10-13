@@ -14,8 +14,8 @@ pub use crate::expr::js::{bigint_decimal, number};
 pub fn literal_text(s: &Syntax, node: u32) -> Option<String> {
     let text = s.text(node);
     match s.kind(node)? {
-        K::String => super::regex::cook(text),
-        K::Template if s.all(node, F::Expr).next().is_none() => super::regex::cook(text),
+        K::String => crate::expr::js::strings::decode_literal(text),
+        K::Template if s.all(node, F::Expr).next().is_none() => crate::expr::js::strings::decode_literal(text),
         K::Number => Some(js_number_text(number(text)?)),
         K::BigInt => bigint_decimal(text),
         K::Bool | K::Null | K::Regex => Some(text.to_string()),
@@ -36,14 +36,14 @@ pub fn literal_value(s: &Syntax, node: u32) -> Option<(&'static str, String)> {
         let mut lexer = super::lexer::Lexer::new(text);
         let token = lexer.next_token();
         return if token.tok == super::lexer::Tok::Str && token.end as usize == text.len() && lexer.broken.is_none() {
-            Some(("string", super::regex::cook(text)?))
+            Some(("string", crate::expr::js::strings::decode_literal(text)?))
         } else {
             None
         };
     };
     Some(match kind {
-        K::String => ("string", super::regex::cook(text)?),
-        K::Template if s.all(node, F::Expr).next().is_none() => ("string", super::regex::cook(text)?),
+        K::String => ("string", crate::expr::js::strings::decode_literal(text)?),
+        K::Template if s.all(node, F::Expr).next().is_none() => ("string", crate::expr::js::strings::decode_literal(text)?),
         K::Number => ("number", js_number_text(number(text)?)),
         K::BigInt => ("bigint", bigint_decimal(text)?),
         K::Bool => ("boolean", text.to_string()),
@@ -76,7 +76,7 @@ pub fn identifier_name(text: &str) -> String {
     if !text.contains('\\') {
         return text.to_string();
     }
-    super::regex::cook(&format!("\"{text}\"")).unwrap_or_else(|| text.to_string())
+    crate::expr::js::strings::decode_literal(&format!("\"{text}\"")).unwrap_or_else(|| text.to_string())
 }
 
 /// A member's or property's name when it is known statically: `a`, `"a"`,

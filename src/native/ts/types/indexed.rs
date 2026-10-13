@@ -262,7 +262,7 @@ impl Checker<'_> {
 fn literal_key(index: &Ty) -> Option<String> {
     match index {
         Ty::EnumMember(member) => literal_key(&member.base),
-        Ty::Lit(value, "string") => super::super::regex::cook(value),
+        Ty::Lit(value, "string") => crate::expr::js::strings::decode_literal(value),
         Ty::Lit(value, "number") => super::super::statics::number(value).map(crate::expr::value::js_number_text),
         _ => None,
     }
