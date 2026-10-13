@@ -1,0 +1,4 @@
+input.proof:1:1-1:5 positive#0 positive
+input.proof:2:1-2:5 counterexample#0 counterexample
+input.proof:4:1-4:3 counterexample#0 counterexample
+input.proof:4:1-4:3 negative#0 negative

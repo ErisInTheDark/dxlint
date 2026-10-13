@@ -1,0 +1,24 @@
+lang proof "*.proof"
+
+match uncertain /u/ {
+  fits good when node always mystery
+  fits mystery when node always mystery
+}
+match good /a/ { fits good }
+match absent /b/ { fits other }
+match union left:uncertain "|" right:(good or absent) {
+  unwraps left | right
+}
+
+in .proof match positive_probe "p" subject:union {
+  fits positive when subject.node could good
+  rule positive warn "positive" { when node always positive }
+}
+
+in .proof match negative_probe "n" subject:(union or uncertain or absent) {
+  fits negative when !(subject.node could good)
+  fits counterexample when !(subject.node always good)
+
+  rule counterexample warn "counterexample" { when node always counterexample }
+  rule negative warn "negative" { when node always negative }
+}
