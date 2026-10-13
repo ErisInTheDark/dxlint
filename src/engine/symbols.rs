@@ -479,7 +479,9 @@ impl Symbols {
                         self.use_parent(&Parent::Matcher(layer.clone()));
                         let actual_field = self.get(Kind::Layer, &layer.text)
                             .is_some_and(|id| self.symbols[id].fields.contains(&field.text));
-                        let kind = if !actual_field && facts::link(&field.text).is_some() { Kind::Fact } else { Kind::Field };
+                        let kind = if actual_field { Kind::Field }
+                            else if self.get(Kind::Attr, &field.text).is_some() { Kind::Attr }
+                            else if facts::link(&field.text).is_some() { Kind::Fact } else { Kind::Field };
                         self.use_of(field.span, kind, &field.text);
                     }
                     Target::Lang(n) if n.text != "*" => self.use_of(n.span, Kind::Lang, &n.text),
