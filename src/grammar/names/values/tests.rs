@@ -3,12 +3,14 @@ use crate::config::ast::Config;
 use crate::grammar::{Edge, Grammar, Node, Tree};
 use super::super::{KindNames, Names, Resolved, ScopeInfo};
 use super::super::question::{Budget, FrameId, QueryContext, ScopeRef, World};
+use std::cell::RefCell;
 
 struct TestWorld {
     grammar: Grammar,
     tree: Tree,
     names: Resolved,
     attributes: Vec<Known<crate::expr::Value<'static>>>,
+    conditions: RefCell<Vec<Leaf>>,
 }
 
 impl TestWorld {
@@ -21,6 +23,7 @@ impl TestWorld {
             ),
             names: Resolved::default(),
             attributes: Vec::new(),
+            conditions: RefCell::default(),
         }
     }
 }
@@ -38,6 +41,7 @@ impl World for TestWorld {
     }
     fn module(&self, _: Leaf, _: &str, _: &Semantic<'_>) -> Known<Option<ScopeRef>> { Known::Yes(None) }
     fn condition(&self, at: Leaf, condition: u32, semantic: &Semantic<'_>) -> Known<bool> {
+        self.conditions.borrow_mut().push(at);
         match condition {
             1 => semantic.values().fits(at, 0),
             2 => Known::Yes(matches!(at.target, Target::Scope(_))),
@@ -472,6 +476,9 @@ fn reference_arguments_bind_formals_without_leaking_the_declaration_frame() {
         Node { matcher: 1, start: 0, end: 0, children: Vec::new() },
     ], 0);
     tables.kinds[2].arguments.push((vec![8], None));
+    tables.kinds[1].unwraps.push(super::super::Unwrapping {
+        value: Some(Value::Current), when: Some(3), ..Default::default()
+    });
     let question = QueryContext::default();
     let caller = question.bind(FrameId::ROOT, NodeRef::here(3), None, None);
     let through = Leaf { frame: caller, ..leaf(3) };
@@ -479,6 +486,33 @@ fn reference_arguments_bind_formals_without_leaking_the_declaration_frame() {
     let semantic = Semantic::new(&world, &tables, &question);
     assert_eq!(semantic.values().bound_argument(Leaf { frame: binding, ..leaf(2) }),
         Known::Yes(Some(NodeValue::leaf(Leaf { frame: caller, ..leaf(5) }))));
+    assert!(!world.conditions.borrow().is_empty());
+    assert!(world.conditions.borrow().iter().all(|site| *site == Leaf { frame: caller, ..leaf(5) }),
+        "reading one formal evaluated an unrelated argument");
+    world.conditions.borrow_mut().clear();
+    assert_eq!(semantic.values().declared_arguments(through), Known::Yes(Some(vec![
+        NodeValue::leaf(Leaf { frame: caller, ..leaf(4) }),
+        NodeValue::leaf(Leaf { frame: caller, ..leaf(5) }),
+    ])));
+    assert!(world.conditions.borrow().contains(&Leaf { frame: caller, ..leaf(4) }));
+    assert!(world.conditions.borrow().iter().all(|site| site.frame == caller
+        && [leaf(4).target, leaf(5).target].contains(&site.target)));
+    drop(semantic);
+    for when in [None, Some(0)] {
+        tables.kinds[2].arguments.push((vec![8], when));
+        world.conditions.borrow_mut().clear();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.values().bound_argument(Leaf { frame: binding, ..leaf(2) }), Known::Unknown);
+        assert!(world.conditions.borrow().iter().all(|site| *site == through),
+            "invalid argument declarations evaluated payloads");
+        drop(semantic);
+        tables.kinds[2].arguments.pop();
+    }
+    world.tree.nodes[3].children.truncate(1);
+    world.conditions.borrow_mut().clear();
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.values().bound_argument(Leaf { frame: binding, ..leaf(2) }), Known::Yes(None));
+    assert!(world.conditions.borrow().is_empty());
 }
 
 #[test]

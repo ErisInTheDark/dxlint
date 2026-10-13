@@ -453,11 +453,19 @@ impl Values<'_> {
     }
 
     fn arguments_using(&self, at: Leaf, path: &[u16], value: Option<&Value>) -> Known<Vec<NodeValue>> {
+        let sites = {
+            let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+            if path == [super::PRODUCT_ITEMS] {
+                return if value.is_none() { self.product_items(at) } else { Known::Unknown };
+            }
+            let Known::Yes(sites) = self.follow(at, path) else { return Known::Unknown };
+            sites
+        };
+        self.argument_values(sites, value)
+    }
+
+    fn argument_values(&self, sites: Vec<Leaf>, value: Option<&Value>) -> Known<Vec<NodeValue>> {
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
-        if path == [super::PRODUCT_ITEMS] {
-            return if value.is_none() { self.product_items(at) } else { Known::Unknown };
-        }
-        let Known::Yes(sites) = self.follow(at, path) else { return Known::Unknown };
         let mut arguments = Vec::with_capacity(sites.len());
         for site in sites {
             if !self.question.budget.step() { return Known::Unknown }
@@ -678,8 +686,7 @@ impl Values<'_> {
                             }
                         } else {
                             let Some(through) = binding.through else { return Known::Yes(None) };
-                            let Known::Yes(arguments) = self.declared_arguments(through) else { return Known::Unknown };
-                            return Known::Yes(arguments.and_then(|arguments| arguments.get(position).cloned()));
+                            return self.declared_argument(through, position);
                         }
                     }
                 }
@@ -690,6 +697,29 @@ impl Values<'_> {
     }
 
     pub fn declared_arguments(&self, at: Leaf) -> Known<Option<Vec<NodeValue>>> {
+        let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        match self.declared_argument_sites(at) {
+            Known::Yes(Some(sites)) => match self.argument_values(sites, None) {
+                Known::Yes(arguments) => Known::Yes(Some(arguments)),
+                Known::Unknown => Known::Unknown,
+            },
+            Known::Yes(None) => Known::Yes(None),
+            Known::Unknown => Known::Unknown,
+        }
+    }
+
+    fn declared_argument(&self, at: Leaf, position: usize) -> Known<Option<NodeValue>> {
+        let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        let Known::Yes(sites) = self.declared_argument_sites(at) else { return Known::Unknown };
+        let Some(site) = sites.and_then(|sites| sites.get(position).copied()) else {
+            return Known::Yes(None);
+        };
+        let Some(_value) = self.question.budget.nest() else { return Known::Unknown };
+        if !self.question.budget.step() { return Known::Unknown }
+        Known::Yes(Some(self.values(site)))
+    }
+
+    fn declared_argument_sites(&self, at: Leaf) -> Known<Option<Vec<Leaf>>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         let Target::Node(node) = at.target else { return Known::Yes(None) };
@@ -705,8 +735,8 @@ impl Values<'_> {
                 Known::Yes(true) => {}
             }
             if answer.is_some() { return Known::Unknown }
-            let Known::Yes(arguments) = self.arguments(at, path) else { return Known::Unknown };
-            answer = Some(arguments);
+            let Known::Yes(sites) = self.follow(at, path) else { return Known::Unknown };
+            answer = Some(sites);
         }
         Known::Yes(answer)
     }
