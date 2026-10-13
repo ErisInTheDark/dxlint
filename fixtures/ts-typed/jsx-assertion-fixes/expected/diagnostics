@@ -1,0 +1,2 @@
+input.tsx:6:29-6:38 no-unnecessary-type-assertion:non-null#0
+input.tsx:7:21-7:27 no-unnecessary-type-assertion:non-null#1

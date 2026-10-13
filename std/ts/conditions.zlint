@@ -2,6 +2,15 @@
 
 define {
 
+in ts_switch let switch_default_comment {
+  value case_end: last([] case.end_offset)
+  value if count(case) == 0 then null else {
+    value descendants(ts_comment)
+    filter (comment) comment.offset >= case_end && comment.end_offset < end_offset
+    last
+  }
+}
+
 fn condition_known(d) = d != null && !d.opaque && !any(d.flags, flag => contains(["any", "unknown"], flag))
 fn condition_never(d) = !d.truthy && !d.falsy
 fn condition_base(n) = if n is (ts_member, ts_index) then n.object.node else if n is ts_call then n.callee.node else null

@@ -1,0 +1,80 @@
+define {
+
+fn type_parameter_usages(items) = {
+  value { known: all(items, item => item.known), uses: flat_map(items, item => item.uses) }
+}
+fn type_parameter_part(part, target, returned, from_class) =
+  if part.carrier.description.kind == "parameter" then {
+    known: true,
+    uses: if part.carrier.file == target.file && part.carrier.node == target.node then [true] else [],
+  } else if part.carrier_known != true || part.product_known != true
+    || count(part.uncertain_traits) > 0
+    || any(part.traits, trait => contains(["any", "error", "unknown"], trait)) then { known: false, uses: [] }
+  else if count(part.carrier.arguments) > 0 then {
+    value multiple: from_class || (if part.carrier.description.kind == "template" then false
+      else if part.product != null then returned && !part.product.readonly
+      else if contains(["Array", "ReadonlyArray"], part.carrier.description.name)
+        then returned && part.carrier.description.name == "Array" else true)
+    value uses: type_parameter_usages(map(part.carrier.arguments,
+      argument => type_parameter_value(argument, target, returned, from_class)))
+    value { known: uses.known, uses: if multiple then uses.uses uses.uses else uses.uses }
+  } else if any(part.traits, trait => contains(["object", "structural", "callable", "constructible", "intersection"], trait))
+    then { known: false, uses: [] }
+  else { known: true, uses: [] }
+fn type_parameter_value(parts, target, returned, from_class) =
+  if parts == null then { known: false, uses: [] } else {
+    value arms: map(parts, arm => type_parameter_usages(
+      map(arm, part => type_parameter_part(part, target, returned, from_class))))
+    value largest: max(map(arms, arm => count(arm.uses)))
+    value { known: all(arms, arm => arm.known), uses: find(arms, arm => count(arm.uses) == largest).uses ?? [] }
+  }
+fn type_parameter_signature(signature, target, from_class) = {
+  value parameters: map(signature.parameters,
+    parameter => type_parameter_value(parameter, target, false, from_class))
+  value receiver: if signature.has_receiver == false then { known: true, uses: [] }
+    else type_parameter_value(signature.receiver, target, false, from_class)
+  value result: type_parameter_value(signature.result, target, true, from_class)
+  value uses: type_parameter_usages(parameters [receiver, result])
+  value {
+    known: signature.parameters_known && signature.receiver_known && signature.result_known && uses.known,
+    uses: uses.uses,
+  }
+}
+fn type_parameter_callable(n, target, from_class) = {
+  value signatures: call_signatures(n)
+  value if signatures == null || count(signatures) == 0 then { known: false, uses: [] }
+    else type_parameter_usages({
+      value signatures
+      flat_map (arm) map(arm, signature => type_parameter_signature(signature, target, from_class))
+    })
+}
+fn type_parameter_class(n, target) = type_parameter_usages(map(n.member.nodes,
+  member => if member is ts_method then type_parameter_callable(member, target, true)
+    else if member is ts_class_property then type_parameter_value(value_constituents(member), target, false, true)
+    else { known: false, uses: [] }))
+
+in ts_type_parameter rule no-unnecessary-type-parameters warn "Type parameter {name} is {type_parameter_uses} in the {type_parameter_descriptor} signature." {
+  let type_parameter_owner parent.node
+  when type_parameter_owner is (ts_function, ts_arrow, ts_method, ts_function_type,
+    ts_method_signature, ts_call_signature, ts_class)
+  when !(type_parameter_owner is ts_class)
+    || (type_parameter_owner.extends == null && count(type_parameter_owner.implements) == 0)
+  let type_parameter_descriptor if type_parameter_owner is ts_class then "class" else "function"
+  let type_parameter_binding name_binding(name.node)
+  when type_parameter_binding != null
+  let type_parameter_boundary type_parameter_owner.body.offset ?? type_parameter_owner.return_type.end ?? type_parameter_owner.end
+  let type_parameter_written {
+    value type_parameter_binding.references
+    filter (reference) contains(name_role_classes(reference, "reference"), "type")
+      && reference.offset <= type_parameter_boundary
+      && (reference.offset >= node.end || reference.end <= node.offset)
+  }
+  when type_parameter_owner is ts_class || count(type_parameter_written) < 2
+  let type_parameter_target declaration_identity(node)
+  let type_parameter_usage if type_parameter_owner is ts_class
+    then type_parameter_class(type_parameter_owner, type_parameter_target)
+    else type_parameter_callable(type_parameter_owner, type_parameter_target, false)
+  when type_parameter_usage.known && count(type_parameter_usage.uses) < 2
+  let type_parameter_uses if count(type_parameter_usage.uses) == 0 then "never used" else "used only once"
+}
+}

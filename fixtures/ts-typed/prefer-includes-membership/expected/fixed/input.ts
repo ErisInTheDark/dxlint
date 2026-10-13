@@ -1,0 +1,15 @@
+declare const text: string, needle: string;
+declare const array: string[], custom: Compatible, different: Different, maybe: string | undefined;
+!text.includes(needle);
+text.includes(needle);
+array.includes(needle);
+custom.includes(needle);
+different.indexOf(needle) !== -1;
+maybe?.indexOf(needle) !== -1;
+text.includes('bar');
+/bar/i.test(text);
+/ba[rz]/.test(text);
+(needle + text).includes('bar');
+text.includes(needle /* keep */);
+array.includes(needle, 1);
+text.includes('\x001');

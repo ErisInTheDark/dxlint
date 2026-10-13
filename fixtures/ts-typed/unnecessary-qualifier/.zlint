@@ -1,0 +1,3 @@
+import .ts
+import .ts/typed/qualifiers
+rule no-unnecessary-qualifier

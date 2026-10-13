@@ -462,8 +462,7 @@ in ts_if, ts_conditional rule no-negated-condition {
 in ts_switch rule default-case {
   option commentPattern regex | null = null "comments that allow a missing default"
   when count(case) > 0 && !any(case.nodes, branch => branch.test.node == null)
-  let case_end last([] case.end_offset)
-  let final_comment { value descendants(ts_comment); filter (comment) comment.offset >= case_end && comment.end_offset < end_offset; last }
+  let final_comment switch_default_comment
   when final_comment == null || !{
     value final_comment.structure_comment_body
     trim: trim

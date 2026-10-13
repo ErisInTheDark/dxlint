@@ -1,0 +1,66 @@
+define {
+fn switch_literal(arm) = {
+  value part: find(arm, part => part.identity_known && part.identity != null
+    && (part.identity.kind == "value" || contains(part.traits, "symbol")))
+  value origin: find(arm, part => part.carrier.description.kind == "enum")
+  value if part == null then null else {
+    key: { identity: part.identity, enum_file: origin.carrier.file, enum_node: origin.carrier.node },
+    label: if contains(part.traits, "symbol") then "symbol" else assignment_print_part(part),
+  }
+}
+fn switch_arm_literals(arm) = {
+  value literal: switch_literal(arm)
+  value if literal != null then [literal]
+    else if any(arm, part => contains(part.traits, "boolean")) then map([false, true], value => {
+      key: { identity: { kind: "value", value: value }, enum_file: null, enum_node: null },
+      label: "" value,
+    })
+    else [null]
+}
+fn switch_case_literal(parts) = {
+  value arm: first(parts)
+  value literal: switch_literal(arm)
+  value if count(parts) != 1 || literal == null || any(arm, part =>
+    part.identity != literal.key.identity && part.carrier.description.kind != "enum") then null else literal
+}
+in ts_switch {
+  let switch_parts value_constituents(discriminant.node)
+  let switch_literals flat_map(switch_parts, arm => switch_arm_literals(arm))
+  let switch_tests filter(case.nodes, branch => branch.test != null)
+  let switch_test_parts map(switch_tests, branch => value_constituents(branch.test.node))
+  let switch_test_literals map(switch_test_parts, parts => switch_case_literal(parts))
+  let switch_missing {
+    value filter(switch_literals, literal => literal != null
+      && !any(switch_test_literals, branch => branch != null && branch.key == literal.key))
+    unique
+  }
+}
+in ts_switch rule switch-exhaustiveness-check {
+  option allowDefaultCaseForExhaustiveSwitch boolean = true "allow a default in an exhaustive switch"
+  option considerDefaultExhaustiveForUnions boolean = false "let a default cover missing union members"
+  option requireDefaultForNonUnion boolean = false "require a default for non-literal types"
+  option defaultCaseCommentPattern regex | null = null "comments that count as an omitted default"
+  when switch_parts != null && all(switch_test_parts, parts => parts != null)
+  let switch_default find(case.nodes, branch => branch.test == null) ?? (
+    if switch_default_comment != null && re_test(
+      { value switch_default_comment.structure_comment_body; trim },
+      defaultCaseCommentPattern.nonempty ?? "(?i)^no default$"
+    ) then switch_default_comment else null)
+  let switch_broad any(switch_literals, literal => literal == null)
+  let switch_missing_labels join(sort(map(switch_missing, literal => literal.label)), " | ")
+  let switch_reports {
+    value [
+      { node: discriminant.node, message: "Switch is not exhaustive. Cases not matched: " switch_missing_labels,
+        enabled: count(switch_missing) > 0 && !(considerDefaultExhaustiveForUnions && switch_default != null) },
+      { node: discriminant.node, message: "Switch is not exhaustive. Cases not matched: default",
+        enabled: requireDefaultForNonUnion && switch_broad && switch_default == null },
+      { node: switch_default, message: "The switch statement is exhaustive, so the default case is unnecessary.",
+        enabled: !allowDefaultCaseForExhaustiveSwitch && !switch_broad && count(switch_missing) == 0 && switch_default != null },
+    ]
+    filter (item) item.enabled
+  }
+  each switch_report in switch_reports
+  report at switch_report.node
+  warn "{switch_report.message}"
+}
+}

@@ -1,0 +1,46 @@
+define {
+fn enum_comparison_arm(arm) = {
+  value origin: find(arm, part => part.carrier.description.kind == "enum")
+  value scalar: find(arm, part => contains(part.traits, "number") || contains(part.traits, "string"))
+  value primitive: if contains(scalar.traits, "number") then "number"
+    else if contains(scalar.traits, "string") then "string" else null
+  value {
+    known: all(arm, part => part.carrier_known && part.identity_known
+      && !contains(part.uncertain_traits, "enum")),
+    enum: if origin == null then null else { file: origin.carrier.file, node: origin.carrier.node },
+    primitive: primitive,
+    identity: scalar.identity,
+  }
+}
+fn enum_comparison_parts(n) = {
+  value parts: value_constituents(n)
+  value if parts == null then null else map(parts, arm => enum_comparison_arm(arm))
+}
+fn enum_comparison_kind(parts, primitive) =
+  count(parts) > 0 && all(parts, part => part.primitive == primitive)
+fn enum_comparison_wide(parts, other) = any(parts, part => part.enum == null
+  && part.primitive != null && part.identity == null && enum_comparison_kind(other, part.primitive))
+fn enum_comparison_unsafe(left, right) = {
+  value enums: map(filter(left, part => part.enum != null), part => part.enum)
+  value others: map(filter(right, part => part.enum != null), part => part.enum)
+  value shared: any(enums, origin => contains(others, origin))
+    || any(left, part => part.primitive != null && contains(right, part))
+    || enum_comparison_wide(left, right) || enum_comparison_wide(right, left)
+  value left != null && right != null && all(left, part => part.known) && all(right, part => part.known)
+    && !shared && (
+      any(left, part => part.enum != null && part.primitive != null && enum_comparison_kind(right, part.primitive))
+      || any(right, part => part.enum != null && part.primitive != null && enum_comparison_kind(left, part.primitive))
+    )
+}
+in ts_binary, ts_case rule no-unsafe-enum-comparison {
+  when (node is ts_binary && contains(["<", ">", "<=", ">=", "==", "===", "!=", "!=="], node.operator))
+    || (node is ts_case && node.test != null)
+  let enum_comparison_left enum_comparison_parts(if node is ts_case then parent.discriminant.node else node.left.node)
+  let enum_comparison_right enum_comparison_parts(if node is ts_case then node.test.node else node.right.node)
+  when enum_comparison_unsafe(enum_comparison_left, enum_comparison_right)
+  let enum_comparison_message if node is ts_case
+    then "The case statement does not have a shared enum type with the switch predicate."
+    else "The two values in this comparison do not have a shared enum type."
+  warn "{enum_comparison_message}"
+}
+}

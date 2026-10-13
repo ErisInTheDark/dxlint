@@ -109,7 +109,7 @@ fn structure_parens_required(source, p, inner, outer) =
     || p is ts_new && inner.structure_parens_has_call
     structure_parens_need
   }
-  else if p is (ts_call, ts_new, ts_import_call) then structure_parens_need(inner.precedence < 1)
+  else if p is (ts_call, ts_new, ts_import_call, ts_jsx_expression) then structure_parens_need(inner.precedence < 1)
   else if outer is (ts_member.object, ts_index.object) then (if inner is ts_regex then null else {
     value inner is ts_number && p is ts_member && re_test(inner.text, /^[0-9_]+$/) && !re_test(inner.text, /^0[0-7]+$/)
     || inner.structure_parens_optional && p.optional == null || inner.precedence < 19

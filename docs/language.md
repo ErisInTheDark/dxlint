@@ -1276,6 +1276,11 @@ and `final-newline`.
 | `.ts/structure/padding` | statement padding policies and comment-aware blank-line fixes, imported by `.ts/structure` |
 | `.ts/spreads` | type-aware spread policy and allowed-type options, imported by `.ts/typed`; suggestions remain diagnostic-only |
 | `.ts/typed/assignments` | unsafe assignment, destructuring and spread policy; imported by `.ts/typed` |
+| `.ts/typed/enums` | number/string enum comparison policy, shared enum and union exemptions, including switch cases; imported by `.ts/typed`, diagnostic-only |
+| `.ts/typed/includes` | membership tests with compatible `indexOf`/`includes` methods, literal regex tests and comment-safe fixes; imported by `.ts/typed` |
+| `.ts/typed/qualifiers` | redundant runtime namespace qualifiers whose unqualified name binds the same declaration, with comment-safe fixes (type qualifiers not yet); imported by `.ts/typed` |
+| `.ts/typed/switches` | literal, boolean, enum and unique-symbol switch exhaustiveness, default policies and trailing-comment exemptions; imported by `.ts/typed`, diagnostic-only |
+| `.ts/typed/type-parameters` | unnecessary formal type parameters in known scalar, array and tuple signature graphs; opaque graphs and inherited classes skipped; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/awaitability` | own async syntax (`await`, `for await`, `await using`) and Values decisions for `require-await`'s missing-await check; imported by `.ts/typed` |
 | `.ts/typed/unbound-method` | receiver-preserving method extraction, including destructuring and ignoreStatic; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; imported by `.ts/typed` |

@@ -1,0 +1,101 @@
+import .ts/typed/string-boundaries
+
+define {
+
+fn includes_compatible(receiver, optional) = if string_boundary_receiver(receiver, optional) then true else {
+  value index_arms: member_call_parameters(receiver, "indexOf")
+  value includes_arms: member_call_parameters(receiver, "includes")
+  value index: flat_map(index_arms, arm => arm)
+  value includes: flat_map(includes_arms, arm => arm)
+  value index_arms != null && includes_arms != null && len(index) > 0 && len(includes) > 0
+      && all(index_arms, arm => len(arm) > 0) && all(includes_arms, arm => len(arm) > 0)
+      && all(index, signature => signature.parameters_known)
+      && all(includes, signature => signature.parameters_known)
+      && all(index, signature => all(includes, other => signature.parameters == other.parameters))
+}
+fn includes_index_call(n) = {
+  value call: unparenthesised_node(n)
+  value method: unparenthesised_node(call.callee.node)
+  value optional: method.optional != null || call.optional != null
+  value if call not ts_call || !collection_method(method, "indexOf") || count(call.argument) < 1
+    || !includes_compatible(method.object.node, optional) then null else {
+      call: call, method: method, optional: optional
+    }
+}
+fn includes_negative(operator, threshold) =
+  if threshold == -1 && contains(["!==", "!=", ">"], operator) || threshold == 0 && operator == ">=" then false
+  else if threshold == -1 && contains(["===", "==", "<="], operator) || threshold == 0 && operator == "<" then true
+  else null
+fn includes_replacement(source, n, result, negative, leading) = {
+  value shape: {
+    kind: if negative then "ts_unary" else "ts_call",
+    precedence: if negative then 15 else 19,
+    offset: n.offset, structure_parens_hazard: !negative && leading.structure_parens_hazard,
+    structure_parens_iife: false, structure_parens_has_in: false,
+    structure_parens_has_call: true, structure_parens_optional: false
+  }
+  value required: expression_fix_parens(source, n, shape)
+  value if required == null || !expression_fix_retains_comments(n, result) then null
+    else expression_fix_edges(n, expression_fix_wrap(result, required > 0))
+}
+fn includes_index_replacement(source, n, info, negative) = {
+  value property: if info.method is ts_member then info.method.property.node else info.method.index.node
+  value call: expression_fix_edits(info.call.text, info.call.offset, [{
+    start: property.offset, end: property.end_offset,
+    text: if info.method is ts_member then "includes" else "'includes'"
+  }])
+  value result: (if negative then "!" else "") call
+  value if info.optional then null else includes_replacement(source, n, result, negative, info.call)
+}
+fn includes_regex(n) = {
+  value pattern: collection_value_node(n)
+  value syntax: pattern.regexp_syntax
+  value root: first(syntax)
+  value flags: pattern.regexp_input.flags
+  value alternatives: filter(syntax, part => part.kind == "alternative" && part.parent == root.id)
+  value characters: filter(syntax, term => term.parent == first(alternatives).id)
+  value if syntax == null || type_of(flags) != "str" || re_test(flags, /[gimy]/)
+    || len(alternatives) != 1 || len(characters) == 0
+    || !all(characters, term => term.kind == "character" && term.character != null) then null
+    else { value characters; map (term) term.character; join "" }
+}
+fn includes_quote(text) = "'" {
+  value text
+  re_replace /\\/ "\\\\"
+  re_replace /'/ "\\'"
+  re_replace /\u{0}([0-9])/ "\\x00$1"
+  re_replace /\u{0}/ "\\0"
+  re_replace /\n/ "\\n"
+  re_replace /\r/ "\\r"
+  re_replace /\u{b}/ "\\v"
+  re_replace /\t/ "\\t"
+  re_replace /\u{c}/ "\\f"
+  re_replace /\u{2028}/ "\\u2028"
+  re_replace /\u{2029}/ "\\u2029"
+} "'"
+
+in ts_binary rule prefer-includes {
+  let negative includes_negative(operator.text, right.static_number)
+  when negative != null
+  let info includes_index_call(left.node)
+  when info != null
+  warn "Use 'includes()' method instead."
+  let replacement includes_index_replacement(source, node, info, negative)
+  fix if replacement != null as replacement
+}
+in ts_call rule prefer-includes:regex {
+  when count(argument) == 1
+  let method unparenthesised_node(callee.node)
+  when collection_method(method, "test")
+  let receiver first(argument.nodes)
+  when string_boundary_receiver(receiver, false)
+  let pattern_text includes_regex(method.object.node)
+  when pattern_text != null
+  warn "Use `String#includes()` method with a string instead."
+  let result expression_fix_wrap(receiver.text, receiver.precedence < 19) ".includes(" includes_quote(pattern_text) ")"
+  let replacement if method.optional != null || optional != null then null
+    else includes_replacement(source, node, result, false, method)
+  fix if replacement != null as replacement
+}
+
+}

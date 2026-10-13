@@ -1,0 +1,15 @@
+declare const text: string, needle: string;
+declare const array: string[], custom: Compatible, different: Different, maybe: string | undefined;
+text.indexOf(needle) <= -1;
+text.indexOf(needle) !== -1;
+array.indexOf(needle) !== -1;
+custom.indexOf(needle) !== -1;
+different.indexOf(needle) !== -1;
+maybe?.indexOf(needle) !== -1;
+/bar/.test(text);
+/bar/i.test(text);
+/ba[rz]/.test(text);
+/bar/.test(needle + text);
+text.indexOf(needle /* keep */) !== -1;
+array.indexOf(needle, 1) >= 0;
+/\u00001/.test(text);
