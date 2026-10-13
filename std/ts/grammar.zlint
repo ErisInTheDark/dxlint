@@ -1,0 +1,488 @@
+# Declared JS/TS syntax. Not selected by .ts until oracle and perf gates pass.
+@macro ts_parser_function_header name:type_identifier? (type_parameter:goal(types, type_parameters))? parameter:parameters (":" return_type:goal(types, return_type))?
+@macro ts_parser_variable kind:(text("var") | text("const" not("enum")) | text("let" if(no_in, not(/in|of/), ()) peek(type_identifier | /\[|\{/)) | text("using" if(no_in, (), same_line) peek(not(/in|of/) type_identifier)) | text("await" if(no_in, (), same_line) "using")) cut declaration:ts_declarator ("," declaration:ts_declarator)*
+@macro ts_parser_jsx_header "<" name:jsx_opening_name (type_argument:goal(types, type_arguments))? property:(ts_jsx_spread_attribute | ts_jsx_attribute)*
+@macro ts_parser_signature (type_parameter:type_parameters)? parameter:parameters (":" return_type:return_type)?
+@macro ts_parser_tuple_member (name:type_identifier optional:"?"? ":" type:type_expression | type:type_expression optional:"?"?)
+@macro ts_parser_method_header (kind:/get|set/ peek(accessor_next))? key:property_key optional:"?"? (type_parameter:goal(types, type_parameters))? parameter:parameters (":" return_type:goal(types, return_type))?
+@macro ts_parser_class_header modifier:/declare|abstract/* "class" name:(not(/extends|implements/) type_identifier)? (type_parameter:goal(types, type_parameters))? ("extends" extends:lhs_expression (type_argument:goal(types, type_arguments))?)? ("implements" implements:goal(types, type_expression) ("," implements:goal(types, type_expression))*)?
+@macro ts_parser_class_modifiers (modifier:(text("static") peek(accessor_next) | /public|private|protected|readonly|abstract|override|declare|accessor|async/ same_line peek(accessor_next)))*
+@macro ts_parser_import_kind (kind:"type" peek("{" | "*" | not("from") type_identifier))?
+@macro ts_parser_specifier_kind (kind:"type" peek(not("as") (type_identifier | ts_string)))?
+@macro ts_parser_semi terminator(";", before("}"), newline, eof)
+@macro ts_parser_instantiation_end not(/<|>|\+|-/) (not(same_line) | peek(/instanceof|in|as|satisfies|\?\?|\|\||&&|\||\^|&|==|!=|===|!==|<=|>=|<<|>>|>>>|\*|\/|%|\*\*/) | not(peek(type_identifier | ts_number | ts_bigint | ts_string | ts_template | /\(|\[|\{|!|~|\+\+|--|\/|\/=|@|\.\.\.|#/)))
+@macro ts_parser_arrow_tail same_line operator:"=>" cut body:clear(generator, (clear(no_in, ts_block) | assignment))
+parser ts_syntax in js {
+  trivia /\A\u{feff}?#![^\n]*/
+  trivia /[ \t\r\n\x0b\x0c\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]+/
+  trivia /\/\/[^\r\n\u{2028}\u{2029}]*/
+  trivia /\/\*(?:[^*]|\*+[^*/])*\*+\//
+  line_break /[\r\n\u{2028}\u{2029}]/
+
+  flag jsx option
+  flag generator
+  flag async
+  flag no_in
+  flag no_cond
+
+  token keyword /(?:break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|return|super|switch|this|throw|true|try|typeof|var|void|while|with|yield|let|static|implements|interface|package|private|protected|public|await|async|abstract|declare|type|namespace|module|as|satisfies|keyof|infer|readonly|is|asserts|of|using)/ as ts_keyword
+  token word /(?:[A-Za-z_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))(?:[A-Za-z0-9_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]|\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\}))*/
+  token private_name /#(?:[A-Za-z_$]|[^\x00-\x7f])(?:[A-Za-z0-9_$]|[^\x00-\x7f])*/
+  token bigint /(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*)n/
+  token number /(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|0[oO][0-7_]+|(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9][0-9_]*)?)/
+  token string /(?:"(?:\\\r\n|\\[\s\S]|[^"\\\n])*"|'(?:\\\r\n|\\[\s\S]|[^'\\\n])*')/
+  token regexp /\/(?:\\[\s\S]|\[(?:\\[\s\S]|[^\]\\\n])*\]|[^\/\\\[\n])+\/(?:[A-Za-z0-9_$\\]|[^\x00-\x7f])*/
+  token template /`(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*`/
+  token template_head /`(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*\$\{/
+  token template_middle /\}(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*\$\{/
+  token template_tail /\}(?:\\[\s\S]|[^\\`$]|\$+(?:\\[\s\S]|[^\\`{$]))*\$*`/
+  token jsx_name /(?:[A-Za-z_$]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}])(?:[A-Za-z0-9_$-]|[^\x00-\x7f\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}])*/
+  token jsx_text /[^<{]+/
+  token jsx_string /(?:"[^"]*"|'[^']*')/
+  token jsx_value_comment /[ \t\r\n\x0b\x0c\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]*(?:\/\/|\/\*)/
+
+  token comma "," as ts_comma
+  token semicolon ";" as ts_semicolon
+  token colon ":" as ts_colon
+  token dot "." as ts_dot
+  token question "?" as ts_question
+  token ellipsis "..." as ts_ellipsis
+  token equals "=" as ts_equals
+  token open_paren "(" as ts_open_paren
+  token close_paren ")" as ts_close_paren
+  token open_bracket "[" as ts_open_bracket
+  token close_bracket "]" as ts_close_bracket
+  token open_brace "{" as ts_open_brace
+  token close_brace "}" as ts_close_brace
+  token open_angle "<" as ts_open_angle
+  token close_angle ">" as ts_close_angle
+  token punctuator /(?:\?\.|\?\?=?|={2,3}|=>|!={1,2}|!|\*\*=?|\*=|\*|&&=?|&=?|\|\|=?|\|=?|<<=?|<=|>>>=?|>>=?|>=|\+\+|\+=|\+|--|-=|-|%=|%|\^=|\^|\/=|\/|~|@|#)/ as ts_punctuator
+  token type_punctuator /(?:\?\.|\?\?=?|={2,3}|=>|!={1,2}|!|\*\*=?|\*=|\*|&&=?|&=?|\|\|=?|\|=?|<<=?|<=|\+\+|\+=|\+|--|-=|-|%=|%|\^=|\^|\/=|\/|~|@|#)/ as ts_punctuator
+
+  goal code {
+    keyword word private_name bigint number string template template_head
+    comma semicolon colon dot question ellipsis equals open_paren close_paren
+    open_bracket close_bracket open_brace close_brace open_angle close_angle punctuator
+  }
+  goal primary {
+    keyword word private_name bigint number string regexp template template_head
+    comma semicolon colon dot question ellipsis equals open_paren close_paren
+    open_bracket close_bracket open_brace close_brace open_angle close_angle punctuator
+  }
+  goal template_parts { template_middle template_tail }
+  goal jsx_body raw { jsx_text open_angle open_brace }
+  goal jsx_value { jsx_string open_angle open_brace }
+  goal jsx_value_guard raw { jsx_value_comment }
+  goal jsx_tag {
+    keyword word jsx_name comma semicolon colon dot question ellipsis equals
+    open_paren close_paren open_bracket close_bracket open_brace close_brace
+    open_angle close_angle punctuator
+  }
+  goal types {
+    keyword word private_name bigint number string template template_head
+    comma semicolon colon dot question ellipsis equals open_paren close_paren
+    open_bracket close_bracket open_brace close_brace open_angle close_angle type_punctuator
+  }
+
+  node ts_program { body: statement* }
+  node ts_block { body: statement* }
+  node ts_expression_statement { expression: expression }
+  node ts_variable_declaration { kind: text, declaration: ts_declarator+, modifier?: text* }
+  node ts_declarator { name: binding, type?: type_expression, init?: assignment }
+  node ts_if { test: expression, consequent: statement, alternate?: statement }
+  node ts_while { test: expression, body: statement }
+  node ts_do_while { body: statement, test: expression }
+  node ts_for { modifier?: text, init?: expression | ts_variable_declaration, test?: expression, update?: expression, body: statement }
+  node ts_for_in { modifier?: text, left: expression | ts_variable_declaration, right: expression, body: statement }
+  node ts_for_of { modifier?: text, left: expression | ts_variable_declaration, right: assignment, body: statement }
+  node ts_switch { discriminant: expression, case?: ts_case* }
+  node ts_case { test?: expression, body?: statement* }
+  node ts_try { block: ts_block, kind?: text, parameter?: binding, type?: type_expression, handler?: ts_block, finalizer?: ts_block }
+  node ts_return { argument?: expression }
+  node ts_throw { argument?: expression }
+  node ts_break { label?: ts_identifier }
+  node ts_continue { label?: ts_identifier }
+  node ts_empty {}
+  node ts_debugger {}
+  node ts_labeled { label: ts_identifier, body: statement }
+  node ts_with { object: expression, body: statement }
+  node ts_function { modifier?: text*, name?: ts_identifier, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type, body?: ts_block }
+  node ts_arrow { modifier?: text*, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type, operator: text, body: assignment | ts_block }
+  node ts_parameter { decorator?: ts_decorator*, modifier?: text*, name: binding | ts_rest | ts_this, optional?: text, type?: type_expression, init?: assignment }
+  node ts_decorator { expression: lhs_expression }
+  node ts_class { decorator?: ts_decorator*, modifier?: text*, name?: type_identifier, type_parameter?: ts_type_parameter*, extends?: lhs_expression, type_argument?: type_expression*, implements?: type_expression*, member?: class_member* }
+  node ts_method { decorator?: ts_decorator*, modifier?: text*, kind?: text, key: property_key, optional?: text, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type, body?: ts_block }
+  node ts_class_property { decorator?: ts_decorator*, modifier?: text*, kind?: text, key: property_key, optional?: text, type?: type_expression, init?: assignment }
+  node ts_static_block { body: ts_block }
+  node ts_interface { modifier?: text*, name: type_identifier, type_parameter?: ts_type_parameter*, extends?: type_expression*, member?: type_member* }
+  node ts_type_alias { modifier?: text*, name: type_identifier, type_parameter?: ts_type_parameter*, type: type_expression }
+  node ts_enum { modifier?: text*, name: type_identifier, member?: ts_enum_member* }
+  node ts_enum_member { name: property_key, init?: assignment }
+  node ts_namespace { modifier?: text*, kind: text, name?: namespace_name, body?: ts_block }
+  node ts_import { kind?: text, default_import?: type_identifier, namespace?: type_identifier, specifier?: ts_import_specifier*, from: ts_string }
+  node ts_import_specifier { kind?: text, imported: type_identifier | ts_string, local?: type_identifier }
+  node ts_import_equals { kind?: text, modifier?: text*, name: type_identifier, value: lhs_expression }
+  node ts_export { kind?: text, declaration?: declaration | ts_import | ts_import_equals, specifier?: ts_export_specifier*, namespace?: type_identifier | ts_string, from?: ts_string, expression?: assignment, operator?: text }
+  node ts_export_specifier { kind?: text, local: type_identifier | ts_string, exported?: type_identifier | ts_string }
+  node ts_export_assignment { expression: expression }
+  node ts_object_pattern { property?: ts_pattern_property*, rest?: ts_rest, type?: type_expression }
+  node ts_array_pattern { element?: binding_element | ts_rest | ts_hole*, type?: type_expression }
+  node ts_pattern_property { key: property_key, value?: binding_element }
+  node ts_rest { argument?: binding, name?: ts_identifier, optional?: text, type?: type_expression }
+  node ts_identifier {}
+  node ts_private_name {}
+  node ts_this {}
+  node ts_super {}
+  node ts_null {}
+  node ts_boolean {}
+  node ts_number {}
+  node ts_bigint {}
+  node ts_string literal {}
+  node ts_regex literal {}
+  node ts_template { quasi: text+, expression?: expression* }
+  node ts_tagged_template { tag: expression, type_argument?: type_expression*, quasi: ts_template }
+  node ts_array { element?: assignment | ts_spread | ts_hole* }
+  node ts_object { property?: ts_property | ts_method | ts_spread* }
+  node ts_property { modifier?: text*, kind?: text, key: property_key, value?: assignment | ts_assignment_pattern }
+  node ts_assignment_pattern { left?: binding, right: assignment }
+  node ts_computed_key { expression: assignment }
+  node ts_spread { argument: assignment }
+  node ts_hole {}
+  node ts_member { object: expression, optional?: text, property: property_name }
+  node ts_index { object: expression, optional?: text, index: expression }
+  node ts_call { callee: expression, optional?: text, type_argument?: type_expression*, argument?: assignment | ts_spread* }
+  node ts_new { callee: new_callee, type_argument?: type_expression*, argument?: assignment | ts_spread* }
+  node ts_meta_property {}
+  node ts_import_call { argument?: assignment | ts_spread* }
+  node ts_unary { operator: text, argument: expression }
+  node ts_update { operator: text, argument: expression }
+  node ts_await { argument: expression }
+  node ts_yield { operator?: text, argument?: assignment }
+  node ts_binary { left: expression, operator: text, right: expression }
+  node ts_logical { left: expression, operator: text, right: expression }
+  node ts_assignment { left: expression, operator: text, right: assignment }
+  node ts_conditional { test: expression, consequent: assignment, alternate: assignment }
+  node ts_sequence { expression: assignment+ }
+  node ts_parenthesized { expression: expression }
+  node ts_as { expression: expression, type: type_expression }
+  node ts_satisfies { expression: expression, type: type_expression }
+  node ts_non_null { expression: expression }
+  node ts_instantiation { expression: expression, type_argument?: type_expression* }
+  node ts_type_assertion { type: type_expression, expression: unary_expression }
+  node ts_jsx_element { opening: ts_jsx_opening, body?: jsx_child*, closing?: ts_jsx_closing }
+  node ts_jsx_fragment { opening: ts_jsx_opening, body?: jsx_child*, closing: ts_jsx_closing }
+  node ts_jsx_opening { name?: jsx_opening_name, type_argument?: type_expression*, property?: ts_jsx_attribute | ts_jsx_spread_attribute* }
+  node ts_jsx_closing { name?: ts_jsx_name }
+  node ts_jsx_attribute { name: ts_jsx_name, value?: ts_string | ts_jsx_expression | ts_jsx_element | ts_jsx_fragment }
+  node ts_jsx_spread_attribute { argument: assignment }
+  node ts_jsx_expression { expression?: expression | ts_spread }
+  node ts_jsx_text literal {}
+  node ts_jsx_name {}
+  node ts_type_reference { name: entity_name, type_argument?: type_expression* }
+  node ts_type_keyword {}
+  node ts_type_parameter { modifier?: text*, name: ts_identifier, constraint?: type_expression, default?: type_expression }
+  node ts_union { type: type_expression+ }
+  node ts_intersection { type: type_expression+ }
+  node ts_array_type { type: type_expression }
+  node ts_parenthesized_type { type: type_expression }
+  node ts_qualified_name { left: entity_name, right: type_identifier | ts_private_name }
+  node ts_type_operator { operator: text, type: type_operator }
+  node ts_indexed_access { object: type_expression, index: type_expression }
+  node ts_conditional_type { check: type_union, extends: type_expression, consequent: type_expression, alternate: type_expression }
+  node ts_infer { type_parameter: ts_type_parameter }
+  node ts_function_type { modifier?: text, kind?: text, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type: return_type }
+  node ts_type_literal { member?: type_member* }
+  node ts_property_signature { modifier?: text, key: property_key, optional?: text, type?: type_expression }
+  node ts_method_signature { modifier?: text, kind?: text, key: property_key, optional?: text, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type }
+  node ts_call_signature { kind?: text, type_parameter?: ts_type_parameter*, parameter?: ts_parameter*, return_type?: return_type }
+  node ts_index_signature { decorator?: ts_decorator*, modifier?: text*, parameter: ts_parameter, type?: type_expression }
+  node ts_tuple_type { element?: ts_tuple_member | ts_rest* }
+  node ts_tuple_member { name?: type_identifier, optional?: text, type: type_expression }
+  node ts_type_query { name: entity_query | ts_import_type, type_argument?: type_expression* }
+  node ts_import_type { argument: type_expression, qualifier?: entity_name, type_argument?: type_expression* }
+  node ts_literal_type { value: ts_number | ts_bigint | ts_string | ts_boolean }
+  node ts_template_type { quasi: text+, type?: type_expression* }
+  node ts_type_predicate { modifier?: text, name: type_identifier | ts_this, type?: type_expression }
+  node ts_mapped_type { modifier?: text, type_parameter: ts_type_parameter, name?: type_expression, optional?: text, type?: type_expression }
+  node ts_comma {}
+  node ts_semicolon {}
+  node ts_colon {}
+  node ts_dot {}
+  node ts_question {}
+  node ts_ellipsis {}
+  node ts_equals {}
+  node ts_open_paren {}
+  node ts_close_paren {}
+  node ts_open_bracket {}
+  node ts_close_bracket {}
+  node ts_open_brace {}
+  node ts_close_brace {}
+  node ts_open_angle {}
+  node ts_close_angle {}
+  node ts_keyword {}
+  node ts_punctuator {}
+
+  root ts_program = body:statement* end
+  production statement = (
+    ts_block | ts_empty | ts_if | ts_while | ts_do_while | ts_return | ts_throw |
+    ts_break | ts_continue | ts_debugger | ts_with | ts_switch | ts_try |
+    try(ts_for_in) | try(ts_for_of) | ts_for | ts_variable_declaration |
+    try(ts_import_equals) | try(ts_import) | try(ts_export_assignment) | decorated_export | ts_export |
+    declaration | try(ts_labeled) | ts_expression_statement
+  )
+  production ts_block = "{" cut body:statement* "}"
+  production ts_empty = ";"
+  production ts_if = "if" cut "(" test:expression ")" consequent:statement ("else" alternate:statement)?
+  production ts_while = "while" cut "(" test:expression ")" body:statement
+  production ts_do_while = "do" cut body:statement "while" "(" test:expression ")" ";"?
+  production ts_return = "return" cut (same_line argument:expression)? terminator(";", before("}"), newline, eof)
+  production ts_throw = "throw" cut (same_line argument:expression)? terminator(";", before("}"), newline, eof)
+  production ts_break = "break" cut (same_line label:ts_identifier)? terminator(";", before("}"), newline, eof)
+  production ts_continue = "continue" cut (same_line label:ts_identifier)? terminator(";", before("}"), newline, eof)
+  production ts_debugger = "debugger" cut terminator(";", before("}"), newline, eof)
+  production ts_with = "with" cut "(" object:expression ")" body:statement
+  production for_initializer = emit(ts_variable_declaration, @ts_parser_variable) | expression
+  production ts_for_in = "for" (modifier:"await")? "(" left:set(no_in, for_initializer) "in" right:clear(no_in, expression) ")" body:statement
+  production ts_for_of = "for" (modifier:"await")? "(" left:set(no_in, for_initializer) "of" right:clear(no_in, assignment) ")" body:statement
+  production ts_for = "for" cut (modifier:"await")? "(" (init:set(no_in, for_initializer))? ";" test:expression? ";" update:expression? ")" body:statement
+  production ts_switch = "switch" cut "(" discriminant:expression ")" "{" case:ts_case* "}"
+  production ts_case = ("case" test:expression | "default") ":" body:(not(/case|default|\}/) statement)*
+  production ts_try = "try" cut block:ts_block (kind:"catch" ("(" parameter:binding (":" type:goal(types, type_expression))? ")")? handler:ts_block)? ("finally" finalizer:ts_block)?
+  production ts_labeled = label:ts_identifier ":" cut body:statement
+  production ts_variable_declaration = modifier:"declare"* @ts_parser_variable terminator(";", before("}"), newline, eof)
+  production ts_declarator = name:binding "!"? (":" type:goal(types, type_expression))? ("=" init:assignment)?
+  production ts_expression_statement = expression:expression terminator(";", before("}"), newline, eof)
+  production binding = ts_identifier | ts_object_pattern | ts_array_pattern
+  production binding_element precedence binding {
+    suffix 1 ("=" right:goal(code, clear(no_in, assignment))) => ts_assignment_pattern(left)
+  }
+  production ts_object_pattern = "{" (property:ts_pattern_property | rest:ts_rest) ("," (property:ts_pattern_property | rest:ts_rest))* ","? "}" | "{" "}"
+  production ts_array_pattern = "[" (element:emit(ts_hole, peek(",")) "," | element:(ts_rest | binding_element) cut ("," | peek("]")))* "]"
+  production ts_pattern_property = (key:property_key ":" value:binding_element) | (key:ts_identifier value:ts_assignment_pattern?) | key:property_key
+  production ts_rest = "..." argument:binding
+  production ts_identifier = not(/(?:break|case|catch|class|const|continue|debugger|default|delete|do|else|enum|export|extends|false|finally|for|function|if|import|in|instanceof|new|null|return|super|switch|this|throw|true|try|typeof|var|void|while|with)/) /(?:[A-Za-z_$]|[^\x00-\x7f]|\\u[\s\S]+)(?:[A-Za-z0-9_$]|[^\x00-\x7f]|\\u[\s\S]+)*/
+  production property_name = emit(ts_identifier, /(?:[A-Za-z_$]|[^\x00-\x7f]|\\u[\s\S]+)(?:[A-Za-z0-9_$]|[^\x00-\x7f]|\\u[\s\S]+)*/) | ts_private_name
+  production ts_private_name = private_name
+  production ts_this = "this"
+  production ts_super = "super"
+  production ts_null = "null"
+  production ts_boolean = /true|false/
+  production ts_number = number
+  production ts_bigint = bigint
+  production ts_string = string
+  production ts_regex = regexp
+  production ts_parenthesized = "(" cut expression:clear(no_in, expression) ")"
+  production ts_array = "[" cut clear(no_in, ((element:emit(ts_hole, peek(",")) "," | element:(ts_spread | assignment) cut ("," | peek("]")))*)) "]"
+  production ts_spread = "..." cut argument:goal(code, clear(no_in, assignment))
+  production ts_object = "{" cut clear(no_in, ((property:(ts_spread | try(object_method) | ts_property) ("," property:(ts_spread | try(object_method) | ts_property))* ","?)?)) "}"
+  production property_key = property_name | ts_string | ts_number | ts_bigint | ts_computed_key
+  production ts_computed_key = "[" expression:goal(code, clear(no_in, assignment)) "]"
+  production ts_property = (modifier:"async" same_line peek(accessor_next))? modifier:"*"? (kind:/get|set/ peek(accessor_next))? key:property_key (":" value:assignment | value:ts_assignment_pattern)?
+  production ts_assignment_pattern = "=" right:assignment
+  production ts_template = quasi:template | (quasi:template_head expression:clear(no_in, expression) (goal(template_parts, quasi:template_middle) expression:clear(no_in, expression))* goal(template_parts, quasi:template_tail))
+  production ts_decorator = "@" expression:lhs_expression
+  production ts_parameter = decorator:ts_decorator* (modifier:/public|private|protected|readonly|override/ same_line peek(property_key))* name:(ts_rest | ts_this | binding) (optional:"?")? (":" type:goal(types, type_expression))? ("=" init:goal(code, clear(no_in, assignment)))?
+  production parameters = "(" (parameter:ts_parameter ("," parameter:ts_parameter)* ","?)? ")"
+  production ts_function = modifier:"declare"* (modifier:"async" same_line)? "function" (modifier:"*" @ts_parser_function_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) | @ts_parser_function_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi))
+  production ts_arrow = try(
+    peek(ts_identifier same_line "=>" | "(" | "<" | "async" same_line (ts_identifier same_line "=>" | "(" | "<"))
+    (
+    parameter:emit(ts_parameter, name:ts_identifier) @ts_parser_arrow_tail |
+    (if(jsx, peek("<" type_identifier ("," | "extends")), ()) type_parameter:goal(types, type_parameters))? parameter:parameters (":" return_type:goal(types, return_type))? @ts_parser_arrow_tail |
+    modifier:"async" same_line (
+      parameter:emit(ts_parameter, name:ts_identifier) |
+      (type_parameter:goal(types, type_parameters))? parameter:parameters (":" return_type:goal(types, return_type))?
+    ) @ts_parser_arrow_tail
+    )
+  )
+
+  production expression precedence assignment {
+    left 0 "," => ts_sequence(expression, expression) flatten
+  }
+  production assignment = goal(code, (ts_arrow | if(generator, ts_yield, fail) | assignment_value))
+  production ts_yield = "yield" (same_line operator:"*")? (same_line argument:assignment)?
+  production assignment_value precedence binary_expression {
+    suffix 1 (operator:/=|\+=|-=|\*=|\/=|%=|\*\*=|<<=|>>=|>>>=|&=|\|=|\^=|&&=|\|\|=|\?\?=/ cut right:assignment) => ts_assignment(left)
+    suffix 2 ("?" consequent:clear(no_in, assignment) ":" alternate:assignment) => ts_conditional(test)
+  }
+  production binary_expression precedence unary_expression {
+    left 1 operator:"??" => ts_logical(left, operator, right)
+    left 2 operator:"||" => ts_logical(left, operator, right)
+    left 3 operator:"&&" => ts_logical(left, operator, right)
+    left 4 operator:"|" => ts_binary(left, operator, right)
+    left 5 operator:"^" => ts_binary(left, operator, right)
+    left 6 operator:"&" => ts_binary(left, operator, right)
+    left 7 operator:/==|!=|===|!==/ => ts_binary(left, operator, right)
+    left 8 operator:/<|>|<=|>=|instanceof/ => ts_binary(left, operator, right)
+    left 8 operator:if(no_in, fail, text("in")) => ts_binary(left, operator, right)
+    left 9 operator:/<<|>>|>>>/ => ts_binary(left, operator, right)
+    left 10 operator:/\+|-/ => ts_binary(left, operator, right)
+    left 11 operator:/\*|\/|%/ => ts_binary(left, operator, right)
+    right 12 operator:"**" => ts_binary(left, operator, right)
+    suffix 8 (same_line "as" type:goal(types, (emit(ts_type_keyword, "const") | type_expression))) => ts_as(expression)
+    suffix 8 (same_line "satisfies" type:goal(types, (emit(ts_type_keyword, "const") | type_expression))) => ts_satisfies(expression)
+  }
+  production unary_expression precedence (if(jsx, fail, ts_type_assertion) | lhs_expression) {
+    prefix 1 operator:/!|~|\+|-|delete|void|typeof/ => ts_unary(operator, argument)
+    prefix 1 operator:/\+\+|--/ => ts_update(operator, argument)
+    prefix 1 ("await" not(end) not(/\)|\]|\}|,|;|:|=|\.|\?\.|=>|\?/)) => ts_await(argument)
+    suffix 2 (same_line operator:/\+\+|--/) => ts_update(argument)
+  }
+  production lhs_expression precedence goal(primary, primary_expression) {
+    suffix 1 ("." property:property_name) => ts_member(object)
+    suffix 1 (optional:"?." property:property_name) => ts_member(object)
+    suffix 1 ("[" index:clear(no_in, expression) "]") => ts_index(object)
+    suffix 1 (optional:"?." "[" index:clear(no_in, expression) "]") => ts_index(object)
+    suffix 1 argument:arguments => ts_call(callee)
+    suffix 1 try(type_argument:goal(types, type_arguments) argument:arguments) => ts_call(callee)
+    suffix 1 (optional:"?." argument:arguments) => ts_call(callee)
+    suffix 1 (optional:"?." type_argument:goal(types, type_arguments) argument:arguments) => ts_call(callee)
+    suffix 1 (same_line "!") => ts_non_null(expression)
+    suffix 1 quasi:ts_template => ts_tagged_template(tag)
+    suffix 1 try(type_argument:goal(types, type_arguments) quasi:ts_template) => ts_tagged_template(tag)
+    suffix 1 try(type_argument:goal(types, type_arguments) @ts_parser_instantiation_end) => ts_instantiation(expression)
+  }
+  production arguments = "(" (argument:(ts_spread | clear(no_in, assignment)) ("," argument:(ts_spread | clear(no_in, assignment)))* ","?)? ")"
+  production new_callee precedence goal(primary, primary_expression) {
+    suffix 1 ("." property:property_name) => ts_member(object)
+    suffix 1 ("[" index:clear(no_in, expression) "]") => ts_index(object)
+    suffix 1 (same_line "!") => ts_non_null(expression)
+    suffix 1 quasi:ts_template => ts_tagged_template(tag)
+  }
+  production ts_meta_property = /new|import/ "." /[\s\S]+/
+  production ts_new = "new" callee:new_callee (try(type_argument:goal(types, type_arguments)))? argument:arguments?
+  production ts_import_call = "import" argument:arguments
+  production ts_type_assertion = "<" type:goal(types, (emit(ts_type_keyword, "const") | type_expression)) ">" expression:unary_expression
+  production primary_expression = if(jsx, goal(jsx_tag, (ts_jsx_fragment | ts_jsx_element)), fail) | ts_this | ts_super | ts_null | ts_boolean | ts_bigint | ts_number | ts_string | ts_regex | ts_template | ts_parenthesized | ts_array | ts_object | try(ts_meta_property) | ts_new | ts_import_call | ts_function | ts_class | ts_private_name | ts_identifier
+
+  production ts_jsx_fragment = opening:emit(ts_jsx_opening, "<" ">") goal(jsx_body, body:jsx_child*) closing:emit(ts_jsx_closing, "<" "/" ">")
+  production ts_jsx_element = (
+    try(opening:emit(ts_jsx_opening, @ts_parser_jsx_header "/" ">")) |
+    opening:emit(ts_jsx_opening, @ts_parser_jsx_header ">")
+    goal(jsx_body, body:jsx_child*)
+    closing:emit(ts_jsx_closing, "<" "/" name:ts_jsx_name ">")
+    same_text(opening.name, closing.name, /[ \t\r\n\x0b\x0c\u{00a0}\u{1680}\u{2000}-\u{200a}\u{2028}\u{2029}\u{202f}\u{205f}\u{3000}\u{feff}]+/)
+  )
+  production jsx_child = not(peek("<" goal(code, "/"))) (ts_jsx_text | goal(code, ts_jsx_expression) | goal(jsx_tag, (ts_jsx_fragment | ts_jsx_element)))
+  production ts_jsx_text = jsx_text
+  production jsx_part = /(?:[A-Za-z_$]|[^\x00-\x7f])(?:[A-Za-z0-9_$-]|[^\x00-\x7f])*/
+  production ts_jsx_name = jsx_part (("." | ":") jsx_part)*
+  production jsx_namespace_name = emit(ts_jsx_name, jsx_part ":" jsx_part)
+  production jsx_component_base = ts_this | emit(ts_identifier, jsx_part)
+  production jsx_member = emit(ts_member, object:jsx_component_base "." property:emit(ts_identifier, jsx_part))
+  production jsx_component_name precedence jsx_member {
+    suffix 1 ("." property:emit(ts_identifier, jsx_part)) => ts_member(object)
+  }
+  production jsx_opening_name = try(jsx_namespace_name) | try(jsx_component_name) | emit(ts_jsx_name, /[a-z][A-Za-z0-9_$-]*|[A-Za-z_$][A-Za-z0-9_$]*-[A-Za-z0-9_$-]*/) | jsx_component_base
+  production ts_jsx_attribute = name:emit(ts_jsx_name, jsx_part (":" jsx_part)?) ("=" not(goal(jsx_value_guard, jsx_value_comment)) value:goal(jsx_value, (emit(ts_string, jsx_string) | goal(code, ts_jsx_attribute_expression) | goal(jsx_tag, (ts_jsx_fragment | ts_jsx_element)))))?
+  production ts_jsx_spread_attribute = goal(code, ("{" "..." argument:clear(no_in, assignment) "}"))
+  production ts_jsx_expression = "{" (expression:(ts_spread | clear(no_in, expression)))? "}"
+  production ts_jsx_attribute_expression = emit(ts_jsx_expression, "{" expression:clear(no_in, assignment)? "}")
+
+  production type_expression = clear(no_cond, type_inner)
+  production type_no_conditional = set(no_cond, type_inner)
+  production type_inner = try(ts_function_type) | type_conditional
+  production type_conditional precedence type_union {
+    suffix 0 (same_line if(no_cond, fail, "extends") extends:type_no_conditional "?" consequent:type_expression ":" alternate:type_expression) => ts_conditional_type(check)
+  }
+  production type_union = emit(ts_union, "|" type:union_members) | type_union_value
+  production union_members = type_intersection ("|" type_intersection)*
+  production type_union_value precedence type_intersection {
+    left 1 "|" => ts_union(type, type) flatten
+  }
+  production type_intersection = emit(ts_intersection, "&" type:intersection_members) | type_intersection_value
+  production intersection_members = type_operator ("&" type_operator)*
+  production type_intersection_value precedence type_operator {
+    left 2 "&" => ts_intersection(type, type) flatten
+  }
+  production type_operator precedence (ts_infer | type_postfix) {
+    prefix 1 (/keyof|readonly|unique/ not(end) not(/\)|\]|\}|,|;|:|=|>|\||&|\?|\.|=>/)) => ts_type_operator(operator, type)
+  }
+  production type_postfix precedence type_atom {
+    suffix 1 (same_line "[" "]") => ts_array_type(type)
+    suffix 1 (same_line "[" index:type_expression "]") => ts_indexed_access(object)
+  }
+  production type_atom = ts_parenthesized_type | try(ts_mapped_type) | ts_type_literal | ts_tuple_type | ts_literal_type | ts_template_type | ts_type_query | ts_import_type | ts_type_keyword | ts_type_reference
+  production ts_parenthesized_type = "(" type:type_expression ")"
+  production ts_type_keyword = /any|unknown|never|void|undefined|null|boolean|number|bigint|string|symbol|object|intrinsic|this/ not(".")
+  production type_identifier = emit(ts_identifier, /(?:[A-Za-z_$]|[^\x00-\x7f]|\\u[\s\S]+)(?:[A-Za-z0-9_$]|[^\x00-\x7f]|\\u[\s\S]+)*/)
+  production entity_name precedence (ts_this | type_identifier) {
+    suffix 1 ("." right:type_identifier) => ts_qualified_name(left)
+  }
+  production entity_query precedence (ts_this | type_identifier) {
+    suffix 1 ("." right:(type_identifier | ts_private_name)) => ts_qualified_name(left)
+  }
+  production ts_type_reference = name:entity_name (same_line type_argument:type_arguments)?
+  production type_arguments = "<" (type_expression ("," type_expression)* ","?)? ">"
+  production type_parameters = "<" (ts_type_parameter ("," ts_type_parameter)* ","?)? ">"
+  production ts_type_parameter = (modifier:/const|in|out/ peek(type_identifier))* name:type_identifier ("extends" constraint:type_expression)? ("=" default:type_expression)?
+  production ts_infer = "infer" type_parameter:emit(ts_type_parameter, name:type_identifier (try("extends" constraint:type_no_conditional if(no_cond, (), not("?"))))?)
+  production ts_function_type = modifier:"abstract"? kind:"new"? (type_parameter:type_parameters)? parameter:parameters "=>" return_type:return_type
+  production return_type = try(ts_type_predicate) | type_expression
+  production ts_type_predicate = (modifier:"asserts" same_line name:(ts_this | type_identifier) ("is" type:type_expression)?) | (name:(ts_this | type_identifier) same_line "is" type:type_expression)
+  production ts_type_query = "typeof" cut name:(ts_import_type | entity_query) (same_line type_argument:type_arguments)?
+  production ts_import_type = "import" cut "(" argument:type_expression ("," discard(goal(code, clear(no_in, assignment)))?)? ")" ("." qualifier:entity_name)? (same_line type_argument:type_arguments)?
+  production ts_literal_type = "-"? value:(ts_number | ts_bigint) | value:(ts_string | ts_boolean)
+  production ts_template_type = quasi:template | (quasi:template_head type:type_expression (goal(template_parts, quasi:template_middle) type:type_expression)* goal(template_parts, quasi:template_tail))
+  production ts_tuple_type = "[" (element:(emit(ts_rest, "..." @ts_parser_tuple_member) | ts_tuple_member) ("," element:(emit(ts_rest, "..." @ts_parser_tuple_member) | ts_tuple_member))* ","?)? "]"
+  production ts_tuple_member = @ts_parser_tuple_member
+  production ts_mapped_type = "{" (modifier:(text(/[-+]/ "readonly") | /readonly/))? "[" type_parameter:emit(ts_type_parameter, name:type_identifier "in" constraint:type_expression) ("as" name:type_expression)? "]" (optional:(text(/[-+]/ "?") | text("?")))? (":" type:type_expression)? (";" | ",")? "}"
+  production ts_type_literal = member:type_members
+  production type_members = "{" (type_member (";" | "," | terminator(";", before("}"), newline)))* "}"
+  production type_member = try(ts_call_signature) | try(ts_index_signature) | try(ts_method_signature) | ts_property_signature
+  production ts_call_signature = kind:"new"? @ts_parser_signature
+  production ts_index_signature = (modifier:"readonly" same_line peek("["))? "[" parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:type_expression) "]" (":" type:type_expression)?
+  production ts_method_signature = (modifier:"readonly" same_line peek(property_key))? (kind:/get|set/ same_line peek(property_key))? key:property_key optional:"?"? (type_parameter:type_parameters)? parameter:parameters (":" return_type:return_type)?
+  production ts_property_signature = (modifier:"readonly" same_line peek(property_key))? (discard(/get|set/) same_line peek(property_key))? key:property_key optional:"?"? (":" type:type_expression)?
+
+  production declaration = ts_function | ts_class | ts_interface | ts_type_alias | ts_enum | ts_namespace | ts_variable_declaration
+  production accessor_next = type_identifier | ts_string | ts_number | ts_bigint | ts_private_name | /\[|\*|\{|#/
+  production ts_class = decorator:ts_decorator* @ts_parser_class_header "{" (";" | member:class_member)* "}"
+  production decorated_export = emit(ts_export, scope(decorators, ts_decorator+,
+    "export" kind:"default"? declaration:emit(ts_class,
+      decorator:reuse(decorators) @ts_parser_class_header "{" (";" | member:class_member)* "}"
+    )
+  ))
+  production class_member = try(ts_static_block) | try(class_index_signature) | try(class_method) | ts_class_property
+  production ts_static_block = discard(ts_decorator*) "static" body:clear(no_in, ts_block)
+  production class_index_signature = emit(ts_index_signature, decorator:ts_decorator* @ts_parser_class_modifiers "[" parameter:emit(ts_parameter, name:type_identifier optional:"?"? ":" type:goal(types, type_expression)) "]" (":" type:goal(types, type_expression))?) discard(@ts_parser_semi)
+  production class_method = emit(ts_method, decorator:ts_decorator* @ts_parser_class_modifiers (
+    modifier:"*" @ts_parser_method_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) |
+    @ts_parser_method_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi)
+  ))
+  production object_method = emit(ts_method, (modifier:"async" same_line peek(accessor_next))? (
+    modifier:"*" @ts_parser_method_header (body:clear(no_in, set(generator, ts_block)) | @ts_parser_semi) |
+    @ts_parser_method_header (body:clear(no_in, clear(generator, ts_block)) | @ts_parser_semi)
+  ))
+  production ts_class_property = decorator:ts_decorator* @ts_parser_class_modifiers modifier:"*"? (kind:/get|set/ peek(accessor_next))? key:property_key optional:"?"? "!"? (":" type:goal(types, type_expression))? ("=" init:clear(no_in, assignment))? @ts_parser_semi
+  production ts_interface = modifier:"declare"* "interface" same_line name:type_identifier (type_parameter:goal(types, type_parameters))? ("extends" extends:goal(types, type_expression) ("," extends:goal(types, type_expression))*)? member:goal(types, type_members)
+  production ts_type_alias = modifier:"declare"* "type" same_line name:type_identifier (type_parameter:goal(types, type_parameters))? "=" type:goal(types, type_expression) @ts_parser_semi
+  production ts_enum = modifier:"declare"* modifier:"const"? "enum" name:type_identifier "{" (member:ts_enum_member ("," member:ts_enum_member)* ","?)? "}"
+  production ts_enum_member = name:property_key ("=" init:clear(no_in, assignment))?
+  production namespace_name precedence (ts_string | type_identifier) {
+    suffix 1 ("." right:type_identifier) => ts_qualified_name(left)
+  }
+  production ts_namespace = modifier:"declare"* (
+    kind:"global" peek("{") | kind:/namespace|module/ same_line name:namespace_name
+  ) (body:ts_block | @ts_parser_semi)
+  production ts_import_equals = "import" @ts_parser_import_kind name:type_identifier "=" value:lhs_expression @ts_parser_semi
+  production ts_import = "import" @ts_parser_import_kind (
+    from:ts_string import_attributes? |
+    default_import:type_identifier? ","? ("*" "as" namespace:type_identifier | "{" (specifier:ts_import_specifier ("," specifier:ts_import_specifier)* ","?)? "}")? "from" from:ts_string import_attributes?
+  ) @ts_parser_semi
+  production ts_import_specifier = @ts_parser_specifier_kind imported:(ts_string | type_identifier) ("as" local:type_identifier)?
+  production import_attributes = discard(("with" | same_line "assert") attribute_braces)
+  production attribute_braces = "{" (attribute_braces | not("{" | "}") /[\s\S]+/)* "}"
+  production ts_export_assignment = "export" "=" expression:expression @ts_parser_semi
+  production ts_export = "export" (
+    "as" "namespace" namespace:type_identifier @ts_parser_semi |
+    kind:"default" (declaration:(try(ts_function) | try(ts_class) | try(ts_interface)) | expression:assignment @ts_parser_semi) |
+    declaration:(try(ts_import_equals) | ts_import) |
+    (kind:"type" peek("{" | "*"))? (
+      operator:"*" ("as" namespace:(ts_string | type_identifier))? "from" from:ts_string import_attributes? @ts_parser_semi |
+      "{" (specifier:ts_export_specifier ("," specifier:ts_export_specifier)* ","?)? "}" ("from" from:ts_string import_attributes?)? @ts_parser_semi
+    ) |
+    declaration:declaration
+  )
+  production ts_export_specifier = @ts_parser_specifier_kind local:(ts_string | type_identifier) ("as" exported:(ts_string | type_identifier))?
+}

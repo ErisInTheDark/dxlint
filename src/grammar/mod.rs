@@ -195,6 +195,7 @@ pub struct Grammar {
     /// The config's `fn`s, by index; bodies are compiled once every
     /// function is known (they may call each other).
     pub functions: Vec<UserFn>,
+    pub parsers: syntax::Parsers,
     /// `scope`, `declares` and `resolves` tables.
     pub names: names::Names,
 }
@@ -539,6 +540,7 @@ impl Grammar {
             cache_pool: Mutex::new(Vec::new()),
             dropped: config.dropped.clone(),
             functions: user_functions(config, errors),
+            parsers: syntax::Parsers::build(&config.parsers, errors),
             names: names::Names::default(),
         };
         grammar.shapes = shapes::Shapes::build(&grammar);

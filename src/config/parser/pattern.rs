@@ -11,7 +11,7 @@ use super::Parser;
 use crate::pattern::{regex, Pat};
 
 impl Parser<'_> {
-    fn field_name(&mut self, token: &Token) -> bool {
+    pub(super) fn field_name(&mut self, token: &Token) -> bool {
         if matches!(&*token.text, "nodes" | "nonempty") {
             self.errors.push(ConfigError::new(token.span, format!("field `{}` is a reserved expression suffix", token.text)));
             false

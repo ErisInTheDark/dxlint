@@ -35,6 +35,7 @@ pub struct Goal {
 pub struct Node {
     pub name: String,
     pub fields: Vec<Field>,
+    pub literal_text: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +71,7 @@ pub struct ContextChange {
 #[derive(Clone, Debug)]
 pub enum Expr {
     Token(TokenMatch),
+    TokenPattern { pattern: Pat, emit: Option<String> },
     Call { production: String, min_binding_power: u16 },
     Seq(Vec<Expr>),
     Choice(Vec<Expr>),
@@ -81,9 +83,12 @@ pub enum Expr {
     Look { inner: Box<Expr>, negative: bool },
     Try(Box<Expr>),
     Discard(Box<Expr>),
+    Text(Box<Expr>),
+    Scope { capture: String, header: Box<Expr>, body: Box<Expr> },
+    Reuse(String),
     Cut,
     SameLine,
-    SameText { left: String, right: String },
+    SameText { left: String, right: String, ignore: Option<Pat> },
     Terminator {
         explicit: TokenMatch,
         before: Vec<TokenMatch>,
@@ -121,4 +126,5 @@ pub struct Operator {
     pub left: String,
     pub operator_field: Option<String>,
     pub right: Option<String>,
+    pub flatten: bool,
 }

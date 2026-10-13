@@ -8,4 +8,6 @@ pub struct ParserDecl {
     pub name: Name,
     pub language: Name,
     pub definition: Definition,
+    /// Only these flags read same-name boolean language options initially.
+    pub option_flags: Vec<String>,
 }
