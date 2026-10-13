@@ -352,6 +352,11 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.effect_read_catalogue_builds)
     ));
     output.err(format_args!(
+        "  program catalogue builds: {}; catalogue read validations: {}",
+        Profile::get(&p.program_catalogue_builds),
+        Profile::get(&p.catalogue_read_validations)
+    ));
+    output.err(format_args!(
         "  memo entries discarded at limit: {}",
         Profile::get(&p.semantic_memo_discards)
     ));

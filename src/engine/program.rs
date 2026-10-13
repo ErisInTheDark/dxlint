@@ -6,7 +6,7 @@ use std::thread::ThreadId;
 use crate::grammar::names::question::Known;
 use crate::fx_hash::FxHashMap;
 
-use super::reads::{self, Cached, Dep};
+use super::{Profile, reads::{self, Cached, Dep}};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct Context {
@@ -91,13 +91,18 @@ impl<K, V> Default for Memo<K, V> {
 }
 
 impl<K: Clone + Eq + Hash, V> Memo<K, V> {
-    fn get(&self, key: K, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<V>) -> Known<Arc<V>> {
+    fn get(&self, key: K, profile: Option<&Profile>, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<V>) -> Known<Arc<V>> {
         let owner = std::thread::current().id();
         let mut entries = self.entries.lock().expect("program cache");
         loop {
             match entries.get(&key) {
-                Some(Entry::Ready(answer)) if !answer.reads.any(&mut |dep| !holds(dep)) => {
-                    return Known::Yes(answer.get());
+                Some(Entry::Ready(answer)) => {
+                    if let Some(profile) = profile { Profile::add(&profile.catalogue_read_validations, 1); }
+                    if !answer.reads.any(&mut |dep| !holds(dep)) {
+                        return Known::Yes(answer.get());
+                    }
+                    entries.insert(key.clone(), Entry::Building(owner));
+                    break;
                 }
                 Some(Entry::Building(thread)) if *thread == owner => return Known::Unknown,
                 Some(Entry::Building(_)) => {
@@ -114,6 +119,7 @@ impl<K: Clone + Eq + Hash, V> Memo<K, V> {
         }
         drop(entries);
         let lease = Build { memo: self, key };
+        if let Some(profile) = profile { Profile::add(&profile.program_catalogue_builds, 1); }
         let answer = Cached::compute(|| match build() {
             Known::Yes(value) => Known::Yes(Arc::new(value)),
             Known::Unknown => Known::Unknown,
@@ -121,9 +127,7 @@ impl<K: Clone + Eq + Hash, V> Memo<K, V> {
         reads::note_group(&answer.reads);
         match answer.value {
             Known::Yes(value) => {
-                if !answer.reads.any(&mut |dep| !holds(dep)) {
-                    lease.publish(Cached { value: value.clone(), reads: answer.reads });
-                }
+                lease.publish(Cached { value: value.clone(), reads: answer.reads });
                 Known::Yes(value)
             }
             _ => Known::Unknown,
@@ -164,11 +168,11 @@ pub(super) struct Programs {
 
 impl Programs {
     pub fn paths(&self, context: Context, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
-        self.paths.get(context, holds, build)
+        self.paths.get(context, None, holds, build)
     }
 
-    pub fn catalog(&self, key: CatalogKey, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Catalog>) -> Known<Arc<Catalog>> {
-        self.catalogs.get(key, holds, build)
+    pub fn catalog(&self, key: CatalogKey, profile: Option<&Profile>, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Catalog>) -> Known<Arc<Catalog>> {
+        self.catalogs.get(key, profile, holds, build)
     }
 
     pub fn clear(&mut self) {
@@ -210,14 +214,19 @@ mod tests {
         reads::set_buffer(path, "first");
         let memo = Memo::<(), String>::default();
         let builds = Cell::new(0);
-        let load = || memo.get((), |dep| dep.holds(|_| reads::MISSING), || {
+        let validations = Cell::new(0);
+        let load = || memo.get((), None, |dep| {
+            validations.set(validations.get() + 1);
+            dep.holds(|_| reads::MISSING)
+        }, || {
             builds.set(builds.get() + 1);
             Known::Yes(reads::read(path).unwrap().to_string())
         });
-        for _ in 0..20 {
+        for lookup in 0..20 {
             let (answer, dependencies) = reads::track(load);
             assert_eq!(answer.known().as_deref().map(String::as_str), Some("first"));
             assert!(!dependencies.is_empty());
+            assert_eq!(validations.get(), lookup, "newly read input needs no second read before publication");
         }
         assert_eq!(builds.get(), 1);
         reads::set_buffer(path, "second");
@@ -230,13 +239,13 @@ mod tests {
     fn unknown_and_recursive_builds_do_not_become_completed_answers() {
         let memo = Memo::<(), u32>::default();
         let builds = Cell::new(0);
-        let answer = memo.get((), |_| true, || {
+        let answer = memo.get((), None, |_| true, || {
             builds.set(builds.get() + 1);
-            assert_eq!(memo.get((), |_| true, || Known::Yes(99)), Known::Unknown);
+            assert_eq!(memo.get((), None, |_| true, || Known::Yes(99)), Known::Unknown);
             Known::Unknown
         });
         assert_eq!(answer, Known::Unknown);
-        let answer = memo.get((), |_| true, || {
+        let answer = memo.get((), None, |_| true, || {
             builds.set(builds.get() + 1);
             Known::Yes(7)
         });

@@ -397,7 +397,7 @@ impl<'a> Files<'a> {
                 outside: (!paths.iter().any(|path| path == self.0.path)).then(|| self.0.path.to_owned()),
                 classes,
             };
-            self.0.linter.programs.catalog(key.clone(), |dep| {
+            self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |dep| {
                 if let super::reads::Dep::Text(path, hash) = dep {
                     if path == self.0.path && *hash != super::reads::hash_bytes(self.0.ctx.source.as_bytes()) { return false }
                 }
@@ -696,7 +696,7 @@ mod tests {
 
     #[test]
     fn program_catalog_reuses_declarations_across_questions_and_worlds_then_invalidates() {
-        let linter = linter(r#"
+        let mut linter = linter(r#"
             module_resolution program {
                 config {
                     files ["catalog.json"]
@@ -714,6 +714,8 @@ mod tests {
                 when text == "(unsaved)" { scope ambient named "local" }
             }
         "#);
+        linter.enable_profile();
+        let profile = linter.profile.as_ref().unwrap();
         let root = Path::new("/root/catalog-reuse");
         let main = root.join("main.t");
         let next = root.join("next.t");
@@ -735,6 +737,8 @@ mod tests {
                 assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(Some(scope)));
             }
             assert_eq!(question.budget.remaining(), remaining, "completed catalog is not repeated question work");
+            assert_eq!(super::super::Profile::get(&profile.program_catalogue_builds), 1);
+            assert_eq!(super::super::Profile::get(&profile.catalogue_read_validations), 0, "freshly built catalog needs no reread");
         });
         with_source_world(&linter, &next, "()", |files| {
             files.0.file(&main).unwrap();
@@ -743,6 +747,11 @@ mod tests {
             let semantic = Semantic::new(&files, &linter.grammar.names, &question);
             let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("shared catalog is available without rebuilding") };
             assert_eq!(World::text(&files, scope.file), Some("(library)"), "shared descriptors must not retain another world's file ids");
+            for _ in 0..20 {
+                assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(Some(scope)));
+            }
+            assert_eq!(super::super::Profile::get(&profile.program_catalogue_builds), 1);
+            assert_eq!(super::super::Profile::get(&profile.catalogue_read_validations), 1, "a shared catalog is validated once for this world");
         });
         for (source, present) in [("(unsaved)", true), ("()", false)] {
             with_source_world(&linter, &main, source, |files| {

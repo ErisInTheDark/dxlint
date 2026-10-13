@@ -136,6 +136,8 @@ pub struct Profile {
     pub semantic_budget_steps_over_half: AtomicU64,
     pub semantic_state_discards: AtomicU64,
     pub semantic_memo_discards: AtomicU64,
+    pub program_catalogue_builds: AtomicU64,
+    pub catalogue_read_validations: AtomicU64,
     pub effect_graph_builds: AtomicU64,
     pub effect_read_catalogue_builds: AtomicU64,
     pub effect_graph_build_nanos: AtomicU64,
