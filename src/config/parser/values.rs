@@ -22,7 +22,12 @@ impl Parser<'_> {
         if !self.word("fits") { self.error_here("expected `fits <traits>`"); return }
         let traits = self.name_list("a product trait");
         if !self.word("as") { self.error_here("expected `as <constant carrier record>`"); return }
-        let Some(expression) = self.expr() else { return };
+        let Some(open) = self.bump() else { return };
+        if open.kind != crate::config::lexer::Tk::LBrace {
+            self.errors.push(ConfigError::new(open.span, "product carriers are constant records"));
+            return;
+        }
+        let Some(expression) = self.record(open) else { return };
         let description = match super::schema::literal(&expression) {
             Ok(value @ crate::expr::Value::Record(_)) => value,
             _ => {

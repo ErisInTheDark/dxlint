@@ -632,8 +632,14 @@ fn dynamic_conditionals_use_the_bound_inferred_pattern_before_choosing_branches(
 fn language_products_keep_ordered_values_and_member_frames_without_nominal_identity() {
     let loaded = crate::config::load_text("products.zlint", r#"
         lang demo "*.demo"
-        product duo items fits object as { kind: "duo" }
-        in .demo match item /i/ { fits scalar }
+        product duo items fits object as { kind: "duo" } inherits ...items readonly inherits trait frozen optional trait absent
+        in .demo match marker /m/ { fits frozen, absent }
+        in .demo match item /i/ {
+            fits scalar
+            scope members
+            members members closed
+            member members "extra" unwraps it
+        }
         in .demo match pack (element:item)+ { unwraps product duo of element }
     "#, &crate::config::source::Disk);
     let mut errors = loaded.errors;
@@ -650,6 +656,10 @@ fn language_products_keep_ordered_values_and_member_frames_without_nominal_ident
         Node { matcher: item, start: 0, end: 0, children: Vec::new() },
     ], 0);
     world.grammar = grammar;
+    let members = world.grammar.names.vocabulary.scope_class("members");
+    for node in [1, 2] {
+        world.names.scopes.push(ScopeInfo { node, classes: members, parent: None });
+    }
     let question = QueryContext::default();
     let frame = question.bind(FrameId::ROOT, NodeRef::here(0), None, None);
     let semantic = Semantic::new(&world, &world.grammar.names, &question);
@@ -665,6 +675,11 @@ fn language_products_keep_ordered_values_and_member_frames_without_nominal_ident
     assert_eq!(values.member(&output, &Key::Ordinal(1)), second);
     assert_eq!(values.identity(product), Known::Yes(None));
     assert_eq!(values.closed(&output), Known::Yes(true));
+    let scalar = world.grammar.names.vocabulary.trait_bit("scalar");
+    assert_eq!(values.always(&values.member(&output, &Key::Text("extra".into())), scalar), Known::Yes(true));
+    let Known::Yes(Some(info)) = values.product_info(product) else { panic!("product payload was lost") };
+    let readonly = values.product(info.shape, info.source, info.elements, true);
+    assert_eq!(values.always(&readonly, world.grammar.names.vocabulary.trait_bit("frozen")), Known::Yes(true));
     let empty = values.product(super::products::ProductShapeId(0), Leaf { frame, ..leaf(0) }, Vec::new(), false);
     assert_eq!(values.member(&empty, &Key::Domain(crate::config::ast::values::KeyDomain::Ordinal)), NodeValue::never());
 }

@@ -529,7 +529,7 @@ impl Parser<'_> {
     }
 
     /// `{ key: value, ... }` after its `{`. Keys are names or strings.
-    fn record(&mut self, open: Token) -> Option<Expr> {
+    pub(super) fn record(&mut self, open: Token) -> Option<Expr> {
         self.expr_depth += 1;
         let mut entries: Vec<(Name, Expr)> = Vec::new();
         let result = loop {
