@@ -401,6 +401,28 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
     for (nanos, calls, name) in semantic {
         output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos)));
     }
+    let mut values: Vec<_> = linter.grammar.matchers.iter().enumerate()
+        .map(|(index, matcher)| (Profile::get(&p.value_nanos[index]), Profile::get(&p.value_calls[index]), matcher.name.as_str()))
+        .filter(|(_, calls, _)| *calls > 0).collect();
+    values.sort_by_key(|row| std::cmp::Reverse(row.0));
+    if !values.is_empty() {
+        output.err(format_args!("\n  {BOLD}value evaluations{BOLD:#} {DIM}top 15 by inclusive time; nested aliases overlap, cache hits included{DIM:#}"));
+        for (nanos, calls, name) in values.into_iter().take(15) {
+            output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos)));
+        }
+    }
+    let mut names: Vec<_> = p.semantic_queries.iter()
+        .map(|(&name, query)| (Profile::get(&query.names_nanos), Profile::get(&query.names_trees), name))
+        .chain(std::iter::once((Profile::get(&p.unattributed_names.names_nanos),
+            Profile::get(&p.unattributed_names.names_trees), "unattributed")))
+        .filter(|(_, trees, _)| *trees > 0).collect();
+    names.sort_by_key(|row| std::cmp::Reverse(row.0));
+    if !names.is_empty() {
+        output.err(format_args!("\n  {BOLD}name resolution{BOLD:#} {DIM}by asking query; cold tree loads only{DIM:#}"));
+        for (nanos, trees, name) in names {
+            output.err(format_args!("  {:>11.1} ms {trees:>11} trees  {CYAN}{name}{CYAN:#}", ms(nanos)));
+        }
+    }
 }
 
 pub fn functions(output: &mut Output<'_>) -> u8 {

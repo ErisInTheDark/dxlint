@@ -3,6 +3,7 @@
 
 mod attributes;
 mod builtins;
+mod descendants;
 pub mod case;
 pub mod facts;
 pub mod functions;
@@ -22,7 +23,7 @@ use std::collections::HashMap;
 use crate::config::ast::{BinOp, Dropped, Expr, ExprKind, Name, PipelineStage, PipelineStep, Quantifier, TemplatePart, UnOp};
 use crate::config::error::{closest, ConfigError};
 use crate::fx_hash::FxHashMap;
-use crate::grammar::{full_match, Grammar, Tree, ROOT, TEXT};
+use crate::grammar::{full_match, Grammar, Tree};
 use crate::line_index::LineIndex;
 use crate::pattern::compile::{compile, Labels, Program};
 use crate::pattern::dfa::{is_decidable, Dfa};
@@ -380,31 +381,18 @@ pub struct NodeSel {
 }
 
 impl NodeSel {
-    fn matches(&self, grammar: &Grammar, tree: &Tree, id: u32) -> bool {
-        let is_a = |m: u32| m != ROOT && m != TEXT && self.kinds.iter().any(|&k| grammar.is_a(m, k));
+    pub(crate) fn new(grammar: &Grammar, kinds: &[u32], field: Option<u16>) -> Self {
+        let kinds = (0..grammar.matchers.len() as u32)
+            .filter(|&matcher| kinds.iter().any(|&kind| grammar.is_a(matcher, kind))).collect();
+        Self { kinds, field }
+    }
+
+    fn matches(&self, tree: &Tree, id: u32) -> bool {
+        let is_a = |m: u32| self.kinds.binary_search(&m).is_ok();
         match self.field {
             None => is_a(tree.node(id).matcher),
             Some(label) => tree.label(id) == Some(label) && tree.owner(id).is_some_and(|o| is_a(tree.node(o).matcher)),
         }
-    }
-
-    /// `descendants(sel)`: selected nodes under `node`, in source order
-    /// (outer first at one start), not entering nested files.
-    pub(crate) fn descendants(&self, grammar: &Grammar, tree: &Tree, node: u32) -> Vec<u32> {
-        let mut found = Vec::new();
-        let mut stack: Vec<u32> = tree.node(node).children.iter().map(|e| e.node).collect();
-        while let Some(id) = stack.pop() {
-            let n = tree.node(id);
-            if n.matcher == ROOT {
-                continue;
-            }
-            if self.matches(grammar, tree, id) {
-                found.push((n.start, std::cmp::Reverse(n.end), id));
-            }
-            stack.extend(n.children.iter().map(|e| e.node));
-        }
-        found.sort_unstable();
-        found.into_iter().map(|(_, _, id)| id).collect()
     }
 }
 
@@ -904,7 +892,7 @@ impl Scope<'_> {
                     Some((from, to)) => Some(Box::new((self.compile(from, errors)?, self.compile(to, errors)?))),
                     None => None,
                 };
-                let sel = NodeSel { kinds: ids, field: label };
+                let sel = NodeSel::new(self.grammar, &ids, label);
                 if containing {
                     CExpr::Containing(sel)
                 } else if overlapping {

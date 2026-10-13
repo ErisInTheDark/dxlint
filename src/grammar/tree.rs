@@ -7,6 +7,8 @@ use crate::pattern::compile::NO_LABEL;
 use crate::fx_hash::FxHashMap;
 use std::sync::OnceLock;
 
+mod descendants;
+
 const NONE: u32 = u32::MAX;
 
 /// [`Tree::field_one`]: how many nodes a field holds, the node when one.
@@ -22,6 +24,7 @@ pub struct Tree {
     parent: Vec<u32>,
     label: Vec<u16>,
     field_indices: OnceLock<Vec<usize>>,
+    descendants: OnceLock<descendants::Index>,
     module_index: OnceLock<super::names::modules::index::Index>,
     /// Reachable nodes in document order (pre-order).
     pub order: Vec<u32>,
@@ -133,7 +136,11 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, parent, label, field_indices: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+        Tree { nodes, parent, label, field_indices: OnceLock::new(), descendants: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+    }
+
+    pub(crate) fn descendant_nodes(&self, node: u32, kinds: &[u32], field: Option<u16>) -> Option<impl Iterator<Item = u32> + '_> {
+        self.descendants.get_or_init(|| descendants::Index::new(self)).iter(self, node, kinds, field)
     }
 
     pub fn module_index(&self, tables: &super::names::Names, text: &str, key: &super::names::NameKey<'_>, profile: Option<&crate::engine::Profile>) -> &super::names::modules::index::Index {

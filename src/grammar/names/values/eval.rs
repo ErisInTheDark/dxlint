@@ -15,6 +15,7 @@ impl Answer {
 enum Task<'a> {
     Leaf(Leaf),
     Save(Leaf),
+    Profile(crate::engine::ValueEvaluation<'a>),
     Expression(Leaf, &'a Value),
     Fallback(Leaf, &'a Value),
     Combine { count: usize, intersection: bool },
@@ -91,10 +92,11 @@ impl<'a, 'world> Run<'a, 'world> {
 
     fn run_answer(mut self) -> Answer {
         while let Some(task) = self.tasks.pop() {
-            if !self.values.question.budget.step() {
+            if !matches!(&task, Task::Profile(_)) && !self.values.question.budget.step() {
                 return Answer::unknown();
             }
             match task {
+                Task::Profile(timer) => drop(timer),
                 Task::Leaf(leaf) => self.leaf(leaf),
                 Task::Save(leaf) => {
                     if let Some(answer) = self.answers.last_mut() {
@@ -119,6 +121,15 @@ impl<'a, 'world> Run<'a, 'world> {
     }
 
     fn leaf(&mut self, leaf: Leaf) {
+        if let Some(profile) = self.values.world.profile() {
+            if let Target::Node(node) = leaf.target {
+                if let Some(timer) = self.values.world.tree(node.file)
+                    .and_then(|tree| tree.nodes.get(node.node as usize))
+                    .and_then(|node| profile.begin_value(node.matcher as usize)) {
+                    self.tasks.push(Task::Profile(timer));
+                }
+            }
+        }
         let Known::Yes(leaf) = self.values.semantic.leaf(leaf) else {
             self.answers.push(Answer::unknown());
             return;

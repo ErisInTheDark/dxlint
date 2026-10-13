@@ -97,7 +97,7 @@ impl<'a> Ctx<'a> {
         let mut stack = vec![self.tree.root];
         while let Some(id) = stack.pop() {
             let node = self.tree.node(id);
-            if sel.matches(self.grammar, self.tree, id) {
+            if sel.matches(self.tree, id) {
                 nodes.push((node.start, node.end, id));
             }
             stack.extend(node.children.iter().map(|edge| edge.node));
@@ -141,8 +141,8 @@ impl<'a> Ctx<'a> {
     }
 
     /// `descendants(sel)` under this node.
-    pub(crate) fn descendant_ids(&self, sel: &NodeSel) -> Vec<u32> {
-        self.query(Query::Descendants, || sel.descendants(self.grammar, self.tree, self.node), Vec::len)
+    pub(crate) fn descendant_ids<'s>(&'s self, node: u32, sel: &NodeSel) -> impl Iterator<Item = u32> + 's {
+        crate::engine::Profile::iter_query(self.profile, Query::Descendants, || sel.descendants(self.tree, node))
     }
 
 }

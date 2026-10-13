@@ -790,8 +790,8 @@ pub trait Host {
     /// `containing(sel)` from a node.
     fn containing(&self, _node: u32, _sel: &NodeSel) -> Option<Option<u32>> { None }
     /// `descendants(sel)` under `node`, in source order.
-    fn descendants(&self, node: u32, sel: &NodeSel) -> Vec<u32> {
-        sel.descendants(self.grammar(), self.tree(), node)
+    fn descendants<'s>(&'s self, node: u32, sel: &NodeSel) -> impl Iterator<Item = u32> + 's {
+        sel.descendants(self.tree(), node)
     }
     /// The file's language, for `is .lang`.
     fn lang(&self) -> usize { 0 }
@@ -1740,6 +1740,9 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             V::Bool(h.with_text(eval!(node, text)?, run)?)
         }
         VExpr::Count(s) => {
+            if let Seq::Descendants(sel) = &**s {
+                return Some(V::Num(h.descendants(node, sel).count() as f64));
+            }
             let mut n = 0.0;
             walk_seq(h, node, s, f, &mut |_, _| { n += 1.0; Some(true) })?;
             V::Num(n)
@@ -1749,8 +1752,11 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             walk_seq(h, node, s, f, &mut |v, _| { total += h.num(v)?; Some(true) })?;
             V::Num(total)
         }
-        // Every item evaluates, even past the first, so errors propagate.
         VExpr::First(s) => {
+            if let Seq::Descendants(sel) = &**s {
+                return Some(h.descendants(node, sel).next().map_or(V::Null, V::Node));
+            }
+            // Other sequences drain so late errors still propagate.
             let mut first = None;
             walk_seq(h, node, s, f, &mut |v, _| { first.get_or_insert(v); Some(true) })?;
             first.unwrap_or(V::Null)
@@ -1760,8 +1766,16 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             walk_seq(h, node, s, f, &mut |v, _| { last = v; Some(true) })?;
             last
         }
-        // The input list evaluates before any test.
         VExpr::Each(kind, s, test, bind) => {
+            if let (EachKind::Any, Seq::Descendants(sel)) = (*kind, &**s) {
+                for (at, id) in h.descendants(node, sel).enumerate() {
+                    if h.truthy(call_bound(h, node, test, f, *bind, V::Node(id), at as f64)?) {
+                        return Some(V::Bool(true));
+                    }
+                }
+                return Some(V::Bool(false));
+            }
+            // Non-raw inputs evaluate before any test.
             let mut items = Vec::new();
             walk_seq(h, node, s, f, &mut |v, _| { items.push(v); Some(true) })?;
             let holds = |at: usize, f: &mut Vec<V>| -> Option<bool> {
@@ -2243,6 +2257,86 @@ mod tests {
         for (deep, shallow) in depth_arguments.iter().zip(failed_arguments) {
             assert_eq!(deep.message.split_once("failed here:").map(|(_, cause)| cause), shallow.message.split_once("failed here:").map(|(_, cause)| cause));
         }
+    }
+
+    #[test]
+    fn raw_descendant_reducers_stop_without_hiding_pipeline_errors() {
+        use crate::grammar::{Edge, Node};
+        struct CountingHost<'a> {
+            grammar: &'a Grammar,
+            tree: Tree,
+            lines: crate::line_index::LineIndex,
+            values: Values,
+            file: FileVm,
+            yielded: std::cell::Cell<usize>,
+        }
+        impl Host for CountingHost<'_> {
+            fn tree(&self) -> &Tree { &self.tree }
+            fn grammar(&self) -> &Grammar { self.grammar }
+            fn source(&self) -> &str { "abc" }
+            fn lines(&self) -> &crate::line_index::LineIndex { &self.lines }
+            fn values(&self) -> &Values { &self.values }
+            fn file_vm(&self) -> Option<&FileVm> { Some(&self.file) }
+            fn attr(&self, _: u32, _: u16) -> Option<V> { None }
+            fn fact(&self, _: u32, _: usize, _: Option<usize>, _: FactOf) -> Option<V> { None }
+            fn descendants<'s>(&'s self, node: u32, sel: &NodeSel) -> impl Iterator<Item = u32> + 's {
+                sel.descendants(&self.tree, node).inspect(|_| self.yielded.set(self.yielded.get() + 1))
+            }
+        }
+        let linter = crate::engine::tests::linter("match item \"i\"");
+        let item = linter.grammar.matcher("item").unwrap();
+        let host = CountingHost {
+            grammar: &linter.grammar,
+            tree: Tree::from_native(vec![
+                Node { matcher: item, start: 0, end: 1, children: vec![] },
+                Node { matcher: item, start: 1, end: 2, children: vec![] },
+                Node { matcher: item, start: 2, end: 3, children: vec![] },
+                Node { matcher: ROOT, start: 0, end: 3, children: vec![
+                    Edge { node: 0, label: 1 }, Edge { node: 1, label: 1 }, Edge { node: 2, label: 1 },
+                ] },
+            ], 3),
+            lines: crate::line_index::LineIndex::new("abc"),
+            values: Values::default(),
+            file: FileVm::default(),
+            yielded: Default::default(),
+        };
+        let source = || Box::new(Seq::Descendants(NodeSel::new(host.grammar, &[item], None)));
+        let bind = Binder { slot: 0, indexed: false };
+        let first = VExpr::First(source());
+        assert_eq!(eval(&host, 3, &first).unwrap().value, V::Node(0));
+        assert_eq!(host.yielded.replace(0), 1);
+        let any = |source| VExpr::Each(EachKind::Any, source, Box::new(VExpr::Const(V::Bool(true))), bind);
+        assert_eq!(eval(&host, 3, &any(source())).unwrap().value, V::Bool(true));
+        assert_eq!(host.yielded.replace(0), 1);
+        let indexed = VExpr::Each(EachKind::Any, source(), Box::new(VExpr::Binary(
+            BinOp::Eq, Box::new(VExpr::Bound(1)), Box::new(VExpr::Const(V::Num(1.0))),
+        )), Binder { slot: 0, indexed: true });
+        assert_eq!(eval(&host, 3, &indexed).unwrap().value, V::Bool(true));
+        assert_eq!(host.yielded.replace(0), 2);
+        let never = VExpr::Each(EachKind::Any, source(), Box::new(VExpr::Const(V::Bool(false))), bind);
+        assert_eq!(eval(&host, 3, &never).unwrap().value, V::Bool(false));
+        assert_eq!(host.yielded.replace(0), 3);
+        let error = || VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str("bad"))].into());
+        let failed = VExpr::Each(EachKind::Any, source(), Box::new(error()), bind);
+        assert!(eval(&host, 3, &failed).is_none());
+        assert_eq!(host.yielded.replace(0), 1);
+        assert_eq!(eval(&host, 3, &VExpr::Count(source())).unwrap().value, V::Num(3.0));
+        assert_eq!(host.yielded.replace(0), 3);
+        let empty = Box::new(Seq::Descendants(NodeSel::new(host.grammar, &[], None)));
+        assert_eq!(eval(&host, 3, &VExpr::First(empty)).unwrap().value, V::Null);
+        let mapped = || Box::new(Seq::Stage(SeqStage::Map, source(), Box::new(VExpr::If(
+            Box::new(VExpr::Binary(BinOp::Eq, Box::new(VExpr::Bound(0)), Box::new(VExpr::Const(V::Node(1))))),
+            Box::new(VExpr::Call(functions::lookup("num").unwrap(), vec![VExpr::Const(V::Str("bad"))].into())),
+            Box::new(VExpr::Const(V::Num(1.0))),
+        )), bind));
+        assert!(eval(&host, 3, &VExpr::First(mapped())).is_none());
+        assert!(eval(&host, 3, &any(mapped())).is_none());
+        let walked = || Box::new(Seq::Walk(source(), Box::new(Seq::Value(Box::new(VExpr::If(
+            Box::new(VExpr::Binary(BinOp::Eq, Box::new(VExpr::Bound(0)), Box::new(VExpr::Const(V::Node(1))))),
+            Box::new(error()), Box::new(VExpr::Const(V::Null)),
+        )))), 0));
+        assert!(eval(&host, 3, &VExpr::First(walked())).is_none());
+        assert!(eval(&host, 3, &any(walked())).is_none());
     }
 
 }

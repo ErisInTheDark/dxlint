@@ -28,6 +28,7 @@ pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
 pub use frontend::Stale;
 pub use profile::{EffectBuild, Profile, Query};
+pub(crate) use profile::ValueEvaluation;
 
 use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{FileId, SourceMap, Span};

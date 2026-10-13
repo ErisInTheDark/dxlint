@@ -13,10 +13,60 @@ thread_local! {
     /// This thread's outermost native fact time so far, and how deeply fact
     /// computations are nested right now (a fact may read another fact).
     static FACT_TIME: Cell<(u64, u32)> = const { Cell::new((0, 0)) };
+    static SEMANTIC_QUERY: Cell<Option<&'static str>> = const { Cell::new(None) };
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{Profile, Query};
+
+    #[test]
+    fn descendants_profile_counts_consumed_results_on_drop() {
+        let profile = Profile::new(0, 0);
+        {
+            let mut iter = Profile::iter_query(Some(&profile), Query::Descendants, || 0..10);
+            assert_eq!(iter.next(), Some(0));
+            assert_eq!(iter.next(), Some(1));
+        }
+        {
+            let _unused = Profile::iter_query(Some(&profile), Query::Descendants, || 0..10);
+        }
+        let at = Query::Descendants as usize;
+        assert_eq!(Profile::get(&profile.query_calls[at]), 2);
+        assert_eq!(Profile::get(&profile.query_nodes[at]), 2);
+    }
+
+    #[test]
+    fn profile_scopes_restore_attribution_and_count_abandoned_values() {
+        let profile = Profile::new(2, 0);
+        let names = || profile.time_names(|| ());
+        names();
+        profile.time_semantic_query("could", || {
+            names();
+            profile.time_semantic_query("always", names);
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                profile.time_semantic_query("always", || panic!("query failed"));
+            }));
+            assert!(failed.is_err());
+            names();
+        });
+        names();
+        assert_eq!(Profile::get(&profile.semantic_queries["could"].names_trees), 2);
+        assert_eq!(Profile::get(&profile.semantic_queries["always"].names_trees), 1);
+        assert_eq!(Profile::get(&profile.unattributed_names.names_trees), 2);
+        assert_eq!(Profile::get(&profile.names_trees), 5);
+
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _outer = profile.begin_value(0).unwrap();
+            let _inner = profile.begin_value(1).unwrap();
+            panic!("budget exit");
+        }));
+        assert!(failed.is_err());
+        assert_eq!(Profile::get(&profile.value_calls[0]), 1);
+        assert_eq!(Profile::get(&profile.value_calls[1]), 1);
+        assert!(profile.begin_value(2).is_none());
+    }
+
     #[test]
     fn trait_queries_are_counted_when_linting() {
         let source = r#"
@@ -46,6 +96,8 @@ pub struct Profile {
     pub matcher_steps: Vec<AtomicU64>,
     /// Program runs per matcher (memoised calls and overlay attempts).
     pub matcher_runs: Vec<AtomicU64>,
+    pub value_nanos: Vec<AtomicU64>,
+    pub value_calls: Vec<AtomicU64>,
     /// Nanoseconds searching for each overlay matcher, and the nodes found.
     pub overlay_nanos: Vec<AtomicU64>,
     pub overlay_nodes: Vec<AtomicU64>,
@@ -77,6 +129,7 @@ pub struct Profile {
     pub query_calls: [AtomicU64; Query::ALL.len()],
     pub query_nodes: [AtomicU64; Query::ALL.len()],
     pub semantic_queries: FxHashMap<&'static str, SemanticQueryProfile>,
+    pub unattributed_names: SemanticQueryProfile,
     pub semantic_budget_limits: AtomicU64,
     pub semantic_budget_steps_total: AtomicU64,
     pub semantic_budget_steps_max: AtomicU64,
@@ -111,6 +164,29 @@ pub struct EffectFailureProfile {
 pub struct SemanticQueryProfile {
     pub nanos: AtomicU64,
     pub calls: AtomicU64,
+    pub names_nanos: AtomicU64,
+    pub names_trees: AtomicU64,
+}
+
+pub(crate) struct ValueEvaluation<'a> {
+    nanos: &'a AtomicU64,
+    calls: &'a AtomicU64,
+    started: Instant,
+}
+
+impl Drop for ValueEvaluation<'_> {
+    fn drop(&mut self) {
+        Profile::add_time(self.nanos, self.started.elapsed());
+        Profile::add(self.calls, 1);
+    }
+}
+
+struct SemanticQueryScope(Option<&'static str>);
+
+impl Drop for SemanticQueryScope {
+    fn drop(&mut self) {
+        SEMANTIC_QUERY.with(|query| query.set(self.0));
+    }
 }
 
 pub enum EffectBuild {
@@ -125,6 +201,37 @@ pub enum Query {
     Overlapping,
     Containing,
     Descendants,
+}
+
+pub(crate) struct QueryIter<'a, I: Iterator> {
+    inner: I,
+    profile: Option<&'a Profile>,
+    query: Query,
+    elapsed: Duration,
+    found: u64,
+}
+
+impl<I: Iterator> Iterator for QueryIter<'_, I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(_) = self.profile else { return self.inner.next() };
+        let started = Instant::now();
+        let value = self.inner.next();
+        self.elapsed += started.elapsed();
+        self.found += u64::from(value.is_some());
+        value
+    }
+}
+
+impl<I: Iterator> Drop for QueryIter<'_, I> {
+    fn drop(&mut self) {
+        if let Some(profile) = self.profile {
+            let at = self.query as usize;
+            Profile::add_time(&profile.query_nanos[at], self.elapsed);
+            Profile::add(&profile.query_calls[at], 1);
+            Profile::add(&profile.query_nodes[at], self.found);
+        }
+    }
 }
 
 impl Query {
@@ -173,6 +280,8 @@ impl Profile {
         Profile {
             matcher_steps: counters(matchers),
             matcher_runs: counters(matchers),
+            value_nanos: counters(matchers),
+            value_calls: counters(matchers),
             overlay_nanos: counters(matchers),
             overlay_nodes: counters(matchers),
             rule_nanos: counters(rules),
@@ -199,6 +308,14 @@ impl Profile {
         counter.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn begin_value(&self, matcher: usize) -> Option<ValueEvaluation<'_>> {
+        Some(ValueEvaluation {
+            nanos: self.value_nanos.get(matcher)?,
+            calls: self.value_calls.get(matcher)?,
+            started: Instant::now(),
+        })
+    }
+
     /// Computes one native fact, counting its time against the fact and,
     /// when outermost, against this thread's fact clock.
     pub fn time_fact<T>(&self, fact: usize, compute: impl FnOnce() -> T) -> T {
@@ -207,7 +324,13 @@ impl Profile {
 
     /// Resolves one tree's names: shared by every rule, so outside their time.
     pub fn time_names<T>(&self, compute: impl FnOnce() -> T) -> T {
-        shared(&self.names_nanos, &self.names_trees, compute)
+        let label = SEMANTIC_QUERY.with(Cell::get);
+        let query = label.and_then(|label| self.semantic_queries.get(label)).unwrap_or(&self.unattributed_names);
+        let started = Instant::now();
+        let value = shared(&self.names_nanos, &self.names_trees, compute);
+        Self::add_time(&query.names_nanos, started.elapsed());
+        Self::add(&query.names_trees, 1);
+        value
     }
 
     /// Runs one name item's `when` condition (inside the names' time).
@@ -226,7 +349,16 @@ impl Profile {
         value
     }
 
+    pub(crate) fn iter_query<'a, I: Iterator>(
+        profile: Option<&'a Self>, query: Query, run: impl FnOnce() -> I,
+    ) -> QueryIter<'a, I> {
+        let started = profile.map(|_| Instant::now());
+        let inner = run();
+        QueryIter { inner, profile, query, elapsed: started.map_or(Duration::ZERO, |started| started.elapsed()), found: 0 }
+    }
+
     pub fn time_semantic_query<T>(&self, name: &'static str, run: impl FnOnce() -> T) -> T {
+        let _scope = SemanticQueryScope(SEMANTIC_QUERY.with(|query| query.replace(Some(name))));
         let Some(query) = self.semantic_queries.get(name) else { return run() };
         timed(&query.nanos, &query.calls, run)
     }
