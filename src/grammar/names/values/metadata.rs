@@ -3,12 +3,12 @@ use super::{Identity, Known, Leaf, NodeRef, Target, Values};
 impl Values<'_> {
     pub fn optional(&self, at: Leaf) -> Known<bool> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        if let Some(&answer) = self.semantic.values.optional.borrow().get(&at) {
+        if let Some(answer) = self.semantic.values.optional.get(&at) {
             return answer;
         }
-        self.semantic.values.optional.borrow_mut().insert(at, Known::Unknown);
+        self.semantic.values.optional.insert(self.semantic.epoch, at, Known::Unknown);
         let answer = self.direct_optional(at);
-        self.semantic.values.optional.borrow_mut().insert(at, answer);
+        self.semantic.values.optional.insert(self.semantic.epoch, at, answer);
         answer
     }
 
@@ -32,12 +32,12 @@ impl Values<'_> {
 
     pub fn identity(&self, at: Leaf) -> Known<Option<Identity>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.identities.borrow().get(&at) {
-            return answer.clone();
+        if let Some(answer) = self.semantic.values.identities.get(&at) {
+            return answer;
         }
-        self.semantic.values.identities.borrow_mut().insert(at, Known::Unknown);
+        self.semantic.values.identities.insert(self.semantic.epoch, at, Known::Unknown);
         let answer = self.direct_identity(at);
-        self.semantic.values.identities.borrow_mut().insert(at, answer.clone());
+        self.semantic.values.identities.insert(self.semantic.epoch, at, answer.clone());
         answer
     }
 

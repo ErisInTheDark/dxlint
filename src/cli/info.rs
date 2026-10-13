@@ -352,6 +352,10 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.effect_read_catalogue_builds)
     ));
     output.err(format_args!(
+        "  memo entries discarded at limit: {}",
+        Profile::get(&p.semantic_memo_discards)
+    ));
+    output.err(format_args!(
         "  semantic budget: {} steps total, {} max per root question, {} questions over half budget",
         Profile::get(&p.semantic_budget_steps_total),
         Profile::get(&p.semantic_budget_steps_max),

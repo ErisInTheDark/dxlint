@@ -6,7 +6,6 @@ use super::{Entry, Memo, Modules, Source};
 use crate::expr::Value;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 
 mod preparation;
 use preparation::{Batch, PreparedItem};
@@ -22,19 +21,10 @@ enum Request {
 
 #[derive(Default)]
 pub(crate) struct State {
-    answers: Rc<RefCell<BTreeMap<Request, Answer>>>,
-    star_filters: Rc<RefCell<BTreeMap<(ScopeRef, Box<str>), Known<bool>>>>,
-    publications: Rc<RefCell<BTreeMap<ScopeRef, bool>>>,
-    graph: Rc<Memo>,
-}
-
-impl State {
-    pub(crate) fn after_limit(&self) -> Self {
-        Self {
-            answers: self.answers.clone(), star_filters: self.star_filters.clone(),
-            publications: self.publications.clone(), graph: self.graph.clone(),
-        }
-    }
+    answers: RefCell<BTreeMap<Request, Answer>>,
+    star_filters: RefCell<BTreeMap<(ScopeRef, Box<str>), Known<bool>>>,
+    publications: RefCell<BTreeMap<ScopeRef, bool>>,
+    graph: Memo,
 }
 
 pub struct Queries<'a> {

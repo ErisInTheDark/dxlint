@@ -102,7 +102,7 @@ impl<'a, 'world> Run<'a, 'world> {
                             Some(_nested) => self.values.normalize(self.values.semantic.narrowing().refine(leaf, answer.value.clone())),
                             None => NodeValue::Unknown,
                         };
-                        self.values.semantic.values.values.borrow_mut().insert(leaf, answer.value.clone());
+                        self.values.semantic.values.values.insert(self.values.semantic.epoch, leaf, answer.value.clone());
                     }
                 }
                 Task::Expression(at, expression) => self.expression(at, expression),
@@ -123,11 +123,11 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer::unknown());
             return;
         };
-        if let Some(value) = self.values.semantic.values.values.borrow().get(&leaf) {
-            self.answers.push(Answer { exists: true, value: value.clone() });
+        if let Some(value) = self.values.semantic.values.values.get(&leaf) {
+            self.answers.push(Answer { exists: true, value });
             return;
         }
-        self.values.semantic.values.values.borrow_mut().insert(leaf, NodeValue::Unknown);
+        self.values.semantic.values.values.insert(self.values.semantic.epoch, leaf, NodeValue::Unknown);
         let Target::Node(_) = leaf.target else {
             self.answers.push(Answer { exists: true, value: NodeValue::leaf(leaf) });
             self.tasks.push(Task::Save(leaf));
@@ -391,10 +391,10 @@ impl<'a, 'world> Run<'a, 'world> {
 
 fn widened(values: &Values<'_>, leaf: Leaf) -> NodeValue {
     let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return NodeValue::Unknown };
-    if let Some(answer) = values.semantic.values.widened.borrow().get(&leaf) { return answer.clone() }
-    values.semantic.values.widened.borrow_mut().insert(leaf, NodeValue::Unknown);
+    if let Some(answer) = values.semantic.values.widened.get(&leaf) { return answer }
+    values.semantic.values.widened.insert(values.semantic.epoch, leaf, NodeValue::Unknown);
     let answer = widen(values, leaf);
-    values.semantic.values.widened.borrow_mut().insert(leaf, answer.clone());
+    values.semantic.values.widened.insert(values.semantic.epoch, leaf, answer.clone());
     answer
 }
 

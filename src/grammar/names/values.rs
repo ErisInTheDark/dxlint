@@ -1,10 +1,7 @@
 //! Values: `unwraps`, `fits`, `could` / `always`, `through` generics
 //! (docs/design/type-layers.md). Owner: Violet.
 
-use std::cell::RefCell;
-
-use crate::fx_hash::FxHashMap;
-
+use super::memo::{Epoch, Memo};
 use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
 use super::semantic::Semantic;
 use super::Value;
@@ -162,17 +159,28 @@ pub struct Carrier {
 
 #[derive(Default)]
 pub(crate) struct State {
-    values: RefCell<FxHashMap<Leaf, NodeValue>>,
-    widened: RefCell<FxHashMap<Leaf, NodeValue>>,
-    traits: RefCell<FxHashMap<(Leaf, u16), Known<bool>>>,
-    optional: RefCell<FxHashMap<Leaf, Known<bool>>>,
-    identities: RefCell<FxHashMap<Leaf, Known<Option<Identity>>>>,
-    members: RefCell<FxHashMap<Leaf, Known<Vec<Member>>>>,
-    member_keys: RefCell<FxHashMap<(Leaf, Key), Known<Option<Member>>>>,
-    key_paths: RefCell<FxHashMap<(Leaf, Vec<u16>), Key>>,
-    member_closed: RefCell<FxHashMap<Leaf, Known<bool>>>,
-    bound_arguments: RefCell<FxHashMap<Leaf, Known<Option<NodeValue>>>>,
-    carriers: RefCell<FxHashMap<Leaf, Known<Option<Carrier>>>>,
+    values: Memo<Leaf, NodeValue>,
+    widened: Memo<Leaf, NodeValue>,
+    traits: Memo<(Leaf, u16), Known<bool>>,
+    optional: Memo<Leaf, Known<bool>>,
+    identities: Memo<Leaf, Known<Option<Identity>>>,
+    members: Memo<Leaf, Known<Vec<Member>>>,
+    member_keys: Memo<(Leaf, Key), Known<Option<Member>>>,
+    key_paths: Memo<(Leaf, Vec<u16>), Key>,
+    member_closed: Memo<Leaf, Known<bool>>,
+    bound_arguments: Memo<Leaf, Known<Option<NodeValue>>>,
+    carriers: Memo<Leaf, Known<Option<Carrier>>>,
+}
+
+impl State {
+    pub(super) fn finish(&self, epoch: Epoch, failed: bool) -> u64 {
+        self.values.finish(epoch, failed) + self.widened.finish(epoch, failed)
+            + self.traits.finish(epoch, failed) + self.optional.finish(epoch, failed)
+            + self.identities.finish(epoch, failed) + self.members.finish(epoch, failed)
+            + self.member_keys.finish(epoch, failed) + self.key_paths.finish(epoch, failed)
+            + self.member_closed.finish(epoch, failed) + self.bound_arguments.finish(epoch, failed)
+            + self.carriers.finish(epoch, failed)
+    }
 }
 
 pub struct Values<'a> {
@@ -214,14 +222,14 @@ impl Values<'_> {
 
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
         let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
-        if let Some(&answer) = self.semantic.values.traits.borrow().get(&(leaf, trait_id)) {
+        if let Some(answer) = self.semantic.values.traits.get(&(leaf, trait_id)) {
             return answer;
         }
         if trait_id >= 64 || !self.question.budget.step() {
             return Known::Unknown;
         }
         // A pending question cuts recursion without a separate cycle set.
-        self.semantic.values.traits.borrow_mut().insert((leaf, trait_id), Known::Unknown);
+        self.semantic.values.traits.insert(self.semantic.epoch, (leaf, trait_id), Known::Unknown);
         let answer = match leaf.target {
             Target::Traits(bits) => Known::Yes(bits & (1 << trait_id) != 0),
             Target::Product(_) => self.product_fits(leaf, trait_id),
@@ -232,7 +240,7 @@ impl Values<'_> {
             },
             Target::Node(node) => self.direct_fits(leaf, node, trait_id),
         };
-        self.semantic.values.traits.borrow_mut().insert((leaf, trait_id), answer);
+        self.semantic.values.traits.insert(self.semantic.epoch, (leaf, trait_id), answer);
         answer
     }
 
@@ -346,12 +354,12 @@ impl Values<'_> {
             Value::Path(path) => Some((at, path.clone())),
             _ => None,
         };
-        if let Some(key) = request.as_ref().and_then(|request| self.semantic.values.key_paths.borrow().get(request).cloned()) {
+        if let Some(key) = request.as_ref().and_then(|request| self.semantic.values.key_paths.get(request)) {
             return Known::Yes(key);
         }
         let answer = self.direct_key(at, expression);
         if let (Some(request), Known::Yes(key)) = (request, &answer) {
-            self.semantic.values.key_paths.borrow_mut().insert(request, key.clone());
+            self.semantic.values.key_paths.insert(self.semantic.epoch, request, key.clone());
         }
         answer
     }
@@ -491,12 +499,12 @@ impl Values<'_> {
 
     pub fn bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
         let Known::Yes(formal) = self.semantic.leaf(formal) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.bound_arguments.borrow().get(&formal) {
-            return answer.clone();
+        if let Some(answer) = self.semantic.values.bound_arguments.get(&formal) {
+            return answer;
         }
-        self.semantic.values.bound_arguments.borrow_mut().insert(formal, Known::Unknown);
+        self.semantic.values.bound_arguments.insert(self.semantic.epoch, formal, Known::Unknown);
         let answer = self.find_bound_argument(formal);
-        self.semantic.values.bound_arguments.borrow_mut().insert(formal, answer.clone());
+        self.semantic.values.bound_arguments.insert(self.semantic.epoch, formal, answer.clone());
         answer
     }
 

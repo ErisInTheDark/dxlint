@@ -3,6 +3,7 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
+use super::memo::Epoch;
 use super::question::{Known, Leaf, NodeRef, QueryContext, Target, World};
 use super::values::Values;
 use super::Names;
@@ -11,6 +12,7 @@ pub struct Semantic<'a> {
     pub world: &'a dyn World,
     pub tables: &'a Names,
     pub question: &'a QueryContext,
+    pub(super) epoch: Epoch,
     state: Rc<State>,
 }
 
@@ -36,6 +38,7 @@ pub(crate) struct Session {
     question: QueryContext,
     state: RefCell<Rc<State>>,
     revision: Cell<u64>,
+    epoch: Cell<Epoch>,
 }
 
 impl Session {
@@ -43,7 +46,9 @@ impl Session {
         let revision = world.revision();
         if self.revision.replace(revision) != revision { self.state.replace(Rc::default()); }
         self.question.budget.restart();
-        let semantic = Semantic { world, tables, question: &self.question, state: self.state.borrow().clone() };
+        let epoch = self.epoch.get().next();
+        self.epoch.set(epoch);
+        let semantic = Semantic { world, tables, question: &self.question, epoch, state: self.state.borrow().clone() };
         let answer = run(&semantic);
         if let Some(profile) = world.profile() {
             profile.record_semantic_budget(
@@ -51,21 +56,16 @@ impl Session {
                 u64::from(super::question::Budget::DEFAULT),
             );
         }
-        if self.question.budget.limited() {
+        let failed = self.question.budget.limited();
+        let discarded = semantic.values.finish(epoch, failed) + semantic.calls.finish(epoch, failed);
+        if failed {
             if let Some(profile) = world.profile() {
                 crate::engine::Profile::add(&profile.semantic_budget_limits, 1);
                 crate::engine::Profile::add(&profile.semantic_state_discards, 1);
+                crate::engine::Profile::add(&profile.semantic_memo_discards, discarded);
             }
             semantic.effects.rollback();
-            let fresh = Rc::new(State {
-                values: Default::default(),
-                calls: Default::default(),
-                effects: semantic.effects.clone(),
-                name_queries: semantic.name_queries.clone(),
-                modules: semantic.modules.after_limit(),
-                defects: Default::default(),
-            });
-            self.state.replace(fresh);
+            semantic.defects.borrow_mut().clear();
         }
         answer
     }
@@ -79,7 +79,7 @@ pub struct Defect {
 
 impl<'a> Semantic<'a> {
     pub fn new(world: &'a dyn World, tables: &'a Names, question: &'a QueryContext) -> Self {
-        Self { world, tables, question, state: Rc::default() }
+        Self { world, tables, question, epoch: Epoch::default(), state: Rc::default() }
     }
 
     pub fn leaf(&self, mut at: Leaf) -> Known<Leaf> {
@@ -299,7 +299,8 @@ mod tests {
         let tree = crate::grammar::Tree::parse_with(&linter.grammar, 0, "()", None, None);
         let matcher = linter.grammar.matcher("paren").unwrap();
         let node = tree.order.iter().copied().find(|&node| tree.node(node).matcher == matcher).unwrap();
-        let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: None };
+        let profile = crate::engine::Profile::default();
+        let world = CountingWorld { grammar: &linter.grammar, tree: &tree, conditions: Cell::new(0), cut: Cell::new(0), revision: Cell::new(0), profile: Some(&profile) };
         let at = Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT };
         let trait_id = linter.grammar.names.vocabulary.traits.iter().position(|name| name == "marked").unwrap() as u16;
         let session = Session::default();
@@ -320,10 +321,34 @@ mod tests {
         assert_eq!(world.conditions.get(), 3);
         for cut in [1, 2] {
             let session = Session::default();
-            world.cut.set(cut);
-            assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Unknown);
+            assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+            let before = world.conditions.get();
+            let discarded = crate::engine::Profile::get(&profile.semantic_memo_discards);
+            assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+                let complete = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
+                    Some(vec![super::super::question::NodeValue::leaf(at)]));
+                assert_eq!(semantic.values().fits(Leaf { frame: complete, ..at }, trait_id), Known::Yes(false));
+                world.cut.set(cut);
+                let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
+                    Some(vec![super::super::question::NodeValue::never()]));
+                semantic.values().fits(Leaf { frame, ..at }, trait_id)
+            }), Known::Unknown);
+            assert_eq!(crate::engine::Profile::get(&profile.semantic_memo_discards), discarded + 2);
             world.cut.set(0);
             assert_eq!(session.run(&world, &linter.grammar.names, |semantic| semantic.values().fits(at, trait_id)), Known::Yes(true));
+            assert_eq!(world.conditions.get(), before + 2, "another root's limit discarded a completed answer");
+            assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+                let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
+                    Some(vec![super::super::question::NodeValue::leaf(at)]));
+                semantic.values().fits(Leaf { frame, ..at }, trait_id)
+            }), Known::Yes(false));
+            assert_eq!(world.conditions.get(), before + 3, "failed root retained its completed writes");
+            assert_eq!(session.run(&world, &linter.grammar.names, |semantic| {
+                let frame = semantic.question.bind(FrameId::ROOT, NodeRef::here(node), None,
+                    Some(vec![super::super::question::NodeValue::never()]));
+                semantic.values().fits(Leaf { frame, ..at }, trait_id)
+            }), Known::Yes(true));
+            assert_eq!(world.conditions.get(), before + 4);
         }
         let before = world.conditions.get();
         world.revision.set(1);

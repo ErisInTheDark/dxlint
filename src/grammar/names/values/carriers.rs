@@ -3,12 +3,12 @@ use super::{Carrier, Known, Leaf, NodeRef, Target, Values};
 impl Values<'_> {
     pub fn carrier(&self, at: Leaf) -> Known<Option<Carrier>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.carriers.borrow().get(&at) {
-            return answer.clone();
+        if let Some(answer) = self.semantic.values.carriers.get(&at) {
+            return answer;
         }
-        self.semantic.values.carriers.borrow_mut().insert(at, Known::Unknown);
+        self.semantic.values.carriers.insert(self.semantic.epoch, at, Known::Unknown);
         let answer = self.direct_carrier(at);
-        self.semantic.values.carriers.borrow_mut().insert(at, answer.clone());
+        self.semantic.values.carriers.insert(self.semantic.epoch, at, answer.clone());
         answer
     }
 

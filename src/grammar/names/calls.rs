@@ -1,11 +1,9 @@
 //! Calls and signatures: overloads, `expected`, call-site inference
 //! (docs/design/type-layers.md "Calls and signatures"). Owner: Juniper.
 
-use std::cell::RefCell;
-
 use crate::config::ast::calls::{ExpectedAt, Variance};
-use crate::fx_hash::FxHashMap;
 
+use super::memo::{Epoch, Memo};
 use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
 use super::semantic::Semantic;
 use super::values::Values;
@@ -127,10 +125,17 @@ type HeaderAnswer = Known<Vec<Vec<Header>>>;
 
 #[derive(Default)]
 pub(crate) struct State {
-    pub(super) acceptance: RefCell<FxHashMap<(NodeValue, NodeValue), Known<bool>>>,
-    headers: RefCell<FxHashMap<(NodeValue, InvokeKind), HeaderAnswer>>,
-    candidates: RefCell<FxHashMap<Leaf, select::Answer>>,
-    values: RefCell<FxHashMap<(Leaf, ValueQuestion), ValueAnswer>>,
+    pub(super) acceptance: Memo<(NodeValue, NodeValue), Known<bool>>,
+    headers: Memo<(NodeValue, InvokeKind), HeaderAnswer>,
+    candidates: Memo<Leaf, select::Answer>,
+    values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
+}
+
+impl State {
+    pub(super) fn finish(&self, epoch: Epoch, failed: bool) -> u64 {
+        self.acceptance.finish(epoch, failed) + self.headers.finish(epoch, failed)
+            + self.candidates.finish(epoch, failed) + self.values.finish(epoch, failed)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -181,13 +186,13 @@ impl Calls<'_> {
     pub fn headers(&self, value: &NodeValue, kind: InvokeKind) -> Known<Vec<Vec<Header>>> {
         self.profile(ProfileQuery::Headers, || {
             let key = (value.clone(), kind);
-            if let Some(answer) = self.semantic.calls.headers.borrow().get(&key) {
-                return answer.clone();
+            if let Some(answer) = self.semantic.calls.headers.get(&key) {
+                return answer;
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            self.semantic.calls.headers.borrow_mut().insert(key.clone(), Known::Unknown);
+            self.semantic.calls.headers.insert(self.semantic.epoch, key.clone(), Known::Unknown);
             let answer = headers::headers(value, kind, &self.semantic.values());
-            self.semantic.calls.headers.borrow_mut().insert(key, answer.clone());
+            self.semantic.calls.headers.insert(self.semantic.epoch, key, answer.clone());
             answer
         })
     }
@@ -206,14 +211,14 @@ impl Calls<'_> {
     fn candidates(&self, call: Leaf) -> select::Answer {
         self.profile(ProfileQuery::Select, || {
             let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
-            if let Some(answer) = self.semantic.calls.candidates.borrow().get(&call) {
-                return answer.clone();
+            if let Some(answer) = self.semantic.calls.candidates.get(&call) {
+                return answer;
             }
             if !self.question.budget.step() { return Known::Unknown }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            self.semantic.calls.candidates.borrow_mut().insert(call, Known::Unknown);
+            self.semantic.calls.candidates.insert(self.semantic.epoch, call, Known::Unknown);
             let answer = select::candidates(call, &self.semantic.values());
-            self.semantic.calls.candidates.borrow_mut().insert(call, answer.clone());
+            self.semantic.calls.candidates.insert(self.semantic.epoch, call, answer.clone());
             answer
         })
     }
@@ -223,13 +228,13 @@ impl Calls<'_> {
     pub fn accepts(&self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
         self.profile(ProfileQuery::Accept, || {
             let key = (expected.clone(), actual.clone());
-            if let Some(&known) = self.semantic.calls.acceptance.borrow().get(&key) {
+            if let Some(known) = self.semantic.calls.acceptance.get(&key) {
                 return known;
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            self.semantic.calls.acceptance.borrow_mut().insert(key.clone(), Known::Unknown);
+            self.semantic.calls.acceptance.insert(self.semantic.epoch, key.clone(), Known::Unknown);
             let answer = accepts::accepts(expected, actual, &self.semantic.values());
-            self.semantic.calls.acceptance.borrow_mut().insert(key, answer);
+            self.semantic.calls.acceptance.insert(self.semantic.epoch, key, answer);
             answer
         })
     }
@@ -295,19 +300,19 @@ impl Calls<'_> {
     fn value(&self, at: Leaf, question: ValueQuestion) -> Known<Option<NodeValue>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let key = (at, question);
-        if let Some(answer) = self.semantic.calls.values.borrow().get(&key) {
-            return answer.clone();
+        if let Some(answer) = self.semantic.calls.values.get(&key) {
+            return answer;
         }
         if !self.question.budget.step() {
             return Known::Unknown;
         }
         let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        self.semantic.calls.values.borrow_mut().insert(key, Known::Unknown);
+        self.semantic.calls.values.insert(self.semantic.epoch, key, Known::Unknown);
         let answer = match question {
             ValueQuestion::Result => result::result(at, &self.semantic.values()),
             ValueQuestion::Expected => expected::expected(at, &self.semantic.values()),
         };
-        self.semantic.calls.values.borrow_mut().insert(key, answer.clone());
+        self.semantic.calls.values.insert(self.semantic.epoch, key, answer.clone());
         answer
     }
 }

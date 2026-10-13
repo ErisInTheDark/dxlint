@@ -77,10 +77,10 @@ impl Values<'_> {
 
     fn closed_leaf(&self, at: Leaf) -> Known<bool> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        if let Some(&answer) = self.semantic.values.member_closed.borrow().get(&at) { return answer }
-        self.semantic.values.member_closed.borrow_mut().insert(at, Known::Unknown);
+        if let Some(answer) = self.semantic.values.member_closed.get(&at) { return answer }
+        self.semantic.values.member_closed.insert(self.semantic.epoch, at, Known::Unknown);
         let answer = self.direct_closed(at);
-        self.semantic.values.member_closed.borrow_mut().insert(at, answer);
+        self.semantic.values.member_closed.insert(self.semantic.epoch, at, answer);
         answer
     }
 
@@ -212,13 +212,13 @@ impl Values<'_> {
     fn leaf_member(&self, at: Leaf, key: &Key) -> Known<Option<Member>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let request = (at, key.clone());
-        if let Some(answer) = self.semantic.values.member_keys.borrow().get(&request) { return answer.clone() }
-        self.semantic.values.member_keys.borrow_mut().insert(request.clone(), Known::Unknown);
+        if let Some(answer) = self.semantic.values.member_keys.get(&request) { return answer }
+        self.semantic.values.member_keys.insert(self.semantic.epoch, request.clone(), Known::Unknown);
         let answer = match self.direct_members(at, Some(key)) {
             Known::Yes(mut members) => Known::Yes(members.pop()),
             Known::Unknown => Known::Unknown,
         };
-        self.semantic.values.member_keys.borrow_mut().insert(request, answer.clone());
+        self.semantic.values.member_keys.insert(self.semantic.epoch, request, answer.clone());
         answer
     }
 
@@ -249,10 +249,10 @@ impl Values<'_> {
 
     fn leaf_members(&self, at: Leaf) -> Known<Vec<Member>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.values.members.borrow().get(&at) { return answer.clone() }
-        self.semantic.values.members.borrow_mut().insert(at, Known::Unknown);
+        if let Some(answer) = self.semantic.values.members.get(&at) { return answer }
+        self.semantic.values.members.insert(self.semantic.epoch, at, Known::Unknown);
         let answer = self.direct_members(at, None);
-        self.semantic.values.members.borrow_mut().insert(at, answer.clone());
+        self.semantic.values.members.insert(self.semantic.epoch, at, answer.clone());
         answer
     }
 
