@@ -79,7 +79,8 @@ in ts_class {
 in ts_interface, ts_type_alias { declares type name in nearest block hoisted }
 in ts_enum { declares value, type, query name in nearest block hoisted }
 in ts_namespace {
-  declares value, type, query name in nearest block hoisted
+  declares type name in nearest block hoisted
+  when ts_namespace_runtime(node) { declares value, query name in nearest block hoisted }
 }
 # `namespace A.B {}` declares `A`.
 in ts_qualified_name { targets left }
