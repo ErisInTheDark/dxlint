@@ -11,6 +11,7 @@ mod inspect;
 pub(crate) mod language_options;
 mod message;
 mod profile;
+mod program;
 mod prune;
 pub mod reads;
 mod suppress;
@@ -195,6 +196,7 @@ pub struct Linter {
     invalidation: std::sync::atomic::AtomicU64,
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
+    programs: program::Programs,
     unit_overlays: Vec<bool>,
     unit_tokens: bool,
     pub grammar: Grammar,
@@ -233,6 +235,7 @@ impl Linter {
     pub(crate) fn reset_runtime(&mut self) {
         self.units.get_mut().expect("unit cache").clear();
         self.discoveries.get_mut().expect("unit discoveries").clear();
+        self.programs.clear();
         self.projects = frontend::Projects::new(&self.grammar.natives);
         self.profile = None;
         *self.invalidation.get_mut() = 0;

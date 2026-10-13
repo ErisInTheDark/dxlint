@@ -260,6 +260,7 @@ pub struct Names {
 /// One tree's resolved names.
 #[derive(Default)]
 pub struct Resolved {
+    pub complete: bool,
     /// What the class bits and effect indexes below mean.
     pub vocabulary: std::sync::Arc<Vocabulary>,
     pub keys: FxHashMap<u32, Option<Box<str>>>,
@@ -797,7 +798,7 @@ impl Names {
     /// it means (a language's escapes); `when(node, condition)` evaluates a
     /// `when` condition on a node.
     pub fn resolve<'t>(&self, tree: &Tree, text: &'t str, key: &dyn Fn(&'t str) -> Cow<'t, str>, when: &dyn Fn(u32, u32) -> bool, operand: &ResolveOperand<'_>) -> Resolved {
-        let mut out = Resolved { vocabulary: self.vocabulary.clone(), ..Resolved::default() };
+        let mut out = Resolved { vocabulary: self.vocabulary.clone(), complete: true, ..Resolved::default() };
         if self.resolves_nothing() {
             return out;
         }
@@ -1012,6 +1013,7 @@ impl Names {
             refs.sort_by_key(|&r| tree.node(r).start);
         }
         out.scope_of = scope_of;
+        out.complete = out.failures.is_empty();
         out
     }
 }

@@ -321,6 +321,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         invalidation: Default::default(),
         units: Default::default(),
         discoveries: Default::default(),
+        programs: Default::default(),
         unit_overlays,
         unit_tokens: unit_reads.all_tokens || unit_reads.own_tokens || unit_reads.layers.iter().any(|&layer| {
             grammar.native_kind(layer).is_some_and(|kind| kind.is_token()) || grammar.native_hosts[layer as usize].iter().any(|&host| grammar.native_kind(host).is_some_and(|kind| kind.is_token()))

@@ -8,6 +8,7 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
 use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, Target, World};
@@ -37,7 +38,9 @@ type ModuleAnswers = crate::fx_hash::FxHashMap<Box<str>, ModuleAnswer>;
 #[derive(Default)]
 struct ProgramMemo<'a> {
     selected: RefCell<Selection<'a>>,
+    inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Arc<Vec<PathBuf>>>>>,
     roots: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Known<Vec<ScopeRef>>>>>,
+    catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
 }
 
@@ -237,9 +240,9 @@ pub struct Files<'a>(pub &'a LintWorld<'a>);
 
 struct NamedModule {
     scope: ScopeRef,
-    at: Leaf,
     name: String,
     source: Option<String>,
+    classes: u64,
 }
 
 impl<'a> Files<'a> {
@@ -324,15 +327,44 @@ impl<'a> Files<'a> {
         answer
     }
 
+    fn program_context(self, selected: &Settings) -> super::program::Context {
+        super::program::Context {
+            directory: self.0.path.parent().unwrap_or(Path::new("")).to_owned(),
+            settings: selected as *const Settings as usize,
+        }
+    }
+
+    fn input_paths(self, selected: &Settings) -> Known<Arc<Vec<PathBuf>>> {
+        let key = selected as *const Settings;
+        if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return Known::Yes(cached.get()) }
+        let cached = super::reads::Cached::compute(|| {
+            self.0.linter.programs.paths(self.program_context(selected), |dep| self.0.linter.holds(dep), || {
+                let question = QueryContext::default();
+                let answer = program_inputs(selected, &self, &question);
+                if question.budget.limited() {
+                    if let Some(profile) = self.0.ctx.profile {
+                        super::Profile::add(&profile.semantic_budget_limits, 1);
+                    }
+                }
+                answer
+            })
+        });
+        let answer = cached.get();
+        if let Known::Yes(paths) = &answer {
+            self.0.program.inputs.borrow_mut().insert(key, super::reads::Cached { value: paths.clone(), reads: cached.reads });
+        }
+        answer
+    }
+
     fn roots(self, selected: &Settings) -> Known<Vec<ScopeRef>> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.roots.borrow().get(&key) { return cached.get() }
         let cached = super::reads::Cached::compute(|| {
             let question = QueryContext::default();
             let roots = (|| {
-                let Known::Yes(paths) = program_inputs(selected, &self, &question) else { return Known::Unknown };
+                let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
                 let mut roots = Vec::new();
-                for path in paths {
+                for path in paths.iter() {
                     if !question.budget.step() { return Known::Unknown }
                     let Some(file) = self.0.file(&path) else { return Known::Unknown };
                     let scope = ScopeRef { file, scope: 0 };
@@ -355,17 +387,56 @@ impl<'a> Files<'a> {
         roots
     }
 
-    fn named_modules(self, roots: &[ScopeRef], classes: u64, semantic: &Semantic<'_>) -> Known<Vec<NamedModule>> {
-        let mut modules = Vec::new();
-        for root in roots {
-            let Some(names) = World::names(&self, root.file) else { return Known::Unknown };
-            for (scope, info) in names.scopes.iter().enumerate() {
-                if classes & info.classes == 0 { continue }
-                let Known::Yes(items) = self.named_scope(ScopeRef { file: root.file, scope: scope as u32 }, classes, semantic) else { return Known::Unknown };
-                modules.extend(items);
-            }
+    fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
+        let key = (selected as *const Settings, classes);
+        if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
+        let cached = super::reads::Cached::compute(|| {
+            let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
+            let key = super::program::CatalogKey {
+                context: self.program_context(selected),
+                outside: (!paths.iter().any(|path| path == self.0.path)).then(|| self.0.path.to_owned()),
+                classes,
+            };
+            self.0.linter.programs.catalog(key.clone(), |dep| {
+                if let super::reads::Dep::Text(path, hash) = dep {
+                    if path == self.0.path && *hash != super::reads::hash_bytes(self.0.ctx.source.as_bytes()) { return false }
+                }
+                self.0.linter.holds(dep)
+            }, || match self.0.complete_attribute(|| {
+                let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
+                let mut declarations = Vec::new();
+                for path in paths.iter().chain(key.outside.iter()) {
+                    let Some(file) = self.0.file(path) else { return Known::Unknown };
+                    let Some(text) = World::text(&self, file) else { return Known::Unknown };
+                    super::reads::note(super::reads::Dep::Text(path.clone(), super::reads::hash_bytes(text.as_bytes())));
+                    let Some(names) = World::names(&self, file) else { return Known::Unknown };
+                    for (scope, info) in names.scopes.iter().enumerate() {
+                        if classes & info.classes == 0 { continue }
+                        let Known::Yes(items) = self.named_scope(ScopeRef { file, scope: scope as u32 }, classes, semantic) else { return Known::Unknown };
+                        declarations.extend(items.into_iter().map(|item| super::program::Declaration {
+                            path: path.clone(), scope: item.scope.scope, node: info.node,
+                            name: item.name, source: item.source, classes: item.classes,
+                        }));
+                    }
+                }
+                Known::Yes(super::program::Catalog::new(declarations))
+            }) {
+                Known::Yes(answer) => answer,
+                Known::Unknown => Known::Unknown,
+            })
+        });
+        let answer = cached.get();
+        if let Known::Yes(catalog) = &answer {
+            self.0.program.catalogs.borrow_mut().insert(key, super::reads::Cached { value: catalog.clone(), reads: cached.reads });
         }
-        Known::Yes(modules)
+        answer
+    }
+
+    fn declaration_scope(self, declaration: &super::program::Declaration) -> Known<ScopeRef> {
+        match self.0.file(&declaration.path) {
+            Some(file) => Known::Yes(ScopeRef { file, scope: declaration.scope }),
+            None => Known::Unknown,
+        }
     }
 
     fn named_scope(self, scope: ScopeRef, classes: u64, semantic: &Semantic<'_>) -> Known<Vec<NamedModule>> {
@@ -398,18 +469,21 @@ impl<'a> Files<'a> {
                 },
                 None => None,
             };
-            modules.push(NamedModule { scope, at, name, source });
+            modules.push(NamedModule { scope, name, source, classes: opened });
         }
         Known::Yes(modules)
     }
 
     fn ambient_with(self, name: &str, classes: u64, semantic: &Semantic<'_>) -> Known<Option<ScopeRef>> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
-        let Known::Yes(roots) = self.roots(selected) else { return Known::Unknown };
-        let Known::Yes(modules) = self.named_modules(&roots, classes, semantic) else { return Known::Unknown };
-        let exact = modules.iter().find(|module| module.source.is_none() && module.name == name);
-        let found = exact.or_else(|| modules.iter().find(|module| module.source.is_none() && crate::path_globs::wildcard(&module.name, name)));
-        Known::Yes(found.map(|module| module.scope))
+        let Known::Yes(catalog) = self.catalog(selected, classes, semantic) else { return Known::Unknown };
+        match catalog.ambient(name, classes) {
+            Some(declaration) => match self.declaration_scope(declaration) {
+                Known::Yes(scope) => Known::Yes(Some(scope)),
+                Known::Unknown => Known::Unknown,
+            },
+            None => Known::Yes(None),
+        }
     }
 }
 
@@ -439,7 +513,11 @@ impl World for Files<'_> {
     }
 
     fn names(&self, file: u32) -> Option<&Resolved> {
-        Some(self.0.on(file, self.tree(file)?.root)?.names())
+        let names = self.0.on(file, self.tree(file)?.root)?.names();
+        if names.complete { Some(names) } else {
+            self.0.mark_unknown();
+            None
+        }
     }
 
     fn index(&self, file: u32) -> Option<&ScopeIndex> {
@@ -495,21 +573,23 @@ impl World for Files<'_> {
         };
         let classes = selected.ambient_scopes;
         if scope.scope != 0 && info.classes & classes == 0 { return Known::Yes(vec![scope]); }
-        let Known::Yes(roots) = self.roots(selected) else { return Known::Unknown };
-        let Known::Yes(modules) = self.named_modules(&roots, classes, semantic) else { return Known::Unknown };
+        let Known::Yes(catalog) = self.catalog(selected, classes, semantic) else { return Known::Unknown };
         let Known::Yes(own) = self.named_scope(scope, classes, semantic) else { return Known::Unknown };
         let name = own.iter().find(|module| module.source.is_none()).map(|module| module.name.as_str());
         let mut merged = vec![scope];
-        for module in &modules {
-            let same = match (name, &module.source) {
-                (Some(name), _) => module.name == name,
-                (None, Some(source)) => match self.module(module.at, source, semantic) {
-                    Known::Yes(target) => target == Some(scope),
-                    Known::Unknown => return Known::Unknown,
-                },
-                _ => false,
+        for declaration in catalog.candidates(name, classes) {
+            let Known::Yes(candidate) = self.declaration_scope(declaration) else { return Known::Unknown };
+            let same = match name {
+                Some(_) => true,
+                None => {
+                    let at = Leaf { target: Target::Node(NodeRef { file: candidate.file, node: declaration.node }), frame: FrameId::ROOT };
+                    match self.module(at, declaration.source.as_deref().expect("source declaration"), semantic) {
+                        Known::Yes(target) => target == Some(scope),
+                        Known::Unknown => return Known::Unknown,
+                    }
+                }
             };
-            if same && !merged.contains(&module.scope) { merged.push(module.scope); }
+            if same && !merged.contains(&candidate) { merged.push(candidate); }
         }
         Known::Yes(merged)
     }
@@ -599,14 +679,163 @@ mod tests {
     use crate::engine::{reads, tests::linter};
 
     fn with_world<T>(linter: &super::super::Linter, f: impl FnOnce(Files<'_>) -> T) -> T {
-        let source = "()";
+        with_source_world(linter, Path::new("/root/main.t"), "()", f)
+    }
+
+    fn with_source_world<T>(linter: &super::super::Linter, path: &Path, source: &str, f: impl FnOnce(Files<'_>) -> T) -> T {
         let tree = Tree::parse_with(&linter.grammar, 0, source, None, None);
         let lines = crate::line_index::LineIndex::new(source);
         let memo = Default::default();
         let reindented = Default::default();
-        let ctx = linter.tree_ctx(0, &tree, (source, &lines, "main.t"), &memo, &reindented, None);
-        let world = LintWorld::new(linter, Path::new("/root/main.t"), ctx);
+        let rel = linter.relative(path);
+        let file = rel.to_string_lossy();
+        let ctx = linter.tree_ctx(0, &tree, (source, &lines, &file), &memo, &reindented, None);
+        let world = LintWorld::new(linter, path, ctx);
         f(Files(&world))
+    }
+
+    #[test]
+    fn program_catalog_reuses_declarations_across_questions_and_worlds_then_invalidates() {
+        let linter = linter(r#"
+            module_resolution program {
+                config {
+                    files ["catalog.json"]
+                    format jsonc
+                    source_files "files"
+                }
+                extensions [".t"]
+                ambient_scopes [ambient]
+                search [ambient]
+            }
+            in paren {
+                scope module
+                uses module_resolution program
+                when text == "(library)" { scope ambient named "shared" }
+                when text == "(unsaved)" { scope ambient named "local" }
+            }
+        "#);
+        let root = Path::new("/root/catalog-reuse");
+        let main = root.join("main.t");
+        let next = root.join("next.t");
+        let library = root.join("library.t");
+        let config = root.join("catalog.json");
+        reads::set_buffer(&main, "()");
+        reads::set_buffer(&next, "()");
+        reads::set_buffer(&library, "(library)");
+        let inputs = r#"{"files":["library.t","main.t","next.t"]}"#;
+        reads::set_buffer(&config, inputs);
+        let classes = linter.grammar.names.vocabulary.scope_class("ambient");
+        with_source_world(&linter, &main, "()", |files| {
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("ambient declaration exists") };
+            assert_eq!(World::text(&files, scope.file), Some("(library)"));
+            let remaining = question.budget.remaining();
+            for _ in 0..20 {
+                assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(Some(scope)));
+            }
+            assert_eq!(question.budget.remaining(), remaining, "completed catalog is not repeated question work");
+        });
+        with_source_world(&linter, &next, "()", |files| {
+            files.0.file(&main).unwrap();
+            let mut question = QueryContext::default();
+            question.budget = crate::grammar::names::question::Budget::new(0);
+            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("shared catalog is available without rebuilding") };
+            assert_eq!(World::text(&files, scope.file), Some("(library)"), "shared descriptors must not retain another world's file ids");
+        });
+        for (source, present) in [("(unsaved)", true), ("()", false)] {
+            with_source_world(&linter, &main, source, |files| {
+                let question = QueryContext::default();
+                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                let Known::Yes(answer) = files.ambient_with("local", classes, &semantic) else { panic!("provided file text is known") };
+                assert_eq!(answer.is_some(), present, "the caller's text must not be replaced by a shared disk snapshot");
+            });
+        }
+        for (metadata, present) in [(r#"{"files":["main.t","next.t"]}"#, false), (inputs, true)] {
+            reads::set_buffer(&config, metadata);
+            with_source_world(&linter, &main, "()", |files| {
+                let question = QueryContext::default();
+                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                let Known::Yes(answer) = files.ambient_with("shared", classes, &semantic) else { panic!("changed project inputs are known") };
+                assert_eq!(answer.is_some(), present);
+            });
+        }
+        reads::set_buffer(&library, "(changed)");
+        with_source_world(&linter, &main, "()", |files| {
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(None));
+        });
+        reads::set_buffer(&library, "(library)");
+        with_source_world(&linter, &main, "()", |files| {
+            let mut bounded = QueryContext::default();
+            bounded.budget = crate::grammar::names::question::Budget::new(0);
+            let semantic = Semantic::new(&files, &linter.grammar.names, &bounded);
+            assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Unknown);
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+            let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("unknown catalog is retried") };
+            assert_eq!(World::text(&files, scope.file), Some("(library)"));
+        });
+        for path in [&main, &next, &library, &config] { reads::drop_buffer(path); }
+    }
+
+    #[test]
+    fn unknown_scope_conditions_cannot_publish_partial_names_or_catalogs() {
+        thread_local! { static CALLS: Cell<u32> = const { Cell::new(0) }; }
+        static QUERY: crate::expr::queries::QueryFunction = crate::expr::queries::QueryFunction {
+            name: "unresolved_scope",
+            arity: 1,
+            call: |_, _, _| {
+                CALLS.with(|calls| calls.set(calls.get() + 1));
+                Known::Unknown
+            },
+        };
+        CALLS.with(|calls| calls.set(0));
+        let mut linter = linter(r#"
+            module_resolution program {
+                config {
+                    files ["catalog.json"]
+                    format jsonc
+                    source_files "files"
+                }
+                extensions [".t"]
+                ambient_scopes [ambient]
+            }
+            in paren {
+                scope module
+                uses module_resolution program
+                when text == "(library)" { scope ambient named "shared" }
+            }
+        "#);
+        for condition in &mut linter.grammar.names.conditions {
+            let original = condition.lowered.take().unwrap();
+            condition.lowered.set(VExpr::Binary(crate::config::ast::BinOp::And,
+                Box::new(original), Box::new(VExpr::QueryCall(&QUERY,
+                    Box::new([VExpr::Builtin(crate::expr::Builtin::Node)]))))).unwrap();
+        }
+        let root = Path::new("/root/catalog-unknown");
+        let main = root.join("main.t");
+        let library = root.join("library.t");
+        let config = root.join("catalog.json");
+        reads::set_buffer(&main, "()");
+        reads::set_buffer(&library, "(library)");
+        reads::set_buffer(&config, r#"{"files":["library.t","main.t"]}"#);
+        let classes = linter.grammar.names.vocabulary.scope_class("ambient");
+        let mut previous = 0;
+        for _ in 0..2 {
+            with_source_world(&linter, &main, "()", |files| {
+                let question = QueryContext::default();
+                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Unknown);
+                let calls = CALLS.with(Cell::get);
+                assert!(calls > previous, "a new world must retry incomplete names");
+                assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Unknown);
+                previous = calls;
+            });
+        }
+        for path in [&main, &library, &config] { reads::drop_buffer(path); }
     }
 
     #[test]

@@ -221,14 +221,15 @@ impl<'a> Ctx<'a> {
             fresh = true;
             let resolve = || {
                 self.memo.resolving_names.set(true);
+                let incomplete = std::cell::Cell::new(false);
                 let names = &self.grammar.names;
                 let session = crate::vm::Session::new(self, self.node, &[]);
                 let holds = |node: u32, e: &crate::vm::VExpr| match session.holds_on(node, e) {
                     Some(held) => held,
-                    None => { self.memo.vm.clear_error(); false }
+                    None => { incomplete.set(true); self.memo.vm.clear_error(); false }
                 };
                 let when = |node: u32, condition: u32| {
-                    let Some(e) = names.conditions[condition as usize].lowered.get() else { return false };
+                    let Some(e) = names.conditions[condition as usize].lowered.get() else { incomplete.set(true); return false };
                     match self.profile {
                         Some(profile) => profile.time_name_condition(|| holds(node, e)),
                         None => holds(node, e),
@@ -239,20 +240,43 @@ impl<'a> Ctx<'a> {
                     None => std::borrow::Cow::Borrowed(text),
                 };
                 let operand = |node: u32, id: u32, item: Option<u32>| {
-                    let e = names.operands.get(id as usize).and_then(|operand| operand.lowered.get())
-                        .ok_or_else(|| Box::<str>::from("item expression is not compiled"))?;
-                    session.value_on(node, e, item).ok_or_else(|| session.error().into())
+                    let Some(e) = names.operands.get(id as usize).and_then(|operand| operand.lowered.get()) else {
+                        incomplete.set(true);
+                        return Err(Box::<str>::from("item expression is not compiled"));
+                    };
+                    session.value_on(node, e, item).ok_or_else(|| {
+                        incomplete.set(true);
+                        session.error().into()
+                    })
                 };
-                let resolve = || names.resolve(self.tree, self.source, &key, &when, &operand);
-                let resolved = std::sync::Arc::new(match self.profile {
-                    Some(profile) => profile.time_names(resolve),
-                    None => resolve(),
-                });
+                let mut resolved = None;
+                let mut run = || {
+                    let resolve = || names.resolve(self.tree, self.source, &key, &when, &operand);
+                    resolved = Some(match self.profile {
+                        Some(profile) => profile.time_names(resolve),
+                        None => resolve(),
+                    });
+                };
+                let complete = match self.world {
+                    Some(world) => world.complete_attribute(run).known().is_some(),
+                    None => { run(); true }
+                };
+                let mut resolved = resolved.expect("name resolution ran");
+                resolved.complete &= complete && !incomplete.get();
                 self.memo.resolving_names.set(false);
-                resolved
+                std::sync::Arc::new(resolved)
             };
             match self.world.and_then(|world| world.name_cache(self.file_id)) {
-                Some(cache) => cache.get_or_init(|| crate::engine::reads::Cached::compute(resolve)).clone(),
+                Some(cache) => match cache.get() {
+                    Some(cached) => cached.clone(),
+                    None => {
+                        let answer = crate::engine::reads::Cached::compute(resolve);
+                        if answer.value.complete {
+                            let _ = cache.set(answer.clone());
+                            cache.get().expect("completed names").clone()
+                        } else { answer }
+                    }
+                },
                 None => crate::engine::reads::Cached::compute(resolve),
             }
         });
