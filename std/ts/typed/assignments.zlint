@@ -1,0 +1,154 @@
+define {
+
+fn assignment_carrier(parts) = {
+  value arm: first(parts)
+  value carriers: filter(arm, part => part.carrier_known && part.carrier != null)
+  value carrier: first(carriers).carrier
+  value if parts != null && len(parts) == 1 && len(carriers) > 0
+    && all(carriers, part => part.carrier.description == carrier.description && part.carrier.arguments == carrier.arguments)
+    then carrier else null
+}
+fn assignment_trait(parts, trait) = parts != null && len(parts) > 0
+  && all(parts, arm => any(arm, part => contains(part.traits, trait)))
+fn assignment_category(parts) = if parts != null && any(parts, arm => any(arm, part => contains(part.traits, "error"))) then "error"
+  else if assignment_trait(parts, "any") then "any" else null
+fn assignment_array(parts, source) = {
+  value shape: ts_value_array_parts(parts, source)
+  value shape.known && shape.array
+}
+fn assignment_unsafe(sender, receiver) = {
+  value direct: assignment_trait(sender, "any")
+  value safe: assignment_trait(receiver, "any") || assignment_trait(receiver, "unknown")
+  value source: first(sender)
+  value target: first(receiver)
+  value if direct then receiver != null && len(receiver) > 0 && !safe
+    else sender != null && receiver != null && len(sender) == 1 && len(receiver) == 1
+      && any(source, part => any(target, other => assignment_carrier_unsafe(part, other)))
+}
+fn assignment_carrier_unsafe(source, target) = {
+  value a: source.carrier
+  value b: target.carrier
+  value tuples: a.description.kind == "tuple" && b.description.kind == "tuple"
+    && a.description.signature == b.description.signature && a.description.readonly == b.description.readonly
+  value same: tuples || a.description.kind == "named" && b.description.kind == "named"
+    && a.file == b.file && a.node == b.node
+  value arguments: zip(a.arguments ?? [], b.arguments ?? [])
+  value source.carrier_known && target.carrier_known && a != null && b != null
+    && same && len(a.arguments) == len(b.arguments)
+    && any(arguments, pair => {
+      value sender: first(pair)
+      value receiver: last(pair)
+      value assignment_unsafe(sender, receiver)
+    })
+}
+fn assignment_string(text) = {
+  value slashes: replace(text, "\\", "\\\\")
+  value quotes: replace(slashes, "\"", "\\\"")
+  value lines: replace(quotes, "\n", "\\n")
+  value "\"" lines "\""
+}
+fn assignment_print_part(part) = {
+  value carrier: part.carrier
+  value args: map(carrier.arguments ?? [], item => assignment_print(item))
+  value joined: { value args; join ", " }
+  value scalar: find(["any", "unknown", "void", "null", "undefined", "string", "number", "boolean", "bigint", "symbol", "object"], trait => contains(part.traits, trait))
+  value literal: part.identity.kind == "value" && part.identity_known
+  value if carrier.description.kind == "tuple" then (if carrier.description.readonly then "readonly " else "") "[" joined "]"
+    else if carrier.description.kind == "named" then carrier.description.name (if len(args) == 0 then "" else "<" joined ">")
+    else if literal && scalar == "string" then assignment_string(part.identity.value)
+    else if literal && scalar == "bigint" then part.identity.value.value "n"
+    else if literal && (scalar == "number" || scalar == "boolean") then "" part.identity.value
+    else scalar ?? "unknown"
+}
+fn assignment_print(parts) = if parts == null then "unknown" else if len(parts) == 0 then "never" else {
+  value arms: map(parts, arm => { value arm; map (part) assignment_print_part(part); unique; join " & " })
+  value { value arms; unique; join " | " }
+}
+fn assignment_finding(site, mode, parts, receiver) = {
+  site: site.offset, mode: mode, error: assignment_category(parts) == "error",
+  sender: if mode == "generic" then assignment_print(parts) else "any",
+  receiver: if mode == "generic" then assignment_print(receiver) else null
+}
+fn assignment_destructure(receiver, source, path) = {
+  value sender: value_at(source, path)
+  value carrier: assignment_carrier(sender)
+  value array: assignment_array(sender, source)
+  value element: first(carrier.arguments)
+  value if receiver is (ts_array, ts_array_pattern) then
+    if array && assignment_trait(element, "any") then [assignment_finding(receiver, "array", element, null)]
+    else if carrier.description.kind == "tuple" then {
+      value items: receiver.element.nodes
+      value selected: filter(items, item => item not (ts_hole, ts_rest))
+      value flat_map(selected, item => {
+        value position: index_of(items, item)
+        value next: [] path position
+        value value: value_at(source, next)
+        value if assignment_category(value) != null then [assignment_finding(item, "tuple", value, null)]
+          else assignment_destructure(item, source, next)
+      })
+    } else []
+  else if receiver is (ts_object, ts_object_pattern) && assignment_category(sender) == null
+      && !assignment_trait(sender, "unknown") then {
+    value properties: filter(receiver.property.nodes, property => property not ts_rest && ts_value_key(property.key.node) != null)
+    value flat_map(properties, property => {
+      value key: ts_value_key(property.key.node)
+      value next: [] path key
+      value value: value_at(source, next)
+      value target: property.value.node ?? property.key.node
+      value if assignment_category(value) != null then [assignment_finding(target, "object", value, null)]
+        else assignment_destructure(target, source, next)
+    })
+  } else []
+}
+fn assignment_empty_map(source) = {
+  value bare: unparenthesised_node(source)
+  value bare is ts_new && bare.callee is ts_identifier && bare.callee.text == "Map"
+    && count(bare.argument.nodes) == 0 && count(bare.type_argument.nodes) == 0
+}
+fn assignment_receiver(n) = if n is (ts_declarator, ts_parameter) then n.name.node
+  else if n is (ts_class_property, ts_property) then n.key.node
+  else if n is (ts_assignment, ts_assignment_pattern) then n.left.node
+  else if n is ts_jsx_attribute then n.name.node else null
+fn assignment_sender(n) = if n is (ts_declarator, ts_parameter, ts_class_property) then n.init.node
+  else if n is (ts_assignment, ts_assignment_pattern) then n.right.node
+  else if n is ts_property then n.value.node ?? n.key.node
+  else if n is ts_jsx_attribute && n.value is ts_jsx_expression then n.value.expression.node else null
+fn assignment_transfers_value(n) = {
+  value source: assignment_sender(n)
+  value target: assignment_receiver(n)
+  value compare: n not (ts_declarator, ts_parameter, ts_class_property) || n.type != null
+  value report: if n is ts_parameter then target
+    else if n is ts_jsx_attribute then source else n
+  value sender: if source != null then value_constituents(source) else null
+  value receiver: if n.type != null then value_constituents(n.type.node)
+    else if n is ts_property then {
+      value key: ts_value_key(n.key.node)
+      value path: [key]
+      value value_expected_at(n.parent.node, path) ?? value_constituents(target)
+    } else if target != null then value_constituents(target) else null
+  value category: assignment_category(sender)
+  value known_unknown: assignment_trait(receiver, "unknown")
+    && (n.type != null || target not (ts_array, ts_array_pattern, ts_object, ts_object_pattern))
+  value if source == null || target == null || n is ts_assignment && n.operator != "="
+    || n is ts_property && (n.parent.flow_destructuring_target || source is ts_assignment_pattern) then []
+    else if category != null && !known_unknown then [assignment_finding(report, "any", sender, null)]
+    else if compare && !assignment_empty_map(source) && assignment_unsafe(sender, receiver)
+      then [assignment_finding(report, "generic", sender, receiver)]
+    else assignment_destructure(target, source, [])
+}
+fn assignment_spread(n) = {
+  value source: n.argument.node
+  value sender: value_constituents(source)
+  value carrier: assignment_carrier(sender)
+  value element: first(carrier.arguments)
+  value if n.parent is ts_array && (assignment_category(sender) != null
+    || assignment_array(sender, source) && assignment_trait(element, "any"))
+    then [assignment_finding(n, "spread", sender, null)] else []
+}
+
+in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_jsx_attribute {
+  let assignment_value_transfers assignment_transfers_value(node)
+}
+in ts_spread { let assignment_value_transfers assignment_spread(node) }
+
+}

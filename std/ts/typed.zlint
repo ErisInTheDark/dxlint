@@ -8,6 +8,7 @@ import .ts/methods
 import .ts/spreads
 import .ts/type-specifiers
 import .ts/typed/promises
+import .ts/typed/awaitability
 import .ts/typed/optional-chains
 import .ts/typed/floating-promises
 import .ts/typed/unbound-method
@@ -20,6 +21,7 @@ import .ts/typed/nullish-coalescing
 import .ts/typed/boolean-comparisons
 import .ts/typed/void-expressions
 import .ts/typed/strict-void-return
+import .ts/typed/assignments
 
 define {
 
@@ -264,39 +266,39 @@ in ts_call, ts_new, ts_tagged_template {
 
 in ts_declarator, ts_parameter, ts_class_property, ts_assignment, ts_assignment_pattern, ts_property, ts_spread, ts_jsx_attribute {
   rule no-unsafe-assignment {
-    each unsafe_assigned in assignment_transfers.nonempty ?? []
+    each unsafe_assigned in assignment_value_transfers
     when unsafe_assigned.mode == "any"
-    report at unsafe_assigned.offset
+    report at unsafe_assigned.site
     warn "Unsafe assignment of an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:generic {
-    each unsafe_assigned in assignment_transfers.nonempty ?? []
+    each unsafe_assigned in assignment_value_transfers
     when unsafe_assigned.mode == "generic"
-    report at unsafe_assigned.offset
+    report at unsafe_assigned.site
     warn "Unsafe assignment of type " unsafe_assignment_sender(unsafe_assigned) " to a variable of type `{unsafe_assigned.receiver}`."
   }
   rule no-unsafe-assignment:array {
-    each unsafe_assigned in assignment_transfers.nonempty ?? []
+    each unsafe_assigned in assignment_value_transfers
     when unsafe_assigned.mode == "array"
-    report at unsafe_assigned.offset
+    report at unsafe_assigned.site
     warn "Unsafe array destructuring of an " unsafe_assignment_sender(unsafe_assigned) " array value."
   }
   rule no-unsafe-assignment:tuple {
-    each unsafe_assigned in assignment_transfers.nonempty ?? []
+    each unsafe_assigned in assignment_value_transfers
     when unsafe_assigned.mode == "tuple"
-    report at unsafe_assigned.offset
+    report at unsafe_assigned.site
     warn "Unsafe array destructuring of a tuple element with an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:object {
-    each unsafe_assigned in assignment_transfers.nonempty ?? []
+    each unsafe_assigned in assignment_value_transfers
     when unsafe_assigned.mode == "object"
-    report at unsafe_assigned.offset
+    report at unsafe_assigned.site
     warn "Unsafe object destructuring of a property with an " unsafe_assignment_sender(unsafe_assigned) " value."
   }
   rule no-unsafe-assignment:spread {
-    each unsafe_assigned in assignment_transfers.nonempty ?? []
+    each unsafe_assigned in assignment_value_transfers
     when unsafe_assigned.mode == "spread"
-    report at unsafe_assigned.offset
+    report at unsafe_assigned.site
     warn "Unsafe spread of an " unsafe_assignment_sender(unsafe_assigned) " value in an array."
   }
 }
@@ -319,8 +321,8 @@ in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
 }
 
 in ts_call rule prefer-regexp-exec {
-  when regexp_exec_offset != null
-  report at regexp_exec_offset
+  when regexp_match_exec_offset != null
+  report at regexp_match_exec_offset
   warn "Use the `RegExp#exec()` method instead."
 }
 
@@ -378,14 +380,15 @@ in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversi
 # `await` of something that is not a promise; promise aggregators of arrays
 # of non-promises.
 in ts_await rule await-thenable {
-  when argument.nonawaitable_type == true
+  when argument always nonthenable
   warn "Unexpected `await` of a non-Promise (non-\"Thenable\") value."
 }
 in ts_member, ts_index let promise_aggregate_member object.global_value == "Promise" && contains(["all", "allSettled", "race", "any"], static_name)
 in ts_call let is_promise_aggregator callee.promise_aggregate_member == true
 in ts_array let is_promise_aggregator_argument parent.is_promise_aggregator == true
 in ts_array.element rule await-thenable:aggregate {
-  when not ts_hole && parent.is_promise_aggregator_argument && nonawaitable_type == true
+  when not ts_hole && parent.is_promise_aggregator_argument
+    && (if is ts_spread then nonawaitable_type == true else node always nonthenable)
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_call.argument rule await-thenable:iterable {

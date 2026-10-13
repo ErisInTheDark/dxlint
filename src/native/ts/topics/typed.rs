@@ -20,11 +20,9 @@ mod assertions;
 mod accessors;
 mod conversions;
 mod constituents;
-mod regexp;
 mod redundant;
 mod this_return;
 mod transfers;
-mod assignments;
 mod arguments;
 mod enums;
 pub(super) mod specifiers;
@@ -32,11 +30,6 @@ mod errors;
 mod promises;
 mod empty_types;
 mod defaults;
-mod return_await;
-
-fn is_typescript(file: &NativeFile<'_>) -> bool {
-    file.path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| matches!(extension, "ts" | "tsx" | "mts" | "cts"))
-}
 
 pub const FACTS: &[Fact] = &[
     Fact {
@@ -158,14 +151,6 @@ pub const FACTS: &[Fact] = &[
         get: |f, n| f.with_file(|file, node| file.static_string(node).map_or(Value::Null, Value::from), n),
     },
     Fact {
-        shape: Shape::List(&Shape::Record(&[
-            ("expression", Shape::Scalar), ("offset", Shape::Scalar), ("awaited", Shape::Scalar), ("certainty", Shape::Scalar), ("handling", Shape::Scalar),
-        ])),
-        name: "returned_awaitables",
-        doc: "native async functions: returned expression nodes, offsets, awaited state, branch certainty and error/resource handling context",
-        get: |f, n| f.with_file(return_await::findings, n),
-    },
-    Fact {
         shape: Fact::SCALAR.shape,
         name: "useless_default",
         doc: "native defaults: source property or contextual parameter cannot use the fallback",
@@ -182,14 +167,6 @@ pub const FACTS: &[Fact] = &[
         name: "generated_empty_object",
         doc: "native type operations: provably resolved empty object, excluding unresolved mapped keys",
         get: |f, n| f.with_file(empty_types::generated, n),
-    },
-    Fact {
-        shape: crate::expr::facts::Shape::Record(&[
-            ("name", crate::expr::facts::Shape::Scalar), ("offset", crate::expr::facts::Shape::Scalar),
-        ]),
-        name: "missing_await",
-        doc: "native async functions: no own await, awaited loop/using, thenable return or async yield",
-        get: |f, n| f.with_file(promises::missing_await, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -229,12 +206,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "assignment_transfers",
-        doc: "native assignments, declarations, properties and spreads: any transfer sites, raw types and error provenance",
-        get: |f, n| f.with_file(assignments::findings, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "return_transfer",
         doc: "native returns and arrow bodies: any carrier, raw types and error provenance",
         get: |f, n| f.with_file(transfers::returned, n),
@@ -250,12 +221,6 @@ pub const FACTS: &[Fact] = &[
         name: "redundant_type_constituents",
         doc: "native unions and intersections: top/bottom overrides and primitive/literal dominance",
         get: |f, n| f.with_file(redundant::findings, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "regexp_exec_offset",
-        doc: "native calls: match property offset when its pattern is provably nonglobal",
-        get: |f, n| f.with_file(regexp::exec, n),
     },
     Fact {
         shape: Shape::List(&Shape::Record(&[
