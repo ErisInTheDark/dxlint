@@ -11,6 +11,13 @@ mod names;
 
 pub(crate) use names::Memo as NamesMemo;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Uncertainty {
+    Strict,
+    /// The result propagates unknowns or represents them in its schema.
+    Explicit,
+}
+
 #[derive(Debug)]
 pub struct Query {
     pub name: &'static str,
@@ -41,6 +48,13 @@ pub struct QueryFunction {
 }
 
 pub static QUERY_FUNCTIONS: &[&[QueryFunction]] = &[flow::FUNCTIONS, values::FUNCTIONS, syntax::FUNCTIONS, modules::FUNCTIONS, names::FUNCTIONS];
+
+impl QueryFunction {
+    pub fn uncertainty(&self) -> Uncertainty {
+        const EXPLICIT: &[&str] = &["call_signatures", "call_parameters", "call_results", "member_call_parameters", "value_constituents"];
+        if EXPLICIT.contains(&self.name) { Uncertainty::Explicit } else { Uncertainty::Strict }
+    }
+}
 
 pub fn lookup_function(name: &str) -> Option<&'static QueryFunction> {
     QUERY_FUNCTIONS.iter().flat_map(|group| group.iter()).find(|function| function.name == name)

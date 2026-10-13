@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::expr::{Ctx, Value};
+use crate::expr::queries::Uncertainty;
 use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, Target, World};
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::modules::compile::Action;
@@ -99,16 +100,16 @@ impl<'a> LintWorld<'a> {
     /// asked from the conditions `f` runs nest in it.
     fn asking<R>(&self, semantic: &Semantic<'_>, at: Leaf, f: impl FnOnce() -> Known<R>) -> Known<R> {
         let Some(_nested) = semantic.question.budget.nest() else { return Known::Unknown };
-        self.evaluating(Some(ActiveQuestion { semantic, at }), f)
+        self.evaluating(Some(ActiveQuestion { semantic, at }), Uncertainty::Strict, f)
     }
 
-    fn evaluating<R>(&self, question: Option<ActiveQuestion<'_, '_>>, f: impl FnOnce() -> Known<R>) -> Known<R> {
+    fn evaluating<R>(&self, question: Option<ActiveQuestion<'_, '_>>, uncertainty: Uncertainty, f: impl FnOnce() -> Known<R>) -> Known<R> {
         let evaluation = ActiveEvaluation { question, unknown: Cell::new(false) };
         let before = self.evaluation.replace((&evaluation as *const ActiveEvaluation<'_, '_>).cast());
         let restore = Restore { slot: &self.evaluation, before };
         let result = f();
         drop(restore);
-        if evaluation.unknown.get() || matches!(result, Known::Unknown) {
+        if (uncertainty == Uncertainty::Strict && evaluation.unknown.get()) || matches!(result, Known::Unknown) {
             self.mark_unknown();
             Known::Unknown
         } else { result }
@@ -117,7 +118,7 @@ impl<'a> LintWorld<'a> {
     pub(crate) fn complete_attribute<R>(&self, f: impl FnOnce() -> R) -> Known<R> {
         let revision = self.revision();
         let question = self.question().map(|question| ActiveQuestion { semantic: question.semantic, at: question.at });
-        let answer = self.evaluating(question, || Known::Yes(f()));
+        let answer = self.evaluating(question, Uncertainty::Strict, || Known::Yes(f()));
         if self.revision() != revision {
             self.mark_unknown();
             Known::Unknown
@@ -143,7 +144,7 @@ impl<'a> LintWorld<'a> {
         self.active_evaluation()?.question.as_ref()
     }
 
-    fn semantic_query<R>(&'a self, file: u32, node: u32, run: impl FnOnce(&Semantic<'_>, Leaf) -> Known<R>) -> Known<R> {
+    fn semantic_query<R>(&'a self, file: u32, node: u32, uncertainty: Uncertainty, run: impl FnOnce(&Semantic<'_>, Leaf) -> Known<R>) -> Known<R> {
         let target = Target::Node(NodeRef { file, node });
         if let Some(question) = self.question() {
             let frame = match question.at.target {
@@ -156,9 +157,16 @@ impl<'a> LintWorld<'a> {
                     .and_then(|names| names.scopes.get(scope.scope as usize)).is_some_and(|scope| scope.node == node) => question.at.target,
                 _ => target,
             };
-            let answer = match question.semantic.leaf(Leaf { target, frame }) {
+            let ask = || match question.semantic.leaf(Leaf { target, frame }) {
                 Known::Yes(at) => run(question.semantic, at),
                 Known::Unknown => Known::Unknown,
+            };
+            let answer = match uncertainty {
+                Uncertainty::Strict => ask(),
+                Uncertainty::Explicit => self.evaluating(
+                    Some(ActiveQuestion { semantic: question.semantic, at: Leaf { target, frame } }),
+                    uncertainty, ask,
+                ),
             };
             return match answer {
                 Known::Yes(answer) => Known::Yes(answer),
@@ -169,14 +177,15 @@ impl<'a> LintWorld<'a> {
         let at = Leaf { target, frame: FrameId::ROOT };
         let answer = self.semantic.run(&files, &self.ctx.grammar.names, |semantic| {
             let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
-            self.asking(semantic, at, || run(semantic, at))
+            let Some(_nested) = semantic.question.budget.nest() else { return Known::Unknown };
+            self.evaluating(Some(ActiveQuestion { semantic, at }), uncertainty, || run(semantic, at))
         });
         if matches!(answer, Known::Unknown) { self.mark_unknown(); }
         answer
     }
 
     pub fn query(&'a self, file: u32, node: u32, subject: &crate::grammar::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
-        let run = || self.semantic_query(file, node, |semantic, at| (query.call)(semantic, at, subject, mask));
+        let run = || self.semantic_query(file, node, Uncertainty::Strict, |semantic, at| (query.call)(semantic, at, subject, mask));
         let answer = match self.ctx.profile {
             Some(profile) => profile.time_semantic_query(query.name, run),
             None => run(),
@@ -185,7 +194,7 @@ impl<'a> LintWorld<'a> {
     }
 
     pub fn query_function(&'a self, file: u32, node: u32, query: &crate::expr::queries::QueryFunction, args: &[Value<'static>]) -> Value<'static> {
-        let run = || self.semantic_query(file, node, |semantic, at| (query.call)(semantic, at, args));
+        let run = || self.semantic_query(file, node, query.uncertainty(), |semantic, at| (query.call)(semantic, at, args));
         let answer = match self.ctx.profile {
             Some(profile) => profile.time_semantic_query(query.name, run),
             None => run(),
@@ -850,7 +859,7 @@ mod tests {
     #[test]
     fn reentrant_queries_in_fresh_frames_share_the_question_depth_bound() {
         fn reenter<'a>(world: &'a LintWorld<'a>, semantic: &Semantic<'_>, at: Leaf, remaining: u32) -> Known<bool> {
-            world.asking(semantic, at, || world.semantic_query(0, 0, |semantic, at| {
+            world.asking(semantic, at, || world.semantic_query(0, 0, Uncertainty::Strict, |semantic, at| {
                 if remaining == 0 { return Known::Yes(true) }
                 let frame = semantic.question.bind(at.frame, NodeRef::here(0), None, None);
                 reenter(world, semantic, Leaf { frame, ..at }, remaining - 1)
@@ -1024,13 +1033,13 @@ mod tests {
             let viewed = linter.grammar.names.vocabulary.trait_bit("viewed");
             assert!(!files.0.query(file, node, &crate::grammar::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed));
             assert_eq!(files.0.asking(&semantic, scoped, || Known::Yes(files.0.query(file, node, &crate::grammar::names::Value::Path(vec![]), crate::expr::queries::query(crate::config::ast::Quantifier::Could), viewed))), Known::Yes(true));
-            assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, node, |_, nested| Known::Yes(nested))), Known::Yes(scoped));
+            assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, node, Uncertainty::Strict, |_, nested| Known::Yes(nested))), Known::Yes(scoped));
             let other = tree.root;
-            assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, other, |_, nested| Known::Yes(nested))), Known::Yes(Leaf { target: Target::Node(NodeRef { file, node: other }), frame }));
-            assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(0, 0, |_, nested| Known::Yes(nested.frame))), Known::Yes(FrameId::ROOT));
+            assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(file, other, Uncertainty::Strict, |_, nested| Known::Yes(nested))), Known::Yes(Leaf { target: Target::Node(NodeRef { file, node: other }), frame }));
+            assert_eq!(files.0.asking(&semantic, scoped, || files.0.semantic_query(0, 0, Uncertainty::Strict, |_, nested| Known::Yes(nested.frame))), Known::Yes(FrameId::ROOT));
             let nodeless = Leaf { target: Target::Traits(0), frame };
             assert_eq!(files.condition(nodeless, 0, &semantic), Known::Unknown);
-            assert_eq!(files.0.asking(&semantic, nodeless, || files.0.semantic_query(file, node, |_, nested| Known::Yes(nested.frame))), Known::Yes(FrameId::ROOT));
+            assert_eq!(files.0.asking(&semantic, nodeless, || files.0.semantic_query(file, node, Uncertainty::Strict, |_, nested| Known::Yes(nested.frame))), Known::Yes(FrameId::ROOT));
             assert_eq!(World::text(&files, 0), Some("()"));
         });
         reads::drop_buffer(path);

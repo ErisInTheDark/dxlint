@@ -63,9 +63,9 @@ fn project(semantic: &Semantic<'_>, value: NodeValue) -> Known<Value<'static>> {
             if semantic.question.budget.exhausted() { return Known::Unknown }
             let (carrier, carrier_known) = match values.carrier(leaf) {
                 Known::Yes(Some(carrier)) => {
-                    let arguments = carrier.arguments.into_iter()
-                        .map(|value| project(semantic, value).known().unwrap_or(Value::Null))
-                        .collect();
+                    let Some(arguments) = carrier.arguments.into_iter()
+                        .map(|value| project(semantic, value).known())
+                        .collect::<Option<Vec<_>>>() else { return Known::Unknown };
                     (Value::record(vec![
                         ("file".into(), Value::Num(f64::from(carrier.declaration.file))),
                         ("node".into(), Value::Num(f64::from(carrier.declaration.node))),
@@ -466,6 +466,68 @@ mod tests {
             }
         "#);
         assert_eq!(lint(&linter, "pa").len(), 1);
+    }
+
+    #[test]
+    fn known_parameter_traits_survive_unrelated_recursive_uncertainty_on_first_query() {
+        let linter = linter(r#"
+            match parameter /a/ {
+                fits callable
+                fits incidental when parent always checked
+            }
+            in .t match producer "p" parameter:parameter {
+                fits callable
+                signature parameter returns it
+                let parameters call_parameters(node)
+                fits checked when any(parameters, arm => any(arm, header =>
+                    header.parameters_known && any(header.parameters, parameter =>
+                        any(parameter, parts => any(parts, part => contains(part.traits, "callable"))))))
+                let missing if node could checked then null else { name: "missing" }
+                rule missing warn missing.name { when missing != null }
+                rule checked warn "checked" { when node always checked }
+            }
+        "#);
+        let reports = lint(&linter, "pa");
+        assert_eq!(reports.len(), 1, "{reports:#?}");
+        assert_eq!(reports[0].rule, "checked");
+    }
+
+    #[test]
+    fn known_constituents_survive_uncertain_traits_without_inventing_negative_proofs() {
+        let linter = linter(r#"
+            match known /a/ {
+                fits good
+                fits incidental when node always incidental
+            }
+            in .t match producer "p" parameter:known {
+                fits checked when any(value_constituents(parameter.node), arm =>
+                    any(arm, part => contains(part.traits, "good")
+                        && contains(part.uncertain_traits, "incidental")))
+                fits invented when !(parameter.node could incidental)
+                rule checked warn "checked" { when node always checked }
+                rule invented warn "invented" { when node always invented }
+            }
+        "#);
+        let reports = lint(&linter, "pa");
+        assert_eq!(reports.len(), 1, "{reports:#?}");
+        assert_eq!(reports[0].rule, "checked");
+    }
+
+    #[test]
+    fn unreadable_carrier_arguments_cannot_be_known_signature_parameters() {
+        let linter = linter(r#"
+            match unreadable /u/ { unwraps unknown }
+            match container "c" argument:unreadable { carries argument using it as {} }
+            in .t match producer "p" parameter:container {
+                fits callable
+                signature parameter returns it
+                rule unknown warn "unknown" {
+                    when any(call_parameters(node), arm => any(arm, header =>
+                        !header.parameters_known && header.parameters == null))
+                }
+            }
+        "#);
+        assert_eq!(lint(&linter, "pcu").len(), 1);
     }
 
     #[test]
