@@ -424,7 +424,8 @@ in ts_object {
 }
 in ts_interface, ts_type_literal, ts_class {
   let ts_value_then_shape {
-    value if value_has_member(node, "then", null) == false then { known: true, thenable: false }
+    value if ts_value_closed_type_members(member.nodes) && value_has_member(node, "then", null) == false
+      then { known: true, thenable: false }
       else {
         value signatures: member_call_parameters(node, "then")
         value ts_value_then_headers(signatures)
@@ -480,7 +481,6 @@ in ts_class {
   members statics
   fits constructible, object, truthy in statics
   fits structural, object, truthy in members
-  unwraps scope members from it for type
   unwraps scope statics from it
   member statics "prototype" unwraps scope members from it
   when ts_value_closed_type_members(member.nodes) { members members closed }
