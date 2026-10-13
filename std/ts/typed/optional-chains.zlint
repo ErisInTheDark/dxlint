@@ -59,7 +59,8 @@ fn optional_operand(n, op) = if n is ts_binary then optional_binary_operand(n, o
   else {node: n, subject: unparenthesised_node(n), kind: "plain", matches: op == "&&", terminal: false}
 fn optional_falsy_literal(n) = {
   value arms: value_constituents(n)
-  value any(arms, arm => any(arm, part => part.identity.kind == "value")
+  value any(arms, arm => any(arm, part => part.identity.kind == "value"
+      || contains(part.traits, "boolean"))
     && any(arm, part => contains(part.traits, "falsy")
       && any(part.traits, trait => contains(["boolean", "number", "string", "bigint"], trait))))
 }
