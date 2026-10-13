@@ -241,9 +241,9 @@ impl<'a, 'world> Run<'a, 'world> {
                 self.answers.push(Answer { exists: true, value });
             }
             Value::Excludes { traits, from: Some(from) } => {
-                let value = self.values.evaluate(at, from);
-                let value = self.excludes(value, *traits);
-                self.answers.push(Answer { exists: true, value });
+                let mut answer = Run { values: self.values, tasks: vec![Task::Expression(at, from)], answers: Vec::new() }.run_answer();
+                if answer.exists { answer.value = self.excludes(answer.value, *traits) }
+                self.answers.push(answer);
             }
             Value::Text(_) | Value::From(..) | Value::Not(_) | Value::Excludes { from: None, .. }
                 | Value::Includes { .. } | Value::Has { .. } | Value::Ordinal(_) => self.answers.push(Answer::unknown()),

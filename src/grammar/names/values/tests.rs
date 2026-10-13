@@ -1149,6 +1149,26 @@ fn raw_sites_fallback_distinguishes_missing_paths_from_unknown_and_empty_spreads
 }
 
 #[test]
+fn excluding_traits_preserves_absence_without_hiding_failed_or_empty_values() {
+    let mut world = TestWorld::new();
+    world.attributes = vec![Known::Unknown];
+    let tables = tables();
+    for (source, expected, fallback) in [
+        (Value::Path(vec![8]), Known::Yes(None), NodeValue::leaf(leaf(1))),
+        (Value::Path(vec![super::super::ATTR_STEP]), Known::Unknown, NodeValue::Unknown),
+        (Value::Spread { intersection: false, path: vec![8], value: None }, Known::Yes(Some(NodeValue::never())), NodeValue::never()),
+        (Value::Current, Known::Yes(Some(NodeValue::never())), NodeValue::never()),
+    ] {
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let expression = Value::Excludes { traits: 1, from: Some(Box::new(source)) };
+        assert_eq!(semantic.values().evaluate_optional(leaf(0), &expression), expected);
+        let expression = Value::Either(Box::new(expression), Box::new(Value::Captured(Box::new(NodeValue::leaf(leaf(1))))));
+        assert_eq!(semantic.values().evaluate(leaf(0), &expression), fallback);
+    }
+}
+
+#[test]
 fn value_refinement_respects_the_shared_engine_nesting_limit() {
     let world = TestWorld::new();
     let tables = tables();
