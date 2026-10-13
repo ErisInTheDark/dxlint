@@ -7,7 +7,8 @@ define {
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
     let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
     generics type_parameter
-    when !contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
+    when !contains([] node.modifier, "async") && !contains([] node.modifier, "*")
+      && !(node is ts_method && node.calls_constructor && count(node.parent.type_parameter) == 0) {
       signature calls_parameters receiver calls_receivers returns return_type ?? calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable)
     }
     when contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
@@ -31,6 +32,9 @@ define {
     )
     fits callable when kind != "get" && kind != "set" && !calls_constructor
     fits constructible when calls_constructor
+    when calls_constructor && count(parent.type_parameter) == 0 {
+      signature calls_parameters receiver calls_receivers returns scope members from parent
+    }
     variance parameters bivariant
   }
   in ts_method_signature {
@@ -46,7 +50,10 @@ define {
   }
   in ts_class {
     let calls_constructor_headers filter(member.nodes, h => h is ts_method && h.calls_constructor)
-    signatures calls_constructor_headers
+    when count(calls_constructor_headers) > 0 { signatures calls_constructor_headers }
+    when count(calls_constructor_headers) == 0 && extends == null {
+      signature calls_constructor_headers returns scope members from it
+    }
   }
 
   in ts_parameter {
