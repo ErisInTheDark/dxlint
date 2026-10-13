@@ -534,18 +534,11 @@ impl<'t> NativeFile<'t> {
         params.iter().map(|p| inferred.iter().find(|(n, _)| *n == p.name).map_or(Ty::Unknown, |(_, t)| t.clone().literal_base())).collect()
     }
 
-    /// For a node with type arguments: each type parameter's default and
-    /// what the arguments would infer, printed (`None` where there is none).
-    pub fn type_params(&self, id: u32) -> Option<super::facts::TypeParamFacts> {
+    pub fn type_defaults(&self, id: u32) -> Option<Vec<Option<String>>> {
         let ck = self.ck();
         let print = |t: Ty| (!t.is_unknown()).then(|| ck.print(&t));
-        let (params, env, sig) = self.generic_target(id)?;
-        let defaults = self.defaults(&params, &env).into_iter().map(print).collect();
-        let inferred = match self.syntax.kind(id) {
-            Some(K::Call | K::New) => self.inferred(id, &params, sig.as_deref()).into_iter().map(print).collect(),
-            _ => vec![None; params.len()],
-        };
-        Some((defaults, inferred))
+        let (params, env, _) = self.generic_target(id)?;
+        Some(self.defaults(&params, &env).into_iter().map(print).collect())
     }
 
     /// On the last explicit type argument of a call, `new`, type reference
