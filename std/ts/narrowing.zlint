@@ -1,0 +1,90 @@
+define {
+
+in ts_if, ts_conditional {
+  in consequent propagates test
+  in alternate propagates !test
+}
+in ts_while, ts_for {
+  in body propagates test
+}
+in ts_for { in update propagates test }
+in ts_logical {
+  when operator == "&&" { in right propagates left }
+  when operator == "||" { in right propagates !left }
+  when operator == "??" { in right propagates !excludes nullable from left }
+  when operator == "&&" { unwraps truthy left & right }
+  when operator == "||" { unwraps truthy left | right }
+}
+in ts_assignment {
+  when operator == "&&=" { in right propagates left }
+  when operator == "||=" { in right propagates !left }
+  when operator == "??=" { in right propagates !excludes nullable from left }
+}
+in ts_parenthesized { unwraps truthy expression }
+in ts_non_null { unwraps truthy expression }
+in ts_unary {
+  when operator == "!" { unwraps truthy !argument }
+}
+in ts_identifier, ts_this, ts_member, ts_index {
+  unwraps truthy excludes nullable, falsy
+}
+in ts_conditional {
+  unwraps truthy (test & consequent) | (!test & alternate)
+}
+in ts_type_predicate {
+  resolves value name
+  when modifier == null { unwraps truthy includes type from name }
+}
+in ts_binary {
+  when operator == "===" { unwraps truthy includes right from left }
+  when operator == "===" { unwraps truthy includes left from right }
+  when operator == "!==" { unwraps truthy !includes right from left }
+  when operator == "!==" { unwraps truthy !includes left from right }
+  when operator == "==" && (right.structure_unwrapped is ts_null || right always undefined) {
+    unwraps truthy !excludes nullable from left
+  }
+  when operator == "==" && (left.structure_unwrapped is ts_null || left always undefined) {
+    unwraps truthy !excludes nullable from right
+  }
+  when operator == "!=" && (right.structure_unwrapped is ts_null || right always undefined) {
+    unwraps truthy excludes nullable from left
+  }
+  when operator == "!=" && (left.structure_unwrapped is ts_null || left always undefined) {
+    unwraps truthy excludes nullable from right
+  }
+  when operator == "in" { unwraps truthy has left from right }
+  when operator == "instanceof" {
+    unwraps truthy includes from right at "prototype" from left
+  }
+}
+
+@macro narrowing_typeof(tag, expected) {
+  in ts_binary {
+    when left.structure_unwrapped is ts_unary && left.structure_unwrapped.operator == "typeof" && right.literal_value.value == tag {
+      when operator == "===" || operator == "==" {
+        unwraps truthy includes expected from left.structure_unwrapped.argument
+      }
+      when operator == "!==" || operator == "!=" {
+        unwraps truthy !includes expected from left.structure_unwrapped.argument
+      }
+    }
+    when right.structure_unwrapped is ts_unary && right.structure_unwrapped.operator == "typeof" && left.literal_value.value == tag {
+      when operator == "===" || operator == "==" {
+        unwraps truthy includes expected from right.structure_unwrapped.argument
+      }
+      when operator == "!==" || operator == "!=" {
+        unwraps truthy !includes expected from right.structure_unwrapped.argument
+      }
+    }
+  }
+}
+@narrowing_typeof("string", (trait string, truthy, nonthenable | trait string, falsy, nonthenable))
+@narrowing_typeof("number", (trait number, truthy, nonthenable | trait number, falsy, nonthenable))
+@narrowing_typeof("boolean", (trait boolean, truthy, nonthenable | trait boolean, falsy, nonthenable))
+@narrowing_typeof("bigint", (trait bigint, truthy, nonthenable | trait bigint, falsy, nonthenable))
+@narrowing_typeof("symbol", (trait symbol, truthy, nonthenable))
+@narrowing_typeof("undefined", (trait undefined, nullable, falsy, nonthenable))
+@narrowing_typeof("function", (trait callable, truthy | trait constructible, truthy))
+@narrowing_typeof("object", (trait object, truthy | trait null, nullable, falsy, nonthenable))
+
+}

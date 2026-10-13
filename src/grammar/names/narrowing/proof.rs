@@ -1,5 +1,10 @@
 use super::*;
 
+struct ProofContext<'a> {
+    subject: &'a Place,
+    region: Option<&'a Region<'a>>,
+}
+
 enum Work<'a> {
     Apply { at: Leaf, proof: &'a Value, negative: bool, input: NodeValue },
     Test { at: Leaf, negative: bool, input: NodeValue },
@@ -11,7 +16,14 @@ enum Work<'a> {
 }
 
 impl Narrowing<'_> {
+    #[cfg(test)]
     pub(super) fn apply(&self, at: Leaf, proof: &Value, subject: &Place, base: NodeValue) -> NodeValue {
+        self.apply_in(at, proof, subject, base, None)
+    }
+
+    pub(super) fn apply_in(&self, at: Leaf, proof: &Value, subject: &Place, base: NodeValue, region: Option<&Region<'_>>) -> NodeValue {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return NodeValue::Unknown };
+        let context = ProofContext { subject, region };
         let mut pending = vec![Work::Apply { at, proof, negative: false, input: base }];
         let mut results = Vec::new();
         let values = self.semantic.values();
@@ -35,11 +47,16 @@ impl Narrowing<'_> {
                         };
                         pending.push(Work::Test { at: *site, negative, input });
                     }
-                    Value::Excludes { traits, from } => results.push(self.excludes(at, from.as_deref(), subject, input, *traits, negative)),
-                    Value::Includes { value, from } => results.push(self.includes(at, from.as_deref(), subject, input, value, negative)),
+                    Value::Excludes { traits, from } => results.push(self.excludes(at, from.as_deref(), &context, input, *traits, negative)),
+                    Value::Includes { value, from } => results.push(self.includes(at, from.as_deref(), &context, input, value, negative)),
+                    Value::Has { key, from } => results.push(self.has(at, from.as_deref(), &context, input, key, negative)),
                     _ => results.push(input),
                 },
                 Work::Test { at, negative, input } => {
+                    let Known::Yes(at) = self.semantic.leaf(at) else {
+                        results.push(input);
+                        continue;
+                    };
                     let Target::Node(node) = at.target else {
                         results.push(input);
                         continue;
@@ -65,7 +82,8 @@ impl Narrowing<'_> {
                             Known::Yes(true) => {}
                         }
                         match &item.value {
-                            Some(value) => parts.push(value),
+                            Some(value) if self.relevant_atom(at, value, &context) => parts.push(value),
+                            Some(_) => {}
                             None => opaque = true,
                         }
                     }
@@ -153,19 +171,23 @@ impl Narrowing<'_> {
         for chosen in selection.choices {
             if !self.semantic.question.budget.step() { return Known::Unknown }
             let header = chosen.header;
-            let Target::Node(node) = header.site.target else { return Known::Unknown };
-            let Some(signature) = self.semantic.world.tree(node.file)
-                .and_then(|tree| tree.nodes.get(node.node as usize))
-                .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize))
-                .and_then(|kind| kind.calls.signatures.get(header.signature as usize)) else { return Known::Unknown };
-            let Known::Yes(results) = self.semantic.values().sites(header.site, &signature.item.result) else { return Known::Unknown };
+            let Known::Yes(results) = self.semantic.calls().header_result_sites(header) else { return Known::Unknown };
             if results.is_empty() { return Known::Unknown }
             sites.extend(results);
         }
         if sites.is_empty() { Known::Unknown } else { Known::Yes(Some(sites)) }
     }
 
-    fn projection(&self, at: Leaf, from: Option<&Value>, subject: &Place) -> Known<Vec<Key>> {
+    fn relevant_atom(&self, at: Leaf, mut proof: &Value, context: &ProofContext<'_>) -> bool {
+        while let Value::Not(inner) = proof { proof = inner; }
+        let from = match proof {
+            Value::Excludes { from, .. } | Value::Includes { from, .. } | Value::Has { from, .. } => from.as_deref(),
+            _ => return true,
+        };
+        matches!(self.projection(at, from, context, None), Known::Yes(_))
+    }
+
+    fn projection(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, key: Option<&Key>) -> Known<Vec<Key>> {
         let values = self.semantic.values();
         let site = match from {
             None => at,
@@ -175,9 +197,12 @@ impl Narrowing<'_> {
                 *site
             }
         };
-        let Known::Yes(tested) = self.place(site) else { return Known::Unknown };
-        if tested.root != subject.root || !tested.path.starts_with(&subject.path) { return Known::Unknown }
-        Known::Yes(tested.path[subject.path.len()..].to_vec())
+        let Known::Yes(mut tested) = self.place(site) else { return Known::Unknown };
+        if tested.root != context.subject.root || !tested.path.starts_with(&context.subject.path) { return Known::Unknown }
+        let path = tested.path[context.subject.path.len()..].to_vec();
+        if let Some(key) = key { tested.path.push(key.clone()) }
+        if context.region.is_some_and(|region| region.valid(self, &tested) != Known::Yes(true)) { return Known::Unknown }
+        Known::Yes(path)
     }
 
     fn projected(&self, mut value: NodeValue, path: &[Key]) -> NodeValue {
@@ -188,8 +213,8 @@ impl Narrowing<'_> {
         value
     }
 
-    fn excludes(&self, at: Leaf, from: Option<&Value>, subject: &Place, base: NodeValue, traits: u64, negative: bool) -> NodeValue {
-        let Known::Yes(path) = self.projection(at, from, subject) else { return base };
+    fn excludes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, traits: u64, negative: bool) -> NodeValue {
+        let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
         let values = self.semantic.values();
         let NodeValue::Alternatives(alternatives) = base else { return NodeValue::Unknown };
         let mut kept = Vec::new();
@@ -214,8 +239,8 @@ impl Narrowing<'_> {
         NodeValue::Alternatives(kept)
     }
 
-    fn includes(&self, at: Leaf, from: Option<&Value>, subject: &Place, base: NodeValue, value: &Value, negative: bool) -> NodeValue {
-        let Known::Yes(path) = self.projection(at, from, subject) else { return base };
+    fn includes(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, value: &Value, negative: bool) -> NodeValue {
+        let Known::Yes(path) = self.projection(at, from, context, None) else { return base };
         let expected = self.semantic.values().evaluate(at, value);
         if matches!(expected, NodeValue::Unknown) { return base }
         let NodeValue::Alternatives(alternatives) = base else {
@@ -231,13 +256,43 @@ impl Narrowing<'_> {
             } else if included {
                 kept.push(alternative);
             } else if !self.proven_disjoint(&expected, &actual) {
-                if path.is_empty() && self.semantic.calls().accepts(&actual, &expected) == Known::Yes(true) {
+                if path.is_empty() {
                     let NodeValue::Alternatives(refined) = &expected else { unreachable!() };
-                    kept.extend(refined.iter().cloned());
+                    for refinement in refined {
+                        if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+                        let narrowed = NodeValue::Alternatives(vec![refinement.clone()]);
+                        if self.proven_disjoint(&narrowed, &actual) { continue }
+                        let mut intersection = alternative.clone();
+                        intersection.extend(refinement.iter().copied());
+                        kept.push(intersection);
+                    }
                 } else {
                     kept.push(alternative);
                 }
             }
+            if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
+        }
+        NodeValue::Alternatives(kept)
+    }
+
+    fn has(&self, at: Leaf, from: Option<&Value>, context: &ProofContext<'_>, base: NodeValue, key: &Value, negative: bool) -> NodeValue {
+        let values = self.semantic.values();
+        let Known::Yes(key) = values.key(at, key) else { return base };
+        if !negative && !matches!(key, Key::Text(_)) { return base }
+        let Known::Yes(path) = self.projection(at, from, context, Some(&key)) else { return base };
+        let NodeValue::Alternatives(alternatives) = base else { return NodeValue::Unknown };
+        let mut kept = Vec::new();
+        for alternative in alternatives {
+            if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+            let projected = self.projected(NodeValue::Alternatives(vec![alternative.clone()]), &path);
+            let excluded = match values.members(&projected) {
+                Known::Yes(rows) if negative => !rows.is_empty() && rows.iter().all(|row| row.iter()
+                    .any(|member| member.key == key && member.required == Known::Yes(true))),
+                Known::Yes(rows) => values.closed(&projected) == Known::Yes(true)
+                    && rows.iter().all(|row| row.iter().all(|member| member.key != key)),
+                _ => false,
+            };
+            if !excluded { kept.push(alternative) }
             if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
         }
         NodeValue::Alternatives(kept)

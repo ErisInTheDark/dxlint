@@ -5,11 +5,19 @@ define {
 fn condition_known(d) = d != null && !d.opaque && !any(d.flags, flag => contains(["any", "unknown"], flag))
 fn condition_never(d) = !d.truthy && !d.falsy
 fn condition_base(n) = if n is (ts_member, ts_index) then n.object.node else if n is ts_call then n.callee.node else null
-fn condition_unchecked_index(n) = n is ts_index && contains(n.object.type_domains.flags, "array") && !(contains(n.object.type_domains.flags, "tuple") && unparenthesised_node(n.index.node) is ts_literal)
+fn condition_unchecked_index(n) = if n not ts_index then false else {
+  value shape: ts_value_array_shape(n.object.node)
+  value if !shape.known then null else (shape.array || shape.tuple)
+    && !(shape.tuple && unparenthesised_node(n.index.node) is ts_literal)
+}
 fn condition_array_origin(n) = {
-  value n
-  walk (current) condition_base(current)
-  any (current) current.optional != null && { value current; condition_base; condition_unchecked_index }
+  value candidates: {
+    value n
+    walk (current) condition_base(current)
+    filter (current) current.optional != null
+    map (current) { value current; condition_base; condition_unchecked_index }
+  }
+  value if contains(candidates, true) then true else if contains(candidates, null) then null else false
 }
 fn condition_index_fallback(n, unchecked) = n.access_resolution.from_index && (n is ts_index || unchecked || condition_base(n).evaluated_type_domains.nullish)
 fn condition_access_domains(n) = if n.access_resolution != null then n.access_resolution.evaluated else n.evaluated_type_domains
@@ -45,10 +53,35 @@ fn condition_boolean_leaf(n) = { node: n, subject: {
   filter (current) current is ts_unary && current.operator == "!"
   count
 } % 2 == 1 }
-fn condition_loop_allowed(n, mode) = mode == "always" && n.type_domains.literal.type == "boolean" && n.type_domains.literal.value == true || mode == "only-allowed-literals" && n is ts_literal && (n.literal_value.type == "boolean" || n.literal_value.type == "number" && contains([0, 1], n.literal_value.value))
+fn condition_loop_allowed(n, mode) = if mode == "always" then {
+  value literal: condition_literal(n)
+  value literal.type == "boolean" && literal.value == true
+} else mode == "only-allowed-literals" && n is ts_literal && (n.literal_value.type == "boolean" || n.literal_value.type == "number" && contains([0, 1], n.literal_value.value))
 fn condition_callback(n) = if n is (ts_arrow, ts_function) then if n.body not ts_block then n.body.node else if count(n.body.body.node) == 1 && first(n.body.body.node) is ts_return then first(n.body.body.node).argument.node else null else null
 fn condition_array_method(n) = n.callee is (ts_member, ts_index) && contains(["every", "filter", "find", "findIndex", "findLast", "findLastIndex", "some"], n.callee.static_name)
-fn condition_array_callback(n) = condition_array_method(n) && n.callee.object.array_type
+fn condition_array_callback(n) = condition_array_method(n) && strict_boolean_array(n.callee.object.node)
+fn condition_literal_arm(arm) = {
+  value parts: filter(arm, part => part.identity.kind == "value")
+  value part: first(parts)
+  value kind: if contains(part.traits, "null") then "null"
+    else if contains(part.traits, "undefined") then "undefined"
+    else if contains(part.traits, "boolean") then "boolean"
+    else if contains(part.traits, "number") then "number"
+    else if contains(part.traits, "string") then "string"
+    else if contains(part.traits, "bigint") then "bigint" else null
+  value if kind == null || !all(parts, other => other.identity == part.identity) then null else {
+    type: kind,
+    value: if kind == "bigint" then part.identity.value.value "n"
+      else if kind == "undefined" then "undefined" else part.identity.value
+  }
+}
+fn condition_literal(n) = {
+  value arms: value_constituents(n)
+  value literals: map(arms, arm => condition_literal_arm(arm))
+  value first_literal: first(literals)
+  value if arms != null && count(arms) > 0 && first_literal != null && all(literals, literal => literal == first_literal)
+    then first_literal else null
+}
 fn condition_equal(left, right, strict) = if left.type == right.type then contains(["null", "undefined"], left.type) || js_compare(left, right) == 0 else if strict then false else if contains(["null", "undefined"], left.type) || contains(["null", "undefined"], right.type) then contains(["null", "undefined"], left.type) && contains(["null", "undefined"], right.type) else js_compare(left, right) == 0
 fn condition_compare(left, right, op) = if contains(["==", "==="], op) then condition_equal(left, right, op == "===") else if contains(["!=", "!=="], op) then !condition_equal(left, right, op == "!==") else if op == "<" then js_compare(left, right) == -1 else if op == ">" then js_compare(left, right) == 1 else if op == "<=" then js_compare(left, right) != null && js_compare(left, right) <= 0 else js_compare(left, right) != null && js_compare(left, right) >= 0
 fn condition_comparable_nullish(value, other, loose) = !contains(["null", "undefined"], value.literal.type) || !condition_known(other.type_domains) || {
@@ -61,11 +94,14 @@ in ts_case let condition_comparison { left: parent.discriminant.node, right: tes
 
 @macro condition_boolean_policy {
   when checked.node != null && (checked.subject not ts_logical || checked.subject.operator == "??")
-  let domain checked.subject.type_domains
-  when condition_known(domain) && !condition_unchecked_index(checked.subject) && !(compiler_options.noUncheckedIndexedAccess == true && checked.subject.access_resolution.from_index)
-  when condition_never(domain) || !domain.truthy || !domain.falsy
+  let values value_constituents(checked.subject)
+  let never_value values != null && count(values) == 0
+  let certainly_truthy checked.subject always truthy
+  let certainly_falsy checked.subject always falsy
+  when condition_unchecked_index(checked.subject) == false && !(compiler_options.noUncheckedIndexedAccess == true && checked.subject.access_resolution.from_index)
+  when never_value || certainly_truthy || certainly_falsy
   report at { start: checked.node.offset, end: checked.node.end_offset }
-  warn if condition_never(domain) then "Unnecessary conditional, value is `never`." else if !domain.truthy != checked.negated then "Unnecessary conditional, value is always falsy." else "Unnecessary conditional, value is always truthy."
+  warn if never_value then "Unnecessary conditional, value is `never`." else if certainly_falsy != checked.negated then "Unnecessary conditional, value is always falsy." else "Unnecessary conditional, value is always truthy."
 }
 
 in ts_if.test, ts_conditional.test rule no-unnecessary-condition {
@@ -88,7 +124,7 @@ in ts_logical, ts_assignment rule no-unnecessary-condition:nullish {
   let subject unparenthesised_node(left.node)
   let domain subject.type_domains
   when condition_known(domain)
-  when condition_never(domain) || !domain.non_nullish && !subject.type_has_void || !domain.nullish && !condition_unchecked_index(subject) && !condition_array_origin(subject) && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true) && !subject.access_resolution.optional
+  when condition_never(domain) || !domain.non_nullish && !subject.type_has_void || !domain.nullish && condition_unchecked_index(subject) == false && condition_array_origin(subject) == false && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true) && !subject.access_resolution.optional
   report at { start: subject.offset, end: subject.end_offset }
   warn if condition_never(domain) then "Unnecessary conditional, value is `never`." else if !domain.non_nullish then "Unnecessary conditional, left-hand side of `??` operator is always `null` or `undefined`." else "Unnecessary conditional, expected left-hand side of `??` operator to be possibly null or undefined."
 }
@@ -96,7 +132,7 @@ in ts_member, ts_index, ts_call rule no-unnecessary-condition:optional {
   when optional != null
   let subject condition_base(node)
   let domain condition_access_domains(subject)
-  when condition_known(domain) && !domain.nullish && !condition_unchecked_index(subject) && (!condition_array_origin(node) || compiler_options.noUncheckedIndexedAccess == true) && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true)
+  when condition_known(domain) && !domain.nullish && condition_unchecked_index(subject) == false && (condition_array_origin(node) == false || compiler_options.noUncheckedIndexedAccess == true) && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true)
   report at { start: optional.offset, end: optional.end_offset }
   warn "Unnecessary optional chain on a non-nullish value."
 }
@@ -149,8 +185,8 @@ in ts_program rule no-unnecessary-condition:strict {
 in ts_binary, ts_case rule no-unnecessary-condition:comparison {
   let comparison condition_comparison
   when comparison.right != null && contains(["==", "===", "!=", "!==", "<", ">", "<=", ">="], comparison.operator)
-  let left_value comparison.left.type_domains.literal
-  let right_value comparison.right.type_domains.literal
+  let left_value condition_literal(comparison.left)
+  let right_value condition_literal(comparison.right)
   when left_value != null && right_value != null
   let answer condition_compare(left_value, right_value, comparison.operator)
   report at { start: comparison.report.offset, end: comparison.report.end_offset }
@@ -187,7 +223,6 @@ in ts_binary, ts_case rule no-unnecessary-condition:overlap {
 
 fn strict_boolean_parts(d) = if d.kind == "union" then { value d.parts; fold ([]) (parts, part) parts strict_boolean_parts(part) } else [d]
 fn strict_boolean_resolved(d) = !contains(["unresolved", "recursive"], d.kind) && all(d.parts, part => strict_boolean_resolved(part))
-fn strict_boolean_returns(returns) = { value returns; fold ([]) (parts, result) parts strict_boolean_parts(result); unique }
 fn strict_boolean_primitive(d) =
   if d.kind == "intersection" then if any(d.parts, part => part.kind == "boolean") then "boolean" else "object"
   else if contains(d.flags, "enum") then if contains(d.flags, "string") then "string" else "number"
@@ -252,27 +287,67 @@ fn strict_boolean_use(n) = {
   walk (current) if current.parent is ts_parenthesized || current.parent is ts_logical && current.parent.operator != "??" && current.parent.right.node == current then current.parent else null
   any (current) current.parent is (ts_if, ts_while, ts_do_while, ts_for, ts_conditional) && current.parent.test.node == current || current.parent is ts_unary && current.parent.operator == "!" || current.parent is ts_logical && current.parent.operator != "??" && current.parent.left.node == current || strict_boolean_asserted(current)
 }
-fn strict_boolean_array(t) = contains(["array", "tuple"], t.kind) || contains(["union", "intersection"], t.kind) && any(t.parts, part => strict_boolean_array(part))
+fn strict_boolean_array(n) = {
+  value shape: ts_value_array_shape(n)
+  value shape.known && (shape.array || shape.tuple)
+}
+fn strict_boolean_value_has(arm, trait) = any(arm, part => contains(part.traits, trait))
+fn strict_boolean_value_primitive(arm) =
+  if strict_boolean_value_has(arm, "intersection") then if strict_boolean_value_has(arm, "boolean") then "boolean" else "object"
+  else if strict_boolean_value_has(arm, "any") || strict_boolean_value_has(arm, "unknown") || strict_boolean_value_has(arm, "parameter") then "any"
+  else if strict_boolean_value_has(arm, "null") || strict_boolean_value_has(arm, "undefined") then "nullish"
+  else if strict_boolean_value_has(arm, "boolean") then "boolean"
+  else if strict_boolean_value_has(arm, "string") then "string"
+  else if strict_boolean_value_has(arm, "number") || strict_boolean_value_has(arm, "bigint") then "number"
+  else "object"
+fn strict_boolean_value_complete(arms) = arms != null && all(arms, arm =>
+  any(arm, part => any(part.traits, trait => contains(["any", "unknown", "parameter", "intersection", "null", "undefined", "boolean", "string", "number", "bigint", "object", "symbol", "callable", "constructible", "structural"], trait))))
+fn strict_boolean_value_group(arms, primitive) = filter(arms, arm => strict_boolean_value_primitive(arm) == primitive)
+fn strict_boolean_value_variant(arms, primitive) = {
+  value group: strict_boolean_value_group(arms, primitive)
+  value if count(group) == 0 then null
+    else if contains(["boolean", "string", "number"], primitive) && all(group, arm => strict_boolean_value_has(arm, "truthy"))
+      then "truthy " primitive else primitive
+}
+fn strict_boolean_value_variants(arms) = if !strict_boolean_value_complete(arms) then null
+  else if count(arms) == 0 then ["never"] else {
+    value ["nullish", "boolean", "string", "number", "object", "any"]
+    map (primitive) strict_boolean_value_variant(arms, primitive)
+    filter (variant) variant != null
+  }
+fn strict_boolean_native_metadata(n) = contains(n.type_flags, "enum")
+fn strict_boolean_native_variants(n) = {
+  value parts: { value n.type_domains; strict_boolean_parts; unique }
+  value if all(parts, part => strict_boolean_resolved(part)) then strict_boolean_variants(parts) else null
+}
+fn strict_boolean_callback_variants(n) = {
+  value signatures: call_results(n)
+  value headers: { value signatures; flat_map (arm) arm }
+  value parts: if signatures != null && count(headers) > 0 && all(headers, header => header.result_known)
+    then { value headers; flat_map (header) header.result } else null
+  value strict_boolean_value_variants(parts)
+}
 
 in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test, ts_unary.argument, ts_logical.left, ts_logical.right, ts_call.argument rule strict-boolean-expressions {
   @strict_boolean_options
   let subject unparenthesised_node(node)
   when strict_boolean_use(subject) && (subject not ts_logical || subject.operator == "??")
-  let parts { value subject.type_domains; strict_boolean_parts; unique }
-  when all(parts, part => strict_boolean_resolved(part))
-  let failure { value parts; strict_boolean_variants; strict_boolean_report strict_boolean_settings }
+  let variants if strict_boolean_native_metadata(subject) then strict_boolean_native_variants(subject)
+    else { value subject; value_constituents; strict_boolean_value_variants }
+  when variants != null
+  let failure strict_boolean_report(variants, strict_boolean_settings)
   when failure != null
   report at { start: subject.offset, end: subject.end_offset }
   warn strict_boolean_message(failure, "conditional")
 }
 in ts_call rule strict-boolean-expressions:callback {
   @strict_boolean_options
-  when condition_array_method(node) && strict_boolean_array(callee.object.type_domains) && count(argument.nodes) > 0
+  when condition_array_method(node) && strict_boolean_array(callee.object.node) && count(argument.nodes) > 0
   let subject { value argument.nodes; first; unparenthesised_node }
   let asynchronous subject is (ts_arrow, ts_function) && contains(subject.modifier, "async")
-  let parts strict_boolean_returns(subject.callable_return_domains)
-  when asynchronous || count(parts) > 0 && all(parts, part => strict_boolean_resolved(part))
-  let failure if asynchronous then "async" else { value parts; strict_boolean_variants; strict_boolean_report strict_boolean_settings }
+  let variants strict_boolean_callback_variants(subject)
+  when asynchronous || variants != null
+  let failure if asynchronous then "async" else strict_boolean_report(variants, strict_boolean_settings)
   when failure != null
   report at { start: subject.offset, end: subject.end_offset }
   warn if asynchronous then "Predicate function should not be 'async'; expected a boolean return type." else strict_boolean_message(failure, "array predicate return type")

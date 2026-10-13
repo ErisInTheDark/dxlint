@@ -1,0 +1,41 @@
+import .ts
+
+fn guard_union(arms, traits) = arms != null && count(arms) > 0
+  && all(traits, trait => any(arms, arm => any(arm, part => contains(part.traits, trait))))
+  && all(arms, arm => any(arm, part => any(traits, trait => contains(part.traits, trait))))
+fn guard_literal(arms, literal) = arms != null && count(arms) > 0
+  && all(arms, arm => any(arm, part => part.identity.kind == "value" && part.identity.value == literal))
+
+in ts_call rule guard-contract {
+  when callee.text == "probe"
+  let subject first(argument.nodes)
+  let expected { value argument.nodes; slice 1 2; first }
+  let arms value_constituents(subject)
+  let matches if expected.text == '"unknown"' then arms == null
+      || any(arms, arm => any(arm, part => contains(part.traits, "unknown") || contains(part.traits, "parameter")))
+    else arms != null && count(arms) > 0 && (
+      if expected.text == '"string"' then subject always string
+      else if expected.text == '"number"' then subject always number
+      else if expected.text == '"boolean"' then subject always boolean
+      else if expected.text == '"bigint"' then subject always bigint
+      else if expected.text == '"symbol"' then subject always symbol
+      else if expected.text == '"null"' then subject always null
+      else if expected.text == '"undefined"' then subject always undefined
+      else if expected.text == '"object"' then subject always object
+      else if expected.text == '"function"' then subject could callable || subject could constructible
+      else if expected.text == '"array"' then subject.member 0 always string
+      else if expected.text == '"one"' then guard_literal(arms, 1)
+      else if expected.text == '"ready"' then guard_literal(arms, "ready")
+      else if expected.text == '"true"' then subject always boolean && subject always truthy
+      else if expected.text == '"false"' then subject always boolean && subject always falsy
+      else if expected.text == '"string-null"' then guard_union(arms, ["string", "null"])
+      else if expected.text == '"string-undefined"' then guard_union(arms, ["string", "undefined"])
+      else if expected.text == '"null-undefined"' then guard_union(arms, ["null", "undefined"])
+      else if expected.text == '"string-null-undefined"' then guard_union(arms, ["string", "null", "undefined"])
+      else if expected.text == '"string-number"' then guard_union(arms, ["string", "number"])
+      else if expected.text == '"object-null"' then guard_union(arms, ["object", "null"])
+      else false)
+  when !matches
+  report at subject
+  warn "guard did not preserve {expected.text}"
+}

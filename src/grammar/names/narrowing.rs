@@ -15,15 +15,41 @@ pub struct Narrowing<'a> {
 
 impl Narrowing<'_> {
     pub fn refine(&self, at: Leaf, base: NodeValue) -> NodeValue {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return NodeValue::Unknown };
         let refined = self.refine_graph(at, base);
         if self.semantic.question.budget.exhausted() { NodeValue::Unknown } else { refined }
     }
 
     fn refine_graph(&self, at: Leaf, mut base: NodeValue) -> NodeValue {
         let Known::Yes(subject) = self.place(at) else { return base };
-        let Target::Node(node) = at.target else { return base };
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
+        let mut contexts = vec![(entry, at)];
+        if subject.path.is_empty() && effects.unwritten(subject.root, &|target| {
+            match self.place(target) {
+                Known::Yes(written) => Known::Yes(written.root == subject.root && written.path.is_empty()),
+                Known::Unknown => Known::Unknown,
+            }
+        }) == Known::Yes(true) {
+            let mut cursor = entry;
+            loop {
+                if !self.semantic.question.budget.step() { return NodeValue::Unknown }
+                let Known::Yes(Some(creation)) = effects.enclosing(cursor) else { break };
+                contexts.push((creation.entry, creation.site));
+                cursor = creation.entry;
+            }
+        }
+        for (context_entry, site) in contexts.into_iter().rev() {
+            base = self.refine_in(&subject, context_entry, site, base, context_entry != entry);
+            if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
+        }
+        base
+    }
+
+    fn refine_in(&self, subject: &Place, entry: Leaf, at: Leaf, mut base: NodeValue, captured: bool) -> NodeValue {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return base };
+        let Target::Node(node) = at.target else { return base };
+        let effects = self.semantic.effects();
         let Known::Yes(execution) = effects.execution(entry) else { return base };
         let mut uses = Vec::new();
         for site in execution.sites(node, Phase::Enter) {
@@ -34,33 +60,30 @@ impl Narrowing<'_> {
             }
         }
         if uses.is_empty() { return base }
-        let writes = |event: &Event| {
-            if event.kind != EventKind::Write || event.phase != Phase::Leave { return false }
-            let Some(target) = event.target else { return true };
-            let at = Leaf { target: Target::Node(target.value), frame: entry.frame };
-            match self.place(at) {
-                Known::Yes(written) => written.invalidates(&subject),
-                Known::Unknown => true,
-            }
-        };
+        if !captured {
+            base = self.assigned(subject, &execution, &uses, entry.frame, base);
+        }
         let mut owners = crate::fx_hash::FxHashSet::default();
         for (_, step) in execution.steps() {
             if !self.semantic.question.budget.step() { return NodeValue::Unknown }
             if !matches!(step.point, Point::Enter) { continue }
-            let Some(kind) = self.semantic.world.tree(step.node.file)
-                .and_then(|tree| tree.nodes.get(step.node.node as usize))
-                .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize)) else { continue };
-            if kind.propagates.is_empty() || !owners.insert(step.node) { continue }
             let owner = Leaf { target: Target::Node(step.node), frame: entry.frame };
+            let Known::Yes(owner) = self.semantic.leaf(owner) else { continue };
+            let Target::Node(node) = owner.target else { continue };
+            let Some(kind) = self.semantic.world.tree(node.file)
+                .and_then(|tree| tree.nodes.get(node.node as usize))
+                .and_then(|data| self.semantic.tables.kinds.get(data.matcher as usize)) else { continue };
+            if kind.propagates.is_empty() || !owners.insert(node) { continue }
             for (path, proof, when) in &kind.propagates {
                 if !self.semantic.question.budget.step() { return NodeValue::Unknown }
                 if when.is_some_and(|condition| self.semantic.world.condition(owner, condition, self.semantic) != Known::Yes(true)) {
                     continue;
                 }
-                let entries = execution.field_entries(step.node, path);
+                let entries = execution.field_entries(node, path);
                 if entries.is_empty() { continue }
-                if uses.iter().all(|&site| guarded(&execution, entries, site, writes, self.semantic.question) == Known::Yes(true)) {
-                    base = self.apply(owner, proof, &subject, base);
+                if uses.iter().all(|&site| execution.reaches(execution.entry(), site, entries, &self.semantic.question.budget) == Known::Yes(false)) {
+                    let region = Region { execution: &execution, entries, uses: &uses, frame: entry.frame, captured };
+                    base = self.apply_in(owner, proof, subject, base, Some(&region));
                 }
                 if self.semantic.question.budget.exhausted() { return NodeValue::Unknown }
             }
@@ -68,11 +91,48 @@ impl Narrowing<'_> {
         base
     }
 
+    fn assigned(&self, subject: &Place, execution: &Execution, uses: &[StepId], frame: super::question::FrameId, base: NodeValue) -> NodeValue {
+        let budget = &self.semantic.question.budget;
+        let mut candidates = Vec::new();
+        for (id, step) in execution.steps() {
+            if !budget.step() { return NodeValue::Unknown }
+            let Some(event) = step.event() else { continue };
+            if self.write_invalidates(event, subject, frame) { candidates.push(id) }
+        }
+        let Known::Yes(Some(last)) = execution.last_steps(uses, &candidates, budget) else { return base };
+        let values = self.semantic.values();
+        let mut alternatives = Vec::new();
+        for id in last {
+            if !budget.step() { return NodeValue::Unknown }
+            let Some(event) = execution.step(id).and_then(|step| step.event()) else { return base };
+            let Some(target) = event.target else { return base };
+            let at = Leaf { target: Target::Node(target.value), frame };
+            if self.place(at) != Known::Yes(subject.clone()) { return base }
+            let Some(written) = &event.written else { return base };
+            let written = values.evaluate(written.owner, &written.recipe);
+            let NodeValue::Alternatives(rows) = values.reduce(&base, &written) else { return base };
+            alternatives.extend(rows);
+        }
+        NodeValue::Alternatives(alternatives)
+    }
+
+    fn write_invalidates(&self, event: &Event, tested: &Place, frame: super::question::FrameId) -> bool {
+        if event.kind != EventKind::Write || event.phase != Phase::Leave { return false }
+        let Some(target) = event.target else { return true };
+        let at = Leaf { target: Target::Node(target.value), frame };
+        match self.place(at) {
+            Known::Yes(written) => written.invalidates(tested),
+            Known::Unknown => true,
+        }
+    }
+
     fn place(&self, mut at: Leaf) -> Known<Place> {
         let values = self.semantic.values();
         let mut path = Vec::new();
         loop {
             if !self.semantic.question.budget.step() { return Known::Unknown }
+            let Known::Yes(normalized) = self.semantic.leaf(at) else { return Known::Unknown };
+            at = normalized;
             let Target::Node(node) = at.target else { return Known::Unknown };
             let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
             if let Some(&declaration) = names.merged.get(&node.node).or_else(|| names.declaration.get(&node.node)) {
@@ -125,6 +185,37 @@ impl Narrowing<'_> {
     }
 }
 
+struct Region<'a> {
+    execution: &'a Execution,
+    entries: &'a [StepId],
+    uses: &'a [StepId],
+    frame: super::question::FrameId,
+    captured: bool,
+}
+
+impl Region<'_> {
+    fn valid(&self, narrowing: &Narrowing<'_>, tested: &Place) -> Known<bool> {
+        if self.captured && !tested.path.is_empty() { return Known::Yes(false) }
+        let writes = |event: &Event| narrowing.write_invalidates(event, tested, self.frame);
+        let budget = &narrowing.semantic.question.budget;
+        for &entry in self.entries {
+            match self.execution.reaches(self.execution.entry(), entry, &[], budget) {
+                Known::Yes(false) => continue,
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(true) => {}
+            }
+            for &site in self.uses {
+                match self.execution.reaches_through(entry, site, self.entries, &writes, budget) {
+                    Known::Yes(true) => return Known::Yes(false),
+                    Known::Unknown => return Known::Unknown,
+                    Known::Yes(false) => {}
+                }
+            }
+        }
+        Known::Yes(true)
+    }
+}
+
 /// A narrowed place: a root binding and the member path below it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Place {
@@ -135,7 +226,8 @@ struct Place {
 impl Place {
     /// Whether writing `self` makes a guard on `guarded` stale.
     fn invalidates(&self, guarded: &Place) -> bool {
-        self.root == guarded.root && guarded.path.starts_with(&self.path)
+        self.root == guarded.root && self.path.len() <= guarded.path.len()
+            && self.path.iter().zip(&guarded.path).all(|(written, tested)| written.may_alias(tested))
     }
 }
 

@@ -57,9 +57,12 @@ fn optional_binary_operand(n, op) = {
 fn optional_operand(n, op) = if n is ts_binary then optional_binary_operand(n, op)
   else if n is ts_unary && n.operator == "!" then {node: n, subject: unparenthesised_node(n.argument.node), kind: "not", matches: op == "||", terminal: false}
   else {node: n, subject: unparenthesised_node(n), kind: "plain", matches: op == "&&", terminal: false}
-fn optional_falsy_literal(n) = { value n.type_literal_values; any (literal)
-  literal.type == "boolean" && literal.value == false || literal.type == "number" && literal.value == 0
-  || literal.type == "string" && literal.value == "" || literal.type == "bigint" && re_test(literal.value, /^-?0(?:[xXbBoO]0+|0*)n$/) }
+fn optional_falsy_literal(n) = {
+  value arms: value_constituents(n)
+  value any(arms, arm => any(arm, part => part.identity.kind == "value")
+    && any(arm, part => contains(part.traits, "falsy")
+      && any(part.traits, trait => contains(["boolean", "number", "string", "bigint"], trait))))
+}
 fn optional_type_allowed(n, opts) = !n.type_has_void && { value n.type_flags.nonempty ?? ["unknown"]; all (flag)
   !contains(["any", "unknown", "string", "number", "boolean", "bigint"], flag) || get(opts, flag) }
 fn optional_uncertain(n, flag) = { value n.type_flags.nonempty ?? ["unknown"]; any (part) contains([flag, "any", "unknown"], part) }
@@ -67,7 +70,7 @@ fn optional_span(items, opts) = {
   value head: first(items).subject
   value tail: last(items).subject
   value if len(items) > 1 && !optional_same(head, tail)
-    && (!opts.requireNullish || { value items; slice 0 -1; any (item) contains(item.subject.type_flags, "nullable") }) then {
+    && (!opts.requireNullish || { value items; slice 0 -1; any (item) item.subject could nullable }) then {
     start: if { value prefix: first(items).node.offset - opts.boundary.offset; value opts.boundary; byte_slice 0 prefix; re_test /^(?:\s|\(|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*$/ }
       then opts.boundary.offset else first(items).node.offset,
     end: last(items).end + { value suffix: last(items).end - opts.boundary.offset; value opts.boundary; byte_slice suffix;
@@ -240,7 +243,7 @@ in ts_logical rule prefer-optional-chain:empty-object {
   when contains(["||", "??"], operator) && unparenthesised_node(right.node) is ts_object && { value unparenthesised_node(right.node).property.nodes; count } == 0
   let enclosing { value node; walk (n) if n.parent is ts_parenthesized then n.parent.node else null; last }
   when enclosing.parent is (ts_member, ts_index) && enclosing.parent.optional == null
-  when !requireNullish || contains(left.type_flags, "nullable")
+  when !requireNullish || left could nullable
   report at enclosing.parent
   warn "Prefer using an optional chain expression instead, as it's more concise and easier to read."
 }

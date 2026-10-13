@@ -18,6 +18,7 @@ fn write(node: u32, binding: u32) -> Step {
             site: NodeRef::here(node),
             target: Some(Target { value: NodeRef::here(binding), binding: Some(NodeRef::here(binding)) }),
             value: None,
+            written: None,
             phase: Phase::Leave,
         }),
     }
@@ -138,6 +139,83 @@ mod places {
         Leaf { target: Target::Node(NodeRef::here(node)), frame: FrameId::ROOT }
     }
 
+    #[test]
+    fn atomic_guards_track_writes_to_the_tested_place_not_the_queried_root() {
+        let world = TestWorld::new();
+        let tables = tables();
+        for (binding, valid) in [(1, false), (5, false), (6, true)] {
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            let narrowing = semantic.narrowing();
+            let Known::Yes(tested) = narrowing.place(leaf(7)) else { panic!("nested member place is known") };
+            let flow = super::graph(
+                vec![super::entry(0), super::field(0), super::write(8, binding), super::entry(3)],
+                &[&[1], &[2], &[3], &[]],
+            );
+            let region = Region { execution: &flow, entries: &[1], uses: &[3], frame: FrameId::ROOT, captured: false };
+            assert_eq!(region.valid(&narrowing, &tested), Known::Yes(valid));
+            let Known::Yes(root) = narrowing.place(leaf(3)) else { panic!("binding place is known") };
+            assert_eq!(region.valid(&narrowing, &root), Known::Yes(binding != 1));
+            let captured = Region { captured: true, ..region };
+            assert_eq!(captured.valid(&narrowing, &tested), Known::Yes(false));
+        }
+    }
+
+    #[test]
+    fn mixed_member_key_forms_invalidate_guards_without_guessing_a_conversion() {
+        let world = TestWorld::new();
+        let mut tables = tables();
+        tables.kinds[1].unwraps[0].value = Some(Value::From(
+            Box::new(Value::Path(vec![1])), Box::new(Value::Ordinal(0)), 0,
+        ));
+        for (root, key, valid) in [
+            (leaf(1), Key::Text("0".into()), false),
+            (leaf(1), Key::Ordinal(1), true),
+            (leaf(2), Key::Text("0".into()), true),
+        ] {
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            let flow = super::graph(
+                vec![super::entry(0), super::field(0), super::write(8, 5), super::entry(3)],
+                &[&[1], &[2], &[3], &[]],
+            );
+            let region = Region { execution: &flow, entries: &[1], uses: &[3], frame: FrameId::ROOT, captured: false };
+            assert_eq!(region.valid(&semantic.narrowing(), &Place { root, path: vec![key] }), Known::Yes(valid));
+        }
+    }
+
+    #[test]
+    fn assignment_narrowing_requires_valued_last_writes_on_every_reaching_route() {
+        let world = TestWorld::new();
+        let tables = tables();
+        let mut valued = super::write(8, 1);
+        let Point::Event(event) = &mut valued.point else { unreachable!() };
+        event.written = Some(crate::grammar::names::effects::Written {
+            owner: leaf(3), recipe: std::sync::Arc::new(Value::Path(vec![3])),
+        });
+        for (flow, narrowed) in [
+            (super::graph(vec![super::entry(0), valued.clone(), super::entry(3)], &[&[1], &[2], &[]]), true),
+            (super::graph(vec![super::entry(0), valued.clone(), super::entry(3)], &[&[1, 2], &[2], &[]]), false),
+            (super::graph(vec![super::entry(0), valued.clone(), super::write(9, 1), super::entry(3)], &[&[1], &[2], &[3], &[]]), false),
+        ] {
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            let narrowing = semantic.narrowing();
+            let Known::Yes(subject) = narrowing.place(leaf(3)) else { panic!("binding place is known") };
+            let base = NodeValue::Alternatives(vec![vec![leaf(14)], vec![leaf(12)]]);
+            let use_site = flow.steps().last().unwrap().0;
+            let result = narrowing.assigned(&subject, &flow, &[use_site], FrameId::ROOT, base.clone());
+            assert_eq!(result, if narrowed { NodeValue::leaf(leaf(14)) } else { base });
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let narrowing = semantic.narrowing();
+        let Known::Yes(member) = narrowing.place(leaf(7)) else { panic!("member place is known") };
+        let flow = super::graph(vec![super::entry(0), valued, super::entry(7)], &[&[1], &[2], &[]]);
+        let base = NodeValue::Alternatives(vec![vec![leaf(14)], vec![leaf(12)]]);
+        assert_eq!(narrowing.assigned(&member, &flow, &[2], FrameId::ROOT, base.clone()), base);
+    }
+
     impl TestWorld {
         fn new() -> Self {
             let mut nodes = vec![Node { matcher: 0, start: 0, end: 0, children: vec![] }; 15];
@@ -239,7 +317,60 @@ mod places {
     }
 
     #[test]
-    #[ignore = "RED until Values.key is implemented"]
+    fn anonymous_capture_wrappers_do_not_hide_binding_places_or_guard_recipes() {
+        use crate::grammar::parse::TEXT;
+        use crate::pattern::compile::NO_LABEL;
+        let mut world = TestWorld::new();
+        let mut nodes = world.tree.nodes.clone();
+        for target in [3, 15] {
+            nodes.push(Node {
+                matcher: TEXT, start: 0, end: 0,
+                children: vec![Edge { label: NO_LABEL, node: target }],
+            });
+        }
+        world.tree = Tree::from_native(nodes, 0);
+        let tables = tables();
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let narrowing = semantic.narrowing();
+        let subject = Place { root: leaf(1), path: vec![] };
+        assert_eq!(narrowing.place(leaf(16)), Known::Yes(subject.clone()));
+        let positive = narrowing.apply(leaf(16), &Value::Path(vec![]), &subject, candidates());
+        assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
+        let negative = narrowing.apply(leaf(16), &Value::Not(Box::new(Value::Path(vec![]))), &subject, candidates());
+        assert_eq!(semantic.values().could(&negative, 1 << 0), Known::Yes(true));
+        assert_eq!(semantic.values().could(&negative, 1 << 2), Known::Yes(true));
+    }
+
+    #[test]
+    fn directional_guard_atoms_do_not_weaken_negation_but_unrelated_or_branches_do() {
+        let world = TestWorld::new();
+        let mut tables = tables();
+        let forward = Value::Includes {
+            value: Box::new(Value::Path(vec![2])), from: None,
+        };
+        let reverse = Value::Includes {
+            value: Box::new(Value::Path(vec![])), from: Some(Box::new(Value::Path(vec![2]))),
+        };
+        tables.kinds[0].unwraps = [forward.clone(), reverse.clone()].into_iter().map(|value| Unwrapping {
+            effect: Some(0), value: Some(value), ..Default::default()
+        }).collect();
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let narrowing = semantic.narrowing();
+        let subject = Place { root: leaf(1), path: vec![] };
+        let base = NodeValue::Alternatives(vec![vec![leaf(11)], vec![leaf(12)]]);
+        let positive = narrowing.apply(leaf(3), &Value::Path(vec![]), &subject, base.clone());
+        let negative = narrowing.apply(leaf(3), &Value::Not(Box::new(Value::Path(vec![]))), &subject, base.clone());
+        assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
+        assert_eq!(semantic.values().always(&negative, 1 << 0), Known::Yes(true));
+        let unrelated_or = Value::Union(vec![forward, reverse]);
+        let unrelated = narrowing.apply(leaf(3), &unrelated_or, &subject, base);
+        assert_eq!(semantic.values().could(&unrelated, 1 << 0), Known::Yes(true));
+        assert_eq!(semantic.values().could(&unrelated, 1 << 1), Known::Yes(true));
+    }
+
+    #[test]
     fn declared_member_recipes_keep_runtime_roots_and_paths_through_wrappers() {
         let world = TestWorld::new();
         let tables = tables();
@@ -303,7 +434,7 @@ mod places {
         tables.kinds[0].unwraps.push(Unwrapping { value: Some(Value::Path(vec![2])), ..Default::default() });
         tables.kinds[8].fits.push((1 << 4, 0, None));
         tables.kinds[8].calls.signatures.push(Conditional {
-            item: Signature { parameters: vec![8], result: Value::Path(vec![9]) }, when: None,
+            item: Signature { parameters: vec![8], receiver: None, result: Value::Path(vec![9]) }, when: None,
         });
         tables.kinds[9].targets.push((vec![vec![10]], None));
         tables.kinds[9].unwraps.push(Unwrapping { value: Some(Value::Path(vec![10, 2])), ..Default::default() });
@@ -387,6 +518,58 @@ mod places {
             let refined = semantic.narrowing().apply(leaf(20), &proof, &subject, candidates());
             assert_eq!(semantic.values().could(&refined, 1 << 0), Known::Yes(true));
             assert_eq!(semantic.values().could(&refined, 1 << 1), Known::Yes(true));
+        }
+    }
+
+    #[test]
+    fn only_binding_replacements_block_guards_in_a_separate_body() {
+        use crate::grammar::names::effects::{Conditional, Creation};
+        for (write, captured_guard) in [(None, true), (Some(0), false), (Some(1), true), (Some(2), true), (Some(3), false)] {
+            let mut world = TestWorld::branches();
+            let mut nodes = world.tree.nodes.clone();
+            nodes[16].matcher = 10;
+            nodes[16].children.push(Edge { label: 7, node: 19 });
+            nodes.push(Node { matcher: 0, start: 0, end: 0, children: vec![] });
+            world.tree = Tree::from_native(nodes, 0);
+            world.names.declaration.insert(19, 1);
+            let mut tables = branch_tables();
+            tables.kinds.resize_with(11, KindNames::default);
+            tables.kinds[10].execution.entries.push(Conditional {
+                item: vec![7], when: None, item_id: 3,
+                span: crate::config::source::Span::new(crate::config::source::FileId(0), 0, 1),
+            });
+            if let Some(write) = write {
+                let mut nodes = world.tree.nodes.clone();
+                nodes[0].children.push(Edge { label: 0, node: 20 });
+                nodes.push(Node { matcher: 11, start: 0, end: 0, children: vec![Edge { label: 8, node: 21 }] });
+                nodes.push(Node { matcher: if write == 1 { 1 } else { 0 }, start: 0, end: 0,
+                    children: if write == 1 { vec![Edge { label: 1, node: 22 }] } else { vec![] } });
+                nodes.push(Node { matcher: 0, start: 0, end: 0, children: vec![] });
+                match write {
+                    0 => { world.names.declaration.insert(21, 1); }
+                    1 => { world.names.declaration.insert(22, 1); }
+                    2 => { world.names.declaration.insert(21, 2); }
+                    _ => {}
+                }
+                world.tree = Tree::from_native(nodes, 0);
+                tables.kinds.resize_with(12, KindNames::default);
+                tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+                    effects: vec!["truthy".into(), "assigned".into()],
+                    traits: tables.vocabulary.traits.clone(),
+                    ..Default::default()
+                });
+                tables.effect_roles = crate::grammar::names::effects::compile::effect_roles(&tables.vocabulary);
+                tables.kinds[11].effects.push(crate::grammar::names::Effect {
+                    item_id: Some(4), effect: 1, path: vec![8], when: None, value: None, possible: false,
+                });
+            }
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            assert_eq!(semantic.effects().entry_for(leaf(19)), Known::Yes(leaf(19)));
+            assert_eq!(semantic.effects().enclosing(leaf(19)), Known::Yes(Some(Creation { entry: leaf(0), site: leaf(16) })));
+            let captured = semantic.narrowing().refine(leaf(19), candidates());
+            assert_eq!(semantic.values().could(&captured, 1 << 0), Known::Yes(!captured_guard));
+            assert_eq!(semantic.values().always(&captured, 1 << 1), Known::Yes(captured_guard));
         }
     }
 
@@ -537,6 +720,26 @@ mod places {
         assert_eq!(semantic.values().could(&positive, 1 << 0), Known::Yes(false));
         assert_eq!(semantic.values().always(&negative, 1 << 0), Known::Yes(true));
         assert_eq!(semantic.values().could(&negative, 1 << 1), Known::Yes(false));
+    }
+
+    #[test]
+    fn positive_inclusion_refines_open_values_without_losing_existing_constraints() {
+        let world = TestWorld::new();
+        let mut tables = tables();
+        std::sync::Arc::get_mut(&mut tables.vocabulary).unwrap().traits.push("marker".into());
+        tables.kinds[5].fits = vec![(1 << 4, 0, None)];
+        tables.kinds[5].open_fits.push((0, None));
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let subject = Place { root: leaf(1), path: vec![] };
+        let proof = Value::Includes { value: Box::new(Value::Path(vec![2])), from: None };
+        let before = NodeValue::leaf(leaf(12));
+        let positive = semantic.narrowing().apply(leaf(3), &proof, &subject, before.clone());
+        assert_eq!(semantic.values().always(&positive, 1 << 1), Known::Yes(true));
+        assert_eq!(semantic.values().always(&positive, 1 << 4), Known::Yes(true));
+        let negative = semantic.narrowing().apply(leaf(3), &Value::Not(Box::new(proof)), &subject, before);
+        assert_eq!(semantic.values().always(&negative, 1 << 4), Known::Yes(true));
+        assert_eq!(semantic.values().could(&negative, 1 << 1), Known::Unknown);
     }
 
     #[test]
