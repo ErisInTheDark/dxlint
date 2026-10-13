@@ -6,6 +6,11 @@ define {
     let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
     let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
+    let calls_discards_result if return_type is ts_type_keyword then return_type.text == "void" else {
+      value parts: value_constituents(return_type.node)
+      value parts != null && count(parts) > 0
+        && all(parts, arm => any(arm, part => contains(part.traits, "void")))
+    }
     generics type_parameter
     when !contains([] node.modifier, "async") && !contains([] node.modifier, "*")
       && !(node is ts_method && node.calls_constructor && count(node.parent.type_parameter) == 0) {
@@ -17,7 +22,7 @@ define {
     when contains([] node.modifier, "*") {
       signature calls_parameters receiver calls_receivers returns return_type
     }
-    discards result when return_type always void
+    discards result when calls_discards_result
   }
 
   in ts_function, ts_arrow { fits callable }
