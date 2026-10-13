@@ -1,7 +1,14 @@
 //! Executes declared grammars without language-specific parser code.
 
 mod compile;
+mod captures;
 mod run;
+mod shapes;
+mod values;
+mod registry;
+
+pub use values::ValueSource;
+pub use registry::Parsers;
 
 use crate::pattern::syntax::{Definition, Node as NodeSchema, Token};
 use super::Node;
@@ -50,11 +57,14 @@ pub struct ParseError {
 pub struct CompiledParser {
     definition: Definition,
     program: compile::Program,
+    caches: run::Pool,
 }
 
 impl CompiledParser {
     pub fn compile(definition: &Definition) -> Result<Self, String> {
-        Ok(Self { definition: definition.clone(), program: compile::Program::new(definition)? })
+        let definition = shapes::resolve(definition)?;
+        let program = compile::Program::new(&definition)?;
+        Ok(Self { definition, program, caches: run::Pool::default() })
     }
 
     pub fn nodes(&self) -> &[NodeSchema] {
@@ -63,6 +73,10 @@ impl CompiledParser {
 
     pub fn tokens(&self) -> &[Token] {
         &self.definition.tokens
+    }
+
+    pub fn flags(&self) -> &[String] {
+        &self.definition.flags
     }
 
     pub fn parse_root(&self, text: &str, context: Context, registration: &Registration) -> Result<Parsed, ParseError> {

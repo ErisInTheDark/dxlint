@@ -14,6 +14,9 @@ use regex_syntax::hir::{Class, ClassUnicode, ClassUnicodeRange, Hir, HirKind, Lo
 use super::class::{CharClass, Named};
 use super::{Look, Pat};
 
+mod lexer;
+pub use lexer::{Lexer, LexerCache};
+
 /// Resolves a matcher name to its pattern when that matcher is pure, so
 /// references can be inlined into DFAs that only decide match/no match.
 pub type Resolve<'a> = &'a dyn Fn(&str) -> Option<&'a Pat>;
