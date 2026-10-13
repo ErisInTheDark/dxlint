@@ -4,18 +4,27 @@
 
 import .ts/naming
 import .ts/expression-fixes
+import .ts/scoping/receivers
+import .ts/scoping/bindings
+import .ts/scoping/atomic
+import .ts/scoping/loops
+import .ts/scoping/constness
+import .ts/scoping/globals
+import .ts/scoping/shadowing
+import .ts/scoping/usage
 
 define {
 
 in ts_assignment rule require-atomic-updates {
   option allowProperties boolean = false
-  each updated in filter(scoping_atomic_update, u => !u.property || !allowProperties)
+  let updates scoping_atomic_updates(node)
+  each updated in filter(updates, u => !u.property || !allowProperties)
   warn if updated.property then "Possible race condition: `{updated.value}` might be assigned based on an outdated state of `{updated.name}`." else "Possible race condition: `{updated.name}` might be reassigned based on an outdated value of `{updated.name}`."
 }
 
 in ts_this rule no-invalid-this {
   option capIsConstructor boolean = true
-  let context scoping_this_context
+  let context scoping_receiver_context
   when !context.valid && !(capIsConstructor && context.constructor)
   warn "Unexpected 'this'."
 }
@@ -41,7 +50,7 @@ fn arrow_callback_fix(source, n, lexical) = {
   value names: [] n.parameter.name
   value distinct: unique(names)
   value duplicates: count(distinct) != count(names)
-  value unsafe: n.uses_this && !lexical || duplicates || first(names) == "this" || count(n.type_parameter) != 0
+  value unsafe: n.body.scoping_receiver_read == true && !lexical || duplicates || first(names) == "this" || count(n.type_parameter) != 0
   value wrapped: {
     value n
     walk (current) if current.parent is ts_parenthesized then current.parent.node else null
@@ -77,7 +86,7 @@ in ts_function rule prefer-arrow-callback {
   let callback arrow_callback_receiver
   when callback != null && !(allowNamedFunctions && name != null)
   when !contains([] modifier, "*") && (name.uses.nonempty ?? 0) + (name.self_uses.nonempty ?? 0) + (name.writes.nonempty ?? 0) == 0 && !uses_arguments
-  when !allowUnboundThis || !uses_this || callback
+  when !allowUnboundThis || body.scoping_receiver_read != true || callback
   when !any(children.arrow_callback_barrier, b => b == true)
   warn "Unexpected function expression."
   let edit arrow_callback_fix(source, node, callback)
@@ -86,13 +95,12 @@ in ts_function rule prefer-arrow-callback {
 
 in ts_identifier rule no-unmodified-loop-condition {
   option checkConditionalExpressions boolean = false
-  let condition scoping_unmodified_condition
-  when if checkConditionalExpressions then condition.independent else condition.grouped
+  when scoping_condition_unmodified(node, checkConditionalExpressions)
   warn "'{text}' is not modified in this loop."
 }
 
 in ts_function, ts_arrow rule no-loop-func {
-  let captured scoping_loop_captures
+  let captured scoping_loop_captured(node)
   when { value captured.nonempty ?? []; len } > 0
   let captured_names { value captured; map (name) "'" name "'"; join ", " }
   warn "Function declared in a loop contains unsafe references to variable(s) {captured_names}."
@@ -111,7 +119,7 @@ in ts_function, ts_arrow let scoping_callback_method {
   value callee: destination.call.callee.scoping_unparen_node.nonempty ?? destination.call.callee.node
   value method: callee.static_name
   value object: callee.object.scoping_unparen_node.nonempty ?? callee.object.node
-  value factory: object is ts_identifier && (method == "from" && ends_with(object.text, "Array") || method == "fromAsync" && object.text == "Array")
+  value factory: scoping_array_factory(callee)
   value arguments: [] destination.call.argument.nodes
   value index: if factory then 1 else 0
   value next_index: index + 1
@@ -130,16 +138,16 @@ in ts_function, ts_arrow rule array-callback-return {
   option allowImplicit boolean = false
   option checkForEach boolean = false
   option allowVoid boolean = false
-  when scoping_callback_method != null && scoping_callback_method != "forEach" && body is ts_block && code_path == "falls_off"
+  when scoping_callback_method != null && scoping_callback_method != "forEach" && body is ts_block && flow_normal(body.node) == true
   report at scoping_callback_head
-  warn if count(own_returns) > 0 then "{scoping_callback_label}() expects a value to be returned at the end of {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
+  warn if count(scoping_own_returns) > 0 then "{scoping_callback_label}() expects a value to be returned at the end of {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
 }
 in ts_function, ts_arrow rule array-callback-return:return {
   option allowImplicit boolean = false
   option checkForEach boolean = false
   option allowVoid boolean = false
   when scoping_callback_method != null && body is ts_block
-  each returned in filter(own_returns, r => if scoping_callback_method == "forEach" then checkForEach && r.argument != null && !(allowVoid && r.argument.scoping_void_expression == true) else !allowImplicit && r.argument == null)
+  each returned in filter(scoping_own_returns, r => if scoping_callback_method == "forEach" then checkForEach && r.argument != null && !(allowVoid && r.argument.scoping_void_expression == true) else !allowImplicit && r.argument == null)
   report at returned.offset
   warn if scoping_callback_method == "forEach" then "{scoping_callback_label}() expects no useless return value from {function_name}." else "{scoping_callback_label}() expects a return value from {function_name}."
 }
@@ -167,14 +175,14 @@ in ts_variable_declaration let scoping_const_fix {
   value {
     eligible: kind == "let" && count(bindings) > 0
       && (is (ts_for_in.left, ts_for_of.left) || all(declaration.nodes, item => item.init != null))
-      && all(bindings, item => item.scoping_const_binding != null && item.scoping_const_binding.all),
-    before: any(bindings, item => item.scoping_const_binding.before)
+      && all(bindings, item => item.scoping_const_state != null && item.scoping_const_state.all),
+    before: any(bindings, item => item.scoping_const_state.before)
   }
 }
 in ts_program.binding_declarations rule prefer-const {
   option destructuring "any" | "all" = "any"
   option ignoreReadBeforeAssign boolean = false
-  let binding scoping_const_binding
+  let binding scoping_const_state
   when binding != null && !(ignoreReadBeforeAssign && binding.before)
   when destructuring != "all" || binding.all && !(ignoreReadBeforeAssign && binding.all_before)
   report at binding.offset
@@ -185,6 +193,21 @@ in ts_program.binding_declarations rule prefer-const {
     byte_slice(variable.text, 0, variable.kind.offset - variable.offset) "const" byte_slice(variable.text, variable.kind.end_offset - variable.offset)
 }
 
+in ts_function let scoping_function_context {
+  value destination: scoping_outer_parens.parent.node
+  value declaration: destination is (ts_program, ts_block, ts_export, ts_if, ts_labeled, ts_case, ts_while, ts_for)
+  value target: destination.left.node ?? destination.parent.key.node
+  value inferred: if destination is (ts_declarator, ts_parameter) then destination.name is ts_identifier
+    else if destination is (ts_property, ts_class_property) then true
+    else if destination is (ts_assignment, ts_assignment_pattern) then target is ts_identifier
+    else if destination is ts_pattern_property then destination.key is ts_identifier
+    else false
+  value if destination == null then null else {
+    eligible: !declaration || destination is ts_export && destination.kind == "default",
+    expression: !declaration, named: name != null, recursive: count(name.references) > 0,
+    inferred: inferred, generator: contains(modifier, "*")
+  }
+}
 in ts_function rule func-names {
   option mode "always" | "as-needed" | "never" = "always"
   option generators "always" | "as-needed" | "never" | null = null "override policy for generators"
@@ -237,19 +260,55 @@ in ts_function rule func-name-matching {
   let target if descriptor_call then matched.descriptor.name else matched.target
   when name != null && matched != null && target != null
   when includeCommonJSModuleExports || !matched.commonjs
-  when descriptor_call || re_test(target, /^[\p{XID_Start}_$][\p{XID_Continue}$]*$/)
+  when descriptor_call || ts_identifier_name_valid(target)
   when if mode == "always" then target != name else target == name
   report at matched.offset
   warn "Function name `{name}` should{if mode == 'never' then ' not' else ''} match {if matched.property then 'property' else 'variable'} name `{target}`."
 }
 
+in ts_node let scoping_camelcase_assignment_target
+  if is ts_assignment.left && parent.flow_destructuring_target != true then true
+  else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression,
+    ts_type_assertion.expression, ts_instantiation.expression)
+    || flow_destructuring_target == true && parent.flow_destructuring_target == true then parent.scoping_camelcase_assignment_target
+  else false
+in ts_object let scoping_camelcase_import_options
+  parent is ts_import_call
+  || parent is ts_property && parent.parent is ts_object && parent.parent.parent is ts_import_call
+fn scoping_camelcase_candidate(n) = {
+  value name: if n is ts_private_name then slice(n.text, 1) else n.text
+  value body: re_replace(name, /^_+|_+$/, "")
+  value wrapped: n.scoping_outer_parens
+  value property: n is (ts_property.key, ts_method.key, ts_class_property.key)
+    && !(n.parent.parent is ts_object && n.parent.parent.flow_destructuring_target == true)
+    || n is ts_member.property && n.parent.scoping_camelcase_assignment_target == true
+  value own: n.declaration.node == n
+  value kind: n.declaration_kind ?? n.reference_kind
+  value imported: kind == "import"
+  value external: n.resolved == "global"
+  value binding: contains(["var", "let", "const", "using", "parameter", "catch", "function", "function_name", "class", "class_name", "import"], kind) || external
+  value label: n is (ts_labeled.label, ts_break.label, ts_continue.label)
+  value exported: n is (ts_export_specifier.exported, ts_export.namespace)
+  value skipped: !own && (wrapped.parent is (ts_call, ts_new)
+    || wrapped is (ts_assignment_pattern.right, ts_parameter.init))
+  value value_name: if n.parent is ts_assignment_pattern then n.parent.node else n
+  value original: value_name.parent is (ts_property, ts_pattern_property)
+      && value_name.parent.key is ts_identifier && value_name.parent.key.text == name
+    || value_name.parent is ts_import_specifier
+      && re_replace(value_name.parent.imported.text, /^['"]|['"]$/, "") == name
+  value if !contains(body, "_") || upper(body) == body
+    || n is ts_property.key && n.parent.parent.scoping_camelcase_import_options == true
+    || !(property || label || exported) && (skipped || !binding) then null
+    else { name: name, property: property, private: n is ts_private_name,
+      import: imported && own, original: original, global: external && contains(["readonly", "writable"], n.global), binding: binding }
+}
 in ts_identifier, ts_private_name rule camelcase {
   option allow string[] = [] "names or regular expressions allowed"
   option ignoreDestructuring boolean = false
   option ignoreGlobals boolean = false
   option ignoreImports boolean = false
   option properties "always" | "never" = "always"
-  let candidate scoping_camelcase
+  let candidate scoping_camelcase_candidate(node)
   when candidate != null && !any(allow, pattern => candidate.name == pattern || re_test(candidate.name, pattern))
   when candidate.property && properties == "always" || candidate.binding && !(ignoreGlobals && candidate.global) && !(ignoreImports && candidate.import && candidate.original) && !(ignoreDestructuring && candidate.original && !candidate.import) || !candidate.property && !candidate.binding
   warn if candidate.private then "#{candidate.name} is not in camel case." else "Identifier '{candidate.name}' is not in camel case."
@@ -262,18 +321,20 @@ in ts_statement let scoping_meaningful
   else !(is (ts_function, ts_break)) && !scoping_bare_return
 in ts_statement let scoping_following_meaningful scoping_meaningful || next.scoping_following_meaningful
 in ts_statement let scoping_following_break is ts_break || next.scoping_following_break
-in ts_case let scoping_case_exit first([] body.scoping_following_break) || next.node == null
+in ts_case let scoping_case_meaningful any(body.nodes, statement => statement.scoping_meaningful == true) || next.scoping_case_meaningful == true
+in ts_case let scoping_case_exit first([] body.scoping_following_break) || next.node == null || next.scoping_case_meaningful != true
 in ts_statement, ts_case let scoping_return_tail
   if parent is ts_function_like then true
   else if parent is ts_loop || is ts_try.finalizer then false
-  else if parent is (ts_block, ts_case) then
+  else if parent is (ts_block, ts_case, ts_program) then
     !next.scoping_following_meaningful && (parent not ts_case || parent.scoping_case_exit) && parent.scoping_return_tail
   else parent.scoping_return_tail
+in ts_program let scoping_return_tail ts_source_type(node) == "commonjs" || ts_environment(node, "globalReturn") == true
 in ts_node let scoping_return_fix_owner
   if parent is (ts_function_like, ts_program) then parent.node
   else parent.scoping_return_fix_owner
 in ts_return rule no-useless-return {
-  when argument == null && !contains(["unreachable", "unreachable_run"], code_path) && scoping_return_tail
+  when argument == null && reachable(node) == true && scoping_return_tail
   warn "Unnecessary return statement."
   let owner scoping_return_fix_owner
   # Reserve control-flow owner so overlapping edits wait for the next pass.
@@ -293,10 +354,17 @@ in ts_function, ts_arrow, ts_method let scoping_return_void_annotation
     value return_type.scoping_return_type_structure
     scoping_return_void asynchronous
   }
+in ts_program, ts_function, ts_arrow, ts_method let scoping_return_entry if is ts_program then node else body.node
+in ts_program, ts_function, ts_arrow, ts_method let scoping_own_returns {
+  value flow_declared_effects(scoping_return_entry, "returned")
+  filter (effect) effect.site is ts_return
+  map (effect) effect.site
+  sort_by (returned) returned.offset
+}
 in ts_program, ts_function, ts_arrow, ts_method let scoping_consistent_returns
-  if re_test(file, /\.(ts|tsx|mts|cts)$/) && any(own_returns, returned => returned.argument == null)
-    && any(own_returns, returned => returned.argument != null) && scoping_return_void_annotation == true
-    then filter(own_returns, returned => returned.argument != null) else own_returns
+  if re_test(file, /\.(ts|tsx|mts|cts)$/) && any(scoping_own_returns, returned => returned.argument == null)
+    && any(scoping_own_returns, returned => returned.argument != null) && scoping_return_void_annotation == true
+    then filter(scoping_own_returns, returned => returned.argument != null) else scoping_own_returns
 in ts_node let scoping_return_undefined
   is ts_identifier && text == "undefined" || scoping_void_expression == true
   || re_test(file, /\.(ts|tsx|mts|cts)$/) && type == "undefined" && contains(type_flags, "undefined")
@@ -316,14 +384,14 @@ in ts_program, ts_function, ts_arrow, ts_method rule consistent-return {
   let initial first(returns)
   let expected scoping_return_specified(initial, treatUndefinedAsUnspecified)
   each returned in filter(returns, r => r != initial && scoping_return_specified(r, treatUndefinedAsUnspecified) != expected)
-  report at returned.offset
+  report at returned
   warn if expected then "{scoping_return_capitalized} expected a return value." else "{scoping_return_capitalized} expected no return value."
 }
 in ts_program, ts_function, ts_arrow, ts_method rule consistent-return:fallthrough {
   option treatUndefinedAsUnspecified boolean = false "treat undefined and void as bare returns"
   let initial first(scoping_consistent_returns)
   when scoping_return_specified(initial, treatUndefinedAsUnspecified)
-  when !scoping_return_constructor && code_path == "falls_off"
+  when !scoping_return_constructor && flow_normal(scoping_return_entry) == true
   report at scoping_return_head
   warn "Expected to return a value at the end of {scoping_return_name}."
 }
@@ -401,7 +469,7 @@ in ts_return, ts_arrow rule no-promise-executor-return {
 }
 
 in ts_identifier rule block-scoped-var {
-  each definition in scoping_outside_bindings
+  each definition in scoping_outside_definitions(node)
   warn "'{text}' declared on line {definition.line} column {definition.column} is used outside of binding context."
 }
 
@@ -446,7 +514,8 @@ in ts_variable_declaration rule no-inner-declarations:variable {
 in ts_identifier rule no-redeclare {
   option builtinGlobals boolean = true "also report built-in global redeclarations"
   option ignoreDeclarationMerge boolean = true "allow typescript declaration merging"
-  let redeclared scoping_redeclaration
+  when scoping_lexical_declaration
+  let redeclared scoping_redeclaration_context(node)
   when redeclared != null && (redeclared.duplicate || redeclared.comment || builtinGlobals && redeclared.builtin)
   when !(ignoreDeclarationMerge && redeclared.safe_merge && !redeclared.comment && !(builtinGlobals && redeclared.builtin))
   warn if builtinGlobals && redeclared.builtin then "'{text}' is already defined as a built-in global variable." else if redeclared.comment then "'{text}' is already defined by a variable declaration." else "'{text}' is already defined."
@@ -454,7 +523,8 @@ in ts_identifier rule no-redeclare {
 in ts_program rule no-redeclare:global {
   option builtinGlobals boolean = true "also report built-in global redeclarations"
   option ignoreDeclarationMerge boolean = true "allow typescript declaration merging"
-  each redeclaration in filter(scoping_global_redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin)
+  let redeclarations scoping_global_mentions(node)
+  each redeclaration in filter(redeclarations, d => d.duplicate || d.syntax || builtinGlobals && d.builtin)
   report at redeclaration.offset
   warn if builtinGlobals && redeclaration.builtin then "'{redeclaration.name}' is already defined as a built-in global variable." else if redeclaration.syntax then "'{redeclaration.name}' is already defined by a variable declaration." else "'{redeclaration.name}' is already defined."
 }
@@ -496,9 +566,9 @@ in ts_program.binding_declarations rule no-shadow {
   option ignoreOnInitialization boolean = false "allow callback declarations in initializers"
   option ignoreTypeValueShadow boolean = true "allow type and value namespace shadowing"
   option ignoreFunctionTypeParameterNameValueShadow boolean = true "allow parameter names in function types"
-  let shadowed scoping_shadow
-  when shadowed != null && !contains(allow, identifier_name)
-  when !shadowed.global || builtinGlobals
+  when !contains(allow, identifier_name)
+  let shadowed scoping_shadow_context(node, builtinGlobals)
+  when shadowed != null
   when !(ignoreTypeValueShadow && shadowed.type_value)
   when !(ignoreFunctionTypeParameterNameValueShadow && shadowed.function_type)
   when !(ignoreOnInitialization && shadowed.initializing)
@@ -515,7 +585,7 @@ in ts_identifier rule no-use-before-define {
   option typedefs boolean = true "check type declarations"
   option allowNamedExports boolean = false "allow export specifiers before declarations"
   option ignoreTypeReferences boolean = true "allow type references before declarations"
-  let definition scoping_definition_use
+  let definition scoping_definition_context(node)
   when definition.before && !(allowNamedExports && definition.export)
   when !(ignoreTypeReferences && access == "type")
   when !((!functions || mode == "nofunc") && (definition.kind == "function" || definition.kind == "function_name"))
@@ -528,20 +598,23 @@ in ts_identifier rule no-use-before-define {
 fn implicit_global_label(kind) = if kind == "function" || kind == "class" then kind else "'" kind "'"
 in ts_variable_declaration, ts_function, ts_class rule no-implicit-globals {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
-  each global_declaration in filter(scoping_global_declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
+  let declarations scoping_global_bindings(node)
+  each global_declaration in filter(declarations, d => !d.exported && contains(["var", "let", "const", "function", "class"], d.kind) && d.setting != "writable" && (lexicalBindings || d.kind == "var" || d.kind == "function"))
   report at global_declaration.offset
   warn if global_declaration.setting == "readonly" then "Unexpected redeclaration of read-only global variable." else if global_declaration.kind == "var" || global_declaration.kind == "function" then "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in an IIFE for a local variable, assign as global property for a global variable." else "Unexpected {implicit_global_label(global_declaration.kind)} declaration in the global scope, wrap in a block or in an IIFE."
 }
 in ts_identifier rule no-implicit-globals:leak {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
-  when source_type != "module" && !scoping_strict_code && resolved == "global" && (global == null || global == "off") && access == "write"
-  report at node
+  let setting ts_global_setting(scoping_program, identifier_name)
+  when ts_source_type(scoping_program) != "module" && !scoping_strict_code && resolved == "global" && (setting == null || setting == "off") && access == "write"
+  report at scoping_pattern_write_owner
   warn "Global variable leak, declare the variable if it is intended to be local."
 }
 in ts_identifier rule no-implicit-globals:readonly {
   option lexicalBindings boolean = false "also top-level let, const and class declarations"
-  when source_type != "module" && resolved == "global" && global == "readonly" && access == "write"
-  report at node
+  when ts_source_type(scoping_program) != "module" && resolved == "global"
+    && ts_global_setting(scoping_program, identifier_name) == "readonly" && access == "write"
+  report at scoping_pattern_write_owner
   warn "Unexpected assignment to read-only global variable."
 }
 
@@ -554,6 +627,12 @@ in ts_function, ts_class rule no-case-declarations:declaration {
   warn "Unexpected lexical declaration in case block."
 }
 
+in ts_node let scoping_pattern_write_owner
+  if flow_destructuring_target == true && parent.flow_destructuring_target == true then parent.scoping_pattern_write_owner else node
+in ts_node let scoping_parameter_property_write
+  if is (ts_member.property, ts_index.index, ts_conditional.test, ts_call.argument, ts_new.argument) then null
+  else if parent is (ts_member, ts_index) && parent.write_site != null then parent.scoping_pattern_write_owner
+  else parent.scoping_parameter_property_write
 in ts_identifier rule no-param-reassign {
   option props boolean = false "also assignments to parameter properties"
   option ignorePropertyModificationsFor string[] = [] "parameter names whose properties may change"
@@ -565,7 +644,9 @@ in ts_identifier rule no-param-reassign:property {
   option props boolean = false "also assignments to parameter properties"
   option ignorePropertyModificationsFor string[] = [] "parameter names whose properties may change"
   option ignorePropertyModificationsForRegex string[] = [] "patterns for exempt parameter names"
-  when props && param_property_write && !contains(ignorePropertyModificationsFor, identifier_name)
+  let modification scoping_parameter_property_write
+  when props && reference_kind == "parameter" && modification != null && !contains(ignorePropertyModificationsFor, identifier_name)
+  when !any(declaration.references, reference => reference.offset < offset && reference.scoping_parameter_property_write == modification)
   when !any(ignorePropertyModificationsForRegex, pattern => re_test(identifier_name, pattern))
   warn "Assignment to property of function parameter '{text}'."
 }
@@ -603,7 +684,7 @@ in ts_method rule class-methods-use-this {
   option ignoreClassesWithImplements "all" | "public-fields" | null = null "ignore methods implementing interfaces"
   option ignoreClassesThatImplementAnInterface boolean | "public-fields" = false "typescript-eslint interface exception"
   when parent is ts_class && body != null && !contains(modifier, "static") && static_name != "constructor"
-  when !scoping_receiver_use && !{ value default: static_name.nonempty ?? key; value contains(exceptMethods, default) }
+  when !scoping_receiver_used && !{ value default: static_name.nonempty ?? key; value contains(exceptMethods, default) }
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)
   when !((ignoreClassesWithImplements == "public-fields" || ignoreClassesThatImplementAnInterface == "public-fields") && parent.implements != null && !contains(modifier, "private") && !contains(modifier, "protected") && !starts_with(key, "#"))
@@ -617,7 +698,7 @@ in ts_class_property rule class-methods-use-this:field {
   option ignoreClassesWithImplements "all" | "public-fields" | null = null "ignore methods implementing interfaces"
   option ignoreClassesThatImplementAnInterface boolean | "public-fields" = false "typescript-eslint interface exception"
   when enforceForClassFields && parent is ts_class && !contains(modifier, "static")
-  when init.function_name != null && !scoping_receiver_use
+  when init.function_name != null && !scoping_receiver_used
   when !{ value default: static_name.nonempty ?? key; value contains(exceptMethods, default) }
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)

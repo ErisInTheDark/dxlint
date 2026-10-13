@@ -1,0 +1,74 @@
+define {
+
+in ts_node let scoping_const_writer
+  if is (ts_assignment.left, ts_declarator.name) then parent.node
+  else if is ts_assignment_pattern.left
+    || parent is (ts_array, ts_array_pattern, ts_object, ts_object_pattern, ts_property, ts_pattern_property, ts_rest, ts_spread, ts_parenthesized)
+    then parent.scoping_const_writer
+  else null
+fn scoping_const_base(n) = {
+  value declarator: n.scoping_binding_declarator
+  value variable: declarator.parent.node
+  value scope: first(n.scoping_declaration_scopes)
+  value exported: ts_exported_names(n.scoping_program)
+  value n.scoping_site_kind == "let" && n.declaration.node == n
+    && scope != null && declarator != null && !(variable is ts_for.init)
+    && !(scoping_script_scope(scope) && contains(exported, n.text))
+}
+fn scoping_const_pattern_children(n) =
+  if n is ts_assignment_pattern then n.left.node
+  else if n is (ts_property, ts_pattern_property) then n.value.node ?? n.key.node
+  else n.children.nodes
+fn scoping_const_invalid_pattern(host, scope) = {
+  value left: host.left.node
+  value direct: if left is (ts_array, ts_array_pattern) then [] left.element.nodes
+    else if left is (ts_object, ts_object_pattern) then {
+      value [] left.property.nodes
+      map (property) property.value.node ?? property.key.node
+    } else []
+  value any(direct, item => item is ts_identifier && item.declaration != null && {
+    value declared: first(item.declaration.node.scoping_declaration_scopes)
+    value declared == null || declared.id != scope.id || item.declaration.scoping_site_kind == "parameter"
+  }) || {
+    value walk(left, item => scoping_const_pattern_children(item))
+    any (item) item is (ts_member, ts_index)
+  }
+}
+fn scoping_const_candidate(n) = if !scoping_const_base(n) then null else {
+  value declarator: n.scoping_binding_declarator
+  value initialized: declarator.init != null || declarator.parent is (ts_for_in.left, ts_for_of.left)
+  value writes: filter(n.references, reference => contains(["write", "read_write"], reference.access))
+  value writer: if initialized && count(writes) == 0 then n else if !initialized && count(writes) == 1 then first(writes) else null
+  value host: if initialized then declarator else writer.scoping_const_writer
+  value before: any(n.references, reference => reference.offset < writer.offset && reference.access == "read")
+  value declared: first(n.scoping_declaration_scopes)
+  value written: scoping_reference_scope(writer)
+  value outer: host.scoping_outer_parens
+  value valid: initialized || declared.id == written.id && outer.parent is ts_expression_statement
+    && outer.parent.parent is (ts_program, ts_block, ts_case, ts_static_block)
+    && !scoping_const_invalid_pattern(host, declared)
+  value if writer == null || host == null || !valid then null
+    else { offset: if before then n.offset else writer.offset, before: before, group: host }
+}
+fn scoping_const_group(host) = {
+  value root: if host is ts_declarator then host.name.node else host.left.node
+  value walk(root, item => item.children.nodes)
+  filter (item) item is ts_identifier
+    && (host is ts_declarator && item.scoping_binding_declarator == host && item.declaration.node == item
+      || host is ts_assignment && item.scoping_const_writer == host && contains(["write", "read_write"], item.access))
+  map (item) item.declaration.node
+  filter (item) item != null && scoping_const_base(item)
+  unique
+}
+in ts_identifier let scoping_const_state {
+  value candidate: scoping_const_candidate(node)
+  value members: scoping_const_group(candidate.group)
+  value states: map(members, member => scoping_const_candidate(member))
+  value if candidate == null then null else {
+    offset: candidate.offset, before: candidate.before,
+    all: all(states, state => state != null),
+    all_before: any(states, state => state.before == true)
+  }
+}
+
+}

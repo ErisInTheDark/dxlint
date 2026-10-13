@@ -5,7 +5,7 @@ group opener ts_open_paren, ts_open_bracket, ts_open_brace, ts_open_angle
                 in .js layer lines match line /[^\n]+\n?/
                 
                 in line rule text info "text"
-                in line rule dependent info "{declaration}" {
+                in line rule dependent info "{resolved}" {
                     
                     fix as ""
                 }

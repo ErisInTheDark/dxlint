@@ -1,6 +1,6 @@
 import .ts
 in ts_function, ts_arrow rule probe {
-  let captured scoping_loop_captures
+  let captured scoping_loop_captured(node)
   when len(captured) == 2 && contains(captured, "first") && contains(captured, "second")
   warn "bindings"
 }

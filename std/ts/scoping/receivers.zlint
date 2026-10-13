@@ -1,0 +1,107 @@
+define {
+
+fn scoping_array_factory(callee) = {
+  value member: unparenthesised_node(callee)
+  value object: unparenthesised_node(member.object.node)
+  value object is ts_identifier
+    && (member.static_name == "from" && ends_with(object.text, "Array")
+      || member.static_name == "fromAsync" && object.text == "Array")
+}
+fn scoping_receiver_immediate(n) = {
+  value outer: n.scoping_outer_parens
+  value if outer.parent is ts_call && outer.parent.callee.node == outer then outer.parent.node else null
+}
+fn scoping_receiver_destination_next(n) =
+  if n.parent is (ts_parenthesized, ts_logical, ts_conditional) then n.parent.node
+  else if n.parent is ts_return then {
+    value owners: walk(n.parent.node, current => current.parent.node)
+    value owner: { value owners; filter (current) current is ts_function_like; first }
+    value scoping_receiver_immediate(owner)
+  }
+  else if n is ts_arrow.body then scoping_receiver_immediate(n.parent.node)
+  else null
+fn scoping_receiver_nullish(n) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_null || bare is ts_identifier && bare.text == "undefined"
+    || bare is ts_unary && bare.operator == "void"
+}
+fn scoping_receiver_uppercase(n) = n is ts_identifier && re_test(n.text, /^\p{Uppercase}/)
+fn scoping_receiver_callback(call, callback, array_factory) = {
+  value callee: unparenthesised_node(call.callee.node)
+  value object: unparenthesised_node(callee.object.node)
+  value arguments: [] call.argument.nodes
+  value index: if object.text == "Reflect" && callee.static_name == "apply"
+      && count(arguments) == 3 && first(arguments) == callback then 1
+    else if array_factory && count(arguments) == 3
+      && { value arguments; slice 1 2; first } == callback then 2
+    else if count(arguments) == 2 && first(arguments) == callback
+      && contains(["every", "filter", "find", "findIndex", "findLast", "findLastIndex", "flatMap", "forEach", "map", "some"], callee.static_name) then 1
+    else null
+  value if index == null then null else { value arguments; slice index (index + 1); first }
+}
+fn scoping_receiver_assigned(function, constructor) = {
+  value current: { value function; walk (n) scoping_receiver_destination_next(n); last }
+  value parent: current.parent.node
+  value named: function.name != null
+  value callee: unparenthesised_node(parent.callee.node)
+  value array_factory: scoping_array_factory(callee)
+  value receiver: scoping_receiver_callback(parent, current, array_factory)
+  value if constructor && scoping_receiver_uppercase(function.name.node) then true
+    else if parent is (ts_property, ts_class_property) then !constructor && current is (ts_property.value, ts_class_property.init)
+    else if parent is (ts_assignment, ts_assignment_pattern) then
+      if constructor then !named && scoping_receiver_uppercase(parent.left.node) else parent.left is (ts_member, ts_index)
+    else if parent is (ts_declarator, ts_parameter) then constructor && !named
+      && current is (ts_declarator.init, ts_parameter.init) && scoping_receiver_uppercase(parent.name.node)
+    else if parent is (ts_member, ts_index) && current is (ts_member.object, ts_index.object) then {
+      value call: scoping_receiver_immediate(parent)
+      value receiver: first([] call.argument.nodes)
+      value !constructor && contains(["bind", "call", "apply"], parent.static_name)
+        && receiver != null && !scoping_receiver_nullish(receiver)
+    }
+    else parent is ts_call && !constructor && receiver != null && !scoping_receiver_nullish(receiver)
+}
+
+in ts_program let scoping_receiver_comments descendants(ts_comment)
+in ts_node let scoping_receiver_comments parent.scoping_receiver_comments
+fn scoping_receiver_comment(comment) = {
+  value body: { value comment.text; re_replace /^\/[\/*]/ ""; re_replace /\*\/$/ "" }
+  value lines: split(body, "\n")
+  value any(lines, line => re_test(line, /^[\s*]*@this/))
+}
+in ts_node let scoping_receiver_documented
+  any(scoping_receiver_comments, comment => comment.end_offset <= offset
+    && { value source; byte_slice comment.end_offset offset; trim } == ""
+    && scoping_receiver_comment(comment))
+  || parent not (ts_function_like, ts_block, ts_program, ts_call, ts_new)
+    && parent.scoping_receiver_documented == true
+in ts_function let scoping_receiver_function_context {
+  valid: scoping_strict_code != true || any([] parameter.nodes, parameter => parameter.name == "this")
+    || scoping_receiver_documented || scoping_receiver_assigned(node, false),
+  constructor: scoping_receiver_assigned(node, true)
+}
+in ts_node let scoping_receiver_context
+  if parent is ts_static_block || is (ts_method.body, ts_method.parameter, ts_class_property.init)
+    then { valid: true, constructor: false }
+  else if parent is ts_function then parent.scoping_receiver_function_context
+  else parent.scoping_receiver_context
+in ts_program let scoping_receiver_context {
+  value source_type: ts_source_type(node)
+  value {
+    valid: source_type == "script" || source_type == "commonjs" && scoping_strict_code != true,
+    constructor: false
+  }
+}
+
+in ts_node let scoping_receiver_read is (ts_this, ts_super) || any(children.nodes, child => child.scoping_receiver_read)
+in ts_function, ts_method, ts_static_block, ts_class_property let scoping_receiver_read false
+in ts_class let scoping_receiver_read
+  any([] decorator.nodes, item => item.scoping_receiver_read)
+  || any([] extends.nodes, item => item.scoping_receiver_read)
+  || any([] member.nodes, item => item.key is ts_computed_key && item.key.scoping_receiver_read)
+in ts_method let scoping_receiver_used body.scoping_receiver_read == true
+in ts_class_property let scoping_receiver_used {
+  value value: unparenthesised_node(init.node)
+  value if value is ts_function then value.body.scoping_receiver_read == true else value.scoping_receiver_read == true
+}
+
+}

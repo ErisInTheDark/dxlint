@@ -1,0 +1,52 @@
+define {
+
+fn scoping_global_root(n) = {
+  value scope: first(n.scoping_declaration_scopes)
+  value scope != null && scoping_script_scope(scope)
+}
+fn scoping_global_bindings(n) =
+  if ts_source_type(n.scoping_program) != "script" then [] else {
+    value owners: if n is ts_variable_declaration then [] n.declaration.nodes else [n]
+    value exported: ts_exported_names(n.scoping_program)
+    value owners
+    fold ([]) (entries, owner) entries {
+      value if owner.name == null then [] else overlapping(ts_identifier, owner.name.offset, owner.name.end_offset)
+      filter (site) scoping_within(site, owner.name.node) && scoping_global_root(site)
+      map (site) {
+        kind: site.scoping_site_kind,
+        exported: contains(exported, site.identifier_name),
+        setting: ts_global_setting(n.scoping_program, site.identifier_name),
+        name: site.identifier_name, offset: owner.offset
+      }
+    }
+  }
+fn scoping_global_mentions(program) = {
+  value mentions: {
+    value ts_global_mentions(program)
+    map (mention) { name: mention.name, offset: mention.offset, comment: mention.comment }
+  }
+  value roots: filter(program.scoping_lexical_scopes, scope => scoping_script_scope(scope) && scoping_value_scope(scope))
+  value script: ts_source_type(program) == "script"
+  value typed: re_test(program.file, /\.(ts|tsx|mts|cts)$/)
+  value mentions
+  filter (mention) !any(mentions, earlier => earlier.offset < mention.offset
+    && earlier.name == mention.name && earlier.comment == mention.comment)
+  map (mention) {
+    value sites: {
+      value roots
+      flat_map (scope) name_scope_declarations(program, scope.id, mention.name)
+    }
+    value setting: ts_global_setting(program, mention.name)
+    value builtin: ts_global_implicit(program, mention.name)
+      && contains(["readonly", "writable"], setting)
+    value syntax: script && any(sites, site => site.node is ts_identifier
+      && any(site.classes, class => contains(["value", "type", "query"], class)))
+    value {
+      name: mention.name, offset: mention.offset, builtin: builtin, syntax: syntax && !typed,
+      duplicate: any(mentions, earlier => earlier.offset < mention.offset
+        && earlier.name == mention.name && earlier.comment != mention.comment)
+    }
+  }
+}
+
+}

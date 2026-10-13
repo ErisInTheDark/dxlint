@@ -1,0 +1,196 @@
+define {
+
+fn scoping_typed(program) = re_test(program.file, /\.(ts|tsx|mts|cts)$/)
+in ts_identifier let scoping_indexed_declarations {
+  value scope: first(scoping_declaration_scopes)
+  value name_scope_declarations(node, scope.id, identifier_name)
+  filter (site) site.node is ts_identifier
+    && any(site.classes, class => contains(["value", "type", "query"], class))
+}
+fn scoping_scope_sites(n, scope) = {
+  value if scope.id == first(n.scoping_declaration_scopes).id
+    then (n.declaration.node ?? n).scoping_indexed_declarations
+    else name_scope_declarations(n, scope.id, n.identifier_name)
+  filter (site) site.node is ts_identifier
+    && any(site.classes, class => contains(["value", "type", "query"], class))
+}
+fn scoping_redeclaration_context(n) = {
+  value scope: first(n.scoping_declaration_scopes)
+  value program: n.scoping_program
+  value typed: scoping_typed(program)
+  value sites: {
+    value scoping_scope_sites(n, scope)
+    filter (site) !(typed && site.node.parent is ts_function && site.node.parent.body == null)
+    map (site) site.node
+  }
+  value kinds: map(sites, site => site.scoping_site_kind)
+  value category: if all(kinds, kind => contains(["class", "interface", "namespace"], kind)) then "class"
+    else if all(kinds, kind => contains(["function", "namespace"], kind)) then "function"
+    else if all(kinds, kind => contains(["enum", "namespace"], kind)) then "enum"
+    else null
+  value duplicate: any(sites, site => site.offset < n.offset)
+  value merge_all: all(kinds, kind => kind == "interface") || all(kinds, kind => kind == "namespace")
+  value merge_report: if merge_all then false else if category != null
+    then n.scoping_site_kind == category && any(sites, site => site.offset < n.offset && site.scoping_site_kind == category)
+    else duplicate
+  value script: scoping_script_scope(scope)
+  value setting: if script then ts_global_setting(program, n.identifier_name) else null
+  value builtin: script && ts_global_implicit(program, n.identifier_name)
+    && contains(["readonly", "writable"], setting)
+  value if scope == null || !contains(sites, n) then null else {
+    duplicate: duplicate, safe_merge: typed && !merge_report, builtin: builtin,
+    comment: typed && script && ts_global_commented(program, n.identifier_name) && !builtin
+  }
+}
+fn scoping_shadow_scope_name(n, scope) = {
+  value sites: {
+    value scoping_scope_sites(n, scope)
+    map (site) site.node
+    filter (site) site.declaration.node == site || site.declaration.declaration_kind == "function_name"
+  }
+  value secondary: {
+    value sites
+    filter (site) site.declaration.declaration_kind == "function_name" && site.declaration.node != site
+    first
+  }
+  value secondary ?? first(sites)
+}
+fn scoping_shadow_value(n) = {
+  value canonical: n.declaration.node ?? n
+  value classes: name_role_classes(canonical, "declaration")
+  value n == null || contains(classes, "value")
+}
+fn scoping_shadow_ambient(n) = {
+  value owner: {
+    value n.parent.node
+    walk (current) if current is (ts_variable_declaration, ts_class, ts_enum, ts_namespace, ts_function, ts_parameter)
+      then null else current.parent.node
+    last
+  }
+  value re_test(n.file, /\.d\.(ts|cts|mts)$/)
+    && (contains(owner.modifier, "declare") || owner is ts_function && owner.body == null)
+}
+fn scoping_shadow_namespace(n, outer) = {
+  value import: {
+    value outer.parent.node
+    walk (current) if current is ts_import then null else current.parent.node
+    last
+  }
+  value n
+  walk (current) current.parent.node
+  any (current) current is ts_namespace
+    && (current.kind == "global" || current.name.text == "global"
+      || !scoping_shadow_value(outer) && import is ts_import
+        && js_string(import.from.text) == js_string(current.name.text))
+}
+fn scoping_shadow_initializer_children(n) =
+  if n is (ts_function, ts_arrow, ts_method, ts_class, ts_import) then null else n.parent.node
+fn scoping_shadow_initializer(n, outer) = {
+  value outer
+  walk (current) scoping_shadow_initializer_children(current)
+  map (current) if current is (ts_declarator, ts_parameter) then current.init.node
+    else if current is ts_assignment_pattern then current.right.node
+    else if current is ts_pattern_property && current.value is ts_assignment_pattern then current.value.right.node
+    else if current is ts_variable_declaration && current.parent is (ts_for_in, ts_for_of) then current.parent.right.node
+    else null
+  filter (init) scoping_within(n, init)
+  first
+}
+fn scoping_shadow_callback(n, outer, init) = {
+  value scopes: n.scoping_declaration_scopes
+  value scope: {
+    value scopes
+    filter (scope) scope.owner is (ts_function, ts_arrow, ts_method, ts_program)
+    first
+  }
+  value declared: first(outer.scoping_declaration_scopes)
+  value parent_scope: {
+    value result: {
+      value scopes
+      fold ({ started: false, parent: null }) (state, candidate)
+        if state.parent != null then state
+        else if candidate.id == scope.id then { started: true, parent: null }
+        else if state.started && candidate.owner != scope.owner && scoping_value_scope(candidate)
+          then { started: true, parent: candidate }
+        else state
+    }
+    value result.parent
+  }
+  value route: {
+    value scope.owner.parent.node
+    walk (current) if !scoping_within(current, init) || current is (ts_call, ts_function, ts_arrow, ts_method)
+      then null else current.parent.node
+    last
+  }
+  value scope.owner is (ts_function, ts_arrow)
+    && any(scopes, candidate => candidate.owner == parent_scope.owner
+      && scoping_value_scope(candidate) && candidate.id == declared.id)
+    && route is ts_call && scoping_within(route, init)
+}
+fn scoping_shadow_name_initializer(n, canonical, init) = {
+  value expression: {
+    value n.parent.node
+    walk (current) if current.parent is (ts_parenthesized, ts_logical)
+      || current.parent is ts_conditional && !(current is ts_conditional.test)
+      then current.parent.node else null
+    last
+  }
+  value unwrapped: unparenthesised_node(expression)
+  value initializer: unparenthesised_node(init)
+  value n == canonical && contains(["function_name", "class_name"], canonical.declaration_kind)
+    && unwrapped == initializer
+}
+fn scoping_shadow_context(n, builtins) = {
+  value enum_member: n is ts_enum_member.name
+  value scope_node: if enum_member then n.parent.parent.name.node else n
+  value scopes: scope_node.scoping_declaration_scopes
+  value scope: first(scopes)
+  value canonical: n.declaration.node ?? n
+  value named_function: canonical.declaration_kind == "function_name"
+  value if scope == null || canonical != n && !named_function || n.identifier_name == "this"
+    || scoping_shadow_ambient(n) then null else {
+    value outer: if named_function && canonical != n then canonical else {
+      value scopes
+      filter (candidate) enum_member || candidate.id != scope.id
+      map (candidate) scoping_shadow_scope_name(n, candidate)
+      filter (site) site != null
+      first
+    }
+    value if outer == null && !builtins then null else {
+      value program: n.scoping_program
+      value typed: scoping_typed(program)
+      value setting: if outer == null && builtins && (!scoping_script_scope(scope) || typed)
+        then ts_global_setting(program, n.identifier_name) else null
+      value builtin: outer == null && (!scoping_script_scope(scope) || typed)
+        && contains(["readonly", "writable"], setting)
+      value if outer == null && !builtin || scoping_shadow_namespace(n, outer) then null else {
+        value owner: {
+          value n.parent.node
+          walk (current) if current is (ts_parameter, ts_type_parameter) then current.parent.node else null
+          last
+        }
+        value static_generic: canonical.declaration_kind == "type_parameter" && owner is ts_method && contains(owner.modifier, "static")
+        value if static_generic then null else {
+          value init: scoping_shadow_initializer(n, outer)
+          value if init != null && scoping_shadow_name_initializer(n, canonical, init) then null else {
+            value position: position(outer.offset)
+            value {
+              global: builtin, enum_member: typed && enum_member,
+              line: if outer == null then 1 else position.js_line,
+              column: if outer == null then 1 else position.js_column,
+              kind: outer.declaration_kind ?? "",
+              early: outer != null && n.end_offset < outer.offset,
+              type_value: (if enum_member then true else scoping_shadow_value(n)) != scoping_shadow_value(outer),
+              function_type: canonical.declaration_kind == "parameter"
+                && (owner is (ts_function_type, ts_method_signature, ts_call_signature)
+                  || owner is (ts_function, ts_method) && owner.body == null),
+              initializing: init != null && !(typed && named_function) && scoping_shadow_callback(n, outer, init)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+}

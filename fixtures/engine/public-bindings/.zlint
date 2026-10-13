@@ -1,0 +1,56 @@
+import .ts
+
+in ts_identifier rule merged-reference {
+  when text == "Merged" && is (ts_type_reference.name, ts_unary.argument)
+  when declaration != first(declarations) || count(declarations) != 2
+    || count(declaration.references) != 2
+    || first(declaration.references).offset >= last(declaration.references).offset
+    || declaration.declaration_kinds != ["interface", "class"]
+    || reference_kind != "interface"
+  warn "merged declarations lost a reference or source order"
+}
+in ts_identifier rule shorthand-reference {
+  when text == "x" && parent is ts_property && parent.value == null
+  when declaration.parent not ts_declarator || declaration_kind != null
+    || reference_kind != "let" || scope not ts_program
+  warn "a shorthand's member declaration hid its lexical reference"
+}
+in ts_identifier rule member-name {
+  when is ts_member.property && text == "x"
+  when declaration != null || scope != null || count(declarations) != 0
+  warn "a member name became a lexical binding"
+}
+in ts_identifier rule parameter-kind {
+  when text == "p"
+  when scope not ts_function
+    || is ts_parameter.name && declaration_kind != "parameter"
+    || node not ts_parameter.name && reference_kind != "parameter"
+  warn "a parameter lost its declaration owner or scope"
+}
+in ts_identifier rule implicit-arguments {
+  when text == "arguments"
+  when declaration != null || scope not ts_function
+  warn "implicit arguments acquired a declaration or lost its scope"
+}
+in ts_identifier rule writer-node {
+  when text == "x" && is ts_update.argument
+  when writer not ts_update || writer.offset != write_site
+  warn "writer stopped returning the writing node"
+}
+in ts_identifier rule conditional-test {
+  when text == "x" && is ts_if.test
+  when conditional_ancestor != parent.node
+  warn "the enclosing test was lost"
+}
+in ts_identifier rule conditional-function {
+  when text == "x" && is ts_arrow.body
+  when conditional_ancestor != null
+  warn "a conditional ancestor crossed a function"
+}
+in ts_program rule declaration-catalog {
+  let catalog binding_declarations
+  when !any(catalog, site => site is ts_enum_member.name && site.text == "One")
+    || any(catalog, site => site is ts_member.property)
+    || !all(catalog, site => site is ts_enum_member.name || site.declaration != null)
+  warn "the declaration catalog lost real declarations or included member uses"
+}

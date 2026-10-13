@@ -1,10 +1,19 @@
-# .ts/names: JavaScript and TypeScript scopes, declarations, references and
-# writes (docs/design/type-layers.md). The engine resolves them; native
-# facts about names (`declaration`, `references`, `resolved`, `access`,
-# `uses`, `write_site`, ...) answer from them.
+# .ts/names: JavaScript and TypeScript scopes, declarations and references.
+import .ts/directives
+import .ts/effects
+
+fn ts_identifier_name_valid(name) = re_test(name, /^[\p{ID_Start}_$][\p{ID_Continue}$\u{200c}\u{200d}]*$/)
 
 # Where a function or class is a declaration (else an expression).
 fn ts_declared_statement(node) = node is (ts_program.body, ts_block.body, ts_case.body, ts_export.declaration, ts_labeled.body)
+group ts_namespace_runtime_nodes ts_variable_declaration, ts_function, ts_class, ts_enum, ts_empty, ts_export_assignment, ts_export
+fn ts_namespace_runtime(n) = {
+  value n.body.node
+  value descendants(ts_namespace_runtime_nodes)
+  any (item) !(item is ts_export)
+    || !any(item.children.nodes, child => child is ts_export.declaration)
+    || any(item.children.nodes, child => child is ts_import_equals)
+}
 
 # Scopes; several on one node nest, outermost first. A function's body
 # shares the function's scope (parameters and body declarations together,
@@ -14,7 +23,7 @@ in ts_program {
   # CommonJS and `globalReturn` scripts run inside a function.
   when source_environment.root_function {
     scope function, block
-    declares value "arguments" in nearest function hoisted
+    declares value, query "arguments" in nearest function hoisted
   }
 }
 in ts_function { when !ts_declared_statement(node) { scope function_name } }
@@ -27,7 +36,7 @@ in ts_block {
   # A catch clause: its parameter (on the `try`) and body share one scope.
   when is ts_try.handler {
     scope catch, block
-    declares value parent.parameter in nearest catch hoisted
+    declares value, query parent.parameter in nearest catch hoisted
   }
 }
 in ts_for, ts_for_in, ts_for_of, ts_switch { scope block }
@@ -39,8 +48,8 @@ in ts_mapped_type { scope mapped }
 
 # Declarations. Patterns pass a declaration on to the names they bind.
 in ts_variable_declaration {
-  when kind == "var" { declares value declaration in nearest function hoisted }
-  when kind != "var" { declares value declaration in nearest block hoisted }
+  when kind == "var" { declares value, query declaration in nearest function hoisted }
+  when kind != "var" { declares value, query declaration in nearest block hoisted }
 }
 in ts_declarator { targets name }
 in ts_object_pattern { targets property, rest }
@@ -50,22 +59,25 @@ in ts_assignment_pattern { targets left }
 in ts_rest { targets argument }
 
 in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
-  declares value parameter in nearest function hoisted
+  declares value, query parameter in nearest function hoisted
 }
 in ts_parameter { targets name }
-in ts_function, ts_method { declares value "arguments" in nearest function hoisted }
+in ts_function, ts_method { declares value, query "arguments" in nearest function hoisted }
 # A declaration's name lands in the enclosing block; an expression's only
 # inside it.
 in ts_function {
-  when ts_declared_statement(node) { declares value name in enclosing block hoisted }
-  when !ts_declared_statement(node) { declares value name in nearest function_name hoisted }
+  when ts_declared_statement(node) { declares value, query name in enclosing block hoisted }
+  when !ts_declared_statement(node) { declares value, query name in nearest function_name hoisted }
 }
 in ts_class {
-  when ts_declared_statement(node) { declares value, type name in enclosing block hoisted }
-  when !ts_declared_statement(node) { declares value, type name in nearest class hoisted }
+  when ts_declared_statement(node) { declares value, type, query name in enclosing block hoisted }
+  when !ts_declared_statement(node) { declares value, type, query name in nearest class hoisted }
 }
 in ts_interface, ts_type_alias { declares type name in nearest block hoisted }
-in ts_enum, ts_namespace { declares value, type name in nearest block hoisted }
+in ts_enum { declares value, type, query name in nearest block hoisted }
+in ts_namespace {
+  declares value, type, query name in nearest block hoisted
+}
 # `namespace A.B {}` declares `A`.
 in ts_qualified_name { targets left }
 in ts_type_parameter { declares type name in nearest function, class, type_parameters, conditional, mapped hoisted }
@@ -73,24 +85,36 @@ in ts_type_parameter { declares type name in nearest function, class, type_param
 in ts_infer { declares type type_parameter.name in nearest conditional hoisted }
 
 in ts_import {
-  declares value, type default_import in nearest module hoisted
-  declares value, type namespace in nearest module hoisted
-  declares value, type specifier in nearest module hoisted
+  declares type, query default_import in nearest module hoisted
+  declares type, query namespace in nearest module hoisted
+  declares type, query specifier in nearest module hoisted
+  when kind != "type" {
+    declares value default_import in nearest module hoisted
+    declares value namespace in nearest module hoisted
+    declares value specifier where it.parent.kind != "type" in nearest module hoisted
+  }
 }
 in ts_import_specifier { targets local ?? imported }
-in ts_import_equals { declares value, type name in nearest block hoisted }
+in ts_import_equals {
+  declares type, query name in nearest block hoisted
+  when kind != "type" { declares value name in nearest block hoisted }
+}
 
 # References: identifiers, except where they only name something (member
 # and key names, labels, the far side of a rename).
+in ts_decorator let ts_name_decorator_method if parent is ts_method then parent.node else if parent is ts_parameter && parent.parent is ts_method then parent.parent.node else null
 in ts_identifier {
+  let ts_name_outside_method containing(ts_decorator).ts_name_decorator_method
   when !(is (ts_member.property, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key,
       ts_enum_member.name, ts_pattern_property.key, ts_import_specifier.imported, ts_export_specifier.local,
       ts_export_specifier.exported, ts_labeled.label, ts_break.label, ts_continue.label, ts_jsx_attribute.name,
-      ts_tuple_member.name, ts_qualified_name.right)
+      ts_tuple_member.name, ts_qualified_name.right, ts_type_parameter.name, ts_type_alias.name,
+      ts_interface.name, ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_equals.name)
     || is ts_property.key && parent.value != null
     # `[key: string]: T` names nothing.
     || is ts_parameter.name && parent is ts_index_signature.parameter) {
-    resolves value
+    when ts_name_outside_method != null { resolves value outside ts_name_outside_method }
+    when ts_name_outside_method == null { resolves value }
   }
 }
 in ts_type_reference { resolves type name }
@@ -100,20 +124,108 @@ in ts_qualified_name { resolves value, type left }
 in ts_export { resolves value, type expression }
 in ts_export_assignment { resolves value, type expression }
 
-# Writes: `assigned` overwrites, `mutated` reads then changes. Assignment
-# targets are expressions: literals pass writes on.
-in ts_assignment {
-  when operator == "=" {
-    unwraps assigned left
-    targets left
-  }
-  when operator != "=" { unwraps mutated left }
-}
-in ts_update { unwraps mutated argument }
-in ts_unary { when operator == "delete" { unwraps deleted argument } }
-in ts_for_of, ts_for_in { unwraps assigned left }
+in ts_assignment { when operator == "=" { targets left } }
 in ts_array { targets element }
 in ts_object { targets property }
 in ts_property { targets value ?? key }
 in ts_spread { targets argument }
 in ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion { targets expression }
+
+group name_type_syntax ts_type_reference, ts_type_keyword, ts_type_parameter, ts_union, ts_intersection,
+  ts_array_type, ts_parenthesized_type, ts_qualified_name, ts_type_operator, ts_indexed_access,
+  ts_conditional_type, ts_infer, ts_function_type, ts_type_literal, ts_property_signature,
+  ts_method_signature, ts_call_signature, ts_index_signature, ts_tuple_type, ts_tuple_member,
+  ts_type_query, ts_import_type, ts_literal_type, ts_template_type, ts_type_predicate, ts_mapped_type
+in ts_node let name_type_access is name_type_syntax || parent.name_type_access == true
+in ts_node let name_write_owner
+  if is (ts_for_in.left, ts_for_of.left) then parent.node
+  else if is ts_declarator.name then
+    if parent.init != null then parent.node
+    else if parent.parent is (ts_for_in.left, ts_for_of.left) then parent.parent.parent.node
+    else null
+  else if is ts_assignment.left then
+    if parent.flow_destructuring_target == true then parent.name_write_owner else parent.node
+  else if is ts_update.argument || is ts_unary.argument && parent.operator == "delete" && is (ts_member, ts_index)
+    then parent.node
+  else if flow_destructuring_target == true then parent.name_write_owner
+  else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression,
+    ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.name_write_owner
+  else null
+in ts_identifier, ts_member, ts_index, ts_array, ts_object, ts_array_pattern, ts_object_pattern let write_site name_write_owner.offset
+in ts_identifier let access {
+  value classes: name_role_classes(node, "reference")
+  value writer: name_write_owner
+  value if classes == null then null
+    else if writer is ts_update || writer is ts_assignment && writer.operator != "=" then "read_write"
+    else if writer != null then "write"
+    else if name_type_access || !contains(classes, "value")
+      || is ts_export_specifier.local && (parent.kind == "type" || parent.parent.kind == "type") then "type"
+    else "read"
+}
+
+fn ts_name_lexical(classes) = any(classes, class => contains(["value", "type", "query"], class))
+in ts_identifier let ts_name_declared ts_name_lexical(name_role_classes(node, "declaration"))
+in ts_identifier let ts_name_referenced ts_name_lexical(name_role_classes(node, "reference"))
+in ts_identifier let ts_name_binding
+  if ts_name_declared then name_binding(node)
+  else if ts_name_referenced && scope_declaration != null then name_binding(scope_declaration)
+  else null
+in ts_identifier let ts_name_site {
+  value binding: if ts_name_declared then ts_name_binding else null
+  value scope: if binding != null then first(name_scopes(node, "declaration")) else null
+  value if scope == null then null else {
+    value name_scope_declarations(node, scope.id, binding.key)
+    find (site) site.node == node
+  }.owner
+}
+fn ts_name_parameter(n, owner) = {
+  value n
+  walk (current) if current != owner then current.parent.node else null
+  any (current) current is ts_parameter
+}
+fn ts_name_site_kind(n, owner) =
+  if owner is ts_variable_declaration then if contains(["var", "let", "const"], owner.kind) then owner.kind else "using"
+  else if owner is (ts_function, ts_arrow, ts_method, ts_function_type, ts_call_signature, ts_method_signature)
+    && ts_name_parameter(n, owner) then "parameter"
+  else if owner is ts_function then if ts_declared_statement(owner) then "function" else "function_name"
+  else if owner is ts_class then if ts_declared_statement(owner) then "class" else "class_name"
+  else if owner is ts_block && owner.parent is ts_try then "catch"
+  else if owner is ts_interface then "interface"
+  else if owner is ts_type_alias then "type"
+  else if owner is ts_enum then "enum"
+  else if owner is ts_namespace then "namespace"
+  else if owner is (ts_type_parameter, ts_infer) then "type_parameter"
+  else if owner is (ts_import, ts_import_equals) then "import"
+  else ""
+in ts_identifier let ts_name_kind if ts_name_site != null then ts_name_site_kind(node, ts_name_site) else null
+
+in ts_node let declaration null
+in ts_node let declarations []
+in ts_node let references []
+in ts_node let scope null
+in ts_node let declaration_kind null
+in ts_node let declaration_kinds null
+in ts_node let reference_kind null
+in ts_identifier let declaration ts_name_binding.node
+in ts_identifier let declarations ts_name_binding.declarations ?? []
+in ts_identifier let references
+  if ts_name_declared && ts_name_binding.node == node then ts_name_binding.references else []
+in ts_identifier let scope
+  if ts_name_declared then first(name_scopes(node, "declaration")).owner
+  else if ts_name_referenced then first(name_scopes(node, "reference")).owner else null
+in ts_identifier let declaration_kind
+  if ts_name_declared && ts_name_binding.node == node then ts_name_kind else null
+in ts_identifier let declaration_kinds
+  if ts_name_declared then map(ts_name_binding.declarations, site => site.ts_name_kind) else null
+in ts_identifier let reference_kind
+  if !ts_name_declared && ts_name_referenced then ts_name_binding.node.ts_name_kind else null
+in ts_node let binding_declarations []
+in ts_program let binding_declarations {
+  value descendants(ts_identifier)
+  filter (site) site.ts_name_declared || site is ts_enum_member.name
+  sort_by (site) site.offset
+}
+in ts_node let writer name_write_owner
+in ts_node let conditional_ancestor
+  if is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test) then parent.node
+  else if parent is (ts_function, ts_arrow, ts_method) then null else parent.conditional_ancestor

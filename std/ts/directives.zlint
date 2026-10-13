@@ -1,0 +1,60 @@
+import .ts/globals
+
+in ts_node let ts_directive_program parent.ts_directive_program
+in ts_program let ts_directive_program node
+in ts_node let ecma_version parent.ecma_version
+in ts_program let ecma_version ts_ecma_version(node)
+in ts_node let source_environment parent.source_environment
+in ts_program let source_environment {
+  value program: node
+  value {
+    implied_strict: ts_environment(program, "impliedStrict") == true,
+    root_function: ts_source_type(program) == "commonjs"
+      || ts_source_type(program) == "script" && ts_environment(program, "globalReturn") == true
+  }
+}
+fn ts_directive_body(n) = if n is ts_program then n
+  else if n is (ts_function, ts_method, ts_arrow, ts_namespace) && n.body is ts_block then n.body.node
+  else null
+in ts_node let ts_directive_prologue {
+  value body: ts_directive_body(node)
+  value state: {
+    value body.body.nodes
+    fold ({ active: true, statements: [] }) (state, statement)
+      if state.active && statement is ts_expression_statement && statement.expression is ts_string
+        then { active: true, statements: state.statements [statement] }
+      else { active: false, statements: state.statements }
+  }
+  value state.statements
+}
+in ts_node let ts_strict_directives {
+  value ts_directive_prologue
+  filter (statement) contains(["'use strict'", '"use strict"'], statement.expression.text)
+}
+in ts_node let scoping_strict_code {
+  value program: ts_directive_program
+  value ts_source_type(program) == "module"
+    || source_environment.implied_strict && ecma_version >= 5
+    || is (ts_class, ts_static_block)
+    || ecma_version >= 5 && !(is ts_namespace) && count(ts_strict_directives) > 0
+    || parent.scoping_strict_code == true
+}
+in ts_node let directive_statement false
+in ts_expression_statement let directive_statement {
+  value scope: if parent is ts_program then parent.node
+    else if parent is ts_block then parent.parent.node else null
+  value expression is ts_string
+    && contains(scope.ts_directive_prologue, node)
+}
+in ts_node let directive_scope {
+  value ancestors: walk(parent.node, ancestor => ancestor.parent.node)
+  value program: ts_directive_program
+  value {
+    directives: ts_strict_directives,
+    inherited: if parent.node != null then parent.scoping_strict_code
+      else ts_source_type(program) == "module" || source_environment.implied_strict && ecma_version >= 5,
+    parent_function: any(ancestors, ancestor => ancestor is (ts_function, ts_method, ts_arrow)),
+    class_body: any(ancestors, ancestor => ancestor is ts_class.member) || is ts_class.member,
+    simple_parameters: all(parameter.nodes, parameter => parameter.name is ts_identifier && parameter.init == null)
+  }
+}

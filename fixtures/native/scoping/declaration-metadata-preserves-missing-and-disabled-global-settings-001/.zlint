@@ -2,7 +2,7 @@ import .ts
 
 language .js { set sourceType "script" }
 in ts_variable_declaration rule probe {
-  each d in scoping_global_declarations
+  each d in scoping_global_bindings(node)
   when (d.name == "absent" && d.setting == null) || (d.name == "disabled" && d.setting == "off")
   report at d.offset
   warn "binding"

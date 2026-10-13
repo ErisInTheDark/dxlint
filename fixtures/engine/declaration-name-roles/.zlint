@@ -1,0 +1,33 @@
+import .ts
+
+in ts_identifier rule declaration-site {
+  when is (ts_type_parameter.name, ts_type_alias.name, ts_interface.name, ts_import.default_import,
+    ts_import.namespace, ts_import_specifier.local, ts_import_equals.name)
+  when name_role_classes(node, "reference") != null
+  warn "a declaration name also became a value reference"
+}
+in ts_identifier rule shadowed-import {
+  when text == "Foo" && parent is ts_import_specifier
+  when references != []
+  warn "a generic declaration pretended to use its shadowed import"
+}
+in ts_identifier rule generic-use {
+  when text == "Foo" && is ts_type_parameter.name
+  when len(references) != 1
+  warn "a generic parameter lost its type reference"
+}
+in ts_identifier rule type-argument-use {
+  when text == "Bar" && parent is ts_import_specifier
+  when len(references) != 1
+  warn "a type argument lost its import reference"
+}
+in ts_identifier rule decorator-lookup {
+  when text == "command" && containing(ts_decorator) != null
+  when name_binding(node) == null || declaration.node is ts_parameter.name
+  warn "a decorator selected its method parameter instead of an outer or nested local"
+}
+in ts_identifier rule decorator-use {
+  when text == "command" && is ts_declarator.name
+  when len(references) != 1
+  warn "a decorator lost its outer or nested local use"
+}

@@ -1,0 +1,40 @@
+define {
+
+in ts_node let scoping_atomic_target
+  if is ts_assignment.left then { owner: parent.node, property: false }
+  else if is ts_parenthesized.expression then parent.scoping_atomic_target
+  else if is (ts_member.object, ts_index.object) && parent.scoping_atomic_target != null
+    then { owner: parent.scoping_atomic_target.owner, property: true }
+  else null
+fn scoping_atomic_binding(assignment, reference) = {
+  value target: reference.scoping_atomic_target
+  value references: scoping_binding_references(reference)
+  value declared: reference.declaration.scoping_binding_execution_scope
+  value shared: reference.declaration == null
+    || declared != null && any(references, other => other.scoping_execution_scope != null
+      && other.scoping_execution_scope.id != declared.id)
+  value entry: flow_entry(assignment)
+  value reads: {
+    value references
+    filter (other) flow_entry(other) == entry
+      && (contains(["read", "read_write"], other.access) && other.scoping_atomic_target == null
+        || other.scoping_atomic_target != null && other.scoping_atomic_target.owner.operator != "=")
+  }
+  value if !(shared || target.property && reference.reference_kind == "parameter")
+    || flow_crosses(entry, reads, [assignment], ["awaited", "yielded"], reads) != true then null
+    else { name: reference.declaration.text ?? reference.text, property: target.property, value: assignment.left.text }
+}
+fn scoping_atomic_updates(assignment) = {
+  value owner: assignment.scoping_execution_owner
+  value suspending: owner is (ts_function, ts_arrow, ts_method)
+    && any([] owner.modifier.nodes, modifier => contains(["async", "*"], modifier.text))
+  value if !suspending then [] else {
+    value walk(assignment.left.node, child => child.children.nodes)
+    filter (reference) reference is ts_identifier && reference.scoping_atomic_target.owner == assignment
+    map (reference) scoping_atomic_binding(assignment, reference)
+    filter (binding) binding != null
+    unique
+  }
+}
+
+}

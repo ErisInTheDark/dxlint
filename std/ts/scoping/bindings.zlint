@@ -1,0 +1,126 @@
+define {
+
+fn scoping_within(inner, outer) = inner != null && outer != null
+  && outer.offset <= inner.offset && inner.end_offset <= outer.end_offset
+in ts_node let scoping_program parent.scoping_program
+in ts_program let scoping_program node
+in ts_node let scoping_site_kind
+  if is ts_function then "function"
+  else if is ts_class then "class"
+  else if is ts_interface then "interface"
+  else if is ts_enum then "enum"
+  else if is ts_namespace then "namespace"
+  else if is ts_type_alias then "type"
+  else if is ts_parameter then "parameter"
+  else if is ts_type_parameter then "type_parameter"
+  else if is (ts_import, ts_import_specifier) then "import"
+  else parent.scoping_site_kind
+in ts_variable_declaration let scoping_site_kind kind
+in ts_node let scoping_declaration_scopes name_scopes(node, "declaration")
+in ts_identifier let scoping_lexical_declaration ts_name_declared
+in ts_node let scoping_reference_scopes name_scopes(node, "reference")
+in ts_node let scoping_lexical_scopes name_scopes(node, "lexical")
+fn scoping_value_scope(scope) =
+  any(scope.classes, class => contains(["module", "function", "block", "catch", "class"], class))
+fn scoping_script_scope(scope) = scope.owner is ts_program
+  && ts_source_type(scope.owner) == "script" && scope.owner.source_environment.root_function != true
+fn scoping_reference_scope(n) = {
+  value n.scoping_reference_scopes
+  filter (scope) scoping_value_scope(scope)
+  first
+}
+fn scoping_function_scope(n, role) = {
+  value if role == "declaration" then n.scoping_declaration_scopes
+    else if role == "reference" then n.scoping_reference_scopes else n.scoping_lexical_scopes
+  filter (scope) contains(scope.classes, "function")
+  first
+}
+in ts_node let scoping_execution_scope
+  scoping_function_scope(node, "reference") ?? scoping_function_scope(node, "lexical")
+in ts_node let scoping_execution_owner scoping_execution_scope.owner
+in ts_identifier let scoping_binding_execution_scope scoping_function_scope(node, "declaration")
+in ts_identifier let scoping_write_execution_scope
+  scoping_binding_execution_scope ?? scoping_execution_scope
+in ts_program let scoping_reference_catalog descendants(ts_identifier)
+in ts_node let scoping_reference_catalog parent.scoping_reference_catalog
+fn scoping_binding_references(reference) =
+  if reference.declaration != null then reference.declaration.references
+  else if reference.resolved == "global" && contains(["readonly", "writable"], reference.global) then {
+    value reference.scoping_reference_catalog
+    filter (other) other.resolved == "global" && other.identifier_name == reference.identifier_name
+      && contains(["readonly", "writable"], other.global)
+  } else []
+in ts_node let scoping_binding_declarator
+  if is ts_declarator then node
+  else if is (ts_function_like, ts_program) then null
+  else parent.scoping_binding_declarator
+fn scoping_binding_writes(declaration, iteration) = {
+  value writes: filter(declaration.references, reference => contains(["write", "read_write"], reference.access))
+  value initial: {
+    value declaration.declarations
+    filter (site) (iteration || site.scoping_site_kind == "var") && site.scoping_binding_declarator.init != null
+      || iteration && site.scoping_binding_declarator.parent is (ts_for_in.left, ts_for_of.left)
+  }
+  value writes initial
+}
+fn scoping_binding_context(n) = {
+  value n
+  walk (current) if current is (ts_block, ts_for, ts_for_in, ts_for_of, ts_switch, ts_static_block, ts_program)
+    then null else current.parent.node
+  last
+}
+fn scoping_outside_definitions(reference) =
+  if reference.reference_kind == null
+    && !(reference.scoping_site_kind == "var" && name_role_classes(reference, "declaration") != null
+      && reference.scoping_binding_declarator.init != null) then []
+  else {
+    value sites: reference.declarations
+    value sites
+    filter (site) site.scoping_site_kind == "var" && {
+      value context: scoping_binding_context(site)
+      value !scoping_within(reference, context)
+        && !any(sites, earlier => earlier.offset < site.offset
+          && scoping_const_declaration(earlier) == scoping_const_declaration(site))
+    }
+    map (site) {
+      value position: position(site.offset)
+      value { line: position.js_line, column: position.js_column }
+    }
+  }
+
+fn scoping_definition_next(n) =
+  if n is (ts_declarator, ts_class, ts_function_like, ts_import, ts_export, ts_try) then null
+  else n.parent.node
+in ts_identifier let scoping_definition_owners walk(node, current => scoping_definition_next(current))
+fn scoping_definition_separate(reference, boundary) = {
+  value walk(reference, current => if current.parent.node == boundary then null else current.parent.node)
+  any (current) current.parent.node != boundary
+    && (current is (ts_function.body, ts_function.parameter, ts_arrow.body, ts_arrow.parameter, ts_method.body, ts_method.parameter)
+      || current is ts_class_property.init && !contains([] current.parent.modifier, "static"))
+}
+fn scoping_definition_initializes(reference, owner) =
+  if owner is (ts_assignment_pattern, ts_parameter) then scoping_within(reference, owner.right.node ?? owner.init.node)
+  else if owner is ts_pattern_property then owner.value is ts_assignment_pattern
+    && scoping_within(reference, owner.value.right.node)
+  else if owner is ts_declarator then scoping_within(reference, owner.init.node)
+    || owner.parent.parent is (ts_for_in, ts_for_of) && scoping_within(reference, owner.parent.parent.right.node)
+  else if owner is ts_class then scoping_within(reference, owner) && !any([] owner.member.nodes, member =>
+    member is ts_static_block && scoping_within(reference, member)
+    || member is ts_class_property && contains([] member.modifier, "static") && scoping_within(reference, member.init.node))
+  else false
+fn scoping_definition_context(reference) = {
+  value declaration: reference.declaration.node
+  value scope: first(declaration.scoping_declaration_scopes)
+  value separate: scope != null && scoping_definition_separate(reference, scope.owner)
+  value owners: declaration.scoping_definition_owners
+  value can_initialize: !separate && reference.access != "type"
+  value decorated: can_initialize && any(owners, owner => owner is ts_class
+    && any([] owner.decorator.nodes, decorator => scoping_within(reference, decorator)))
+  value initialized: can_initialize && any(owners, owner => scoping_definition_initializes(reference, owner))
+  value if reference.reference_kind == null || declaration == null || scope == null then null
+    else { kind: reference.reference_kind, before: !decorated && (reference.end_offset < declaration.end_offset || initialized),
+      separate: separate, export: reference.parent is ts_export_specifier }
+}
+in ts_identifier let scoping_definition_use scoping_definition_context(node)
+
+}

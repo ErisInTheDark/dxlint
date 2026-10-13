@@ -9,8 +9,7 @@
 use crate::fx_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use crate::grammar::names::Resolved;
 use std::borrow::Cow;
-use std::cell::OnceCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
@@ -46,7 +45,7 @@ pub struct Binding {
 
 #[derive(Default)]
 pub struct Bindings {
-    names: Rc<Resolved>,
+    names: Arc<Resolved>,
     value: u64,
     type_: u64,
     /// Declaring identifier -> its uses.
@@ -63,47 +62,19 @@ pub struct Bindings {
     /// object literal used as a destructuring target -> the node that writes
     /// it: the assignment, update, `delete` or `for` statement.
     pub write_sites: HashMap<u32, u32>,
-    /// Declaring identifier -> the kinds of every declaration merged into
-    /// its binding (`class` and `interface` of one name).
-    pub declaration_kinds: HashMap<u32, Vec<&'static str>>,
     /// Function-like node -> what its own body does ([`USES_THIS`], ...).
     /// Arrow functions count toward the function around them.
     pub functions: HashMap<u32, u8>,
-    pub scopes: Vec<ScopeInfo>,
-    /// Declaring identifier (merged ones too) -> the scope it declares in.
-    pub decl_scope: HashMap<u32, usize>,
-    /// Referencing identifier -> the scope it appears in.
-    pub ref_scope: HashMap<u32, usize>,
     /// Later declaring identifier of a merged name (`var a; var a;`,
     /// overloads, `class X` + `interface X`) -> the first, which owns the
     /// binding.
     pub merged: HashMap<u32, u32>,
     /// `arguments` reference -> the function whose implicit binding it reads.
     arguments: HashMap<u32, u32>,
-    index: OnceCell<BindingIndex>,
-}
-
-#[derive(Default)]
-struct BindingIndex {
-    declarations: HashMap<u32, Vec<u32>>,
-    references: HashMap<u32, Vec<u32>>,
 }
 
 pub const USES_THIS: u8 = 1;
 pub const USES_ARGUMENTS: u8 = 2;
-pub const HAS_YIELD: u8 = 4;
-
-/// A scope: indexes into [`Bindings::scopes`]; the first is the file's.
-#[derive(Clone, Copy, Debug)]
-pub struct ScopeInfo {
-    pub parent: Option<usize>,
-    /// Where `var` lands: the file, a function (or method, arrow), a static
-    /// block or a namespace body.
-    pub function: bool,
-    /// What opens it: the program, a function-like, block, class, `for`,
-    /// `switch`, catch clause, namespace body or type construct.
-    pub node: u32,
-}
 
 /// How a reference uses its name.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -126,64 +97,42 @@ enum Use {
 
 impl Bindings {
     /// The view of the engine's `names` for `s`'s file.
-    pub fn from_names(s: &Syntax, names: Rc<Resolved>) -> Bindings {
+    pub fn from_names(s: &Syntax, names: Arc<Resolved>) -> Bindings {
         let v = &names.vocabulary;
         let (value, type_) = (v.declaration_class("value"), v.declaration_class("type"));
-        let function_scope = v.scope_class("function");
+        let lexical = value | type_ | v.declaration_class("query");
         let (assigned, mutated, deleted) = (v.effect("assigned"), v.effect("mutated"), v.effect("deleted"));
         let mut b = Bindings { value, type_, ..Bindings::default() };
-        b.scopes = names
-            .scopes
-            .iter()
-            .map(|sc| ScopeInfo { parent: sc.parent.map(|p| p as usize), function: sc.classes & function_scope != 0, node: sc.node })
-            .collect();
-
-        // Declarations in document order: merged kinds keep it.
-        let mut declared: Vec<(u32, u32, u32)> =
-            names.declared.iter().filter(|(d, _)| !names.implicit.contains_key(d)).map(|(&d, &(scope, site, ..))| (d, scope, site)).collect();
+        let mut declared: Vec<(u32, u32)> =
+            names.declared.iter().filter(|(d, (_, _, classes, _))| classes & lexical != 0 && !names.implicit.contains_key(d))
+                .map(|(&d, &(_, site, ..))| (d, site)).collect();
         declared.sort_by_key(|&(d, ..)| s.tree.node(d).start);
         // Declaring identifier -> the function its uses inside count as self uses.
         let mut owners: HashMap<u32, u32> = HashMap::default();
-        for (d, scope, site) in declared {
+        for (d, site) in declared {
             if !s.is(d, K::Ident) {
                 continue;
             }
-            b.decl_scope.insert(d, scope as usize);
             let kind = declaration_kind(s, d, site);
             let (exported, ambient) = statement_flags(s, d, site, kind);
             if let Some(&first) = names.merged.get(&d) {
                 b.merged.insert(d, first);
-                b.declaration_kinds.entry(first).or_default().push(kind);
                 if let Some(binding) = b.decls.get_mut(&first) {
                     binding.exported |= exported;
                     binding.ambient &= ambient;
                 }
                 continue;
             }
-            b.declaration_kinds.insert(d, vec![kind]);
             b.decls.insert(d, Binding { kind, exported, ambient, ..Binding::default() });
             if let Some(owner) = self_use_owner(s, d, site, kind) {
                 owners.insert(d, owner);
             }
         }
-        let merged_kinds: Vec<(u32, Vec<&'static str>)> =
-            b.merged.iter().map(|(&d, first)| (d, b.declaration_kinds.get(first).cloned().unwrap_or_default())).collect();
-        b.declaration_kinds.extend(merged_kinds);
-
-        // Function bodies: `this` and `yield`.
         for &id in &s.tree.order {
-            match s.kind(id) {
-                Some(K::This) => {
-                    if let Some(f) = this_owner(s, id) {
-                        *b.functions.entry(f).or_default() |= USES_THIS;
-                    }
+            if s.is(id, K::This) {
+                if let Some(f) = this_owner(s, id) {
+                    *b.functions.entry(f).or_default() |= USES_THIS;
                 }
-                Some(K::Yield) => {
-                    if let Some(f) = this_owner(s, id) {
-                        *b.functions.entry(f).or_default() |= HAS_YIELD;
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -196,11 +145,11 @@ impl Bindings {
             }
         }
 
-        for (&r, &(scope, want)) in &names.asked {
-            if !s.is(r, K::Ident) {
+        for (&r, lookup) in &names.asked {
+            let want = lookup.classes;
+            if want & lexical == 0 || !s.is(r, K::Ident) {
                 continue;
             }
-            b.ref_scope.insert(r, scope as usize);
             let effect = names.effects.get(&r).map(|&(e, _)| Some(e));
             let use_ = match effect {
                 Some(e) if e == assigned => Use::Write,
@@ -255,35 +204,6 @@ impl Bindings {
         }
         b.names = names;
         b
-    }
-
-    fn index(&self, s: &Syntax) -> &BindingIndex {
-        self.index.get_or_init(|| {
-            let mut index = BindingIndex::default();
-            for &d in self.decls.keys() {
-                index.declarations.insert(d, vec![d]);
-            }
-            for (&later, &first) in &self.merged {
-                index.declarations.entry(first).or_default().push(later);
-            }
-            for (&reference, &decl) in &self.refs {
-                index.references.entry(decl).or_default().push(reference);
-            }
-            for nodes in index.declarations.values_mut().chain(index.references.values_mut()) {
-                nodes.sort_by_key(|&id| s.tree.node(id).start);
-            }
-            index
-        })
-    }
-
-    /// Canonical bindings and all their declaring identifiers, in source order.
-    pub fn declarations(&self, s: &Syntax) -> &HashMap<u32, Vec<u32>> {
-        &self.index(s).declarations
-    }
-
-    /// Real references of a canonical binding; initializer writes are not references.
-    pub fn references_of(&self, s: &Syntax, declaration: u32) -> &[u32] {
-        self.index(s).references.get(&declaration).map(Vec::as_slice).unwrap_or_default()
     }
 
     /// Implicit `arguments` has an owning function, but no declaring identifier.
@@ -444,8 +364,8 @@ mod tests {
                 assert_ne!(file.decl_of(nodes[1]), Some(outer), "block binding shadows");
                 assert_eq!(file.decl_of(nodes[2]), Some(outer));
                 let merged = file.decl_of(nodes[3]).expect("merged binding");
-                assert_eq!(file.bindings().references_of(&file.syntax, merged), &[nodes[3]]);
-                assert_eq!(file.bindings().declarations(&file.syntax)[&merged].len(), 2);
+                assert_eq!(file.bindings().refs.get(&nodes[3]), Some(&merged));
+                assert_eq!(file.bindings().merged.values().filter(|&&first| first == merged).count(), 1);
                 assert_eq!(file.bindings().visible(&file.syntax, nodes[0], "a", true), Some(outer));
             },
         );

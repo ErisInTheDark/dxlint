@@ -23,7 +23,7 @@ in ts_if.consequent, ts_while.body, ts_for.body, ts_for_in.body, ts_for_of.body 
 # `declare global { var x }` is the only way to declare a global.
 in ts_namespace let format_global_namespace kind == "global"
 in ts_node let format_global_scope (format_global_namespace.nonempty ?? false) || (parent.format_global_scope.nonempty ?? false)
-in ts_program let format_script_global source_type == "script" && !source_environment.root_function
+in ts_program let format_script_global ts_source_type(node) == "script" && source_environment.root_function != true
 # Dynamic names prevent a binding-preservation proof.
 in ts_program, ts_function_like, ts_static_block let format_lexical_dynamic
   { value descendants(ts_with); count } > 0
@@ -56,6 +56,18 @@ fn format_lexical_declarator(n) = {
   walk (current) if current is ts_declarator then null else current.parent.node
   last
 }
+fn format_lexical_called_after(reference, binding, declarator, container) = {
+  value function: {
+    value reference
+    walk (current) if current is ts_function_like then null else current.parent.node
+    last
+  }
+  value calls: filter(function.name.references, call => !scoping_within(call, function))
+  value function is ts_function && ts_declared_statement(function)
+    && count(calls) > 0 && all(calls, call => call.scoping_outer_parens is ts_call.callee
+      && call.scoping_execution_scope.id == binding.scoping_binding_execution_scope.id
+      && call.offset >= declarator.end_offset && scoping_within(call, container))
+}
 fn format_lexical_binding(binding, declarator, container) = {
   value initializer: declarator.init.structure_unwrapped
   value recursive: initializer is (ts_function, ts_arrow) && !format_lexical_loop(declarator)
@@ -67,8 +79,9 @@ fn format_lexical_binding(binding, declarator, container) = {
   && !format_lexical_catch(binding)
   && all(binding.references, reference => reference.scoping_definition_use != null
     && !reference.scoping_definition_use.before
-    && (!reference.scoping_definition_use.separate || recursive
-      && reference.offset >= initializer.offset && reference.end_offset <= initializer.end_offset)
+    && (!reference.scoping_definition_use.separate
+      || recursive && reference.offset >= initializer.offset && reference.end_offset <= initializer.end_offset
+      || format_lexical_called_after(reference, binding, declarator, container))
     && reference.offset >= container.offset && reference.end_offset <= container.end_offset)
 }
 in ts_variable_declaration let format_lexical_bindings {
@@ -88,7 +101,7 @@ in ts_variable_declaration.kind rule no-var warn "Unexpected var, use let or con
   when ts_namespace.format_global_scope != true
   let owner parent.node
   let body if owner.parent is ts_export then owner.parent.parent.node else owner.parent.node
-  let fixable ecma_version >= 2015
+  let fixable owner.ecma_version >= 2015
     && (body is (ts_program, ts_block) || owner is (ts_for.init, ts_for_in.left, ts_for_of.left))
     && !contains(owner.modifier, "declare")
     && (!format_lexical_loop(owner) || owner is (ts_for_in.left, ts_for_of.left) || owner.format_lexical_initialized)

@@ -1,0 +1,86 @@
+define {
+
+fn scoping_loop_immediate(function) = function is (ts_function, ts_arrow)
+  && !any([] function.modifier.nodes, modifier => contains(["async", "*"], modifier.text))
+  && scoping_receiver_immediate(function) != null
+  && count(function.name.references) == 0
+in ts_node let scoping_loop_context
+  if parent is (ts_while, ts_do_while) then parent.node
+  else if parent is ts_for then if is ts_for.init then parent.scoping_loop_context else parent.node
+  else if parent is (ts_for_in, ts_for_of) then if is (ts_for_in.right, ts_for_of.right) then parent.scoping_loop_context else parent.node
+  else if parent is ts_function_like && !scoping_loop_immediate(parent.node) then null
+  else parent.scoping_loop_context
+fn scoping_loop_unsafe(function, loop, reference) = {
+  value declaration: reference.declaration.node
+  value kind: reference.reference_kind
+  value variable: scoping_const_declaration(declaration)
+  value local: kind == "let" && loop.offset < variable.offset && variable.end_offset < loop.end_offset
+  value border: if kind == "let" then variable.end_offset else 0
+  value top: {
+    value loop
+    walk (current) if current.scoping_loop_context.offset >= border then current.scoping_loop_context else null
+    last
+  }
+  value writes: scoping_binding_writes(declaration, true)
+  value declared: declaration.scoping_binding_execution_scope
+  value declaration != null && !scoping_within(declaration, function)
+    && !contains(["const", "using", "await using"], kind) && !local
+    && any(writes, write => write.offset >= top.offset
+      || declared != null && write.scoping_write_execution_scope != null
+        && write.scoping_write_execution_scope.id != declared.id)
+}
+fn scoping_loop_captured(function) = {
+  value loop: function.scoping_loop_context
+  value if loop == null || scoping_loop_immediate(function) then [] else {
+    value function.scoping_reference_catalog
+    filter (reference) scoping_within(reference, function) && scoping_loop_unsafe(function, loop, reference)
+    sort_by (reference) reference.offset
+    map (reference) reference.text
+    unique
+  }
+}
+
+in ts_node let scoping_condition_dynamic any(children.nodes, child => child.scoping_condition_dynamic)
+in ts_call, ts_member, ts_index, ts_new, ts_tagged_template, ts_yield let scoping_condition_dynamic true
+in ts_function, ts_arrow, ts_class let scoping_condition_dynamic false
+fn scoping_condition_next(n, independent) =
+  if n is (ts_while, ts_do_while, ts_for) then null
+  else if n.parent is (ts_while, ts_do_while, ts_for) then
+    if n is (ts_while.test, ts_do_while.test, ts_for.test) then n.parent.node else null
+  else if n.parent is ts_binary && n.parent.scoping_condition_dynamic
+    || !independent && n.parent is ts_conditional && n.parent.scoping_condition_dynamic
+    || n.parent is (ts_call, ts_member, ts_index, ts_new, ts_yield, ts_function_like, ts_class, ts_block,
+      ts_expression_statement, ts_variable_declaration, ts_declarator, ts_return, ts_if, ts_switch, ts_for_in, ts_for_of, ts_program) then null
+  else n.parent.node
+fn scoping_condition_candidate(reference, independent) = {
+  value path: walk(reference, current => scoping_condition_next(current, independent))
+  value loop: last(path)
+  value group: { value path; filter (current) current is ts_binary || !independent && current is ts_conditional; last }
+  value if reference.declaration == null || loop not (ts_while, ts_do_while, ts_for) then null
+    else { loop: loop, group: group }
+}
+fn scoping_condition_in_loop(n, loop) = scoping_within(n, loop) && !scoping_within(n, loop.init.node)
+fn scoping_condition_modified(reference, loop) = {
+  value declaration: reference.declaration.node
+  value writes: scoping_binding_writes(declaration, false)
+  value any(writes, write => scoping_condition_in_loop(write, loop) || {
+    value ancestors: walk(write, current => current.parent.node)
+    value owner: {
+      value ancestors
+      filter (current) current is ts_function && current.parent is (ts_program, ts_block, ts_export)
+      first
+    }
+    value any(owner.name.references, use => scoping_condition_in_loop(use, loop))
+  })
+}
+fn scoping_condition_unmodified(reference, independent) = {
+  value candidate: scoping_condition_candidate(reference, independent)
+  value if candidate == null then false
+    else if candidate.group == null then !scoping_condition_modified(reference, candidate.loop)
+    else !any(reference.scoping_reference_catalog, other => scoping_within(other, candidate.group) && {
+      value own: scoping_condition_candidate(other, independent)
+      value own.group == candidate.group && scoping_condition_modified(other, candidate.loop)
+    })
+}
+
+}

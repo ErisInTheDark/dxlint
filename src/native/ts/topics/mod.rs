@@ -15,8 +15,6 @@ use super::facts::Facts;
 pub mod conditions;
 pub mod core;
 pub mod layout;
-pub mod relations;
-pub mod scoping;
 pub mod structure;
 pub mod suggestions;
 pub mod syntax;
@@ -56,12 +54,12 @@ pub struct Link {
 
 const FACT_GROUPS: &[&[Fact]] = &[
     core::FACTS, syntax::FACTS, layout::FACTS, structure::FACTS, typed::FACTS, conditions::FACTS,
-    type_relations::FACTS, scoping::FACTS, suggestions::FACTS, symbols::FACTS,
+    type_relations::FACTS, suggestions::FACTS, symbols::FACTS,
 ];
 
 const FACT_FIELD_GROUPS: &[&[FactFields]] = &[syntax::FACT_FIELDS];
 
-const LINK_GROUPS: &[&[Link]] = &[relations::LINKS, layout::LINKS];
+const LINK_GROUPS: &[&[Link]] = &[layout::LINKS];
 
 /// Every fact, numbered as the engine reads them.
 pub static FACTS: LazyLock<Vec<&'static Fact>> = LazyLock::new(|| FACT_GROUPS.iter().flat_map(|group| group.iter()).collect());
