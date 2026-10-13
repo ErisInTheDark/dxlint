@@ -4,11 +4,33 @@ import .ts/helpers
 
 define {
 
-fn padding_selector_matches(info, selector) = (if type_of(selector) == "str" then contains(info.tags, selector) else { value selector.selector; re_replace: re_replace /["']/ ""; value contains(info.selectors, re_replace) } && ((selector.lineMode.nonempty ?? "any") == "any" || selector.lineMode == "multiline" && info.multiline || selector.lineMode == "singleline" && !info.multiline))
+fn padding_sized_tag_matches(item, selector, tag) = tag != null && (
+  selector == tag
+  || selector == "multiline-" tag && item.structure_padding_multiline
+  || selector == "singleline-" tag && !item.structure_padding_multiline
+)
+fn padding_named_selector_matches(item, selector) =
+  selector == "*"
+  || selector == item.structure_padding_plain_tag
+  || selector == first(item.structure_padding_keyword_tag) && item.structure_padding_keyword == selector
+  || padding_sized_tag_matches(item, selector, item.structure_padding_sized_tag)
+  || contains(["block-like", "multiline-block-like", "singleline-block-like"], selector)
+    && item.structure_padding_block_like && padding_sized_tag_matches(item, selector, "block-like")
+  || selector == "require" && item.structure_padding_require
+  || selector == "cjs-import" && item.structure_padding_cjs_import
+  || selector == "iife" && item.structure_padding_iife
+  || selector == "cjs-export" && item.structure_padding_cjs_export
+  || selector == "exports" && item.structure_padding_exports_tag
+fn padding_selector_matches(item, selector) =
+  if type_of(selector) == "str" then padding_named_selector_matches(item, selector)
+  else { value selector.selector; re_replace: re_replace /["']/ ""; value contains(item.structure_padding_selectors.nonempty ?? [item.structure_padding_type], re_replace) }
+    && ((selector.lineMode.nonempty ?? "any") == "any"
+      || selector.lineMode == "multiline" && item.structure_padding_multiline
+      || selector.lineMode == "singleline" && !item.structure_padding_multiline)
 fn padding_category_side_matches(info, selectors) = any(selectors, selector => padding_selector_matches(info, selector))
 fn padding_side_matches(item, selectors) =
   if type_of(selectors) == "str" then
-    selectors == "*" || contains(item.structure_padding_categories.tags, selectors)
+    selectors == "*" || padding_selector_matches(item.structure_padding_categories, selectors)
   else if type_of(selectors) == "list" then
     any(selectors, selector => type_of(selector) == "str" && selector == "*")
     || len(selectors) != 0 && padding_category_side_matches(item.structure_padding_categories, selectors)
@@ -80,21 +102,12 @@ in ts_type_alias let structure_padding_sized_tag if structure_padding_keyword ==
 in ts_return let structure_padding_sized_tag if structure_padding_keyword == "return" then "return" else null
 in ts_declarator let structure_padding_init init.node
 in ts_variable_declaration let structure_padding_first_init first(declaration.structure_padding_init)
-in ts_variable_declaration let structure_padding_extra_tags {
-  value [
-  if { value structure_padding_first_init; structure_padding_receiver; structure_padding_is_require } then "require" else null,
-  if starts_with(structure_padding_first_init.text, "require(") then "cjs-import" else null
-]
-  compact
-}
-in ts_expression_statement let structure_padding_extra_tags {
-  value [
-  if structure_padding_iife then "iife" else null,
-  if expression.structure_unwrapped is ts_assignment && { value expression.structure_unwrapped.left.text; re_replace /\s/ ""; re_test /^(?:module\.)?exports(?:$|[.\[])/ } then "cjs-export" else null,
-  if expression.structure_unwrapped is ts_assignment && expression.structure_unwrapped.left.structure_padding_exports then "exports" else null
-]
-  compact
-}
+in ts_variable_declaration let structure_padding_require { value structure_padding_first_init; structure_padding_receiver; structure_padding_is_require }
+in ts_variable_declaration let structure_padding_cjs_import starts_with(structure_padding_first_init.text, "require(")
+in ts_expression_statement let structure_padding_cjs_export expression.structure_unwrapped is ts_assignment
+  && { value expression.structure_unwrapped.left.text; re_replace /\s/ ""; re_test /^(?:module\.)?exports(?:$|[.\[])/ }
+in ts_expression_statement let structure_padding_exports_tag expression.structure_unwrapped is ts_assignment
+  && expression.structure_unwrapped.left.structure_padding_exports
 in ts_function let structure_padding_selectors { value [if name != null then structure_padding_type "[id.name=" name "]" else null, structure_padding_type]; compact }
 in ts_export let structure_padding_selectors {
   value [if declaration != null then structure_padding_type "[declaration.type=" (declaration.structure_padding_declaration_type.nonempty ?? "") "]" else null, structure_padding_type]
@@ -119,37 +132,19 @@ in ts_node let structure_padding_block_like structure_padding_iife
       value overlapping(structure_padding_block, result_2, result_3)
       any (block) block.end_offset == offset + byte_len(structure_padding_trimmed)
     })
-in ts_node let structure_padding_categories (structure_padding_unlabel.nonempty ?? node).structure_padding_category
-in ts_node let structure_padding_category {
-  tags: ["*"] {
-    value [structure_padding_plain_tag, if structure_padding_keyword == first(structure_padding_keyword_tag) then first(structure_padding_keyword_tag) else null]
-    compact
-  } (structure_padding_extra_tags.nonempty ?? [])
-    {
-      value text
-      multiline: re_test /[\n\r\u2028\u2029]/
-      value structure_padding_tags(structure_padding_sized_tag, multiline)
-    }
-    (if structure_padding_block_like then { value text; multiline_2: re_test /[\n\r\u2028\u2029]/; value structure_padding_tags("block-like", multiline_2) } else []),
-  selectors: structure_padding_selectors.nonempty ?? [structure_padding_type],
-  multiline: re_test(text, /[\n\r\u2028\u2029]/)
-}
-fn structure_padding_tags(tag, multiline) = if tag == null then [] else [tag, (if multiline then "multiline-" else "singleline-") tag]
+in ts_node let structure_padding_categories structure_padding_unlabel.nonempty ?? node
+in ts_node let structure_padding_multiline re_test(text, /[\n\r\u2028\u2029]/)
 fn structure_padding_receiver(n) = n.structure_padding_receiver.nonempty ?? n.structure_unwrapped
 fn structure_padding_is_require(n) = n.callee is ts_identifier && n.callee.text == "require"
 fn structure_padding_blank(text) = { value text; replace "\r\n" "\n"; re_test /[\n\r\u2028\u2029]\s*[\n\r\u2028\u2029]/ }
 fn structure_padding_gap_end(previous, next, source) = {
   value end: if previous is ts_method_signature then previous.member_terminal_token.end else previous.end_offset
-  value text: byte_slice(source, previous.offset, end)
-  value if !ends_with(text, ";") then end else {
-    value content_end: byte_len(text) - 1
-    value text
-    byte_slice 0 content_end
-    trim_end
-    byte_len
-    trimmed_end: then (length) previous.offset + length
+  value semicolon: if previous is ts_method_signature then previous.member_terminal_token.text == ";" else ends_with(previous.text, ";")
+  value if !semicolon then end
+    else if { value source; byte_slice (end - 1) next.offset; re_test /[\n\r\u2028\u2029]/ } then end
+    else {
+    value trimmed_end: { value source; byte_slice previous.offset (end - 1); trim_end; byte_len } + previous.offset
     value if { value source; byte_slice trimmed_end (end - 1); re_test /[\n\r\u2028\u2029]/ }
-      && !{ value source; byte_slice (end - 1) next.offset; re_test /[\n\r\u2028\u2029]/ }
       then trimmed_end else end
   }
 }
