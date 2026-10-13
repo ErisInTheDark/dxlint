@@ -18,6 +18,8 @@ in ts_member rule selected-value {
   when text == "NS.present" && !namespace_scalar(node, 1)
     || text == "NS.Nested.leaf" && !namespace_scalar(node, "ok")
     || text == "NS.E.Zero" && !namespace_scalar(node, 0)
+    || text == "Plain.present" && !namespace_scalar(node, 11)
+    || text == "Ambient.present" && !namespace_scalar(node, 14)
   warn "a selected namespace value lost its real source value"
 }
 in ts_member rule nested-visibility {
@@ -41,6 +43,8 @@ in ts_type_reference rule qualified-type-selection {
     || name == "Alias.One" && !namespace_scalar(node, 1)
     || name == "NS.E.Text" && !namespace_scalar(node, "merged")
     || name == "NS.Box" && !namespace_scalar(node, "box")
+    || name == "Plain.Text" && !namespace_scalar(node, "plain")
+    || name == "Ambient.Text" && !namespace_scalar(node, "ambient")
   warn "a qualified type lost its selected declaration or bound argument"
 }
 in ts_type_reference rule namespace-enum-type {
@@ -57,4 +61,26 @@ in ts_identifier rule empty-namespace-binding {
   when text == "Empty" && is ts_declarator.init
   when declaration_kind != null || reference_kind != "namespace" || value_constituents(node) != null
   warn "an empty namespace lost its binding or invented a runtime value"
+}
+in ts_identifier rule dotted-namespace-binding {
+  when contains(["GlobalDot", "ExportDot", "AmbientDot"], text) && is ts_declarator.init
+  let classes name_classes(node, text, null, null)
+  when classes.value != true || classes.type != true || classes.query != true
+  warn "a dotted namespace lost its root binding classes"
+}
+in ts_program rule dotted-namespace-publications {
+  when ends_with(file, "input.ts")
+  let global name_classes(node, "GlobalDot", null, null)
+  let exported name_classes(node, "ExportDot", "./exports", null)
+  let ambient name_classes(node, "AmbientDot", "ambient-namespaces", null)
+  let global_inner name_classes(node, "Inner", null, null)
+  let exported_inner name_classes(node, "Inner", "./exports", null)
+  let ambient_inner name_classes(node, "Inner", "ambient-namespaces", null)
+  when global.value != true || global.type != true || global.query != true
+    || exported.value != true || exported.type != true || exported.query != true
+    || ambient.value != true || ambient.type != true || ambient.query != true
+    || global_inner.value != false || global_inner.type != false || global_inner.query != false
+    || exported_inner.value != false || exported_inner.type != false || exported_inner.query != false
+    || ambient_inner.value != false || ambient_inner.type != false || ambient_inner.query != false
+  warn "a dotted namespace published the wrong root name or classes"
 }

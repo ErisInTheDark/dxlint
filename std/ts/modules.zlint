@@ -63,20 +63,15 @@ fn ts_module_program(n) = {
   value walk([n], p => p.parent.node)
   find (p) p is ts_program
 }
-fn ts_module_external(n) = ends_with(n.file, ".mjs") || ends_with(n.file, ".mts")
-  || ends_with(n.file, ".cjs") || ends_with(n.file, ".cts")
-  || any(n.body.nodes, item => item is (ts_import, ts_export, ts_export_assignment)
-  || item is ts_import_equals && item.value.node is ts_call)
+fn ts_module_external(n) = n.ts_module_external_file
 fn ts_module_names(n) = if n.name.node is ts_qualified_name then {
   value [n.name.node]
   walk (current) current.children.nodes
   filter (current) current is ts_identifier
   sort_by (current) current.offset
 } else [n.name.node]
-fn ts_module_first_name(n) = { value ts_module_names(n); first }
-fn ts_module_external_file(n) = { value program: ts_module_program(n); value ts_module_external(program) }
 fn ts_module_require_source(n) = { value argument: first(n.value.argument.nodes); value js_string(argument.text) }
-fn ts_module_global(n) = n.parent.node is ts_program && !ts_module_external(n.parent.node)
+fn ts_module_global(n) = n.parent.node is ts_program && !n.parent.ts_module_external_file
   || n.parent.node is ts_block && n.parent.parent.node is ts_namespace && n.parent.parent.kind == "global"
 fn ts_module_public(n) = n is ts_export.declaration && n.parent.kind != "default"
   || n.parent.node is ts_block && n.parent.parent.node is ts_namespace && n.parent.parent.name.node is ts_string
@@ -89,6 +84,10 @@ fn ts_module_primitives(n) = {
 }
 
 in ts_program {
+  let ts_module_external_file ends_with(file, ".mjs") || ends_with(file, ".mts")
+    || ends_with(file, ".cjs") || ends_with(file, ".cts")
+    || any(body.nodes, item => item is (ts_import, ts_export, ts_export_assignment)
+      || item is ts_import_equals && item.value.node is ts_call)
   uses module_resolution ts
   globals first type ts_module_primitives(node) named ["any", "unknown", "never", "void", "undefined", "null",
     "boolean", "number", "bigint", "string", "symbol", "object", "intrinsic"]
@@ -183,8 +182,8 @@ in ts_interface { merges type }
 in ts_namespace {
   merges value, type, query
   when name.node is ts_string {
-    when !ts_module_external_file(node) { scope ambient_module named js_string(name.text) }
-    when ts_module_external_file(node) {
+    when !ts_program.ts_module_external_file { scope ambient_module named js_string(name.text) }
+    when ts_program.ts_module_external_file {
       uses module_resolution ts_augmentation
       scope ambient_module named js_string(name.text) from module js_string(name.text)
     }
@@ -192,12 +191,12 @@ in ts_namespace {
   when name != null && !(name.node is ts_string) {
     scope namespace named ts_module_names(node)
     when ts_module_public(node) {
-      exports type ts_module_first_name(node)
-      when ts_namespace_runtime(node) { exports value, query ts_module_first_name(node) }
+      exports type name.node
+      when ts_namespace_runtime(node) { exports value, query name.node }
     }
     when ts_module_global(node) {
-      globals type ts_module_first_name(node)
-      when ts_namespace_runtime(node) { globals value, query ts_module_first_name(node) }
+      globals type name.node
+      when ts_namespace_runtime(node) { globals value, query name.node }
     }
   }
 }

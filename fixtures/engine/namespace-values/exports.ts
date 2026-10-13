@@ -9,3 +9,6 @@ export namespace Nested {
 export enum E { Zero, One }
 export namespace E { export type Text = 'merged'; }
 export type Box<T> = T;
+export namespace ExportDot.Inner {
+  export const present = 13;
+}

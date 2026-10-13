@@ -1,6 +1,8 @@
 import * as NS from './exports';
 import { E as Alias } from './exports';
 import * as Missing from './missing';
+import { ExportDot } from './exports';
+import { Ambient, AmbientDot } from 'ambient-namespaces';
 const present = NS.present;
 const leaf = NS.Nested.leaf;
 const member = NS.E.Zero;
@@ -19,3 +21,10 @@ type Generic = NS.Box<'box'>;
 type Runtime = typeof NS.E;
 namespace Empty {}
 const empty = Empty;
+const plain = Plain.present;
+const globalDot = GlobalDot;
+const exportDot = ExportDot;
+const ambient = Ambient.present;
+const ambientDot = AmbientDot;
+type PlainText = Plain.Text;
+type AmbientText = Ambient.Text;
