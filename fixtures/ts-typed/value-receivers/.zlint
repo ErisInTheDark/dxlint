@@ -1,0 +1,14 @@
+import .ts
+
+in ts_declarator {
+rule class-instance-contract warn "class instance lost its object domain" {
+  when name == "instance" && (!(init always object) || !(init always truthy))
+}
+
+rule receiver-contract warn "receiver contract lost" {
+  when name == "implicitValue" && !(init always any)
+    || contains(["explicitValue", "arrowValue", "instanceValue", "contextualValue", "objectValue"], name.text)
+      && !(init always string)
+    || name == "staticValue" && !(init always number)
+}
+}

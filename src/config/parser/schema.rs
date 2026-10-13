@@ -24,7 +24,7 @@ const NEW_FORM: &str = "write options as `option name <schema> = <default> \"des
 
 /// A constant value written as a literal: strings without holes, numbers,
 /// booleans, null, and lists and records of those.
-fn literal(e: &Expr) -> Result<Value<'static>, ConfigError> {
+pub(super) fn literal(e: &Expr) -> Result<Value<'static>, ConfigError> {
     Ok(match &e.kind {
         ExprKind::Str(s) => Value::from(s.clone()),
         ExprKind::Num(n) => Value::Num(*n),

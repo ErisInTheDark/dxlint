@@ -40,6 +40,10 @@ pub struct Config {
     pub parsers: Vec<ParserDecl>,
     /// `exclusive a, b, ...`: traits no possible value has together.
     pub exclusive: Vec<Exclusive>,
+    pub top: Vec<Name>,
+    pub dynamic: Vec<Name>,
+    pub key_domains: Vec<(values::KeyDomain, Vec<Name>)>,
+    pub products: Vec<values::ProductShape>,
     /// `module_resolution name { ... }`: how module specifiers find files.
     pub module_resolutions: Vec<modules::Definition>,
     /// `schema name T`: option schemas rules share.
@@ -66,6 +70,17 @@ impl Config {
         match of {
             OperandOf::Item(item) => self.names.get(item)?.item.operand(part),
             OperandOf::Mode { definition, mode } => Some(&self.module_resolutions.get(definition)?.modes.get(mode)?.when),
+        }
+    }
+
+    pub fn operand_parameter(&self, of: OperandOf) -> Option<&'static str> {
+        match of {
+            OperandOf::Mode { .. } => Some("resolution"),
+            OperandOf::Item(item) => match &self.names.get(item)?.item {
+                NameItem::Declares { keyed, filter, .. } if keyed.is_some() || filter.is_some() => Some("it"),
+                NameItem::Resolves { keyed, outside, .. } if keyed.is_some() || outside.is_some() => Some("it"),
+                _ => None,
+            },
         }
     }
 }
@@ -154,10 +169,10 @@ pub enum NameItem {
     /// block` skips the scopes the node opens itself. A text instead of a
     /// field (`declares value "arguments" ...`) declares that name
     /// implicitly, with the node itself as its declaration.
-    Declares { classes: Vec<Name>, path: Vec<Name>, implicit: Option<String>, nearest: Vec<Name>, enclosing: bool, hoisted: bool },
+    Declares { classes: Vec<Name>, path: Vec<Name>, implicit: Option<String>, nearest: Vec<Name>, enclosing: bool, hoisted: bool, keyed: Option<Expr>, filter: Option<Expr> },
     /// `resolves value [path]`: the node (or what `path` leads to) uses a
     /// name.
-    Resolves { classes: Vec<Name>, path: Vec<Name> },
+    Resolves { classes: Vec<Name>, path: Vec<Name>, keyed: Option<Expr>, outside: Option<Expr> },
     /// `exports`, `globals`, `uses module_resolution`, `scope .. named`,
     /// `resolves .. in module`: module publications ([`modules`]).
     Module(modules::Item),
@@ -168,19 +183,26 @@ pub enum NameItem {
     /// `generics <path>`: the declaration's ordered formal type parameters
     /// (what inferred and explicit instantiations bind by position).
     Generics(Vec<Name>),
+    Arguments(Vec<Name>),
+    Indexed { path: Vec<Name>, mode: values::IndexedMode, value: Option<Unwrap>, views: Vec<Name> },
     /// `unwraps <value>` or `unwraps [maybe] <effect> [<value>] [nearest
     /// <scope>]`: what the node stands for, or what evaluating it does
     /// (`maybe`: possibly, beside completing normally).
-    Unwraps { effect: Option<Name>, possible: bool, value: Option<Unwrap>, nearest: Vec<Name> },
+    Unwraps { effect: Option<Name>, possible: bool, value: Option<Unwrap>, nearest: Vec<Name>, classes: Vec<Name> },
+    Widens { value: Unwrap },
+    Defines { value: Unwrap },
+    Constrains { value: Unwrap },
+    Pack(Name),
     /// `runs`, `labels`, `in <field> catches|runs after ...`: execution
     /// shapes ([`effects`]).
     Execution(effects::Item),
     /// `fits trait, ...`: the node directly has these traits.
-    Fits { traits: Vec<Name>, views: Vec<Name> },
+    Fits { traits: Vec<Name>, views: Vec<Name>, open: bool },
+    Carries { description: Expr, arguments: Option<Vec<Name>>, value: Option<Unwrap> },
     /// `members <scope class>, ... [inherits <value>]`: where `from x at key`
     /// looks on this kind's nodes by default, then in the members of what
     /// `inherits` unwraps to.
-    Members { classes: Vec<Name>, inherits: Option<Unwrap> },
+    Members { classes: Vec<Name>, closed: bool, inherits: Option<Unwrap> },
     /// `member <scope class> <key> unwraps <value>`: a member the kind's
     /// scope of that class has without declaring it (`prototype`).
     Member { classes: Vec<Name>, key: Unwrap, value: Unwrap },
@@ -194,11 +216,19 @@ pub enum NameItem {
 }
 
 impl NameItem {
+    pub const KEY_OPERAND: u8 = 0;
+    pub const FILTER_OPERAND: u8 = 1;
+    pub const OUTSIDE_OPERAND: u8 = 2;
+
     /// Expression `part` the item evaluates on its nodes
     /// ([`crate::grammar::names::Operand`]).
     pub fn operand(&self, part: u8) -> Option<&Expr> {
         match self {
+            NameItem::Declares { keyed, .. } | NameItem::Resolves { keyed, .. } if part == Self::KEY_OPERAND => keyed.as_ref(),
+            NameItem::Declares { filter, .. } if part == Self::FILTER_OPERAND => filter.as_ref(),
+            NameItem::Resolves { outside, .. } if part == Self::OUTSIDE_OPERAND => outside.as_ref(),
             NameItem::Calls(item) => item.operand(part),
+            NameItem::Carries { description, .. } if part == 0 => Some(description),
             NameItem::Module(item) => item.operand(part),
             _ => None,
         }
@@ -566,6 +596,13 @@ pub enum ExprKind {
     /// `is a`, `parent is (a, b)`, `is a.field`, `n is layer lines`,
     /// `is .rust`: does the node pass one of these tests?
     Is(Box<Expr>, Vec<IsName>),
+    Trait(Box<Expr>, Quantifier, Vec<Name>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quantifier {
+    Could,
+    Always,
 }
 
 #[derive(Clone, Debug)]

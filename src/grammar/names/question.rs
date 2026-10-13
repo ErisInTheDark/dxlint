@@ -46,6 +46,7 @@ impl<T> Known<T> {
 pub struct Budget {
     left: Cell<u32>,
     depth: Cell<u32>,
+    limited: Cell<bool>,
 }
 
 /// Holds one level of [`Budget::nest`]; leaving it returns the level.
@@ -65,7 +66,7 @@ impl Budget {
     pub const DEPTH: u32 = 256;
 
     pub fn new(units: u32) -> Budget {
-        Budget { left: Cell::new(units), depth: Cell::new(0) }
+        Budget { left: Cell::new(units), depth: Cell::new(0), limited: Cell::new(false) }
     }
 
     /// Enters one more level of engine-to-engine calls; `None` (answer
@@ -73,16 +74,15 @@ impl Budget {
     /// into another engine's question, never per step.
     pub fn nest(&self) -> Option<Nested<'_>> {
         let depth = self.depth.get();
-        (depth < Self::DEPTH).then(|| {
-            self.depth.set(depth + 1);
-            Nested(&self.depth)
-        })
+        if depth >= Self::DEPTH { self.limited.set(true); return None }
+        self.depth.set(depth + 1);
+        Some(Nested(&self.depth))
     }
 
     /// Spends one unit; `false` when the budget is gone.
     pub fn step(&self) -> bool {
         match self.left.get() {
-            0 => false,
+            0 => { self.limited.set(true); false }
             n => {
                 self.left.set(n - 1);
                 true
@@ -92,6 +92,20 @@ impl Budget {
 
     pub fn exhausted(&self) -> bool {
         self.left.get() == 0
+    }
+
+    pub fn remaining(&self) -> u32 {
+        self.left.get()
+    }
+
+    pub(crate) fn restart(&self) {
+        assert_eq!(self.depth.get(), 0);
+        self.left.set(Self::DEFAULT);
+        self.limited.set(false);
+    }
+
+    pub(crate) fn limited(&self) -> bool {
+        self.limited.get() || self.exhausted()
     }
 }
 
@@ -116,11 +130,47 @@ impl FrameId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ArgsId(pub u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProductShapeId(pub u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProductId(pub u32);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ProductElement {
+    pub site: Leaf,
+    pub value: NodeValue,
+    pub optional: bool,
+    pub repeated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Product {
+    pub shape: ProductShapeId,
+    pub source: Leaf,
+    pub elements: Vec<ProductElement>,
+    pub readonly: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Args {
+    Complete(Vec<Option<NodeValue>>),
+    Overlay(Vec<Option<NodeValue>>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Argument {
+    Bound(NodeValue),
+    Unbound,
+    Inherited,
+}
+
 /// One instantiation of a generic declaration (`owner`): through a
 /// reference whose ordered type arguments are read in its own frame, or with
 /// evaluated `args` (no syntax: inferred or library instantiations).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Frame {
+    pub classes: u64,
     pub parent: FrameId,
     pub through: Option<Leaf>,
     pub owner: NodeRef,
@@ -132,6 +182,8 @@ pub struct Frame {
 pub enum Target {
     Node(NodeRef),
     Scope(ScopeRef),
+    Traits(u64),
+    Product(ProductId),
 }
 
 /// A leaf of a value: a node that fits traits (or a namespace scope), seen
@@ -165,12 +217,18 @@ impl NodeValue {
 /// reach them (the engine owns reading, parsing and recorded reads).
 pub trait World {
     fn grammar(&self) -> &crate::grammar::Grammar;
+    fn profile(&self) -> Option<&crate::engine::Profile> { None }
+    fn revision(&self) -> u64 { 0 }
+    fn path(&self, _file: u32) -> Option<&std::path::Path> { None }
     fn tree(&self, file: u32) -> Option<&crate::grammar::Tree>;
     fn text(&self, file: u32) -> Option<&str>;
     /// The file's resolved names (scopes, declarations, references).
     fn names(&self, file: u32) -> Option<&super::Resolved>;
     /// The file's declarations by scope and name, keyed by its front end.
     fn index(&self, file: u32) -> Option<&super::ScopeIndex>;
+    fn module_index(&self, file: u32, tables: &super::Names) -> Option<&super::modules::index::Index> {
+        Some(self.tree(file)?.module_index(tables, self.text(file)?, &|text| self.name_key(file, text), self.profile()))
+    }
     /// What a name's text means in `file` (its front end's escapes).
     fn name_key<'s>(&self, file: u32, text: &'s str) -> std::borrow::Cow<'s, str>;
     /// The scope a module specifier names, asked by node `at` (its file's
@@ -182,6 +240,9 @@ pub trait World {
     /// file module. Just `scope` where nothing merges.
     fn module_scopes(&self, scope: ScopeRef, _semantic: &super::semantic::Semantic<'_>) -> Known<Vec<ScopeRef>> {
         Known::Yes(vec![scope])
+    }
+    fn module_star_excludes(&self, _scope: ScopeRef, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<bool> {
+        Known::Unknown
     }
     /// The global scopes the program around file `importer` sees (libs,
     /// type roots, script files, global augmentations), in policy order.
@@ -217,7 +278,8 @@ pub struct ScopeRef {
 #[derive(Default)]
 pub struct QueryContext {
     frames: std::cell::RefCell<Interner<Frame>>,
-    args: std::cell::RefCell<Interner<Vec<NodeValue>>>,
+    args: std::cell::RefCell<Interner<Args>>,
+    products: std::cell::RefCell<Interner<Product>>,
     pub budget: Budget,
 }
 
@@ -246,11 +308,46 @@ impl<T: Clone + Eq + std::hash::Hash> Interner<T> {
 }
 
 impl QueryContext {
+    pub(crate) fn intern_product(&self, product: Product) -> ProductId {
+        ProductId(self.products.borrow_mut().intern(product))
+    }
+
+    pub fn product(&self, id: ProductId) -> Option<Product> {
+        self.products.borrow().items.get(id.0 as usize).cloned()
+    }
+
     /// The frame instantiating `owner` through `through` (syntax arguments
     /// read in that leaf's frame) or with evaluated `args`; interned.
     pub fn bind(&self, parent: FrameId, owner: NodeRef, through: Option<Leaf>, args: Option<Vec<NodeValue>>) -> FrameId {
+        self.bind_definition(parent, owner, through, args, 0)
+    }
+
+    pub fn bind_definition(&self, parent: FrameId, owner: NodeRef, through: Option<Leaf>, args: Option<Vec<NodeValue>>, classes: u64) -> FrameId {
+        let args = args.map(|args| Args::Complete(args.into_iter().map(Some).collect()));
+        self.bind_arguments(parent, owner, through, args, classes)
+    }
+
+    pub fn bind_slots(&self, parent: FrameId, owner: NodeRef, through: Option<Leaf>, args: Vec<Option<NodeValue>>, classes: u64) -> FrameId {
+        self.bind_arguments(parent, owner, through, Some(Args::Complete(args)), classes)
+    }
+
+    pub fn bind_overlay(&self, parent: FrameId, owner: NodeRef, args: Vec<Option<NodeValue>>, classes: u64) -> FrameId {
+        self.bind_arguments(parent, owner, None, Some(Args::Overlay(args)), classes)
+    }
+
+    fn bind_arguments(&self, parent: FrameId, owner: NodeRef, through: Option<Leaf>, args: Option<Args>, classes: u64) -> FrameId {
         let args = args.map(|args| ArgsId(self.args.borrow_mut().intern(args)));
-        FrameId(self.frames.borrow_mut().intern(Frame { parent, through, owner, args }) + 1)
+        FrameId(self.frames.borrow_mut().intern(Frame { parent, through, owner, args, classes }) + 1)
+    }
+
+    pub fn owner_classes(&self, mut parent: FrameId, owner: NodeRef) -> Known<u64> {
+        while parent != FrameId::ROOT {
+            if !self.budget.step() { return Known::Unknown }
+            let Some(frame) = self.get(parent) else { return Known::Unknown };
+            if frame.owner == owner { return Known::Yes(frame.classes) }
+            parent = frame.parent;
+        }
+        Known::Yes(0)
     }
 
     /// The frame `id` stands for; `None` for [`FrameId::ROOT`].
@@ -258,17 +355,24 @@ impl QueryContext {
         id.0.checked_sub(1).and_then(|at| self.frames.borrow().items.get(at as usize).copied())
     }
 
-    /// A frame's evaluated arguments.
-    pub fn arguments(&self, id: ArgsId) -> Option<Vec<NodeValue>> {
-        self.args.borrow().items.get(id.0 as usize).cloned()
+    pub fn argument_slot(&self, id: ArgsId, position: usize) -> Known<Argument> {
+        let args = self.args.borrow();
+        match args.items.get(id.0 as usize) {
+            Some(Args::Complete(args)) => Known::Yes(args.get(position).cloned().flatten()
+                .map_or(Argument::Unbound, Argument::Bound)),
+            Some(Args::Overlay(args)) => Known::Yes(args.get(position).cloned().flatten()
+                .map_or(Argument::Inherited, Argument::Bound)),
+            None => Known::Unknown,
+        }
     }
 
     /// One of a frame's evaluated arguments: `Yes(None)` past the last,
     /// unknown for an id this context never interned.
     pub fn argument(&self, id: ArgsId, position: usize) -> Known<Option<NodeValue>> {
-        match self.args.borrow().items.get(id.0 as usize) {
-            Some(args) => Known::Yes(args.get(position).cloned()),
-            None => Known::Unknown,
+        match self.argument_slot(id, position) {
+            Known::Yes(Argument::Bound(value)) => Known::Yes(Some(value)),
+            Known::Yes(Argument::Unbound | Argument::Inherited) => Known::Yes(None),
+            Known::Unknown => Known::Unknown,
         }
     }
 }

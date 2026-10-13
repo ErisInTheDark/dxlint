@@ -40,6 +40,8 @@ pub struct Declare {
     pub implicit: Option<Box<str>>,
     /// `when` condition ([`Names::conditions`]).
     pub when: Option<u32>,
+    pub key: Option<u32>,
+    pub filter: Option<u32>,
 }
 
 /// One `resolves` item.
@@ -50,6 +52,8 @@ pub struct Resolve {
     /// Labels from the node to the using name; empty: the node itself.
     pub path: Vec<u16>,
     pub when: Option<u32>,
+    pub key: Option<u32>,
+    pub outside: Option<u32>,
 }
 
 pub use values::compile::Value;
@@ -59,6 +63,7 @@ use values::compile::lower_value;
 /// evaluating it does.
 #[derive(Clone, Debug, Default)]
 pub struct Unwrapping {
+    pub classes: u64,
     /// Index into [`Vocabulary::effects`].
     pub effect: Option<u16>,
     /// `maybe`: the effect may happen, or the node completes normally.
@@ -82,6 +87,9 @@ pub struct Effect {
     pub effect: u16,
     pub path: Vec<u16>,
     pub when: Option<u32>,
+    pub value: Option<std::sync::Arc<Value>>,
+    pub possible: bool,
+    pub item_id: Option<u32>,
 }
 
 /// One `scope` item.
@@ -103,8 +111,14 @@ pub struct KindNames {
     pub resolves: Vec<Resolve>,
     pub effects: Vec<Effect>,
     pub unwraps: Vec<Unwrapping>,
+    pub widens: Vec<(Value, Option<u32>)>,
+    pub defines: Vec<(Value, Option<u32>)>,
     /// Traits (bits) the node directly has, each under its condition.
     pub fits: Vec<(u64, u64, Option<u32>)>,
+    pub open_fits: Vec<(u64, Option<u32>)>,
+    pub carriers: Vec<values::CarrierRecipe>,
+    pub arguments: Vec<(Vec<u16>, Option<u32>)>,
+    pub indexed: Vec<values::IndexedRecipe>,
     /// `in <field> propagates <value>`.
     pub propagates: Vec<(Vec<u16>, Value, Option<u32>)>,
     /// Execution shapes (`runs`, `catches`, `runs after`, `labels`).
@@ -121,9 +135,12 @@ pub struct KindNames {
     pub calls: calls::KindCalls,
     /// `generics`: paths to the ordered formal type parameters.
     pub generics: Vec<(Vec<u16>, Option<u32>)>,
+    pub constraints: Vec<(Value, Option<u32>)>,
+    pub packs: Vec<(question::ProductShapeId, Option<u32>)>,
     /// `members .. inherits`: scope classes and where inherited members
     /// come from, searched after the kind's own.
     pub member_bases: Vec<(u64, Value, Option<u32>)>,
+    pub member_closed: Vec<(u64, Option<u32>)>,
     /// `member`: undeclared members (scope classes, key, value).
     pub member_links: Vec<(u64, Value, Value, Option<u32>)>,
 }
@@ -161,6 +178,7 @@ pub struct Vocabulary {
     pub effects: Vec<String>,
     /// Trait names (`fits`, `excludes`, `could` / `always`); at most 64.
     pub traits: Vec<String>,
+    pub products: Vec<String>,
 }
 
 impl Vocabulary {
@@ -190,6 +208,35 @@ fn intern(list: &mut Vec<String>, name: &str) -> usize {
 /// Resolves a field path to labels, reporting unknown fields.
 type PathOf<'a> = dyn Fn(&mut Vec<ConfigError>, &[Name]) -> Option<Vec<u16>> + 'a;
 
+pub(crate) fn lower_path(g: &Grammar, attrs: &crate::expr::AttrNames, errors: &mut Vec<ConfigError>, path: &[Name]) -> Option<Vec<u16>> {
+    path.iter().map(|field| match (g.labels.get(&field.text), field.text.as_str()) {
+        (Some(label), _) if label < ATTR_STEP => Ok(label),
+        (Some(_), _) => {
+            errors.push(ConfigError::new(field.span, "too many fields for name item paths"));
+            Err(())
+        }
+        (None, "parent") => Ok(PARENT),
+        (None, "it") => Ok(IT),
+        (None, "through") => Ok(THROUGH),
+        (None, "definition") => Ok(DECLARATION),
+        (None, "position") => Ok(POSITION),
+        (None, "result") => Ok(RESULT),
+        (None, "expected") => Ok(EXPECTED),
+        (None, "inferred") => Ok(INFERRED),
+        (None, "returned") => Ok(RETURNED),
+        (None, "widened") => Ok(WIDENED),
+        (None, "receiver") => Ok(RECEIVER),
+        (None, name) => match attrs.get(name) {
+            Some(attr) if attr < PRODUCT_ITEMS - ATTR_STEP => Ok(ATTR_STEP | attr),
+            _ => {
+                errors.push(ConfigError::new(field.span, format!("no layer has a field or attribute `{}`", field.text))
+                    .note("path steps are fields, `let` attributes, or `parent`, `it`, `through`, `definition`, `position`, `result`, `expected`, `inferred`, `returned`, `widened`, `receiver`"));
+                Err(())
+            }
+        },
+    }).collect::<Result<Vec<_>, _>>().ok()
+}
+
 /// The tables, per matcher (empty when the config has no name items).
 #[derive(Default)]
 pub struct Names {
@@ -201,6 +248,10 @@ pub struct Names {
     pub operands: Vec<Operand>,
     /// `exclusive` groups: trait bits no possible value has together.
     pub exclusive: Vec<u64>,
+    pub top: u64,
+    pub dynamic: u64,
+    pub key_domains: Vec<(crate::config::ast::values::KeyDomain, u64)>,
+    pub products: Vec<Option<values::products::Shape>>,
     /// `module_resolution` profiles, compiled.
     pub module_resolutions: Vec<modules::compile::Profile>,
 }
@@ -210,6 +261,8 @@ pub struct Names {
 pub struct Resolved {
     /// What the class bits and effect indexes below mean.
     pub vocabulary: std::sync::Arc<Vocabulary>,
+    pub keys: FxHashMap<u32, Option<Box<str>>>,
+    pub failures: Vec<(u32, Box<str>)>,
     /// Using name -> the name node that declares it (the first of merged
     /// declarations); a later merged declaration -> the first.
     pub declaration: FxHashMap<u32, u32>,
@@ -227,10 +280,11 @@ pub struct Resolved {
     /// Declared name -> the scope it lands in, the node whose `declares`
     /// item declares it, its classes and whether it is hoisted.
     pub declared: FxHashMap<u32, (u32, u32, u64, bool)>,
+    /// Semantic descriptors stay separate from declarations' lexical owners.
+    pub bindings: FxHashMap<u32, u32>,
     /// Implicit declarations (`declares value "arguments"`): node -> names.
     pub implicit: FxHashMap<u32, Vec<Box<str>>>,
-    /// Using name -> the scope it is looked up from and the classes asked.
-    pub asked: FxHashMap<u32, (u32, u64)>,
+    pub asked: FxHashMap<u32, ReferenceLookup>,
     /// Declarations by scope and name, built on first ask ([`Resolved::index`]).
     index: std::sync::OnceLock<ScopeIndex>,
     /// Node -> the innermost scope it sits in (its own when it opens one),
@@ -241,6 +295,16 @@ pub struct Resolved {
 /// What a name's text means as a key (a language's escapes):
 /// [`crate::engine::frontend::Frontend::name_key`].
 pub type NameKey<'k> = dyn for<'a> Fn(&'a str) -> Cow<'a, str> + 'k;
+
+pub type ResolveOperand<'a> = dyn Fn(u32, u32, Option<u32>) -> Result<crate::expr::Value<'static>, Box<str>> + 'a;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReferenceLookup {
+    pub scope: u32,
+    pub classes: u64,
+    /// Ignore only this owner's scopes, preserving nested locals.
+    pub outside: Option<u32>,
+}
 
 /// One resolved tree's declarations by scope and name, and the scopes each
 /// node opens: what type questions look members up in.
@@ -305,16 +369,30 @@ impl Names {
     /// opened is an error, like an unknown matcher.
     pub fn build(config: &Config, g: &Grammar, errors: &mut Vec<ConfigError>) -> Names {
         let mut names = Names { kinds: vec![KindNames::default(); g.matchers.len()], ..Names::default() };
-        if config.names.is_empty() && config.exclusive.is_empty() {
+        if config.names.is_empty() && config.exclusive.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.products.is_empty() {
             return names;
         }
         let mut vocab = Vocabulary::default();
+        for shape in &config.products {
+            vocab.products.push(shape.name.text.clone());
+            class_bits(&mut vocab.traits, &shape.traits, errors);
+        }
+        for definition in &config.names {
+            if let NameItem::Fits { traits, .. } = &definition.item {
+                if definition.targets.iter().any(|target| g.matcher(&target.text).is_some()) {
+                    class_bits(&mut vocab.traits, traits, errors);
+                }
+            }
+        }
         // Numbered as the engine numbers them (first definition order).
         let attrs = crate::expr::AttrNames::new(config.attrs.iter().map(|d| d.name.text.as_str()));
         let mut declared = 0u64;
         let mut opened = 0u64;
         let mut asked: Vec<(&Name, bool)> = Vec::new();
         let mut requested_classes = Vec::new();
+        names.products = config.products.iter().map(|shape| {
+            values::products::lower_shape(shape, g, &attrs, &mut vocab, errors, &mut requested_classes)
+        }).collect();
         for (item, def) in config.names.iter().enumerate() {
             let targets: Vec<u32> = def
                 .targets
@@ -328,32 +406,7 @@ impl Names {
                 })
                 .collect();
             let path = |errors: &mut Vec<ConfigError>, path: &[Name]| -> Option<Vec<u16>> {
-                // Fields win over the special steps, those over `let` attributes.
-                path.iter()
-                    .map(|f| match (g.labels.get(&f.text), f.text.as_str()) {
-                        (Some(label), _) if label < ATTR_STEP => Ok(label),
-                        (Some(_), _) => {
-                            errors.push(ConfigError::new(f.span, "too many fields for name item paths"));
-                            Err(())
-                        }
-                        (None, "parent") => Ok(PARENT),
-                        (None, "it") => Ok(IT),
-                        (None, "through") => Ok(THROUGH),
-                        (None, "definition") => Ok(DECLARATION),
-                        (None, "position") => Ok(POSITION),
-                        (None, name) => match attrs.get(name) {
-                            Some(attr) if attr < WIDENED - ATTR_STEP => Ok(ATTR_STEP | attr),
-                            _ => {
-                                errors.push(
-                                    ConfigError::new(f.span, format!("no layer has a field or attribute `{}`", f.text))
-                                        .note("path steps are fields, `let` attributes, or `parent`, `it`, `through`, `definition`, `position`"),
-                                );
-                                Err(())
-                            }
-                        },
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .ok()
+                lower_path(g, &attrs, errors, path)
             };
             // One condition per target layer: it reads that layer's fields.
             let when: Vec<Option<u32>> = targets
@@ -375,7 +428,7 @@ impl Names {
                         names.add(g, m, |k| k.scopes.push(scope.clone()));
                     }
                 }
-                NameItem::Declares { classes, path: p, implicit, nearest, enclosing, hoisted } => {
+                NameItem::Declares { classes, path: p, implicit, nearest, enclosing, hoisted, keyed, filter } => {
                     let Some(bits) = class_bits(&mut vocab.declaration_classes, classes, errors) else { continue };
                     let Some(near) = class_bits(&mut vocab.scope_classes, nearest, errors) else { continue };
                     declared |= bits;
@@ -383,7 +436,9 @@ impl Names {
                     let Some(p) = path(errors, p) else { continue };
                     let implicit: Option<Box<str>> = implicit.as_deref().map(Into::into);
                     for (&m, &when) in targets.iter().zip(&when) {
-                        let d = Declare { classes: bits, path: p.clone(), nearest: near, hoisted: *hoisted, enclosing: *enclosing, implicit: implicit.clone(), when };
+                        let key = keyed.as_ref().map(|_| names.operand(item, m, NameItem::KEY_OPERAND));
+                        let filter = filter.as_ref().map(|_| names.operand(item, m, NameItem::FILTER_OPERAND));
+                        let d = Declare { classes: bits, path: p.clone(), nearest: near, hoisted: *hoisted, enclosing: *enclosing, implicit: implicit.clone(), when, key, filter };
                         names.add(g, m, |k| k.declares.push(d.clone()));
                     }
                 }
@@ -398,7 +453,36 @@ impl Names {
                         names.add(g, m, |k| k.targets.extend(passes.iter().map(|group| (group.clone(), when))));
                     }
                 }
-                NameItem::Unwraps { effect, possible, value, nearest } => {
+                NameItem::Widens { value } => {
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.widens.push((value.clone(), when)));
+                    }
+                }
+                NameItem::Defines { value } => {
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.defines.push((value.clone(), when)));
+                    }
+                }
+                NameItem::Constrains { value } => {
+                    let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.constraints.push((value.clone(), when)));
+                    }
+                }
+                NameItem::Pack(shape) => {
+                    let Some(index) = vocab.products.iter().position(|name| *name == shape.text) else {
+                        errors.push(ConfigError::new(shape.span, format!("unknown product shape `{}`", shape.text)));
+                        continue;
+                    };
+                    for (&matcher, &when) in targets.iter().zip(&when) {
+                        names.add(g, matcher, |kind| kind.packs.push((question::ProductShapeId(index as u32), when)));
+                    }
+                }
+                NameItem::Unwraps { effect, possible, value, nearest, classes } => {
+                    requested_classes.extend(classes.iter().cloned());
+                    let Some(classes) = class_bits(&mut vocab.declaration_classes, classes, errors) else { continue };
                     let effect = effect.as_ref().map(|e| intern(&mut vocab.effects, &e.text) as u16);
                     let Some(near) = class_bits(&mut vocab.scope_classes, nearest, errors) else { continue };
                     asked.extend(nearest.iter().map(|n| (n, true)));
@@ -412,23 +496,25 @@ impl Names {
                     for (&m, &when) in targets.iter().zip(&when) {
                         // An effect on a field: the targets it reaches carry it (writes).
                         if let (Some(effect), Some(Value::Path(p))) = (effect, &value) {
-                            let e = Effect { effect, path: p.clone(), when };
-                            names.add(g, m, |k| k.effects.push(e.clone()));
+                            if vocab.effects[effect as usize] != "read" {
+                                let e = Effect { effect, path: p.clone(), when, value: None, possible: *possible, item_id: Some(item as u32) };
+                                names.add(g, m, |k| k.effects.push(e.clone()));
+                            }
                         }
                         let span = def.targets.first().map(|t| t.span);
-                        let u = Unwrapping { effect, possible: *possible, value: value.clone(), nearest: near, when, item: item as u32, span };
+                        let u = Unwrapping { classes, effect, possible: *possible, value: value.clone(), nearest: near, when, item: item as u32, span };
                         names.add(g, m, |k| k.unwraps.push(u.clone()));
                     }
                 }
                 NameItem::Execution(execution) => {
-                    let Some(lowered) = effects::compile::lower(execution, &mut |p| path(errors, p), &mut |e| u16::try_from(intern(&mut vocab.effects, &e.text)).ok()) else {
+                    let Some(lowered) = effects::compile::lower(execution, &path, &mut vocab, errors, &mut requested_classes) else {
                         continue;
                     };
                     for (&m, &when) in targets.iter().zip(&when) {
-                        names.add(g, m, |k| k.execution.push(lowered.clone(), when, item as u32, def.targets[0].span));
+                        names.add(g, m, |k| k.push_execution(lowered.clone(), when, item as u32, def.targets[0].span));
                     }
                 }
-                NameItem::Members { classes, inherits } => {
+                NameItem::Members { classes, closed, inherits } => {
                     let Some(bits) = class_bits(&mut vocab.scope_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|n| (n, true)));
                     let inherits = match inherits {
@@ -440,6 +526,7 @@ impl Names {
                     };
                     for (&m, &when) in targets.iter().zip(&when) {
                         names.add(g, m, |k| k.member_defaults |= bits);
+                        if *closed { names.add(g, m, |k| k.member_closed.push((bits, when))) }
                         if let Some(base) = &inherits {
                             names.add(g, m, |k| k.member_bases.push((bits, base.clone(), when)));
                         }
@@ -455,12 +542,15 @@ impl Names {
                         names.add(g, m, |k| k.member_links.push(link.clone()));
                     }
                 }
-                NameItem::Fits { traits, views } => {
+                NameItem::Fits { traits, views, open } => {
                     let Some(bits) = class_bits(&mut vocab.traits, traits, errors) else { continue };
                     let Some(views_mask) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
                     asked.extend(views.iter().map(|name| (name, true)));
                     for (&m, &when) in targets.iter().zip(&when) {
-                        names.add(g, m, |k| k.fits.push((bits, views_mask, when)));
+                        names.add(g, m, |k| {
+                            k.fits.push((bits, views_mask, when));
+                            if *open { k.open_fits.push((views_mask, when)) }
+                        });
                     }
                 }
                 NameItem::Propagates { field, value } => {
@@ -471,12 +561,14 @@ impl Names {
                         names.add(g, m, |k| k.propagates.push(p.clone()));
                     }
                 }
-                NameItem::Resolves { classes, path: p } => {
+                NameItem::Resolves { classes, path: p, keyed, outside } => {
                     let Some(bits) = class_bits(&mut vocab.declaration_classes, classes, errors) else { continue };
                     asked.extend(classes.iter().map(|c| (c, false)));
                     let Some(p) = path(errors, p) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
-                        let r = Resolve { classes: bits, path: p.clone(), when };
+                        let key = keyed.as_ref().map(|_| names.operand(item, m, NameItem::KEY_OPERAND));
+                        let outside = outside.as_ref().map(|_| names.operand(item, m, NameItem::OUTSIDE_OPERAND));
+                        let r = Resolve { classes: bits, path: p.clone(), when, key, outside };
                         names.add(g, m, |k| k.resolves.push(r.clone()));
                     }
                 }
@@ -484,6 +576,58 @@ impl Names {
                     let Some(p) = path(errors, p) else { continue };
                     for (&m, &when) in targets.iter().zip(&when) {
                         names.add(g, m, |k| k.generics.push((p.clone(), when)));
+                    }
+                }
+                NameItem::Arguments(arguments) => {
+                    let Some(arguments) = path(errors, arguments) else { continue };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |kind| kind.arguments.push((arguments.clone(), when)));
+                    }
+                }
+                NameItem::Indexed { path: indexed, mode, value, views } => {
+                    let Some(indexed_path) = path(errors, indexed) else { continue };
+                    let mode = match mode {
+                        crate::config::ast::values::IndexedMode::Slots { repeated, strings } => values::IndexedMode::Slots { repeated: *repeated, strings: *strings },
+                        crate::config::ast::values::IndexedMode::Domain(domain) => values::IndexedMode::Domain(*domain),
+                        crate::config::ast::values::IndexedMode::Keyed(key) => {
+                            let Some(key) = lower_value(key, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                            values::IndexedMode::Keyed(key)
+                        }
+                    };
+                    let Some(views) = class_bits(&mut vocab.scope_classes, views, errors) else { continue };
+                    let value = match value {
+                        Some(value) => {
+                            let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                            Some(value)
+                        }
+                        None => None,
+                    };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        names.add(g, m, |kind| kind.indexed.push(values::IndexedRecipe {
+                            path: indexed_path.clone(), mode: mode.clone(), views, value: value.clone(), when,
+                        }));
+                    }
+                }
+                NameItem::Carries { arguments, value, .. } => {
+                    let arguments = match arguments {
+                        Some(arguments) => {
+                            let Some(arguments) = path(errors, arguments) else { continue };
+                            Some(arguments)
+                        }
+                        None => None,
+                    };
+                    let value = match value {
+                        Some(value) => {
+                            let Some(value) = lower_value(value, &path, &mut vocab, errors, &mut requested_classes) else { continue };
+                            Some(value)
+                        }
+                        None => None,
+                    };
+                    for (&m, &when) in targets.iter().zip(&when) {
+                        let description = names.operand(item, m, 0);
+                        names.add(g, m, |kind| kind.carriers.push(values::CarrierRecipe {
+                            description, arguments: arguments.clone(), value: value.clone(), when,
+                        }));
                     }
                 }
                 NameItem::Calls(call) => {
@@ -540,7 +684,12 @@ impl Names {
                 errors.push(ConfigError::new(name.span, format!("{what} `{}`", name.text)).suggest(&name.text, list.iter().map(String::as_str)));
             }
         }
-        names.exclusive = values::exclusive_groups(config, &mut vocab, &names.kinds, errors);
+        names.exclusive = values::exclusive_groups(config, &mut vocab, &names, errors);
+        names.top = values::algebra_traits(&config.top, &vocab, &names, errors);
+        names.dynamic = values::algebra_traits(&config.dynamic, &vocab, &names, errors);
+        names.key_domains = config.key_domains.iter().map(|(domain, traits)| {
+            (*domain, values::algebra_traits(traits, &vocab, &names, errors))
+        }).collect();
         names.module_resolutions = modules::compile::profiles(config, g, &vocab, errors, &mut |definition, mode| names.mode_operand(definition, mode));
         names.vocabulary = std::sync::Arc::new(vocab);
         names.effect_roles = effects::compile::effect_roles(&names.vocabulary);
@@ -579,14 +728,18 @@ impl Names {
     /// What a declaration or effect targeting `node` reaches: the node
     /// itself, or what its `targets` paths lead to, recursively. `passed`
     /// collects the nodes passing it on.
-    fn targets(&self, tree: &Tree, node: u32, holds: &dyn Fn(u32, Option<u32>) -> bool, out: &mut Vec<u32>, passed: &mut Vec<u32>, depth: u32) {
+    fn targets(&self, tree: &Tree, node: u32, holds: &dyn Fn(u32, Option<u32>) -> bool, out: &mut Vec<u32>, passed: &mut Vec<u32>, active: &mut Vec<u32>) -> bool {
+        const MAX_TARGET_DEPTH: usize = 256;
+        let Some(node) = tree.semantic_node(node) else { return false };
+        if active.len() > MAX_TARGET_DEPTH || active.contains(&node) { return false; }
         let targets = self.kinds.get(tree.node(node).matcher as usize).map_or(&[][..], |k| &k.targets[..]);
         let mut targets = targets.iter().filter(|(_, when)| holds(node, *when)).peekable();
-        if targets.peek().is_none() || depth > 256 {
+        if targets.peek().is_none() {
             out.push(node);
-            return;
+            return true;
         }
         let (reached, passing) = (out.len(), passed.len());
+        active.push(node);
         passed.push(node);
         // Per group, the first alternative that reaches anything: `value ??
         // key` falls back to the key when the value is a pattern reaching
@@ -594,8 +747,19 @@ impl Names {
         for (group, _) in targets {
             for path in group {
                 let before = out.len();
-                for n in follow(tree, node, path) {
-                    self.targets(tree, n, holds, out, passed, depth + 1);
+                let Some(nodes) = tree.semantic_follow(node, path) else {
+                    out.truncate(reached);
+                    passed.truncate(passing);
+                    active.pop();
+                    return false;
+                };
+                for n in nodes {
+                    if !self.targets(tree, n, holds, out, passed, active) {
+                        out.truncate(reached);
+                        passed.truncate(passing);
+                        active.pop();
+                        return false;
+                    }
                 }
                 if out.len() > before {
                     break;
@@ -605,6 +769,8 @@ impl Names {
         if out.len() == reached {
             passed.truncate(passing);
         }
+        active.pop();
+        true
     }
 
     /// What a declaration or effect aimed at `node` reaches through
@@ -622,14 +788,14 @@ impl Names {
             })
         };
         let (mut out, mut passed) = (Vec::new(), Vec::new());
-        self.targets(tree, node, &decide, &mut out, &mut passed, 0);
-        if unknown.get() { question::Known::Unknown } else { question::Known::Yes(out) }
+        let complete = self.targets(tree, node, &decide, &mut out, &mut passed, &mut Vec::new());
+        if !complete || unknown.get() { question::Known::Unknown } else { question::Known::Yes(out) }
     }
 
     /// Resolves every name `tree` uses. `key` turns a name's text into what
     /// it means (a language's escapes); `when(node, condition)` evaluates a
     /// `when` condition on a node.
-    pub fn resolve<'t>(&self, tree: &Tree, text: &'t str, key: &dyn Fn(&'t str) -> Cow<'t, str>, when: &dyn Fn(u32, u32) -> bool) -> Resolved {
+    pub fn resolve<'t>(&self, tree: &Tree, text: &'t str, key: &dyn Fn(&'t str) -> Cow<'t, str>, when: &dyn Fn(u32, u32) -> bool, operand: &ResolveOperand<'_>) -> Resolved {
         let mut out = Resolved { vocabulary: self.vocabulary.clone(), ..Resolved::default() };
         if self.resolves_nothing() {
             return out;
@@ -643,7 +809,7 @@ impl Names {
         // Node -> the innermost scope it sits in (its own, when it opens one).
         let mut scope_of = vec![NO_SCOPE; tree.nodes.len()];
         let at = |scope_of: &[u32], id: u32| Some(scope_of[id as usize] as usize).filter(|&s| s != NO_SCOPE as usize);
-        let mut uses: Vec<(u32, usize, u64)> = Vec::new();
+        let mut uses = Vec::new();
         let mut declared = Vec::new();
         let mut passed = Vec::new();
         // Node opening a scope `within` some fields -> those fields, and the
@@ -681,57 +847,111 @@ impl Names {
                 }
                 let Some(target) = target else { continue };
                 if let Some(name) = &d.implicit {
+                    if d.filter.is_some_and(|expression| !out.evaluate_filter(id, id, expression, operand)) { continue }
+                    let name = match d.key {
+                        Some(expression) => match out.evaluate_key(id, id, expression, operand) {
+                            Some(key) => key,
+                            None => continue,
+                        },
+                        None => name.clone(),
+                    };
                     let entry = Declared { name: id, start: tree.node(id).start, classes: d.classes, hoisted: true, implicit: true };
                     scopes[target].declared.entry(Cow::Owned(name.to_string())).or_default().push(entry);
-                    out.implicit.entry(id).or_default().push(name.clone());
+                    out.implicit.entry(id).or_default().push(name);
                     out.declared.insert(id, (target as u32, id, d.classes, true));
+                    out.bindings.insert(id, id);
                     continue;
                 }
-                declared.clear();
-                for named in follow(tree, id, &d.path) {
-                    self.targets(tree, named, &holds, &mut declared, &mut passed, 0);
+                let Some(named_nodes) = tree.semantic_follow(id, &d.path) else {
+                    out.failure(id, "name path cannot be resolved".into());
+                    continue;
+                };
+                for named in named_nodes {
+                    declared.clear();
+                    passed.clear();
+                    if !self.targets(tree, named, &holds, &mut declared, &mut passed, &mut Vec::new()) {
+                        out.failure(id, "name path cannot be resolved".into());
+                        continue;
+                    }
+                    let descriptor = if passed.first() == Some(&named) { named } else { id };
+                    for &name in &declared {
+                        if d.filter.is_some_and(|expression| !out.evaluate_filter(id, name, expression, operand)) { continue }
+                        let key = match d.key {
+                            Some(expression) => match out.evaluate_key(id, name, expression, operand) {
+                                Some(key) => Cow::Owned(key.into()),
+                                None => continue,
+                            },
+                            None => match out.keys.get(&name) {
+                                Some(Some(key)) => Cow::Owned(key.to_string()),
+                                Some(None) => continue,
+                                None => name_key(name),
+                            },
+                        };
+                        let entry = Declared { name, start: tree.node(name).start, classes: d.classes, hoisted: d.hoisted, implicit: false };
+                        scopes[target].declared.entry(key).or_default().push(entry);
+                        out.declared.entry(name).and_modify(|(scope, owner, classes, hoisted)| {
+                            if *scope == target as u32 && *owner == id {
+                                *classes |= d.classes;
+                                *hoisted |= d.hoisted;
+                            }
+                        }).or_insert((target as u32, id, d.classes, d.hoisted));
+                        out.bindings.entry(name).or_insert(descriptor);
+                    }
                 }
                 passed.clear();
-                for &name in &declared {
-                    let entry = Declared { name, start: tree.node(name).start, classes: d.classes, hoisted: d.hoisted, implicit: false };
-                    scopes[target].declared.entry(name_key(name)).or_default().push(entry);
-                    out.declared.entry(name).or_insert((target as u32, id, d.classes, d.hoisted));
-                }
             }
             for e in kind.effects.iter().filter(|e| holds(id, e.when)) {
                 declared.clear();
                 passed.clear();
-                for target in follow(tree, id, &e.path) {
-                    self.targets(tree, target, &holds, &mut declared, &mut passed, 0);
+                let Some(targets) = tree.semantic_follow(id, &e.path) else {
+                    out.failure(id, "name path cannot be resolved".into());
+                    continue;
+                };
+                for target in targets {
+                    if !self.targets(tree, target, &holds, &mut declared, &mut passed, &mut Vec::new()) {
+                        out.failure(id, "name path cannot be resolved".into());
+                        declared.clear();
+                        passed.clear();
+                        break;
+                    }
                 }
                 for &node in passed.iter().chain(&declared) {
                     out.effects.entry(node).or_insert((e.effect, id));
                 }
             }
+            if here.is_none() && kind.resolves.iter().any(|resolve| resolve.outside.is_some() && holds(id, resolve.when)) {
+                out.failure(id, "outside lookup requires an active scope".into());
+            }
             if let Some(here) = here {
                 for r in kind.resolves.iter().filter(|r| holds(id, r.when)) {
                     if r.path.is_empty() {
-                        uses.push((id, here, r.classes));
+                        uses.push((id, here, r.classes, id, r.key, r.outside));
                         continue;
                     }
                     // A use aimed at a qualified name or parentheses passes
                     // on through `targets` (`A.B` in a type looks up `A`).
                     declared.clear();
-                    for named in follow(tree, id, &r.path) {
-                        self.targets(tree, named, &holds, &mut declared, &mut passed, 0);
+                    let Some(named_nodes) = tree.semantic_follow(id, &r.path) else {
+                        out.failure(id, "name path cannot be resolved".into());
+                        continue;
+                    };
+                    for named in named_nodes {
+                        if !self.targets(tree, named, &holds, &mut declared, &mut passed, &mut Vec::new()) {
+                            out.failure(id, "name path cannot be resolved".into());
+                            declared.clear();
+                            break;
+                        }
                     }
                     passed.clear();
-                    uses.extend(declared.iter().map(|&name| (name, here, r.classes)));
+                    uses.extend(declared.iter().map(|&name| (name, here, r.classes, id, r.key, r.outside)));
                 }
             }
         }
-        // A later hoisted declaration of a merged name stands for the first.
         for scope in &scopes {
             for decls in scope.declared.values() {
                 let mut hoisted = decls.iter().filter(|d| d.hoisted && !d.implicit);
                 if let Some(first) = hoisted.next() {
                     for later in hoisted.filter(|d| d.name != first.name) {
-                        out.declaration.insert(later.name, first.name);
                         out.merged.insert(later.name, first.name);
                     }
                 }
@@ -740,25 +960,51 @@ impl Names {
         // A name looked up twice keeps the first lookup, found or not: a
         // parent's `resolves type name` comes before the name's own
         // `resolves value`.
-        // Declaring names are declarations, not uses.
-        for (name, scope, want) in uses {
-            if out.asked.contains_key(&name) || out.declared.contains_key(&name) {
+        for (name, scope, want, item, expression, outside) in uses {
+            if out.asked.contains_key(&name) || out.declared.get(&name).is_some_and(|(_, _, classes, _)| classes & want != 0) {
                 continue;
             }
-            out.asked.insert(name, (scope as u32, want));
-            let start = tree.node(name).start;
-            let key = name_key(name);
-            let mut at = Some(scope);
-            while let Some(s) = at {
-                let decls = scopes[s].declared.get(&key);
-                if let Some(found) = decls.and_then(|decls| visible(decls, start, want)) {
-                    if found != name {
-                        out.declaration.insert(name, found);
-                        out.references.entry(found).or_default().push(name);
+            let mut lookup = ReferenceLookup { scope: scope as u32, classes: want, outside: None };
+            out.asked.insert(name, lookup);
+            if let Some(expression) = outside {
+                let owner = match operand(item, expression, Some(name)) {
+                    Ok(crate::expr::Value::Node(owner, _)) => owner,
+                    Ok(_) => {
+                        out.failure(item, "outside lookup must select a local ancestor opening scopes".into());
+                        continue;
                     }
-                    break;
+                    Err(message) => {
+                        out.failure(item, message);
+                        continue;
+                    }
+                };
+                let ancestor = std::iter::successors(Some(name), |&node| tree.parent(node)).any(|node| node == owner);
+                if !ancestor || !out.lookup_scopes(lookup).any(|scope| out.scopes[scope as usize].node == owner) {
+                    out.failure(item, "outside lookup must select a local ancestor opening scopes".into());
+                    continue;
                 }
-                at = out.scopes[s].parent.map(|p| p as usize);
+                lookup.outside = Some(owner);
+                out.asked.insert(name, lookup);
+            }
+            let start = tree.node(name).start;
+            let key = match expression {
+                Some(expression) => match out.evaluate_key(item, name, expression, operand) {
+                    Some(key) => Cow::Owned(key.into()),
+                    None => continue,
+                },
+                None if out.declared.contains_key(&name) => name_key(name),
+                None => match out.keys.get(&name) {
+                    Some(Some(key)) => Cow::Owned(key.to_string()),
+                    Some(None) => continue,
+                    None => name_key(name),
+                },
+            };
+            let found = out.lookup_scopes(lookup).find_map(|scope| {
+                scopes[scope as usize].declared.get(&key).and_then(|decls| visible(decls, start, want))
+            });
+            if let Some(found) = found.filter(|&found| found != name) {
+                out.declaration.insert(name, found);
+                out.references.entry(found).or_default().push(name);
             }
         }
         for refs in out.references.values_mut() {
@@ -772,7 +1018,7 @@ impl Names {
 /// Path steps that are not fields: the node's parent (`parent.parameter`),
 /// the node something unwraps from (`it`), the reference a node was reached
 /// through (`through`), and a name's declaration.
-const PARENT: u16 = u16::MAX;
+pub(crate) const PARENT: u16 = u16::MAX;
 pub const IT: u16 = u16::MAX - 1;
 pub const THROUGH: u16 = u16::MAX - 2;
 pub const DECLARATION: u16 = u16::MAX - 3;
@@ -784,30 +1030,14 @@ pub const EXPECTED: u16 = u16::MAX - 6;
 pub const INFERRED: u16 = u16::MAX - 7;
 pub const RETURNED: u16 = u16::MAX - 8;
 pub const WIDENED: u16 = u16::MAX - 9;
+pub const RECEIVER: u16 = u16::MAX - 10;
+pub const PRODUCT_ITEMS: u16 = u16::MAX - 11;
 /// `ATTR_STEP | id`: the node a `let` attribute (by engine attribute id)
 /// holds; fields are numbered below it, the special steps above.
 pub const ATTR_STEP: u16 = 0x8000;
 
 pub fn attribute_step(step: u16) -> Option<u16> {
-    (ATTR_STEP..WIDENED).contains(&step).then_some(step & !ATTR_STEP)
-}
-
-/// The nodes a structural `path` (field labels, [`PARENT`], [`IT`]) leads to
-/// from `from` in one tree. Semantic steps ([`THROUGH`], [`DECLARATION`],
-/// [`POSITION`], attributes) lead nowhere here: the values engine owns them.
-pub fn follow(tree: &Tree, from: u32, path: &[u16]) -> Vec<u32> {
-    let mut nodes = vec![from];
-    for &label in path {
-        nodes = match label {
-            PARENT => nodes.into_iter().filter_map(|n| tree.parent(n)).collect(),
-            IT => nodes,
-            // Unwrapping steps: not names' business.
-            THROUGH | DECLARATION | POSITION => Vec::new(),
-            _ if label >= ATTR_STEP => Vec::new(),
-            _ => nodes.into_iter().flat_map(|n| tree.fields(n, label)).collect(),
-        };
-    }
-    nodes
+    (ATTR_STEP..PRODUCT_ITEMS).contains(&step).then_some(step & !ATTR_STEP)
 }
 
 /// The bits of `classes`, adding new ones to `list` (at most 64).
@@ -832,22 +1062,66 @@ fn class_bits(list: &mut Vec<String>, classes: &[Name], errors: &mut Vec<ConfigE
 
 /// The declaration a use at `start` sees among one scope's declarations of
 /// its name: the latest one before it that is not hoisted (shadowing), else
-/// the first hoisted one; merged hoisted declarations (of any class:
-/// `interface X` + `namespace X`, overloads) are one binding, the first.
+/// the first hoisted one matching the requested class.
 /// Implicit declarations count only when nothing declares the name here.
 fn visible(decls: &[Declared], start: u32, want: u64) -> Option<u32> {
     let matching = || decls.iter().filter(|d| d.classes & want != 0 && !d.implicit);
     let shadowing = matching().rfind(|d| !d.hoisted && d.start <= start);
-    let hoisted = || matching().any(|d| d.hoisted).then(|| decls.iter().find(|d| d.hoisted && !d.implicit)).flatten();
+    let hoisted = || matching().find(|d| d.hoisted);
     shadowing.or_else(hoisted).or_else(|| decls.iter().find(|d| d.implicit && d.classes & want != 0)).map(|d| d.name)
 }
 
 impl Resolved {
+    pub fn declaration_in(&self, node: u32, classes: u64) -> u32 {
+        if self.declared.get(&node).is_some_and(|&(_, _, declared, _)| declared & classes != 0) {
+            node
+        } else {
+            self.declaration.get(&node).copied().unwrap_or(node)
+        }
+    }
+
+    fn failure(&mut self, node: u32, message: Box<str>) {
+        if !self.failures.iter().any(|(at, previous)| *at == node && *previous == message) {
+            self.failures.push((node, message));
+        }
+    }
+
+    fn evaluate_filter(&mut self, node: u32, target: u32, expression: u32, operand: &ResolveOperand<'_>) -> bool {
+        match operand(node, expression, Some(target)) {
+            Ok(crate::expr::Value::Bool(value)) => value,
+            Ok(_) => {
+                self.failure(node, "declaration filter must return a boolean".into());
+                false
+            }
+            Err(message) => {
+                self.failure(node, message);
+                false
+            }
+        }
+    }
+
+    fn evaluate_key(&mut self, node: u32, target: u32, expression: u32, operand: &ResolveOperand<'_>) -> Option<Box<str>> {
+        let key = match operand(node, expression, Some(target)) {
+            Ok(crate::expr::Value::Str(text)) => Some(Box::<str>::from(&*text)),
+            Ok(_) => None,
+            Err(message) => {
+                self.failure(node, message);
+                None
+            }
+        };
+        self.keys.entry(target).or_insert(key).clone()
+    }
+
     /// The innermost scope `node` sits in (its own when it opens one),
     /// respecting `within`. Names are syntax-only, so this holds in every
     /// generic frame.
     pub fn scope_of(&self, node: u32) -> Option<u32> {
         self.scope_of.get(node as usize).copied().filter(|&s| s != NO_SCOPE)
+    }
+
+    pub fn lookup_scopes(&self, lookup: ReferenceLookup) -> impl Iterator<Item = u32> + '_ {
+        std::iter::successors(Some(lookup.scope), |&scope| self.scopes.get(scope as usize)?.parent)
+            .filter(move |&scope| self.scopes.get(scope as usize).is_some_and(|scope| Some(scope.node) != lookup.outside))
     }
 
     /// The tree's declarations by scope and name. `key` must be the file's
@@ -865,7 +1139,12 @@ impl Resolved {
                     Some(texts) => texts.iter().for_each(|t| names.entry(t.clone()).or_default().push(name)),
                     None => {
                         let n = tree.node(name);
-                        names.entry(key(&text[n.start as usize..n.end as usize]).into()).or_default().push(name);
+                        let named = match self.keys.get(&name) {
+                            Some(Some(key)) => key.clone(),
+                            Some(None) => continue,
+                            None => key(&text[n.start as usize..n.end as usize]).into(),
+                        };
+                        names.entry(named).or_default().push(name);
                     }
                 }
             }
@@ -879,16 +1158,19 @@ impl Resolved {
     /// The declaration `name` (a name's key) means at `at`, searching the
     /// scopes around it outward for one of `classes`.
     pub fn visible(&self, tree: &Tree, text: &str, key: &NameKey<'_>, at: u32, name: &str, classes: u64) -> Option<u32> {
+        if !self.failures.is_empty() { return None }
         let index = self.index(tree, text, key);
         let start = tree.node(at).start;
-        let mut node = Some(at);
-        let mut scope = None;
-        while let (None, Some(n)) = (scope, node) {
-            scope = index.opened(n).last();
-            node = tree.parent(n);
-        }
-        let mut scope = scope.or((!self.scopes.is_empty()).then_some(0));
-        while let Some(s) = scope {
+        let lookup = match self.asked.get(&at) {
+            Some(&lookup) => lookup,
+            None => {
+                let scope = std::iter::successors(Some(at), |&node| tree.parent(node))
+                    .find_map(|node| index.opened(node).last())
+                    .or((!self.scopes.is_empty()).then_some(0))?;
+                ReferenceLookup { scope, classes, outside: None }
+            }
+        };
+        for s in self.lookup_scopes(lookup) {
             let decls: Vec<Declared> = index
                 .declared(s, name)
                 .iter()
@@ -900,11 +1182,17 @@ impl Resolved {
             if let Some(found) = visible(&decls, start, classes) {
                 return Some(found);
             }
-            scope = self.scopes[s as usize].parent;
         }
         None
     }
 }
+
+#[cfg(test)]
+mod keyed_tests;
+#[cfg(test)]
+mod filter_tests;
+#[cfg(test)]
+mod lookup_tests;
 
 #[cfg(test)]
 mod tests {
@@ -913,16 +1201,43 @@ mod tests {
     const VALUE: u64 = 1;
     const TYPE: u64 = 2;
 
+    #[test]
+    fn target_depth_exhaustion_is_unknown_not_a_terminal() {
+        use super::{question::Known, KindNames, Names};
+        use crate::grammar::{Edge, Node, Tree};
+        let tables = Names {
+            kinds: vec![KindNames { targets: vec![(vec![vec![0]], None)], ..KindNames::default() }],
+            ..Names::default()
+        };
+        let chain = |length: u32| Tree::from_native((0..length).map(|at| Node {
+            matcher: if at + 1 == length { 1 } else { 0 }, start: 0, end: 0,
+            children: if at + 1 == length { vec![] } else { vec![Edge { label: 0, node: at + 1 }] },
+        }).collect(), 0);
+        assert_eq!(tables.targets_of(&chain(2), 0, &|_, _| Known::Yes(true)), Known::Yes(vec![1]));
+        assert_eq!(tables.targets_of(&chain(300), 0, &|_, _| Known::Yes(true)), Known::Unknown);
+    }
+
+    #[test]
+    fn target_cycles_are_unknown_not_terminal_nodes() {
+        use super::{question::Known, KindNames, Names, IT};
+        use crate::grammar::{Node, Tree};
+        let tables = Names {
+            kinds: vec![KindNames { targets: vec![(vec![vec![IT]], None)], ..KindNames::default() }],
+            ..Names::default()
+        };
+        let tree = Tree::from_native(vec![Node { matcher: 0, start: 0, end: 0, children: vec![] }], 0);
+        assert_eq!(tables.targets_of(&tree, 0, &|_, _| Known::Yes(true)), Known::Unknown);
+    }
+
     fn d(name: u32, start: u32, classes: u64, hoisted: bool) -> Declared {
         Declared { name, start, classes, hoisted, implicit: false }
     }
 
     #[test]
-    fn hoisted_declarations_of_any_class_merge_into_the_first() {
-        // `type X` then `namespace X`: a value lookup finds the namespace,
-        // which merges into the type alias; a later `let X` shadows both.
+    fn hoisted_lookups_select_the_requested_declaration_class() {
         let decls = [d(1, 10, TYPE, true), d(2, 20, VALUE | TYPE, true), d(3, 30, VALUE, false)];
-        assert_eq!(visible(&decls, 25, VALUE), Some(1));
+        assert_eq!(visible(&decls, 25, VALUE), Some(2));
+        assert_eq!(visible(&decls, 25, TYPE), Some(1));
         assert_eq!(visible(&decls, 40, VALUE), Some(3));
     }
 
@@ -937,11 +1252,9 @@ mod tests {
         let vars = [d(3, 10, VALUE, true), d(4, 30, VALUE, true)];
         assert_eq!(visible(&vars, 5, VALUE), Some(3));
         assert_eq!(visible(&vars, 40, VALUE), Some(3));
-        // Namespaces: a type declaration alone is invisible to value
-        // lookups; beside a value of the name, both are one binding.
         assert_eq!(visible(&[d(5, 10, TYPE, true)], 30, VALUE), None);
         let both = [d(5, 10, TYPE, true), d(6, 20, VALUE, true)];
-        assert_eq!(visible(&both, 30, VALUE), Some(5));
+        assert_eq!(visible(&both, 30, VALUE), Some(6));
         assert_eq!(visible(&both, 30, TYPE), Some(5));
     }
 

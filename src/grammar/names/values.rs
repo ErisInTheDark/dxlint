@@ -10,16 +10,44 @@ use super::semantic::Semantic;
 use super::Value;
 
 pub mod compile;
+mod algebra;
+mod carriers;
+mod conditional;
 mod eval;
+mod indexed;
+mod keys;
+mod members;
+mod metadata;
+pub mod products;
+mod reduction;
+
+pub(super) fn algebra_traits(
+    traits: &[crate::config::ast::Name],
+    vocabulary: &super::Vocabulary,
+    names: &super::Names,
+    errors: &mut Vec<crate::config::error::ConfigError>,
+) -> u64 {
+    let fitted = fitted_traits(names);
+    let mut mask = 0;
+    for name in traits {
+        let bit = vocabulary.trait_bit(&name.text);
+        if fitted & bit == 0 {
+            errors.push(crate::config::error::ConfigError::new(name.span, format!("nothing fits trait `{}`", name.text)));
+        } else {
+            mask |= bit;
+        }
+    }
+    mask
+}
 
 pub(super) fn exclusive_groups(
     config: &crate::config::ast::Config,
     vocabulary: &mut super::Vocabulary,
-    kinds: &[super::KindNames],
+    names: &super::Names,
     errors: &mut Vec<crate::config::error::ConfigError>,
 ) -> Vec<u64> {
     use crate::config::error::ConfigError;
-    let fitted = kinds.iter().flat_map(|kind| &kind.fits).fold(0, |all, &(bits, _, _)| all | bits);
+    let fitted = fitted_traits(names);
     let mut groups = Vec::new();
     for group in &config.exclusive {
         let Some(bits) = super::class_bits(&mut vocabulary.traits, &group.traits, errors) else { continue };
@@ -43,11 +71,29 @@ pub(super) fn exclusive_groups(
     groups
 }
 
+fn fitted_traits(names: &super::Names) -> u64 {
+    let ordinary = names.kinds.iter().flat_map(|kind| &kind.fits).fold(0, |all, &(bits, _, _)| all | bits);
+    names.products.iter().flatten().fold(ordinary, |all, shape| all | shape.traits)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     Text(Box<str>),
     Ordinal(u32),
     Symbol(NodeRef),
+    Domain(crate::config::ast::values::KeyDomain),
+}
+
+impl Key {
+    pub fn may_alias(&self, other: &Self) -> bool {
+        self == other || matches!((self, other),
+            (Self::Text(_), Self::Ordinal(_)) | (Self::Ordinal(_), Self::Text(_)))
+            || (matches!(self, Self::Domain(_)) || matches!(other, Self::Domain(_)))
+                && (self.domain() == other.domain()
+                    || matches!((self.domain(), other.domain()),
+                        (crate::config::ast::values::KeyDomain::Text, crate::config::ast::values::KeyDomain::Ordinal)
+                        | (crate::config::ast::values::KeyDomain::Ordinal, crate::config::ast::values::KeyDomain::Text)))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -59,16 +105,74 @@ pub enum Identity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Member {
     pub key: Key,
-    pub sites: Vec<Leaf>,
+    pub sources: Vec<MemberSource>,
+    pub required: Known<bool>,
 }
 
-/// One root question. Nested value, call and narrowing queries use this
-/// controller and its context rather than opening another work budget.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberSource {
+    pub site: Leaf,
+    pub value: Option<Value>,
+    pub origin: MemberOrigin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberOrigin {
+    Named,
+    Ordinal { repeated: bool },
+    Indexer(crate::config::ast::values::KeyDomain),
+}
+
+impl MemberSource {
+    fn normal(site: Leaf) -> Self {
+        Self { site, value: None, origin: MemberOrigin::Named }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CarrierRecipe {
+    pub description: u32,
+    pub arguments: Option<Vec<u16>>,
+    pub value: Option<Value>,
+    pub when: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexedRecipe {
+    pub path: Vec<u16>,
+    pub mode: IndexedMode,
+    pub views: u64,
+    pub value: Option<Value>,
+    pub when: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub enum IndexedMode {
+    Slots { repeated: bool, strings: bool },
+    Domain(crate::config::ast::values::KeyDomain),
+    Keyed(Value),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Carrier {
+    pub declaration: NodeRef,
+    pub description: crate::expr::Value<'static>,
+    pub arguments: Vec<NodeValue>,
+}
+
 #[derive(Default)]
 pub(crate) struct State {
     values: RefCell<FxHashMap<Leaf, NodeValue>>,
+    widened: RefCell<FxHashMap<Leaf, NodeValue>>,
     traits: RefCell<FxHashMap<(Leaf, u16), Known<bool>>>,
+    optional: RefCell<FxHashMap<Leaf, Known<bool>>>,
+    identities: RefCell<FxHashMap<Leaf, Known<Option<Identity>>>>,
+    members: RefCell<FxHashMap<Leaf, Known<Vec<Member>>>>,
+    member_keys: RefCell<FxHashMap<(Leaf, Key), Known<Option<Member>>>>,
+    key_paths: RefCell<FxHashMap<(Leaf, Vec<u16>), Key>>,
+    member_closed: RefCell<FxHashMap<Leaf, Known<bool>>>,
     bound_arguments: RefCell<FxHashMap<Leaf, Known<Option<NodeValue>>>>,
+    carriers: RefCell<FxHashMap<Leaf, Known<Option<Carrier>>>>,
 }
 
 pub struct Values<'a> {
@@ -88,7 +192,28 @@ impl Values<'_> {
         eval::values(self, leaf)
     }
 
+    pub fn unwrap_recipe(&self, leaf: Leaf) -> Known<Option<&Value>> {
+        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
+        let Target::Node(node) = leaf.target else { return Known::Yes(None) };
+        let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+        let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+        let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Known::Yes(None) };
+        let classes = self.question.get(leaf.frame).filter(|frame| frame.owner == node).map_or(0, |frame| frame.classes);
+        let unwraps = kind.unwraps.iter().filter(|unwrap| unwrap.classes & classes != 0)
+            .chain(kind.unwraps.iter().filter(|unwrap| unwrap.classes == 0));
+        for unwrap in unwraps {
+            if unwrap.effect.is_some() { continue }
+            match unwrap.when.map_or(Known::Yes(true), |condition| self.world.condition(leaf, condition, self.semantic)) {
+                Known::Yes(false) => continue,
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(true) => return unwrap.value.as_ref().map_or(Known::Unknown, |value| Known::Yes(Some(value))),
+            }
+        }
+        Known::Yes(None)
+    }
+
     pub fn fits(&self, leaf: Leaf, trait_id: u16) -> Known<bool> {
+        let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
         if let Some(&answer) = self.semantic.values.traits.borrow().get(&(leaf, trait_id)) {
             return answer;
         }
@@ -98,6 +223,8 @@ impl Values<'_> {
         // A pending question cuts recursion without a separate cycle set.
         self.semantic.values.traits.borrow_mut().insert((leaf, trait_id), Known::Unknown);
         let answer = match leaf.target {
+            Target::Traits(bits) => Known::Yes(bits & (1 << trait_id) != 0),
+            Target::Product(_) => self.product_fits(leaf, trait_id),
             Target::Scope(scope) => match self.world.names(scope.file)
                 .and_then(|names| names.scopes.get(scope.scope as usize)) {
                 Some(info) => self.direct_fits(leaf, NodeRef { file: scope.file, node: info.node }, trait_id),
@@ -134,6 +261,20 @@ impl Values<'_> {
                 Known::Yes(false) => {}
             }
         }
+        for &(views, when) in &kind.open_fits {
+            if !self.question.budget.step() { return Known::Unknown }
+            if views != 0 {
+                let Target::Scope(scope) = leaf.target else { continue };
+                let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
+                    return Known::Unknown;
+                };
+                if info.classes & views == 0 { continue }
+            }
+            if !matches!(when.map_or(Known::Yes(true), |condition| self.world.condition(leaf, condition, self.semantic)),
+                Known::Yes(false)) {
+                unknown = true;
+            }
+        }
         if unknown { Known::Unknown } else { Known::Yes(false) }
     }
 
@@ -143,32 +284,6 @@ impl Values<'_> {
 
     pub fn always(&self, value: &NodeValue, traits: u64) -> Known<bool> {
         self.quantify(value, traits, true)
-    }
-
-    fn normalize(&self, value: NodeValue) -> NodeValue {
-        let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
-        if self.tables.exclusive.is_empty() { return NodeValue::Alternatives(alternatives) }
-        let mask = self.tables.exclusive.iter().fold(0, |all, group| all | group);
-        let mut possible = Vec::new();
-        'alternative: for alternative in alternatives {
-            let mut proven = 0;
-            for &leaf in &alternative {
-                for trait_id in 0..64 {
-                    if mask & (1 << trait_id) == 0 { continue }
-                    if !self.question.budget.step() { return NodeValue::Unknown }
-                    if self.fits(leaf, trait_id) == Known::Yes(true) {
-                        proven |= 1 << trait_id;
-                        for group in &self.tables.exclusive {
-                            if !self.question.budget.step() { return NodeValue::Unknown }
-                            if (proven & group).count_ones() > 1 { continue 'alternative }
-                        }
-                    }
-                    if self.question.budget.exhausted() { return NodeValue::Unknown }
-                }
-            }
-            possible.push(alternative);
-        }
-        NodeValue::Alternatives(possible)
     }
 
     fn quantify(&self, value: &NodeValue, traits: u64, every: bool) -> Known<bool> {
@@ -217,43 +332,165 @@ impl Values<'_> {
         if unknown { Known::Unknown } else { Known::Yes(every) }
     }
 
-    pub fn member(&self, _value: &NodeValue, _key: &Key) -> NodeValue {
-        NodeValue::Unknown
-    }
-
-    pub fn member_sites(&self, _value: &NodeValue, _key: &Key) -> Known<Vec<Leaf>> {
-        Known::Unknown
-    }
-
-    pub fn members(&self, _value: &NodeValue) -> Known<Vec<Vec<Member>>> {
-        Known::Unknown
-    }
-
-    pub fn optional(&self, _at: Leaf) -> Known<bool> {
-        Known::Unknown
-    }
-
-    pub fn identity(&self, _at: Leaf) -> Known<Option<Identity>> {
-        Known::Unknown
-    }
-
     pub fn evaluate(&self, at: Leaf, expression: &Value) -> NodeValue {
         eval::evaluate(self, at, expression)
     }
 
-    pub fn key(&self, _at: Leaf, _expression: &Value) -> Known<Key> {
-        Known::Unknown
+    pub(crate) fn combine(&self, inputs: impl IntoIterator<Item = NodeValue>, intersection: bool) -> NodeValue {
+        eval::combine(self, inputs, intersection)
+    }
+
+    pub fn key(&self, at: Leaf, expression: &Value) -> Known<Key> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        let request = match expression {
+            Value::Path(path) => Some((at, path.clone())),
+            _ => None,
+        };
+        if let Some(key) = request.as_ref().and_then(|request| self.semantic.values.key_paths.borrow().get(request).cloned()) {
+            return Known::Yes(key);
+        }
+        let answer = self.direct_key(at, expression);
+        if let (Some(request), Known::Yes(key)) = (request, &answer) {
+            self.semantic.values.key_paths.borrow_mut().insert(request, key.clone());
+        }
+        answer
+    }
+
+    fn direct_key(&self, at: Leaf, expression: &Value) -> Known<Key> {
+        if !self.question.budget.step() {
+            return Known::Unknown;
+        }
+        match expression {
+            Value::Text(text) => Known::Yes(Key::Text(text.clone())),
+            Value::Ordinal(index) => Known::Yes(Key::Ordinal(*index)),
+            Value::Path(path) => {
+                let mut answer = None;
+                if let Some((&super::POSITION, prefix)) = path.split_last() {
+                    let Known::Yes(sites) = self.follow(at, prefix) else { return Known::Unknown };
+                    for site in sites {
+                        if !self.question.budget.step() { return Known::Unknown }
+                        let Known::Yes(Some(index)) = self.semantic.position(site) else { return Known::Unknown };
+                        let Ok(position) = u32::try_from(index) else {
+                            return Known::Unknown;
+                        };
+                        let key = Key::Ordinal(position);
+                        if answer.as_ref().is_some_and(|previous| previous != &key) { return Known::Unknown }
+                        answer = Some(key);
+                    }
+                } else if let Some((attribute, prefix)) = path.split_last()
+                    .and_then(|(&last, prefix)| super::attribute_step(last).map(|attribute| (attribute, prefix))) {
+                    let Known::Yes(sites) = self.follow(at, prefix) else { return Known::Unknown };
+                    for site in sites {
+                        if !self.question.budget.step() { return Known::Unknown }
+                        let Known::Yes(value) = self.world.attribute(site, attribute, self.semantic) else { return Known::Unknown };
+                        let Some(key) = Self::expression_key(value) else { return Known::Unknown };
+                        if answer.as_ref().is_some_and(|previous| previous != &key) { return Known::Unknown }
+                        answer = Some(key);
+                    }
+                } else {
+                    return self.value_key(&self.evaluate(at, expression));
+                }
+                answer.map_or(Known::Unknown, Known::Yes)
+            }
+            _ => Known::Unknown,
+        }
+    }
+
+    fn expression_key(value: crate::expr::Value<'static>) -> Option<Key> {
+        match value {
+            crate::expr::Value::Str(text) => Some(Key::Text((&*text).into())),
+            crate::expr::Value::Num(number) if number >= 0.0 && number <= u32::MAX as f64 && number.fract() == 0.0 => {
+                Some(Key::Ordinal(number as u32))
+            }
+            _ => None,
+        }
     }
 
     pub fn sites(&self, at: Leaf, expression: &Value) -> Known<Vec<Leaf>> {
         eval::sites(self, at, expression)
     }
 
-    pub fn arguments(&self, _at: Leaf, _path: &[u16]) -> Known<Vec<NodeValue>> {
-        Known::Unknown
+    fn scopes(&self, at: Leaf, from: &Value, classes: u64) -> Known<Vec<Leaf>> {
+        use super::question::ScopeRef;
+        let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        let Known::Yes(sites) = self.sites(at, from) else { return Known::Unknown };
+        let mut leaves = Vec::new();
+        for site in sites {
+            if !self.question.budget.step() { return Known::Unknown }
+            let node = match site.target {
+                Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                Target::Node(node) => node,
+                Target::Scope(scope) => {
+                    let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
+                        return Known::Unknown;
+                    };
+                    NodeRef { file: scope.file, node: info.node }
+                }
+            };
+            let Some(names) = self.world.names(node.file) else { return Known::Unknown };
+            let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+            let Some(text) = self.world.text(node.file) else { return Known::Unknown };
+            for scope in names.index(tree, text, &|text| self.world.name_key(node.file, text)).opened(node.node) {
+                if !self.question.budget.step() { return Known::Unknown }
+                if names.scopes[scope as usize].classes & classes == 0 { continue }
+                let leaf = Leaf { target: Target::Scope(ScopeRef { file: node.file, scope }), frame: site.frame };
+                if !leaves.contains(&leaf) { leaves.push(leaf) }
+            }
+        }
+        Known::Yes(leaves)
+    }
+
+    pub fn arguments(&self, at: Leaf, path: &[u16]) -> Known<Vec<NodeValue>> {
+        self.arguments_using(at, path, None)
+    }
+
+    fn arguments_using(&self, at: Leaf, path: &[u16], value: Option<&Value>) -> Known<Vec<NodeValue>> {
+        let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        if path == [super::PRODUCT_ITEMS] {
+            return if value.is_none() { self.product_items(at) } else { Known::Unknown };
+        }
+        let Known::Yes(sites) = self.follow(at, path) else { return Known::Unknown };
+        let mut arguments = Vec::with_capacity(sites.len());
+        for site in sites {
+            if !self.question.budget.step() { return Known::Unknown }
+            arguments.push(value.map_or_else(|| self.values(site), |value| self.evaluate(site, value)));
+        }
+        Known::Yes(arguments)
+    }
+
+    pub fn origin(&self, at: Leaf) -> Known<Option<Leaf>> {
+        let mut frame = at.frame;
+        while frame != super::question::FrameId::ROOT {
+            if !self.question.budget.step() { return Known::Unknown }
+            let Some(binding) = self.question.get(frame) else { return Known::Unknown };
+            if let Some(origin) = binding.through {
+                return match self.semantic.leaf(origin) {
+                    Known::Yes(origin) => Known::Yes(Some(origin)),
+                    Known::Unknown => Known::Unknown,
+                };
+            }
+            frame = binding.parent;
+        }
+        Known::Yes(None)
+    }
+
+    pub fn declaration_owner(&self, node: NodeRef) -> Known<NodeRef> {
+        let Known::Yes(leaf) = self.semantic.leaf(Leaf { target: Target::Node(node), frame: super::question::FrameId::ROOT }) else { return Known::Unknown };
+        let Target::Node(node) = leaf.target else { return Known::Unknown };
+        if !self.question.budget.step() { return Known::Unknown }
+        let Some(names) = self.world.names(node.file) else { return Known::Unknown };
+        let classes = names.declared.get(&node.node).map(|&(_, _, classes, _)| classes)
+            .or_else(|| names.asked.get(&node.node).map(|lookup| lookup.classes)).unwrap_or(0);
+        let name = names.declaration_in(node.node, classes);
+        let owner = names.bindings.get(&name).copied()
+            .or_else(|| names.declared.get(&name).map(|&(_, owner, ..)| owner)).unwrap_or(name);
+        let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+        if tree.nodes.get(owner as usize).is_none() { return Known::Unknown }
+        Known::Yes(NodeRef { file: node.file, node: owner })
     }
 
     pub fn bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
+        let Known::Yes(formal) = self.semantic.leaf(formal) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.bound_arguments.borrow().get(&formal) {
             return answer.clone();
         }
@@ -263,10 +500,148 @@ impl Values<'_> {
         answer
     }
 
+    fn instance(&self, at: Leaf, name: &str, classes: u64, arguments: &[Value]) -> NodeValue {
+        let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
+        let importer = match at.target {
+            Target::Traits(_) => return NodeValue::Unknown,
+            Target::Node(node) => node.file,
+            Target::Scope(scope) => scope.file,
+            Target::Product(_) => {
+                let Known::Yes(Some(product)) = self.product_info(at) else { return NodeValue::Unknown };
+                match product.source.target {
+                    Target::Node(node) => node.file,
+                    Target::Scope(scope) => scope.file,
+                    _ => return NodeValue::Unknown,
+                }
+            }
+        };
+        let Known::Yes(targets) = self.semantic.modules().global(importer, name, classes) else {
+            return NodeValue::Unknown;
+        };
+        if targets.is_empty() { return NodeValue::Unknown }
+        let type_class = self.tables.vocabulary.declaration_class("type");
+        if targets.len() > 1 && (type_class == 0 || classes & type_class == 0) { return NodeValue::Unknown }
+        let mut args = Vec::new();
+        for argument in arguments {
+            if !self.question.budget.step() { return NodeValue::Unknown }
+            args.push(self.evaluate(at, argument));
+        }
+        let mut values = Vec::new();
+        for target in targets {
+            if !self.question.budget.step() { return NodeValue::Unknown }
+            let Target::Node(node) = target else { return NodeValue::Unknown };
+            let Known::Yes(owner) = self.declaration_owner(node) else { return NodeValue::Unknown };
+            let through = match at.target { Target::Node(_) => Some(at), _ => None };
+            let frame = self.question.bind_definition(at.frame, owner, through, Some(args.clone()), classes);
+            values.push(self.values(Leaf { target: Target::Node(owner), frame }));
+        }
+        eval::combine(self, values, true)
+    }
+
+    fn definitions(&self, leaf: Leaf, through: Leaf) -> Known<Vec<Leaf>> {
+        let Target::Node(node) = leaf.target else { return Known::Unknown };
+        let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+        let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+        if let Some(kind) = self.tables.kinds.get(data.matcher as usize) {
+            for (recipe, when) in &kind.defines {
+                if !self.question.budget.step() { return Known::Unknown }
+                match when.map_or(Known::Yes(true), |when| self.world.condition(leaf, when, self.semantic)) {
+                    Known::Yes(false) => continue,
+                    Known::Unknown => return Known::Unknown,
+                    Known::Yes(true) => {}
+                }
+                let Known::Yes(sites) = self.sites(leaf, recipe) else { return Known::Unknown };
+                let mut definitions = Vec::new();
+                for site in sites {
+                    if !self.question.budget.step() { return Known::Unknown }
+                    let (target, owner) = match site.target {
+                        Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                        Target::Node(node) => {
+                            let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
+                            (Target::Node(owner), owner)
+                        },
+                        Target::Scope(scope) => {
+                            let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
+                                return Known::Unknown;
+                            };
+                            (site.target, NodeRef { file: scope.file, node: info.node })
+                        },
+                    };
+                    let binding = self.question.get(site.frame).filter(|frame| frame.owner == owner);
+                    let frame = if binding.is_some_and(|frame| frame.args.is_some() || frame.through.is_some()) {
+                        site.frame
+                    } else {
+                        let classes = binding.map_or(0, |frame| frame.classes);
+                        let through = match through.target { Target::Node(_) => Some(through), _ => None };
+                        self.question.bind_definition(site.frame, owner, through, None, classes)
+                    };
+                    let definition = Leaf { target, frame };
+                    if !definitions.contains(&definition) { definitions.push(definition) }
+                }
+                return Known::Yes(definitions);
+            }
+        }
+        let Some(names) = self.world.names(node.file) else { return Known::Unknown };
+        if names.keys.get(&node.node) == Some(&None) { return Known::Unknown }
+        let classes = names.asked.get(&node.node).map(|lookup| lookup.classes)
+            .or_else(|| names.declared.get(&node.node).map(|&(_, _, classes, _)| classes));
+        let declaration = names.declaration_in(node.node, classes.unwrap_or(0));
+        let name = (names.declaration.contains_key(&node.node) || names.declared.contains_key(&declaration)).then_some(declaration);
+        let modules = self.semantic.modules();
+        let route = match classes {
+            Some(classes) => modules.definition(node, classes),
+            None => Known::Yes(None),
+        };
+        let targets = match route {
+            Known::Unknown => return Known::Unknown,
+            Known::Yes(Some(targets)) => targets,
+            Known::Yes(None) => match name {
+                Some(name) => vec![Target::Node(NodeRef { file: node.file, node: name })],
+                None => {
+                    let Some(classes) = classes else { return Known::Yes(Vec::new()) };
+                    let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+                    let Some(text) = self.world.text(node.file) else { return Known::Unknown };
+                    let at = tree.node(node.node);
+                    let key = match names.keys.get(&node.node) {
+                        Some(Some(key)) => std::borrow::Cow::Borrowed(&**key),
+                        Some(None) => return Known::Unknown,
+                        None => self.world.name_key(node.file, &text[at.start as usize..at.end as usize]),
+                    };
+                    match modules.global(node.file, &key, classes) {
+                        Known::Yes(targets) if !targets.is_empty() => targets,
+                        _ => return Known::Unknown,
+                    }
+                }
+            },
+        };
+        let mut leaves = Vec::new();
+        for target in targets {
+            if !self.question.budget.step() { return Known::Unknown }
+            let (target, owner) = match target {
+                Target::Traits(_) | Target::Product(_) => return Known::Unknown,
+                Target::Node(node) => {
+                    let Known::Yes(owner) = self.declaration_owner(node) else { return Known::Unknown };
+                    (Target::Node(owner), owner)
+                }
+                Target::Scope(scope) => {
+                    let Some(info) = self.world.names(scope.file).and_then(|names| names.scopes.get(scope.scope as usize)) else {
+                        return Known::Unknown;
+                    };
+                    (target, NodeRef { file: scope.file, node: info.node })
+                }
+            };
+            let through = match through.target { Target::Node(_) => Some(through), _ => None };
+            let frame = self.question.bind_definition(leaf.frame, owner, through, None, classes.unwrap_or(0));
+            leaves.push(Leaf { target, frame });
+        }
+        Known::Yes(leaves)
+    }
+
     fn find_bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
         if !self.question.budget.step() { return Known::Unknown }
         let mut frame = formal.frame;
-        while frame != super::question::FrameId::ROOT {
+        'frames: while frame != super::question::FrameId::ROOT {
             if !self.question.budget.step() { return Known::Unknown }
             let Some(binding) = self.question.get(frame) else { return Known::Unknown };
             let Some(tree) = self.world.tree(binding.owner.file) else { return Known::Unknown };
@@ -283,8 +658,21 @@ impl Values<'_> {
                     for (position, parameter) in parameters.iter().enumerate() {
                         if !self.question.budget.step() { return Known::Unknown }
                         if parameter.target != formal.target { continue }
-                        let Some(arguments) = binding.args else { return Known::Yes(None) };
-                        return self.question.argument(arguments, position);
+                        if let Some(arguments) = binding.args {
+                            match self.question.argument_slot(arguments, position) {
+                                Known::Yes(super::question::Argument::Bound(value)) => return Known::Yes(Some(value)),
+                                Known::Yes(super::question::Argument::Unbound) => return Known::Yes(None),
+                                Known::Yes(super::question::Argument::Inherited) => {
+                                    frame = binding.parent;
+                                    continue 'frames;
+                                }
+                                Known::Unknown => return Known::Unknown,
+                            }
+                        } else {
+                            let Some(through) = binding.through else { return Known::Yes(None) };
+                            let Known::Yes(arguments) = self.declared_arguments(through) else { return Known::Unknown };
+                            return Known::Yes(arguments.and_then(|arguments| arguments.get(position).cloned()));
+                        }
                     }
                 }
             }
@@ -293,7 +681,30 @@ impl Values<'_> {
         Known::Yes(None)
     }
 
+    pub fn declared_arguments(&self, at: Leaf) -> Known<Option<Vec<NodeValue>>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
+        let Target::Node(node) = at.target else { return Known::Yes(None) };
+        let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+        let Some(node) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+        let Some(kind) = self.tables.kinds.get(node.matcher as usize) else { return Known::Unknown };
+        let mut answer = None;
+        for (path, when) in &kind.arguments {
+            if !self.question.budget.step() { return Known::Unknown }
+            match when.map_or(Known::Yes(true), |when| self.world.condition(at, when, self.semantic)) {
+                Known::Yes(false) => continue,
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(true) => {}
+            }
+            if answer.is_some() { return Known::Unknown }
+            let Known::Yes(arguments) = self.arguments(at, path) else { return Known::Unknown };
+            answer = Some(arguments);
+        }
+        Known::Yes(answer)
+    }
+
     pub fn follow(&self, at: Leaf, path: &[u16]) -> Known<Vec<Leaf>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let mut leaves = vec![at];
         for &label in path {
             let mut next = Vec::new();
@@ -301,7 +712,12 @@ impl Values<'_> {
                 if !self.question.budget.step() {
                     return Known::Unknown;
                 }
+                if label == super::IT {
+                    next.push(leaf);
+                    continue;
+                }
                 let node = match leaf.target {
+                    Target::Traits(_) | Target::Product(_) => return Known::Unknown,
                     Target::Node(node) => node,
                     Target::Scope(scope) => {
                         let Some(names) = self.world.names(scope.file) else { return Known::Unknown };
@@ -314,7 +730,6 @@ impl Values<'_> {
                     return Known::Unknown;
                 }
                 match label {
-                    super::IT => next.push(leaf),
                     super::THROUGH => {
                         let mut frame = leaf.frame;
                         while let Some(binding) = self.question.get(frame) {
@@ -329,16 +744,13 @@ impl Values<'_> {
                         }
                     }
                     super::DECLARATION => {
-                        let Some(names) = self.world.names(node.file) else { return Known::Unknown };
-                        if let Some(&name) = names.declaration.get(&node.node) {
-                            let declaring = names.declared.get(&name).map_or(name, |&(_, item, ..)| item);
-                            let owner = NodeRef { file: node.file, node: declaring };
-                            let through = match at.target { Target::Node(_) => Some(at), Target::Scope(_) => None };
-                            let frame = self.question.bind(leaf.frame, owner, through, None);
-                            next.push(Leaf { target: Target::Node(owner), frame });
+                        match self.definitions(leaf, at) {
+                            Known::Yes(leaves) => next.extend(leaves),
+                            Known::Unknown => return Known::Unknown,
                         }
                     }
                     super::POSITION => return Known::Unknown,
+                    super::RESULT | super::EXPECTED | super::INFERRED | super::RETURNED | super::WIDENED | super::RECEIVER => return Known::Unknown,
                     _ if super::attribute_step(label).is_some() => {
                         use crate::expr::Value as Expression;
                         let Some(attribute_id) = super::attribute_step(label) else { unreachable!() };
@@ -359,16 +771,16 @@ impl Values<'_> {
                         }
                     }
                     _ => {
-                        for child in super::follow(tree, node.node, &[label]) {
-                            if !self.question.budget.step() {
-                                return Known::Unknown;
-                            }
-                            next.push(Leaf { target: Target::Node(NodeRef { file: node.file, node: child }), frame: leaf.frame });
-                        }
+                        let Known::Yes(children) = self.semantic.follow(leaf, &[label]) else { return Known::Unknown };
+                        next.extend(children);
                     }
                 }
             }
-            leaves = next;
+            leaves = Vec::with_capacity(next.len());
+            for leaf in next {
+                let Known::Yes(leaf) = self.semantic.leaf(leaf) else { return Known::Unknown };
+                leaves.push(leaf);
+            }
         }
         Known::Yes(leaves)
     }

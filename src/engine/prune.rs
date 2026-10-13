@@ -15,7 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::config::ast::{Config, Expr, ExprKind, Parent, PipelineStage, Target, TemplatePart};
+use crate::config::ast::{calls, effects, Config, Expr, ExprKind, Name, NameItem, Parent, PipelineStage, Target, TemplatePart, Unwrap};
 use crate::pattern::Pat;
 
 /// Runtime compilation keeps only helpers reachable from enabled rules
@@ -92,6 +92,170 @@ fn expr_names(e: &Expr, out: &mut HashSet<String>) {
             expr_names(value, out);
             out.extend(names.iter().filter_map(|n| n.kind()).map(|n| n.text.clone()));
         }
+        ExprKind::Trait(value, _, traits) => {
+            expr_names(value, out);
+            path_names(traits, out);
+        }
+    }
+}
+
+fn path_names(path: &[Name], out: &mut HashSet<String>) {
+    out.extend(path.iter().map(|name| name.text.clone()));
+}
+
+fn value_names(value: &Unwrap, out: &mut HashSet<String>) {
+    match value {
+        Unwrap::Path(path) => path_names(path, out),
+        Unwrap::Spread { path, value, .. } => {
+            path_names(path, out);
+            if let Some(value) = value { value_names(value, out); }
+        }
+        Unwrap::Text(text) => { out.insert(text.clone()); }
+        Unwrap::Traits(traits) => path_names(traits, out),
+        Unwrap::Returned { default } => value_names(default, out),
+        Unwrap::Either(left, right) => {
+            value_names(left, out);
+            value_names(right, out);
+        }
+        Unwrap::Union(values) | Unwrap::Intersection(values) => {
+            values.iter().for_each(|value| value_names(value, out));
+        }
+        Unwrap::From(source, key, classes) => {
+            value_names(source, out);
+            value_names(key, out);
+            path_names(classes, out);
+        }
+        Unwrap::Scope { classes, from } => {
+            path_names(classes, out);
+            value_names(from, out);
+        }
+        Unwrap::Not(value) => value_names(value, out),
+        Unwrap::Excludes { traits, from } => {
+            path_names(traits, out);
+            if let Some(from) = from { value_names(from, out); }
+        }
+        Unwrap::Includes { value, from } | Unwrap::Has { key: value, from } => {
+            value_names(value, out);
+            if let Some(from) = from { value_names(from, out); }
+        }
+        Unwrap::Current | Unwrap::Unknown | Unwrap::Ordinal(_) => {}
+        Unwrap::Select { check, pattern, yes, no, distribute, .. } => {
+            for value in [check, pattern, yes, no] { value_names(value, out) }
+            if let Some(path) = distribute { path_names(path, out) }
+        }
+        Unwrap::Product { shape, sites, value, optional, repeated, readonly } => {
+            out.insert(shape.text.clone());
+            path_names(sites, out);
+            if let Some(value) = value { value_names(value, out) }
+            for path in [optional, repeated, readonly].into_iter().flatten() { path_names(path, out) }
+        }
+        Unwrap::Instance { name, class, arguments } => {
+            out.insert(name.text.clone());
+            out.insert(class.text.clone());
+            arguments.iter().for_each(|value| value_names(value, out));
+        }
+    }
+}
+
+fn flow_names(flow: &effects::Flow, out: &mut HashSet<String>) {
+    match flow {
+        effects::Flow::Nothing => {}
+        effects::Flow::Field(path) => path_names(path, out),
+        effects::Flow::Then(flows) | effects::Flow::Or(flows) => {
+            flows.iter().for_each(|flow| flow_names(flow, out));
+        }
+        effects::Flow::Maybe(flow) => flow_names(flow, out),
+        effects::Flow::Repeat { body, test, next, first: _ } => {
+            flow_names(body, out);
+            if let Some(test) = test { path_names(test, out); }
+            if let Some(next) = next { flow_names(next, out); }
+        }
+        effects::Flow::Select { entries, test, body } => {
+            path_names(entries, out);
+            path_names(test, out);
+            path_names(body, out);
+        }
+    }
+}
+
+fn item_names(item: &NameItem, out: &mut HashSet<String>) {
+    match item {
+        NameItem::Scope { classes: _, within } => path_names(within, out),
+        NameItem::Declares { path, keyed, filter, .. } => {
+            path_names(path, out);
+            if let Some(keyed) = keyed { expr_names(keyed, out); }
+            if let Some(filter) = filter { expr_names(filter, out); }
+        }
+        NameItem::Resolves { path, keyed, outside, .. } => {
+            path_names(path, out);
+            if let Some(keyed) = keyed { expr_names(keyed, out); }
+            if let Some(outside) = outside { expr_names(outside, out); }
+        }
+        NameItem::Module(item) => item.exprs().for_each(|expr| expr_names(expr, out)),
+        NameItem::Calls(item) => match item {
+            calls::Item::Signature { parameters, receiver, result } => {
+                path_names(parameters, out);
+                if let Some(receiver) = receiver { path_names(receiver, out); }
+                value_names(result, out);
+            }
+            calls::Item::Sources(value) => value_names(value, out),
+            calls::Item::Invoke { callee, arguments, construct: _ } => {
+                value_names(callee, out);
+                path_names(arguments, out);
+            }
+            calls::Item::Expected { field, value, .. } => {
+                path_names(field, out);
+                value_names(value, out);
+            }
+            calls::Item::Identity(expr) => expr_names(expr, out),
+            calls::Item::DiscardsResult | calls::Item::Optional | calls::Item::ParameterVariance(_) | calls::Item::InferLastOverload => {}
+        },
+        NameItem::Generics(path) | NameItem::Arguments(path) => path_names(path, out),
+        NameItem::Widens { value } | NameItem::Defines { value } | NameItem::Constrains { value } => value_names(value, out),
+        NameItem::Pack(shape) => { out.insert(shape.text.clone()); }
+        NameItem::Unwraps { value, .. }
+        | NameItem::Members { classes: _, closed: _, inherits: value } => {
+            if let Some(value) = value { value_names(value, out); }
+        }
+        NameItem::Execution(item) => match item {
+            effects::Item::Assigned { target, value } => {
+                path_names(target, out);
+                if let Some(value) = value { value_names(value, out); }
+            }
+            effects::Item::Runs(flow) => flow_names(flow, out),
+            effects::Item::Entry(path) | effects::Item::Labels(path) => path_names(path, out),
+            effects::Item::Catches { handler, effects: _, source } => {
+                path_names(handler, out);
+                path_names(source, out);
+            }
+            effects::Item::After { finalizer, sources } => {
+                path_names(finalizer, out);
+                sources.iter().for_each(|source| path_names(source, out));
+            }
+        },
+        NameItem::Fits { traits, views, .. } => {
+            path_names(traits, out);
+            path_names(views, out);
+        }
+        NameItem::Carries { description, arguments, value } => {
+            if let Some(arguments) = arguments { path_names(arguments, out); }
+            expr_names(description, out);
+            if let Some(value) = value { value_names(value, out); }
+        }
+        NameItem::Indexed { path, mode, value, .. } => {
+            path_names(path, out);
+            if let crate::config::ast::values::IndexedMode::Keyed(key) = mode { value_names(key, out); }
+            if let Some(value) = value { value_names(value, out); }
+        }
+        NameItem::Member { classes: _, key, value } => {
+            value_names(key, out);
+            value_names(value, out);
+        }
+        NameItem::Propagates { field, value } => {
+            path_names(field, out);
+            value_names(value, out);
+        }
+        NameItem::Targets(groups) => groups.iter().flatten().for_each(|path| path_names(path, out)),
     }
 }
 
@@ -127,6 +291,7 @@ fn prune_config(config: &mut Config, runtime: bool) {
     // What turned-on rules and the config's own items mention.
     for r in config.rules.iter().filter(|r| r.enabled()) {
         for t in &r.targets {
+            if let Target::Field(_, field) = t { needed.insert(field.text.clone()); }
             let name = match t {
                 Target::Matcher(n) | Target::Field(n, _) => &n.text,
                 Target::Lang(_) => continue,
@@ -154,14 +319,22 @@ fn prune_config(config: &mut Config, runtime: bool) {
         needed.extend(f.targets.iter().map(|t| t.text.clone()));
         needed.extend(f.attrs.iter().map(|a| a.text.clone()));
     }
-    // Name items always apply: their layers and what their conditions read.
+    // Name items always apply, including their helper dependencies.
     for n in &config.names {
         needed.extend(n.targets.iter().map(|t| t.text.clone()));
         if let Some(when) = &n.when {
             expr_names(when, &mut needed);
         }
-        if let crate::config::ast::NameItem::Module(item) = &n.item {
-            item.exprs().for_each(|e| expr_names(e, &mut needed));
+        item_names(&n.item, &mut needed);
+    }
+    for profile in &config.module_resolutions {
+        for mode in &profile.modes {
+            expr_names(&mode.when, &mut needed);
+        }
+    }
+    for shape in &config.products {
+        for value in [&shape.inherits, &shape.readonly_inherits, &shape.optional].into_iter().flatten() {
+            value_names(value, &mut needed);
         }
     }
     if runtime {

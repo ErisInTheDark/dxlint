@@ -4,11 +4,127 @@ use crate::config::error::ConfigError;
 use crate::config::source::Span;
 
 impl Parser<'_> {
+    pub(super) fn product_value(&mut self) -> Option<Unwrap> {
+        let shape = self.ident("a product shape")?;
+        if !self.word("of") { self.error_here("expected `product <shape> of <sites>`"); return None }
+        let sites = self.name_path("product element sites")?;
+        let value = if self.word("using") { Some(Box::new(self.unwrap_value()?)) } else { None };
+        let optional = if self.word("optional") { Some(self.name_path("an optional element flag")?) } else { None };
+        let repeated = if self.word("repeated") { Some(self.name_path("a repeated element flag")?) } else { None };
+        let readonly = if self.word("readonly") { Some(self.name_path("a readonly product flag")?) } else { None };
+        Some(Unwrap::Product { shape, sites, value, optional, repeated, readonly })
+    }
+
+    pub(super) fn product_shape_item(&mut self, context: Option<&Context>) {
+        let keyword = self.bump().expect("peeked");
+        let Some(name) = self.ident("a product shape name") else { return };
+        let Some(items) = self.ident("the product items label") else { return };
+        if !self.word("fits") { self.error_here("expected `fits <traits>`"); return }
+        let traits = self.name_list("a product trait");
+        if !self.word("as") { self.error_here("expected `as <constant carrier record>`"); return }
+        let Some(expression) = self.expr() else { return };
+        let description = match super::schema::literal(&expression) {
+            Ok(value @ crate::expr::Value::Record(_)) => value,
+            _ => {
+                self.errors.push(ConfigError::new(expression.span, "product carriers are constant records"));
+                return;
+            }
+        };
+        let inherits = if self.word("inherits") { self.unwrap_value() } else { None };
+        let readonly_inherits = if self.word("readonly") {
+            if !self.word("inherits") { self.error_here("expected `readonly inherits <value>`"); return }
+            self.unwrap_value()
+        } else { None };
+        let optional = if self.word("optional") { self.unwrap_value() } else { None };
+        self.end_of_item();
+        if context.is_some() || !self.conditions.is_empty() {
+            self.errors.push(ConfigError::new(keyword.span, "product shapes belong at top level"));
+            return;
+        }
+        if let Some(previous) = self.config.products.iter().find(|shape| shape.name.text == name.text) {
+            self.errors.push(ConfigError::new(name.span, format!("product shape `{}` is already defined", name.text))
+                .related(previous.name.span, "first defined here"));
+            return;
+        }
+        self.config.products.push(crate::config::ast::values::ProductShape {
+            name, items, traits, description, inherits, readonly_inherits, optional,
+        });
+    }
+
+    pub(super) fn select_value(&mut self) -> Option<Unwrap> {
+        let check = Box::new(self.unwrap_value()?);
+        if !self.word("against") { self.error_here("expected `against <value>`"); return None }
+        let pattern = Box::new(self.unwrap_value()?);
+        if !self.word("then") { self.error_here("expected `then <value>`"); return None }
+        let yes = Box::new(self.unwrap_value()?);
+        if !self.word("else") { self.error_here("expected `else <value>`"); return None }
+        let no = Box::new(self.unwrap_value()?);
+        let distribute = if self.word("distribute") {
+            Some(self.name_path("a formal parameter site")?)
+        } else { None };
+        let dynamic_both = self.word("dynamic");
+        if dynamic_both && !self.word("both") {
+            self.error_here("expected `dynamic both`");
+            return None;
+        }
+        Some(Unwrap::Select { check, pattern, yes, no, distribute, dynamic_both })
+    }
+
+    pub(super) fn key_domains_item(&mut self, context: Option<&Context>) {
+        let keyword = self.bump().expect("peeked");
+        let Some(domain) = self.ident("a key domain") else { return };
+        let Some(domain) = crate::config::ast::values::KeyDomain::parse(&domain.text) else {
+            self.error_here("expected key domain `text`, `ordinal`, or `symbol`");
+            return;
+        };
+        let traits = self.name_list("a trait name");
+        self.end_of_item();
+        if context.is_some() || !self.conditions.is_empty() {
+            self.errors.push(ConfigError::new(keyword.span, "key domains belong at top level"));
+            return;
+        }
+        self.config.key_domains.push((domain, traits));
+    }
+
+    pub(super) fn indexed_item(&mut self) -> Option<NameItem> {
+        use crate::config::ast::values::{IndexedMode, KeyDomain};
+        let domain = self.peek().and_then(|token| KeyDomain::parse(&token.text));
+        let keyed = domain.is_none() && self.word("keyed");
+        if domain.is_some() { self.bump(); }
+        let repeated = domain.is_none() && !keyed && self.word("repeated");
+        let path = self.name_path("an indexed value field")?;
+        let mode = if let Some(domain) = domain {
+            IndexedMode::Domain(domain)
+        } else if keyed {
+            if !self.word("by") { self.error_here("expected `by <key value>`"); return None; }
+            IndexedMode::Keyed(self.unwrap_primary()?)
+        } else {
+            IndexedMode::Slots { repeated, strings: self.word("strings") }
+        };
+        let value = if self.word("using") { Some(self.unwrap_value()?) } else { None };
+        let views = if self.word("in") { self.name_list("a scope class") } else { Vec::new() };
+        Some(NameItem::Indexed { path, mode, value, views })
+    }
+
+    pub(super) fn traits_value(&mut self) -> Option<Unwrap> {
+        let traits = self.name_list("a trait name");
+        (!traits.is_empty()).then_some(Unwrap::Traits(traits))
+    }
+
+    pub(super) fn returned_value(&mut self) -> Option<Unwrap> {
+        if !self.word("default") {
+            self.error_here("expected `returned default <value>`");
+            return None;
+        }
+        Some(Unwrap::Returned { default: Box::new(self.unwrap_unary()?) })
+    }
+
     pub(super) fn members_item(&mut self) -> Option<NameItem> {
         let classes = self.name_list("a scope class");
         if classes.is_empty() { return None }
+        let closed = self.word("closed");
         let inherits = if self.word("inherits") { Some(self.unwrap_value()?) } else { None };
-        Some(NameItem::Members { classes, inherits })
+        Some(NameItem::Members { classes, closed, inherits })
     }
 
     pub(super) fn member_item(&mut self) -> Option<NameItem> {
@@ -80,6 +196,21 @@ impl Parser<'_> {
         }
         self.config.exclusive.push(Exclusive { traits, span: keyword.span });
     }
+
+    pub(super) fn algebra_item(&mut self, context: Option<&Context>) {
+        let keyword = self.bump().expect("peeked");
+        let traits = self.name_list("a trait name");
+        self.end_of_item();
+        if context.is_some() || !self.conditions.is_empty() {
+            self.errors.push(ConfigError::new(keyword.span, "value algebra belongs at top level"));
+            return;
+        }
+        if &*keyword.text == "top" {
+            self.config.top.extend(traits);
+        } else {
+            self.config.dynamic.extend(traits);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -88,10 +219,17 @@ mod tests {
     use crate::config::ast::{NameItem, Unwrap};
 
     #[test]
+    fn nullary_carriers_do_not_need_an_argument_field() {
+        let (config, errors, _) = parse_str("in container { carries as { kind: \"enum\" } }\n");
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(matches!(&config.names[0].item, NameItem::Carries { .. }));
+    }
+
+    #[test]
     fn scoped_traits_keep_the_view_and_condition_together() {
         let (config, errors, _) = parse_str("in container { fits callable in statics when true }\n");
         assert!(errors.is_empty(), "{errors:?}");
-        let NameItem::Fits { traits, views } = &config.names[0].item else { panic!("trait declaration was lost") };
+        let NameItem::Fits { traits, views, .. } = &config.names[0].item else { panic!("trait declaration was lost") };
         assert!(!traits.is_empty() && !views.is_empty());
         assert!(config.names[0].when.is_some());
     }
@@ -160,7 +298,7 @@ mod tests {
     fn inherited_member_views_keep_their_base_value() {
         let (config, errors, _) = parse_str("in container { members members inherits scope members from base }\n");
         assert!(errors.is_empty(), "{errors:?}");
-        let NameItem::Members { classes, inherits: Some(Unwrap::Scope { classes: view, from }) } = &config.names[0].item else {
+        let NameItem::Members { classes, inherits: Some(Unwrap::Scope { classes: view, from }), .. } = &config.names[0].item else {
             panic!("member inheritance was lost");
         };
         assert_eq!(classes[0].text, view[0].text);

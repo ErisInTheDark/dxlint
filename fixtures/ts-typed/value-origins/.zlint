@@ -1,0 +1,24 @@
+import .ts
+
+fn origin_has(parts, trait) = parts != null && len(parts) > 0
+  && all(parts, arm => any(arm, part => contains(part.traits, trait)))
+
+in ts_declarator {
+rule value-origin-contract warn "value origin or constraint lost" {
+  let parts value_constituents(init.node)
+  when name == "parameter" && (!origin_has(parts, "parameter") || !(init always string))
+    || name == "branded" && (!origin_has(parts, "intersection") || !(init always string))
+    || name == "scalar" && (origin_has(parts, "intersection") || !(init always string))
+    || name == "absorbed" && (!origin_has(parts, "any") || origin_has(parts, "intersection"))
+    || name == "narrowed" && (origin_has(parts, "intersection") || !(init always string))
+    || name == "concrete" && (origin_has(parts, "parameter") || !(init always string))
+}
+
+rule merged-carrier-contract warn "generic argument safety lost across merged declarations" {
+  let sender value_constituents(init.node)
+  let receiver value_constituents(type.node)
+  when name == "mergedUnsafe" && !assignment_unsafe(sender, receiver)
+    || name == "mergedSafe" && assignment_unsafe(sender, receiver)
+    || name == "dynamicSafe" && assignment_unsafe(sender, receiver)
+}
+}

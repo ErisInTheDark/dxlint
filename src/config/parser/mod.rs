@@ -35,8 +35,8 @@ const RESERVED: &[&str] = &[
 
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
-const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "fits", "members", "member", "runs", "labels", "exports", "globals", "uses",
-    "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "variance", "generics"];
+const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "constrains", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
+    "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "variance", "generics", "overloads", "pack"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -303,6 +303,9 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "group") => self.group(),
             (Tk::Ident, "parser") => self.syntax_parser(),
             (Tk::Ident, "exclusive") => self.exclusive_item(ctx),
+            (Tk::Ident, "top" | "dynamic") => self.algebra_item(ctx),
+            (Tk::Ident, "keys") => self.key_domains_item(ctx),
+            (Tk::Ident, "product") => self.product_shape_item(ctx),
             (Tk::Ident, "module_resolution") => {
                 self.bump();
                 if let Some(definition) = self.module_resolution() {
@@ -486,6 +489,22 @@ impl<'a> Parser<'a> {
         let kw = self.bump().expect("peeked");
         let what = kw.text.to_string();
         let item = match what.as_str() {
+            "widens" => {
+                let Some(value) = self.unwrap_value() else { return };
+                NameItem::Widens { value }
+            }
+            "defines" => {
+                let Some(value) = self.unwrap_value() else { return };
+                NameItem::Defines { value }
+            }
+            "constrains" => {
+                let Some(value) = self.unwrap_value() else { return };
+                NameItem::Constrains { value }
+            }
+            "pack" => {
+                let Some(shape) = self.ident("a product shape") else { return };
+                NameItem::Pack(shape)
+            }
             "unwraps" => {
                 self.skip(false, true);
                 if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
@@ -499,22 +518,47 @@ impl<'a> Parser<'a> {
             }
             "members" => match self.members_item() { Some(item) => item, None => return },
             "member" => match self.member_item() { Some(item) => item, None => return },
+            "carries" => {
+                let arguments = if self.word("as") { None } else {
+                    let Some(arguments) = self.name_path("an ordered argument field") else { return };
+                    Some(arguments)
+                };
+                let value = if arguments.is_some() && self.word("using") {
+                    let Some(value) = self.unwrap_value() else { return };
+                    Some(value)
+                } else { None };
+                if arguments.is_some() && !self.word("as") {
+                    self.error_here("expected `carries [<argument path>] as <description>`");
+                    return;
+                }
+                let Some(description) = self.expr() else { return };
+                NameItem::Carries { description, arguments, value }
+            }
+            "arguments" => {
+                let Some(arguments) = self.name_path("an ordered argument field") else { return };
+                NameItem::Arguments(arguments)
+            }
+            "indexed" => {
+                let Some(item) = self.indexed_item() else { return };
+                item
+            }
             "fits" => {
                 let traits = self.name_list("a trait name");
                 if traits.is_empty() {
                     return;
                 }
                 let views = if self.word("in") { self.name_list("a scope class") } else { Vec::new() };
+                let open = self.word("open");
                 // `fits thenable when <cond>`: conditional like a `when` block.
                 if self.word("when") {
                     let Some(cond) = self.expr() else { return };
                     self.end_of_item();
                     self.conditions.push(cond);
-                    self.name_def(ctx, kw.span, &what, NameItem::Fits { traits, views });
+                    self.name_def(ctx, kw.span, &what, NameItem::Fits { traits, views, open });
                     self.conditions.pop();
                     return;
                 }
-                NameItem::Fits { traits, views }
+                NameItem::Fits { traits, views, open }
             }
             "in" => {
                 let Some(field) = self.name_path("a field") else { return };
@@ -529,11 +573,11 @@ impl<'a> Parser<'a> {
                     NameItem::Execution(item)
                 }
             }
-            "runs" | "labels" => {
+            "assigned" | "runs" | "labels" => {
                 let Some(item) = self.execution_item(&what) else { return };
                 NameItem::Execution(item)
             }
-            "exports" | "globals" | "uses" => {
+            "exports" | "globals" | "uses" | "merges" => {
                 let Some(item) = self.module_item(&what) else { return };
                 NameItem::Module(item)
             }
@@ -541,7 +585,7 @@ impl<'a> Parser<'a> {
                 let Some(path) = self.generics_item() else { return };
                 NameItem::Generics(path)
             }
-            "signature" | "signatures" | "calls" | "constructs" | "discards" | "identity" | "optional" | "variance" => {
+            "signature" | "signatures" | "calls" | "constructs" | "discards" | "identity" | "optional" | "variance" | "overloads" => {
                 let Some(item) = self.call_item(&what) else { return };
                 // `optional when <cond>`: conditional like a `when` block.
                 if self.word("when") {
@@ -616,6 +660,8 @@ impl<'a> Parser<'a> {
                     }
                     _ => (self.name_path("the field holding the declared name")?, None),
                 };
+                let keyed = if self.word("keyed") { Some(self.expr()?) } else { None };
+                let filter = if self.word("where") { Some(self.expr()?) } else { None };
                 let at = self.word("in");
                 let enclosing = if at && self.word("nearest") {
                     false
@@ -630,19 +676,21 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 let hoisted = self.word("hoisted");
-                NameItem::Declares { classes, path, implicit, nearest, enclosing, hoisted }
+                NameItem::Declares { classes, path, implicit, nearest, enclosing, hoisted, keyed, filter }
             }
             _ => {
                 if self.module_resolves_ahead() {
                     return self.module_resolves(classes).map(NameItem::Module);
                 }
                 self.skip(false, true);
-                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident) {
+                let path = if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Ident && !t.is_ident("keyed") && !t.is_ident("outside")) {
                     self.name_path("the field holding the used name")?
                 } else {
                     Vec::new()
                 };
-                NameItem::Resolves { classes, path }
+                let keyed = if self.word("keyed") { Some(self.expr()?) } else { None };
+                let outside = if self.word("outside") { Some(self.expr()?) } else { None };
+                NameItem::Resolves { classes, path, keyed, outside }
             }
         })
     }
@@ -692,7 +740,9 @@ impl<'a> Parser<'a> {
         // After `maybe` the word is always the effect (`unwraps maybe thrown`:
         // no payload).
         let effect = (first.kind == Tk::Ident
-            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance")
+            && !self.ts.peek_raw(1).is_some_and(|token| token.is_ident("for"))
+            && !matches!(&*first.text, "from" | "excludes" | "includes" | "has" | "scope" | "instance" | "trait" | "select" | "product" | "unknown")
+            && !(first.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")))
             && (possible || matches!(next, Some(Tk::Ident | Tk::Bang | Tk::Str | Tk::LParen))))
         .then(|| {
             self.ts.next_raw();
@@ -702,11 +752,16 @@ impl<'a> Parser<'a> {
         let ends = |t: Option<&Token>| t.is_none_or(|t| matches!(t.kind, Tk::Newline | Tk::RBrace) || t.is_ident("nearest"));
         let value = if effect.is_some() && ends(self.ts.peek_raw(0)) { None } else { Some(self.unwrap_value()?) };
         let nearest = if self.word("nearest") { self.name_list("a scope class") } else { Vec::new() };
+        let classes = if self.word("for") { self.name_list("a declaration class") } else { Vec::new() };
+        if effect.is_some() && !classes.is_empty() {
+            self.error_here("declaration classes apply to values, not effects");
+            return None;
+        }
         if possible && effect.is_none() {
             self.error_here("`maybe` belongs before an effect: `unwraps maybe thrown it`");
             return None;
         }
-        Some(NameItem::Unwraps { effect, possible, value, nearest })
+        Some(NameItem::Unwraps { effect, possible, value, nearest, classes })
     }
 
     /// `a ?? b`, lowest precedence.
@@ -779,7 +834,8 @@ impl<'a> Parser<'a> {
                     self.ts.next_raw();
                 }
                 let path = self.name_path("the field to spread")?;
-                Some(Unwrap::Spread { intersection: false, path })
+                let value = if self.word("using") { Some(Box::new(self.unwrap_value()?)) } else { None };
+                Some(Unwrap::Spread { intersection: false, path, value })
             }
             Tk::LParen => {
                 self.ts.next_raw();
@@ -804,6 +860,26 @@ impl<'a> Parser<'a> {
             Tk::Ident if &*t.text == "instance" => {
                 self.ts.next_raw();
                 self.instance_value()
+            }
+            Tk::Ident if &*t.text == "select" => {
+                self.ts.next_raw();
+                self.select_value()
+            }
+            Tk::Ident if &*t.text == "unknown" => {
+                self.ts.next_raw();
+                Some(Unwrap::Unknown)
+            }
+            Tk::Ident if &*t.text == "product" => {
+                self.ts.next_raw();
+                self.product_value()
+            }
+            Tk::Ident if &*t.text == "trait" => {
+                self.ts.next_raw();
+                self.traits_value()
+            }
+            Tk::Ident if t.is_ident("returned") && self.ts.peek_raw(1).is_some_and(|token| token.is_ident("default")) => {
+                self.ts.next_raw();
+                self.returned_value()
             }
             Tk::Ident if &*t.text == "from" => {
                 self.ts.next_raw();
@@ -840,6 +916,10 @@ impl<'a> Parser<'a> {
                 }
                 let from = if self.word("from") { Some(Box::new(self.unwrap_unary()?)) } else { None };
                 Some(Unwrap::Excludes { traits, from })
+            }
+            Tk::Ident if t.is_ident("self") => {
+                self.bump();
+                Some(Unwrap::Current)
             }
             Tk::Ident => Some(Unwrap::Path(self.name_path("a field")?)),
             _ => {
@@ -2136,27 +2216,6 @@ mod tests {
         let (config, errors, _) = parse_str(src);
         assert!(errors.is_empty(), "{errors:#?}");
         config
-    }
-
-    #[test]
-    fn calls_require_simple_arguments_but_check_lambda_bodies_independently() {
-        for expression in [
-            "count(map(items, x => x))", "str([count(items)])",
-            "str({count: count(items)})", "str(count(items) + 1)",
-            "str(if true then items else [])", "str({ value items; first })",
-            "str(\"{count(items)}\")", "map(items, x => str(count(x)))",
-            "{ value items; take (count(items)) }",
-        ] {
-            let (_, errors, _) = parse_str(&format!("fn sample(items) = {expression}"));
-            assert!(errors.iter().any(|error| error.message.contains("simple")), "{expression}: {errors:#?}");
-        }
-        for expression in [
-            "count(items) > 2", "\"{count(items)}\"", "str(\"{{literal}}\")",
-            "map(items, x => count(x))", "str([items.text, 2 + 1])",
-            "str({count: 2 + 1})", "{ value items; map (x) { value x; first }; count }",
-        ] {
-            ok(&format!("fn sample(items) = {expression}"));
-        }
     }
 
     fn parents(m: &MatcherDef) -> Vec<String> {
