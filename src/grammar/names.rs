@@ -1039,6 +1039,12 @@ pub const PRODUCT_ITEMS: u16 = u16::MAX - 11;
 /// holds; fields are numbered below it, the special steps above.
 pub const ATTR_STEP: u16 = 0x8000;
 
+/// Steps that ask a value question (`result`, `expected`, `inferred`, ...)
+/// instead of leading to syntax sites.
+pub fn query_step(step: u16) -> bool {
+    matches!(step, RESULT | EXPECTED | INFERRED | RETURNED | WIDENED | RECEIVER)
+}
+
 pub fn attribute_step(step: u16) -> Option<u16> {
     (ATTR_STEP..PRODUCT_ITEMS).contains(&step).then_some(step & !ATTR_STEP)
 }

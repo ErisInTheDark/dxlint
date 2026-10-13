@@ -15,6 +15,7 @@ use crate::expr::queries::Uncertainty;
 use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, Target, World};
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::modules::compile::Action;
+use crate::grammar::names::modules::SharedQuestion;
 use crate::grammar::names::modules::resolution::{program_inputs, DiscoveryRequest, Host, Resolver, Settings};
 use crate::grammar::names::question::QueryContext;
 use crate::grammar::names::{Resolved, ScopeIndex};
@@ -43,6 +44,14 @@ struct ProgramMemo<'a> {
     roots: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Known<Vec<ScopeRef>>>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
+    /// The linted text's hash: every run-shared answer this world computes
+    /// records it, since the linted file's own tree is not a run unit.
+    linted_hash: std::cell::OnceCell<u64>,
+    /// Whether the linted text is what the run reads for its path, so this
+    /// world may use and add run-shared answers.
+    shares: std::cell::OnceCell<bool>,
+    /// Per program settings, the linted file when it is not an input.
+    outside: RefCell<crate::fx_hash::FxHashMap<*const Settings, Option<PathBuf>>>,
 }
 
 /// One lint's world. Engines hold it as `&dyn World` through [`Files`].
@@ -385,15 +394,14 @@ impl<'a> Files<'a> {
             let roots = (|| {
                 let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
                 let mut roots = Vec::new();
+                let mut seen = crate::fx_hash::FxHashSet::default();
                 for path in paths.iter() {
                     if !question.budget.step() { return Known::Unknown }
                     let Some(file) = self.0.file(&path) else { return Known::Unknown };
-                    let scope = ScopeRef { file, scope: 0 };
-                    if !roots.contains(&scope) { roots.push(scope); }
+                    if seen.insert(file) { roots.push(ScopeRef { file, scope: 0 }); }
                 }
                 let Known::Yes(program) = Host::program(&self) else { return Known::Unknown };
-                let program = ScopeRef { file: program, scope: 0 };
-                if !roots.contains(&program) { roots.push(program); }
+                if seen.insert(program) { roots.push(ScopeRef { file: program, scope: 0 }); }
                 Known::Yes(roots)
             })();
             if question.budget.limited() {
@@ -406,6 +414,128 @@ impl<'a> Files<'a> {
         let roots = cached.get();
         self.0.program.roots.borrow_mut().insert(key, cached);
         roots
+    }
+
+    /// Every scope merged into module scope `scope` ([`World::module_scopes`]).
+    fn merged_scopes(self, scope: ScopeRef, semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
+        let Some(names) = World::names(&self, scope.file) else { return Known::Unknown };
+        let Some(info) = names.scopes.get(scope.scope as usize) else { return Known::Unknown };
+        let selected = match self.program_selected() {
+            Known::Yes(Some(selected)) => selected,
+            Known::Yes(None) => return Known::Yes(vec![scope]),
+            Known::Unknown => return Known::Unknown,
+        };
+        let classes = selected.ambient_scopes;
+        if scope.scope != 0 && info.classes & classes == 0 { return Known::Yes(vec![scope]); }
+        let Known::Yes(catalog) = self.catalog(selected, classes, semantic) else { return Known::Unknown };
+        let Known::Yes(own) = self.named_scope(scope, classes, semantic) else { return Known::Unknown };
+        let name = own.iter().find(|module| module.source.is_none()).map(|module| module.name.as_str());
+        let mut merged = vec![scope];
+        for declaration in catalog.candidates(name, classes) {
+            let Known::Yes(candidate) = self.declaration_scope(declaration) else { return Known::Unknown };
+            let same = match name {
+                Some(_) => true,
+                None => {
+                    let at = Leaf { target: Target::Node(NodeRef { file: candidate.file, node: declaration.node }), frame: FrameId::ROOT };
+                    match World::module(&self, at, declaration.source.as_deref().expect("source declaration"), semantic) {
+                        Known::Yes(target) => target == Some(scope),
+                        Known::Unknown => return Known::Unknown,
+                    }
+                }
+            };
+            if same && !merged.contains(&candidate) { merged.push(candidate); }
+        }
+        Known::Yes(merged)
+    }
+
+    /// Whether `path` is a file, recorded; probed once per run.
+    fn probe_file(self, path: &Path) -> bool {
+        let found = match self.0.snapshot {
+            Some(snapshot) => snapshot.is_file(self.0.revision(), path),
+            None => super::reads::is_file_unrecorded(path),
+        };
+        super::reads::note(super::reads::Dep::IsFile(path.to_owned(), found));
+        found
+    }
+
+    /// A run unit's path, for questions about it shared across worlds; `None`
+    /// for the linted file (see [`World::shared_modules`]).
+    fn shared_path(self, file: u32) -> Option<PathBuf> {
+        if file == 0 { return None }
+        World::path(&self, file).map(Path::to_owned)
+    }
+
+    /// The run-shared answer to `question` under this world's program,
+    /// computing (and sharing) it on a miss ([`World::shared_modules`]).
+    fn shared(self, question: super::program::StableQuestion, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
+        let Some(snapshot) = self.0.snapshot else { return compute() };
+        let linted = *self.0.program.linted_hash.get_or_init(|| super::reads::hash_bytes(self.0.ctx.source.as_bytes()));
+        // Shared answers see every file as the run reads it; a world whose
+        // linted text differs (a fix pass, an unsaved edit) keeps its own.
+        let consistent = *self.0.program.shares.get_or_init(|| snapshot.text(self.0.revision(), self.0.path).1 == linted);
+        let (true, Some(key)) = (consistent, self.module_key(question)) else { return compute() };
+        if let Some(shared) = snapshot.module_answer(&key) {
+            if let Some(targets) = self.local_targets(&shared.value) {
+                super::reads::note_group(&shared.reads);
+                return Known::Yes(targets);
+            }
+        }
+        let answer = super::reads::Cached::compute(|| {
+            super::reads::note(super::reads::Dep::Text(self.0.path.to_owned(), linted));
+            compute()
+        });
+        super::reads::note_group(&answer.reads);
+        if let Known::Yes(targets) = &answer.value {
+            if let Some(stable) = self.stable_targets(targets) {
+                snapshot.keep_module_answer(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
+            }
+        }
+        answer.value
+    }
+
+    /// `question` under this world's program; `None` while the program is
+    /// not settled.
+    fn module_key(self, question: super::program::StableQuestion) -> Option<super::program::ModuleKey> {
+        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
+        let known = self.0.program.outside.borrow().get(&(selected as *const Settings)).cloned();
+        let outside = match known {
+            Some(outside) => outside,
+            None => {
+                let Known::Yes(paths) = self.input_paths(selected) else { return None };
+                let outside = (!paths.iter().any(|path| path == self.0.path)).then(|| self.0.path.to_owned());
+                self.0.program.outside.borrow_mut().insert(selected as *const Settings, outside.clone());
+                outside
+            }
+        };
+        Some(super::program::ModuleKey {
+            revision: self.0.revision(),
+            settings: selected as *const Settings as usize,
+            outside,
+            question,
+        })
+    }
+
+    fn stable_targets(self, targets: &[Target]) -> Option<Arc<[super::program::StableTarget]>> {
+        targets.iter().map(|target| match *target {
+            Target::Node(node) if node.file != 0 => Some(super::program::StableTarget::Node(World::path(&self, node.file)?.to_owned(), node.node)),
+            Target::Scope(scope) if scope.file != 0 => Some(super::program::StableTarget::Scope(World::path(&self, scope.file)?.to_owned(), scope.scope)),
+            _ => None,
+        }).collect()
+    }
+
+    /// Shared targets in this world's file ids; `None` when one is in the
+    /// linted file (see [`World::shared_modules`]).
+    fn local_targets(self, targets: &[super::program::StableTarget]) -> Option<Vec<Target>> {
+        targets.iter().map(|target| {
+            let (path, index) = match target {
+                super::program::StableTarget::Node(path, index) | super::program::StableTarget::Scope(path, index) => (path, *index),
+            };
+            let file = self.0.file(path).filter(|&file| file != 0)?;
+            Some(match target {
+                super::program::StableTarget::Node(..) => Target::Node(NodeRef { file, node: index }),
+                super::program::StableTarget::Scope(..) => Target::Scope(ScopeRef { file, scope: index }),
+            })
+        }).collect()
     }
 
     fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
@@ -578,8 +708,26 @@ impl World for Files<'_> {
             }
         }
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
-        let answer = super::reads::Cached::compute(|| {
-            self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question))
+        let resolve = || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question));
+        // Resolution depends on the importer's path, not its tree, so even
+        // the linted file's imports are shared by path.
+        let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id) {
+            Some(path) => {
+                let question = super::program::StableQuestion::Resolve { path: path.to_owned(), specifier: specifier.into() };
+                let shared = self.shared(question, &mut || match resolve() {
+                    Known::Yes(scope) => Known::Yes(scope.into_iter().map(Target::Scope).collect()),
+                    Known::Unknown => Known::Unknown,
+                });
+                match shared {
+                    Known::Yes(targets) => match targets.as_slice() {
+                        [] => Known::Yes(None),
+                        [Target::Scope(scope)] => Known::Yes(Some(*scope)),
+                        _ => Known::Unknown,
+                    },
+                    Known::Unknown => Known::Unknown,
+                }
+            }
+            None => resolve(),
         });
         let result = answer.get();
         let mut modules = self.0.program.modules.borrow_mut();
@@ -598,35 +746,33 @@ impl World for Files<'_> {
         self.roots(selected)
     }
 
-    fn module_scopes(&self, scope: ScopeRef, semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
-        let Some(names) = self.names(scope.file) else { return Known::Unknown };
-        let Some(info) = names.scopes.get(scope.scope as usize) else { return Known::Unknown };
-        let selected = match self.program_selected() {
-            Known::Yes(Some(selected)) => selected,
-            Known::Yes(None) => return Known::Yes(vec![scope]),
-            Known::Unknown => return Known::Unknown,
+    /// Shares answers across the run's worlds by file path. Answers about
+    /// or pointing into the linted file stay in this world: its tree is
+    /// parsed for linting, so its node ids are not the run unit's.
+    fn shared_modules(&self, question: SharedQuestion<'_>, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
+        let question = match question {
+            SharedQuestion::Publication { kind, scope, name, class } => {
+                let Some(path) = self.shared_path(scope.file) else { return compute() };
+                super::program::StableQuestion::Publication { kind, path, scope: scope.scope, name: name.into(), class }
+            }
+            SharedQuestion::Global { name, class } => super::program::StableQuestion::Global { name: name.into(), class },
         };
-        let classes = selected.ambient_scopes;
-        if scope.scope != 0 && info.classes & classes == 0 { return Known::Yes(vec![scope]); }
-        let Known::Yes(catalog) = self.catalog(selected, classes, semantic) else { return Known::Unknown };
-        let Known::Yes(own) = self.named_scope(scope, classes, semantic) else { return Known::Unknown };
-        let name = own.iter().find(|module| module.source.is_none()).map(|module| module.name.as_str());
-        let mut merged = vec![scope];
-        for declaration in catalog.candidates(name, classes) {
-            let Known::Yes(candidate) = self.declaration_scope(declaration) else { return Known::Unknown };
-            let same = match name {
-                Some(_) => true,
-                None => {
-                    let at = Leaf { target: Target::Node(NodeRef { file: candidate.file, node: declaration.node }), frame: FrameId::ROOT };
-                    match self.module(at, declaration.source.as_deref().expect("source declaration"), semantic) {
-                        Known::Yes(target) => target == Some(scope),
-                        Known::Unknown => return Known::Unknown,
-                    }
-                }
-            };
-            if same && !merged.contains(&candidate) { merged.push(candidate); }
-        }
-        Known::Yes(merged)
+        self.shared(question, compute)
+    }
+
+    fn module_scopes(&self, scope: ScopeRef, semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
+        let Some(path) = self.shared_path(scope.file) else { return self.merged_scopes(scope, semantic) };
+        let question = super::program::StableQuestion::Scopes { path, scope: scope.scope };
+        let shared = self.shared(question, &mut || match self.merged_scopes(scope, semantic) {
+            Known::Yes(scopes) => Known::Yes(scopes.into_iter().map(Target::Scope).collect()),
+            Known::Unknown => Known::Unknown,
+        });
+        let Known::Yes(targets) = shared else { return Known::Unknown };
+        let scopes: Option<Vec<ScopeRef>> = targets.into_iter().map(|target| match target {
+            Target::Scope(scope) => Some(scope),
+            _ => None,
+        }).collect();
+        scopes.map_or(Known::Unknown, Known::Yes)
     }
 
     fn module_star_excludes(&self, scope: ScopeRef, name: &str, _semantic: &Semantic<'_>) -> Known<bool> {
@@ -675,15 +821,20 @@ impl Host for Files<'_> {
 
     fn text(&self, path: &Path, _: &QueryContext) -> Known<Option<String>> {
         if path == self.0.path { return Known::Yes(Some(self.0.ctx.source.to_owned())); }
-        Known::Yes(super::reads::read(path).map(|text| text.to_string()))
+        let (text, hash) = match self.0.snapshot {
+            Some(snapshot) => snapshot.text(self.0.revision(), path),
+            None => super::reads::read_unrecorded(path),
+        };
+        super::reads::note(super::reads::Dep::Text(path.to_owned(), hash));
+        Known::Yes(text.map(|text| text.to_string()))
     }
 
     fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> {
-        Known::Yes(path == self.0.path || super::reads::is_file(path))
+        Known::Yes(path == self.0.path || self.probe_file(path))
     }
 
     fn scope(&self, path: &Path, _: &QueryContext) -> Known<Option<ScopeRef>> {
-        if path != self.0.path && !super::reads::is_file(path) { return Known::Yes(None); }
+        if path != self.0.path && !self.probe_file(path) { return Known::Yes(None); }
         self.0.file(path).map_or(Known::Unknown, |file| Known::Yes(Some(ScopeRef { file, scope: 0 })))
     }
 
@@ -1178,7 +1329,8 @@ mod tests {
         reads::set_buffer(path, "(after)");
         let (again, deps) = reads::track(|| linter.unit(path, Some(&run)).unwrap());
         assert!(std::sync::Arc::ptr_eq(&first, &again), "a run keeps the unit it validated");
-        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, hash) if p == path && *hash == first.hash)));
+        let first_hash = reads::hash_bytes(first.text.as_bytes());
+        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, hash) if p == path && *hash == first_hash)));
         assert!(deps.any(&mut |dep| !linter.holds(dep)), "the replayed read still detects the edit for caching");
         let fresh = linter.unit(path, Some(&super::super::program::Snapshot::default())).unwrap();
         assert_eq!(&*fresh.text, "(after)");

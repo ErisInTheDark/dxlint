@@ -1,7 +1,7 @@
 //! `zlint --profile`: where linting time goes, per matcher and rule.
 //! Counters are atomics so parallel lint threads share one profile.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,6 +14,44 @@ thread_local! {
     /// computations are nested right now (a fact may read another fact).
     static FACT_TIME: Cell<(u64, u32)> = const { Cell::new((0, 0)) };
     static SEMANTIC_QUERY: Cell<Option<&'static str>> = const { Cell::new(None) };
+    /// Per open self-timed region (outermost first), the time its nested
+    /// regions took so far.
+    static NESTED_TIME: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One self-timed region: semantic queries, value evaluations and name
+/// loads, so each reports the time not spent in the others it nests.
+struct Region {
+    depth: usize,
+    started: Instant,
+}
+
+impl Region {
+    fn start() -> Self {
+        let depth = NESTED_TIME.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            stack.push(0);
+            stack.len()
+        });
+        Region { depth, started: Instant::now() }
+    }
+
+    /// The region's total time and its self time; the total counts as
+    /// nested time of the enclosing region. An evaluation abandoned out of
+    /// order (an enclosing region closed first) reports no self time.
+    fn finish(&self) -> (Duration, Duration) {
+        let elapsed = self.started.elapsed();
+        let nested = NESTED_TIME.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.len() < self.depth { return None }
+            stack.truncate(self.depth);
+            let nested = stack.pop().unwrap_or(0);
+            if let Some(parent) = stack.last_mut() { *parent += elapsed.as_nanos() as u64 }
+            Some(nested)
+        });
+        let own = nested.map_or(Duration::ZERO, |nested| elapsed.saturating_sub(Duration::from_nanos(nested)));
+        (elapsed, own)
+    }
 }
 
 #[cfg(test)]
@@ -97,6 +135,7 @@ pub struct Profile {
     /// Program runs per matcher (memoised calls and overlay attempts).
     pub matcher_runs: Vec<AtomicU64>,
     pub value_nanos: Vec<AtomicU64>,
+    pub value_self_nanos: Vec<AtomicU64>,
     pub value_calls: Vec<AtomicU64>,
     /// Nanoseconds searching for each overlay matcher, and the nodes found.
     pub overlay_nanos: Vec<AtomicU64>,
@@ -153,6 +192,9 @@ pub struct Profile {
     pub module_index_calls: AtomicU64,
     pub module_plans_nanos: AtomicU64,
     pub module_plans_calls: AtomicU64,
+    /// Reading and parsing files other than the linted ones (once per run).
+    pub unit_parse_nanos: AtomicU64,
+    pub unit_parses: AtomicU64,
     effect_failures: Mutex<FxHashMap<(PathBuf, u32, crate::grammar::names::effects::build::Failure), EffectFailureProfile>>,
 }
 
@@ -165,6 +207,8 @@ pub struct EffectFailureProfile {
 #[derive(Default)]
 pub struct SemanticQueryProfile {
     pub nanos: AtomicU64,
+    /// Time not spent in nested queries, value evaluations or name loads.
+    pub self_nanos: AtomicU64,
     pub calls: AtomicU64,
     pub names_nanos: AtomicU64,
     pub names_trees: AtomicU64,
@@ -172,13 +216,16 @@ pub struct SemanticQueryProfile {
 
 pub(crate) struct ValueEvaluation<'a> {
     nanos: &'a AtomicU64,
+    self_nanos: &'a AtomicU64,
     calls: &'a AtomicU64,
-    started: Instant,
+    region: Region,
 }
 
 impl Drop for ValueEvaluation<'_> {
     fn drop(&mut self) {
-        Profile::add_time(self.nanos, self.started.elapsed());
+        let (elapsed, own) = self.region.finish();
+        Profile::add_time(self.nanos, elapsed);
+        Profile::add_time(self.self_nanos, own);
         Profile::add(self.calls, 1);
     }
 }
@@ -283,6 +330,7 @@ impl Profile {
             matcher_steps: counters(matchers),
             matcher_runs: counters(matchers),
             value_nanos: counters(matchers),
+            value_self_nanos: counters(matchers),
             value_calls: counters(matchers),
             overlay_nanos: counters(matchers),
             overlay_nodes: counters(matchers),
@@ -293,6 +341,7 @@ impl Profile {
             semantic_queries: crate::expr::queries::QUERY_FUNCTIONS.iter().flat_map(|group| group.iter())
                 .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
                 .chain(crate::grammar::names::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
+                .chain(crate::grammar::names::modules::queries::PROFILE_QUERIES.iter().copied())
                 .map(|name| (name, SemanticQueryProfile::default())).collect(),
             ..Profile::default()
         }
@@ -313,8 +362,9 @@ impl Profile {
     pub(crate) fn begin_value(&self, matcher: usize) -> Option<ValueEvaluation<'_>> {
         Some(ValueEvaluation {
             nanos: self.value_nanos.get(matcher)?,
+            self_nanos: self.value_self_nanos.get(matcher)?,
             calls: self.value_calls.get(matcher)?,
-            started: Instant::now(),
+            region: Region::start(),
         })
     }
 
@@ -328,9 +378,9 @@ impl Profile {
     pub fn time_names<T>(&self, compute: impl FnOnce() -> T) -> T {
         let label = SEMANTIC_QUERY.with(Cell::get);
         let query = label.and_then(|label| self.semantic_queries.get(label)).unwrap_or(&self.unattributed_names);
-        let started = Instant::now();
+        let region = Region::start();
         let value = shared(&self.names_nanos, &self.names_trees, compute);
-        Self::add_time(&query.names_nanos, started.elapsed());
+        Self::add_time(&query.names_nanos, region.finish().0);
         Self::add(&query.names_trees, 1);
         value
     }
@@ -362,11 +412,27 @@ impl Profile {
     pub fn time_semantic_query<T>(&self, name: &'static str, run: impl FnOnce() -> T) -> T {
         let _scope = SemanticQueryScope(SEMANTIC_QUERY.with(|query| query.replace(Some(name))));
         let Some(query) = self.semantic_queries.get(name) else { return run() };
-        timed(&query.nanos, &query.calls, run)
+        let region = Region::start();
+        let value = run();
+        let (elapsed, own) = region.finish();
+        Self::add_time(&query.nanos, elapsed);
+        Self::add_time(&query.self_nanos, own);
+        Self::add(&query.calls, 1);
+        value
     }
 
     pub fn time_module_index<T>(&self, run: impl FnOnce() -> T) -> T {
         timed(&self.module_index_nanos, &self.module_index_calls, run)
+    }
+
+    /// Parses one unit (a file a semantic question reached), outside the
+    /// self time of the query that reached it.
+    pub fn time_unit_parse<T>(&self, run: impl FnOnce() -> T) -> T {
+        let region = Region::start();
+        let value = run();
+        Self::add_time(&self.unit_parse_nanos, region.finish().0);
+        Self::add(&self.unit_parses, 1);
+        value
     }
 
     pub fn time_module_plans<T>(&self, run: impl FnOnce() -> T) -> T {

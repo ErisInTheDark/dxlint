@@ -14,6 +14,14 @@ pub enum PublicationKind {
 pub struct Index {
     scopes: FxHashMap<(u32, PublicationKind), Scope>,
     plans: Vec<Plan>,
+    /// Union of class masks any scope of the file publishes, per
+    /// publication kind: for each static name, and for computed names.
+    mentioned: FxHashMap<Box<str>, [u64; PublicationKind::COUNT]>,
+    computed: [u64; PublicationKind::COUNT],
+}
+
+impl PublicationKind {
+    const COUNT: usize = 2;
 }
 
 #[derive(Default)]
@@ -53,6 +61,15 @@ impl Index {
                 let id = index.plans.len();
                 let names = publication_names(tables, tree, text, key, node, &item.action);
                 index.plans.push(Plan { node, item: item.clone() });
+                let mask = if classes == 0 { u64::MAX } else { classes };
+                if !scopes.is_empty() {
+                    match &names {
+                        Some(names) => for name in names {
+                            index.mentioned.entry(name.clone()).or_default()[publication as usize] |= mask;
+                        },
+                        None => index.computed[publication as usize] |= mask,
+                    }
+                }
                 for &owner in &scopes {
                     let scope = index.scopes.entry((owner, publication)).or_default();
                     scope.all.push(id);
@@ -71,10 +88,8 @@ impl Index {
     /// Whether any scope of the file could publish `name` in `class`: when
     /// not, every owner's plans for it are empty, without resolving names.
     pub fn mentions(&self, name: &str, class: u64, publication: PublicationKind) -> bool {
-        let matching = |classes: &FxHashMap<u64, Vec<usize>>| classes.keys()
-            .any(|mask| class != 0 && (*mask == 0 || *mask & class != 0));
-        self.scopes.iter().filter(|((_, kind), _)| *kind == publication)
-            .any(|(_, scope)| scope.named.get(name).is_some_and(matching) || matching(&scope.computed))
+        let named = self.mentioned.get(name).map_or(0, |masks| masks[publication as usize]);
+        (named | self.computed[publication as usize]) & class != 0
     }
 
     pub fn plans(&self, owner: u32, name: Option<(&str, u64)>, publication: PublicationKind) -> Vec<&Plan> {

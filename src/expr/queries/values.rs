@@ -9,6 +9,7 @@ use super::QueryFunction;
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_constituents", arity: 1, call: constituents },
     QueryFunction { name: "call_signatures", arity: 1, call: signatures },
+    QueryFunction { name: "expected_call_signatures", arity: 1, call: expected_signatures },
     QueryFunction { name: "call_parameters", arity: 1, call: parameters },
     QueryFunction { name: "call_results", arity: 1, call: results },
     QueryFunction { name: "member_call_parameters", arity: 2, call: member_parameters },
@@ -354,6 +355,19 @@ fn declaration(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known
 
 fn signatures(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
     signature_groups(semantic, at, SignatureFields::All)
+}
+
+/// The call signatures of the node's expected value, per alternative;
+/// alternatives that cannot be called drop out. Null when nothing is
+/// expected.
+fn expected_signatures(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    let expected = match semantic.calls().expected(at) {
+        Known::Yes(Some(expected)) => expected,
+        Known::Yes(None) => return Known::Yes(Value::Null),
+        Known::Unknown => return Known::Unknown,
+    };
+    let Known::Yes(Value::List(alternatives)) = signature_values(semantic, &expected, SignatureFields::All) else { return Known::Unknown };
+    Known::Yes(Value::list(alternatives.iter().filter(|arm| !matches!(arm, Value::List(signatures) if signatures.is_empty())).cloned().collect()))
 }
 
 fn parameters(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {

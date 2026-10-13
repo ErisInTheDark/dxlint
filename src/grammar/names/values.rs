@@ -395,7 +395,19 @@ impl Values<'_> {
                     for site in sites {
                         if !self.question.budget.step() { return Known::Unknown }
                         let Known::Yes(value) = self.world.attribute(site, attribute, self.semantic) else { return Known::Unknown };
-                        let Some(key) = Self::expression_key(value) else { return Known::Unknown };
+                        // A node-valued key (a computed `[key]`) is that
+                        // expression's value, seen from the same frame.
+                        let key = match (&value, site.target) {
+                            (crate::expr::Value::Node(node, _), Target::Node(owner)) => {
+                                let leaf = Leaf { target: Target::Node(NodeRef { file: owner.file, node: *node }), frame: site.frame };
+                                let Known::Yes(key) = self.value_key(&self.values(leaf)) else { return Known::Unknown };
+                                key
+                            }
+                            _ => {
+                                let Some(key) = Self::expression_key(value) else { return Known::Unknown };
+                                key
+                            }
+                        };
                         if answer.as_ref().is_some_and(|previous| previous != &key) { return Known::Unknown }
                         answer = Some(key);
                     }
@@ -792,7 +804,7 @@ impl Values<'_> {
                         }
                     }
                     super::POSITION => return Known::Unknown,
-                    super::RESULT | super::EXPECTED | super::INFERRED | super::RETURNED | super::WIDENED | super::RECEIVER => return Known::Unknown,
+                    label if super::query_step(label) => return Known::Unknown,
                     _ if super::attribute_step(label).is_some() => {
                         use crate::expr::Value as Expression;
                         let Some(attribute_id) = super::attribute_step(label) else { unreachable!() };

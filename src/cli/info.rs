@@ -385,6 +385,11 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
     ));
     let failed_graphs = p.effect_failures();
     output.err(format_args!(
+        "  units: {} files parsed for semantic questions ({:.1} ms)",
+        Profile::get(&p.unit_parses),
+        ms(Profile::get(&p.unit_parse_nanos)),
+    ));
+    output.err(format_args!(
         "  module work: {} index builds ({:.1} ms), {} plan lookups ({:.1} ms, index builds excluded)",
         Profile::get(&p.module_index_calls),
         ms(Profile::get(&p.module_index_nanos)),
@@ -399,21 +404,21 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         }
     }
     let mut semantic: Vec<_> = p.semantic_queries.iter()
-        .map(|(&name, query)| (Profile::get(&query.nanos), Profile::get(&query.calls), name))
-        .filter(|(_, calls, _)| *calls > 0).collect();
+        .map(|(&name, query)| (Profile::get(&query.nanos), Profile::get(&query.self_nanos), Profile::get(&query.calls), name))
+        .filter(|(_, _, calls, _)| *calls > 0).collect();
     semantic.sort_by_key(|row| std::cmp::Reverse(row.0));
-    output.err(format_args!("\n  {BOLD}semantic queries{BOLD:#} {DIM}inclusive time; nested calls overlap{DIM:#}"));
-    for (nanos, calls, name) in semantic {
-        output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos)));
+    output.err(format_args!("\n  {BOLD}semantic queries{BOLD:#} {DIM}inclusive time (nested calls overlap), then self time{DIM:#}"));
+    for (nanos, own, calls, name) in semantic {
+        output.err(format_args!("  {:>11.1} ms {:>11.1} ms self {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos), ms(own)));
     }
     let mut values: Vec<_> = linter.grammar.matchers.iter().enumerate()
-        .map(|(index, matcher)| (Profile::get(&p.value_nanos[index]), Profile::get(&p.value_calls[index]), matcher.name.as_str()))
-        .filter(|(_, calls, _)| *calls > 0).collect();
-    values.sort_by_key(|row| std::cmp::Reverse(row.0));
+        .map(|(index, matcher)| (Profile::get(&p.value_nanos[index]), Profile::get(&p.value_self_nanos[index]), Profile::get(&p.value_calls[index]), matcher.name.as_str()))
+        .filter(|(_, _, calls, _)| *calls > 0).collect();
+    values.sort_by_key(|row| std::cmp::Reverse(row.1));
     if !values.is_empty() {
-        output.err(format_args!("\n  {BOLD}value evaluations{BOLD:#} {DIM}top 15 by inclusive time; nested aliases overlap, cache hits included{DIM:#}"));
-        for (nanos, calls, name) in values.into_iter().take(15) {
-            output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos)));
+        output.err(format_args!("\n  {BOLD}value evaluations{BOLD:#} {DIM}top 15 by self time; inclusive time overlaps nested aliases, cache hits included{DIM:#}"));
+        for (nanos, own, calls, name) in values.into_iter().take(15) {
+            output.err(format_args!("  {:>11.1} ms {:>11.1} ms self {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos), ms(own)));
         }
     }
     let mut names: Vec<_> = p.semantic_queries.iter()

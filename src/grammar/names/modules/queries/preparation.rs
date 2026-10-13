@@ -129,7 +129,9 @@ impl Queries<'_> {
             if let Some(&held) = batch.conditions.borrow().get(&(node, condition)) { return Ok(held) }
         }
         self.spend()?;
-        let held = condition.map_or(Ok(true), |condition| self.semantic.world.condition(leaf(node), condition, self.semantic).known().ok_or(()))?;
+        let held = condition.map_or(Ok(true), |condition| self.profiled("modules.condition", || {
+            self.semantic.world.condition(leaf(node), condition, self.semantic)
+        }).known().ok_or(()))?;
         if let (Some(batch), Some(condition)) = (self.batch, condition) {
             if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
             batch.conditions.borrow_mut().insert((node, condition), held);
@@ -143,7 +145,7 @@ impl Queries<'_> {
             if let Some(value) = batch.operands.borrow().get(&(node, operand)) { return Ok(value.clone()) }
         }
         self.spend()?;
-        let value = self.semantic.world.operand(leaf(node), operand, self.semantic).known().ok_or(())?;
+        let value = self.profiled("modules.operand", || self.semantic.world.operand(leaf(node), operand, self.semantic)).known().ok_or(())?;
         if let Some(batch) = self.batch {
             if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
             batch.operands.borrow_mut().insert((node, operand), value.clone());
@@ -156,7 +158,7 @@ impl Queries<'_> {
             if batch.revision != self.semantic.world.revision() { return Err(()) }
             if let Some(scopes) = batch.globals.borrow().get(&importer) { return Ok(scopes.clone()) }
         }
-        let scopes = self.semantic.world.global_scopes(importer, self.semantic).known().ok_or(())?;
+        let scopes = self.profiled("modules.roots", || self.semantic.world.global_scopes(importer, self.semantic)).known().ok_or(())?;
         if let Some(batch) = self.batch {
             if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
             batch.globals.borrow_mut().insert(importer, scopes.clone());
@@ -194,7 +196,7 @@ impl Queries<'_> {
             let prepared = match plan.prepared.get() {
                 Some(prepared) => prepared.clone(),
                 None => {
-                    let prepared = self.prepare_item(scope, plan)?;
+                    let prepared = self.profiled("modules.prepare", || self.prepare_item(scope, plan))?;
                     let _ = plan.prepared.set(prepared.clone());
                     prepared
                 }
@@ -237,7 +239,9 @@ impl Queries<'_> {
                 if !self.holds(node, item.when)? { return Ok(None) }
                 item.when = None;
                 let value = self.operand(node, operand)?;
-                let targets = nodes(&value);
+                let raw = nodes(&value);
+                let targets = if raw.iter().all(|target| names.declared.contains_key(target)) { raw }
+                    else { self.target_nodes(scope.file, &value)? };
                 let declaring = targets.first().and_then(|target| names.declared.get(target))
                     .filter(|(_, owner, ..)| *owner == plan.node).map(|(scope, ..)| *scope);
                 if let Some(declaring) = declaring.filter(|&declaring| targets.iter().all(|target| {

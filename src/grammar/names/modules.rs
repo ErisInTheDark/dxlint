@@ -13,6 +13,17 @@ mod profiles;
 mod context;
 mod inputs;
 
+/// A module question whose answer depends only on the program's files and
+/// settings, so every world of a lint run may share it
+/// ([`super::question::World::shared_modules`]).
+#[derive(Clone, Copy)]
+pub enum SharedQuestion<'a> {
+    /// What `scope` publishes as `name` in `class`.
+    Publication { kind: index::PublicationKind, scope: ScopeRef, name: &'a str, class: u64 },
+    /// What the program's global scopes declare as `name` in `class`.
+    Global { name: &'a str, class: u64 },
+}
+
 #[derive(Clone, Debug)]
 pub enum Entry {
     Local { name: Box<str>, classes: u64, targets: Vec<Target> },

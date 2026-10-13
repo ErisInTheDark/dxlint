@@ -193,18 +193,91 @@ impl Programs {
 pub(super) struct Snapshot {
     paths: Memo<(u64, Context), Arc<Vec<PathBuf>>>,
     catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
-    units: Mutex<FxHashMap<PathBuf, (u64, Arc<super::units::Unit>)>>,
+    units: Mutex<FxHashMap<PathBuf, (u64, Arc<UnitSlot>)>>,
+    modules: Mutex<FxHashMap<ModuleKey, Cached<Arc<[StableTarget]>>>>,
+    /// Module resolution's file probes and reads, once per path and revision.
+    probes: Mutex<FxHashMap<PathBuf, (u64, bool)>>,
+    texts: Mutex<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
 }
 
+/// A shared module question ([`crate::grammar::names::modules::SharedQuestion`])
+/// with files by path, under one program and revision.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) struct ModuleKey {
+    pub revision: u64,
+    pub settings: usize,
+    /// The linted file when it is outside the program's inputs.
+    pub outside: Option<PathBuf>,
+    pub question: StableQuestion,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(super) enum StableQuestion {
+    Publication { kind: crate::grammar::names::modules::index::PublicationKind, path: PathBuf, scope: u32, name: Box<str>, class: u64 },
+    Global { name: Box<str>, class: u64 },
+    /// Every scope merged into module scope `scope` of `path`.
+    Scopes { path: PathBuf, scope: u32 },
+    /// The module scope `specifier` names, imported from `path`.
+    Resolve { path: PathBuf, specifier: Box<str> },
+}
+
+/// A module answer's target with its file by path.
+#[derive(Clone)]
+pub(super) enum StableTarget {
+    Node(PathBuf, u32),
+    Scope(PathBuf, u32),
+}
+
+/// One file's run unit: its text hash and the unit, when it parses.
+type UnitSlot = std::sync::OnceLock<(u64, Option<Arc<super::units::Unit>>)>;
+
 impl Snapshot {
-    /// A unit this run already read and validated at `revision`.
-    pub(super) fn unit(&self, revision: u64, path: &std::path::Path) -> Option<Arc<super::units::Unit>> {
-        let units = self.units.lock().expect("run units");
-        units.get(path).filter(|(at, _)| *at == revision).map(|(_, unit)| unit.clone())
+    /// The run's unit for `path` at `revision`, loaded once even when
+    /// several lint threads ask at the same time (the others wait).
+    pub(super) fn unit(&self, revision: u64, path: &std::path::Path,
+        load: impl FnOnce() -> (u64, Option<Arc<super::units::Unit>>)) -> (u64, Option<Arc<super::units::Unit>>) {
+        let slot = {
+            let mut units = self.units.lock().expect("run units");
+            match units.get(path) {
+                Some((at, slot)) if *at == revision => slot.clone(),
+                _ => {
+                    let slot = Arc::new(UnitSlot::new());
+                    units.insert(path.to_owned(), (revision, slot.clone()));
+                    slot
+                }
+            }
+        };
+        slot.get_or_init(load).clone()
     }
 
-    pub(super) fn keep_unit(&self, revision: u64, path: &std::path::Path, unit: &Arc<super::units::Unit>) {
-        self.units.lock().expect("run units").insert(path.to_owned(), (revision, unit.clone()));
+    /// Whether `path` is a file, probed once per revision; the caller
+    /// records the read.
+    pub(super) fn is_file(&self, revision: u64, path: &std::path::Path) -> bool {
+        if let Some(&(at, found)) = self.probes.lock().expect("run probes").get(path) {
+            if at == revision { return found }
+        }
+        let found = reads::is_file_unrecorded(path);
+        self.probes.lock().expect("run probes").insert(path.to_owned(), (revision, found));
+        found
+    }
+
+    /// `path`'s text and hash, read once per revision; the caller records
+    /// the read.
+    pub(super) fn text(&self, revision: u64, path: &std::path::Path) -> (Option<Arc<str>>, u64) {
+        if let Some((at, text, hash)) = self.texts.lock().expect("run texts").get(path) {
+            if *at == revision { return (text.clone(), *hash) }
+        }
+        let (text, hash) = reads::read_unrecorded(path);
+        self.texts.lock().expect("run texts").insert(path.to_owned(), (revision, text.clone(), hash));
+        (text, hash)
+    }
+
+    pub(super) fn module_answer(&self, key: &ModuleKey) -> Option<Cached<Arc<[StableTarget]>>> {
+        self.modules.lock().expect("run modules").get(key).cloned()
+    }
+
+    pub(super) fn keep_module_answer(&self, key: ModuleKey, answer: Cached<Arc<[StableTarget]>>) {
+        self.modules.lock().expect("run modules").insert(key, answer);
     }
 
     pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {

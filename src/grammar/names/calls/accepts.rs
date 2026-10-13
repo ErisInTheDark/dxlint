@@ -66,6 +66,15 @@ impl<'a, 'world> Run<'a, 'world> {
                     None => self.raw_leaf(site),
                 })
             }
+            // A value question (`it.inferred ?? fallback`) has no syntax
+            // sites: its answer is a finished value, else the fallback's.
+            Value::Either(left, right) if matches!(&**left, Value::Path(path) if path.last().is_some_and(|&step| crate::grammar::names::query_step(step))) => {
+                match self.values.evaluate_optional(at, left) {
+                    Known::Yes(Some(value)) => value,
+                    Known::Yes(None) => self.recipe(at, right),
+                    Known::Unknown => NodeValue::Unknown,
+                }
+            }
             Value::Path(_) | Value::Either(..) | Value::Scope { .. } | Value::From(..) => {
                 let Known::Yes(sites) = self.values.sites(at, recipe) else { return NodeValue::Unknown };
                 if sites.is_empty() { return NodeValue::Unknown }

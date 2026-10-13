@@ -2,7 +2,7 @@ use super::super::question::{FrameId, Known, Leaf, NodeRef, QueryContext, ScopeR
 use super::super::semantic::Semantic;
 use super::compile::Action;
 use super::index::PublicationKind;
-use super::{Entry, Memo, Modules, Source};
+use super::{Entry, Memo, Modules, SharedQuestion, Source};
 use crate::expr::Value;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +26,12 @@ pub(crate) struct State {
     publications: RefCell<BTreeMap<ScopeRef, bool>>,
     graph: Memo,
 }
+
+/// Module queries timed in `--profile` (inclusive, nested calls overlap).
+pub(crate) const PROFILE_QUERIES: &[&str] = &[
+    "modules.definition", "modules.global", "modules.publication", "modules.condition", "modules.operand", "modules.targets",
+    "modules.entries", "modules.prepare", "modules.scopes", "modules.roots", "modules.resolve",
+];
 
 pub struct Queries<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
@@ -118,8 +124,7 @@ impl<'a> Queries<'a> {
                             }
                         } else {
                             let source = self.operand(node, module.ok_or(())?)?;
-                            let source = self.semantic.world.module(leaf(node), text(&source).ok_or(())?, self.semantic)
-                                .known().ok_or(())?.ok_or(())?;
+                            let source = self.resolve(node, text(&source).ok_or(())?).known().ok_or(())?.ok_or(())?;
                             visits.push(Visit::Enter(source));
                         }
                     }
@@ -130,7 +135,22 @@ impl<'a> Queries<'a> {
         collect().map_or(Known::Unknown, Known::Yes)
     }
 
+    fn resolve(&self, at: NodeRef, specifier: &str) -> Known<Option<ScopeRef>> {
+        self.profiled("modules.resolve", || self.semantic.world.module(leaf(at), specifier, self.semantic))
+    }
+
+    fn profiled<T>(&self, query: &'static str, run: impl FnOnce() -> T) -> T {
+        match self.semantic.world.profile() {
+            Some(profile) => profile.time_semantic_query(query, run),
+            None => run(),
+        }
+    }
+
     pub fn definition(&self, name: NodeRef, class: u64) -> Answer {
+        self.profiled("modules.definition", || self.definition_uncounted(name, class))
+    }
+
+    fn definition_uncounted(&self, name: NodeRef, class: u64) -> Answer {
         self.cached(Request::Definition(name, class), || {
             let world = self.semantic.world;
             let names = world.names(name.file).ok_or(())?;
@@ -153,7 +173,7 @@ impl<'a> Queries<'a> {
                     if classes & class == 0 { continue }
                     let source = self.operand(node, *module)?;
                     let Some(source) = text(&source) else { continue };
-                    let Some(scope) = world.module(leaf(node), source, self.semantic).known().ok_or(())? else { continue };
+                    let Some(scope) = self.resolve(node, source).known().ok_or(())? else { continue };
                     let imported = imported.map(|operand| self.operand(node, operand)).transpose()?;
                     let key = if let Some(imported) = imported.as_ref().and_then(text) {
                         imported.to_owned()
@@ -210,10 +230,21 @@ impl<'a> Queries<'a> {
     }
 
     pub fn global(&self, importer: u32, name: &str, class: u64) -> Known<Vec<Target>> {
+        self.profiled("modules.global", || self.semantic.world.shared_modules(
+            SharedQuestion::Global { name, class },
+            &mut || self.global_uncounted(importer, name, class),
+        ))
+    }
+
+    fn global_uncounted(&self, importer: u32, name: &str, class: u64) -> Known<Vec<Target>> {
         match self.cached(Request::Global(importer, name.into(), class), || {
             let scopes = self.global_scopes(importer)?;
+            let world = self.semantic.world;
             let mut targets = Vec::new();
             for scope in scopes {
+                // Roots whose file cannot publish the name contribute nothing;
+                // skip them before any per-scope publication work.
+                if !world.module_index(scope.file, self.semantic.tables).ok_or(())?.mentions(name, class, PublicationKind::Globals) { continue }
                 for PreparedItem { node, item, target: prepared } in self.indexed_items(scope, Some((name, class)), PublicationKind::Globals, true)? {
                     let Action::Globals { first: true, classes, target: Some(target), module: None, asks, .. } = item.action else { continue };
                     if classes != 0 && classes & class == 0 || !self.holds(node, item.when)? { continue }
@@ -278,8 +309,15 @@ impl<'a> Queries<'a> {
     }
 
     fn publication(&self, scope: ScopeRef, name: &str, class: u64) -> Answer {
+        self.profiled("modules.publication", || self.publication_uncounted(scope, name, class))
+    }
+
+    fn publication_uncounted(&self, scope: ScopeRef, name: &str, class: u64) -> Answer {
         self.sync_revision();
-        match (Modules { source: self }).publication(scope, name, class, self.semantic.question, &self.semantic.modules.graph) {
+        let question = SharedQuestion::Publication { kind: PublicationKind::Exports, scope, name, class };
+        match self.semantic.world.shared_modules(question, &mut || {
+            (Modules { source: self }).publication(scope, name, class, self.semantic.question, &self.semantic.modules.graph)
+        }) {
             Known::Yes(targets) => Known::Yes(Some(targets)),
             Known::Unknown => Known::Unknown,
         }
@@ -287,7 +325,10 @@ impl<'a> Queries<'a> {
 
     fn global_scope(&self, scope: ScopeRef, name: &str, class: u64) -> Answer {
         self.sync_revision();
-        match (Modules { source: &GlobalSource(self) }).publication(scope, name, class, self.semantic.question, &self.semantic.modules.graph) {
+        let question = SharedQuestion::Publication { kind: PublicationKind::Globals, scope, name, class };
+        match self.semantic.world.shared_modules(question, &mut || {
+            (Modules { source: &GlobalSource(self) }).publication(scope, name, class, self.semantic.question, &self.semantic.modules.graph)
+        }) {
             Known::Yes(targets) => Known::Yes(Some(targets)),
             Known::Unknown => Known::Unknown,
         }
@@ -357,6 +398,10 @@ impl<'a> Queries<'a> {
     }
 
     fn target_nodes(&self, file: u32, value: &Value<'_>) -> Result<Vec<u32>, ()> {
+        self.profiled("modules.targets", || self.target_nodes_uncounted(file, value))
+    }
+
+    fn target_nodes_uncounted(&self, file: u32, value: &Value<'_>) -> Result<Vec<u32>, ()> {
         let world = self.semantic.world;
         let tree = world.tree(file).ok_or(())?;
         let mut targets = Vec::new();
@@ -420,6 +465,10 @@ impl Queries<'_> {
     }
 
     fn entries_for(&self, scope: ScopeRef, name: &str, class: u64, q: &QueryContext, publications: PublicationKind) -> Known<Vec<Entry>> {
+        self.profiled("modules.entries", || self.entries_uncounted(scope, name, class, q, publications))
+    }
+
+    fn entries_uncounted(&self, scope: ScopeRef, name: &str, class: u64, q: &QueryContext, publications: PublicationKind) -> Known<Vec<Entry>> {
         let entries = || -> Result<Vec<Entry>, ()> {
             let mut scopes = vec![scope];
             let mut expand = matches!(publications, PublicationKind::Exports);
@@ -438,7 +487,7 @@ impl Queries<'_> {
                             PublicationKind::Exports => stars.push((node, asks, module)),
                             PublicationKind::Globals => {
                                 let source = self.operand(node, module.ok_or(())?)?;
-                                let source = self.semantic.world.module(leaf(node), text(&source).ok_or(())?, self.semantic).known().ok_or(())?.ok_or(())?;
+                                let source = self.resolve(node, text(&source).ok_or(())?).known().ok_or(())?.ok_or(())?;
                                 direct.push(Entry::Reexport {
                                     name: name.into(), classes: class, asks: self.asks(asks, class),
                                     source: Known::Yes(source), imported: name.into(),
@@ -456,7 +505,7 @@ impl Queries<'_> {
                         if key != name { continue }
                         let source = self.operand(node, module)?;
                         let source = text(&source).ok_or(())?;
-                        let source = self.semantic.world.module(leaf(node), source, self.semantic).known().ok_or(())?.ok_or(())?;
+                        let source = self.resolve(node, source).known().ok_or(())?.ok_or(())?;
                         direct.push(if imported == "*" {
                             Entry::Namespace { name: name.into(), classes: class, source: Known::Yes(source) }
                         } else {
@@ -487,7 +536,7 @@ impl Queries<'_> {
                         }
                     }
                     if !available || merge {
-                        scopes = self.semantic.world.module_scopes(scope, self.semantic).known().ok_or(())?
+                        scopes = self.profiled("modules.scopes", || self.semantic.world.module_scopes(scope, self.semantic)).known().ok_or(())?
                             .into_iter().filter(|other| *other != scope).rev().collect();
                     }
                 }
@@ -498,7 +547,7 @@ impl Queries<'_> {
             }
             for (node, asks, module) in stars {
                 let module = self.operand(node, module.ok_or(())?)?;
-                let source = self.semantic.world.module(leaf(node), text(&module).ok_or(())?, self.semantic).known().ok_or(())?.ok_or(())?;
+                let source = self.resolve(node, text(&module).ok_or(())?).known().ok_or(())?.ok_or(())?;
                 direct.push(Entry::Star { classes: class, asks: self.asks(asks, class), source: Known::Yes(source) });
             }
             Ok(direct)

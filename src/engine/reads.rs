@@ -126,6 +126,8 @@ impl Reads {
 struct Frame {
     deps: HashSet<Dep>,
     groups: Vec<Arc<Reads>>,
+    /// `groups` by address: shared answers are used many times per frame.
+    group_set: crate::fx_hash::FxHashSet<*const Reads>,
 }
 
 thread_local! {
@@ -170,7 +172,7 @@ pub fn note_group(group: &Arc<Reads>) {
     }
     FRAMES.with(|f| {
         if let Some(frame) = f.borrow_mut().last_mut() {
-            if !frame.groups.iter().any(|g| Arc::ptr_eq(g, group)) {
+            if frame.group_set.insert(Arc::as_ptr(group)) {
                 frame.groups.push(group.clone());
             }
         }
@@ -282,6 +284,12 @@ pub fn read(path: &Path) -> Option<Arc<str>> {
 /// finer (a summary records its fingerprint).
 pub fn read_unrecorded(path: &Path) -> (Option<Arc<str>>, u64) {
     content(path)
+}
+
+/// Whether `path` is a file, unrecorded: for callers that record the
+/// [`Dep::IsFile`] themselves (a run's shared probe).
+pub fn is_file_unrecorded(path: &Path) -> bool {
+    file_exists(path)
 }
 
 pub fn is_file(path: &Path) -> bool {

@@ -250,6 +250,25 @@ impl<'a, 'world> Run<'a, 'world> {
         }
     }
 
+    /// The leaves `path` leads to, and whether they are one merged value:
+    /// the declarations of one entity (overloads, interface and namespace
+    /// merging) combine as one value, never as runtime alternatives.
+    fn follow_merged(&self, at: Leaf, path: &[u16]) -> Known<(Vec<Leaf>, bool)> {
+        let merged = match path.split_last() {
+            Some((&super::super::DECLARATION, prefix)) => match self.values.follow(at, prefix) {
+                Known::Yes(owners) => owners.len() == 1,
+                Known::Unknown => return Known::Unknown,
+            },
+            _ => false,
+        };
+        // One walk from `at`: the declarations keep the reference they were
+        // reached through (its type arguments).
+        match self.values.follow(at, path) {
+            Known::Yes(leaves) => Known::Yes((leaves, merged)),
+            Known::Unknown => Known::Unknown,
+        }
+    }
+
     fn path(&mut self, at: Leaf, path: &[u16], intersection: bool, spread: bool) {
         if path == [super::super::PRODUCT_ITEMS] {
             let value = match self.values.product_items(at) {
@@ -259,17 +278,15 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer { exists: true, value });
             return;
         }
-        if let Some((&query, prefix)) = path.split_last().filter(|(last, _)| {
-            matches!(**last, super::super::RESULT | super::super::EXPECTED | super::super::INFERRED | super::super::RETURNED | super::super::WIDENED | super::super::RECEIVER)
-        }) {
+        if let Some((&query, prefix)) = path.split_last().filter(|(last, _)| super::super::query_step(**last)) {
             self.query_path(at, prefix, query, intersection, spread);
             return;
         }
-        match self.values.follow(at, path) {
+        match self.follow_merged(at, path) {
             Known::Unknown => self.answers.push(Answer::unknown()),
-            Known::Yes(leaves) if leaves.is_empty() && !spread => self.answers.push(Answer::absent()),
-            Known::Yes(leaves) => {
-                self.tasks.push(Task::Combine { count: leaves.len(), intersection });
+            Known::Yes((leaves, _)) if leaves.is_empty() && !spread => self.answers.push(Answer::absent()),
+            Known::Yes((leaves, merged)) => {
+                self.tasks.push(Task::Combine { count: leaves.len(), intersection: intersection || merged });
                 self.tasks.extend(leaves.into_iter().rev().map(Task::Leaf));
             }
         }
@@ -280,16 +297,15 @@ impl<'a, 'world> Run<'a, 'world> {
             self.answers.push(Answer::unknown());
             return;
         };
-        if prefix.iter().any(|label| {
-            matches!(*label, super::super::RESULT | super::super::EXPECTED | super::super::INFERRED | super::super::RETURNED | super::super::WIDENED | super::super::RECEIVER)
-        }) {
+        if prefix.iter().any(|&label| super::super::query_step(label)) {
             self.query_value_path(at, prefix, query, spread);
             return;
         }
-        let Known::Yes(leaves) = self.values.follow(at, prefix) else {
+        let Known::Yes((leaves, merged)) = self.follow_merged(at, prefix) else {
             self.answers.push(Answer::unknown());
             return;
         };
+        let intersection = intersection || merged;
         let mut answers = Vec::new();
         let mut absent = 0;
         for leaf in leaves {

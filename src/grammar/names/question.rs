@@ -249,6 +249,11 @@ pub trait World {
     fn global_scopes(&self, _importer: u32, _semantic: &super::semantic::Semantic<'_>) -> Known<Vec<ScopeRef>> {
         Known::Unknown
     }
+    /// The answer to `question`, shared with the other worlds that ask it
+    /// under the same program; `compute` answers it in this world.
+    fn shared_modules(&self, _question: super::modules::SharedQuestion<'_>, compute: &mut dyn FnMut() -> Known<Vec<Target>>) -> Known<Vec<Target>> {
+        compute()
+    }
     /// Whether item condition `condition` ([`super::Names::conditions`])
     /// holds at `at` (run on the VM in that node's file; nested questions
     /// see its frame and view).
