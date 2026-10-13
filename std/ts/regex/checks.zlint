@@ -1,0 +1,247 @@
+define {
+
+fn regexp_categories(value) = re_test(value, /^(?:C|Other|Cc|Control|cntrl|Cf|Format|Cn|Unassigned|Co|Private_Use|Cs|Surrogate|L|Letter|LC|Cased_Letter|Ll|Lowercase_Letter|Lm|Modifier_Letter|Lo|Other_Letter|Lt|Titlecase_Letter|Lu|Uppercase_Letter|M|Mark|Combining_Mark|Mc|Spacing_Mark|Me|Enclosing_Mark|Mn|Nonspacing_Mark|N|Number|Nd|Decimal_Number|digit|Nl|Letter_Number|No|Other_Number|P|Punctuation|punct|Pc|Connector_Punctuation|Pd|Dash_Punctuation|Pe|Close_Punctuation|Pf|Final_Punctuation|Pi|Initial_Punctuation|Po|Other_Punctuation|Ps|Open_Punctuation|S|Symbol|Sc|Currency_Symbol|Sk|Modifier_Symbol|Sm|Math_Symbol|So|Other_Symbol|Z|Separator|Zl|Line_Separator|Zp|Paragraph_Separator|Zs|Space_Separator)$/)
+fn regexp_binary_property(value) = re_test(value, /^(?:ASCII|ASCII_Hex_Digit|AHex|Alphabetic|Alpha|Any|Assigned|Bidi_Control|Bidi_C|Bidi_Mirrored|Bidi_M|Case_Ignorable|CI|Cased|Changes_When_Casefolded|CWCF|Changes_When_Casemapped|CWCM|Changes_When_Lowercased|CWL|Changes_When_NFKC_Casefolded|CWKCF|Changes_When_Titlecased|CWT|Changes_When_Uppercased|CWU|Dash|Default_Ignorable_Code_Point|DI|Deprecated|Dep|Diacritic|Dia|Emoji|Emoji_Component|EComp|Emoji_Modifier|EMod|Emoji_Modifier_Base|EBase|Emoji_Presentation|EPres|Extended_Pictographic|ExtPict|Extender|Ext|Grapheme_Base|Gr_Base|Grapheme_Extend|Gr_Ext|Hex_Digit|Hex|IDS_Binary_Operator|IDSB|IDS_Trinary_Operator|IDST|ID_Continue|IDC|ID_Start|IDS|Ideographic|Ideo|Join_Control|Join_C|Logical_Order_Exception|LOE|Lowercase|Lower|Math|Noncharacter_Code_Point|NChar|Pattern_Syntax|Pat_Syn|Pattern_White_Space|Pat_WS|Quotation_Mark|QMark|Radical|Regional_Indicator|RI|Sentence_Terminal|STerm|Soft_Dotted|SD|Terminal_Punctuation|Term|Unified_Ideograph|UIdeo|Uppercase|Upper|Variation_Selector|VS|White_Space|space|XID_Continue|XIDC|XID_Start|XIDS)$/)
+fn regexp_string_property(value) = contains(["Basic_Emoji", "Emoji_Keycap_Sequence", "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence", "RGI_Emoji_Tag_Sequence", "RGI_Emoji_ZWJ_Sequence", "RGI_Emoji"], value)
+fn regexp_script(value) = re_test(value, /^[A-Z][A-Za-z0-9_]*$/) && {
+  value pattern: "\\p{{Script=" value "}}"
+  value re_valid(pattern)
+}
+fn regexp_property_valid(raw, sets) = {
+  value parts: split(raw, "=")
+  value key: first(parts)
+  value value: last(parts)
+  value if len(parts) > 2 then false
+    else if len(parts) == 2 then if contains(["General_Category", "gc"], key) then regexp_categories(value)
+      else contains(["Script", "sc", "Script_Extensions", "scx"], key) && regexp_script(value)
+    else regexp_categories(value) || regexp_binary_property(value) || sets && regexp_string_property(value)
+}
+fn regexp_name(raw) = {
+  value literal: '"' raw '"'
+  value decoded: js_string_parts(literal)
+  value if decoded == null || re_test(raw, /\\[^u]/) then null
+    else if re_test(decoded.text, /^[$_\p{Alphabetic}][$_\p{Alphabetic}\p{Number}\p{Mark}\u{200c}\u{200d}]*$/) then decoded.text else null
+}
+fn regexp_disjunctive(nodes, a, b) = {
+  value a_path: regexp_ancestors(nodes, a)
+  value b_path: regexp_ancestors(nodes, b)
+  value any(a_path, first => first.kind == "regexp_alternative"
+    && any(b_path, second => second.kind == "regexp_alternative" && first.parent == second.parent && first.id != second.id))
+}
+fn regexp_group_error(nodes, entry) = {
+  value open: regexp_field_text(nodes, entry, "open")
+  value name: regexp_group_name(nodes, entry)
+  value flags: slice(open, 2, -1)
+  value duplicate: { value ["i", "m", "s"]; filter (flag) re_count(flags, flag) > 1; first }
+  value if starts_with(entry.text, "(?<") && !starts_with(entry.text, "(?<=") && !starts_with(entry.text, "(?<!")
+    && (open == "(" || regexp_name(name) == null) then { message: "Invalid capture group name", offset: entry.start }
+    else if open == "(" && starts_with(entry.text, "(?") then { message: "Invalid group", offset: entry.start }
+    else if duplicate != null then { message: "Duplicated flag '" duplicate "'", offset: entry.start }
+    else if starts_with(open, "(?") && ends_with(open, ":") && open != "(?:" && re_count(flags, /-/) > 1 then { message: "Invalid group", offset: entry.start }
+    else if open == "(?-:" then { message: "Invalid empty flags", offset: entry.start }
+    else if len(entry.fields.close) == 0 then { message: "Unterminated group", offset: entry.end }
+    else null
+}
+fn regexp_escape_error(nodes, input, entry) = {
+  value raw: entry.text
+  value in_class: regexp_in_class(nodes, entry)
+  value unicode: regexp_unicode(input)
+  value sets: contains(input.flags, "v")
+  value quoted: '"' raw '"'
+  value decoded: js_string_parts(quoted)
+  value if raw == "\\" && (unicode || byte_char(input.text, entry.end) != "c") then { message: "\\ at end of pattern", offset: entry.end }
+    else if !unicode then null
+    else if starts_with(raw, "\\u") && (!re_test(raw, /^\\u(?:[0-9a-fA-F]{4}|[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|\{[0-9a-fA-F]+\})$/)
+      || decoded == null) then { message: "Invalid unicode escape", offset: entry.end }
+    else if starts_with(raw, "\\x") && !re_test(raw, /^\\x[0-9a-fA-F]{2}$/) then { message: "Invalid escape", offset: entry.end }
+    else if starts_with(raw, "\\c") && !re_test(raw, /^\\c[A-Za-z]$/) then { message: if in_class then "Invalid class escape" else "Invalid unicode escape", offset: entry.end }
+    else if re_test(raw, /^\\[pP]/) then {
+      value property: slice(raw, 3, -1)
+      value valid: starts_with(raw, "\\p{{") || starts_with(raw, "\\P{{")
+      value if !valid || !ends_with(raw, "}}") || !regexp_property_valid(property, sets)
+        || starts_with(raw, "\\P") && regexp_string_property(property) then {
+        message: if in_class then "Invalid property name in character class" else "Invalid property name", offset: entry.end
+      } else null
+    }
+    else if re_test(raw, /^\\[0-9]/) && (in_class || starts_with(raw, "\\0") && byte_char(input.text, entry.end) ~ /[0-9]/)
+      && raw != "\\0" then { message: if in_class then "Invalid class escape" else "Invalid escape", offset: entry.end }
+    else if raw == "\\0" && byte_char(input.text, entry.end) ~ /[0-9]/ then { message: if in_class then "Invalid class escape" else "Invalid escape", offset: entry.end }
+    else if re_test(raw, /^\\[1-9]/) && !in_class || starts_with(raw, "\\k") && !in_class then null
+    else if re_test(raw, /^\\[bBdDsSwWntrfv0]$/) then null
+    else if starts_with(raw, "\\u") || starts_with(raw, "\\x") || starts_with(raw, "\\c") then null
+    else if !re_test(raw, /^\\[\^$\\.*+?()\[\]{}|\/]$/) && !(in_class && raw == "\\-")
+      && !(sets && in_class && re_test(raw, /^\\[&!#%,:;<=>@`~]$/)) then {
+      message: if in_class then "Invalid class escape" else "Invalid escape", offset: entry.end
+    } else null
+}
+fn regexp_atom_point(nodes, input, entry) = if regexp_kind(nodes, input, entry) != "character" then null else {
+  value units: regexp_character_units(input, entry)
+  value regexp_point(units)
+}
+fn regexp_quantifier_error(nodes, input, entry) = {
+  value element: { value regexp_field(nodes, entry, "element"); first }
+  value kind: regexp_kind(nodes, input, element)
+  value behind: starts_with(element.text, "(?<=") || starts_with(element.text, "(?<!")
+  value operator: regexp_field_text(nodes, entry, "operator")
+  value if kind == "assertion" || kind == "invalid" || kind == "quantifier" || kind == "lookaround" && (behind || regexp_unicode(input)) then {
+    message: "Nothing to repeat", offset: element.end
+  } else if starts_with(operator, "{{") then {
+    value plain: trim_end(operator, "?")
+    value counts: { value plain; slice 1 -1; split "," }
+    value from: { value counts; first; num }
+    value to: if last(counts) == "" then null else { value counts; last; num }
+    value if to != null && to < from then { message: "numbers out of order in {{}} quantifier", offset: element.end } else null
+  } else null
+}
+fn regexp_class_strings(nodes, input, entry) = {
+  value items: regexp_field(nodes, entry, "item")
+  value operators: filter(items, item => item.kind == "regexp_set_operator")
+  value operands: filter(items, item => item.kind != "regexp_set_operator")
+  value strings: map(operands, operand => if operand.kind == "regexp_class" then regexp_class_strings(nodes, input, operand)
+    else if operand.kind == "regexp_string_disjunction" then {
+      value alternatives: regexp_field(nodes, operand, "alternative")
+      value any(alternatives, alternative => {
+        value parts: regexp_field(nodes, alternative, "item")
+        value len(parts) != 1
+      })
+    }
+    else if operand.kind == "regexp_escape" && starts_with(operand.text, "\\p{{") then {
+      value property: slice(operand.text, 3, -1)
+      value regexp_string_property(property)
+    } else false)
+  value if first(operators).text == "&&" then all(strings, value => value == true)
+    else if first(operators).text == "--" then first(strings) == true else any(strings, value => value == true)
+}
+fn regexp_class_error(nodes, input, entry) = {
+  value sets: contains(input.flags, "v")
+  value items: regexp_field(nodes, entry, "item")
+  value operators: filter(items, item => item.kind == "regexp_set_operator")
+  value operands: filter(items, item => item.kind != "regexp_set_operator")
+  value if len(entry.fields.close) == 0 then { message: "Unterminated character class", offset: entry.end }
+    else if sets && len(operators) > 0 && (first(operands).kind == "regexp_range" || any(operators, operator => operator.text != first(operators).text)) then {
+      message: "Invalid set operation in character class", offset: entry.end
+    }
+    else if sets && len(operators) > 0 && (len(operands) != len(operators) + 1 || first(items).kind == "regexp_set_operator"
+      || last(items).kind == "regexp_set_operator" || any(operands, operand => operand.kind == "regexp_range")) then {
+      message: "Invalid character in character class", offset: entry.end
+    }
+    else if sets && regexp_field_text(nodes, entry, "negate") == "^" && regexp_class_strings(nodes, input, entry) then {
+      message: "Negated character class may contain strings", offset: entry.end
+    } else null
+}
+fn regexp_range_error(nodes, input, entry) = {
+  value from: { value regexp_field(nodes, entry, "from"); first }
+  value to: { value regexp_field(nodes, entry, "to"); first }
+  value from_value: regexp_atom_point(nodes, input, from)
+  value to_value: regexp_atom_point(nodes, input, to)
+  value if from_value != null && to_value != null && from_value > to_value then {
+    message: "Range out of order in character class", offset: entry.end
+  } else if regexp_unicode(input) && (from_value == null || to_value == null) then {
+    message: "Invalid character class", offset: entry.end
+  } else null
+}
+fn regexp_character_error(nodes, input, entry) = {
+  value raw: entry.text
+  value in_class: regexp_in_class(nodes, entry)
+  value if !in_class && regexp_unicode(input) && contains(["{{", "}}", "]"], raw) then {
+    message: "Lone quantifier brackets", offset: entry.start
+  } else if in_class && contains(input.flags, "v") && contains(["(", ")", "[", "{{", "}}", "/", "-", "|"], raw) then {
+    message: "Invalid character in character class", offset: entry.start
+  } else if in_class && contains(input.flags, "v") && contains("&!#$%*+,.:;<=>?@^`~", raw)
+    && (byte_char(input.text, entry.end) == raw || any(nodes, operator => operator.kind == "regexp_set_operator"
+      && operator.end == entry.start && ends_with(operator.text, raw))) then {
+    message: "Invalid character in character class", offset: entry.start
+  } else null
+}
+fn regexp_backreference_targets(nodes, input, entry) = {
+  value groups: regexp_groups(nodes)
+  value raw: entry.text
+  value if starts_with(raw, "\\k<") then {
+    value name: { value raw; slice 3 -1; regexp_name }
+    value filter(groups, group => {
+      value raw_name: regexp_group_name(nodes, group)
+      value regexp_name(raw_name) == name
+    })
+  } else if re_test(raw, /^\\[1-9][0-9]*$/) then {
+    value number: { value raw; slice 1; num }
+    value group: regexp_at(groups, number - 1)
+    value if group == null then [] else [group]
+  } else []
+}
+fn regexp_backreference_error(nodes, input, entry) = {
+  value targets: regexp_backreference_targets(nodes, input, entry)
+  value raw: entry.text
+  value if starts_with(raw, "\\k") && (!starts_with(raw, "\\k<") || !ends_with(raw, ">")
+    || { value raw; slice 3 -1; regexp_name } == null) then { message: "Invalid named reference", offset: entry.end }
+    else if len(targets) == 0 then {
+      message: if starts_with(raw, "\\k") then "Invalid named capture referenced" else "Invalid escape", offset: byte_len(input.text)
+    } else null
+}
+fn regexp_entry_error(nodes, input, entry) = if entry.kind == "regexp_group" then regexp_group_error(nodes, entry)
+  else if entry.kind == "regexp_escape" then {
+    value error: regexp_escape_error(nodes, input, entry)
+    value if error != null then error else if regexp_escape_kind(nodes, input, entry) == "backreference" then regexp_backreference_error(nodes, input, entry) else null
+  }
+  else if entry.kind == "regexp_quantifier" then regexp_quantifier_error(nodes, input, entry)
+  else if entry.kind == "regexp_class" then regexp_class_error(nodes, input, entry)
+  else if entry.kind == "regexp_range" then regexp_range_error(nodes, input, entry)
+  else if entry.kind == "regexp_character" then regexp_character_error(nodes, input, entry)
+  else if entry.kind == "regexp_invalid" then {
+    message: if entry.text == ")" then "Unmatched ')'" else "Nothing to repeat", offset: entry.start
+  } else null
+fn regexp_error(nodes, input) = {
+  value entries: filter(nodes, entry => entry.kind != "TEXT")
+  value errors: map(entries, entry => regexp_entry_error(nodes, input, entry))
+  value structural: { value errors; filter (error) error != null; sort_by (error) error.offset; first }
+  value if structural != null then structural else {
+    value groups: regexp_groups(nodes)
+    value duplicate: {
+      value groups
+      filter (group) {
+        value raw_name: regexp_group_name(nodes, group)
+        value name: regexp_name(raw_name)
+        value name != null && any(groups, previous => previous.start < group.start && regexp_group_name(nodes, previous) != null && {
+          value previous_name: regexp_group_name(nodes, previous)
+          value regexp_name(previous_name) == name && !regexp_disjunctive(nodes, group, previous)
+        })
+      }
+      first
+    }
+    value if duplicate != null then { message: "Duplicate capture group name", offset: byte_len(input.text) } else null
+  }
+}
+in regexp_site let regexp_error if regexp_tree.ok then regexp_error(regexp_nodes, regexp_input) else null
+
+fn regexp_input_flags(input, flags) = {
+  text: input.text, source: input.source, flags: flags, spans: input.spans, units: input.units,
+  offset: input.offset, end_offset: input.end_offset, written: input.written, pattern_node: input.pattern_node
+}
+fn regexp_mode_error(n, input, flags) = {
+  value mapped: regexp_input_flags(input, flags)
+  value unicode: contains(flags, "u")
+  value sets: contains(flags, "v")
+  value parsed: regexp_parse(n, mapped, unicode, sets)
+  value nodes: if parsed.ok then regexp_ordered(parsed.nodes, parsed.root) else []
+  value error: if parsed.ok then regexp_error(nodes, mapped) else null
+  value if unicode && sets then "Regex 'u' and 'v' flags cannot be used together"
+    else if error == null then null else "Invalid regular expression: /" input.text "/" (if unicode then "u" else "") (if sets then "v" else "") ": " error.message
+}
+fn regexp_flags(n) = {
+  value arguments: n.argument.nodes
+  value second: regexp_at(arguments, 1)
+  value if second == null then "" else if second is ts_string then second.static_string else null
+}
+fn regexp_pattern_error(n, input) = {
+  value argument: first(n.argument.nodes)
+  value flags: regexp_flags(n)
+  value if input == null || argument not ts_string || n not (ts_call, ts_new) then null
+    else if type_of(flags) == "str" then regexp_mode_error(n, input, flags) else {
+      value unicode: regexp_mode_error(n, input, "u")
+      value sets: if unicode != null then regexp_mode_error(n, input, "v") else null
+      value if sets == null then null else regexp_mode_error(n, input, "")
+    }
+}
+in regexp_site let regexp_flags if node is ts_regex then regexp_input.flags else regexp_flags(node)
+in regexp_site let regexp_pattern_error regexp_pattern_error(node, regexp_input)
+
+}

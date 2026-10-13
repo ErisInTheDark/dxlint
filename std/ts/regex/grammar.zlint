@@ -1,0 +1,80 @@
+@macro regexp_alternatives alternative:emit(regexp_alternative, term:regexp_term*) ("|" alternative:emit(regexp_alternative, term:regexp_term*))*
+@macro regexp_pattern emit(regexp_pattern, @regexp_alternatives end)
+parser regexp_syntax in js {
+  flag unicode
+  flag sets
+  flag named
+  flag grouped
+  line_break /[\r\n]/
+
+  token unicode_escape /\\(?:u[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|c[A-Za-z]|[pP]\{[^}]*\}|k<[^>]*>|[1-9][0-9]*|[\s\S]?)/
+  token named_escape /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|c[A-Za-z]|k<[^>]*>|[1-9][0-9]*|[0-3][0-7]{0,2}|[4-7][0-7]?|[^c]?)/
+  token legacy_escape /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|c[A-Za-z]|[1-9][0-9]*|[0-3][0-7]{0,2}|[4-7][0-7]?|[^c]?)/
+  token unicode_class_escape /\\(?:u[dD][89aAbB][0-9a-fA-F]{2}\\u[dD][c-fC-F][0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|c[A-Za-z]|[pP]\{[^}]*\}|[\s\S]?)/
+  token legacy_class_escape /\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|c[A-Za-z0-9_]|[0-3][0-7]{0,2}|[4-7][0-7]?|[^c]?)/
+  token string_open "\\q{"
+  token group_open /\((?:\?(?:[:=!]|<[=!]|<[^>)]*>|[ims-]+:))?/
+  token count /\{[0-9]+(?:,[0-9]*)?\}/
+  token repeat /[*+?]/
+  token set_operator /&&|--/
+  token unit /[\s\S]/
+
+  goal unicode raw { unicode_escape group_open count repeat unit }
+  goal named raw { named_escape group_open count repeat unit }
+  goal legacy raw { legacy_escape group_open count repeat unit }
+  goal unicode_class raw { unicode_class_escape unit }
+  goal legacy_class raw { legacy_class_escape unit }
+  goal sets raw { string_open unicode_class_escape set_operator unit }
+  goal strings raw { unicode_class_escape unit }
+
+  node regexp_pattern { alternative: regexp_alternative* }
+  node regexp_alternative { term?: regexp_term* }
+  node regexp_group { open: text, alternative: regexp_alternative*, close?: text }
+  node regexp_class { open: text, negate?: text, item?: regexp_class_item*, close?: text }
+  node regexp_range { from: regexp_class_item, dash: text, to: regexp_class_item }
+  node regexp_escape { value: text }
+  node regexp_character { value: text }
+  node regexp_assertion { value: text }
+  node regexp_set { value: text }
+  node regexp_invalid { value: text }
+  node regexp_quantifier { element: regexp_term, operator: text }
+  node regexp_string_disjunction { open: text, alternative: regexp_string_alternative*, close?: text }
+  node regexp_string_alternative { item?: regexp_class_item* }
+  node regexp_set_operator { value: text }
+
+  root pattern = if(unicode, goal(unicode, (@regexp_pattern)), if(named, goal(named, (@regexp_pattern)), goal(legacy, (@regexp_pattern))))
+  production regexp_term precedence regexp_atom {
+    suffix 1 text(count "?"? | repeat "?"?) => regexp_quantifier(element, operator)
+  }
+  production regexp_atom = (
+    emit(regexp_group, open:group_open set(grouped, (@regexp_alternatives)) close:")"?)
+    | if(sets, goal(sets, regexp_class), if(unicode, goal(unicode_class, regexp_class), goal(legacy_class, regexp_class)))
+    | emit(regexp_assertion, value:/\^|\$/)
+    | emit(regexp_set, value:".")
+    | emit(regexp_escape, value:if(unicode, unicode_escape, if(named, named_escape, legacy_escape)))
+    | emit(regexp_invalid, value:(repeat | count | if(grouped, fail, ")")))
+    | emit(regexp_character, value:(not("|" | ")") unit))
+  )
+  production regexp_class = emit(regexp_class, open:"[" negate:"^"? item:regexp_class_item* close:"]"?)
+  production regexp_class_item = if(sets, (
+    regexp_class | regexp_strings | emit(regexp_set_operator, value:set_operator)
+    | try(emit(regexp_range, from:regexp_class_atom dash:"-" not("]") to:regexp_class_atom))
+    | regexp_class_atom
+  ), (
+    try(emit(regexp_range, from:regexp_class_atom dash:"-" not("]") to:regexp_class_atom))
+    | regexp_class_atom
+  ))
+  production regexp_class_atom = (
+    emit(regexp_escape, value:if(sets, unicode_class_escape, if(unicode, unicode_class_escape, legacy_class_escape)))
+    | emit(regexp_character, value:(not("]") unit))
+  )
+  production regexp_strings = emit(regexp_string_disjunction, open:string_open goal(strings, (
+    alternative:emit(regexp_string_alternative, item:regexp_string_item*)
+    ("|" alternative:emit(regexp_string_alternative, item:regexp_string_item*))*
+    close:"}"?
+  )))
+  production regexp_string_item = (
+    emit(regexp_escape, value:unicode_class_escape)
+    | emit(regexp_character, value:(not("}" | "|") unit))
+  )
+}

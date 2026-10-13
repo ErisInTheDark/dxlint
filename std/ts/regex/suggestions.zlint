@@ -1,0 +1,129 @@
+import .ts/layout/literals
+
+define {
+
+in quoted_literals let regexp_literal_escape_parts {
+  value overlapping(layout_quote_piece, offset, end_offset)
+  filter (piece) piece.offset >= offset && piece.end_offset <= end_offset && starts_with(piece.text, "\\")
+  unique_by (piece) { start: piece.offset, end: piece.end_offset }
+}
+
+fn regexp_literal_useless_escapes(n) = if n.parent is (ts_jsx_attribute, ts_jsx_element, ts_jsx_fragment)
+  || n.parent is ts_tagged_template && n.parent.quasi.node == n then [] else {
+  value template: n is ts_template
+  value quote: if template then "`" else slice(n.text, 0, 1)
+  value escapes: n.regexp_literal_escape_parts
+  value unnecessary: filter(escapes, escape => {
+    value own: !template || any(n.quasi.nodes, part => part.offset <= escape.offset && escape.end_offset <= part.end_offset)
+    value character: byte_char(escape.text, 1)
+    value necessary: re_test(character, /^[0-9]$/) || contains("\\nrvtbfux\r\n\u{2028}\u{2029}", character) || character == quote
+    value after: escape.offset - n.offset + 1 + byte_len(character)
+    value special: if template && character == "$" then byte_char(n.text, after) != "{{"
+      else if template && character == "{{" then byte_char(n.text, escape.offset - n.offset - 1) != "$"
+      else !necessary
+    value own && special
+  })
+  value map(unnecessary, escape => { character: byte_char(escape.text, 1), offset: escape.offset, regex: false })
+}
+fn regexp_regex_escape_necessary(nodes, input, entry) = {
+  value ancestors: regexp_ancestors(nodes, entry)
+  value cls: { value ancestors; filter (parent) parent.kind == "regexp_class"; first }
+  value sets: contains(input.flags, "v")
+  value units: regexp_character_units(input, entry)
+  value point: regexp_point(units)
+  value character: regexp_character(point)
+  value allowed: if cls == null then "\\bcdDfnpPrsStvwWxu0123456789]^/.$*+?[{{}}|()Bk"
+    else if sets then "\\bcdDfnpPrsStvwWxu0123456789]q/[{{}}|()-" else "\\bcdDfnpPrsStvwWxu0123456789]"
+  value if character == null || !regexp_unicode(input) && point > 65535 || entry.text != "\\" character || contains(allowed, character) then true
+    else if cls == null then false
+    else if character == "^" && cls.start + 1 == entry.start then true
+    else if !sets && character == "-" && cls.start + 1 != entry.start && entry.end != cls.end - 1 then true
+    else if sets && contains("!#$%&*+,.:;<=>?@^`~", character) then {
+      value previous: byte_char(input.text, entry.start - 1)
+      value next: byte_char(input.text, entry.end)
+      value negate: regexp_field_text(nodes, cls, "negate") == "^"
+      value next == character || previous == character && (character != "^" || !negate || cls.start + 1 < entry.start - 1)
+    } else false
+}
+fn regexp_regex_useless_escapes(n) = if n.regexp_error != null || n.regexp_tree.ok != true then [] else {
+  value input: n.regexp_input
+  value nodes: n.regexp_nodes
+  value characters: filter(nodes, entry => regexp_kind(nodes, input, entry) == "character" && !regexp_regex_escape_necessary(nodes, input, entry))
+  value map(characters, entry => {
+    value units: regexp_character_units(input, entry)
+    value point: regexp_point(units)
+    value { character: regexp_character(point), offset: entry.offset, regex: true }
+  })
+}
+in ts_string, ts_template, ts_regex let regexp_useless_escapes if node is ts_regex then regexp_regex_useless_escapes(node) else regexp_literal_useless_escapes(node)
+
+fn regexp_unnamed_captures(n) = {
+  value input: if n is ts_regex then n.regexp_input else {
+    value arguments: n.argument.nodes
+    value first: first(arguments)
+    value flags_argument: regexp_at(arguments, 1)
+    value flags: if type_of(flags_argument.static_string) == "str" then flags_argument.static_string else ""
+    value if n.callee.global_value == "RegExp" then regexp_computed_input(first, flags) else null
+  }
+  value if input == null then [] else {
+    value unicode: contains(input.flags, "u")
+    value sets: contains(input.flags, "v")
+    value parsed: regexp_parse(n, input, unicode, sets)
+    value nodes: if parsed.ok then regexp_ordered(parsed.nodes, parsed.root) else []
+    value valid: parsed.ok == true && regexp_error(nodes, input) == null
+    value groups: if !valid then [] else regexp_groups(nodes)
+    value unnamed: filter(groups, group => regexp_group_name(nodes, group) == null)
+    value map(unnamed, group => group.text)
+  }
+}
+in regexp_site let regexp_unnamed_captures regexp_unnamed_captures(node)
+
+fn regexp_unicode_info(n) = if n is ts_regex then { flags: n.regexp_input.flags }
+  else if n.callee.global_value != "RegExp" then null else {
+    value arguments: n.argument.nodes
+    value first: first(arguments)
+    value pattern: unparenthesised_node(first)
+    value flag_argument: regexp_at(arguments, 1)
+    value flags: if flag_argument == null then "" else flag_argument.static_string
+    value if pattern is ts_spread || type_of(flags) != "str" then null else { flags: flags }
+  }
+in regexp_site let regexp_unicode_info regexp_unicode_info(node)
+
+fn regexp_nonglobal(n) = {
+  value bare: collection_value_node(n)
+  value input: bare.regexp_input
+  value flags_argument: regexp_at(bare.argument.nodes, 1)
+  value if input != null then type_of(input.flags) == "str" && !contains(input.flags, "g")
+    else if type_of(bare.static_string) == "str" then true
+    else if bare is (ts_call, ts_new) && bare.callee is ts_identifier && bare.callee.text == "RegExp" then
+      flags_argument == null || type_of(flags_argument.static_string) == "str" && !contains(flags_argument.static_string, "g")
+      || type_of(flags_argument.static_number) == "num" || flags_argument is ts_identifier && flags_argument.text == "undefined" && flags_argument.declaration == null
+    else false
+}
+fn regexp_exec_argument(n) = {
+  value arms: value_constituents(n)
+  value strings: any(arms, arm => {
+    value part: first(arm)
+    value len(arm) == 1 && contains(part.traits, "string")
+  })
+  value regexes: any(arms, arm => {
+    value part: first(arm)
+    value len(arm) == 1 && part.carrier_known == true
+      && part.carrier.description.kind == "named" && part.carrier.description.name == "RegExp"
+  })
+  value strings != regexes
+}
+fn regexp_match_exec_offset(n) = {
+  value method: unparenthesised_node(n.callee.node)
+  value arguments: n.argument.nodes
+  value argument: first(arguments)
+  value if n not ts_call || len(arguments) != 1 || !collection_method(method, "match")
+    || !(method.object.node always string) || !regexp_nonglobal(argument) then null
+    else if argument is ts_string then {
+      value input: regexp_string_input(argument, "")
+      value if input != null && regexp_mode_error(n, input, "") == null then method.property.offset ?? method.index.offset else null
+    } else if regexp_exec_argument(argument) then method.property.offset ?? method.index.offset else null
+}
+in ts_call let regexp_match_exec_offset regexp_match_exec_offset(node)
+
+}

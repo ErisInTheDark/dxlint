@@ -1,0 +1,357 @@
+import .ts/expression-fixes
+import .ts/suggestions/globals
+
+define {
+
+group regexp_site ts_regex, ts_call, ts_new
+
+fn regexp_record(nodes, id) = { value nodes; filter (entry) entry.id == id; first }
+fn regexp_field(nodes, entry, name) = {
+  value ids: get(entry.fields, name) ?? []
+  value map(ids, id => regexp_record(nodes, id))
+}
+fn regexp_ancestors(nodes, entry) = if entry.parent == null then [] else {
+  value parent: regexp_record(nodes, entry.parent)
+  value rest: regexp_ancestors(nodes, parent)
+  value concat([parent], rest)
+}
+
+fn regexp_quote(text) = '"' {
+  value text
+  re_replace /\\/ "\\\\"
+  re_replace /"/ '\\"'
+  re_replace /\n/ "\\n"
+  re_replace /\r/ "\\r"
+} '"'
+fn regexp_units(text) = {
+  value quoted: regexp_quote(text)
+  value decoded: js_string_parts(quoted)
+  value decoded.units
+}
+fn regexp_literal_input(n, override_flags) = {
+  value pieces: split(n.text, "/")
+  value written_flags: last(pieces)
+  value flags: if override_flags == null then written_flags else override_flags.value
+  value end: byte_len(n.text) - byte_len(written_flags) - 1
+  value pattern: byte_slice(n.text, 1, end)
+  value characters: split(pattern, "")
+  value initial: { offset: n.offset + 1, spans: [], units: [] }
+  value items: concat([initial], characters)
+  value mapped: reduce(items, (state, character) => {
+    value next: state.offset + byte_len(character)
+    value units: regexp_units(character)
+    value located: map(units, unit => { value: unit.value, offset: state.offset, end_offset: next })
+    value {
+      offset: next,
+      spans: concat(state.spans, [{ offset: state.offset, end_offset: next }]),
+      units: concat(state.units, located)
+    }
+  })
+  value {
+    text: pattern, source: pattern, flags: flags, spans: mapped.spans, units: mapped.units,
+    offset: n.offset + 1, end_offset: n.offset + end, written: "regex", pattern_node: n
+  }
+}
+fn regexp_string_input(n, flags) = {
+  value decoded: js_string_parts(n.text)
+  value mapped: if decoded == null then null else {
+    value initial: { index: 0, text: "", spans: [] }
+    value characters: split(decoded.text, "")
+    value items: concat([initial], characters)
+    value reduce(items, (state, character) => {
+      value span: regexp_at(decoded.spans, state.index)
+      value units: filter(decoded.units, unit => unit.offset >= span.offset && unit.end_offset <= span.end_offset)
+      value unit: first(units)
+      value hex: regexp_hex(unit.value)
+      value text: if len(units) == 1 && unit.value >= 55296 && unit.value <= 57343 then "\\u" pad_start(hex, 4, "0") else character
+      value scalars: split(text, "")
+      value spans: map(scalars, character => span)
+      value { index: state.index + 1, text: state.text text, spans: concat(state.spans, spans) }
+    })
+  }
+  value if decoded == null then null else {
+    text: mapped.text, source: mapped.text, flags: flags,
+    spans: map(mapped.spans, span => { offset: n.offset + span.offset, end_offset: n.offset + span.end_offset }),
+    units: map(decoded.units, unit => { value: unit.value, offset: n.offset + unit.offset, end_offset: n.offset + unit.end_offset }),
+    offset: n.offset + 1, end_offset: n.end_offset - 1, written: if n is ts_string then "string" else "template", pattern_node: n
+  }
+}
+fn regexp_computed_input(n, flags) = if type_of(n.static_string) != "str" then null else {
+  text: n.static_string, source: n.static_string, flags: flags, spans: null, units: null,
+  offset: n.offset, end_offset: n.end_offset, written: "computed", pattern_node: n
+}
+in ts_call, ts_new let regexp_candidate ts_global_method_candidate(node, "RegExp")
+  || unparenthesised_node(callee.node) is (ts_non_null, ts_as, ts_satisfies, ts_type_assertion, ts_conditional, ts_logical)
+fn regexp_input(n) = if n is ts_regex then regexp_literal_input(n, null)
+  else if n not (ts_call, ts_new) || !n.regexp_candidate || n.callee.global_value != "RegExp" then null else {
+    value args: n.argument.nodes
+    value argument: first(args)
+    value pattern: unparenthesised_node(argument)
+    value flag_args: drop(args, 1)
+    value flag_argument: first(flag_args)
+    value flags: if flag_argument == null then "" else flag_argument.static_string
+    value if pattern == null then null
+      else if pattern is ts_regex then if flag_argument == null then null else regexp_literal_input(pattern, { value: flags })
+      else if pattern is (ts_string, ts_template) then {
+        value literal: regexp_string_input(pattern, flags)
+        value if literal != null then literal else regexp_computed_input(pattern, flags)
+      } else regexp_computed_input(pattern, flags)
+  }
+fn regexp_parse(n, input, unicode, sets) = if input == null then null else {
+  value initial: syntax_tree(n, "regexp_syntax", {
+    text: input.text, spans: input.spans, offset: input.offset, end_offset: input.end_offset,
+    flags: { unicode: unicode || sets, sets: sets, named: false }
+  })
+  value groups: regexp_groups(initial.nodes)
+  value named: any(groups, group => regexp_group_name(initial.nodes, group) != null)
+  value if unicode || sets || !named then initial else syntax_tree(n, "regexp_syntax", {
+    text: input.text, spans: input.spans, offset: input.offset, end_offset: input.end_offset,
+    flags: { unicode: false, sets: false, named: true }
+  })
+}
+in regexp_site let regexp_input regexp_input(node)
+in regexp_site let regexp_tree {
+  value unicode: contains(regexp_input.flags, "u")
+  value sets: contains(regexp_input.flags, "v")
+  value regexp_parse(node, regexp_input, unicode, sets)
+}
+fn regexp_ordered(nodes, id) = {
+  value entry: regexp_record(nodes, id)
+  value branches: map(entry.children, child => regexp_ordered(nodes, child))
+  value children: flat(branches)
+  value concat([entry], children)
+}
+in regexp_site let regexp_nodes {
+  value nodes: get(regexp_tree, "nodes")
+  value if regexp_tree.ok then regexp_ordered(nodes, regexp_tree.root) else null
+}
+in regexp_site let regexp_view_nodes if regexp_tree.ok then regexp_view(regexp_nodes, regexp_input) else null
+
+fn regexp_at(values, index) = if index < 0 then null else { value values; drop index; first }
+fn regexp_field_text(nodes, entry, name) = {
+  value fields: regexp_field(nodes, entry, name)
+  value first(fields).text
+}
+fn regexp_group_kind(nodes, entry) = {
+  value open: regexp_field_text(nodes, entry, "open")
+  value if open == "(" || starts_with(open, "(?<") && !starts_with(open, "(?<=") && !starts_with(open, "(?<!") then "capturing_group"
+    else if contains(["(?=", "(?!", "(?<=", "(?<!"], open) then "lookaround" else "group"
+}
+fn regexp_groups(nodes) = filter(nodes, entry => entry.kind == "regexp_group" && regexp_group_kind(nodes, entry) == "capturing_group")
+fn regexp_group_name(nodes, entry) = {
+  value open: regexp_field_text(nodes, entry, "open")
+  value if open == "(" then null else slice(open, 3, -1)
+}
+fn regexp_in_class(nodes, entry) = {
+  value ancestors: regexp_ancestors(nodes, entry)
+  value any(ancestors, ancestor => contains(["regexp_class", "regexp_string_disjunction"], ancestor.kind))
+}
+fn regexp_unicode(input) = contains(input.flags, "u") || contains(input.flags, "v")
+fn regexp_escape_kind(nodes, input, entry) = {
+  value raw: entry.text
+  value in_class: regexp_in_class(nodes, entry)
+  value groups: regexp_groups(nodes)
+  value named: any(groups, group => regexp_group_name(nodes, group) != null)
+  value unicode: regexp_unicode(input)
+  value if !in_class && contains(["\\b", "\\B"], raw) then "assertion"
+    else if re_test(raw, /^\\[dDsSwW]$/) || unicode && re_test(raw, /^\\[pP]/) then "character_set"
+    else if !in_class && re_test(raw, /^\\[1-9][0-9]*$/) then {
+      value number: { value raw; slice 1; num }
+      value if unicode || number <= len(groups) then "backreference" else "character"
+    }
+    else if !in_class && starts_with(raw, "\\k") && (unicode || named) then "backreference"
+    else "character"
+}
+fn regexp_character_units(input, entry) = {
+  value raw: entry.text
+  value if raw == "\\" then [{ value: 92 }]
+  else if re_test(raw, /^\\[\r\n\u{2028}\u{2029}]$/) then {
+    value identity: slice(raw, 1)
+    value regexp_units(identity)
+  }
+  else if entry.kind == "regexp_character" then
+    if input.units == null then regexp_units(raw) else filter(input.units, unit => unit.offset >= entry.offset && unit.end_offset <= entry.end_offset)
+  else if re_test(raw, /^\\c[A-Za-z0-9_]$/) then {
+    value character: slice(raw, -1)
+    value units: regexp_units(character)
+    value [{ value: first(units).value % 32 }]
+  }
+  else {
+    value quoted: '"' raw '"'
+    value decoded: js_string_parts(quoted)
+    value if decoded != null then decoded.units else {
+      value identity: slice(raw, 1)
+      value regexp_units(identity)
+    }
+  }
+}
+fn regexp_point(units) = if len(units) == 2 && first(units).value >= 55296 && first(units).value <= 56319
+  && last(units).value >= 56320 && last(units).value <= 57343 then 65536 + (first(units).value - 55296) * 1024 + last(units).value - 56320
+  else first(units).value
+fn regexp_hex(value) = {
+  value digits: split("0123456789abcdef", "")
+  value digit: regexp_at(digits, value % 16)
+  value if value < 16 then digit else {
+    value high: divide((value - value % 16), 16)
+    value regexp_hex(high) digit
+  }
+}
+fn regexp_character(value) = if value == null || value >= 55296 && value <= 57343 then null else {
+  value hex: regexp_hex(value)
+  value literal: '"\\u{{' hex '}}"'
+  value js_string(literal)
+}
+fn regexp_kind(nodes, input, entry) = if entry.kind == "regexp_group" then regexp_group_kind(nodes, entry)
+  else if entry.kind == "regexp_escape" then regexp_escape_kind(nodes, input, entry)
+  else if entry.kind == "regexp_class" then "class"
+  else if entry.kind == "regexp_range" then "class_range"
+  else if entry.kind == "regexp_string_disjunction" then "string_disjunction"
+  else if entry.kind == "regexp_set" then "character_set"
+  else slice(entry.kind, 7)
+fn regexp_flat_range(nodes, input, entry) = entry.kind == "regexp_range" && !regexp_unicode(input) && {
+  value from: { value regexp_field(nodes, entry, "from"); first }
+  value to: { value regexp_field(nodes, entry, "to"); first }
+  value regexp_kind(nodes, input, from) != "character" || regexp_kind(nodes, input, to) != "character"
+}
+fn regexp_view_parent(nodes, input, entry) = {
+  value parent: regexp_record(nodes, entry.parent)
+  value if parent.kind == "regexp_string_alternative" || regexp_flat_range(nodes, input, parent)
+    then regexp_view_parent(nodes, input, parent) else entry.parent
+}
+fn regexp_initial(values) = {
+  value count: len(values) - 1
+  value take(values, count)
+}
+fn regexp_character_parts(nodes, input, entry) = {
+  value units: regexp_character_units(input, entry)
+  value point: regexp_point(units)
+  value separate: entry.kind == "regexp_escape" && point <= 65535 && len(units) > 1
+  value if regexp_unicode(input) || len(units) <= 1 then [{ id: entry.id, value: point, start: entry.start, end: entry.end }] else
+    map(units, unit => {
+      value index: index_of(units, unit)
+      value {
+        id: str(entry.id) ":" str(index), value: unit.value,
+        start: if separate then entry.start + unit.offset - 1 else entry.start,
+        end: if separate then entry.start + unit.end_offset - 1 else entry.end
+      }
+    })
+}
+fn regexp_decimal_tail(nodes, input, entry) = if entry.kind != "regexp_escape" || regexp_unicode(input)
+  || regexp_escape_kind(nodes, input, entry) != "character" then false else {
+  value units: regexp_character_units(input, entry)
+  value point: regexp_point(units)
+  value len(units) > 1 && point <= 65535
+}
+fn regexp_view_ids(nodes, input, entry) = if entry.kind == "TEXT" || entry.kind == "regexp_set_operator" then []
+  else if entry.kind == "regexp_string_alternative" || regexp_flat_range(nodes, input, entry) then {
+    value parts: map(entry.children, id => {
+      value child: regexp_record(nodes, id)
+      value regexp_view_ids(nodes, input, child)
+    })
+    value ids: flat(parts)
+    value dash: str(entry.id) ":dash"
+    value if entry.kind == "regexp_range" then concat(ids, [dash]) else ids
+  } else if entry.kind == "regexp_quantifier" then {
+    value element: { value regexp_field(nodes, entry, "element"); first }
+    value parts: regexp_view_ids(nodes, input, element)
+    value prefix: if regexp_decimal_tail(nodes, input, element) then regexp_initial(parts) else []
+    value concat(prefix, [entry.id])
+  } else if entry.kind == "regexp_range" then {
+    value from: { value regexp_field(nodes, entry, "from"); first }
+    value to: { value regexp_field(nodes, entry, "to"); first }
+    value a: regexp_view_ids(nodes, input, from)
+    value b: regexp_view_ids(nodes, input, to)
+    value a_prefix: regexp_initial(a)
+    value b_prefix: regexp_initial(b)
+    value prefix: concat(a_prefix, b_prefix)
+    value concat(prefix, [entry.id])
+  } else if regexp_kind(nodes, input, entry) != "character" then [entry.id] else {
+    value parts: regexp_character_parts(nodes, input, entry)
+    value map(parts, part => part.id)
+}
+fn regexp_view_children(nodes, input, entry) = if entry.kind == "regexp_quantifier" then {
+  value element: { value regexp_field(nodes, entry, "element"); first }
+  value parts: regexp_view_ids(nodes, input, element)
+  value if regexp_decimal_tail(nodes, input, element) then [last(parts)] else parts
+} else if entry.kind == "regexp_range" && !regexp_flat_range(nodes, input, entry) then {
+  value from: { value regexp_field(nodes, entry, "from"); first }
+  value to: { value regexp_field(nodes, entry, "to"); first }
+  value a: regexp_view_ids(nodes, input, from)
+  value b: regexp_view_ids(nodes, input, to)
+  value [last(a), last(b)]
+} else {
+  value child_parts: map(entry.children, id => {
+    value child: regexp_record(nodes, id)
+    value regexp_view_ids(nodes, input, child)
+  })
+  value flat(child_parts)
+}
+fn regexp_part_parent(nodes, input, entry, id) = {
+  value parent: regexp_record(nodes, entry.parent)
+  value lifted: parent.kind == "regexp_quantifier" && regexp_decimal_tail(nodes, input, entry)
+    || parent.kind == "regexp_range" && !regexp_flat_range(nodes, input, parent)
+  value if !lifted then regexp_view_parent(nodes, input, entry) else {
+    value parts: regexp_character_parts(nodes, input, entry)
+    value if id != last(parts).id then regexp_view_parent(nodes, input, parent) else regexp_view_parent(nodes, input, entry)
+  }
+}
+fn regexp_view_record(nodes, input, entry, kind, value, id, part) = {
+  value start: if part == null then entry.start else part.start
+  value end: if part == null then entry.end else part.end
+  value span: if start == entry.start && end == entry.end then { offset: entry.offset, end: entry.end_offset } else regexp_location(input, start, end)
+  value parent: if part == null then regexp_view_parent(nodes, input, entry) else regexp_part_parent(nodes, input, entry, id)
+  value children: regexp_view_children(nodes, input, entry)
+  value raw_name: if kind == "capturing_group" then regexp_group_name(nodes, entry) else null
+  value {
+    id: id, parent: parent, kind: kind, raw: byte_slice(input.text, start, end), written: regexp_written(input, start, end), children: children,
+    start: start, end: end, offset: span.offset, end_offset: span.end,
+    value: value, character: regexp_character(value), name: if raw_name == null then null else regexp_name(raw_name),
+    behind: kind == "lookaround" && starts_with(entry.text, "(?<"),
+    negative: kind == "lookaround" && (starts_with(entry.text, "(?!") || starts_with(entry.text, "(?<!")),
+    negate: if kind == "class" then regexp_field_text(nodes, entry, "negate") == "^" else false,
+    expression: kind == "class" && any(nodes, item => item.parent == entry.id && item.kind == "regexp_set_operator")
+  }
+}
+fn regexp_view_base(nodes, input, entry) = {
+  value kind: regexp_kind(nodes, input, entry)
+  value if kind == "quantifier" then {
+    value element: { value regexp_field(nodes, entry, "element"); first }
+    value extent: if regexp_decimal_tail(nodes, input, element) then {
+      value parts: regexp_character_parts(nodes, input, element)
+      value { start: last(parts).start, end: entry.end }
+    } else null
+    value [regexp_view_record(nodes, input, entry, kind, null, entry.id, extent)]
+  } else if kind != "character" then [regexp_view_record(nodes, input, entry, kind, null, entry.id, null)] else {
+    value parts: regexp_character_parts(nodes, input, entry)
+    value map(parts, part => regexp_view_record(nodes, input, entry, kind, part.value, part.id, part))
+  }
+}
+fn regexp_view_entry(nodes, input, entry) = if contains(["TEXT", "regexp_set_operator", "regexp_string_alternative"], entry.kind)
+  || regexp_flat_range(nodes, input, entry) then [] else {
+    value parts: regexp_view_base(nodes, input, entry)
+    value parent: regexp_record(nodes, entry.parent)
+    value to: { value regexp_field(nodes, parent, "to"); first }
+    value if !regexp_flat_range(nodes, input, parent) || to.id != entry.id then parts else {
+      value dash: { value regexp_field(nodes, parent, "dash"); first }
+      value id: str(parent.id) ":dash"
+      value record: regexp_view_record(nodes, input, dash, "character", 45, id, null)
+      value concat(parts, [record])
+    }
+}
+fn regexp_view_ordered(nodes, id) = {
+  value entry: regexp_record(nodes, id)
+  value branches: map(entry.children, child => regexp_view_ordered(nodes, child))
+  value children: flat(branches)
+  value if contains(["regexp_range", "regexp_quantifier"], entry.kind) then concat(children, [entry]) else concat([entry], children)
+}
+fn regexp_view(nodes, input) = {
+  value root: first(nodes)
+  value ordered: regexp_view_ordered(nodes, root.id)
+  value entries: filter(ordered, entry => entry.kind != "TEXT")
+  value parts: map(entries, entry => regexp_view_entry(nodes, input, entry))
+  value flat(parts)
+}
+in regexp_site let regexp_syntax if regexp_tree.ok && type_of(regexp_input.flags) == "str" && regex_flags_error(regexp_input.flags, "") == null
+  && regexp_error == null then regexp_view_nodes else null
+
+}

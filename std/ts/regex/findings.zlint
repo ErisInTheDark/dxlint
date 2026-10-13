@@ -1,0 +1,198 @@
+define {
+
+fn regexp_location(input, start, end) = if input.spans == null || end <= start then {
+  offset: input.pattern_node.offset, end: input.pattern_node.end_offset
+} else {
+  value prefix: byte_slice(input.text, 0, start)
+  value through: byte_slice(input.text, 0, end)
+  value first_index: len(prefix)
+  value last_index: len(through) - 1
+  value a: regexp_at(input.spans, first_index)
+  value b: regexp_at(input.spans, last_index)
+  value { offset: a.offset, end: b.end_offset }
+}
+fn regexp_written(input, start, end) = if input.spans == null then byte_slice(input.text, start, end) else {
+  value span: regexp_location(input, start, end)
+  value byte_slice(input.pattern_node.text, span.offset - input.pattern_node.offset, span.end - input.pattern_node.offset)
+}
+fn regexp_finding(input, check, kind, data, start, end) = {
+  value span: regexp_location(input, start, end)
+  value { check: check, kind: kind, data: data, offset: span.offset, end: span.end }
+}
+fn regexp_controls(nodes, input) = {
+  value characters: filter(nodes, entry => entry.kind == "character" && type_of(entry.value) == "num" && entry.value <= 31 && {
+    value written: regexp_written(input, entry.start, entry.end)
+    value starts_with(entry.raw, entry.character) || starts_with(entry.raw, "\\x") || starts_with(entry.raw, "\\u")
+      || starts_with(written, "\\x") || starts_with(written, "\\u")
+  })
+  value if len(characters) == 0 then [] else {
+    value data: map(characters, character => {
+      value hex: regexp_hex(character.value)
+      value "\\x" (if len(hex) == 1 then "0" else "") hex
+    })
+    value first: first(characters)
+    value last: last(characters)
+    value joined: join(data, ", ")
+    value [regexp_finding(input, "control", "", [joined], first.start, last.end)]
+  }
+}
+fn regexp_space_step(state, character, nodes, input) = {
+  value offset: state.offset + byte_len(character)
+  value run: if character == " " then state.run + 1 else 0
+  value previous: state.run - (if contains(["+", "*", "{{", "?"], character) then 1 else 0)
+  value start: state.offset - state.run
+  value in_class: any(nodes, entry => entry.kind == "class" && entry.start <= start && start < entry.end)
+  value kind: str(previous)
+  value report: if state.report == null && character != " " && previous >= 2 && !in_class
+    then regexp_finding(input, "spaces", kind, [], start, start + previous) else state.report
+  value { offset: offset, run: run, report: report }
+}
+fn regexp_spaces(nodes, input) = {
+  value end: byte_len(input.text)
+  value written: regexp_written(input, 0, end)
+  value if !contains(written, "  ") then [] else {
+    value characters: { value split(input.text, ""); concat [""] }
+    value items: concat([{ offset: 0, run: 0, report: null }], characters)
+    value result: reduce(items, (state, character) => regexp_space_step(state, character, nodes, input))
+    value if result.report == null then [] else [result.report]
+  }
+}
+fn regexp_backreference_problem(nodes, reference, group) = {
+  value reference_path: regexp_ancestors(nodes, reference)
+  value group_path: regexp_ancestors(nodes, group)
+  value common: filter(group_path, parent => any(reference_path, other => parent.id == other.id))
+  value cut: filter(group_path, parent => !any(common, other => parent.id == other.id))
+  value look: { value common; filter (parent) parent.kind == "lookaround"; first }
+  value backward: look != null && look.behind
+  value if any(reference_path, parent => parent.id == group.id) then "nested"
+    else if last(cut).kind == "alternative" then "disjunctive"
+    else if !backward && reference.end <= group.start then "forward"
+    else if backward && group.end <= reference.start then "backward"
+    else if any(cut, parent => parent.kind == "lookaround" && parent.negative) then "intoNegativeLookaround"
+    else null
+}
+fn regexp_backreferences(raw_nodes, nodes, input) = {
+  value references: filter(raw_nodes, entry => regexp_kind(raw_nodes, input, entry) == "backreference")
+  value reports: map(references, reference => {
+    value targets: regexp_backreference_targets(raw_nodes, input, reference)
+    value groups: map(targets, group => regexp_record(nodes, group.id))
+    value entry: regexp_record(nodes, reference.id)
+    value problems: map(groups, group => { kind: regexp_backreference_problem(nodes, entry, group), group: group })
+    value same: filter(problems, problem => problem.kind != "disjunctive")
+    value selected: if len(same) == 0 then problems else same
+    value other: len(selected) - 1
+    value suffix: if other == 0 then "" else if other == 1 then " and another group" else " and other " str(other) " groups"
+    value first: first(selected)
+    value if len(problems) == 0 || any(problems, problem => problem.kind == null) then [] else
+      [regexp_finding(input, "backref", first.kind, [entry.raw, first.group.raw, suffix], entry.start, entry.end)]
+  })
+  value flat(reports)
+}
+fn regexp_sequence_step(state, entry, nodes) = if entry.kind == "character" then {
+  current: concat(state.current, [entry]), complete: state.complete
+} else if entry.kind == "class_range" then {
+  value ends: filter(nodes, child => child.parent == entry.id)
+  value first: first(ends)
+  value complete: concat(state.current, [first])
+  value { current: [last(ends)], complete: concat(state.complete, [complete]) }
+} else { current: [], complete: concat(state.complete, [state.current]) }
+fn regexp_sequences(nodes, cls) = {
+  value children: filter(nodes, entry => entry.parent == cls.id)
+  value items: concat([{ current: [], complete: [] }], children)
+  value result: reduce(items, (state, entry) => regexp_sequence_step(state, entry, nodes))
+  value sequences: concat(result.complete, [result.current])
+  value filter(sequences, sequence => len(sequence) > 0)
+}
+fn regexp_acceptable_escape(input, entry) = {
+  value written: regexp_written(input, entry.start, entry.end)
+  value after: re_replace(written, /^\\+/, "")
+  value units: regexp_units(after)
+  value point: regexp_point(units)
+  value itself: len(after) == 1 && (point == entry.value || point > 65535 && any(units, unit => unit.value == entry.value))
+  value starts_with(written, "\\") && !itself
+}
+fn regexp_mark(entry) = entry.character != null && re_test(entry.character, /^\p{M}$/)
+fn regexp_pair_findings(sequence, input, check, allow_escape) = {
+  value parts: map(sequence, current => {
+    value index: index_of(sequence, current)
+    value previous: regexp_at(sequence, index - 1)
+    value accepted: !allow_escape || !regexp_acceptable_escape(input, current)
+    value previous_accepted: !allow_escape || !regexp_acceptable_escape(input, previous)
+    value combining: if regexp_mark(current) && !regexp_mark(previous) then ["combiningClass"] else []
+    value surrogate: if previous.value >= 55296 && previous.value <= 56319 && current.value >= 56320 && current.value <= 57343
+      then [if starts_with(previous.raw, "\\u{{") || starts_with(current.raw, "\\u{{") then "surrogatePair" else "surrogatePairWithoutUFlag"] else []
+    value modifier: if current.value >= 127995 && current.value <= 127999 && !(previous.value >= 127995 && previous.value <= 127999) then ["emojiModifier"] else []
+    value regional: if current.value >= 127462 && current.value <= 127487 && previous.value >= 127462 && previous.value <= 127487 then ["regionalIndicatorSymbol"] else []
+    value pair: if !previous_accepted then [] else flat([surrogate, modifier, regional])
+    value kinds: if index == 0 || !accepted then [] else concat(combining, pair)
+    value map(kinds, kind => regexp_finding(input, check, kind, [], previous.start, current.end))
+  })
+  value flat(parts)
+}
+fn regexp_zwj_step(state, current, sequence, input, check, allow_escape) = {
+  value index: index_of(sequence, current)
+  value previous: regexp_at(sequence, index - 1)
+  value next: regexp_at(sequence, index + 1)
+  value valid: index > 0 && index + 1 < len(sequence) && current.value == 8205 && previous.value != 8205 && next.value != 8205
+    && (!allow_escape || !regexp_acceptable_escape(input, previous) && !regexp_acceptable_escape(input, current) && !regexp_acceptable_escape(input, next))
+  value if !valid then state else {
+    value adjacent: state.last != null && state.last.id == previous.id
+    value report: if state.first != null && !adjacent then
+      [regexp_finding(input, check, "zwj", [], state.first.start, state.last.end)] else []
+    value { first: if adjacent then state.first else previous, last: next, reports: concat(state.reports, report) }
+  }
+}
+fn regexp_zwj_findings(sequence, input, check, allow_escape) = {
+  value items: concat([{ first: null, last: null, reports: [] }], sequence)
+  value result: reduce(items, (state, current) => regexp_zwj_step(state, current, sequence, input, check, allow_escape))
+  value final: if result.first == null then [] else
+    [regexp_finding(input, check, "zwj", [], result.first.start, result.last.end)]
+  value concat(result.reports, final)
+}
+fn regexp_misleading(nodes, input, allow_escape) = {
+  value check: if allow_escape then "misleading_escaped" else "misleading"
+  value classes: filter(nodes, entry => entry.kind == "class" && !entry.expression)
+  value parts: map(classes, cls => {
+    value sequences: regexp_sequences(nodes, cls)
+    value parts: map(sequences, sequence => {
+      value pairs: regexp_pair_findings(sequence, input, check, allow_escape)
+      value joined: regexp_zwj_findings(sequence, input, check, allow_escape)
+      value concat(pairs, joined)
+    })
+    value flat(parts)
+  })
+  value findings: flat(parts)
+  value order: ["surrogatePairWithoutUFlag", "surrogatePair", "combiningClass", "emojiModifier", "regionalIndicatorSymbol", "zwj"]
+  value { value findings; sort_by (finding) index_of(order, finding.kind) }
+}
+fn regexp_empty_classes(nodes, input) = {
+  value classes: filter(nodes, entry => entry.kind == "class" && !entry.negate && !entry.expression && !any(nodes, child => child.parent == entry.id))
+  value map(classes, cls => regexp_finding(input, "empty_class", "", [], cls.start, cls.end))
+}
+fn regexp_checked_by_call(n) = {
+  value owner: n.parent.node
+  value arguments: owner.argument.nodes
+  value first: first(arguments)
+  value n is ts_regex && owner is (ts_call, ts_new) && first == n && len(arguments) > 1 && regexp_input(owner) != null
+}
+in regexp_site let regexp_control_findings if regexp_tree.ok
+  then regexp_controls(regexp_view_nodes, regexp_input) else []
+in regexp_site let regexp_empty_class_findings if node is ts_regex && regexp_tree.ok && regexp_error == null
+  then regexp_empty_classes(regexp_view_nodes, regexp_input) else []
+in regexp_site let regexp_space_findings if regexp_tree.ok && regexp_error == null
+  then regexp_spaces(regexp_view_nodes, regexp_input) else []
+in regexp_site let regexp_backreference_findings if regexp_tree.ok && regexp_error == null
+  then regexp_backreferences(regexp_nodes, regexp_view_nodes, regexp_input) else []
+in regexp_site let regexp_misleading_findings if regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
+  then regexp_misleading(regexp_view_nodes, regexp_input, false) else []
+in regexp_site let regexp_misleading_escaped_findings if regexp_tree.ok && regexp_error == null && !regexp_checked_by_call(node)
+  then regexp_misleading(regexp_view_nodes, regexp_input, true) else []
+in regexp_site let regexp_findings if regexp_tree.ok != true then null else {
+  value flat([
+    regexp_control_findings, regexp_empty_class_findings, regexp_space_findings,
+    regexp_backreference_findings, regexp_misleading_findings, regexp_misleading_escaped_findings
+  ])
+  sort_by (finding) finding.check
+}
+
+}

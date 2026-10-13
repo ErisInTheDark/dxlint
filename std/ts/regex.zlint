@@ -1,0 +1,5 @@
+import .ts/regex/grammar
+import .ts/regex/values
+import .ts/regex/checks
+import .ts/regex/findings
+import .ts/regex/suggestions

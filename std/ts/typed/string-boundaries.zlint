@@ -71,14 +71,16 @@ fn string_boundary_comparison(n, needle) = {
 
 fn string_boundary_regex(n) = {
   value pattern: collection_value_node(n)
-  value syntax: pattern.regex_syntax
-  value alternatives: filter(syntax, part => part.kind == "alternative" && part.parent == 0)
+  value syntax: pattern.regexp_syntax
+  value root: first(syntax)
+  value flags: pattern.regexp_input.flags
+  value alternatives: filter(syntax, part => part.kind == "alternative" && part.parent == root.id)
   value alternative: first(alternatives)
   value terms: filter(syntax, term => term.parent == alternative.id)
   value from_start: first(terms).kind == "assertion" && first(terms).raw == "^"
   value from_end: last(terms).kind == "assertion" && last(terms).raw == "$"
   value characters: if from_start then drop(terms, 1) else slice(terms, 0, -1)
-  value if syntax == null || type_of(pattern.regex_pattern.flags) != "str" || re_test(pattern.regex_pattern.flags, /[gimy]/)
+  value if syntax == null || type_of(flags) != "str" || re_test(flags, /[gimy]/)
     || len(alternatives) != 1 || from_start == from_end || len(characters) == 0
     || !all(characters, term => term.kind == "character" && term.character != null) then null else {
       kind: if from_start then "start" else "end",

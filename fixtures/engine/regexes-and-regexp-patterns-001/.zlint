@@ -1,8 +1,8 @@
 import .ts
 
         in ts_regex, ts_call, ts_new rule r info "{f.check}:{f.kind}@{f.offset}" {
-          each f in regex_findings.nonempty ?? []
+          each f in regexp_findings.nonempty ?? []
         }
-        in ts_call, ts_new rule e info "{ { value regex_flags.nonempty ?? ''; regex_flags_error ([]); nonempty } ?? regex_pattern_error }" {
-          when regex_pattern_error != null || { value regex_flags.nonempty ?? ''; regex_flags_error ([]) } != null
+        in ts_call, ts_new rule e info "{ { value regexp_flags.nonempty ?? ''; regex_flags_error ([]); nonempty } ?? regexp_pattern_error }" {
+          when regexp_pattern_error != null || { value regexp_flags.nonempty ?? ''; regex_flags_error ([]) } != null
         }
