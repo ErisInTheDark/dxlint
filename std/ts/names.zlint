@@ -8,8 +8,8 @@ fn ts_identifier_name_valid(name) = re_test(name, /^[\p{ID_Start}_$][\p{ID_Conti
 fn ts_declared_statement(node) = node is (ts_program.body, ts_block.body, ts_case.body, ts_export.declaration, ts_labeled.body)
 group ts_namespace_runtime_nodes ts_variable_declaration, ts_function, ts_class, ts_enum, ts_empty, ts_export_assignment, ts_export
 fn ts_namespace_runtime(n) = {
-  value n.body.node
-  value descendants(ts_namespace_runtime_nodes)
+  value walk(n.body.node, item => item.children.nodes)
+  filter (item) item is ts_namespace_runtime_nodes
   any (item) !(item is ts_export)
     || !any(item.children.nodes, child => child is ts_export.declaration)
     || any(item.children.nodes, child => child is ts_import_equals)
@@ -79,8 +79,7 @@ in ts_class {
 in ts_interface, ts_type_alias { declares type name in nearest block hoisted }
 in ts_enum { declares value, type, query name in nearest block hoisted }
 in ts_namespace {
-  declares type name in nearest block hoisted
-  when ts_namespace_runtime(node) { declares value, query name in nearest block hoisted }
+  declares value, type, query name in nearest block hoisted
 }
 # `namespace A.B {}` declares `A`.
 in ts_qualified_name { targets left }

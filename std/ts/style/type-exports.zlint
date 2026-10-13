@@ -7,8 +7,15 @@ in ts_export_specifier {
   let export_key ts_module_name(local.node)
   let export_source js_string(parent.from.text)
   let export_classes name_classes(local.node, export_key, export_source, null)
-  let export_type kind == null && export_classes.value == false && (export_classes.type == true || export_classes.query == true)
-  let export_value kind == null && export_classes.value == true
+  let export_erased_namespace parent.from == null && {
+    value declarations: name_binding(local.node).declarations
+    value any(declarations, site => site.parent is ts_namespace)
+      && all(declarations, site => site.parent is (ts_interface, ts_type_alias)
+        || site.parent is ts_namespace && !ts_namespace_runtime(site.parent.node))
+  }
+  let export_type kind == null && (export_classes.value == false || export_erased_namespace)
+    && (export_classes.type == true || export_classes.query == true)
+  let export_value kind == null && export_classes.value == true && !export_erased_namespace
   let export_name local.literal_value.value ?? local.text
   let export_alias { value children.nodes; filter (item) item is ts_export_specifier.exported; first }
 }
