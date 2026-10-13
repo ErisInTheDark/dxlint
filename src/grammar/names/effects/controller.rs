@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::fx_hash::FxHashMap;
+use crate::fx_hash::FxHashSet;
 
 use super::{EffectId, Execution};
 use crate::grammar::names::question::{Known, Leaf, NodeRef, Target};
@@ -10,7 +11,35 @@ use crate::grammar::names::semantic::Semantic;
 #[derive(Default)]
 pub(crate) struct State {
     graphs: RefCell<FxHashMap<Leaf, Known<Rc<Execution>>>>,
+    reads: RefCell<FxHashMap<Leaf, Known<Rc<Reads>>>>,
+    entry_owners: RefCell<FxHashMap<Leaf, Leaf>>,
+    discarded: RefCell<Option<Discarded>>,
 }
+
+#[derive(Default)]
+struct Discarded {
+    graphs: FxHashSet<Leaf>,
+    reads: FxHashSet<Leaf>,
+}
+
+impl State {
+    pub(crate) fn rollback(&self) {
+        let mut discarded = self.discarded.borrow_mut();
+        self.graphs.borrow_mut().retain(|&entry, graph| {
+            if matches!(graph, Known::Yes(_)) { return true }
+            if let Some(discarded) = discarded.as_mut() { discarded.graphs.insert(entry); }
+            false
+        });
+        self.reads.borrow_mut().retain(|&root, reads| {
+            if matches!(reads, Known::Yes(_)) { return true }
+            if let Some(discarded) = discarded.as_mut() { discarded.reads.insert(root); }
+            false
+        });
+    }
+
+}
+
+pub(super) type Reads = FxHashMap<NodeRef, FxHashSet<(NodeRef, NodeRef)>>;
 
 pub struct Effects<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
@@ -21,6 +50,7 @@ pub struct DeclaredEffect {
     pub site: Leaf,
     pub target: Option<NodeRef>,
     pub value: Option<Leaf>,
+    pub possible: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,62 +68,208 @@ pub struct Creation {
 }
 
 impl Effects<'_> {
+    pub fn has_reads(&self, at: Leaf) -> Known<bool> {
+        let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
+        let Target::Node(node) = at.target else { return Known::Unknown };
+        let runtime = super::source::Runtime::new(self.semantic);
+        let Some(Some(binding)) = runtime.binding(at, node).known() else { return Known::Unknown };
+        let Some(reads) = self.reads(at).known() else { return Known::Unknown };
+        Known::Yes(reads.get(&binding).is_some_and(|reads| !reads.is_empty()))
+    }
+
+    pub fn value_used(&self, at: Leaf) -> Known<bool> {
+        let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
+        let Target::Node(node) = at.target else { return Known::Unknown };
+        let Some(entry) = self.entry_for(at).known() else { return Known::Unknown };
+        let Some(graph) = self.execution(entry).known() else { return Known::Unknown };
+        if graph.write_steps(node).is_empty() { return Known::Unknown }
+        let Some(reads) = self.reads(at).known() else { return Known::Unknown };
+        graph.value_used(node, &reads, &self.semantic.question.budget)
+    }
+
+    fn reads(&self, at: Leaf) -> Known<Rc<Reads>> {
+        let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
+        let Target::Node(node) = at.target else { return Known::Unknown };
+        let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
+        let root = Leaf { target: Target::Node(NodeRef { node: tree.root, ..node }), ..at };
+        let Some(root) = self.semantic.leaf(root).known() else { return Known::Unknown };
+        if let Some(reads) = self.semantic.effects.reads.borrow().get(&root) { return reads.clone() }
+        let Some(effect) = self.semantic.tables.vocabulary.effect("read") else { return Known::Unknown };
+        self.semantic.effects.reads.borrow_mut().insert(root, Known::Unknown);
+        let collect = || self.collect_reads(at, node, tree, effect);
+        let reads = match self.semantic.world.profile() {
+            Some(profile) => {
+                let rebuild = self.semantic.effects.discarded.borrow_mut()
+                    .get_or_insert_with(Discarded::default).reads.remove(&root);
+                profile.time_effect_build(crate::engine::EffectBuild::ReadCatalogue, rebuild, collect, |reads, _| matches!(reads, Known::Yes(_)))
+            }
+            None => collect(),
+        };
+        self.semantic.effects.reads.borrow_mut().insert(root, reads.clone());
+        reads
+    }
+
+    fn collect_reads(&self, at: Leaf, node: NodeRef, tree: &crate::grammar::Tree, effect: EffectId) -> Known<Rc<Reads>> {
+        let runtime = super::source::Runtime::new(self.semantic);
+        let mut reads = Reads::default();
+        let mut visited = FxHashSet::default();
+        for id in 0..tree.nodes.len() {
+            if !self.semantic.question.budget.step() { return Known::Unknown }
+            let Some(kind) = self.semantic.tables.kinds.get(tree.nodes[id].matcher as usize) else { continue };
+            if !kind.unwraps.iter().any(|item| item.effect == Some(effect)) { continue }
+            let site = Leaf { target: Target::Node(NodeRef { node: id as u32, ..node }), ..at };
+            let Some(site) = self.semantic.leaf(site).known() else { return Known::Unknown };
+            if !visited.insert(site) { continue }
+            let Some(declared) = runtime.declarations(site, Some(effect)).known() else { return Known::Unknown };
+            for emission in declared {
+                let Some(target) = runtime.read(site, &emission).known() else { return Known::Unknown };
+                if let Some(binding) = target.binding {
+                    let Target::Node(owner) = site.target else { return Known::Unknown };
+                    reads.entry(binding).or_default().insert((owner, target.value));
+                }
+            }
+        }
+        Known::Yes(Rc::new(reads))
+    }
+
+    pub fn entries(&self, owner: Leaf) -> Known<Vec<Leaf>> {
+        let Some(owner) = self.semantic.leaf(owner).known() else { return Known::Unknown };
+        let Target::Node(node) = owner.target else { return Known::Unknown };
+        let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
+        let Some(syntax) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+        let Some(kind) = self.semantic.tables.kinds.get(syntax.matcher as usize) else { return Known::Yes(Vec::new()) };
+        if kind.execution.entries.is_empty() { return Known::Yes(Vec::new()) }
+        let runtime = super::source::Runtime::new(self.semantic);
+        let Some(items) = runtime.enabled(owner, &kind.execution.entries).known() else { return Known::Unknown };
+        let mut entries = Vec::new();
+        for item in items {
+            let Some(projected) = self.semantic.follow(owner, &item.item).known() else { return Known::Unknown };
+            for entry in projected {
+                if !self.semantic.question.budget.step() { return Known::Unknown }
+                if !entries.contains(&entry) { entries.push(entry) }
+            }
+        }
+        Known::Yes(entries)
+    }
+
+    pub fn unwritten(&self, binding: Leaf, replaces: &impl Fn(Leaf) -> Known<bool>) -> Known<bool> {
+        let Some(binding) = self.semantic.leaf(binding).known() else { return Known::Unknown };
+        if binding.frame != super::super::question::FrameId::ROOT { return Known::Unknown }
+        let Target::Node(node) = binding.target else { return Known::Unknown };
+        let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
+        let Some(names) = self.semantic.world.names(node.file) else { return Known::Unknown };
+        if !names.declared.contains_key(&node.node) { return Known::Unknown }
+        let runtime = super::source::Runtime::new(self.semantic);
+        let mut visited = FxHashSet::default();
+        for id in 0..tree.nodes.len() {
+            if !self.semantic.question.budget.step() { return Known::Unknown }
+            let at = Leaf { target: Target::Node(NodeRef { node: id as u32, ..node }), ..binding };
+            let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
+            if !visited.insert(at) { continue }
+            let Some(writes) = runtime.writes(at, None).known() else { return Known::Unknown };
+            for (_, _, write) in writes {
+                let Some(target) = write.event.target else { return Known::Unknown };
+                if target.value == node { continue }
+                match replaces(Leaf { target: Target::Node(target.value), ..binding }) {
+                    Known::Yes(true) => return Known::Yes(false),
+                    Known::Yes(false) => {}
+                    Known::Unknown => return Known::Unknown,
+                }
+            }
+        }
+        Known::Yes(true)
+    }
+
     pub fn enclosing(&self, entry: Leaf) -> Known<Option<Creation>> {
+        let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         if entry.frame != super::super::question::FrameId::ROOT { return Known::Unknown }
         let Target::Node(node) = entry.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         if tree.nodes.get(node.node as usize).is_none() { return Known::Unknown }
         if self.entry_for(entry) != Known::Yes(entry) { return Known::Unknown }
-        let runtime = super::source::Runtime { semantic: self.semantic };
         let mut owner = Some(node.node);
         while let Some(id) = owner {
             if !self.semantic.question.budget.step() { return Known::Unknown }
             let site = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..entry };
-            if let Some(kind) = self.semantic.tables.kinds.get(tree.node(id).matcher as usize) {
-                let Some(entries) = runtime.enabled(site, &kind.execution.entries).known() else { return Known::Unknown };
-                if entries.iter().any(|entry| crate::grammar::names::follow(tree, id, &entry.item).contains(&node.node)) {
-                    if site == entry { return Known::Unknown }
-                    let Some(outer) = self.entry_for(site).known() else { return Known::Unknown };
-                    return Known::Yes(Some(Creation { entry: outer, site }));
-                }
+            let Some(site) = self.semantic.leaf(site).known() else { return Known::Unknown };
+            if site.target != Target::Node(NodeRef { node: id, ..node }) { owner = tree.parent(id); continue }
+            let Some(entries) = self.entries(site).known() else { return Known::Unknown };
+            if entries.contains(&entry) {
+                if site == entry { return Known::Unknown }
+                let Some(outer) = self.entry_for(site).known() else { return Known::Unknown };
+                return Known::Yes(Some(Creation { entry: outer, site }));
             }
             owner = tree.parent(id);
         }
-        if node.node == tree.root { Known::Yes(None) } else { Known::Unknown }
+        let Some(root) = self.semantic.leaf(Leaf { target: Target::Node(NodeRef { node: tree.root, ..node }), ..entry }).known() else { return Known::Unknown };
+        if entry == root { Known::Yes(None) } else { Known::Unknown }
     }
 
     pub fn entry_for(&self, at: Leaf) -> Known<Leaf> {
+        let find = || self.find_entry(at);
+        match self.semantic.world.profile() {
+            Some(profile) => profile.time_effect_entry(find),
+            None => find(),
+        }
+    }
+
+    fn find_entry(&self, at: Leaf) -> Known<Leaf> {
+        let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
+        if let Some(&entry) = self.semantic.effects.entry_owners.borrow().get(&at) { return Known::Yes(entry) }
+        let entry = self.search_entry(at);
+        if let Known::Yes(entry) = entry { self.semantic.effects.entry_owners.borrow_mut().insert(at, entry); }
+        entry
+    }
+
+    fn search_entry(&self, at: Leaf) -> Known<Leaf> {
         let Target::Node(node) = at.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         if tree.nodes.get(node.node as usize).is_none() { return Known::Unknown }
-        let runtime = super::source::Runtime { semantic: self.semantic };
         let mut ancestry = Vec::new();
         let mut owner = Some(node.node);
         while let Some(id) = owner {
             if !self.semantic.question.budget.step() { return Known::Unknown }
-            ancestry.push(id);
             let owner_leaf = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..at };
-            if let Some(kind) = self.semantic.tables.kinds.get(tree.node(id).matcher as usize) {
-                let Some(entries) = runtime.enabled(owner_leaf, &kind.execution.entries).known() else { return Known::Unknown };
-                let closest = entries.into_iter().flat_map(|entry| {
-                    crate::grammar::names::follow(tree, id, &entry.item)
-                }).filter_map(|entry| ancestry.iter().position(|&ancestor| ancestor == entry).map(|distance| (distance, entry)))
-                    .min_by_key(|&(distance, _)| distance);
-                if let Some((_, entry)) = closest {
-                    return Known::Yes(Leaf { target: Target::Node(NodeRef { node: entry, ..node }), ..at });
-                }
+            let Some(owner_leaf) = self.semantic.leaf(owner_leaf).known() else { return Known::Unknown };
+            if owner_leaf.target != Target::Node(NodeRef { node: id, ..node }) { owner = tree.parent(id); continue }
+            ancestry.push(id);
+            let Some(entries) = self.entries(owner_leaf).known() else { return Known::Unknown };
+            let closest = entries.into_iter().filter_map(|entry| {
+                let Target::Node(entry_node) = entry.target else { return None };
+                ancestry.iter().position(|&ancestor| ancestor == entry_node.node).map(|distance| (distance, entry))
+            }).min_by_key(|&(distance, _)| distance);
+            if let Some((_, entry)) = closest {
+                return Known::Yes(entry);
             }
             owner = tree.parent(id);
         }
-        Known::Yes(Leaf { target: Target::Node(NodeRef { node: tree.root, ..node }), ..at })
+        self.semantic.leaf(Leaf { target: Target::Node(NodeRef { node: tree.root, ..node }), ..at })
     }
 
     pub fn execution(&self, entry: Leaf) -> Known<Rc<Execution>> {
+        let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let state = &self.semantic.effects.graphs;
         if let Some(graph) = state.borrow().get(&entry) { return graph.clone() }
         state.borrow_mut().insert(entry, Known::Unknown);
-        let source = super::source::Runtime { semantic: self.semantic };
-        let graph = match super::build::execution(&source, entry, self.semantic.question) {
+        let source = super::source::Runtime::new(self.semantic);
+        let build = || super::build::execution(&source, entry, self.semantic.question);
+        let graph = match self.semantic.world.profile() {
+            Some(profile) => {
+                let rebuild = self.semantic.effects.discarded.borrow_mut()
+                    .get_or_insert_with(Discarded::default).graphs.remove(&entry);
+                profile.time_effect_build(crate::engine::EffectBuild::Graph, rebuild, build, |graph, elapsed| {
+                    if matches!(graph, Known::Yes(_)) { return true }
+                    if let Target::Node(node) = entry.target {
+                        if let Some(path) = self.semantic.world.path(node.file) {
+                            profile.record_effect_failure(path, node.node, source.failure(), elapsed);
+                        }
+                    }
+                    false
+                })
+            }
+            None => build(),
+        };
+        let graph = match graph {
             Known::Yes(graph) => Known::Yes(Rc::new(graph)),
             Known::Unknown => Known::Unknown,
         };
@@ -109,16 +285,20 @@ impl Effects<'_> {
     }
 
     pub fn declared(&self, entry: Leaf, effect: EffectId) -> Known<Vec<DeclaredEffect>> {
+        let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let Target::Node(node) = entry.target else { return Known::Unknown };
         let Some(tree) = self.semantic.world.tree(node.file) else { return Known::Unknown };
         if tree.nodes.get(node.node as usize).is_none() { return Known::Unknown }
-        let runtime = super::source::Runtime { semantic: self.semantic };
+        let runtime = super::source::Runtime::new(self.semantic);
         let mut pending = vec![node.node];
         let mut declared = Vec::new();
         let mut unique = crate::fx_hash::FxHashSet::default();
+        let mut visited = FxHashSet::default();
         while let Some(id) = pending.pop() {
             if !self.semantic.question.budget.step() { return Known::Unknown }
             let at = Leaf { target: Target::Node(NodeRef { node: id, ..node }), ..entry };
+            let Some(at) = self.semantic.leaf(at).known() else { return Known::Unknown };
+            if !visited.insert(at) { continue }
             if at != entry {
                 match self.entry_for(at) {
                     Known::Yes(owner) if owner != entry => continue,
@@ -129,14 +309,32 @@ impl Effects<'_> {
             let Some(effects) = runtime.declarations(at, Some(effect)).known() else { return Known::Unknown };
             for emission in effects {
                 let record = emission.declared;
-                if unique.insert((record.site, record.target, record.value)) { declared.push(record) }
+                if unique.insert((record.site, record.target, record.value, record.possible)) { declared.push(record) }
             }
-            pending.extend(tree.node(id).children.iter().rev().map(|edge| edge.node));
+            let Some(writes) = runtime.writes(at, Some(effect)).known() else { return Known::Unknown };
+            for (_, _, write) in writes {
+                let value = match write.event.written {
+                    Some(written) => {
+                        let Some(_nested) = self.semantic.question.budget.nest() else { return Known::Unknown };
+                        let Some(sites) = self.semantic.values().sites(written.owner, &written.recipe).known() else { return Known::Unknown };
+                        if sites.len() > 1 { return Known::Unknown }
+                        sites.first().copied()
+                    }
+                    None => None,
+                };
+                let record = DeclaredEffect {
+                    site: at, target: write.event.target.map(|target| target.value), value, possible: write.possible,
+                };
+                if unique.insert((record.site, record.target, record.value, record.possible)) { declared.push(record) }
+            }
+            let Target::Node(at) = at.target else { return Known::Unknown };
+            pending.extend(tree.node(at.node).children.iter().rev().map(|edge| edge.node));
         }
         Known::Yes(declared)
     }
 
     pub fn exits(&self, entry: Leaf) -> Known<Vec<ExecutedEffect>> {
+        let Some(entry) = self.semantic.leaf(entry).known() else { return Known::Unknown };
         let Some(graph) = self.execution(entry).known() else { return Known::Unknown };
         let Some(exits) = graph.exits(&self.semantic.question.budget).known() else { return Known::Unknown };
         Known::Yes(exits.into_iter().map(|exit| ExecutedEffect {
@@ -161,6 +359,10 @@ mod tests {
         grammar: Grammar,
         tree: Tree,
         names: Resolved,
+        profile: Option<crate::engine::Profile>,
+        interrupt: std::cell::Cell<bool>,
+        conditions: std::cell::Cell<u32>,
+        unknown_condition: std::cell::Cell<bool>,
     }
 
     impl TestWorld {
@@ -174,11 +376,19 @@ mod tests {
                     Node { matcher: 3, start: 0, end: 0, children: Vec::new() },
                 ], 0),
                 names: Resolved::default(),
+                profile: None,
+                interrupt: std::cell::Cell::new(false),
+                conditions: std::cell::Cell::new(0),
+                unknown_condition: std::cell::Cell::new(false),
             }
         }
     }
 
     impl World for TestWorld {
+        fn profile(&self) -> Option<&crate::engine::Profile> { self.profile.as_ref() }
+        fn path(&self, file: u32) -> Option<&std::path::Path> {
+            (file == 0).then(|| std::path::Path::new("effects.test"))
+        }
         fn grammar(&self) -> &Grammar { &self.grammar }
         fn tree(&self, file: u32) -> Option<&Tree> { (file == 0).then_some(&self.tree) }
         fn text(&self, file: u32) -> Option<&str> { (file == 0).then_some("") }
@@ -188,7 +398,13 @@ mod tests {
             std::borrow::Cow::Borrowed(text)
         }
         fn module(&self, _: Leaf, _: &str, _: &Semantic<'_>) -> Known<Option<ScopeRef>> { Known::Yes(None) }
-        fn condition(&self, at: Leaf, _: u32, _: &Semantic<'_>) -> Known<bool> {
+        fn condition(&self, at: Leaf, _: u32, semantic: &Semantic<'_>) -> Known<bool> {
+            self.conditions.set(self.conditions.get() + 1);
+            if self.interrupt.get() {
+                while semantic.question.budget.step() {}
+                return Known::Unknown;
+            }
+            if self.unknown_condition.get() { return Known::Unknown }
             Known::Yes(at.frame != FrameId::ROOT)
         }
         fn attribute(&self, _: Leaf, _: u16, _: &Semantic<'_>) -> Known<crate::expr::Value<'static>> {
@@ -207,11 +423,229 @@ mod tests {
         Names { kinds: vec![KindNames::default(); 4], ..Names::default() }
     }
 
+    #[test]
+    fn write_origins_preserve_declaration_order_with_possible_throws() {
+        for write_before_throw in [false, true] {
+            let mut world = TestWorld::new();
+            world.tree = Tree::from_native(vec![
+                Node { matcher: 0, start: 0, end: 0, children: vec![Edge { label: 1, node: 1 }, Edge { label: 4, node: 3 }] },
+                Node { matcher: 1, start: 0, end: 0, children: vec![Edge { label: 2, node: 2 }] },
+                Node { matcher: 2, start: 0, end: 0, children: Vec::new() },
+                Node { matcher: 3, start: 0, end: 0, children: Vec::new() },
+            ], 0);
+            let mut tables = tables();
+            tables.effect_roles = vec![super::super::EffectRole::Control(super::super::Control::Thrown),
+                super::super::EffectRole::Event { writes: true }];
+            tables.kinds[0].execution.runs.push(conditional(Flow::Field(vec![1]), None));
+            tables.kinds[0].execution.catches.push(conditional(super::super::Catch {
+                handler: vec![4], source: vec![1], effects: vec![0],
+            }, None));
+            tables.kinds[1].execution.runs.push(conditional(Flow::Nothing, None));
+            tables.kinds[1].unwraps.push(crate::grammar::names::Unwrapping {
+                effect: Some(0), possible: true, item: u32::from(write_before_throw), ..Default::default()
+            });
+            tables.kinds[1].effects.push(crate::grammar::names::Effect {
+                item_id: Some(u32::from(!write_before_throw)),
+                effect: 1, path: vec![2], when: None, value: None, possible: false,
+            });
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            let graph = semantic.effects().execution(leaf(0)).known().expect("execution");
+            let handler = graph.sites(NodeRef::here(3), super::super::Phase::Enter).next().expect("handler entry");
+            assert_eq!(graph.reaches_through(graph.entry(), handler, &[],
+                |event| event.kind == super::super::EventKind::Write, &question.budget), Known::Yes(write_before_throw));
+        }
+    }
+
     fn conditional<T>(item: T, when: Option<u32>) -> Conditional<T> {
         Conditional {
             item, when, item_id: 0,
             span: crate::config::source::Span::new(crate::config::source::FileId(0), 0, 1),
         }
+    }
+
+    fn read_world(external: bool) -> (TestWorld, Names) {
+        let mut world = TestWorld::new();
+        world.tree = Tree::from_native(vec![
+            Node { matcher: 0, start: 0, end: 0, children: vec![
+                Edge { label: 1, node: 1 }, Edge { label: 2, node: 2 },
+            ] },
+            Node { matcher: 1, start: 0, end: 0, children: Vec::new() },
+            Node { matcher: crate::grammar::parse::TEXT, start: 0, end: 0, children: vec![
+                Edge { label: crate::pattern::compile::NO_LABEL, node: 4 },
+            ] },
+            Node { matcher: 3, start: 0, end: 0, children: Vec::new() },
+            Node { matcher: 2, start: 0, end: 0, children: vec![Edge { label: 3, node: 3 }] },
+        ], 0);
+        world.names.declaration.insert(1, 1);
+        world.names.declaration.insert(3, 4);
+        world.names.merged.insert(4, 1);
+        let mut tables = tables();
+        tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+            effects: vec!["assigned".into(), "read".into()], ..Default::default()
+        });
+        tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
+        tables.kinds[1].effects.push(crate::grammar::names::Effect {
+            effect: 0, path: Vec::new(), when: None, value: None, possible: false, item_id: None,
+        });
+        tables.kinds[2].execution.runs.push(conditional(Flow::Nothing, None));
+        tables.kinds[2].unwraps.push(crate::grammar::names::Unwrapping {
+            effect: Some(1), value: Some(crate::grammar::names::Value::Path(vec![3])), ..Default::default()
+        });
+        if external {
+            tables.kinds[0].execution.runs.push(conditional(Flow::Field(vec![1]), None));
+            tables.kinds[0].execution.entries.push(conditional(vec![2], None));
+        }
+        (world, tables)
+    }
+
+    #[test]
+    fn declared_read_targets_need_not_be_executed_syntax_and_other_entries_still_count() {
+        for external in [false, true] {
+            let (world, tables) = read_world(external);
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            let effects = semantic.effects();
+            assert_eq!(effects.has_reads(leaf(1)), Known::Yes(true));
+            assert_eq!(effects.value_used(leaf(1)), Known::Yes(true));
+            assert_eq!(effects.value_used(leaf(1)), Known::Yes(true));
+            let graph = effects.execution(leaf(0)).known().expect("outer execution");
+            assert_eq!(graph.reachable(NodeRef::here(3), &question.budget), Known::Yes(false));
+        }
+    }
+
+    #[test]
+    fn unrelated_budget_cut_keeps_completed_effects_and_retries_the_interrupted_entry() {
+        use crate::engine::Profile;
+        use crate::grammar::names::semantic::Session;
+
+        let (mut world, mut tables) = read_world(true);
+        world.profile = Some(Profile::default());
+        tables.kinds[2].execution.runs.push(conditional(Flow::Field(vec![3]), Some(0)));
+        let session = Session::default();
+        assert_eq!(session.run(&world, &tables, |semantic| semantic.effects().value_used(leaf(1))), Known::Yes(true));
+        let profile = world.profile.as_ref().expect("profile");
+        assert_eq!(Profile::get(&profile.effect_graph_builds), 1);
+        assert_eq!(Profile::get(&profile.effect_read_catalogue_builds), 1);
+
+        world.interrupt.set(true);
+        assert!(matches!(session.run(&world, &tables, |semantic| semantic.effects().execution(leaf(4))), Known::Unknown));
+        world.interrupt.set(false);
+        assert_eq!(session.run(&world, &tables, |semantic| semantic.effects().value_used(leaf(1))), Known::Yes(true));
+        assert_eq!(Profile::get(&profile.effect_graph_builds), 2);
+        assert_eq!(Profile::get(&profile.effect_read_catalogue_builds), 1);
+        assert!(matches!(session.run(&world, &tables, |semantic| semantic.effects().execution(leaf(4))), Known::Yes(_)));
+        assert_eq!(Profile::get(&profile.effect_graph_builds), 3);
+    }
+
+    #[test]
+    fn failed_graph_profiles_distinguish_limits_shapes_conditions_and_dependencies() {
+        use super::super::build::Failure;
+
+        for failure in [Failure::Budget, Failure::Shape, Failure::Condition, Failure::Dependency] {
+            let mut world = TestWorld::new();
+            world.profile = Some(crate::engine::Profile::default());
+            let mut tables = tables();
+            match failure {
+                Failure::Budget | Failure::Condition => {
+                    tables.kinds[0].execution.runs.push(conditional(Flow::Nothing, Some(0)));
+                    world.interrupt.set(failure == Failure::Budget);
+                    world.unknown_condition.set(failure == Failure::Condition);
+                }
+                Failure::Shape => {
+                    tables.kinds[0].execution.runs.push(conditional(Flow::Nothing, None));
+                    let mut conflict = conditional(Flow::Children, None);
+                    conflict.item_id = 1;
+                    tables.kinds[0].execution.runs.push(conflict);
+                }
+                Failure::Dependency => {
+                    tables.kinds[0].execution.runs.push(conditional(Flow::Repeat {
+                        body: Box::new(Flow::Nothing), test: None, truth: Some(0), next: None, first: false,
+                    }, None));
+                }
+            }
+            let question = QueryContext::default();
+            let semantic = Semantic::new(&world, &tables, &question);
+            assert!(matches!(semantic.effects().execution(leaf(0)), Known::Unknown));
+            let rows = world.profile.as_ref().expect("profile").effect_failures();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].2, failure);
+            assert_eq!(rows[0].3.calls, 1);
+        }
+    }
+
+    #[test]
+    fn entry_lookup_reuses_completed_answers_without_reusing_interrupted_or_other_frames() {
+        use crate::grammar::names::semantic::Session;
+
+        let world = TestWorld::new();
+        let mut tables = tables();
+        tables.kinds[1].execution.entries.push(conditional(vec![2], Some(0)));
+        let session = Session::default();
+        let lookup = |frame| session.run(&world, &tables, |semantic| {
+            let frame = if frame {
+                semantic.question.bind(FrameId::ROOT, NodeRef::here(3), Some(leaf(1)), None)
+            } else { FrameId::ROOT };
+            semantic.effects().entry_for(Leaf { frame, ..leaf(3) })
+        });
+
+        assert_eq!(lookup(false), Known::Yes(leaf(0)));
+        let completed_conditions = world.conditions.get();
+        assert_eq!(lookup(false), Known::Yes(leaf(0)));
+        assert_eq!(world.conditions.get(), completed_conditions);
+
+        world.interrupt.set(true);
+        assert_eq!(lookup(true), Known::Unknown);
+        world.interrupt.set(false);
+        let after_cut = world.conditions.get();
+        assert_eq!(lookup(false), Known::Yes(leaf(0)));
+        assert_eq!(world.conditions.get(), after_cut);
+        let Known::Yes(entry) = lookup(true) else { panic!("interrupted entry must retry") };
+        assert_eq!(entry.target, leaf(2).target);
+        assert_ne!(entry.frame, FrameId::ROOT);
+        assert!(world.conditions.get() > after_cut);
+        let completed_conditions = world.conditions.get();
+        assert_eq!(lookup(true), Known::Yes(entry));
+        assert_eq!(world.conditions.get(), completed_conditions);
+    }
+
+    #[test]
+    fn capture_wrapped_entries_keep_execution_and_creation_identity() {
+        let mut world = TestWorld::new();
+        world.tree = Tree::from_native(vec![
+            Node { matcher: 0, start: 0, end: 0, children: vec![Edge { label: 1, node: 1 }] },
+            Node { matcher: crate::grammar::parse::TEXT, start: 0, end: 0, children: vec![
+                Edge { label: crate::pattern::compile::NO_LABEL, node: 2 },
+            ] },
+            Node { matcher: 1, start: 0, end: 0, children: vec![Edge { label: 2, node: 3 }] },
+            Node { matcher: crate::grammar::parse::TEXT, start: 0, end: 0, children: vec![
+                Edge { label: crate::pattern::compile::NO_LABEL, node: 4 },
+            ] },
+            Node { matcher: 2, start: 0, end: 0, children: vec![Edge { label: 3, node: 5 }] },
+            Node { matcher: 3, start: 0, end: 0, children: Vec::new() },
+        ], 0);
+        let mut tables = tables();
+        tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+            effects: vec!["returned".into()], ..Default::default()
+        });
+        tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
+        tables.kinds[1].execution.runs.push(conditional(Flow::Nothing, None));
+        tables.kinds[1].execution.entries.push(conditional(vec![2], None));
+        tables.kinds[3].unwraps.push(crate::grammar::names::Unwrapping {
+            effect: Some(0), ..Default::default()
+        });
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let effects = semantic.effects();
+        assert_eq!(effects.entries(leaf(1)), Known::Yes(vec![leaf(4)]));
+        assert_eq!(effects.entry_for(leaf(5)), Known::Yes(leaf(4)));
+        assert_eq!(effects.enclosing(leaf(3)), Known::Yes(Some(Creation { entry: leaf(0), site: leaf(2) })));
+        assert_eq!(effects.normal(leaf(3)), Known::Yes(false));
+        assert_eq!(effects.exits(leaf(3)), Known::Yes(vec![
+            ExecutedEffect { effect: 0, site: leaf(5), target: None, value: None },
+        ]));
+        assert_eq!(effects.execution(leaf(3)).known().expect("body execution")
+            .reachable(NodeRef::here(5), &question.budget), Known::Yes(true));
     }
 
     #[test]
@@ -315,6 +749,7 @@ mod tests {
                 effect: Some(0), ..Default::default()
             });
         }
+        tables.kinds[2].unwraps[0].possible = true;
         let question = QueryContext::default();
         let frame = question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None);
         let entry = Leaf { frame, ..leaf(0) };
@@ -322,15 +757,15 @@ mod tests {
         let semantic = Semantic::new(&world, &tables, &question);
         let effects = semantic.effects();
         assert_eq!(effects.declared(entry, 0), Known::Yes(vec![
-            DeclaredEffect { site: at(1), target: None, value: None },
-            DeclaredEffect { site: at(2), target: None, value: None },
+            DeclaredEffect { site: at(1), target: None, value: None, possible: false },
+            DeclaredEffect { site: at(2), target: None, value: None, possible: true },
         ]));
         assert_eq!(effects.exits(entry), Known::Yes(vec![
             ExecutedEffect { effect: 0, site: at(1), target: None, value: None },
         ]));
         assert_eq!(effects.normal(entry), Known::Yes(false));
         assert_eq!(effects.declared(at(5), 0), Known::Yes(vec![
-            DeclaredEffect { site: at(5), target: None, value: None },
+            DeclaredEffect { site: at(5), target: None, value: None, possible: false },
         ]));
     }
 
@@ -375,15 +810,85 @@ mod tests {
         for kind in [2, 3] {
             tables.kinds[kind].unwraps.push(crate::grammar::names::Unwrapping { effect: Some(0), nearest: 1, ..Default::default() });
         }
-        world.names = tables.resolve(&world.tree, "", &std::borrow::Cow::Borrowed, &|_, _| true);
+        world.names = tables.resolve(&world.tree, "", &std::borrow::Cow::Borrowed, &|_, _| true, &|_, _, _| Err("no operand".into()));
         let question = QueryContext::default();
         let semantic = Semantic::new(&world, &tables, &question);
         assert_eq!(semantic.effects().declared(leaf(2), 0), Known::Yes(vec![
-            DeclaredEffect { site: leaf(2), target: Some(NodeRef::here(1)), value: None },
+            DeclaredEffect { site: leaf(2), target: Some(NodeRef::here(1)), value: None, possible: false },
         ]));
         assert_eq!(semantic.effects().declared(leaf(0), 0), Known::Yes(vec![
-            DeclaredEffect { site: leaf(3), target: Some(NodeRef::here(0)), value: None },
+            DeclaredEffect { site: leaf(3), target: Some(NodeRef::here(0)), value: None, possible: false },
         ]));
+    }
+
+    #[test]
+    fn possible_target_writes_preserve_a_path_to_the_following_use() {
+        let mut world = TestWorld::new();
+        world.tree = Tree::from_native(vec![
+            Node { matcher: 0, start: 0, end: 0, children: vec![Edge { label: 1, node: 1 }, Edge { label: 3, node: 3 }] },
+            Node { matcher: 1, start: 0, end: 0, children: vec![Edge { label: 2, node: 2 }] },
+            Node { matcher: 2, start: 0, end: 0, children: Vec::new() },
+            Node { matcher: 3, start: 0, end: 0, children: Vec::new() },
+        ], 0);
+        let mut tables = tables();
+        tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+            effects: vec!["assigned".into()], ..Default::default()
+        });
+        tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
+        tables.kinds[1].effects.push(crate::grammar::names::Effect {
+            item_id: Some(0),
+            effect: 0, path: vec![2], when: None, value: None, possible: true,
+        });
+        tables.kinds[1].unwraps.push(crate::grammar::names::Unwrapping {
+            effect: Some(0), possible: true, value: Some(crate::grammar::names::Value::Path(vec![2])),
+            ..Default::default()
+        });
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let graph = semantic.effects().execution(leaf(0)).known().expect("possible write execution must be known");
+        let writes: Vec<_> = graph.steps().filter_map(|(id, step)| {
+            step.event().filter(|event| event.kind == super::super::EventKind::Write).map(|_| id)
+        }).collect();
+        assert_eq!(writes.len(), 1);
+        let use_site = graph.sites(NodeRef::here(3), super::super::Phase::Enter).next().expect("following use");
+        assert_eq!(graph.reaches(graph.entry(), use_site, &writes, &question.budget), Known::Yes(true));
+        assert_eq!(graph.reaches_through(graph.entry(), use_site, &[], |event| {
+            event.kind == super::super::EventKind::Write
+        }, &question.budget), Known::Yes(true));
+    }
+
+    #[test]
+    fn assignment_events_keep_written_recipes_in_their_owner_frame() {
+        let world = TestWorld::new();
+        let mut tables = tables();
+        tables.vocabulary = std::sync::Arc::new(crate::grammar::names::Vocabulary {
+            effects: vec!["assigned".into()], ..Default::default()
+        });
+        tables.effect_roles = super::super::compile::effect_roles(&tables.vocabulary);
+        tables.kinds[0].effects.push(crate::grammar::names::Effect {
+            item_id: Some(0),
+            effect: 0, path: vec![1], when: None, possible: false,
+            value: Some(std::sync::Arc::new(crate::grammar::names::Value::Path(vec![1, 2]))),
+        });
+        let question = QueryContext::default();
+        let framed = Leaf {
+            frame: question.bind(FrameId::ROOT, NodeRef::here(0), Some(leaf(1)), None),
+            ..leaf(0)
+        };
+        let semantic = Semantic::new(&world, &tables, &question);
+        for entry in [leaf(0), framed] {
+            let graph = semantic.effects().execution(entry).known().expect("assignment execution must be known");
+            let writes: Vec<_> = graph.steps().filter_map(|(_, step)| step.event())
+                .filter(|event| event.kind == super::super::EventKind::Write).collect();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0].target.expect("write target").value, NodeRef::here(1));
+            assert_eq!(writes[0].phase, super::super::Phase::Leave);
+            let written = writes[0].written.as_ref().expect("written value recipe");
+            assert_eq!(written.owner, entry);
+            assert_eq!(semantic.values().sites(written.owner, &written.recipe), Known::Yes(vec![
+                Leaf { frame: entry.frame, ..leaf(2) },
+            ]));
+        }
     }
 
     #[test]
@@ -402,7 +907,8 @@ mod tests {
             });
             if targets {
                 tables.kinds[0].effects.push(crate::grammar::names::Effect {
-                    effect: 0, path: vec![1], when: None,
+                    item_id: Some(0),
+                    effect: 0, path: vec![1], when: None, value: None, possible: false,
                 });
             }
             let question = QueryContext::default();

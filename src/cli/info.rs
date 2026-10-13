@@ -344,6 +344,59 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
             ));
         }
     }
+    output.err(format_args!(
+        "\n  {BOLD}semantic work{BOLD:#}: {} budget-limit hits, {} session state resets, {} effects graph build attempts, {} read-catalogue build attempts",
+        Profile::get(&p.semantic_budget_limits),
+        Profile::get(&p.semantic_state_discards),
+        Profile::get(&p.effect_graph_builds),
+        Profile::get(&p.effect_read_catalogue_builds)
+    ));
+    output.err(format_args!(
+        "  semantic budget: {} steps total, {} max per root question, {} questions over half budget",
+        Profile::get(&p.semantic_budget_steps_total),
+        Profile::get(&p.semantic_budget_steps_max),
+        Profile::get(&p.semantic_budget_steps_over_half)
+    ));
+    output.err(format_args!(
+        "  effects builds (inclusive; interrupted attempts included): {:.1} ms graphs, {:.1} ms read catalogues; after discarding the same key: {:.1} ms graphs, {:.1} ms read catalogues",
+        ms(Profile::get(&p.effect_graph_build_nanos)),
+        ms(Profile::get(&p.effect_read_catalogue_build_nanos)),
+        ms(Profile::get(&p.effect_graph_rebuild_nanos)),
+        ms(Profile::get(&p.effect_read_catalogue_rebuild_nanos))
+    ));
+    let graph_successes = Profile::get(&p.effect_graph_successes);
+    output.err(format_args!(
+        "  graph build outcomes: {} complete ({:.1} ms), {} unknown ({:.1} ms); entry_for: {} calls ({:.1} ms inclusive)",
+        graph_successes,
+        ms(Profile::get(&p.effect_graph_success_nanos)),
+        Profile::get(&p.effect_graph_builds).saturating_sub(graph_successes),
+        ms(Profile::get(&p.effect_graph_unknown_nanos)),
+        Profile::get(&p.effect_entry_calls),
+        ms(Profile::get(&p.effect_entry_nanos))
+    ));
+    let failed_graphs = p.effect_failures();
+    output.err(format_args!(
+        "  module work: {} index builds ({:.1} ms), {} plan lookups ({:.1} ms, index builds excluded)",
+        Profile::get(&p.module_index_calls),
+        ms(Profile::get(&p.module_index_nanos)),
+        Profile::get(&p.module_plans_calls),
+        ms(Profile::get(&p.module_plans_nanos))
+    ));
+    if !failed_graphs.is_empty() {
+        output.err(format_args!("  failed graph entries (top 10, inclusive; frames combined):"));
+        for (path, node, cause, row) in failed_graphs.into_iter().take(10) {
+            output.err(format_args!("  {:>11.1} ms {:>11} attempts  {} node {node} {}",
+                ms(row.nanos), row.calls, path.display(), cause.name()));
+        }
+    }
+    let mut semantic: Vec<_> = p.semantic_queries.iter()
+        .map(|(&name, query)| (Profile::get(&query.nanos), Profile::get(&query.calls), name))
+        .filter(|(_, calls, _)| *calls > 0).collect();
+    semantic.sort_by_key(|row| std::cmp::Reverse(row.0));
+    output.err(format_args!("\n  {BOLD}semantic queries{BOLD:#} {DIM}inclusive time; nested calls overlap{DIM:#}"));
+    for (nanos, calls, name) in semantic {
+        output.err(format_args!("  {:>11.1} ms {calls:>11} calls  {CYAN}{name}{CYAN:#}", ms(nanos)));
+    }
 }
 
 pub fn functions(output: &mut Output<'_>) -> u8 {

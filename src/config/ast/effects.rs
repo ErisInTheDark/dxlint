@@ -20,6 +20,7 @@ pub enum Flow {
 
 #[derive(Clone, Debug)]
 pub enum Item {
+    Assigned { target: Path, value: Option<super::Unwrap> },
     Runs(Flow),
     Entry(Path),
     Catches { handler: Path, effects: Vec<Name>, source: Path },

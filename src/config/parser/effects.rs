@@ -4,6 +4,11 @@ use crate::config::ast::effects::{Flow, Item, Path};
 impl Parser<'_> {
     pub(super) fn execution_item(&mut self, keyword: &str) -> Option<Item> {
         match keyword {
+            "assigned" => {
+                let target = self.name_path("an assignment target")?;
+                let value = if self.word("with") { Some(self.unwrap_value()?) } else { None };
+                Some(Item::Assigned { target, value })
+            }
             "runs" => self.flow_or().map(Item::Runs),
             "labels" => self.name_path("a label field").map(Item::Labels),
             "in" => {

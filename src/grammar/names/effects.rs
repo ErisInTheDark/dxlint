@@ -1,6 +1,6 @@
 use super::question::{Budget, Known, NodeRef};
 use crate::fx_hash::FxHashMap;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 
 pub mod compile;
 pub mod build;
@@ -18,14 +18,15 @@ pub type EffectId = u16;
 pub enum EffectRole {
     Control(Control),
     Proof,
-    Event,
+    Read,
+    Event { writes: bool },
 }
 
 impl EffectRole {
     fn control(self) -> Option<Control> {
         match self {
             Self::Control(control) => Some(control),
-            Self::Proof | Self::Event => None,
+            Self::Proof | Self::Read | Self::Event { .. } => None,
         }
     }
 }
@@ -120,12 +121,19 @@ pub struct Target {
     pub binding: Option<NodeRef>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
+pub struct Written {
+    pub owner: super::question::Leaf,
+    pub recipe: std::sync::Arc<super::Value>,
+}
+
+#[derive(Clone, Debug)]
 pub struct Event {
     pub kind: EventKind,
     pub site: NodeRef,
     pub target: Option<Target>,
     pub value: Option<NodeRef>,
+    pub written: Option<Written>,
     pub phase: Phase,
 }
 
@@ -167,8 +175,19 @@ pub struct Execution {
     edges: Vec<Vec<StepId>>,
     sites: FxHashMap<NodeRef, Vec<StepId>>,
     fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>>,
+    writes: FxHashMap<NodeRef, Vec<StepId>>,
+    binding_writes: FxHashMap<NodeRef, crate::fx_hash::FxHashSet<StepId>>,
+    binding_reads: FxHashMap<NodeRef, ReadSet>,
     reachable: OnceCell<Vec<bool>>,
     completion: Option<Completion>,
+}
+
+#[derive(Default)]
+struct ReadSet {
+    sites: crate::fx_hash::FxHashSet<(NodeRef, NodeRef)>,
+    steps: crate::fx_hash::FxHashSet<StepId>,
+    external: OnceCell<bool>,
+    used: RefCell<FxHashMap<StepId, bool>>,
 }
 
 struct Completion {
@@ -192,14 +211,36 @@ impl Execution {
     pub(crate) fn new(entry: StepId, steps: Vec<Step>, edges: Vec<Vec<StepId>>) -> Execution {
         let mut sites: FxHashMap<NodeRef, Vec<StepId>> = FxHashMap::default();
         let mut fields: FxHashMap<NodeRef, FxHashMap<Path, Vec<StepId>>> = FxHashMap::default();
+        let mut writes: FxHashMap<NodeRef, Vec<StepId>> = FxHashMap::default();
+        let mut binding_writes: FxHashMap<NodeRef, crate::fx_hash::FxHashSet<StepId>> = FxHashMap::default();
+        let mut binding_reads: FxHashMap<NodeRef, ReadSet> = FxHashMap::default();
         for (index, step) in steps.iter().enumerate() {
             match &step.point {
                 Point::Enter | Point::Leave => sites.entry(step.node).or_default().push(index as u32),
                 Point::Field(path) => fields.entry(step.node).or_default().entry(path.clone()).or_default().push(index as u32),
+                Point::Event(event) if event.kind == EventKind::Write => {
+                    if let Some(target) = event.target {
+                        writes.entry(target.value).or_default().push(index as StepId);
+                        if let Some(binding) = target.binding {
+                            binding_writes.entry(binding).or_default().insert(index as StepId);
+                            binding_reads.entry(binding).or_default();
+                        }
+                    }
+                }
+                Point::Event(event) if event.kind == EventKind::Read => {
+                    if let Some(target) = event.target {
+                        if let Some(binding) = target.binding {
+                            let reads = binding_reads.entry(binding).or_default();
+                            reads.sites.insert((event.site, target.value));
+                            reads.steps.insert(index as StepId);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
-        Execution { entry, steps, edges, sites, fields, reachable: OnceCell::new(), completion: None }
+        Execution { entry, steps, edges, sites, fields, writes, binding_writes,
+            binding_reads, reachable: OnceCell::new(), completion: None }
     }
 
     fn with_completion(mut self, normal: Vec<StepId>, exits: Vec<(StepId, Exit)>) -> Self {
@@ -233,6 +274,10 @@ impl Execution {
         self.fields.get(&node).and_then(|fields| fields.get(path)).map_or(&[], Vec::as_slice)
     }
 
+    pub fn write_steps(&self, target: NodeRef) -> &[StepId] {
+        self.writes.get(&target).map_or(&[], Vec::as_slice)
+    }
+
     pub(crate) fn normal(&self, budget: &Budget) -> Known<bool> {
         let Some(completion) = &self.completion else { return Known::Unknown };
         let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
@@ -253,6 +298,33 @@ impl Execution {
             if seen[at as usize] && unique.insert(exit) { exits.push(exit) }
         }
         Known::Yes(exits)
+    }
+
+    pub fn completes_avoiding(&self, avoiding: &[StepId], effects: &[EffectId], budget: &Budget) -> Known<bool> {
+        let Some(completion) = &self.completion else { return Known::Unknown };
+        let Known::Yes(Walk::Seen(seen)) = self.walk(self.entry, avoiding, |_| false, budget) else { return Known::Unknown };
+        for &step in &completion.normal {
+            if !budget.step() { return Known::Unknown }
+            if seen[step as usize] { return Known::Yes(true) }
+        }
+        for &(step, exit) in &completion.exits {
+            if !budget.step() { return Known::Unknown }
+            if effects.contains(&exit.effect) && seen[step as usize] { return Known::Yes(true) }
+        }
+        Known::Yes(false)
+    }
+
+    pub fn completes_through(&self, effect: EffectId, effects: &[EffectId], budget: &Budget) -> Known<bool> {
+        let Some(completion) = &self.completion else { return Known::Unknown };
+        for step in completion.normal.iter().copied()
+            .chain(completion.exits.iter().filter(|(_, exit)| effects.contains(&exit.effect)).map(|(step, _)| *step)) {
+            match self.reaches_through(self.entry, step, &[], |event| event.kind == EventKind::Effect(effect), budget) {
+                Known::Yes(true) => return Known::Yes(true),
+                Known::Yes(false) => {}
+                Known::Unknown => return Known::Unknown,
+            }
+        }
+        Known::Yes(false)
     }
 
     fn reachable_steps(&self, budget: &Budget) -> Known<&[bool]> {
@@ -279,6 +351,165 @@ impl Execution {
             Known::Yes(Walk::Seen(_)) => Known::Yes(false),
             Known::Unknown => Known::Unknown,
         }
+    }
+
+    pub(crate) fn value_used(&self, target: NodeRef, catalogue: &controller::Reads, budget: &Budget) -> Known<bool> {
+        if !budget.step() { return Known::Unknown }
+        let Some(writes) = self.writes.get(&target) else { return Known::Unknown };
+        let mut binding = None;
+        for &write in writes {
+            if !budget.step() { return Known::Unknown }
+            let Some(current) = self.step(write).and_then(Step::event).and_then(|event| event.target).and_then(|target| target.binding) else {
+                return Known::Unknown;
+            };
+            if binding.is_some_and(|binding| binding != current) { return Known::Unknown }
+            binding = Some(current);
+        }
+        let Some(binding) = binding else { return Known::Unknown };
+        let Some(reads) = self.binding_reads.get(&binding) else { return Known::Unknown };
+        let external = match reads.external.get() {
+            Some(external) => *external,
+            None => {
+                let mut external = false;
+                for site in catalogue.get(&binding).into_iter().flatten() {
+                    if !budget.step() { return Known::Unknown }
+                    if !reads.sites.contains(site) { external = true; break }
+                }
+                *reads.external.get_or_init(|| external)
+            }
+        };
+        let Some(reachable) = self.reachable_steps(budget).known() else { return Known::Unknown };
+        let Some(overwrites) = self.binding_writes.get(&binding) else { return Known::Unknown };
+        let mut has_reachable_write = false;
+        for &write in writes {
+            if !budget.step() { return Known::Unknown }
+            if !reachable[write as usize] { continue }
+            has_reachable_write = true;
+            if external { return Known::Yes(true) }
+            let cached = reads.used.borrow().get(&write).copied();
+            let used = match cached {
+                Some(used) => used,
+                None => {
+                    let Some(used) = self.read_before_overwrite(write, &reads.steps, overwrites, budget).known() else { return Known::Unknown };
+                    reads.used.borrow_mut().insert(write, used);
+                    used
+                }
+            };
+            if used { return Known::Yes(true) }
+        }
+        if has_reachable_write { Known::Yes(false) } else { Known::Unknown }
+    }
+
+    fn read_before_overwrite(&self, write: StepId, reads: &crate::fx_hash::FxHashSet<StepId>,
+        overwrites: &crate::fx_hash::FxHashSet<StepId>, budget: &Budget) -> Known<bool> {
+        let Some(next) = self.successors(write) else { return Known::Unknown };
+        let mut pending = next.to_vec();
+        let mut seen = vec![false; self.steps.len()];
+        while let Some(step) = pending.pop() {
+            if !budget.step() || step as usize >= seen.len() { return Known::Unknown }
+            if seen[step as usize] || overwrites.contains(&step) { continue }
+            seen[step as usize] = true;
+            if reads.contains(&step) { return Known::Yes(true) }
+            let Some(next) = self.successors(step) else { return Known::Unknown };
+            for &next in next {
+                if !budget.step() || next as usize >= seen.len() { return Known::Unknown }
+                pending.push(next);
+            }
+        }
+        Known::Yes(false)
+    }
+
+    pub fn crosses(&self, starts: &[StepId], observations: &[StepId], effects: &[EffectId],
+        barriers: &[StepId], budget: &Budget) -> Known<bool> {
+        let mut seen = vec![ThroughVisit::default(); self.steps.len()];
+        let mut targets = crate::fx_hash::FxHashSet::default();
+        for &step in starts.iter().chain(observations).chain(barriers) {
+            if !budget.step() || self.step(step).is_none() { return Known::Unknown }
+        }
+        targets.extend(observations.iter().copied());
+        for &step in barriers { seen[step as usize].barrier = true; }
+        if starts.is_empty() || targets.is_empty() || effects.is_empty() { return Known::Yes(false) }
+        let Some(reachable) = self.reachable_steps(budget).known() else { return Known::Unknown };
+        let mut pending: Vec<_> = starts.iter().copied().filter(|&step| reachable[step as usize])
+            .map(|step| (step, false)).collect();
+        while let Some((step, crossed)) = pending.pop() {
+            if !budget.step() { return Known::Unknown }
+            if crossed && seen[step as usize].barrier { continue }
+            let crossed = crossed || self.steps[step as usize].event().is_some_and(|event| {
+                matches!(event.kind, EventKind::Effect(effect) if effects.contains(&effect))
+            });
+            let visit = if crossed { &mut seen[step as usize].with_event } else { &mut seen[step as usize].without_event };
+            if *visit { continue }
+            *visit = true;
+            if crossed && targets.contains(&step) { return Known::Yes(true) }
+            let Some(next) = self.successors(step) else { return Known::Unknown };
+            for &next in next {
+                if !budget.step() || next as usize >= self.steps.len() { return Known::Unknown }
+                pending.push((next, crossed));
+            }
+        }
+        Known::Yes(false)
+    }
+
+    pub fn prior_event(&self, node: NodeRef, effect: EffectId, budget: &Budget) -> Known<bool> {
+        let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
+        let mut events = Vec::new();
+        let mut targets = Vec::new();
+        for (step, point) in self.steps() {
+            if !budget.step() { return Known::Unknown }
+            if let Some(event) = point.event().filter(|event| event.kind == EventKind::Effect(effect)) {
+                if seen[step as usize] { events.push(step) }
+                if event.site == node { targets.push(step) }
+            }
+        }
+        for event in events {
+            let Some(next) = self.successors(event) else { return Known::Unknown };
+            for &next in next {
+                for &target in &targets {
+                    match self.reaches(next, target, &[], budget) {
+                        Known::Yes(true) => return Known::Yes(true),
+                        Known::Yes(false) => {}
+                        Known::Unknown => return Known::Unknown,
+                    }
+                }
+            }
+        }
+        Known::Yes(false)
+    }
+
+    pub fn last_steps(&self, uses: &[StepId], candidates: &[StepId], budget: &Budget) -> Known<Option<Vec<StepId>>> {
+        for &step in uses.iter().chain(candidates) {
+            if !budget.step() || self.step(step).is_none() { return Known::Unknown }
+        }
+        let Some(seen) = self.reachable_steps(budget).known() else { return Known::Unknown };
+        let uses: Vec<_> = uses.iter().copied().filter(|&step| seen[step as usize]).collect();
+        if uses.is_empty() { return Known::Yes(None) }
+        for &use_at in &uses {
+            match self.reaches(self.entry, use_at, candidates, budget) {
+                Known::Yes(true) => return Known::Yes(None),
+                Known::Yes(false) => {}
+                Known::Unknown => return Known::Unknown,
+            }
+        }
+        let mut last = Vec::new();
+        for &candidate in candidates {
+            if !budget.step() { return Known::Unknown }
+            if !seen[candidate as usize] || last.contains(&candidate) { continue }
+            let Some(next) = self.successors(candidate) else { return Known::Unknown };
+            let mut found = false;
+            for &next in next {
+                for &use_at in &uses {
+                    match self.reaches(next, use_at, candidates, budget) {
+                        Known::Yes(true) => { found = true; break }
+                        Known::Yes(false) => {}
+                        Known::Unknown => return Known::Unknown,
+                    }
+                }
+                if found { break }
+            }
+            if found { last.push(candidate) }
+        }
+        Known::Yes(Some(last))
     }
 
     pub fn reaches_through(&self, from: StepId, to: StepId, barriers: &[StepId], event: impl Fn(&Event) -> bool, budget: &Budget) -> Known<bool> {
@@ -385,9 +616,97 @@ mod tests {
             site: NodeRef::here(step),
             target: Some(Target { value: NodeRef::here(99), binding: Some(NodeRef::here(99)) }),
             value: None,
+            written: None,
             phase: Phase::Leave,
         });
         Execution::new(graph.entry, steps, graph.edges)
+    }
+
+    fn with_writes(graph: Execution, writes: &[(StepId, u32)]) -> Execution {
+        let mut steps = graph.steps;
+        for &(step, target) in writes {
+            steps[step as usize].point = Point::Event(Event {
+                kind: EventKind::Write, site: NodeRef::here(step),
+                target: Some(Target { value: NodeRef::here(target), binding: Some(NodeRef::here(99)) }),
+                value: None, written: None, phase: Phase::Leave,
+            });
+        }
+        Execution::new(graph.entry, steps, graph.edges)
+    }
+
+    fn with_read(graph: Execution, step: StepId) -> Execution {
+        let mut steps = graph.steps;
+        steps[step as usize].point = Point::Event(Event {
+            kind: EventKind::Read, site: NodeRef::here(step),
+            target: Some(Target { value: NodeRef::here(step), binding: Some(NodeRef::here(99)) }),
+            value: None, written: None, phase: Phase::Enter,
+        });
+        Execution::new(graph.entry, steps, graph.edges)
+    }
+
+    fn read_catalogue(nodes: &[u32]) -> controller::Reads {
+        [(NodeRef::here(99), nodes.iter().copied().map(|node| (NodeRef::here(node), NodeRef::here(node))).collect())].into_iter().collect()
+    }
+
+    #[test]
+    fn value_use_stops_at_overwrites_but_keeps_branch_reads() {
+        let reads = read_catalogue(&[3]);
+        let sequence = with_read(with_writes(graph(&[&[1], &[2], &[3], &[]]), &[(1, 10), (2, 20)]), 3);
+        assert_eq!(sequence.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(false));
+        assert_eq!(sequence.value_used(NodeRef::here(20), &reads, &Budget::default()), Known::Yes(true));
+        let branch = with_read(with_writes(graph(&[&[1], &[2, 3], &[4], &[4], &[]]), &[(1, 10), (2, 20)]), 3);
+        assert_eq!(branch.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(true));
+    }
+
+    #[test]
+    fn value_use_cache_never_keeps_incomplete_queries() {
+        let reads = read_catalogue(&[3]);
+        let execution = with_read(with_writes(graph(&[&[1], &[2], &[3], &[], &[]]), &[(1, 10)]), 3);
+        assert_eq!(execution.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
+        assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::new(7)), Known::Unknown);
+        assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(true));
+        assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(true));
+        assert_eq!(execution.value_used(NodeRef::here(50), &reads, &Budget::default()), Known::Unknown);
+    }
+
+    #[test]
+    fn external_reads_are_conservative_but_dead_writes_are_not_proofs() {
+        let reads = read_catalogue(&[200]);
+        let execution = with_writes(graph(&[&[1], &[]]), &[(1, 10)]);
+        assert_eq!(execution.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Yes(true));
+        let dead = with_writes(graph(&[&[], &[]]), &[(1, 10)]);
+        assert_eq!(dead.value_used(NodeRef::here(10), &reads, &Budget::default()), Known::Unknown);
+    }
+
+    fn with_event(graph: Execution, step: StepId, effect: EffectId) -> Execution {
+        let mut steps = graph.steps;
+        steps[step as usize].point = Point::Event(Event {
+            kind: EventKind::Effect(effect), site: NodeRef::here(step),
+            target: None, value: None, written: None, phase: Phase::Leave,
+        });
+        Execution::new(graph.entry, steps, graph.edges)
+    }
+
+    #[test]
+    fn crossing_keeps_start_event_and_observation_on_one_route() {
+        let split = with_event(graph(&[&[1, 2], &[3], &[3], &[]]), 2, 9);
+        assert_eq!(split.crosses(&[1], &[3], &[9], &[], &Budget::default()), Known::Yes(false));
+        let joined = with_event(graph(&[&[1, 2], &[3], &[3], &[4], &[]]), 3, 9);
+        assert_eq!(joined.crosses(&[1, 2], &[4], &[9], &[], &Budget::default()), Known::Yes(true));
+        let dead = with_event(graph(&[&[3], &[2], &[3], &[]]), 2, 9);
+        assert_eq!(dead.crosses(&[1], &[3], &[9], &[], &Budget::default()), Known::Yes(false));
+    }
+
+    #[test]
+    fn crossing_refresh_stops_only_post_event_paths_and_can_start_again() {
+        let sequence = with_event(graph(&[&[1], &[2], &[3], &[4], &[]]), 2, 9);
+        assert_eq!(sequence.crosses(&[0], &[4], &[9], &[1], &Budget::default()), Known::Yes(true));
+        assert_eq!(sequence.crosses(&[0], &[4], &[9], &[3], &Budget::default()), Known::Yes(false));
+        let looped = with_event(with_event(graph(&[&[1], &[2], &[3], &[1, 4], &[5], &[]]), 2, 9), 4, 9);
+        assert_eq!(looped.crosses(&[0], &[5], &[9], &[3], &Budget::default()), Known::Yes(false));
+        assert_eq!(looped.crosses(&[0, 3], &[5], &[9], &[3], &Budget::default()), Known::Yes(true));
+        assert_eq!(looped.crosses(&[0], &[5], &[9], &[], &Budget::new(0)), Known::Unknown);
+        assert_eq!(looped.crosses(&[99], &[5], &[9], &[], &Budget::default()), Known::Unknown);
     }
 
     #[test]
@@ -417,5 +736,53 @@ mod tests {
         assert_eq!(graph.reaches_through(0, 1, &[0], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(false));
         assert_eq!(graph.reaches_through(0, 1, &[], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(true));
         assert_eq!(graph.reaches_through(0, 2, &[0], |event| event.kind == EventKind::Write, &Budget::default()), Known::Yes(true));
+    }
+
+    #[test]
+    fn completion_queries_keep_event_paths_and_selected_exits_separate() {
+        let mut graph = with_write(graph(&[&[1, 2], &[3], &[4], &[], &[]]), 1);
+        let Point::Event(event) = &mut graph.steps[1].point else { unreachable!() };
+        event.kind = EventKind::Effect(9);
+        let graph = graph.with_completion(vec![3], vec![(4, Exit {
+            effect: 7, site: NodeRef::here(4), target: None, value: None,
+        })]);
+        assert_eq!(graph.completes_avoiding(&[1], &[], &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.completes_avoiding(&[1], &[7], &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.completes_through(9, &[], &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.completes_through(8, &[7], &Budget::default()), Known::Yes(false));
+        assert_eq!(graph.completes_avoiding(&[], &[7], &Budget::new(0)), Known::Unknown);
+        assert_eq!(graph.completes_through(9, &[7], &Budget::new(0)), Known::Unknown);
+    }
+
+    #[test]
+    fn prior_events_include_children_and_previous_rounds_but_not_the_current_event() {
+        for (end, repeated) in [(&[][..], false), (&[0][..], true)] {
+            let mut graph = with_write(graph(&[&[1], &[2], &[3], &[4], end]), 1);
+            let Point::Event(event) = &mut graph.steps[1].point else { unreachable!() };
+            event.kind = EventKind::Effect(9);
+            let event = Event {
+                kind: EventKind::Effect(9), site: NodeRef::here(0),
+                target: None, value: None, written: None, phase: Phase::Leave,
+            };
+            graph.steps[3].point = Point::Event(event);
+            let graph = Execution::new(graph.entry, graph.steps, graph.edges);
+            assert_eq!(graph.prior_event(NodeRef::here(0), 9, &Budget::default()), Known::Yes(true));
+            assert_eq!(graph.prior_event(NodeRef::here(1), 9, &Budget::default()), Known::Yes(repeated));
+            assert_eq!(graph.prior_event(NodeRef::here(0), 9, &Budget::new(0)), Known::Unknown);
+        }
+    }
+
+    #[test]
+    fn last_steps_distinguish_overwrites_branch_writes_and_unwritten_routes() {
+        let sequence = graph(&[&[1], &[2], &[3], &[], &[]]);
+        assert_eq!(sequence.last_steps(&[3], &[1, 2], &Budget::default()), Known::Yes(Some(vec![2])));
+        assert_eq!(sequence.last_steps(&[4], &[1, 2], &Budget::default()), Known::Yes(None));
+        let branches = graph(&[&[1, 2], &[3], &[3], &[]]);
+        assert_eq!(branches.last_steps(&[3], &[1, 2], &Budget::default()), Known::Yes(Some(vec![1, 2])));
+        assert_eq!(branches.last_steps(&[3], &[1], &Budget::default()), Known::Yes(None));
+        let looped = graph(&[&[1], &[2], &[1, 3], &[]]);
+        assert_eq!(looped.last_steps(&[3], &[1, 2], &Budget::default()), Known::Yes(Some(vec![2])));
+        assert_eq!(branches.last_steps(&[1, 3], &[1, 2], &Budget::new(0)), Known::Unknown);
+        assert_eq!(branches.last_steps(&[99], &[1], &Budget::default()), Known::Unknown);
     }
 }

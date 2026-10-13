@@ -1,13 +1,14 @@
-use super::{After, Catch, Conditional, Flow, KindEffects, Path};
+use super::{After, Catch, Conditional, Flow, Path};
 use crate::config::ast::Name;
 use crate::config::ast::effects::{Flow as ParsedFlow, Item as ParsedItem};
 use crate::config::error::ConfigError;
 use crate::config::source::Span;
 use crate::fx_hash::FxHashSet;
-use crate::grammar::names::Names;
+use crate::grammar::names::{KindNames, Names, PathOf, Vocabulary};
 
 #[derive(Clone, Debug)]
 pub enum Item {
+    Assigned(crate::grammar::names::Effect),
     Runs(Flow),
     Entry(Path),
     Catches(Catch),
@@ -20,29 +21,45 @@ pub fn effect_roles(vocabulary: &crate::grammar::names::Vocabulary) -> Vec<super
         match super::Control::named(name) {
             Some(control) => super::EffectRole::Control(control),
             None if name == "truthy" => super::EffectRole::Proof,
-            None => super::EffectRole::Event,
+            None if name == "read" => super::EffectRole::Read,
+            None => super::EffectRole::Event { writes: matches!(name.as_str(), "assigned" | "mutated" | "deleted") },
         }
     }).collect()
 }
 
 pub fn lower(
     item: &ParsedItem,
-    path: &mut impl FnMut(&[Name]) -> Option<Path>,
-    effect: &mut impl FnMut(&Name) -> Option<u16>,
+    path: &PathOf<'_>,
+    vocabulary: &mut Vocabulary,
+    errors: &mut Vec<ConfigError>,
+    requested_classes: &mut Vec<Name>,
 ) -> Option<Item> {
     Some(match item {
-        ParsedItem::Runs(value) => Item::Runs(flow(value, path)?),
-        ParsedItem::Entry(value) => Item::Entry(path(value)?),
+        ParsedItem::Assigned { target, value } => Item::Assigned(crate::grammar::names::Effect {
+            item_id: None,
+            effect: u16::try_from(super::super::intern(&mut vocabulary.effects, "assigned")).ok()?,
+            path: path(errors, target)?,
+            when: None,
+            possible: false,
+            value: match value {
+                Some(value) => Some(std::sync::Arc::new(super::super::values::compile::lower_value(
+                    value, path, vocabulary, errors, requested_classes,
+                )?)),
+                None => None,
+            },
+        }),
+        ParsedItem::Runs(value) => Item::Runs(flow(value, &mut |names| path(errors, names))?),
+        ParsedItem::Entry(value) => Item::Entry(path(errors, value)?),
         ParsedItem::Catches { handler, effects, source } => Item::Catches(Catch {
-            handler: path(handler)?,
-            source: path(source)?,
-            effects: effects.iter().map(effect).collect::<Option<_>>()?,
+            handler: path(errors, handler)?,
+            source: path(errors, source)?,
+            effects: effects.iter().map(|effect| u16::try_from(super::super::intern(&mut vocabulary.effects, &effect.text)).ok()).collect::<Option<_>>()?,
         }),
         ParsedItem::After { finalizer, sources } => Item::After(After {
-            finalizer: path(finalizer)?,
-            sources: sources.iter().map(|source| path(source)).collect::<Option<_>>()?,
+            finalizer: path(errors, finalizer)?,
+            sources: sources.iter().map(|source| path(errors, source)).collect::<Option<_>>()?,
         }),
-        ParsedItem::Labels(value) => Item::Labels(path(value)?),
+        ParsedItem::Labels(value) => Item::Labels(path(errors, value)?),
     })
 }
 
@@ -70,14 +87,19 @@ fn flow(value: &ParsedFlow, path: &mut impl FnMut(&[Name]) -> Option<Path>) -> O
     })
 }
 
-impl KindEffects {
-    pub fn push(&mut self, item: Item, when: Option<u32>, item_id: u32, span: Span) {
+impl KindNames {
+    pub fn push_execution(&mut self, item: Item, when: Option<u32>, item_id: u32, span: Span) {
         match item {
-            Item::Runs(item) => self.runs.push(Conditional { item, when, item_id, span }),
-            Item::Entry(item) => self.entries.push(Conditional { item, when, item_id, span }),
-            Item::Catches(item) => self.catches.push(Conditional { item, when, item_id, span }),
-            Item::After(item) => self.after.push(Conditional { item, when, item_id, span }),
-            Item::Labels(item) => self.labels.push(Conditional { item, when, item_id, span }),
+            Item::Assigned(mut item) => {
+                item.item_id = Some(item_id);
+                item.when = when;
+                self.effects.push(item);
+            }
+            Item::Runs(item) => self.execution.runs.push(Conditional { item, when, item_id, span }),
+            Item::Entry(item) => self.execution.entries.push(Conditional { item, when, item_id, span }),
+            Item::Catches(item) => self.execution.catches.push(Conditional { item, when, item_id, span }),
+            Item::After(item) => self.execution.after.push(Conditional { item, when, item_id, span }),
+            Item::Labels(item) => self.execution.labels.push(Conditional { item, when, item_id, span }),
         }
     }
 }
@@ -147,7 +169,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "RED until `assigned .. with` parses"]
     fn assignments_accept_shared_value_recipes_and_plain_targets() {
         assert!(valid("assigned block with handler ?? finalizer"));
         assert!(valid("assigned block"));

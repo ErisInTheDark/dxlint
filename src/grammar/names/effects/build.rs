@@ -9,6 +9,25 @@ pub enum Control {
     Continued,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Failure {
+    Budget,
+    Dependency,
+    Shape,
+    Condition,
+}
+
+impl Failure {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Budget => "budget",
+            Self::Dependency => "dependency",
+            Self::Shape => "shape",
+            Self::Condition => "condition",
+        }
+    }
+}
+
 impl Control {
     pub(super) fn named(name: &str) -> Option<Self> {
         match name {
@@ -38,6 +57,7 @@ pub struct Shape {
 }
 
 pub trait Source {
+    fn leaf(&self, node: Leaf, _: &QueryContext) -> Known<Leaf> { Known::Yes(node) }
     fn shape(&self, node: Leaf, question: &QueryContext) -> Known<Shape>;
     fn children(&self, node: Leaf, question: &QueryContext) -> Known<Vec<Leaf>>;
     fn path(&self, node: Leaf, path: &[u16], question: &QueryContext) -> Known<Vec<Leaf>>;
@@ -62,6 +82,7 @@ type Slot = usize;
 
 enum Task {
     Node { node: Leaf, out: Slot },
+    SelectedNode { node: Leaf, flow: Flow, out: Slot },
     FinishNode { node: Leaf, enter: StepId, body: Slot, shape: Shape, out: Slot },
     Flow { node: Leaf, flow: Flow, catches: Vec<Catch>, out: Slot },
     Sequence { node: NodeRef, parts: Vec<Slot>, out: Slot },
@@ -170,12 +191,11 @@ impl<S: Source> Builder<'_, S> {
 
     fn effects(&mut self, node: NodeRef, fragment: &mut Fragment, effects: &[Effect], phase: Phase) -> Option<()> {
         let at_phase = || effects.iter().filter(|effect| effect.event.phase == phase);
-        let ordered = at_phase().filter(|effect| effect.control.is_none())
-            .chain(at_phase().filter(|effect| effect.control.is_some() && effect.possible))
+        let ordered = at_phase().filter(|effect| effect.control.is_none() || effect.possible)
             .chain(at_phase().filter(|effect| effect.control.is_some() && !effect.possible));
         for effect in ordered {
             if !self.question.budget.step() { return None }
-            let at = self.point(node, Point::Event(effect.event));
+            let at = self.point(node, Point::Event(effect.event.clone()));
             let mut before = std::mem::take(&mut fragment.normal);
             self.connect(&before, at);
             if let Some(control) = effect.control {
@@ -204,9 +224,11 @@ impl<S: Source> Builder<'_, S> {
         while let Some(task) = self.tasks.pop() {
             if !self.question.budget.step() { return None }
             match task {
-                Task::Node { node, out } => {
+                Task::Node { node, out } | Task::SelectedNode { node, out, .. } => {
+                    let node = self.source.leaf(node, self.question).known()?;
                     let Target::Node(id) = node.target else { return None };
-                    let shape = self.source.shape(node, self.question).known()?;
+                    let mut shape = self.source.shape(node, self.question).known()?;
+                    if let Task::SelectedNode { flow, .. } = task { shape.flow = flow; }
                     if shape.after.len() > 1 { return None }
                     let enter = self.step(id, Phase::Enter, None);
                     let body = self.slot();
@@ -296,13 +318,12 @@ impl<S: Source> Builder<'_, S> {
                             for node in nodes {
                                 if !self.question.budget.step() { return None }
                                 let tests = self.source.path(node, &test, self.question).known()?;
-                                let flows = if tests.is_empty() {
-                                    vec![Flow::Field(body.clone())]
-                                } else {
-                                    vec![Flow::Field(test.clone()), Flow::Field(body.clone())]
+                                let selected = self.slot();
+                                self.tasks.push(Task::SelectedNode { node, flow: Flow::Field(body.clone()), out: selected });
+                                let test = if tests.is_empty() { None } else {
+                                    Some(self.flows(node, vec![Flow::Field(test.clone())], &[])?[0])
                                 };
-                                let slots = self.flows(node, flows, &[])?;
-                                parts.push(if tests.is_empty() { (None, slots[0]) } else { (Some(slots[0]), slots[1]) });
+                                parts.push((test, selected));
                             }
                             self.tasks.insert(at, Task::Select { node: id, parts, out });
                         }
@@ -489,6 +510,7 @@ mod tests {
         let mut node = node(Flow::Nothing, &[]);
         node.shape.effects.push(Effect {
             event: Event {
+                written: None,
                 kind: EventKind::Effect(0),
                 site: NodeRef::here(1),
                 target: None,
@@ -556,6 +578,7 @@ mod tests {
             let mut returning = returned();
             returning.shape.effects.push(Effect {
                 event: Event {
+                    written: None,
                     kind: EventKind::Effect(9),
                     site: NodeRef::here(1),
                     target: None,
@@ -693,13 +716,13 @@ mod tests {
             next: None,
             first: false,
         });
-        let lowered = super::super::compile::lower(&parsed, &mut |names| {
+        let lowered = super::super::compile::lower(&parsed, &|_, names| {
             Some(match names[0].text.as_str() {
                 "body" => vec![0],
                 "test" => vec![1, crate::grammar::names::ATTR_STEP | 7],
                 _ => unreachable!(),
             })
-        }, &mut |_| None).expect("execution path compiles");
+        }, &mut crate::grammar::names::Vocabulary::default(), &mut Vec::new(), &mut Vec::new()).expect("execution path compiles");
         let super::super::compile::Item::Runs(flow) = lowered else { panic!("runs declaration") };
         let mut guard = node(Flow::Nothing, &[]);
         guard.truth = Some(false);
@@ -751,6 +774,9 @@ mod tests {
         assert_eq!(selection(&language, 3, 5), Known::Yes(true));
         assert_eq!(selection(&language, 4, 5), Known::Yes(false));
         assert_eq!(selection(&language, 4, 6), Known::Yes(true));
+        let graph = execution(&language, leaf(0), &QueryContext::default()).known().expect("selection graph");
+        assert_eq!(graph.reachable(NodeRef::here(1), &Budget::default()), Known::Yes(true));
+        assert_eq!(graph.reachable(NodeRef::here(2), &Budget::default()), Known::Yes(true));
     }
 
     #[test]
@@ -845,6 +871,27 @@ mod tests {
         assert_eq!(graph.exits(&Budget::default()), Known::Yes(vec![
             Exit { effect: 1, site: NodeRef::here(1), target: None, value: None },
         ]));
+    }
+
+    #[test]
+    fn optional_throws_keep_declared_event_order_on_the_caught_path() {
+        for emitted_before_throw in [false, true] {
+            let mut operation = control_node(1, Control::Thrown);
+            operation.shape.effects[0].possible = true;
+            let mut completed = operation.shape.effects[0].clone();
+            completed.event.kind = EventKind::Effect(9);
+            completed.control = None;
+            completed.possible = false;
+            operation.shape.effects.push(completed);
+            if emitted_before_throw { operation.shape.effects.reverse() }
+            let mut guarded = node(Flow::Field(vec![0]), &[1, 2]);
+            guarded.shape.catches.push(Catch { handler: vec![1], source: vec![0], effects: vec![1] });
+            let graph = built(&Language(vec![guarded, operation, node(Flow::Nothing, &[])]));
+            let handler = graph.sites(NodeRef::here(2), Phase::Enter).next().expect("handler entry");
+            assert_eq!(graph.reaches_through(graph.entry(), handler, &[],
+                |event| event.kind == EventKind::Effect(9), &Budget::default()), Known::Yes(emitted_before_throw));
+            assert_eq!(graph.normal(&Budget::default()), Known::Yes(true));
+        }
     }
 
     #[test]
