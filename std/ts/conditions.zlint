@@ -88,6 +88,11 @@ fn condition_comparable_nullish(value, other, loose) = !contains(["null", "undef
   value result: if value.literal.type == "null" then "null" else "undefined"
   value contains(other.type_domains.flags, result)
 } || value.literal.type == "undefined" && other.type_has_void || loose && other.type_domains.nullish
+fn condition_structural_truthy(arms) = arms != null && count(arms) > 0 && all(arms, arm =>
+  any(arm, part => contains(part.traits, "structural")) && all(arm, part =>
+    !any(part.traits, trait => contains(["any", "unknown", "error", "null", "undefined", "falsy"], trait))
+    && (!any(part.traits, trait => contains(["boolean", "number", "bigint", "string"], trait))
+      || contains(part.traits, "truthy"))))
 
 in ts_binary let condition_comparison { left: left.node, right: right.node, operator: operator, report: node }
 in ts_case let condition_comparison { left: parent.discriminant.node, right: test.node, operator: "===", report: test.node }
@@ -96,8 +101,8 @@ in ts_case let condition_comparison { left: parent.discriminant.node, right: tes
   when checked.node != null && (checked.subject not ts_logical || checked.subject.operator == "??")
   let values value_constituents(checked.subject)
   let never_value values != null && count(values) == 0
-  let certainly_truthy checked.subject always truthy
-  let certainly_falsy checked.subject always falsy
+  let certainly_truthy condition_structural_truthy(values) || checked.subject always truthy
+  let certainly_falsy if certainly_truthy then false else checked.subject always falsy
   when condition_unchecked_index(checked.subject) == false && !(compiler_options.noUncheckedIndexedAccess == true && checked.subject.access_resolution.from_index)
   when never_value || certainly_truthy || certainly_falsy
   report at { start: checked.node.offset, end: checked.node.end_offset }
@@ -294,14 +299,17 @@ fn strict_boolean_array(n) = {
 fn strict_boolean_value_has(arm, trait) = any(arm, part => contains(part.traits, trait))
 fn strict_boolean_value_primitive(arm) =
   if strict_boolean_value_has(arm, "intersection") then if strict_boolean_value_has(arm, "boolean") then "boolean" else "object"
-  else if strict_boolean_value_has(arm, "any") || strict_boolean_value_has(arm, "unknown") || strict_boolean_value_has(arm, "parameter") then "any"
+  else if strict_boolean_value_has(arm, "any") || strict_boolean_value_has(arm, "unknown") then "any"
   else if strict_boolean_value_has(arm, "null") || strict_boolean_value_has(arm, "undefined") then "nullish"
   else if strict_boolean_value_has(arm, "boolean") then "boolean"
   else if strict_boolean_value_has(arm, "string") then "string"
   else if strict_boolean_value_has(arm, "number") || strict_boolean_value_has(arm, "bigint") then "number"
+  else if strict_boolean_value_has(arm, "parameter") && !any(arm, part =>
+    any(part.traits, trait => contains(["object", "symbol", "callable", "constructible", "structural"], trait))) then "any"
   else "object"
 fn strict_boolean_value_complete(arms) = arms != null && all(arms, arm =>
-  any(arm, part => any(part.traits, trait => contains(["any", "unknown", "parameter", "intersection", "null", "undefined", "boolean", "string", "number", "bigint", "object", "symbol", "callable", "constructible", "structural"], trait))))
+  !strict_boolean_value_has(arm, "error") && any(arm, part =>
+    any(part.traits, trait => contains(["any", "unknown", "parameter", "intersection", "null", "undefined", "boolean", "string", "number", "bigint", "object", "symbol", "callable", "constructible", "structural"], trait))))
 fn strict_boolean_value_group(arms, primitive) = filter(arms, arm => strict_boolean_value_primitive(arm) == primitive)
 fn strict_boolean_value_variant(arms, primitive) = {
   value group: strict_boolean_value_group(arms, primitive)

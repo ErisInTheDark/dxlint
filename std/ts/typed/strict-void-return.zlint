@@ -81,7 +81,8 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   let contracts callable_contracts(site, actual, [], fields) strict_void_static_contracts(actual)
   when any(contracts, contract => strict_void_transfer(contract)
     && !strict_void_source_allowed(signatures, contract.source, allowReturnAny))
-    || actual.expected could callable && actual.expected.result always void && strict_void_signatures_known(signatures)
+    || value_has_expected(actual) && actual.expected could callable
+      && actual.expected.result always void && strict_void_signatures_known(signatures)
       && !all(signatures, signature => strict_void_signature_allowed(signature))
   let unwrapped unparenthesised_node(actual)
   each report in strict_void_reports(unwrapped, allowReturnAny)
