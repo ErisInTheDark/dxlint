@@ -18,6 +18,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_at", arity: 2, call: path },
     QueryFunction { name: "value_expected_at", arity: 2, call: expected_path },
     QueryFunction { name: "value_expected", arity: 1, call: expected },
+    QueryFunction { name: "value_has_expected", arity: 1, call: has_expected },
     QueryFunction { name: "value_widened", arity: 1, call: widened },
     QueryFunction { name: "value_origin", arity: 1, call: origin },
     QueryFunction { name: "global_declarations", arity: 3, call: globals },
@@ -259,6 +260,13 @@ fn expected(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Va
     ]))
 }
 
+fn has_expected(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    match semantic.calls().expected(at) {
+        Known::Yes(value) => Known::Yes(Value::Bool(value.is_some())),
+        Known::Unknown => Known::Unknown,
+    }
+}
+
 fn widened(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
     project(semantic, semantic.values().evaluate(at,
         &crate::grammar::names::Value::Path(vec![crate::grammar::names::WIDENED])))
@@ -424,6 +432,36 @@ fn signature_values(semantic: &Semantic<'_>, value: &NodeValue, fields: Signatur
 #[cfg(test)]
 mod tests {
     use crate::engine::tests::{lint, linter};
+
+    #[test]
+    fn expected_presence_does_not_expand_values_or_turn_failed_context_into_absence() {
+        let linter = linter(r#"
+            match unreadable /u/ { unwraps unknown }
+            match container "c" argument:unreadable { carries argument using it as {} }
+            in .t match present "p" context:container {
+                in it expects context
+                fits checked when value_has_expected(node)
+                rule present warn "present" { when node always checked }
+            }
+            match absent /a/ {
+                in it expects context
+                fits checked when !value_has_expected(node)
+                rule absent warn "absent" { when node always checked }
+            }
+            in .t match host "h" content:absent { fits context }
+            in .t match failed /f/ {
+                in it expects unknown
+                fits invented when !value_has_expected(node)
+                rule invented warn "invented" { when node always invented }
+                rule unknown warn "unknown" { when value_has_expected(node) == null }
+            }
+        "#);
+        let reports = lint(&linter, "pcu ha f");
+        assert_eq!(reports.len(), 3, "{reports:#?}");
+        for rule in ["present", "absent", "unknown"] {
+            assert_eq!(reports.iter().filter(|report| report.rule == rule).count(), 1);
+        }
+    }
 
     #[test]
     fn member_paths_follow_each_value_and_keep_missing_answers_unknown() {

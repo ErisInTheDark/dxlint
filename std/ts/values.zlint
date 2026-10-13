@@ -103,7 +103,7 @@ fn ts_value_tuple_context(n) = {
   value receiver: ts_value_destructuring_receiver(n)
   value n.flow_destructuring_target || receiver is (ts_array, ts_array_pattern)
     || !any(n.element.nodes, item => item is ts_spread)
-      && (ts_value_const_context(n) || value_expected(n).present && n.expected could tuple)
+      && (ts_value_const_context(n) || value_has_expected(n) && n.expected could tuple)
 }
 fn ts_value_scalar_part(n) = {
   value parts: value_constituents(n)
@@ -144,7 +144,7 @@ fn ts_value_fresh_literal(n, part) = {
 }
 fn ts_value_contextual_literal(n, part) = {
   value category: find(["string", "number", "boolean", "bigint"], trait => contains(part.traits, trait))
-  value value_expected(n).present && (if category == "boolean" then n.expected could boolean
+  value value_has_expected(n) && (if category == "boolean" then n.expected could boolean
     else if category == "string" then n.expected could (string, literal)
     else if category == "number" then n.expected could (number, literal)
     else if category == "bigint" then n.expected could (bigint, literal)
