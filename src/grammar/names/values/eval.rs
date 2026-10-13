@@ -35,6 +35,15 @@ pub(super) fn evaluate(values: &Values<'_>, at: Leaf, expression: &Value) -> Nod
     Run { values, tasks: vec![Task::Expression(at, expression)], answers: Vec::new() }.run()
 }
 
+pub(super) fn evaluate_optional(values: &Values<'_>, at: Leaf, expression: &Value) -> Known<Option<NodeValue>> {
+    let answer = Run { values, tasks: vec![Task::Expression(at, expression)], answers: Vec::new() }.run_answer();
+    match (answer.exists, answer.value) {
+        (false, _) => Known::Yes(None),
+        (true, NodeValue::Unknown) => Known::Unknown,
+        (true, value) => Known::Yes(Some(value)),
+    }
+}
+
 pub(super) fn sites(values: &Values<'_>, at: Leaf, mut expression: &Value) -> Known<Vec<Leaf>> {
     let mut fallbacks = Vec::new();
     loop {

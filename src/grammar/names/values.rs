@@ -344,6 +344,10 @@ impl Values<'_> {
         eval::evaluate(self, at, expression)
     }
 
+    pub(crate) fn evaluate_optional(&self, at: Leaf, expression: &Value) -> Known<Option<NodeValue>> {
+        eval::evaluate_optional(self, at, expression)
+    }
+
     pub(crate) fn combine(&self, inputs: impl IntoIterator<Item = NodeValue>, intersection: bool) -> NodeValue {
         eval::combine(self, inputs, intersection)
     }

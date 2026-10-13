@@ -70,7 +70,13 @@ fn declared(owner: Leaf, at: Leaf, own: bool, values: &Values<'_>) -> Known<Opti
             ExpectedAt::Owner => owner,
             ExpectedAt::Subject => at,
         };
-        if !agree(&mut answer, values.evaluate(subject, &expected.item.value), values) { return Known::Unknown }
+        match values.evaluate_optional(subject, &expected.item.value) {
+            Known::Yes(Some(value)) => {
+                if !agree(&mut answer, value, values) { return Known::Unknown }
+            }
+            Known::Yes(None) => {}
+            Known::Unknown => return Known::Unknown,
+        }
     }
     Known::Yes(answer)
 }

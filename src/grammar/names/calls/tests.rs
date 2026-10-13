@@ -88,6 +88,68 @@ fn expected_recipes_keep_owner_context_or_use_each_real_subject() {
 }
 
 #[test]
+fn expected_recipes_distinguish_missing_context_from_failed_and_empty_values() {
+    for at in [ExpectedAt::Owner, ExpectedAt::Subject] {
+        for own in [false, true] {
+            let mut world = TestWorld::new();
+            let mut nodes = world.tree.nodes.clone();
+            nodes[3].children.push(Edge { label: 40, node: 0 });
+            world.tree = Tree::from_native(nodes, 3);
+            let owner = if own { 0 } else { 3 };
+            let field = if own { vec![super::super::IT] } else { vec![40] };
+            let absent = super::Value::Either(
+                Box::new(super::Value::Path(vec![41])),
+                Box::new(super::Value::Path(vec![42])),
+            );
+            let failed = super::Value::From(
+                Box::new(super::Value::Current), Box::new(super::Value::Unknown), 0,
+            );
+            let empty = super::Value::Spread { intersection: false, path: vec![41], value: None };
+            for (recipes, expected) in [
+                (vec![absent.clone()], Known::Yes(None)),
+                (vec![failed], Known::Unknown),
+                (vec![empty], Known::Yes(Some(NodeValue::never()))),
+                (vec![absent.clone(), super::Value::Current], Known::Yes(Some(value(if at == ExpectedAt::Owner { owner } else { 0 })))),
+                (vec![super::Value::Current, absent], Known::Yes(Some(value(if at == ExpectedAt::Owner { owner } else { 0 })))),
+            ] {
+                let mut tables = tables();
+                for recipe in recipes {
+                    tables.kinds[owner as usize].calls.expected.push(Conditional {
+                        item: Expected { field: field.clone(), value: recipe, at }, when: None,
+                    });
+                }
+                let question = QueryContext::default();
+                let semantic = Semantic::new(&world, &tables, &question);
+                assert_eq!(semantic.calls().expected(leaf(0)), expected, "{at:?}, own={own}");
+            }
+        }
+    }
+}
+
+#[test]
+fn unannotated_returns_have_no_expected_type_when_both_context_sources_are_absent() {
+    let mut world = TestWorld::new();
+    let mut nodes = world.tree.nodes.clone();
+    nodes[3].children.push(Edge { label: 40, node: 0 });
+    world.tree = Tree::from_native(nodes, 3);
+    let mut tables = tables();
+    tables.kinds[3].calls.expected.push(Conditional {
+        item: Expected {
+            field: vec![40],
+            value: super::Value::Either(
+                Box::new(super::Value::Path(vec![41])),
+                Box::new(super::Value::Path(vec![super::super::EXPECTED, super::super::RESULT])),
+            ),
+            at: ExpectedAt::Owner,
+        },
+        when: None,
+    });
+    let question = QueryContext::default();
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.calls().expected(leaf(0)), Known::Yes(None));
+}
+
+#[test]
 fn categories_accept_matching_values_and_reject_incompatible_union_arms() {
     let world = TestWorld::new();
     let tables = tables();
