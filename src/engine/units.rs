@@ -25,6 +25,7 @@ pub(super) struct Unit {
     pub rel: String,
     pub lang: usize,
     pub text: Arc<str>,
+    pub hash: u64,
     pub parsed: ParsedFile,
     pub names: OnceLock<reads::Cached<Arc<crate::grammar::names::Resolved>>>,
 }
@@ -64,23 +65,36 @@ impl Linter {
         Ok(ParsedFile { tree, front: plan.front, state })
     }
 
-    pub(super) fn unit(&self, path: &Path) -> Option<Arc<Unit>> {
-        let text = reads::read(path)?;
-        let mut units = self.units.lock().expect("unit cache");
-        if let Some(unit) = units.get(path).filter(|unit| unit.text == text
-            && unit.names.get().is_none_or(|names| !names.reads.any(&mut |dep| !self.holds(dep)))) {
-            return Some(unit.clone());
+    /// The parsed unit for `path`. Inside a run, a unit is read and validated
+    /// once; later lookups replay its text read without touching the disk.
+    pub(super) fn unit(&self, path: &Path, run: Option<&super::program::Snapshot>) -> Option<Arc<Unit>> {
+        let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
+        if let Some(unit) = run.and_then(|run| run.unit(revision, path)) {
+            reads::note(reads::Dep::Text(path.to_owned(), unit.hash));
+            return Some(unit);
         }
-        let rel = self.relative(path);
-        let lang = self.grammar.lang_for(&rel)?;
-        let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
-        let tokens = front.map(|index| {
-            let frontend = self.grammar.natives[index].frontend;
-            (0..frontend.kinds().len()).map(|kind| self.unit_tokens && frontend.is_token(kind as u16)).collect::<Vec<_>>()
-        }).unwrap_or_default();
-        let parsed = self.parse(path, &text, ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens }).ok()?;
-        let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new() });
-        units.insert(path.to_owned(), unit.clone());
+        let (text, hash) = reads::read_unrecorded(path);
+        reads::note(reads::Dep::Text(path.to_owned(), hash));
+        let text = text?;
+        let cached = self.units.lock().expect("unit cache").get(path).cloned();
+        let unit = match cached.filter(|unit| unit.text == text
+            && unit.names.get().is_none_or(|names| !names.reads.any(&mut |dep| !self.holds(dep)))) {
+            Some(unit) => unit,
+            None => {
+                let rel = self.relative(path);
+                let lang = self.grammar.lang_for(&rel)?;
+                let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
+                let tokens = front.map(|index| {
+                    let frontend = self.grammar.natives[index].frontend;
+                    (0..frontend.kinds().len()).map(|kind| self.unit_tokens && frontend.is_token(kind as u16)).collect::<Vec<_>>()
+                }).unwrap_or_default();
+                let parsed = self.parse(path, &text, ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens }).ok()?;
+                let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, hash, parsed, names: OnceLock::new() });
+                self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());
+                unit
+            }
+        };
+        if let Some(run) = run { run.keep_unit(revision, path, &unit); }
         Some(unit)
     }
 }

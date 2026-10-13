@@ -79,7 +79,7 @@ impl<'a> LintWorld<'a> {
     fn file(&'a self, path: &Path) -> Option<u32> {
         if path == self.path { return Some(0); }
         if let Some(&file) = self.files.borrow().get(path) { return Some(file); }
-        let unit = self.linter.unit(path)?;
+        let unit = self.linter.unit(path, self.snapshot)?;
         let file = self.views.insert(unit) + 1;
         self.files.borrow_mut().insert(path.to_owned(), file);
         Some(file)
@@ -190,7 +190,9 @@ impl<'a> LintWorld<'a> {
     }
 
     pub fn query(&'a self, file: u32, node: u32, subject: &crate::grammar::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
-        let run = || self.semantic_query(file, node, Uncertainty::Strict, |semantic, at| (query.call)(semantic, at, subject, mask));
+        // could/always quantify over alternatives and answer Unknown themselves
+        // unless a known alternative decides, so their known answers stand.
+        let run = || self.semantic_query(file, node, Uncertainty::Explicit, |semantic, at| (query.call)(semantic, at, subject, mask));
         let answer = match self.ctx.profile {
             Some(profile) => profile.time_semantic_query(query.name, run),
             None => run(),
@@ -1113,8 +1115,8 @@ mod tests {
         let linter = linter("in paren fits marked");
         let path = Path::new("/root/unit-cache.t");
         reads::set_buffer(path, "(before)");
-        let first = linter.unit(path).unwrap();
-        let second = linter.unit(path).unwrap();
+        let first = linter.unit(path, None).unwrap();
+        let second = linter.unit(path, None).unwrap();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
         for _ in 0..2 {
             let (_, deps) = reads::track(|| with_world(&linter, |files| {
@@ -1135,6 +1137,47 @@ mod tests {
             let file = files.0.file(path).expect("unit reloads");
             assert_eq!(World::text(&files, file), Some("(after)"));
         });
+        reads::drop_buffer(path);
+    }
+
+    #[test]
+    fn quantified_trait_answers_survive_unrelated_unknown_alternatives_on_a_cold_ask() {
+        let linter = linter(r#"
+            in .t match incomplete /u/ {
+                fits good when node always mystery
+                fits mystery when node always mystery
+            }
+            in .t match complete /a/ { fits good }
+            in .t match known left:incomplete "|" right:complete {
+                unwraps left | right
+                rule proven { when node could good; warn "proven" }
+            }
+            in .t match unknown left:incomplete "&" right:incomplete {
+                unwraps left | right
+                rule unproven { when node could good; warn "unknown proven" }
+            }
+        "#);
+        let messages = |text| crate::engine::tests::lint(&linter, text).into_iter().map(|d| d.message).collect::<Vec<_>>();
+        assert_eq!(messages("u|a"), ["proven"], "a known good alternative decides `could` on the first ask");
+        assert!(messages("u&u").is_empty(), "only unknown alternatives prove nothing");
+    }
+
+    #[test]
+    fn a_run_reads_each_unit_once_and_replays_its_text_read() {
+        let linter = linter("in paren fits marked");
+        let path = Path::new("/root/run-unit.t");
+        reads::set_buffer(path, "(before)");
+        let run = super::super::program::Snapshot::default();
+        let first = linter.unit(path, Some(&run)).unwrap();
+        reads::set_buffer(path, "(after)");
+        let (again, deps) = reads::track(|| linter.unit(path, Some(&run)).unwrap());
+        assert!(std::sync::Arc::ptr_eq(&first, &again), "a run keeps the unit it validated");
+        assert!(deps.any(&mut |dep| matches!(dep, reads::Dep::Text(p, hash) if p == path && *hash == first.hash)));
+        assert!(deps.any(&mut |dep| !linter.holds(dep)), "the replayed read still detects the edit for caching");
+        let fresh = linter.unit(path, Some(&super::super::program::Snapshot::default())).unwrap();
+        assert_eq!(&*fresh.text, "(after)");
+        linter.invalidate(&[path.to_owned()]);
+        assert_eq!(&*linter.unit(path, Some(&run)).unwrap().text, "(after)", "invalidation ends the run's snapshot");
         reads::drop_buffer(path);
     }
 

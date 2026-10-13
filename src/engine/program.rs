@@ -193,9 +193,20 @@ impl Programs {
 pub(super) struct Snapshot {
     paths: Memo<(u64, Context), Arc<Vec<PathBuf>>>,
     catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
+    units: Mutex<FxHashMap<PathBuf, (u64, Arc<super::units::Unit>)>>,
 }
 
 impl Snapshot {
+    /// A unit this run already read and validated at `revision`.
+    pub(super) fn unit(&self, revision: u64, path: &std::path::Path) -> Option<Arc<super::units::Unit>> {
+        let units = self.units.lock().expect("run units");
+        units.get(path).filter(|(at, _)| *at == revision).map(|(_, unit)| unit.clone())
+    }
+
+    pub(super) fn keep_unit(&self, revision: u64, path: &std::path::Path, unit: &Arc<super::units::Unit>) {
+        self.units.lock().expect("run units").insert(path.to_owned(), (revision, unit.clone()));
+    }
+
     pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {
         self.paths.get((revision, context), None, |_| true, build)
     }
