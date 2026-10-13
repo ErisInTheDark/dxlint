@@ -4,6 +4,7 @@
 fn is_identifier(x) = re_test(x, /^[A-Za-z_$][\w$]*$/)
 
 fn unparenthesised_node(n) = { value n; walk (current) if current is ts_parenthesized then current.expression.node else null; last }
+fn outer_parenthesised_node(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
 
 # Function-wide warnings identify the callable, not its body.
 fn function_warning_site(n) = if n is ts_method then n.key.node
@@ -13,5 +14,12 @@ fn function_warning_site(n) = if n is ts_method then n.key.node
   else { start: n.first_token.start, end: n.first_token.end }
 
 define {
+  in ts_import {
+    let import_named_open {
+      value overlapping(ts_open_brace, first_token.end, from.offset)
+      find (token) token.paired_token.end <= from.offset
+    }
+    let import_named_close import_named_open.paired_token
+  }
   in ts_property_signature, ts_method_signature, ts_call_signature, ts_index_signature let member_terminal_token if contains([";", ","], token_neighbours.after.text) then token_neighbours.after else last_token
 }

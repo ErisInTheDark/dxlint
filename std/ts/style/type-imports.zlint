@@ -19,11 +19,6 @@ in ts_import_specifier {
 in ts_import {
   let import_uses compact([default_import.import_use, namespace.import_use] specifier.import_use)
   let type_only_names compact([default_import.type_only_name, namespace.type_only_name] specifier.type_only_name)
-  let import_named_open {
-    value overlapping(ts_open_brace, first_token.end, from.offset)
-    find (token) token.paired_token.end <= from.offset
-  }
-  let import_named_close import_named_open.paired_token
   let import_type_named kind == "type" && default_import == null && namespace == null && import_named_open != null
   let import_has_attributes { value overlapping(ts_import_attributes, offset, end_offset); count } > 0
 }

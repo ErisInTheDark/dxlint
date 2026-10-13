@@ -24,12 +24,6 @@ impl NativeFile<'_> {
         })
     }
 
-    pub fn own_returns(&self, func: u32) -> Vec<u32> {
-        let mut returns: Vec<_> = self.return_sites(func).filter(|&node| self.syntax.is(node, K::Return)).collect();
-        returns.sort_by_key(|&node| self.syntax.tree.node(node).start);
-        returns
-    }
-
     /// What calling `sig` returns, when it is this file's own unannotated
     /// function (`None` otherwise).
     pub(super) fn own_return(&self, sig: &Sig, file: super::modules::FileId) -> Option<Ty> {
@@ -94,7 +88,7 @@ impl NativeFile<'_> {
             if found.iter().any(Ty::is_unknown) {
                 return Ty::Unknown;
             }
-            if !found.is_empty() && self.reach().0.falls_off.get(&func).copied().unwrap_or(false) {
+            if !found.is_empty() && self.reach().falls_off.get(&func).copied().unwrap_or(false) {
                 found.push(Ty::Undefined);
             }
             if found.is_empty() {
@@ -112,26 +106,5 @@ impl NativeFile<'_> {
         } else {
             t
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::tests::with_native_file;
-    use crate::native::ts::kinds::{Field as F, Kind as K};
-
-    #[test]
-    fn own_returns_keep_source_order_and_scope_boundaries() {
-        with_native_file("function outer(x: boolean) { function nested() { return 1; } const arrow = () => { return 2; }; class C { method() { return 3; } static { } } if (x) return; return void nested(); } return 4;", |file, _| {
-            let program = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, K::Program)).unwrap();
-            let outer = (0..file.syntax.tree.nodes.len() as u32).find(|&node| file.syntax.is(node, K::Function) && file.syntax.get(node, F::Name).is_some_and(|name| file.syntax.text(name) == "outer")).unwrap();
-            let returns = file.own_returns(outer);
-            assert_eq!(returns.len(), 2);
-            assert!(file.syntax.get(returns[0], F::Arg).is_none());
-            assert!(file.syntax.get(returns[1], F::Arg).is_some());
-            let program_returns = file.own_returns(program);
-            assert_eq!(program_returns.len(), 1);
-            assert_eq!(file.syntax.get(program_returns[0], F::Arg).map(|argument| file.static_number(argument)), Some(Some(4.0)));
-        });
     }
 }

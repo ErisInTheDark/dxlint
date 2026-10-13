@@ -3,6 +3,46 @@ import .ts/expression-fixes
 
 define {
 
+fn return_await_leaves(n) = {
+  value unparenthesised_node(n)
+  walk (current) {
+    value branch: unparenthesised_node(current)
+    value if branch is ts_conditional then [branch.consequent.node, branch.alternate.node] else null
+  }
+  map (current) unparenthesised_node(current)
+  filter (current) current not ts_conditional
+}
+fn return_await_scope(n) = if n == null || n is (ts_block, ts_program, ts_function, ts_arrow, ts_method, ts_for, ts_for_in, ts_for_of, ts_switch)
+  then n else return_await_scope(n.parent.node)
+fn return_await_handling(n, owner, resources) = {
+  value ancestors: walk(n, current => if current == owner then null else current.parent.node)
+  value any(ancestors, child => child.parent is ts_try
+    && (child is ts_try.block || child is ts_try.handler && child.parent.finalizer != null))
+    || any(resources, resource => {
+      value scope: return_await_scope(resource)
+      value resource.end_offset < n.offset && contains(ancestors, scope)
+    })
+}
+fn return_await_certainty(n) = {
+  value parts: value_constituents(n)
+  value complete: parts != null && len(parts) > 0
+    && all(parts, arm => len(arm) > 0 && all(arm, part => !contains(part.uncertain_traits, "thenable")
+      && !contains(part.traits, "any") && !contains(part.traits, "unknown")))
+  value if complete && n could thenable then "always" else if n always nonthenable then "never" else "may"
+}
+fn return_await_result(n, owner, resources) = {
+  value awaited: n is ts_await
+  value argument: if awaited then n.argument.node else n
+  value {
+    expression: n,
+    offset: n.offset,
+    awaited: awaited,
+    certainty: return_await_certainty(argument),
+    handling: return_await_handling(n, owner, resources),
+  }
+}
+in ts_declarator let return_await_resource parent is ts_variable_declaration && re_test(parent.kind, /(?:^|\s)using$/)
+
 fn return_await_remove(source, n) = {
   value argument: n.argument.node
   value operand: unparenthesised_node(argument)
@@ -25,8 +65,22 @@ fn return_await_selected(result, mode) = result.certainty == "never" && result.a
 
 in ts_function, ts_arrow, ts_method rule return-await {
   option mode ("always" | "error-handling-correctness-only" | "in-try-catch" | "never") = "in-try-catch" "Await policy for returned promises"
+  when contains([] modifier, "async") && body != null
+  let owner node
+  let resources {
+    value body.node
+    value descendants(ts_declarator)
+    filter (declaration) declaration.return_await_resource == true
+  }
+  let expressions if body is ts_block then {
+    value flow_declared_effects(body.node, "returned")
+    filter (effect) effect.site is ts_return && effect.value != null
+    map (effect) effect.value
+  } else [body.node]
   let results {
-    value returned_awaitables
+    value expressions
+    flat_map (expression) return_await_leaves(expression)
+    map (expression) return_await_result(expression, owner, resources)
     filter (result) return_await_selected(result, mode)
     map (result) {
       data: result,
