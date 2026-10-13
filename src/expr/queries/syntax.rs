@@ -7,7 +7,15 @@ use super::QueryFunction;
 
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "syntax_tree", arity: 3, call: parse },
+    QueryFunction { name: "node_ordinal", arity: 1, call: ordinal },
 ];
+
+fn ordinal(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    match semantic.position(at) {
+        Known::Yes(position) => Known::Yes(position.map_or(Value::Null, Value::from)),
+        Known::Unknown => Known::Unknown,
+    }
+}
 
 fn parse(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let Target::Node(anchor) = at.target else { return Known::Unknown };
@@ -168,6 +176,22 @@ mod tests {
             root entry = emit(root, item:character+ end)
         }
     "#;
+
+    #[test]
+    fn node_ordinals_ignore_fields_named_index() {
+        let rules = r#"
+            import .ts
+            in ts_call.argument rule ordinal {
+                warn "{node_ordinal(node)}:{node.index.text}"
+            }
+            in ts_program rule missing {
+                when node_ordinal(node) != null || node_ordinal("not a node") != null
+                warn "not a child"
+            }
+        "#;
+        let diagnostics = linter(rules).lint(std::path::Path::new("/root/file.ts"), "f(a[x],b[y]);");
+        assert_eq!(diagnostics.iter().map(|diagnostic| diagnostic.message.as_str()).collect::<Vec<_>>(), ["0:x", "1:y"]);
+    }
 
     #[test]
     fn mapped_value_trees_drive_real_vm_fixes_at_the_written_escape() {

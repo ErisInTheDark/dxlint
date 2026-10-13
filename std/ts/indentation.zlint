@@ -175,7 +175,8 @@ in indent_lists let indent_list_open if is ts_import_attributes then open.node e
 in ts_variable_declaration let indent_first_item first(declaration.nodes)
 in ts_variable_declaration let indent_multiline_declaration { value last(declaration.nodes).offset; position }.js_line > position(offset).js_line
 in ts_node let indent_list_first if is (ts_call.argument, ts_new.argument, ts_import_call.argument, ts_function.parameter, ts_arrow.parameter, ts_method.parameter, ts_array.element, ts_array_pattern.element, ts_tuple_type.element, ts_object.property, ts_object_pattern.property, ts_import.specifier, ts_variable_declaration.declaration) then parent.indent_first_item else null
-in ts_node let indent_list_previous if indent_list_first != null && node.index > 0 && parent is indent_lists then { value parent.indent_items; slice (node.index - 1) node.index; first } else null
+in ts_node let indent_list_ordinal if indent_list_first != null then node_ordinal(node) else null
+in ts_node let indent_list_previous if indent_list_ordinal > 0 && parent is indent_lists then { value parent.indent_items; slice (indent_list_ordinal - 1) indent_list_ordinal; first } else null
 in ts_import_attribute let indent_list_first parent.indent_first_item
 in ts_import_attribute let indent_list_previous { value parent.indent_items; filter (item) item.offset < offset; last }
 in ts_import_attribute let indent_attribute_anchor { value node; walk (item) if indent_list_anchor(item) != item.offset then item.indent_list_previous else null; last }
