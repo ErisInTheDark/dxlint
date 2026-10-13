@@ -11,17 +11,13 @@
 //! Nested functions and classes are separate code paths: their bodies are
 //! not entered (class heritage, computed keys and decorators run in place).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
 
 pub trait Domain {
     type S: Clone + PartialEq;
-    /// Also enter a `finally` with the state from the try block's first
-    /// throwing node (eslint's path past the `catch`; no-useless-assignment
-    /// relies on it). The state then continues after the `try` statement.
-    const FINALLY_FROM_FIRST_THROW: bool = false;
     /// Where paths meet.
     fn join(&self, a: &Self::S, b: &Self::S) -> Self::S;
     /// After `node` (an expression, or a statement's own effect) ran, its
@@ -31,14 +27,6 @@ pub trait Domain {
     /// Before an expression's children run (`x += await y` reads `x`
     /// before the `await`, though `step` sees the target after the value).
     fn before_expr(&mut self, _s: &Syntax, _node: u32, _state: &mut Self::S) {}
-    /// After a loop's body: whether any path entered it (`while (false)`
-    /// never does), and the state going around again (the body's end and
-    /// its `continue`s, before any update or later test), `None` when
-    /// nothing comes back. Called each settling round: the last call is
-    /// final.
-    fn loop_back(&mut self, _s: &Syntax, _node: u32, _entered: bool, _state: Option<&Self::S>) {}
-    /// Before a statement (or `case`) runs; `None` when no path reaches it.
-    fn enter(&mut self, _s: &Syntax, _node: u32, _state: Option<&Self::S>) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,17 +49,9 @@ impl<S> Out<'_, S> {
     }
 }
 
-/// The ends of a body: falling off it, `return`s and `throw`s (each with
-/// its state).
-pub struct Ends<S> {
-    pub fall: Option<S>,
-    pub returns: Vec<S>,
-    pub throws: Vec<S>,
-}
-
 /// Runs `d` over a function's body (a block, an arrow's expression, or the
 /// program), from `start`.
-pub fn walk<D: Domain>(s: &Syntax, d: &mut D, body: u32, start: D::S) -> Ends<D::S> {
+pub fn walk<D: Domain>(s: &Syntax, d: &mut D, body: u32, start: D::S) -> Option<D::S> {
     let mut w = Walker { s, d, first_throw: Vec::new() };
     let out = if is_expression(s, body) {
         let st = w.expr(body, start);
@@ -81,16 +61,15 @@ pub fn walk<D: Domain>(s: &Syntax, d: &mut D, body: u32, start: D::S) -> Ends<D:
     } else {
         w.stmt(body, Some(start))
     };
-    let mut ends = Ends { fall: out.normal, returns: Vec::new(), throws: Vec::new() };
+    let mut fall = out.normal;
     for (j, st) in out.jumps {
         match j {
-            Jump::Return => ends.returns.push(st),
-            Jump::Throw => ends.throws.push(st),
+            Jump::Return | Jump::Throw => {}
             // Stray `break`/`continue` (a syntax error) end the body.
-            _ => ends.fall = join_opt(&*w.d, ends.fall.take(), Some(st)),
+            _ => fall = join_opt(&*w.d, fall.take(), Some(st)),
         }
     }
-    ends
+    fall
 }
 
 fn join_opt<D: Domain + ?Sized>(d: &D, a: Option<D::S>, b: Option<D::S>) -> Option<D::S> {
@@ -184,7 +163,6 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
 
     fn stmt(&mut self, node: u32, st: Option<D::S>) -> Out<'t, D::S> {
         let s = self.s;
-        self.d.enter(s, node, st.as_ref());
         let Some(kind) = s.kind(node) else { return Out::normal(st) };
         let out = match kind {
             K::Block => self.list(s.all(node, F::Body).collect(), st),
@@ -350,7 +328,6 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
                 // for-in/of: may run zero times.
                 exits = self.join(exits, head.clone());
             }
-            let entered = entry.is_some();
             let out = match body {
                 Some(b) => self.stmt(b, entry.take()),
                 None => Out::normal(entry.take()),
@@ -365,7 +342,6 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
                     jumps_out.push((j, x));
                 }
             }
-            self.d.loop_back(s, node, entered, next.as_ref());
             next = self.opt_expr(update, next);
             if body_first {
                 next = self.opt_expr(test, next);
@@ -402,7 +378,6 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
                     self.join(test_state.clone(), fall.take())
                 }
             };
-            self.d.enter(s, c, entry.as_ref());
             let out = self.list(s.all(c, F::Body).collect(), entry);
             fall = out.normal;
             jumps.extend(out.jumps);
@@ -429,7 +404,6 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
         // As eslint models it: the first thing in the block that can throw
         // may have thrown (with the state from before it).
         let first = if tracked { self.first_throw.pop().flatten().flatten() } else { None };
-        let past_catch = if D::FINALLY_FROM_FIRST_THROW && handler.is_some() { first.clone() } else { None };
         if handler.is_none() {
             if let Some(x) = first.clone() {
                 jumps.push((Jump::Throw, x));
@@ -456,7 +430,6 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
             jumps.extend(out.jumps);
         }
         let Some(fin) = s.get(node, F::Finalizer) else { return Out { normal, jumps } };
-        let normal = if past_catch.is_some() { self.join(normal, past_catch) } else { normal };
         // The finally block runs on every way out, and continues each only
         // if it completes itself. The jumps' paths and the normal one are
         // kept apart (walked separately), as eslint keeps their segments.
@@ -616,35 +589,18 @@ impl<'t, D: Domain> Walker<'_, '_, 't, D> {
 
 // ---- reachability ----------------------------------------------------------------
 
-/// What a whole file's code paths say about reachability.
 #[derive(Default)]
 pub struct Reach {
-    /// Statements no path reaches.
-    pub unreachable: HashSet<u32>,
     /// Function-like node (or the program) -> its end is reachable (it can
     /// finish without `return` / `throw`).
     pub falls_off: HashMap<u32, bool>,
-    /// `case` clauses whose statements' end is reachable.
-    pub case_falls: HashSet<u32>,
 }
 
-/// Statements entered, and those some walk reached (`finally` blocks are
-/// walked once per way in).
-#[derive(Default)]
-struct ReachDomain {
-    entered: HashSet<u32>,
-    reached: HashSet<u32>,
-}
+struct ReachDomain;
 
 impl Domain for ReachDomain {
     type S = ();
     fn join(&self, _: &(), _: &()) {}
-    fn enter(&mut self, _s: &Syntax, node: u32, state: Option<&()>) {
-        self.entered.insert(node);
-        if state.is_some() {
-            self.reached.insert(node);
-        }
-    }
 }
 
 /// Code bodies of a file: the program and every function, method, arrow,
@@ -676,268 +632,9 @@ pub fn bodies(s: &Syntax) -> Vec<(u32, u32)> {
 
 pub fn reach(s: &Syntax) -> Reach {
     let mut reach = Reach::default();
-    let mut d = ReachDomain::default();
+    let mut d = ReachDomain;
     for (owner, body) in bodies(s) {
-        let ends = walk(s, &mut d, body, ());
-        reach.falls_off.insert(owner, ends.fall.is_some());
-    }
-    reach.unreachable = d.entered.difference(&d.reached).copied().collect();
-    // `case` clauses: what reaches the end of their statements.
-    for id in 0..s.tree.nodes.len() as u32 {
-        if s.is(id, K::Case) && !reach.unreachable.contains(&id) && case_end_reachable(s, id, &reach) {
-            reach.case_falls.insert(id);
-        }
+        reach.falls_off.insert(owner, walk(s, &mut d, body, ()).is_some());
     }
     reach
-}
-
-// ---- super() in constructors ---------------------------------------------------
-
-/// Whether `super()` was called: on every path so far (`must`), on some
-/// (`may`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Called {
-    must: bool,
-    may: bool,
-}
-
-#[derive(Default)]
-pub struct Supers {
-    /// Constructor -> `all`, `some` or `none` of the ways out (falling off
-    /// the end, `return`) called `super()`.
-    pub calls: HashMap<u32, &'static str>,
-    /// `this` / `super.x` reached on some path before `super()`.
-    pub before_super: HashSet<u32>,
-    /// `super()` calls some path already made.
-    pub duplicate: HashSet<u32>,
-    /// `super()` calls (reachable, not duplicates) where the class extends
-    /// something that cannot be a constructor (`null`, `5`).
-    pub bad: HashSet<u32>,
-}
-
-struct SuperDomain<'r> {
-    out: &'r mut Supers,
-    /// The class extends something that may be a constructor.
-    constructor_heritage: bool,
-}
-
-impl Domain for SuperDomain<'_> {
-    type S = Called;
-    fn join(&self, a: &Called, b: &Called) -> Called {
-        Called { must: a.must && b.must, may: a.may || b.may }
-    }
-    fn step(&mut self, s: &Syntax, node: u32, st: &mut Called) {
-        match s.kind(node) {
-            // Findings only accumulate: any path (loop rounds only make
-            // states less certain, and `finally` blocks are walked once per
-            // way in) that sees a problem has it. A duplicate is not also a
-            // bad call (see `code_path`).
-            Some(K::Call) if s.get(node, F::Callee).is_some_and(|c| s.is(c, K::Super)) => {
-                if st.may {
-                    self.out.duplicate.insert(node);
-                } else if !self.constructor_heritage {
-                    self.out.bad.insert(node);
-                }
-                *st = Called { must: true, may: true };
-            }
-            // Returning a value stands in for `super()`.
-            Some(K::Return) if s.get(node, F::Arg).is_some() => *st = Called { must: true, may: true },
-            Some(K::This) if !st.must => {
-                self.out.before_super.insert(node);
-            }
-            Some(K::Member | K::Index) if !st.must && s.get(node, F::Object).is_some_and(|o| s.is(o, K::Super)) => {
-                self.out.before_super.insert(node);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// `super()` along the code paths of every constructor of a class with an
-/// `extends`. Arrow functions inside are separate paths (eslint's view).
-pub fn supers(s: &Syntax) -> Supers {
-    let mut out = Supers::default();
-    for id in 0..s.tree.nodes.len() as u32 {
-        if !s.is(id, K::Method) || s.get(id, F::Key).is_none_or(|k| s.text(k) != "constructor") {
-            continue;
-        }
-        let Some(heritage) = s.parent(id).filter(|&c| s.is(c, K::Class)).and_then(|c| s.get(c, F::Extends)) else { continue };
-        let Some(body) = s.get(id, F::Body) else { continue };
-        let mut d = SuperDomain { out: &mut out, constructor_heritage: possible_constructor(s, heritage) };
-        let ends = walk(s, &mut d, body, Called { must: false, may: false });
-        let exits: Vec<Called> = ends.fall.into_iter().chain(ends.returns).collect();
-        // Paths that throw need no call.
-        let all = exits.iter().all(|c| c.must);
-        let any = exits.iter().any(|c| c.may);
-        out.calls.insert(id, if all { "all" } else if any { "some" } else { "none" });
-    }
-    out
-}
-
-/// What a class extends can be a constructor (eslint's
-/// `isPossibleConstructor`): not `null`, a literal or arithmetic.
-fn possible_constructor(s: &Syntax, node: u32) -> bool {
-    match s.kind(node) {
-        Some(K::Class | K::Function | K::This | K::Member | K::Index | K::Call | K::New | K::Yield | K::TaggedTemplate | K::MetaProperty) => true,
-        Some(K::Ident) => s.text(node) != "undefined",
-        Some(K::Paren | K::NonNull | K::As | K::Satisfies) => s.get(node, F::Expr).is_some_and(|e| possible_constructor(s, e)),
-        Some(K::Assign) => match s.word(node, F::Op) {
-            Some("=" | "&&=") => s.get(node, F::Right).is_some_and(|r| possible_constructor(s, r)),
-            Some("||=" | "??=") => [F::Left, F::Right].iter().any(|&f| s.get(node, f).is_some_and(|x| possible_constructor(s, x))),
-            _ => false,
-        },
-        Some(K::Logical) => match s.word(node, F::Op) {
-            Some("&&") => s.get(node, F::Right).is_some_and(|r| possible_constructor(s, r)),
-            _ => [F::Left, F::Right].iter().any(|&f| s.get(node, f).is_some_and(|x| possible_constructor(s, x))),
-        },
-        Some(K::Conditional) => [F::Consequent, F::Alternate].iter().any(|&f| s.get(node, f).is_some_and(|x| possible_constructor(s, x))),
-        Some(K::Sequence) => s.all(node, F::Expr).last().is_some_and(|x| possible_constructor(s, x)),
-        _ => false,
-    }
-}
-
-/// The statements eslint's no-unreachable looks at.
-fn reported_statement(s: &Syntax, node: u32) -> bool {
-    match s.kind(node) {
-        Some(
-            K::Block | K::Break | K::Class | K::Continue | K::Debugger | K::DoWhile | K::ExprStmt | K::ForIn | K::ForOf | K::For | K::If | K::Labeled
-            | K::Return | K::Switch | K::Throw | K::Try | K::While | K::With | K::Export,
-        ) => true,
-        // `var x;` is hoisted: nothing runs.
-        Some(K::Var) => s.word(node, F::Kind) != Some("var") || s.all(node, F::Decl).any(|d| s.get(d, F::Init).is_some()),
-        _ => false,
-    }
-}
-
-/// eslint's no-unreachable reports: each run of consecutive unreachable
-/// statements once, at its first statement (-> the end of the run). Also
-/// instance fields of a derived class whose constructor never calls
-/// `super()`.
-pub fn unreachable_runs(s: &Syntax, reach: &Reach, comments: &[super::comments::Comment]) -> HashMap<u32, u32> {
-    let mut never_built: HashSet<u32> = HashSet::new();
-    for id in 0..s.tree.nodes.len() as u32 {
-        if !s.is(id, K::Class) || s.get(id, F::Extends).is_none() {
-            continue;
-        }
-        let ctor = s.all(id, F::Member).find(|&m| s.is(m, K::Method) && s.get(m, F::Key).is_some_and(|k| s.text(k) == "constructor"));
-        let Some(body) = ctor.and_then(|c| s.get(c, F::Body)) else { continue };
-        if !calls_super_anywhere(s, body) {
-            for m in s.all(id, F::Member) {
-                if s.is(m, K::ClassProp) && !s.has_word(m, F::Modifier, "static") {
-                    never_built.insert(m);
-                }
-            }
-        }
-    }
-    let src = s.src.as_bytes();
-    // The token before `at`: past whitespace and comments.
-    let token_before = |at: usize| -> Option<usize> {
-        let mut i = at;
-        loop {
-            while i > 0 && src[i - 1].is_ascii_whitespace() {
-                i -= 1;
-            }
-            if i == 0 {
-                return None;
-            }
-            match comments.iter().find(|c| c.end as usize == i) {
-                Some(c) => i = c.start as usize,
-                None => return Some(i - 1),
-            }
-        }
-    };
-    let mut out = HashMap::new();
-    let mut range: Option<(u32, usize, usize)> = None;
-    // In document order: outer statements before what they contain.
-    let mut order: Vec<u32> = (0..s.tree.nodes.len() as u32).filter(|&id| reported_statement(s, id) || never_built.contains(&id)).collect();
-    order.sort_by_key(|&id| (s.tree.node(id).start, std::cmp::Reverse(s.tree.node(id).end)));
-    for id in order {
-        let candidate = (reported_statement(s, id) && reach.unreachable.contains(&id)) || never_built.contains(&id);
-        let n = s.tree.node(id);
-        let (start, end) = (n.start as usize, n.end as usize);
-        if candidate {
-            match range {
-                None => {
-                    range = Some((id, start, end));
-                    continue;
-                }
-                Some((_, rs, re)) if start >= rs && end <= re => continue,
-                Some((first, rs, re)) if token_before(start).is_some_and(|t| t >= rs && t < re) => {
-                    range = Some((first, rs, end.max(re)));
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        if let Some((first, _, re)) = range.take() {
-            out.insert(first, re as u32);
-        }
-        if candidate {
-            range = Some((id, start, end));
-        }
-    }
-    if let Some((first, _, re)) = range {
-        out.insert(first, re as u32);
-    }
-    out
-}
-
-/// A `super(...)` call anywhere in `node`, except in nested constructors.
-fn calls_super_anywhere(s: &Syntax, node: u32) -> bool {
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if s.is(n, K::Method) && n != node && s.get(n, F::Key).is_some_and(|k| s.text(k) == "constructor") {
-            continue;
-        }
-        if s.is(n, K::Call) && s.get(n, F::Callee).is_some_and(|c| s.is(c, K::Super)) {
-            return true;
-        }
-        stack.extend(s.kids(n).map(|(_, c)| c));
-    }
-    false
-}
-
-/// The end of a case's statements is reachable: re-walked from the case on
-/// its own (its entry is reachable).
-fn case_end_reachable(s: &Syntax, case: u32, _reach: &Reach) -> bool {
-    struct Quiet;
-    impl Domain for Quiet {
-        type S = ();
-        fn join(&self, _: &(), _: &()) {}
-    }
-    let mut d = Quiet;
-    let mut w = Walker { s, d: &mut d, first_throw: Vec::new() };
-    let out = w.list(s.all(case, F::Body).collect(), Some(()));
-    // A `break` out of the switch is not falling through; other jumps
-    // leave too.
-    out.normal.is_some()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use super::*;
-
-    /// Whether each loop's body is entered, and comes back around.
-    struct Back(HashMap<u32, (bool, bool)>);
-
-    impl Domain for Back {
-        type S = ();
-        fn join(&self, _: &(), _: &()) {}
-        fn loop_back(&mut self, _: &Syntax, node: u32, entered: bool, state: Option<&()>) {
-            self.0.insert(node, (entered, state.is_some()));
-        }
-    }
-
-    #[test]
-    fn loop_back_sees_entry_the_body_end_and_continues() {
-        let text = "/*@*/for (;;) { break; } /*@*/while (x) { if (y) continue; break; } /*@*/for (const a of b) { throw a; } /*@*/do { f(); } while (x); /*@*/while (false) { f(); }";
-        crate::engine::tests::with_native_file(text, |file, marks| {
-            let mut back = Back(HashMap::new());
-            walk(&file.syntax, &mut back, file.syntax.root(), ());
-            let got: Vec<(bool, bool)> = marks.iter().map(|m| back.0[m]).collect();
-            assert_eq!(got, [(true, false), (true, true), (true, false), (true, true), (false, false)]);
-        })
-    }
 }
