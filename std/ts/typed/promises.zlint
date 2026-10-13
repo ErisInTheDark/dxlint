@@ -26,14 +26,13 @@ in ts_node rule no-misused-promises:conditionals {
   when not (ts_parenthesized, ts_logical, ts_conditional)
   when !(is ts_unary && node.operator == "!")
   when promise_boolean_use(node)
-  let awaitability type_awaitability
-  when awaitability.all || awaitability.any && (flagUnions == "all" || flagUnions == "strict" && awaitability.union_equivalent == true)
+  when node could thenable && (node always thenable || flagUnions == "all" || flagUnions == "strict" && type_awaitability.union_equivalent == true)
   warn "Expected non-Promise value in a boolean conditional."
 }
 
 in ts_spread rule no-misused-promises:spreads {
   when parent is ts_object
-  when argument.type_awaitability.any
+  when argument could thenable
   report at argument.node
   warn "Expected a non-Promise value to be spread in an object."
 }

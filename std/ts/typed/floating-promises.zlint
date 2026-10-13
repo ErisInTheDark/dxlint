@@ -15,7 +15,7 @@ fn floating_promise_subject_checked(n, ignore_iife) = {
   && !(ignore_iife && n.parent.node is ts_expression_statement
     && expression is ts_call && callee is (ts_function, ts_arrow))
 }
-fn floating_rejection_handler(n) = {
+fn floating_rejection_handler(n, check_thenables) = {
   value callee: unparenthesised_node(n.callee.node)
   value position: if callee.static_name == "catch" then 0
     else if callee.static_name == "then" then 1 else -1
@@ -24,13 +24,25 @@ fn floating_rejection_handler(n) = {
   value checked_count: position + 1
   value preceding: slice(n.argument.nodes, 0, checked_count)
   value handler != null && !any(preceding, argument => argument is ts_spread)
-    && handler.floating_promise_type.callable
+    && (if check_thenables then handler could callable && handler always callable
+      else handler.floating_promise_type.callable)
 }
+fn floating_promise_nonnull(n) = {
+  value arms: value_constituents(n)
+  value arms != null && len(arms) > 0
+    && all(arms, arm => any(arm, part => any(part.traits, trait =>
+      contains(["boolean", "number", "string", "bigint", "symbol", "object", "truthy"], trait))))
+}
+fn floating_promise_logical_leaves(n) =
+  if n.operator == "&&" && n.left.node could falsy && n.left.node always falsy
+    || n.operator == "||" && n.left.node could truthy && n.left.node always truthy
+    || n.operator == "??" && floating_promise_nonnull(n.left.node) then [n.left.node]
+  else [n.left.node, n.right.node]
 fn floating_promise_leaves(n, ignore_void) = {
   value unparenthesised_node(n)
   walk (current) if current is ts_parenthesized then current.expression.node
     else if current is ts_sequence then current.expression.nodes
-    else if current is ts_logical then [current.left.node, current.right.node]
+    else if current is ts_logical then floating_promise_logical_leaves(current)
     else if current is ts_conditional then [current.consequent.node, current.alternate.node]
     else if !ignore_void && current is ts_unary && current.operator == "void" then current.argument.node
     else if current is ts_call && current.callee.node.static_name == "finally" then current.callee.node.object.node else null
@@ -44,8 +56,10 @@ fn floating_promise_failure(n, check_thenables, ignore_void) = {
       value part_type: if check_thenables then part.floating_thenable_type else part.floating_promise_type
       value allowed: part.floating_promise_allowed_types
       value if floating_promise_array(part_type, check_thenables, allowed) then "array"
-        else if part not ts_await && floating_promise_element(part_type, check_thenables, allowed)
-          && !(part is ts_call && floating_rejection_handler(part)) then "promise" else null
+        else if part not ts_await
+          && (if check_thenables then !contains(allowed, part_type) && part could thenable
+            else floating_promise_element(part_type, false, allowed))
+          && !(part is ts_call && floating_rejection_handler(part, check_thenables)) then "promise" else null
     }
   filter (failure) failure != null
   first
