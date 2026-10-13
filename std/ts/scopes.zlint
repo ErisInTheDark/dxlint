@@ -1,5 +1,4 @@
-# .ts/scopes: rules on names and their uses (bindings), on the native
-# TypeScript layers.
+# .ts/scopes: rules on names and their uses.
 
 define {
 
@@ -20,7 +19,7 @@ fn unused_binding_names(context) = if context == "array" then "elements of array
   when u != null && no_unused_vars_checked && unused_binding_context == context
   let policy if type_of(no_unused_vars_ignored) == "null" then ignorePattern else no_unused_vars_ignored
   let pattern if type_of(policy) == "str" then policy else ""
-  let ignored if type_of(policy) == "bool" then policy else pattern != "" && re_test(text, pattern)
+  let ignored ts_usage_ignored(node, pattern)
   let used_ignored ignored && reportUsedIgnorePattern && u.used
   when used_ignored || !ignored && !u.used && !u.exported && !u.silent && !(after_used && u.before_used_param)
   let names unused_binding_names(context)
@@ -29,20 +28,23 @@ fn unused_binding_names(context) = if context == "array" then "elements of array
     else "'{text}' is {u.action} but {if u.only_type then 'only used as a type' else 'never used'}{if pattern != '' then '. Allowed unused ' names ' must match /' pattern '/u' else ''}."
 }
 
-in ts_program.binding_declarations rule no-unused-vars:variables {
+in ts_identifier rule no-unused-vars:variables {
   @unused_binding_options
+  option enableAutofixRemoval { imports?: boolean } = {} "remove unused import bindings"
   @unused_binding_checks("variable", false)
+  let removal if enableAutofixRemoval.imports == true && !used_ignored then ts_usage_import_removal(node, pattern) else null
+  fix at removal if removal != null as ""
 }
-in ts_program.binding_declarations rule no-unused-vars:parameters {
+in ts_identifier rule no-unused-vars:parameters {
   @unused_binding_options
   default option mode enum(all, after-used) = after-used "which unused parameters to check"
   @unused_binding_checks("parameter", mode == "after-used")
 }
-in ts_program.binding_declarations rule no-unused-vars:caught-errors {
+in ts_identifier rule no-unused-vars:caught-errors {
   @unused_binding_options
   @unused_binding_checks("catch", false)
 }
-in ts_program.binding_declarations rule no-unused-vars:array-elements {
+in ts_identifier rule no-unused-vars:array-elements {
   @unused_binding_options
   @unused_binding_checks("array", false)
 }

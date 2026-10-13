@@ -1,0 +1,338 @@
+import .ts/scoping/bindings
+import .ts/names
+import .ts/globals
+import .ts/helpers
+
+define {
+
+group ts_usage_jsx ts_jsx_element, ts_jsx_fragment
+group ts_usage_iteration ts_for_in, ts_for_of
+in ts_program let ts_usage_jsx_present count(descendants(ts_usage_jsx)) > 0
+in ts_program let ts_usage_return_bindings {
+  value descendants(ts_usage_iteration)
+  filter (loop) {
+    value body: loop.body.node
+    value statements: if body is ts_block then body.body.nodes else [body]
+    value count(statements) == 1 && first(statements) is ts_return
+  }
+  map (loop) {
+    value left: unparenthesised_node(loop.left.node)
+    value declarator: { value left.children.nodes; filter (child) child is ts_declarator; first }
+    value target: if left is ts_variable_declaration then declarator.name.node else left
+    value if target is ts_identifier then name_binding(target).node else null
+  }
+  filter (binding) binding != null
+  unique
+}
+fn ts_usage_parent(n) = outer_parenthesised_node(n).parent.node
+fn ts_usage_pattern_parent(n) = if n.parent is (ts_array_pattern, ts_object_pattern, ts_pattern_property, ts_assignment_pattern, ts_rest)
+  then n.parent.node else null
+fn ts_usage_site(n) = {
+  value pattern: { value n; walk (current) ts_usage_pattern_parent(current); last }
+  value parent: pattern.parent.node
+  value if parent is ts_declarator then parent.parent.node else parent
+}
+fn ts_usage_function(n) = {
+  value parameter: {
+    value walk(n.parent.node, current => current.parent.node)
+    filter (current) current is ts_parameter
+    first
+  }
+  value parameter.parent.node
+}
+fn ts_usage_variable_scope_next(n) =
+  if n.parent is (ts_function, ts_class) && n is (ts_function.name, ts_class.name) then n.parent.node
+  else if n.parent is (ts_function, ts_arrow, ts_method, ts_static_block, ts_program) || n is ts_class_property.init then null
+  else n.parent.node
+fn ts_usage_variable_scope(n) = {
+  value { value n; walk (current) ts_usage_variable_scope_next(current); last }.parent.node
+}
+fn ts_usage_in_loop(n) = {
+  value n.parent.node
+  walk (current) if current is (ts_function, ts_arrow, ts_method) then null else current.parent.node
+  any (current) current is ts_loop
+}
+fn ts_usage_unused_expression(n) = {
+  value parent: ts_usage_parent(n)
+  value parent is ts_expression_statement || parent is ts_sequence
+    && (unparenthesised_node(last(parent.expression.nodes)) != n || ts_usage_unused_expression(parent))
+}
+fn ts_usage_statement(n) = if n is (ts_function, ts_class) then ts_declared_statement(n)
+  else n is ts_statement
+fn ts_usage_storable_path(n, rhs) = {
+  value parent: ts_usage_parent(n)
+  value if !scoping_within(parent, rhs) then false
+    else if parent is ts_sequence && unparenthesised_node(last(parent.expression.nodes)) != n then false
+    else if parent is (ts_call, ts_new) then unparenthesised_node(parent.callee.node) != n
+    else if parent is (ts_assignment, ts_tagged_template, ts_yield) || ts_usage_statement(parent) then true
+    else ts_usage_storable_path(parent, rhs)
+}
+fn ts_usage_storable_function(n, rhs) = {
+  value function: {
+    value walk(n.parent.node, current => current.parent.node)
+    filter (current) current is (ts_function, ts_arrow, ts_method)
+    first
+  }
+  value scoping_within(function, rhs) && ts_usage_storable_path(function, rhs)
+}
+fn ts_usage_rhs(n, scope, previous) = {
+  value parent: ts_usage_parent(n)
+  value if scoping_within(n, previous) then previous
+    else if parent is ts_assignment && unparenthesised_node(parent.left.node) == n
+      && ts_usage_unused_expression(parent) && ts_usage_variable_scope(n) == scope && !ts_usage_in_loop(n)
+    then parent.right.node else null
+}
+fn ts_usage_self_read(n, rhs) = {
+  value parent: ts_usage_parent(n)
+  value update: parent is ts_assignment && unparenthesised_node(parent.left.node) == n
+      && !contains(["&&=", "||=", "??="], parent.operator) || parent is ts_update
+  value update && ts_usage_unused_expression(parent)
+    || scoping_within(n, rhs) && !ts_usage_storable_function(n, rhs)
+}
+fn ts_usage_type_query(n) = if n.parent is ts_type_query then true
+  else n.parent is (ts_qualified_name, ts_member) && ts_usage_type_query(n.parent.node)
+fn ts_usage_type_import(n) = n.parent is ts_import_specifier && n.parent.kind == "type"
+  || n.parent is (ts_import_specifier, ts_import)
+    && (if n.parent is ts_import_specifier then n.parent.parent.kind else n.parent.kind) == "type"
+fn ts_usage_type_only(n, variable) = n.access == "type"
+  && (variable || n.parent is ts_type_predicate || ts_usage_type_query(n))
+fn ts_usage_initialized(n) = {
+  value n.scoping_definition_owners
+  any (current) current is ts_assignment_pattern.left
+    || current is ts_pattern_property.key && current.parent.value is ts_assignment_pattern
+    || current is ts_declarator.name && (current.parent.init != null
+      || current.parent.parent is (ts_for_in.left, ts_for_of.left))
+    || current is ts_parameter.name && current.parent.init != null
+}
+fn ts_usage_for_return(n) = {
+  value parent: ts_usage_parent(n)
+  value loop: if parent is ts_declarator then parent.parent.parent.node else parent
+  value body: loop.body.node
+  value statement: if body is ts_block then first(body.body.nodes) else body
+  value loop is (ts_for_in, ts_for_of) && statement is ts_return
+}
+fn ts_usage_own_nodes(sites, typed) = {
+  value sites
+  flat_map (site) {
+    value parent: site.parent.node
+    value init: unparenthesised_node(parent.init.node)
+    value if site is ts_function.name then [parent]
+      else if site is ts_declarator.name && init is (ts_function, ts_arrow) then [init]
+      else if typed && parent is (ts_interface, ts_type_alias, ts_namespace, ts_enum) then [parent]
+      else []
+  }
+}
+fn ts_usage_exports_override(body) = any([] body.body.nodes, statement => statement is ts_export_assignment
+  || statement is ts_export && (if statement.kind == "default"
+    then unparenthesised_node(statement.expression.node) is ts_identifier else statement.declaration == null))
+fn ts_usage_ambient(n, declaration_file) = {
+  value site: ts_usage_site(n)
+  value outer: if site.parent is ts_export then site.parent.node else site
+  value container: outer.parent.node
+  value namespace: container.parent.node
+  value if site not (ts_interface, ts_type_alias, ts_class, ts_function, ts_enum, ts_namespace, ts_variable_declaration)
+      || ts_usage_exports_override(container) then false
+    else if container is ts_program then declaration_file
+    else namespace is ts_namespace && (declaration_file || {
+      value walk(namespace, current => current.parent.node)
+      any (current) current is ts_namespace && contains([] current.modifier, "declare")
+    })
+}
+fn ts_usage_marked(n, typed, declaration_file) = typed && {
+  value site: ts_usage_site(n)
+  value function: ts_usage_function(n)
+  value signature: function is (ts_function_type, ts_call_signature, ts_method_signature)
+    || function is (ts_function, ts_method) && function.body == null
+  value site is ts_parameter && (signature || count(site.modifier.nodes) > 0 || function.kind == "set")
+    || site is ts_type_parameter && site.parent is ts_mapped_type
+    || site is ts_namespace && n.text == "global"
+    || ts_usage_ambient(n, declaration_file)
+    || contains(n.scoping_program.ts_usage_return_bindings, n.ts_usage_binding.node)
+}
+fn ts_usage_before_parameter(n, typed, declaration_file) = {
+  value parameter: n.parent.node
+  value function: parameter.parent.node
+  value if n not ts_parameter.name || parameter.init != null || count(parameter.modifier.nodes) > 0
+      || function not (ts_function, ts_arrow, ts_method) then false else {
+    value names: {
+      value [] function.parameter.nodes
+      flat_map (parameter) {
+        value name: parameter.name.node
+        value if name is ts_identifier then [name] else {
+          value [name]
+          walk (current) current.children.nodes
+          filter (identifier) identifier is ts_identifier
+            && name_role_classes(identifier, "declaration") != null && ts_usage_site(identifier) == parameter
+          sort_by (identifier) identifier.offset
+        }
+      }
+    }
+    value index: index_of(names, n)
+    value if index < 0 then false else {
+      value names
+      slice (index + 1)
+      any (later) {
+        value binding: name_binding(later)
+        value binding != null && (count(binding.references) > 0
+          || any(binding.declarations, site => ts_usage_initialized(site) || ts_usage_marked(site, typed, declaration_file)))
+      }
+    }
+  }
+}
+fn ts_usage_rest_sibling(n) = {
+  value parent: n.parent.node
+  value if parent not (ts_pattern_property, ts_property)
+      || n == parent.key.node && parent.value is ts_assignment_pattern then false
+    else if parent is ts_pattern_property then parent.parent.rest != null
+    else parent.parent is ts_object && last(parent.parent.property.nodes) is ts_spread
+}
+fn ts_usage_global(binding, program) = ts_source_type(program) == "script"
+  && binding.scope.id == last(program.scoping_lexical_scopes).id
+fn ts_usage_used(binding, sites, references, typed, variable, value_binding, declaration_file) = {
+  value declaration: first(sites)
+  value program: declaration.scoping_program
+  value root: last(program.scoping_lexical_scopes)
+  value global: ts_usage_global(binding, program)
+  value exported_comment: global && contains(ts_exported_names(program), declaration.text)
+  value jsx: typed && declaration.text == "React" && binding.scope.id == root.id && program.ts_usage_jsx_present
+  value exported: typed && any(sites, site => {
+    value owner: ts_usage_site(site)
+    value !(value_binding && owner is (ts_interface, ts_type_alias)) && owner.parent is ts_export
+  })
+  value marked: any(sites, site => ts_usage_marked(site, typed, declaration_file))
+  value own: ts_usage_own_nodes(sites, typed)
+  value scope: ts_usage_variable_scope(declaration)
+  value imported_type: all(sites, site => ts_usage_type_import(site))
+  value state: {
+    value references
+    fold ({ used: false, rhs: null }) (state, reference)
+      if state.used then state else {
+        value n: reference.node
+        value self_read: reference.read && ts_usage_self_read(n, state.rhs)
+        value rhs: ts_usage_rhs(n, scope, state.rhs)
+        value type_only: typed && !imported_type && ts_usage_type_only(n, variable)
+        value used: !typed && ts_usage_for_return(n) || reference.read && !self_read && !type_only
+          && !any(own, owner => scoping_within(n, owner))
+        value { used: used, rhs: rhs }
+      }
+  }
+  value marked || jsx || exported_comment || exported || state.used
+}
+in ts_identifier let ts_usage_binding name_binding(node)
+in ts_program let ts_usage_typed
+  any([".ts", ".tsx", ".mts", ".cts"], extension => ends_with(file, extension))
+in ts_program let ts_usage_declaration_file ts_usage_typed && contains(last(split(file, "/")), ".d.")
+in ts_node let ts_usage_typed scoping_program.ts_usage_typed
+in ts_node let ts_usage_declaration_file scoping_program.ts_usage_declaration_file
+fn ts_usage_reference(n) = {
+  node: n,
+  read: contains(["read", "read_write", "type"], n.access),
+  write: contains(["write", "read_write"], n.access)
+}
+fn ts_usage_context(n) = {
+  value binding: n.ts_usage_binding
+  value sites: binding.declarations
+  value site: ts_usage_site(n)
+  value expression_name: n is (ts_function.name, ts_class.name) && !ts_declared_statement(n.parent.node)
+  value if !n.scoping_lexical_declaration || binding == null || binding.node != n || expression_name || n.parent is ts_qualified_name then null else {
+    value typed: n.ts_usage_typed
+    value declaration_file: n.ts_usage_declaration_file
+    value real: map(binding.references, reference => ts_usage_reference(reference))
+    value initial: {
+      value sites
+      filter (site) ts_usage_initialized(site)
+      map (site) { node: site, read: false, write: true }
+    }
+    value references: { value real initial; sort_by (reference) reference.node.offset }
+    value classes: { value sites; filter (site) site is ts_class.name; map (site) site.parent.node }
+    value own: filter(references, reference => !any(classes, owner => scoping_within(reference.node, owner)))
+    value variable: any(sites, site => ts_usage_site(site) is ts_variable_declaration)
+    value value_binding: any(sites, site => ts_usage_site(site) not (ts_interface, ts_type_alias))
+    value only_type: typed && any(own, reference => ts_usage_type_only(reference.node, variable))
+    value used: ts_usage_used(binding, sites, own, typed, variable, value_binding, declaration_file)
+    value scope: ts_usage_variable_scope(n)
+    value write: find_last(own, reference => reference.write && ts_usage_variable_scope(reference.node) == scope)
+    value offset: write.node.offset ?? n.offset
+    value def: if site is ts_parameter then "parameter" else if site is ts_try then "catch" else "variable"
+    value {
+      used: used,
+      exported: !typed && any(sites, site => ts_usage_site(site).parent is ts_export),
+      silent: only_type && site is (ts_import, ts_import_specifier, ts_import_equals),
+      def: def,
+      array_element: n.parent is ts_array_pattern,
+      array_target: any(own, reference => reference.write && reference.node.parent is ts_array),
+      setter: def == "parameter" && ts_usage_function(n).kind == "set",
+      before_used_param: def == "parameter" && ts_usage_before_parameter(n, typed, declaration_file),
+      rest_sibling: any(sites, site => ts_usage_rest_sibling(site))
+        || any(own, reference => ts_usage_rest_sibling(reference.node)),
+      static_block: any(classes, owner => any(owner.member.nodes, member => member is ts_static_block)),
+      using: any(sites, site => contains(["using", "await using"], site.scoping_site_kind)),
+      global: ts_usage_global(binding, n.scoping_program),
+      action: if any(own, reference => reference.write) then "assigned a value" else "defined",
+      only_type: only_type,
+      offset: offset,
+      ignored_offset: if typed then offset else n.offset
+    }
+  }
+}
+in ts_identifier let unused_var ts_usage_context(node)
+fn ts_usage_ignored(n, pattern) = {
+  value policy: if type_of(n.no_unused_vars_ignored) == "null" then pattern else n.no_unused_vars_ignored
+  value if type_of(policy) == "bool" then policy
+    else type_of(policy) == "str" && policy != "" && re_test(n.text, policy)
+}
+fn ts_usage_import_name(item) = if item is ts_import_specifier then item.local.node ?? item.imported.node else item
+fn ts_usage_import_removable(n, pattern) = {
+  value u: n.unused_var
+  value u != null && u.used == false && !u.exported && !u.silent
+    && n.no_unused_vars_checked && !ts_usage_ignored(n, pattern)
+}
+fn ts_usage_import_removal(n, pattern) = {
+  value item: if n.parent is ts_import_specifier then n.parent.node else n
+  value statement: item.parent.node
+  value if statement not ts_import then null else {
+    value named: statement.specifier.nodes
+    value bindings: compact([statement.default_import.node, statement.namespace.node]
+      map(named, specifier => ts_usage_import_name(specifier)))
+    value whole: all(bindings, binding => ts_usage_import_removable(binding, pattern))
+    value all_named: count(named) > 0
+      && all(named, specifier => ts_usage_import_removable(ts_usage_import_name(specifier), pattern))
+    value if whole then statement
+      else if item is ts_import_specifier && all_named && statement.default_import != null
+      then { start: statement.default_import.token_neighbours.after.start, end: statement.import_named_close.end }
+      else if item is ts_import_specifier then {
+        value before: item.token_neighbours.before
+        value after: item.token_neighbours.after
+        value { start: if before.text == "," then before.start else item.offset,
+          end: if before.text != "," && after.text == "," then after.end else item.end_offset }
+      }
+      else if item == statement.namespace.node && statement.default_import != null
+      then { start: statement.default_import.token_neighbours.after.start, end: item.end_offset }
+      else if item == statement.default_import.node && item.token_neighbours.after.text == ","
+      then { start: item.offset, end: item.token_neighbours.after.end }
+      else null
+  }
+}
+in ts_program let unused_globals {
+  value program: node
+  value script: ts_source_type(program) == "script"
+  value root: last(scoping_lexical_scopes)
+  value references: descendants(ts_identifier)
+  value read: {
+    value references
+    filter (reference) reference.global != null && reference.access != "write"
+    map (reference) ts_module_name(reference)
+  }
+  value top: {
+    value references
+    filter (declaration) script && declaration.ts_usage_binding.scope.id == root.id
+    map (declaration) ts_module_name(declaration)
+  }
+  value ts_global_mentions(program)
+  filter (mention) ts_global_setting(program, mention.name) != "off"
+    && !contains(read, mention.name) && !contains(top, mention.name)
+  unique_by (mention) mention.name
+  map (mention) { name: mention.name, offset: mention.offset }
+}
+
+}
