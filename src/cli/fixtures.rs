@@ -265,15 +265,32 @@ pub(super) fn run(output: &mut Output<'_>, paths: &[PathBuf], bless: bool) -> u8
 mod tests {
     use super::*;
 
+    struct Project(PathBuf);
+
+    impl Project {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("zlint-fixtures-{name}-{}", std::process::id()));
+            fs::create_dir(&root).expect("fresh test project");
+            Self(root)
+        }
+
+        fn scenario(&self, name: &str) -> PathBuf {
+            let root = self.0.join(name);
+            fs::create_dir_all(root.join("expected")).unwrap();
+            fs::write(root.join(".zlint"), "lang t \"*.t\"\n").unwrap();
+            fs::write(root.join("input.t"), "sample").unwrap();
+            fs::write(root.join("expected/diagnostics"), "").unwrap();
+            root
+        }
+    }
+
+    impl Drop for Project {
+        fn drop(&mut self) { fs::remove_dir_all(&self.0).expect("remove test project"); }
+    }
+
     #[test]
     fn bless_and_replay_preserve_inputs_and_remove_stale_outputs() {
-        struct Project(PathBuf);
-        impl Drop for Project {
-            fn drop(&mut self) { fs::remove_dir_all(&self.0).expect("remove test project"); }
-        }
-        let root = std::env::temp_dir().join(format!("zlint-fixtures-{}", std::process::id()));
-        fs::create_dir(&root).expect("fresh test project");
-        let project = Project(root);
+        let project = Project::new("bless");
         fs::write(project.0.join(".zlint"), r#"
             lang t "*.t"
             in .t match word /[a-z]+/ {
@@ -327,11 +344,35 @@ mod tests {
     }
 
     #[test]
-    fn fixtures() {
-        let cwd = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    fn discovery_deduplicates_scenarios_and_ignores_outputs() {
+        let project = Project::new("discovery");
+        let first = project.scenario("fixtures/alpha");
+        let last = project.scenario("fixtures/zeta");
+        for ignored in ["actual", "expected", ".git"] {
+            project.scenario(&format!("fixtures/{ignored}/hidden"));
+        }
+        let mut found = BTreeSet::new();
+        scenarios(&project.0.join("fixtures"), &mut found).unwrap();
+        scenarios(&first, &mut found).unwrap();
+        assert_eq!(found, BTreeSet::from([first, last]));
+    }
+
+    #[test]
+    fn runner_selects_paths_and_keeps_running_after_failures() {
+        let project = Project::new("runner");
+        let bad = project.scenario("fixtures/bad");
+        let good = project.scenario("fixtures/good");
+        fs::remove_file(bad.join("expected/diagnostics")).unwrap();
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-        let code = super::run(&mut super::Output { cwd, stdout: &mut stdout, stderr: &mut stderr }, &[], false);
-        assert_eq!(code, 0, "fixture scenarios failed:\n{}", String::from_utf8_lossy(&stderr));
-        assert!(cwd.join("fixtures/comment-exemptions/css/actual/diagnostics").is_file(), "runner did not produce scenario outputs");
+        let mut output = Output { cwd: &project.0, stdout: &mut stdout, stderr: &mut stderr };
+        assert_eq!(run(&mut output, &[], false), 1);
+        assert!(good.join("actual/diagnostics").is_file());
+        fs::write(bad.join("expected/diagnostics"), "").unwrap();
+        assert_eq!(run(&mut output, &[], false), 0);
+        fs::remove_file(good.join("expected/diagnostics")).unwrap();
+        assert_eq!(run(&mut output, &[PathBuf::from("fixtures/bad")], false), 0);
+        assert_eq!(run(&mut output, &[], false), 1);
+        fs::create_dir(project.0.join("empty")).unwrap();
+        assert_eq!(run(&mut output, &[PathBuf::from("empty")], false), 1);
     }
 }
