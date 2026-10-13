@@ -85,18 +85,12 @@ fn unbound_global(n, key) = {
   ], spelling)
 }
 
-fn unbound_receiver_void(signature) = count(signature.receiver) > 0
-  && all(signature.receiver, arm => any(arm, part => contains(part.traits, "void")))
-fn unbound_danger(t, key, ignore_static, signature) = {
+fn unbound_danger(t, key, ignore_static) = {
   value declaration: unbound_member(t, key)
   value receiver: first(declaration.signatures).receiver
   value if declaration == null || ignore_static && declaration.is_static
     || !(declaration.kind == "method" || declaration.kind == "property" && declaration.initializer_kind == "function")
     then null
-    else if signature.receiver_known == true
-      && !any(signature.receiver ?? [], arm => any(arm, part => contains(part.uncertain_traits, "void"))) then
-      if signature.has_receiver && unbound_receiver_void(signature) then null
-      else {without_this: signature.has_receiver == false}
     else if receiver.annotation.kind == "ts_type_keyword" && receiver.annotation.keyword == "void" then null
     else {without_this: receiver == null}
 }
@@ -121,9 +115,6 @@ in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_ke
     else { value node.index.type_literal_values; filter (literal) contains(["string", "number"], literal.type); map (literal) literal.value }
   when count(keys) > 0
   let key_node if pattern then node else if is ts_member then property.node else node.index.node
-  let signatures if pattern then null else call_signatures(node)
-  let signature_arm first(signatures)
-  let signature if count(signatures) == 1 && count(signature_arm) == 1 then first(signature_arm) else null
   let sources if pattern then unbound_pattern_sources(pattern_property.parent.node) else unbound_source(object.node, [], true)
   let profiles {
     value sources
@@ -144,7 +135,7 @@ in ts_member, ts_index, ts_pattern_property.key, ts_property.key, ts_computed_ke
       else {
         value profiles
         flat_map (source) source.profiles
-        map (profile) unbound_danger(profile, key, ignoreStatic, signature)
+        map (profile) unbound_danger(profile, key, ignoreStatic)
         filter (danger) danger != null
       }
     first

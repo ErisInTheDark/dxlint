@@ -424,7 +424,8 @@ in ts_object {
 }
 in ts_interface, ts_type_literal, ts_class {
   let ts_value_then_shape {
-    value if ts_value_closed_type_members(member.nodes) && value_has_member(node, "then", null) == false
+    value if node is ts_type_literal && ts_value_closed_type_members(member.nodes)
+      && value_has_member(node, "then", null) == false
       then { known: true, thenable: false }
       else {
         value signatures: member_call_parameters(node, "then")
@@ -439,7 +440,8 @@ in ts_type_literal {
 }
 in ts_property {
   declares member key keyed ts_value_key(it) in nearest members hoisted
-  unwraps value ?? key
+  when ts_value_const_context(node) { unwraps value ?? key }
+  when !ts_value_const_context(node) { unwraps value.widened ?? key.widened }
 }
 in ts_property_signature {
   declares member key keyed ts_value_key(it) in nearest members hoisted
@@ -482,6 +484,7 @@ in ts_class {
   fits constructible, object, truthy in statics
   fits structural, object, truthy in members
   unwraps scope statics from it
+  unwraps scope members from it for type
   member statics "prototype" unwraps scope members from it
   when ts_value_closed_type_members(member.nodes) { members members closed }
   when extends != null {
