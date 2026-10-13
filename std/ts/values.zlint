@@ -9,6 +9,7 @@ dynamic any
 keys text string
 keys ordinal number
 keys symbol symbol
+product ts_tuple items fits object, truthy as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable
 
 in ts_program { fits object, truthy in module }
 in ts_namespace {
@@ -252,9 +253,15 @@ in ts_declarator {
   when !(name is ts_identifier) { unwraps instance "unknown" }
 }
 in ts_parameter, ts_rest {
-  when optional != null { unwraps (type ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
-  when optional == null { unwraps type ?? instance "unknown" }
+  pack ts_tuple
+  when parent not ts_tuple_type {
+    when optional != null { unwraps (type ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
+    when optional == null { unwraps type ?? instance "unknown" }
+  }
 }
+in ts_rest { when parent is ts_tuple_type { unwraps type } }
+in ts_tuple_member, ts_rest { let ts_value_tuple_optional optional != null }
+in ts_rest, ts_spread { let ts_value_tuple_repeated true }
 in ts_assignment_pattern { unwraps left ?? right }
 in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
     ts_import_equals, ts_super, ts_meta_property, ts_import_call {
@@ -357,17 +364,12 @@ in ts_binary {
 
 in ts_hole { unwraps trait undefined, nullable, falsy, nonthenable }
 in ts_array {
-  let ts_value_literal_tuple_signature { value element.nodes; map (item) "n"; join "" }
+  let ts_value_tuple_readonly ts_value_const_context(node)
   when !ts_value_tuple_context(node) {
     unwraps instance "Array" of ...element using (ts_value_preserved_element ?? it.widened)
   }
   when ts_value_tuple_context(node) {
-    fits object, truthy
-    indexed element strings using (ts_value_preserved_element ?? it.widened)
-    carries element using (ts_value_preserved_element ?? it.widened) as {
-      kind: "tuple", signature: ts_value_literal_tuple_signature, readonly: ts_value_const_context(node)
-    }
-    members members inherits instance "Array" of ...element using (ts_value_preserved_element ?? it.widened)
+    unwraps product ts_tuple of element using (ts_value_preserved_element ?? it.widened) optional ts_value_tuple_optional repeated ts_value_tuple_repeated readonly ts_value_tuple_readonly
   }
 }
 in ts_object, ts_interface, ts_type_literal {
@@ -535,17 +537,12 @@ in ts_array_type {
   when !(parent is ts_type_operator && parent.operator == "readonly") { unwraps instance "Array" of type }
 }
 in ts_tuple_type {
-  let ts_value_tuple_signature { value element.nodes; map (item) if item is ts_rest then "r" else if item.optional != null then "o" else "n"; join "" }
-  fits object, truthy
-  indexed element strings
-  carries element as { kind: "tuple", signature: ts_value_tuple_signature,
-    readonly: parent is ts_type_operator && parent.operator == "readonly" }
-  members members inherits instance "Array" of ...element
+  let ts_value_tuple_readonly parent is ts_type_operator && parent.operator == "readonly"
+  unwraps product ts_tuple of element optional ts_value_tuple_optional repeated ts_value_tuple_repeated readonly ts_value_tuple_readonly
 }
 in ts_tuple_member {
   optional when optional != null
-  when optional == null { unwraps type }
-  when optional != null { unwraps type | trait undefined, nullable, falsy, nonthenable }
+  unwraps type
 }
 in ts_indexed_access { unwraps from object at index }
 fn ts_value_conditional_owner(n) = find(walk(n, item => item.parent.node), item => item is ts_conditional_type)

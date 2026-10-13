@@ -6,6 +6,7 @@ fn assignment_carrier(parts) = {
   value carrier: first(carriers).carrier
   value if parts != null && len(parts) == 1 && len(carriers) > 0
     && all(carriers, part => part.carrier.description == carrier.description && part.carrier.arguments == carrier.arguments)
+    && all(carriers, part => part.product_known && part.product == first(carriers).product)
     then carrier else null
 }
 fn assignment_trait(parts, trait) = parts != null && len(parts) > 0
@@ -29,7 +30,8 @@ fn assignment_carrier_unsafe(source, target) = {
   value a: source.carrier
   value b: target.carrier
   value tuples: a.description.kind == "tuple" && b.description.kind == "tuple"
-    && a.description.signature == b.description.signature && a.description.readonly == b.description.readonly
+    && source.product_known && target.product_known && source.product != null
+    && source.product == target.product
   value same: tuples || a.description.kind == "named" && b.description.kind == "named"
     && a.file == b.file && a.node == b.node
   value arguments: zip(a.arguments ?? [], b.arguments ?? [])
@@ -49,11 +51,16 @@ fn assignment_string(text) = {
 }
 fn assignment_print_part(part) = {
   value carrier: part.carrier
-  value args: map(carrier.arguments ?? [], item => assignment_print(item))
+  value args: if carrier.description.kind == "tuple" && part.product_known && part.product != null then
+    map(zip(carrier.arguments ?? [], part.product.elements), pair => {
+      value flags: last(pair)
+      value (if flags.repeated then "..." else "") assignment_print(first(pair)) (if flags.optional then "?" else "")
+    })
+    else map(carrier.arguments ?? [], item => assignment_print(item))
   value joined: { value args; join ", " }
   value scalar: find(["any", "unknown", "void", "null", "undefined", "string", "number", "boolean", "bigint", "symbol", "object"], trait => contains(part.traits, trait))
   value literal: part.identity.kind == "value" && part.identity_known
-  value if carrier.description.kind == "tuple" then (if carrier.description.readonly then "readonly " else "") "[" joined "]"
+  value if carrier.description.kind == "tuple" then (if part.product.readonly then "readonly " else "") "[" joined "]"
     else if carrier.description.kind == "named" then carrier.description.name (if len(args) == 0 then "" else "<" joined ">")
     else if literal && scalar == "string" then assignment_string(part.identity.value)
     else if literal && scalar == "bigint" then part.identity.value.value "n"
