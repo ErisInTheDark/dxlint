@@ -8,7 +8,7 @@ pub mod diagnostic;
 mod fix;
 pub mod frontend;
 mod inspect;
-mod language_options;
+pub(crate) mod language_options;
 mod message;
 mod profile;
 mod prune;
@@ -27,7 +27,7 @@ pub use build::{build, build_for_lint, Built};
 pub use diagnostic::{Diagnostic, Edit, Fix, ENGINE_RULE};
 pub use fix::{apply_fixes, Fixed};
 pub use frontend::Stale;
-pub use profile::{Profile, Query};
+pub use profile::{EffectBuild, Profile, Query};
 
 use crate::config::ast::{FixTarget, Report, Severity};
 use crate::config::source::{FileId, SourceMap, Span};
@@ -53,10 +53,15 @@ pub struct OptionSlot {
 pub enum Target {
     Matcher(u32),
     Field(u32, u16),
-    /// Nodes reached through a registered link from this matcher.
-    Link(u32, usize),
+    Nodes(u32, NodeSelection),
     /// `None` = every language (`in .*`).
     Lang(Option<usize>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodeSelection {
+    Link(usize),
+    Attribute(u16),
 }
 
 pub struct Rule {
@@ -186,6 +191,7 @@ pub struct InertRule {
 }
 
 pub struct Linter {
+    invalidation: std::sync::atomic::AtomicU64,
     units: std::sync::Mutex<crate::fx_hash::FxHashMap<PathBuf, std::sync::Arc<units::Unit>>>,
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     unit_overlays: Vec<bool>,
@@ -204,8 +210,7 @@ pub struct Linter {
     pub profile: Option<Profile>,
     by_matcher: Vec<Vec<usize>>,
     by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>>,
-    /// Owner matcher -> links and their rule indexes.
-    by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>>,
+    by_selection: crate::fx_hash::FxHashMap<u32, Vec<(NodeSelection, Vec<usize>)>>,
     /// Whole-file rules and the language they want (`None`: any).
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
@@ -265,8 +270,8 @@ impl Linter {
         }
         for operand in &self.grammar.names.operands {
             if let Some(e) = operand.expr.get() {
-                let mode = matches!(operand.of, crate::config::ast::OperandOf::Mode { .. });
-                let body = crate::vm::lower_condition(e, functions, &[], values, mode);
+                let item = config.operand_parameter(operand.of).is_some();
+                let body = crate::vm::lower_condition(e, functions, &[], values, item);
                 let failed = values.take_lowering_errors("item expression");
                 if failed.is_empty() { let _ = operand.lowered.set(body); }
                 let span = config.operand(operand.of, operand.part).expect("compiled item expression").span;
@@ -312,7 +317,7 @@ impl Linter {
                             }
                         }
                     }
-                    Target::Link(..) => kinds = KindSet::all(n),
+                    Target::Nodes(..) => kinds = KindSet::all(n),
                     Target::Lang(_) => {}
                 }
             }
@@ -321,6 +326,18 @@ impl Linter {
                 .chain([&rule.message, &rule.fix, &rule.fix_when, &rule.fix_at, &rule.indent_reset, &rule.report_at, &rule.each].into_iter().flatten());
             roots.extend(exprs.map(|e| (kinds.clone(), e)));
         }
+        let compiled_rules = &self.rules;
+        let selection_reads: Vec<_> = self.by_selection.iter().flat_map(|(&matcher, selections)| {
+            selections.iter().filter_map(move |(selection, rules)| match selection {
+                NodeSelection::Attribute(attr) if rules.iter().any(|&rule| compiled_rules[rule].severity != Severity::Off) => {
+                    let mut kinds = KindSet::empty(n);
+                    kinds.insert(matcher);
+                    Some((kinds, CExpr::Attr(*attr)))
+                },
+                _ => None,
+            })
+        }).collect();
+        roots.extend(selection_reads.iter().map(|(kinds, expr)| (kinds.clone(), expr)));
         self.attrs.shape_records(g, roots)
     }
 
@@ -385,7 +402,9 @@ impl Linter {
     pub fn invalidate(&self, changed: &[PathBuf]) -> Stale {
         self.units.lock().expect("unit cache").retain(|path, _| !changed.contains(path));
         self.discoveries.lock().expect("unit discoveries").retain(|request, _| !changed.iter().any(|path| path.starts_with(&request.root)));
-        self.projects.invalidate(changed)
+        let stale = self.projects.invalidate(changed);
+        self.invalidation.fetch_add(1, std::sync::atomic::Ordering::Release);
+        stale
     }
 
     pub fn is_stale(&self, stale: &Stale, reads: &Reads) -> bool {
@@ -467,7 +486,7 @@ impl Linter {
             }
             for t in &f.targets {
                 match *t {
-                    Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => need(m, &mut targets),
+                    Target::Matcher(m) | Target::Field(m, _) | Target::Nodes(m, _) => need(m, &mut targets),
                     Target::Lang(_) => lang_layers = true,
                 }
             }
@@ -611,6 +630,7 @@ impl Linter {
             file,
             file_id: 0,
             options: &[],
+            language_options: Some(&self.language_options),
             reindented,
             attrs: &self.attrs,
             memo,
@@ -636,18 +656,51 @@ impl Linter {
         // Resolve reachability before dispatch: a reference may select a
         // declaration earlier in the tree, and several owners can reach it.
         let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
-        let links_needed = self.by_link.values().flatten().any(|(_, rules)| rules.iter().any(|&fi| run.active[fi]));
-        if let Some(native) = native.filter(|_| links_needed).and_then(|_| tree_ctx.native_facts()) {
-            for &owner in &tree.order {
-                let Some(links) = self.by_link.get(&tree.node(owner).matcher) else { continue };
-                for (link, rules) in links {
-                    if !rules.iter().any(|&fi| run.active[fi]) { continue; }
-                    for node in crate::expr::facts::follow(native, *link, owner) {
+        let selection_owners = if self.by_selection.values().flatten().any(|(_, rules)| rules.iter().any(|&fi| run.active[fi])) {
+            tree.order.as_slice()
+        } else { &[] };
+        for &owner in selection_owners {
+            let Some(selections) = self.by_selection.get(&tree.node(owner).matcher) else { continue };
+            for (selection, rules) in selections {
+                if !rules.iter().any(|&fi| run.active[fi]) { continue; }
+                let nodes = match selection {
+                    NodeSelection::Link(link) => Ok(tree_ctx.native_facts()
+                        .map_or_else(Vec::new, |native| crate::expr::facts::follow(native, *link, owner))),
+                    NodeSelection::Attribute(attr) => {
+                        memo.enter_node(owner);
+                        let ctx = Ctx { node: owner, world: Some(&world), ..tree_ctx };
+                        let session = crate::vm::Session::new(&ctx, owner, &[]);
+                        let selected = session.value(&crate::vm::VExpr::Attr(*attr), None);
+                        match selected {
+                            Some(Value::Null) => Ok(Vec::new()),
+                            Some(Value::Node(node, _)) => Ok(vec![node]),
+                            Some(Value::List(values)) => values.iter().filter(|value| !matches!(value, Value::Null))
+                                .map(|value| match value {
+                                    Value::Node(node, _) => Ok(*node),
+                                    _ => Err("expected a node, a list of nodes, or null".into()),
+                                }).collect(),
+                            Some(_) => Err("expected a node, a list of nodes, or null".into()),
+                            None => Err(session.error()),
+                        }
+                    }
+                };
+                match nodes {
+                    Ok(nodes) => for node in nodes {
+                        if tree.nodes.get(node as usize).is_none() { continue; }
                         let selected = linked.entry(node).or_default();
                         for &fi in rules.iter().filter(|&&fi| run.active[fi]) {
                             if !selected.contains(&fi) { selected.push(fi); }
                         }
-                    }
+                    },
+                    Err(error) => {
+                        let names = rules.iter().filter(|&&fi| run.active[fi]).map(|&fi| self.rules[fi].name.as_str()).collect::<Vec<_>>().join(", ");
+                        let node = tree.node(owner);
+                        out.push(Diagnostic {
+                            rule: ENGINE_RULE.into(), severity: Severity::Error,
+                            message: format!("node selection for `{names}` failed here: {error}"),
+                            message_index: None, start: node.start as usize, end: node.end as usize, fix: None,
+                        });
+                    },
                 }
             }
         }
@@ -670,6 +723,7 @@ impl Linter {
                         file: run.file,
                         file_id: 0,
                         options: &[],
+                        language_options: Some(&self.language_options),
                         reindented: &reindented[fi],
                         attrs: &self.attrs,
                         memo: &memo,

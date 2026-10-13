@@ -1,0 +1,5 @@
+import .ts
+in ts_identifier rule remote-declaration {
+  when is ts_expression_statement.expression && text == "remote" && node always number
+  warn "remote number"
+}

@@ -5,6 +5,10 @@ use super::Parser;
 
 impl Parser<'_> {
     pub(super) fn module_item(&mut self, what: &str) -> Option<Item> {
+        if what == "merges" {
+            let classes = self.name_list("a declaration class");
+            return (!classes.is_empty()).then_some(Item::Merges { classes });
+        }
         if what == "uses" {
             if !self.word("module_resolution") {
                 self.error_here("expected `uses module_resolution <name>`");

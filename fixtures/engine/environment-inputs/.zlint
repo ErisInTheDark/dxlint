@@ -1,0 +1,28 @@
+import .ts
+language .js {
+  set globals { app: "readonly", custom: "off" }
+}
+language .js {
+  files "legacy/**"
+  set ecmaVersion 3
+  set globals { app: "off" }
+}
+in ts_identifier rule environment-setting {
+  when is ts_expression_statement.expression
+  let program ts_module_program(node)
+  let setting ts_global_setting(program, text)
+  let implicit ts_global_implicit(program, text)
+  let commented ts_global_commented(program, text)
+  let source ts_source_type(program)
+  warn "{text}: {setting ?? 'absent'}, implicit={implicit}, comment={commented}, source={source}"
+}
+in ts_program rule environment-mentions {
+  each mention in ts_global_mentions(node)
+  warn "{mention.name}: {mention.setting}"
+  report at {start: mention.offset, end: mention.offset + byte_len(mention.name)}
+}
+in ts_program rule environment-exported {
+  each name in ts_exported_names(node)
+  warn "exported {name}"
+  report at {start: 0, end: 0}
+}

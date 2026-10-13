@@ -7,6 +7,7 @@ pub mod case;
 pub mod facts;
 pub mod functions;
 pub mod pipeline;
+pub mod queries;
 pub(crate) mod fold;
 pub mod indent;
 pub mod js;
@@ -18,7 +19,7 @@ pub mod value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::config::ast::{BinOp, Dropped, Expr, ExprKind, Name, PipelineStage, PipelineStep, TemplatePart, UnOp};
+use crate::config::ast::{BinOp, Dropped, Expr, ExprKind, Name, PipelineStage, PipelineStep, Quantifier, TemplatePart, UnOp};
 use crate::config::error::{closest, ConfigError};
 use crate::fx_hash::FxHashMap;
 use crate::grammar::{full_match, Grammar, Tree, ROOT, TEXT};
@@ -57,6 +58,7 @@ pub enum CExpr {
     FactField(usize, FactOf),
     Opt(usize),
     Call(&'static Function, Vec<CExpr>),
+    QueryCall(&'static queries::QueryFunction, Vec<CExpr>),
     Not(Box<CExpr>),
     Neg(Box<CExpr>),
     Binary(BinOp, Box<CExpr>, Box<CExpr>),
@@ -78,6 +80,8 @@ pub enum CExpr {
     Relative(Relative, Box<CExpr>),
     /// `value is a, b.field, layer l, .lang`: does the node pass one?
     Is(Box<CExpr>, Vec<IsTest>),
+    Trait(Box<CExpr>, Quantifier, u64),
+    Semantic(Box<CExpr>, crate::grammar::names::Value),
     /// A rule's own `let` value, by slot.
     Local(u16),
     /// `{ key: value }`
@@ -151,7 +155,7 @@ macro_rules! child_visitor {
         /// Calls `f` on each direct subexpression, in evaluation order.
         pub(crate) fn $name<'e>(&'e $($m)? self, f: &mut impl FnMut(&'e $($m)? CExpr)) {
             match self {
-                CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items)
+                CExpr::Template(items) | CExpr::List(items) | CExpr::Call(_, items) | CExpr::QueryCall(_, items)
                 | CExpr::UserCall(_, items) => {
                     for item in items { f(item) }
                 }
@@ -161,7 +165,7 @@ macro_rules! child_visitor {
                 }
                 CExpr::Hole(inner, _) | CExpr::Not(inner) | CExpr::Neg(inner) | CExpr::NonEmpty(inner)
                 | CExpr::Test(inner, _) | CExpr::TestDfa(inner, _) | CExpr::Dbg(inner, _)
-                | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Key(inner, _)
+                | CExpr::Relative(_, inner) | CExpr::Is(inner, _) | CExpr::Trait(inner, _, _) | CExpr::Semantic(inner, _) | CExpr::Key(inner, _)
                 | CExpr::OnField(_, inner) | CExpr::OwnChild(_, _, inner) | CExpr::OnParent(inner)
                 | CExpr::Position(inner) | CExpr::KindName(inner) | CExpr::NodeAt(inner)
                 | CExpr::FieldElse(_, inner) | CExpr::OnAncestor(_, inner) => f(inner),
@@ -290,7 +294,7 @@ pub(crate) const MAX_CALL_DEPTH: u32 = 256;
 /// Whether `name(...)` already means something built in: a function, a
 /// special form or a fact.
 pub fn is_builtin_call(name: &str) -> bool {
-    functions::lookup(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at") || facts::fact(name).is_some()
+    functions::lookup(name).is_some() || queries::lookup_function(name).is_some() || Each::named(name).is_some() || matches!(name, "reduce" | "dbg" | "position" | "walk" | "descendants" | "overlapping" | "containing" | "kind_name" | "node_at") || facts::fact(name).is_some()
 }
 
 /// A value as `dbg` prints it: strings quoted, lists bracketed.
@@ -344,7 +348,7 @@ pub struct AttrMemo<'a> {
     /// Indentation queries shared only within the active rule invocation.
     indent_hits: RefCell<FxHashMap<u32, Option<IndentHit>>>,
     /// The tree's names resolved (`scope_declaration`), on first read.
-    names: std::cell::OnceCell<std::rc::Rc<crate::grammar::names::Resolved>>,
+    names: std::cell::OnceCell<crate::engine::reads::Cached<std::sync::Arc<crate::grammar::names::Resolved>>>,
     /// Names are being resolved: native reads meanwhile get no names.
     resolving_names: std::cell::Cell<bool>,
 }
@@ -609,26 +613,25 @@ impl<'a> Scope<'a> {
             self.note(part.span, Resolved::Local(rule(), part.text.clone()));
             return Some(CExpr::Local(self.locals.len() as u16));
         }
-        if let Some(i) = facts::link(&part.text) {
+        let fallback = if let Some(i) = facts::link(&part.text) {
             self.note(part.span, Resolved::Fact(facts::LINKS[i].name));
-            return Some(CExpr::Link(i));
-        }
-        if let Some(i) = self.attrs.get(&part.text) {
+            CExpr::Link(i)
+        } else if let Some(i) = self.attrs.get(&part.text) {
             self.note(part.span, Resolved::Attr(part.text.clone()));
-            return Some(CExpr::Attr(i));
-        }
-        if let Some(i) = facts::fact(&part.text) {
+            CExpr::Attr(i)
+        } else if let Some(i) = facts::fact(&part.text) {
             self.note(part.span, Resolved::Fact(facts::FACTS[i].name));
-            return Some(CExpr::Fact(i, FactOf::Node));
-        }
-        if let Some(b) = Builtin::named(&part.text) {
+            CExpr::Fact(i, FactOf::Node)
+        } else if let Some(b) = Builtin::named(&part.text) {
             self.note(part.span, Resolved::Builtin(b.name()));
-            return Some(CExpr::Builtin(b));
-        }
-        if let Some(label) = self.grammar.labels.get(&part.text) {
-            return Some(CExpr::Field(label));
-        }
-        None
+            CExpr::Builtin(b)
+        } else {
+            return self.grammar.labels.get(&part.text).map(CExpr::Field);
+        };
+        Some(match self.grammar.labels.get(&part.text) {
+            Some(label) => CExpr::FieldElse(label, Box::new(fallback)),
+            None => fallback,
+        })
     }
 
     /// `base.key`: a record's key, or `key` read on a node.
@@ -647,9 +650,13 @@ impl<'a> Scope<'a> {
             let value = if suffix.text == "nonempty" {
                 CExpr::NonEmpty(Box::new(self.member_path(base, &keys[..i])))
             } else {
-                let mut node_keys = keys[..i].to_vec();
-                node_keys.push(Name { text: "node".into(), span: suffix.span });
-                CExpr::Binary(BinOp::Join, Box::new(CExpr::Const(Value::list(vec![]))), Box::new(self.member_path(base, &node_keys)))
+                let value = if i == 0 { base } else {
+                    let mut node_keys = keys[..i].to_vec();
+                    node_keys.push(Name { text: "node".into(), span: suffix.span });
+                    let parts = (0..i).map(|at| self.relative_path(&node_keys[at], &node_keys[at + 1..]).ok()).collect();
+                    CExpr::Path(Box::new(base), keys[..i].iter().map(|key| key.text.clone().into()).collect(), parts)
+                };
+                CExpr::Member(Box::new(value), suffix.text.clone().into(), None)
             };
             return self.member_path(value, &keys[i + 1..]);
         }
@@ -702,6 +709,84 @@ impl Scope<'_> {
         Some(fold::bind(value, self.params.len() as u16, inner.pipeline_steps(rest, Some(name), errors)?))
     }
 
+    fn node_subject(&self, value: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        let plain = self.compile(value, errors)?;
+        match &value.kind {
+            ExprKind::Var(path) if !matches!(&plain, CExpr::Builtin(Builtin::Parent))
+                && path.last().is_some_and(|name| name.text != "node") => {
+                let mut path = path.clone();
+                path.push(Name { text: "node".into(), span: value.span });
+                let as_node = Expr { kind: ExprKind::Var(path), span: value.span };
+                let mut quiet = Vec::new();
+                Some(match self.compile(&as_node, &mut quiet).filter(|_| quiet.is_empty()) {
+                    Some(node) => CExpr::Coalesce(Box::new(node), Box::new(plain)),
+                    None => plain,
+                })
+            }
+            _ => Some(plain),
+        }
+    }
+
+    fn trait_subject(&self, value: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
+        match &value.kind {
+            ExprKind::Binary(BinOp::Join, member, key) => {
+                let base = match &member.kind {
+                    ExprKind::Var(path) if path.last().is_some_and(|name| name.text == "member") && path.len() > 1 =>
+                        Some(Expr { kind: ExprKind::Var(path[..path.len() - 1].to_vec()), span: member.span }),
+                    ExprKind::Key(base, name) if name.text == "member" => Some((**base).clone()),
+                    _ => None,
+                };
+                if let Some(base) = base {
+                    let key = match &key.kind {
+                        ExprKind::Str(text) => crate::grammar::names::Value::Text(text.clone().into()),
+                        ExprKind::Num(number) if *number >= 0.0 && *number <= f64::from(u32::MAX) && number.fract() == 0.0 =>
+                            crate::grammar::names::Value::Ordinal(*number as u32),
+                        _ => {
+                            errors.push(ConfigError::new(key.span, "a semantic member key must be a string or non-negative integer literal"));
+                            return None;
+                        }
+                    };
+                    let (base, subject) = match self.trait_subject(&base, errors)? {
+                        CExpr::Semantic(base, subject) => (base, subject),
+                        base => (Box::new(base), crate::grammar::names::Value::Path(Vec::new())),
+                    };
+                    return Some(CExpr::Semantic(base, crate::grammar::names::Value::From(Box::new(subject), Box::new(key), 0)));
+                }
+            }
+            ExprKind::Var(path) => {
+                if let Some(index) = path.iter().enumerate().skip(1).find_map(|(index, name)| queries::semantic_step(&name.text).map(|_| index)) {
+                    let mut steps = Vec::new();
+                    for name in &path[index..] {
+                        let Some(step) = queries::semantic_step(&name.text) else {
+                            errors.push(ConfigError::new(name.span, "a semantic subject can only take further semantic steps or `could` / `always`"));
+                            return None;
+                        };
+                        steps.push(step);
+                    }
+                    let base = Expr { kind: ExprKind::Var(path[..index].to_vec()), span: value.span };
+                    return Some(CExpr::Semantic(Box::new(self.node_subject(&base, errors)?), crate::grammar::names::Value::Path(steps)));
+                }
+            }
+            ExprKind::Key(base, key) if queries::semantic_step(&key.text).is_some() => {
+                let step = queries::semantic_step(&key.text).expect("matched");
+                let base = self.trait_subject(base, errors)?;
+                return Some(match base {
+                    CExpr::Semantic(base, crate::grammar::names::Value::Path(mut steps)) => {
+                        steps.push(step);
+                        CExpr::Semantic(base, crate::grammar::names::Value::Path(steps))
+                    }
+                    CExpr::Semantic(..) => {
+                        errors.push(ConfigError::new(key.span, "a member subject must be consumed directly by `could` / `always`"));
+                        return None;
+                    }
+                    base => CExpr::Semantic(Box::new(base), crate::grammar::names::Value::Path(vec![step])),
+                });
+            }
+            _ => {}
+        }
+        self.node_subject(value, errors)
+    }
+
     pub fn compile(&self, e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
         Some(match &e.kind {
             ExprKind::Pipeline(steps) => self.pipeline_steps(steps, None, errors)?,
@@ -748,7 +833,13 @@ impl Scope<'_> {
                     at = base;
                 }
                 keys.reverse();
-                self.member_path(self.compile(at, errors)?, &keys)
+                let base = self.compile(at, errors)?;
+                if keys.iter().any(|key| queries::semantic_step(&key.text).is_some())
+                    && matches!(base, CExpr::Builtin(Builtin::Node | Builtin::Parent) | CExpr::Field(_) | CExpr::Ancestor(..)) {
+                    errors.push(ConfigError::new(e.span, "a semantic subject can only be consumed by `could` / `always`"));
+                    return None;
+                }
+                self.member_path(base, &keys)
             }
             ExprKind::Lambda(..) => {
                 errors.push(ConfigError::new(
@@ -880,7 +971,16 @@ impl Scope<'_> {
                 );
                 return None;
             }
-            ExprKind::Var(path) => return self.var(path, e, errors),
+            ExprKind::Var(path) => {
+                if path.iter().enumerate().skip(1).any(|(index, name)| queries::semantic_step(&name.text).is_some()
+                    && (path[..index].iter().any(|name| name.text == "node")
+                        || matches!(path[0].text.as_str(), "parent" | "previous" | "next")
+                        || self.fields.iter().any(|(name, _)| *name == path[0].text))) {
+                    errors.push(ConfigError::new(e.span, "a semantic subject can only be consumed by `could` / `always`"));
+                    return None;
+                }
+                return self.var(path, e, errors);
+            }
             // `dbg(value, "label")`: the value, printed per node to stderr.
             ExprKind::Call(name, args) if name.text == "dbg" => {
                 if args.is_empty() || args.len() > 2 {
@@ -930,6 +1030,18 @@ impl Scope<'_> {
                 CExpr::UserCall(i as u32, args)
             }
             // `fact(args)`: a native analysis that takes the rule's values.
+            ExprKind::Call(name, args) if queries::lookup_function(&name.text).is_some() => {
+                let query = queries::lookup_function(&name.text).expect("matched");
+                if args.len() != query.arity {
+                    errors.push(ConfigError::new(e.span, format!("`{}` takes {} arguments", query.name, query.arity)));
+                    return None;
+                }
+                self.note(name.span, Resolved::Function(query.name));
+                let args = args.iter().enumerate().map(|(index, arg)| {
+                    if index == 0 { self.node_subject(arg, errors) } else { self.compile(arg, errors) }
+                }).collect::<Option<Vec<_>>>()?;
+                CExpr::QueryCall(query, args)
+            }
             ExprKind::Call(name, args) if !self.options_only && functions::lookup(&name.text).is_none() && facts::fact(&name.text).is_some() => {
                 let i = facts::fact(&name.text).expect("checked");
                 self.note(name.span, Resolved::Fact(facts::FACTS[i].name));
@@ -1011,26 +1123,22 @@ impl Scope<'_> {
                 let b = self.compile(b, errors);
                 CExpr::If(Box::new(c?), Box::new(a?), Box::new(b?))
             }
-            ExprKind::Is(value, names) => {
-                // The subject as a node: a path reads its node (`alternate`,
-                // `parent`, `previous`, `n`); anything else is a value.
-                // Not a node there (a fact's kind tag): the value itself.
-                let plain = self.compile(value, errors)?;
-                // This builtin already returns a node or null, not its text.
-                let parent_node = matches!(&plain, CExpr::Builtin(Builtin::Parent));
-                let value = match &value.kind {
-                    ExprKind::Var(path) if !parent_node && path.last().is_some_and(|n| n.text != "node") => {
-                        let mut with_node = path.clone();
-                        with_node.push(crate::config::ast::Name { text: "node".into(), span: value.span });
-                        let mut quiet = Vec::new();
-                        let as_node = Expr { kind: ExprKind::Var(with_node), span: value.span };
-                        match self.compile(&as_node, &mut quiet).filter(|_| quiet.is_empty()) {
-                            Some(c) => CExpr::Coalesce(Box::new(c), Box::new(plain)),
-                            None => plain,
-                        }
+            ExprKind::Trait(value, quantifier, names) => {
+                let value = self.trait_subject(value, errors)?;
+                let mut mask = 0;
+                for name in names {
+                    let bit = self.grammar.names.vocabulary.trait_bit(&name.text);
+                    if bit == 0 {
+                        errors.push(ConfigError::new(name.span, format!("nothing fits trait `{}`", name.text))
+                            .suggest(&name.text, self.grammar.names.vocabulary.traits.iter().map(String::as_str)));
+                        return None;
                     }
-                    _ => plain,
-                };
+                    mask |= bit;
+                }
+                CExpr::Trait(Box::new(value), *quantifier, mask)
+            }
+            ExprKind::Is(value, names) => {
+                let value = self.node_subject(value, errors)?;
                 let mut tests = Vec::new();
                 for name in names {
                     use crate::config::ast::IsName;
@@ -1126,17 +1234,6 @@ impl Scope<'_> {
     }
 
     fn var(&self, path: &[crate::config::ast::Name], e: &Expr, errors: &mut Vec<ConfigError>) -> Option<CExpr> {
-        if let Some(i) = path.iter().enumerate().skip(1).find_map(|(i, key)| matches!(key.text.as_str(), "nodes" | "nonempty").then_some(i)) {
-            let suffix = &path[i];
-            let value = if suffix.text == "nonempty" {
-                CExpr::NonEmpty(Box::new(self.var(&path[..i], e, errors)?))
-            } else {
-                let mut node_path = path[..i].to_vec();
-                node_path.push(Name { text: "node".into(), span: suffix.span });
-                CExpr::Binary(BinOp::Join, Box::new(CExpr::Const(Value::list(vec![]))), Box::new(self.var(&node_path, e, errors)?))
-            };
-            return Some(self.member_path(value, &path[i + 1..]));
-        }
         let first = &path[0];
         // Values holding records: lambda parameters, options and `let`s;
         // `.key` reads into them.
@@ -1214,6 +1311,17 @@ impl Scope<'_> {
         };
         if let Some(value) = own {
             return Some(self.member_path(value, &path[1..]));
+        }
+        if let Some(i) = path.iter().enumerate().skip(1).find_map(|(i, key)| matches!(key.text.as_str(), "nodes" | "nonempty").then_some(i)) {
+            let suffix = &path[i];
+            let value = if suffix.text == "nonempty" {
+                CExpr::NonEmpty(Box::new(self.var(&path[..i], e, errors)?))
+            } else {
+                let mut node_path = path[..i].to_vec();
+                node_path.push(Name { text: "node".into(), span: suffix.span });
+                CExpr::Member(Box::new(self.var(&node_path, e, errors)?), suffix.text.clone().into(), None)
+            };
+            return Some(self.member_path(value, &path[i + 1..]));
         }
         match path {
             [name] => {
@@ -1300,7 +1408,7 @@ impl Scope<'_> {
                     }
                     _ => (members(&layer.text).expect("checked"), second, &path[2..]),
                 };
-                let inner = self.reported(self.node_part(field).ok_or(field), errors)?;
+                let inner = self.reported(self.relative_path(field, &[]), errors)?;
                 if let Some(reads) = self.layer_reads {
                     reads.borrow_mut().extend(&ids);
                 }
@@ -1316,59 +1424,29 @@ impl Scope<'_> {
                 // `children.x`, `previous.x`, `next.x`.
                 if let (Some(rel), None, None) = (Relative::named(&layer.text), own_field, self.grammar.matcher(&layer.text)) {
                     self.note(layer.span, Resolved::Relative(Relative::NAMES.iter().find(|(_, r)| *r == rel).expect("named").0));
-                    return Some(CExpr::Relative(rel, Box::new(self.reported(self.node_part(field).ok_or(field), errors)?)));
+                    return Some(CExpr::Relative(rel, Box::new(self.reported(self.relative_path(field, &[]), errors)?)));
                 }
-                let attr = self.attrs.get(&field.text);
                 let ancestor_field = self.grammar.matcher(&layer.text).is_some_and(|m| self.grammar.matchers[m as usize].labels().contains(&field.text));
-                if let (Some((_, label)), Some(attr), false) = (own_field, attr, ancestor_field) {
-                    self.note(layer.span, Resolved::Field(layer.text.clone()));
-                    self.note(field.span, Resolved::Attr(field.text.clone()));
-                    return Some(CExpr::FieldAttr(*label, attr));
-                }
-                // `field.fact`: a native fact of one of the node's fields.
-                let fact = facts::fact(&field.text);
-                if let (Some((_, label)), Some(fact), None) = (own_field, fact, attr) {
-                    self.note(layer.span, Resolved::Field(layer.text.clone()));
-                    self.note(field.span, Resolved::Fact(facts::FACTS[fact].name));
-                    return Some(CExpr::Fact(fact, FactOf::Field(*label)));
-                }
-                // `field.layer`, `field.offset`: a builtin read on the field's
-                // node(s).
-                let builtin = Builtin::named(&field.text);
-                if let (Some((_, label)), Some(b), None, None, false) = (own_field, builtin, attr, fact, ancestor_field) {
-                    self.note(layer.span, Resolved::Field(layer.text.clone()));
-                    self.note(field.span, Resolved::Builtin(b.name()));
-                    return Some(CExpr::OnField(*label, Box::new(CExpr::Builtin(b))));
-                }
-                // `field.link`, `field.its_field`: anything else read there.
                 if let (Some((_, label)), false) = (own_field, ancestor_field) {
-                    if let Some(part) = self.node_part(field) {
-                        self.note(layer.span, Resolved::Field(layer.text.clone()));
-                        return Some(CExpr::OnField(*label, Box::new(part)));
-                    }
+                    let part = self.reported(self.relative_path(field, &[]), errors)?;
+                    self.note(layer.span, Resolved::Field(layer.text.clone()));
+                    return Some(match part {
+                        CExpr::Attr(attr) => CExpr::FieldAttr(*label, attr),
+                        CExpr::Fact(fact, FactOf::Node) => CExpr::Fact(fact, FactOf::Field(*label)),
+                        part => CExpr::OnField(*label, Box::new(part)),
+                    });
                 }
                 // `parent.x`: a field, attribute or fact of the node's
                 // parent layer.
                 if layer.text == "parent" && self.grammar.matcher("parent").is_none() {
                     self.note(layer.span, Resolved::Builtin("parent"));
-                    if let Some(a) = attr {
-                        self.note(field.span, Resolved::Attr(field.text.clone()));
-                        return Some(CExpr::ParentAttr(a));
-                    }
-                    if let Some(fact) = fact {
-                        self.note(field.span, Resolved::Fact(facts::FACTS[fact].name));
-                        // A field of that name wins where the parent has one.
-                        if let Some(label) = self.grammar.labels.get(&field.text) {
-                            return Some(CExpr::OnParent(Box::new(CExpr::FieldElse(label, Box::new(CExpr::Fact(fact, FactOf::Node))))));
-                        }
-                        return Some(CExpr::Fact(fact, FactOf::Parent));
-                    }
-                    if let Some(label) = self.grammar.labels.get(&field.text) {
-                        return Some(CExpr::ParentField(label));
-                    }
-                    // Builtins and links (`parent.offset`, `parent.scope`).
-                    if let Some(part) = self.node_part(field) {
-                        return Some(CExpr::OnParent(Box::new(part)));
+                    if let Ok(part) = self.relative_path(field, &[]) {
+                        return Some(match part {
+                            CExpr::Attr(attr) => CExpr::ParentAttr(attr),
+                            CExpr::Fact(fact, FactOf::Node) => CExpr::Fact(fact, FactOf::Parent),
+                            CExpr::Field(label) => CExpr::ParentField(label),
+                            part => CExpr::OnParent(Box::new(part)),
+                        });
                     }
                     errors.push(ConfigError::new(field.span, format!("no field or attribute `{}`", field.text)));
                     return None;
@@ -1392,7 +1470,7 @@ impl Scope<'_> {
                 // `ts_function.my_attr`, `ts_class.offset`: anything else a
                 // node has, read on the closest ancestor.
                 if !fields.contains(&field.text) {
-                    if let Some(part) = self.node_part(field).filter(|p| !matches!(p, CExpr::Field(_))) {
+                    if let Some(part) = self.relative_path(field, &[]).ok().filter(|p| !matches!(p, CExpr::Field(_))) {
                         self.note(layer.span, Resolved::Layer(layer.text.clone()));
                         return Some(CExpr::OnAncestor(m, Box::new(part)));
                     }
@@ -1463,23 +1541,21 @@ impl Scope<'_> {
             Some((second, tail)) => Ok(CExpr::OnField(label, Box::new(self.relative_path(second, tail)?))),
             None => Ok(CExpr::Field(label)),
         };
-        let label = self.grammar.labels.get(&first.text);
         match value {
             CExpr::Field(label) => {
                 self.note(first.span, Resolved::Field(first.text.clone()));
                 field_read(label)
             }
-            CExpr::Builtin(_) if !rest.is_empty() && label.is_some() => field_read(label.expect("checked")),
-            CExpr::Fact(..) | CExpr::Link(_) if label.is_some() => {
+            CExpr::FieldElse(label, fallback) => {
                 let kinds: Vec<_> = self.grammar.matchers.iter().enumerate()
                     .filter(|(_, matcher)| matcher.labels().contains(&first.text))
                     .map(|(kind, _)| kind as u32).collect();
-                if kinds.is_empty() { return Ok(self.member_path(value, rest)); }
+                if kinds.is_empty() { return Ok(self.member_path(*fallback, rest)); }
                 self.note(first.span, Resolved::Field(first.text.clone()));
                 Ok(CExpr::If(
                     Box::new(CExpr::Is(Box::new(CExpr::Builtin(Builtin::Node)), vec![IsTest::Kind(kinds)])),
-                    Box::new(field_read(label.expect("checked"))?),
-                    Box::new(self.member_path(value, rest)),
+                    Box::new(field_read(label)?),
+                    Box::new(self.member_path(*fallback, rest)),
                 ))
             }
             value => Ok(self.member_path(value, rest)),
@@ -1541,6 +1617,7 @@ pub struct Ctx<'a> {
     pub file: &'a str,
     pub file_id: u32,
     pub options: &'a [Value<'static>],
+    pub(crate) language_options: Option<&'a crate::engine::language_options::LanguageOptions>,
     /// Lines whose indentation a fix already changes: line -> its leading
     /// whitespace after the fix. Builtins reading lines above the node see
     /// these, so lines inside a mis-indented block are measured from where
@@ -1805,6 +1882,63 @@ pub fn binary<'s>(op: BinOp, a: Value<'s>, b: Value<'s>) -> Result<Value<'s>, St
 mod evaluation_tests {
     use super::{CExpr, Ctx, Value};
     use crate::config::ast::BinOp;
+
+    #[test]
+    fn nodes_keys_read_records_but_project_syntax_fields() {
+        let linter = crate::engine::tests::linter(r#"
+            fn entries(value) = value.nodes
+            fn children(value) = value.element.nodes
+            in .t match item /[ab]/
+            in .t match bag "[" (element:item)* "]" {
+                rule record warn "record" {
+                    let result { nodes: [1, 2] }
+                    when (len(entries(result)) == 2) && (len(result.nodes) == 2)
+                }
+                rule nodes warn "nodes" {
+                    when (len(element.nodes) == 2) && all(element.nodes, n => n is item)
+                }
+                rule broad warn "broad" {
+                    let projected children(node)
+                    when (len(projected) == 2) && any([node], n => len(n.element.nodes) == 2)
+                }
+                rule absent warn "absent" { when len(element.nodes) == 0 }
+            }
+        "#);
+        let reports = crate::engine::tests::lint(&linter, "[ab] []");
+        assert_eq!(reports.iter().filter(|report| report.rule == "record").count(), 2);
+        assert_eq!(reports.iter().filter(|report| report.rule == "nodes").count(), 1, "{reports:?}");
+        assert_eq!(reports.iter().filter(|report| report.rule == "broad").count(), 1);
+        assert_eq!(reports.iter().filter(|report| report.rule == "absent").count(), 1);
+    }
+
+    #[test]
+    fn node_properties_prefer_syntax_fields_but_keep_attributes_on_other_nodes() {
+        let linter = crate::engine::tests::linter(r#"
+            fn declarations(value) = value.declaration.nodes
+            in .t match item /[ab]/
+            in .t match bag "[" (declaration:item)* "]"
+            in .t match marker "!"
+            in item, bag, marker let declaration "attribute"
+            in bag rule field {
+                when len(declarations(node)) == 2 && all(declarations(node), child => child is item)
+                warn "field"
+            }
+            in marker rule attribute {
+                when node.declaration == "attribute"
+                warn "attribute"
+            }
+            in item rule parent_field {
+                when len(parent.declaration.nodes) == 2 && len(declarations(node.parent)) == 2
+                warn "parent"
+            }
+        "#);
+        let reports = crate::engine::tests::lint(&linter, "[ab] !");
+        assert_eq!((
+            reports.iter().filter(|report| report.rule == "field").count(),
+            reports.iter().filter(|report| report.rule == "attribute").count(),
+            reports.iter().filter(|report| report.rule == "parent_field").count(),
+        ), (1, 1, 2));
+    }
 
     #[test]
     fn pipeline_labels_do_not_leak_or_resolve_before_their_step() {

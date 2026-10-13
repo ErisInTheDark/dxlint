@@ -1,0 +1,10 @@
+import .core
+
+define {
+in ts_code {
+  match ts_line_comment like core_line_comment @core_line_comment_pattern
+  match ts_block_comment like core_block_comment @core_block_comment_pattern
+}
+}
+
+group ts_comment ts_line_comment, ts_block_comment

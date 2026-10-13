@@ -1,0 +1,11 @@
+import .ts
+import .ts/names
+in ts_type_query rule type-query-found {
+  when (name.scope_declaration ?? name.left.scope_declaration) != null
+  warn "query resolves"
+  report at { start: name.offset, end: name.end_offset }
+}
+in ts_identifier rule runtime-binding-missing {
+  when is (ts_call.callee, ts_member.object) && scope_declaration == null
+  warn "binding is type-only"
+}

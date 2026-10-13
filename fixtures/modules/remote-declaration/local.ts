@@ -1,0 +1,2 @@
+const remote = "local";
+remote;

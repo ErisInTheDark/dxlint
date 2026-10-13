@@ -21,7 +21,7 @@ struct Patch {
     values: Vec<(String, Value<'static>)>,
 }
 
-pub(super) struct LanguageOptions {
+pub(crate) struct LanguageOptions {
     languages: Vec<Language>,
 }
 
@@ -82,6 +82,14 @@ impl LanguageOptions {
             .flat_map(|patch| patch.values.iter()))
             .map(|(name, value)| (name.as_str(), value))
     }
+
+    pub fn environment(&self, language: usize, path: &Path) -> Value<'static> {
+        Value::record(vec![("settings".into(), Value::list(self.values(language, path)
+            .map(|(name, value)| Value::record(vec![
+                ("name".into(), Value::from(name.to_owned())),
+                ("value".into(), value.clone()),
+            ])).collect()))])
+    }
 }
 
 #[cfg(test)]
@@ -133,6 +141,36 @@ language .js {
         let edition = linter.language_options.values(json, Path::new("legacy/a.json"))
             .filter(|(name, _)| *name == "ecmaVersion").last().map(|(_, value)| value);
         assert_eq!(edition, Some(&crate::expr::Value::Bool(false)));
+    }
+
+    #[test]
+    fn environment_preserves_matching_patch_order_in_rule_workers() {
+        let mut linter = with_rules(r#"
+language .js { set globals { app: "readonly" } }
+language .js {
+  files "legacy/**"
+  set globals { app: "off" }
+}
+"#, r#"
+in ts_program rule environment:patches {
+  let records { value environment.settings; filter (setting) setting.name == "globals"; map (setting) setting.value.app }
+  let ordered join(records, "|")
+  when ordered == "|readonly|off"
+  warn "matched"
+}
+in ts_program rule environment:edition {
+  let edition { value environment.settings; filter (setting) setting.name == "ecmaVersion"; last }
+  when edition.value == null
+  warn "default"
+}
+"#);
+        linter.set_rule_jobs(1);
+        assert_eq!(linter.lint(Path::new("/root/legacy/a.js"), "").len(), 2);
+        assert_eq!(linter.lint(Path::new("/root/a.js"), "").len(), 1);
+        linter.split_at = 1;
+        linter.set_rule_jobs(2);
+        assert_eq!(linter.lint(Path::new("/root/legacy/a.js"), "").len(), 2);
+        assert_eq!(linter.lint(Path::new("/root/a.js"), "").len(), 1);
     }
 
 }

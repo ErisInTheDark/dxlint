@@ -10,21 +10,22 @@ use super::super::summary::{DeclKind, MemberKind};
 use super::super::types::{Checker, Ty};
 use super::typed::specifiers::file_gate;
 
-mod spaces;
-
 pub const FACTS: &[Fact] = &[Fact { shape: Fact::SCALAR.shape,
     name: "symbol_metadata",
     doc: "native layers: resolved declaration and alias docs, kinds and provenance, plus the selected call signature",
     get: |f, n| f.with_file(metadata, n),
-}, Fact { shape: Fact::SCALAR.shape,
-    name: "symbol_spaces",
-    doc: "native layers: resolved identifier or export specifier type, value and namespace spaces; null when unresolved",
-    get: |f, n| f.with_file(spaces::symbol, n),
-}, Fact { shape: Fact::SCALAR.shape,
-    name: "module_exports",
-    doc: "native layers: resolved import/export module exports with symbol spaces and completeness",
-    get: |f, n| f.with_file(spaces::module, n),
 }];
+
+fn remote_export(file: &NativeFile<'_>, node: u32) -> Option<(String, String)> {
+    let syntax = &file.syntax;
+    let specifier = if syntax.is(node, K::ExportSpec) { node } else {
+        syntax.parent(node).filter(|&parent| syntax.is(parent, K::ExportSpec))?
+    };
+    let source = syntax.get(syntax.parent(specifier)?, F::From)?;
+    let local = syntax.get(specifier, F::Local)?;
+    let name = |node| file.static_name(node).unwrap_or_else(|| super::super::statics::identifier_name(syntax.text(node)));
+    Some((name(source), name(local)))
+}
 
 fn origin(ck: &Checker<'_>, declaration: DeclRef, name: &str) -> Value<'static> {
     let gate = file_gate(ck, declaration.file, name.trim_start_matches('#'));
@@ -91,7 +92,7 @@ fn property(file: &NativeFile<'_>, node: u32) -> Option<(Ty, String)> {
             super::super::statics::identifier_name(s.text(key))
         } else {
             file.static_name(key).or_else(|| match file.type_of(key) {
-                Ty::Lit(value, "string") => super::super::regex::cook(&value),
+                Ty::Lit(value, "string") => crate::expr::js::strings::decode_literal(&value),
                 Ty::Lit(value, "number") => Some(value.to_string()),
                 _ => None,
             })?
@@ -177,7 +178,7 @@ fn metadata(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let mut alias_target_declarations = Vec::new();
     let property = property(file, node);
     let name = property.as_ref().map_or_else(|| s.text(node).to_string(), |(_, name)| name.clone());
-    if let Some((source, local)) = spaces::remote_export(file, node) {
+    if let Some((source, local)) = remote_export(file, node) {
         if let Some(module) = file.project.resolve(ck.file, &source) {
             let resolved = file.project.export_resolution(module, &local);
             declarations.extend(resolved.declarations.into_iter().filter_map(|declaration_ref| declaration(ck, declaration_ref)));

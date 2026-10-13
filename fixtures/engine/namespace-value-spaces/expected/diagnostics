@@ -1,0 +1,4 @@
+input.ts:14:1-14:6 namespace-not-value#0 no runtime namespace
+input.ts:2:1-2:6 namespace-not-value#0 no runtime namespace
+input.ts:4:1-4:6 namespace-not-value#0 no runtime namespace
+input.ts:6:1-6:7 namespace-not-value#0 no runtime namespace

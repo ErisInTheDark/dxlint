@@ -149,7 +149,7 @@ impl NativeFile<'_> {
                         Some(F::Quasi) => {
                             let piece = s.text(c).trim_start_matches(['`', '}']).trim_end_matches('`');
                             let piece = piece.strip_suffix("${").unwrap_or(piece);
-                            out.push_str(&super::regex::cook(&format!("`{piece}`"))?);
+                            out.push_str(&crate::expr::js::strings::decode_literal(&format!("`{piece}`"))?);
                         }
                         Some(F::Expr) => out.push_str(&self.static_string_at(c, depth + 1)?),
                         _ => {}

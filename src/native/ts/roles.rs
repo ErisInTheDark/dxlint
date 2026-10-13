@@ -1,6 +1,4 @@
-//! What a function is for, as eslint's accessor rules see it: getters and
-//! setters of classes and object literals, and the `get` / `set` functions
-//! of property descriptors (`Object.defineProperty(o, "x", { get() {} })`).
+//! Function names, enclosing functions and duplicate parameters.
 
 use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
@@ -88,25 +86,6 @@ impl NativeFile<'_> {
         Some(tokens.join(" "))
     }
 
-    /// A key of the options object of a dynamic `import(x, { ... })`:
-    /// `Some(None)` for its own keys (`with`), `Some(Some(name))` for keys
-    /// of an object one level in, under property `name` (`type` in
-    /// `{ with: { type: "json" } }`).
-    pub fn import_options_key(&self, node: u32) -> Option<Option<String>> {
-        let s = &self.syntax;
-        if s.field(node) != Some(F::Key) {
-            return None;
-        }
-        let object = s.parent(node).filter(|&n| s.is(n, K::Prop)).and_then(|p| s.parent(p)).filter(|&n| s.is(n, K::Object))?;
-        let holder = s.parent(object)?;
-        if s.is(holder, K::ImportCall) {
-            return Some(None);
-        }
-        let outer = s.parent(holder).filter(|&n| s.is(holder, K::Prop) && s.is(n, K::Object))?;
-        s.parent(outer).filter(|&n| s.is(n, K::ImportCall))?;
-        Some(super::statics::property_name(s, holder))
-    }
-
     /// Where eslint reports a function: from its start (its property's, for
     /// methods and property values) or, for arrows, at the `=>`.
     pub fn function_head(&self, func: u32) -> Option<usize> {
@@ -119,51 +98,6 @@ impl NativeFile<'_> {
             _ => return None,
         };
         Some(s.tree.node(node).start as usize)
-    }
-
-    /// `all`, `some` of the function's own `return`s give a value; `bare`
-    /// when there are only `return;`s, `none` without any.
-    pub fn return_values(&self, func: u32) -> Option<&'static str> {
-        let s = &self.syntax;
-        let body = s.get(func, F::Body)?;
-        let (mut with, mut without) = (0, 0);
-        let mut stack = vec![body];
-        while let Some(n) = stack.pop() {
-            match s.kind(n) {
-                Some(K::Function | K::Arrow | K::Method | K::Class) => continue,
-                Some(K::Return) => {
-                    if s.get(n, F::Arg).is_some() {
-                        with += 1;
-                    } else {
-                        without += 1;
-                    }
-                }
-                _ => stack.extend(s.kids(n).map(|(_, c)| c)),
-            }
-        }
-        Some(match (with, without) {
-            (0, 0) => "none",
-            (0, _) => "bare",
-            (_, 0) => "all",
-            _ => "some",
-        })
-    }
-
-    /// The `if`, loop or `?:` whose test `node` is part of (not across a
-    /// function).
-    pub fn conditional_ancestor(&self, node: u32) -> Option<u32> {
-        let s = &self.syntax;
-        let mut at = node;
-        loop {
-            let parent = s.parent(at)?;
-            if matches!(s.kind(parent), Some(K::If | K::While | K::DoWhile | K::For | K::Conditional)) && s.field(at) == Some(F::Test) {
-                return Some(parent);
-            }
-            if matches!(s.kind(parent), Some(K::Function | K::Arrow | K::Method)) {
-                return None;
-            }
-            at = parent;
-        }
     }
 
     /// eslint's no-unsafe-finally: a `return`, `throw`, `break` or
@@ -237,62 +171,4 @@ impl NativeFile<'_> {
         dup
     }
 
-    /// `get` or `set` when the function is an accessor or a property
-    /// descriptor's `get` / `set`.
-    pub fn accessor(&self, func: u32) -> Option<&'static str> {
-        let s = &self.syntax;
-        let word = |w: &str| match w {
-            "get" => Some("get"),
-            "set" => Some("set"),
-            _ => None,
-        };
-        // `get x() {}` in a class or object literal.
-        if s.is(func, K::Method) {
-            if let Some(k) = s.word(func, F::Kind).and_then(word) {
-                return Some(k);
-            }
-        }
-        // `{ get: function () {} }`, `{ get() {} }` in a descriptor.
-        let (holder, name) = match s.kind(func)? {
-            K::Method => (func, super::statics::property_name(s, func)?),
-            K::Function | K::Arrow => {
-                let prop = s.parent(func).filter(|&p| s.is(p, K::Prop) && s.field(func) == Some(F::Value))?;
-                (prop, super::statics::property_name(s, prop)?)
-            }
-            _ => return None,
-        };
-        let kind = word(&name)?;
-        let object = s.parent(holder).filter(|&o| s.is(o, K::Object))?;
-        self.is_property_descriptor(object).then_some(kind)
-    }
-
-    /// `Object.defineProperty(o, k, {...})`, `Reflect.defineProperty(o, k,
-    /// {...})`, or a value of `Object.create(p, { k: {...} })` /
-    /// `Object.defineProperties(o, { k: {...} })`.
-    fn is_property_descriptor(&self, object: u32) -> bool {
-        let s = &self.syntax;
-        if self.argument_of_global_method(object, &[("Object", "defineProperty", 2), ("Reflect", "defineProperty", 2)]) {
-            return true;
-        }
-        let Some(prop) = s.parent(object).filter(|&p| s.is(p, K::Prop) && s.field(object) == Some(F::Value)) else { return false };
-        let Some(outer) = s.parent(prop).filter(|&o| s.is(o, K::Object)) else { return false };
-        self.argument_of_global_method(outer, &[("Object", "create", 1), ("Object", "defineProperties", 1)])
-    }
-
-    /// `node` is argument `index` of `Global.method(...)` (also `?.` and
-    /// in parentheses), with `Global` the real global.
-    fn argument_of_global_method(&self, node: u32, methods: &[(&str, &str, usize)]) -> bool {
-        let s = &self.syntax;
-        let Some(call) = s.parent(node).filter(|&c| s.is(c, K::Call) && s.field(node) == Some(F::Arg)) else { return false };
-        let index = s.all(call, F::Arg).position(|a| a == node);
-        let mut callee = s.get(call, F::Callee);
-        while let Some(c) = callee.filter(|&c| s.is(c, K::Paren)) {
-            callee = s.get(c, F::Expr);
-        }
-        let Some(callee) = callee.filter(|&c| matches!(s.kind(c), Some(K::Member | K::Index))) else { return false };
-        let Some(object) = s.get(callee, F::Object).filter(|&o| s.is(o, K::Ident)) else { return false };
-        let Some(name) = super::statics::property_name(s, callee) else { return false };
-        let global = self.global_setting(object).is_some_and(|g| g != "off");
-        global && methods.iter().any(|&(g, m, i)| s.text(object) == g && name == m && index == Some(i))
-    }
 }

@@ -1,0 +1,4 @@
+input.ts:3:17-3:18 type-query-found#0 query resolves
+input.ts:4:17-4:32 type-query-found#0 query resolves
+input.ts:5:1-5:2 runtime-binding-missing#0 binding is type-only
+input.ts:6:1-6:3 runtime-binding-missing#0 binding is type-only

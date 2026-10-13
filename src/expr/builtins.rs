@@ -59,6 +59,7 @@ builtins! {
     PreviousSibling = "previous_sibling": "text of the previous node of the same layer in the same parent (null if none)",
     PreviousGap = "previous_gap": "text between that previous sibling and this node (null if none)",
     Source = "source": "the whole file's text",
+    Environment = "environment": "raw file-scoped language settings in config order: {settings: [{name, value}]}",
     Index = "index": "the node's position among its parent's children in the same field, from 0 (`ts_call.arg` 2nd argument: 1); null for the root",
     GapBefore = "gap_before": "the text between the previous child of the node's parent (of any layer or field) and the node: blank lines, comments, separators; null for the first child",
     Node = "node": "the node itself as a node value (reads as its text): for `walk`, `report at`, and `.x` reads later (`right.node`, `parent.node`)",
@@ -78,6 +79,10 @@ impl<'a> Ctx<'a> {
     pub(crate) fn builtin(&self, b: Builtin) -> Result<Value<'a>, String> {
         let start = self.tree.node(self.node).start as usize;
         Ok(match b {
+            Builtin::Environment => self.language_options.map_or_else(
+                || Value::record(vec![("settings".into(), Value::list(Vec::new()))]),
+                |options| options.environment(self.lang, std::path::Path::new(self.file)),
+            ),
             Builtin::Text => Value::from(self.node_text(self.node)),
             Builtin::Indent => Value::from(self.indent_at(start)),
             Builtin::ParentIndent => match self.parent_layer() {
@@ -210,36 +215,48 @@ impl<'a> Ctx<'a> {
     /// This tree's names, resolved on first use and given to its native
     /// front end.
     pub(crate) fn names(&self) -> &'a crate::grammar::names::Resolved {
+        assert!(!self.memo.resolving_names.get(), "name conditions cannot read resolved names");
         let mut fresh = false;
-        let resolved = self.memo.names.get_or_init(|| {
+        let cached = self.memo.names.get_or_init(|| {
             fresh = true;
-            self.memo.resolving_names.set(true);
-            let names = &self.grammar.names;
-            // One VM session serves every condition in the tree.
-            let session = crate::vm::Session::new(self, self.node, &[]);
-            let holds = |node: u32, e: &crate::vm::VExpr| match session.holds_on(node, e) {
-                Some(held) => held,
-                None => { self.memo.vm.clear_error(); false }
+            let resolve = || {
+                self.memo.resolving_names.set(true);
+                let names = &self.grammar.names;
+                let session = crate::vm::Session::new(self, self.node, &[]);
+                let holds = |node: u32, e: &crate::vm::VExpr| match session.holds_on(node, e) {
+                    Some(held) => held,
+                    None => { self.memo.vm.clear_error(); false }
+                };
+                let when = |node: u32, condition: u32| {
+                    let Some(e) = names.conditions[condition as usize].lowered.get() else { return false };
+                    match self.profile {
+                        Some(profile) => profile.time_name_condition(|| holds(node, e)),
+                        None => holds(node, e),
+                    }
+                };
+                let key = |text: &'a str| match self.native {
+                    Some(native) => native.name_key(text),
+                    None => std::borrow::Cow::Borrowed(text),
+                };
+                let operand = |node: u32, id: u32, item: Option<u32>| {
+                    let e = names.operands.get(id as usize).and_then(|operand| operand.lowered.get())
+                        .ok_or_else(|| Box::<str>::from("item expression is not compiled"))?;
+                    session.value_on(node, e, item).ok_or_else(|| session.error().into())
+                };
+                let resolve = || names.resolve(self.tree, self.source, &key, &when, &operand);
+                let resolved = std::sync::Arc::new(match self.profile {
+                    Some(profile) => profile.time_names(resolve),
+                    None => resolve(),
+                });
+                self.memo.resolving_names.set(false);
+                resolved
             };
-            let when = |node: u32, condition: u32| {
-                let Some(e) = names.conditions[condition as usize].lowered.get() else { return false };
-                match self.profile {
-                    Some(profile) => profile.time_name_condition(|| holds(node, e)),
-                    None => holds(node, e),
-                }
-            };
-            let key = |text: &'a str| match self.native {
-                Some(native) => native.name_key(text),
-                None => std::borrow::Cow::Borrowed(text),
-            };
-            let resolve = || names.resolve(self.tree, self.source, &key, &when);
-            let resolved = std::rc::Rc::new(match self.profile {
-                Some(profile) => profile.time_names(resolve),
-                None => resolve(),
-            });
-            self.memo.resolving_names.set(false);
-            resolved
+            match self.world.and_then(|world| world.name_cache(self.file_id)) {
+                Some(cache) => cache.get_or_init(|| crate::engine::reads::Cached::compute(resolve)).clone(),
+                None => crate::engine::reads::Cached::compute(resolve),
+            }
         });
+        let resolved = cached.as_ref();
         if fresh {
             if let Some(native) = self.native {
                 native.set_names(resolved.clone());
@@ -253,7 +270,7 @@ impl<'a> Ctx<'a> {
     /// as-is: name conditions read only name-free facts.
     pub(crate) fn native_facts(&self) -> Option<&'a (dyn crate::engine::frontend::Native + 'a)> {
         let native = self.native?;
-        if !self.memo.resolving_names.get() && self.memo.names.get().is_none() {
+        if !self.memo.resolving_names.get() {
             self.names();
         }
         Some(native)

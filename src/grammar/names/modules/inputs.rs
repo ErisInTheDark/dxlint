@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use super::configuration::{Configuration, OptionValue};
 use super::metadata::Json;
-use super::resolution::{clean, expand, spend, DiscoveryRequest, Host, Resolver, Settings};
+use super::resolution::{clean, expand, spend, DiscoveryRequest, Host, Probe, Resolver, Settings};
 use super::super::question::{Known, QueryContext};
 
-pub fn program_inputs(importer: u32, settings: &Settings, host: &dyn Host, question: &QueryContext) -> Known<Vec<PathBuf>> {
-    Inputs { resolver: Resolver { host, settings }, question, libraries: Vec::new(), sources: Vec::new() }.collect(importer).map_or(Known::Unknown, Known::Yes)
+pub fn program_inputs(settings: &Settings, host: &dyn Host, question: &QueryContext) -> Known<Vec<PathBuf>> {
+    Inputs { resolver: Resolver { host, settings }, question, libraries: Vec::new(), sources: Vec::new() }.collect().map_or(Known::Unknown, Known::Yes)
 }
 
 struct Inputs<'a> {
@@ -23,9 +23,8 @@ enum Visit {
 }
 
 impl Inputs<'_> {
-    fn collect(mut self, importer: u32) -> Result<Vec<PathBuf>, ()> {
-        let path = self.resolver.host.path(importer).known().ok_or(())?;
-        let directory = path.parent().ok_or(())?.to_path_buf();
+    fn collect(mut self) -> Result<Vec<PathBuf>, ()> {
+        let directory = self.resolver.program_directory()?;
         let config = Configuration::load(&self.resolver, &directory, self.question)?;
         let mut active = BTreeSet::new();
         let mut complete = BTreeSet::new();
@@ -78,7 +77,12 @@ impl Inputs<'_> {
                     spend(self.question)?;
                     let package_dir = ancestor.join(&**package);
                     let path = clean(Path::new(&expand(&settings.globals.libraries, &[("package_dir", &package_dir.to_string_lossy()), ("name", &name)])?));
-                    if self.resolver.host.is_file(&path, self.question).known().ok_or(())? {
+                    let request = DiscoveryRequest {
+                        root: path.parent().ok_or(())?.to_path_buf(),
+                        include: vec![path.file_name().and_then(|name| name.to_str()).ok_or(())?.into()],
+                        exclude: Vec::new(), extensions: Vec::new(),
+                    };
+                    if self.resolver.host.discover(&request, self.question).known().ok_or(())?.contains(&path) {
                         found = Some(path);
                         break 'ancestors;
                     }
@@ -97,11 +101,49 @@ impl Inputs<'_> {
             Some(option) => texts(&option.value)?.iter().map(|root| clean(&option.directory.join(&**root))).collect(),
             None => directory.ancestors().flat_map(|directory| settings.globals.type_directories.iter().map(move |root| clean(&directory.join(&**root)))).collect::<Vec<_>>(),
         };
-        let include = names.map_or_else(|| vec!["**/*".into()], |names| names.iter().map(|name| format!("{name}/**/*").into()).collect());
-        for root in roots {
-            spend(self.question)?;
-            let request = DiscoveryRequest { root, include: include.clone(), exclude: Vec::new(), extensions: settings.extensions.clone() };
-            self.libraries.extend(self.resolver.host.discover(&request, self.question).known().ok_or(())?);
+        if let Some(names) = names {
+            for name in names {
+                let name = name.strip_prefix(&*settings.packages.scoped_prefix).filter(|_| !settings.packages.scoped_prefix.is_empty()).map_or_else(
+                    || name.to_string(), |name| name.replace('/', &settings.packages.type_join)
+                );
+                let mut found = None;
+                for root in &roots {
+                    spend(self.question)?;
+                    match self.resolver.package_path(&root.join(&name), ".", &[], self.question)? {
+                        Probe::Found(path) => { found = Some(path); break; }
+                        Probe::Blocked => return Err(()),
+                        Probe::Missing => {}
+                    }
+                }
+                if let Some(path) = found {
+                    self.libraries.push(path);
+                }
+            }
+        } else {
+            let mut seen = BTreeSet::new();
+            for root in roots {
+                spend(self.question)?;
+                let mut extensions = settings.extensions.clone();
+                if !settings.packages.metadata.is_empty() { extensions.push(settings.packages.metadata.clone()); }
+                let request = DiscoveryRequest { root: root.clone(), include: vec!["**/*".into()], exclude: Vec::new(), extensions };
+                let paths = self.resolver.host.discover(&request, self.question).known().ok_or(())?;
+                let mut packages = BTreeSet::new();
+                for path in paths {
+                    spend(self.question)?;
+                    let relative = path.strip_prefix(&root).map_err(|_| ())?;
+                    if relative.components().count() > 1 {
+                        let name = relative.components().next().ok_or(())?.as_os_str().to_owned();
+                        packages.insert(name);
+                    }
+                }
+                for name in packages {
+                    if !seen.insert(name.clone()) { continue; }
+                    match self.resolver.package_path(&root.join(name), ".", &[], self.question)? {
+                        Probe::Found(path) => self.libraries.push(path),
+                        Probe::Blocked | Probe::Missing => return Err(()),
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -155,14 +197,26 @@ mod tests {
         discovered: BTreeMap<DiscoveryRequest, Vec<PathBuf>>,
     }
 
+    const PROGRAM_FILE: u32 = 7;
+
     impl Host for Files {
-        fn path(&self, _: u32) -> Known<PathBuf> { Known::Yes("/project/src/main.ts".into()) }
+        fn program(&self) -> Known<u32> { Known::Yes(PROGRAM_FILE) }
+        fn path(&self, file: u32) -> Known<PathBuf> {
+            Known::Yes(if file == PROGRAM_FILE { "/project/src/main.ts".into() } else { "/foreign/library.d.ts".into() })
+        }
         fn text(&self, path: &Path, _: &QueryContext) -> Known<Option<String>> { Known::Yes(self.text.get(path).cloned()) }
         fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> { Known::Yes(self.text.contains_key(path)) }
         fn scope(&self, _: &Path, _: &QueryContext) -> Known<Option<ScopeRef>> { Known::Yes(None) }
         fn ambient(&self, _: u32, _: &str, _: u64, _: &QueryContext) -> Known<Option<ScopeRef>> { Known::Yes(None) }
         fn discover(&self, request: &DiscoveryRequest, _: &QueryContext) -> Known<Vec<PathBuf>> {
-            self.discovered.get(request).cloned().map_or(Known::Unknown, Known::Yes)
+            if let Some(paths) = self.discovered.get(request) { return Known::Yes(paths.clone()) }
+            if let [name] = &*request.include {
+                if request.extensions.is_empty() && !name.contains(['*', '?', '[', '{']) {
+                    let path = request.root.join(&**name);
+                    return Known::Yes(self.text.contains_key(&path).then_some(path).into_iter().collect());
+                }
+            }
+            Known::Unknown
         }
     }
 
@@ -179,6 +233,7 @@ mod tests {
                 references: true, ..Globals::default()
             },
             extensions: vec![".ts".into()],
+            candidates: vec!["{dir}/{name}{ext}".into(), "{dir}/{name}/index{ext}".into()],
             ..Settings::default()
         }
     }
@@ -197,7 +252,7 @@ mod tests {
             ]),
             discovered: BTreeMap::from([(request, vec!["/base/globals/a.ts".into()])]),
         };
-        assert_eq!(program_inputs(0, &settings, &files, &QueryContext::default()), Known::Yes(vec![
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec![
             "/base/explicit.ts".into(), "/base/globals/a.ts".into(), "/referenced/ambient.ts".into()
         ]));
     }
@@ -212,7 +267,41 @@ mod tests {
             ]),
             discovered: BTreeMap::new(),
         };
-        assert_eq!(program_inputs(0, &settings, &files, &QueryContext::default()), Known::Yes(Vec::new()));
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(Vec::new()));
+    }
+
+    #[test]
+    fn library_membership_comes_from_discovery_and_missing_libraries_remain_unknown() {
+        let mut settings = settings();
+        settings.globals.default_libraries = vec!["BASE".into()];
+        settings.globals.libraries = "{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into();
+        let path: PathBuf = "/project/node_modules/typescript/lib/lib.base.d.ts".into();
+        let request = DiscoveryRequest {
+            root: path.parent().unwrap().into(), include: vec!["lib.base.d.ts".into()],
+            exclude: Vec::new(), extensions: Vec::new(),
+        };
+        let mut files = Files {
+            text: BTreeMap::from([("/project/tsconfig.json".into(), r#"{"files":[],"compilerOptions":{"types":[]}}"#.into())]),
+            discovered: BTreeMap::from([(request.clone(), vec![path.clone()])]),
+        };
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec![path]));
+        files.discovered.insert(request, Vec::new());
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Unknown);
+    }
+
+    #[test]
+    fn program_inputs_use_the_host_program_not_file_zero() {
+        let settings = settings();
+        let files = Files {
+            text: BTreeMap::from([
+                ("/project/tsconfig.json".into(), r#"{"files":["own.ts"],"compilerOptions":{"lib":[],"types":[]}}"#.into()),
+                ("/project/own.ts".into(), "".into()),
+                ("/foreign/tsconfig.json".into(), r#"{"files":["unrelated.ts"],"compilerOptions":{"lib":[],"types":[]}}"#.into()),
+                ("/foreign/unrelated.ts".into(), "".into()),
+            ]),
+            discovered: BTreeMap::new(),
+        };
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec!["/project/own.ts".into()]));
     }
 
     #[test]
@@ -225,10 +314,11 @@ mod tests {
                 ("/project/tsconfig.json".into(), r#"{"extends":"../base/tsconfig.json","files":["own.ts"]}"#.into()),
                 ("/project/node_modules/typescript/lib/lib.base.d.ts".into(), "".into()),
                 ("/project/own.ts".into(), "".into()),
+                ("/base/types/ambient/index.ts".into(), "".into()),
             ]),
             discovered: BTreeMap::from([(request, vec!["/base/types/ambient/index.ts".into()])]),
         };
-        assert_eq!(program_inputs(0, &settings, &files, &QueryContext::default()), Known::Yes(vec![
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec![
             "/project/node_modules/typescript/lib/lib.base.d.ts".into(), "/base/types/ambient/index.ts".into(), "/project/own.ts".into()
         ]));
     }
@@ -239,9 +329,35 @@ mod tests {
         for config in [
             r#"{"include":["**/*.ts"],"compilerOptions":{"lib":[],"types":[]}}"#,
             r#"{"files":[],"references":[{"path":"."}],"compilerOptions":{"lib":[],"types":[]}}"#,
+            r#"{"files":[],"references":[true],"compilerOptions":{"lib":[],"types":[]}}"#,
         ] {
             let files = Files { text: BTreeMap::from([("/project/tsconfig.json".into(), config.into())]), discovered: BTreeMap::new() };
-            assert_eq!(program_inputs(0, &settings, &files, &QueryContext::default()), Known::Unknown);
+            assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Unknown);
         }
+    }
+
+    #[test]
+    fn selected_type_packages_load_only_their_declared_entry_and_record_missing_entries() {
+        let mut settings = settings();
+        settings.packages.metadata = "package.json".into();
+        settings.packages.entries = vec!["types".into()];
+        settings.candidates = vec!["{dir}/{name}{ext}".into(), "{dir}/{name}/index{ext}".into()];
+        settings.extensions = vec![".d.ts".into()];
+        let request = DiscoveryRequest { root: "/project/types".into(), include: vec!["**/*".into()], exclude: Vec::new(), extensions: vec![".d.ts".into(), "package.json".into()] };
+        let mut files = Files {
+            text: BTreeMap::from([
+                ("/project/tsconfig.json".into(), r#"{"files":[],"compilerOptions":{"lib":[],"types":["missing","one","also-missing"],"typeRoots":["types"]}}"#.into()),
+                ("/project/types/one/package.json".into(), r#"{"types":"entry.d.ts"}"#.into()),
+                ("/project/types/one/entry.d.ts".into(), "".into()),
+                ("/project/types/one/unrelated-global.d.ts".into(), "".into()),
+            ]),
+            discovered: BTreeMap::from([(request, vec!["/project/types/one/entry.d.ts".into(), "/project/types/one/unrelated-global.d.ts".into()])]),
+        };
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec!["/project/types/one/entry.d.ts".into()]));
+        files.text.insert("/project/tsconfig.json".into(), r#"{"files":[],"compilerOptions":{"lib":[],"typeRoots":["types"]}}"#.into());
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Yes(vec!["/project/types/one/entry.d.ts".into()]));
+        files.text.remove(&PathBuf::from("/project/types/one/entry.d.ts"));
+        for paths in files.discovered.values_mut() { paths.retain(|path| path != Path::new("/project/types/one/entry.d.ts")); }
+        assert_eq!(program_inputs(&settings, &files, &QueryContext::default()), Known::Unknown);
     }
 }

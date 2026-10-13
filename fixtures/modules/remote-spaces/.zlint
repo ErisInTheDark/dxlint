@@ -1,0 +1,14 @@
+import .ts
+import .ts/modules
+
+in ts_identifier {
+  let remote_classes name_classes(node, text, null)
+  rule remote-value {
+    when text == "runtimeProbe" && remote_classes.value == true
+    warn "remote value"
+  }
+  rule remote-type {
+    when text == "typeProbe" && remote_classes.type == true && remote_classes.value == false
+    warn "remote type"
+  }
+}

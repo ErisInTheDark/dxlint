@@ -29,6 +29,7 @@ pub enum Item {
         module: Option<Expr>,
     },
     Uses(Name),
+    Merges { classes: Vec<Name> },
 }
 
 impl Item {
@@ -39,14 +40,14 @@ impl Item {
             Item::Globals { target, module, .. } => (target.as_ref(), module.as_ref(), None),
             Item::Resolves { binding, module, imported, .. } => (Some(binding), Some(module), imported.as_ref()),
             Item::Scope { name, module, .. } => (Some(name), module.as_ref(), None),
-            Item::Uses(_) => (None, None, None),
+            Item::Uses(_) | Item::Merges { .. } => (None, None, None),
         };
         [a, b, c].into_iter().flatten()
     }
 
     pub fn classes(&self) -> &[Name] {
         match self {
-            Item::Exports { classes, .. } | Item::Globals { classes, .. } | Item::Resolves { classes, .. } | Item::Scope { classes, .. } => classes,
+            Item::Exports { classes, .. } | Item::Globals { classes, .. } | Item::Resolves { classes, .. } | Item::Scope { classes, .. } | Item::Merges { classes } => classes,
             Item::Uses(_) => &[],
         }
     }

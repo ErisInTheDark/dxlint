@@ -1,0 +1,13 @@
+common.cjs:1:1-1:8 environment-setting#0 require: readonly, implicit=true, comment=false, source=commonjs
+common.cjs:2:1-2:8 environment-setting#0 exports: writable, implicit=true, comment=false, source=commonjs
+legacy/input.js:1:1-1:4 environment-setting#0 app: off, implicit=false, comment=false, source=script
+legacy/input.js:2:1-2:8 environment-setting#0 Promise: off, implicit=false, comment=false, source=script
+legacy/input.js:3:1-3:5 environment-setting#0 Math: readonly, implicit=true, comment=false, source=script
+modern.js:1:1-1:1 environment-exported#0 exported visible
+modern.js:1:11-1:14 environment-mentions#0 app: off
+modern.js:1:20-1:26 environment-mentions#0 custom: writable
+modern.js:2:11-2:17 environment-mentions#0 custom: readonly
+modern.js:4:1-4:4 environment-setting#0 app: off, implicit=true, comment=true, source=script
+modern.js:5:1-5:7 environment-setting#0 custom: readonly, implicit=false, comment=true, source=script
+modern.js:6:1-6:8 environment-setting#0 Promise: readonly, implicit=true, comment=false, source=script
+modern.js:7:1-7:8 environment-setting#0 visible: absent, implicit=false, comment=false, source=script

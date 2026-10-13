@@ -1,0 +1,106 @@
+import .ts/modules
+import .ts/comments
+
+fn ts_environment(n, key) = {
+  value settings: n.ts_environment_settings
+  value setting: find_last(settings, item => item.name == key)
+  value setting.value
+}
+fn ts_ecma_version(n) = {
+  value edition: ts_environment(n, "ecmaVersion")
+  value if edition == null || edition == "latest" then 2026
+    else if edition >= 6 && edition <= 17 then edition + 2009 else edition
+}
+fn ts_source_type(n) = {
+  value selected: ts_environment(n, "sourceType")
+  value selected ?? (if ends_with(n.file, ".cjs") || ends_with(n.file, ".cts") then "commonjs"
+    else if ts_module_external(n) then "module" else "script")
+}
+fn ts_global_configured(n, key) = {
+  value patches: filter(n.ts_environment_settings, item => item.name == "globals")
+  value settings: map(patches, item => get(item.value, key))
+  value find_last(settings, setting => contains(["readonly", "writable", "off"], setting))
+}
+fn ts_global_comment_owner(entry) = {
+  value walk([entry], item => item.parent.node)
+  find (item) item is ts_block_comment
+}
+fn ts_global_real_entry(entry) = {
+  value comment: ts_global_comment_owner(entry)
+  value comment != null && entry.parent.offset == comment.offset + len("/*")
+}
+
+define {
+in ts_program let ts_environment_settings environment.settings
+in ts_identifier let global {
+  value classes: name_role_classes(node, "reference")
+  value program: ts_module_program(node)
+  value key: ts_module_name(node)
+  value if classes != null && contains(classes, "value") && scope_declaration == null
+    then ts_global_setting(program, key) else null
+}
+in ts_program let ts_global_editions [
+  {edition: 3, names: [
+    "Array", "Boolean", "constructor", "Date", "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+    "Error", "escape", "eval", "EvalError", "Function", "hasOwnProperty", "Infinity", "isFinite", "isNaN",
+    "isPrototypeOf", "Math", "NaN", "Number", "Object", "parseFloat", "parseInt", "propertyIsEnumerable", "RangeError",
+    "ReferenceError", "RegExp", "String", "SyntaxError", "toLocaleString", "toString", "TypeError", "undefined",
+    "unescape", "URIError", "valueOf"
+  ]},
+  {edition: 5, names: ["JSON"]},
+  {edition: 2015, names: [
+    "ArrayBuffer", "DataView", "Float32Array", "Float64Array", "Int16Array", "Int32Array", "Int8Array", "Intl", "Map",
+    "Promise", "Proxy", "Reflect", "Set", "Symbol", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray",
+    "WeakMap", "WeakSet"
+  ]},
+  {edition: 2017, names: ["Atomics", "SharedArrayBuffer"]},
+  {edition: 2020, names: ["BigInt", "BigInt64Array", "BigUint64Array", "globalThis"]},
+  {edition: 2021, names: ["AggregateError", "FinalizationRegistry", "WeakRef"]},
+  {edition: 2025, names: ["Float16Array", "Iterator"]},
+  {edition: 2026, names: ["AsyncDisposableStack", "DisposableStack", "SuppressedError", "Temporal"]}
+]
+in ts_block_comment match ts_global_directive /\s*globals?\s+/ until /(?=\*\/)/
+in ts_global_directive match ts_global_entry name:/[^\s,:*\/]+/ (/\s*:\s*/ setting:/[^\s,*\/]+/)?
+in ts_block_comment match ts_exported_directive /\s*exported\s+/ until /(?=\*\/)/
+in ts_exported_directive match ts_exported_entry /[^\s,*\/]+/
+in ts_program let ts_global_exported_entries {
+  value descendants(ts_exported_entry)
+  filter (entry) ts_global_real_entry(entry)
+  map (entry) entry.text
+  unique
+}
+in ts_program let ts_global_comment_entries {
+  value descendants(ts_global_entry)
+  filter (entry) ts_global_real_entry(entry)
+  map (entry) {
+    name: entry.name,
+    offset: entry.name.offset,
+    comment: ts_global_comment_owner(entry),
+    setting: if entry.setting == "true" || entry.setting == "writable" || entry.setting == "writeable" then "writable"
+      else if entry.setting == "off" then "off" else "readonly"
+  }
+}
+}
+
+fn ts_global_builtin_setting(n, key) = {
+  value edition: find(n.ts_global_editions, row => contains(row.names, key))
+  value selected: ts_ecma_version(n)
+  value if edition == null then null else if edition.edition <= selected then "readonly" else "off"
+}
+fn ts_global_implicit_setting(n, key) = {
+  value configured: ts_global_configured(n, key)
+  value source: ts_source_type(n)
+  value commonjs: if source == "commonjs" then get({exports: "writable", global: "readonly", module: "readonly", require: "readonly"}, key) else null
+  value configured ?? commonjs ?? ts_global_builtin_setting(n, key)
+}
+fn ts_global_mentions(n) = n.ts_global_comment_entries
+fn ts_exported_names(n) = n.ts_global_exported_entries
+fn ts_global_implicit(n, key) = {
+  value setting: ts_global_implicit_setting(n, key)
+  value setting == "readonly" || setting == "writable"
+}
+fn ts_global_commented(n, key) = any(n.ts_global_comment_entries, mention => mention.name == key)
+fn ts_global_setting(n, key) = {
+  value mention: find_last(n.ts_global_comment_entries, item => item.name == key)
+  value mention.setting ?? ts_global_implicit_setting(n, key)
+}

@@ -21,6 +21,7 @@ pub enum Action {
     Resolves { classes: u64, asks: u64, binding: u32, module: u32, imported: Option<u32> },
     Scope { classes: u64, name: u32, module: Option<u32> },
     Uses(Box<str>),
+    Merges { classes: u64 },
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +64,7 @@ pub fn lower(item: &Item, classes: u64, asks: u64, when: Option<u32>, operand: &
             module: module.as_ref().map(|_| operand(operand::MODULE)),
         },
         Item::Uses(name) => Action::Uses(name.text.clone().into()),
+        Item::Merges { .. } => Action::Merges { classes },
     };
     Conditional { action, when }
 }

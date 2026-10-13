@@ -1,11 +1,14 @@
 import .ts/expression-fixes
 import .ts/style/type-imports
+import .ts/modules
 
 define {
 in ts_export_specifier {
-  let export_spaces symbol_spaces
-  let export_type kind == null && export_spaces != null && !export_spaces.value
-  let export_value kind == null && export_spaces.value == true
+  let export_key ts_module_name(local.node)
+  let export_source js_string(parent.from.text)
+  let export_classes name_classes(local.node, export_key, export_source)
+  let export_type kind == null && export_classes.value == false && (export_classes.type == true || export_classes.query == true)
+  let export_value kind == null && export_classes.value == true
   let export_name local.literal_value.value ?? local.text
   let export_alias { value children.nodes; filter (item) item is ts_export_specifier.exported; first }
 }
@@ -14,8 +17,9 @@ in ts_export {
   let export_values { value specifier.nodes; filter (item) item.export_value }
   let export_inline { value specifier.nodes; filter (item) item.kind == "type" }
   let export_names { value export_types; map (item) item.export_name }
-  let export_module module_exports
-  let export_star operator == "*" && export_module != null && export_module.complete && !any(export_module.exports, item => item.spaces.value == true)
+  let export_source js_string(from.text)
+  let export_module if operator == "*" then module_exports(node, export_source) else null
+  let export_star operator == "*" && export_module != null && all(export_module, item => item.classes.value == false)
 }
 fn export_specifier_text(item) = if item.export_alias != null then item.local.text " as " item.export_alias.text else item.local.text
 fn export_policy_text(source, n, inline) = if n.operator == "*" then {

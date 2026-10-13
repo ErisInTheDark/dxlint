@@ -1,0 +1,6 @@
+import .ts
+import .ts/names
+in ts_identifier rule namespace-not-value {
+  when is ts_expression_statement.expression && scope_declaration == null
+  warn "no runtime namespace"
+}

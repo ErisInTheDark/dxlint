@@ -17,10 +17,6 @@ use super::summary::{summarise, Export, FileSummary, Module, Scope, Summary};
 use super::view::Raw;
 use crate::config::source::normalize_path;
 
-#[path = "modules/symbol-spaces.rs"]
-mod symbol_spaces;
-pub use symbol_spaces::{ModuleSymbols, SymbolSpaces};
-
 /// Re-exports followed before giving up (cycles, very deep barrels).
 const MAX_HOPS: usize = 16;
 

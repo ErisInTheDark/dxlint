@@ -1,0 +1,236 @@
+import .ts/comments
+
+@macro ts_module_profile(profile, order, condition) {
+  module_resolution profile {
+    config {
+      files ["tsconfig.json", "jsconfig.json"]
+      format jsonc
+      source_files "files"
+      include "include"
+      exclude "exclude"
+      extends "extends"
+      references "references[].path"
+      options "compilerOptions"
+      paths "paths"
+      base "baseUrl"
+    }
+    extensions [".ts", ".tsx", ".d.ts", ".mts", ".cts", ".d.mts", ".d.cts"]
+    substitutions {
+      ".js" [".ts", ".tsx", ".d.ts"]
+      ".jsx" [".tsx", ".d.ts"]
+      ".mjs" [".mts", ".d.mts"]
+      ".cjs" [".cts", ".d.cts"]
+    }
+    candidates ["{{dir}}/{{name}}{{ext}}", "{{dir}}/{{name}}/index{{ext}}"]
+    packages {
+      directories ["node_modules"]
+      metadata "package.json"
+      entries ["types", "typings"]
+      exports "exports"
+      imports "imports"
+      scoped_prefix "@"
+      type_directory "@types"
+      type_join "__"
+    }
+    conditions ["types", condition, "default"]
+    ambient_scopes [ambient_module]
+    star_excludes ["default", "="]
+    search order
+    globals {
+      libraries "{{package_dir}}/typescript/lib/lib.{{name:lower}}.d.ts"
+      library_option "lib"
+      default_libraries ["es2023", "dom"]
+      types_option "types"
+      type_roots_option "typeRoots"
+      type_directories ["node_modules/@types"]
+      project_files ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
+      references true
+    }
+    when resolution.config.module == "commonjs" || resolution.config.module == 1 {
+      conditions ["types", "require", "default"]
+    }
+    when resolution.config.moduleResolution == "classic" || resolution.config.moduleResolution == 1 {
+      search [relative, config_paths, config_base, ambient]
+    }
+  }
+}
+@ts_module_profile(ts, [relative, config_paths, config_base, ambient, packages], "import")
+@ts_module_profile(ts_require, [relative, config_paths, config_base, ambient, packages], "require")
+@ts_module_profile(ts_augmentation, [relative, config_paths, config_base, packages], "import")
+
+fn ts_module_name(n) = js_string(n.text) ?? js_string('"' n.text '"')
+fn ts_module_program(n) = {
+  value walk([n], p => p.parent.node)
+  find (p) p is ts_program
+}
+fn ts_module_external(n) = ends_with(n.file, ".mjs") || ends_with(n.file, ".mts")
+  || ends_with(n.file, ".cjs") || ends_with(n.file, ".cts")
+  || any(n.body.nodes, item => item is (ts_import, ts_export, ts_export_assignment)
+  || item is ts_import_equals && item.value.node is ts_call)
+fn ts_module_names(n) = if n.name.node is ts_qualified_name then {
+  value [n.name.node]
+  walk (current) current.children.nodes
+  filter (current) current is ts_identifier
+  sort_by (current) current.offset
+} else [n.name.node]
+fn ts_module_first_name(n) = { value ts_module_names(n); first }
+fn ts_module_external_file(n) = { value program: ts_module_program(n); value ts_module_external(program) }
+fn ts_module_require_source(n) = { value argument: first(n.value.argument.nodes); value js_string(argument.text) }
+fn ts_module_global(n) = n.parent.node is ts_program && !ts_module_external(n.parent.node)
+  || n.parent.node is ts_block && n.parent.parent.node is ts_namespace && n.parent.parent.kind == "global"
+fn ts_module_public(n) = n is ts_export.declaration && n.parent.kind != "default"
+  || n.parent.node is ts_block && n.parent.parent.node is ts_namespace && n.parent.parent.name.node is ts_string
+fn ts_module_primitives(n) = {
+  value n
+  value descendants(ts_type_keyword)
+  filter (keyword) contains(["any", "unknown", "never", "void", "undefined", "null",
+    "boolean", "number", "bigint", "string", "symbol", "object", "intrinsic"], keyword.text)
+  unique_by (keyword) keyword.text
+}
+
+in ts_program {
+  uses module_resolution ts
+  globals first type ts_module_primitives(node)
+}
+in ts_type_query { resolves query name }
+
+in ts_import {
+  when kind != "type" {
+    resolves value, type, query default_import.node in module js_string(from.text) as "default"
+    resolves value, type, query namespace.node in module js_string(from.text) as "*"
+  }
+  when kind == "type" {
+    resolves type, query default_import.node in module js_string(from.text) as "default" asking all
+    resolves type, query namespace.node in module js_string(from.text) as "*" asking all
+  }
+}
+in ts_import_specifier {
+  when kind != "type" && parent.kind != "type" {
+    resolves value, type, query local.node ?? imported.node in module js_string(parent.from.text) as ts_module_name(imported.node)
+  }
+  when kind == "type" || parent.kind == "type" {
+    resolves type, query local.node ?? imported.node in module js_string(parent.from.text) as ts_module_name(imported.node) asking all
+  }
+}
+in ts_import_equals {
+  when value.node is ts_call && value.callee.text == "require" {
+    uses module_resolution ts_require
+    when kind != "type" {
+      resolves value, type, query name.node in module ts_module_require_source(node) as "="
+    }
+    when kind == "type" {
+      resolves type, query name.node in module ts_module_require_source(node) as "=" asking all
+    }
+  }
+}
+
+in ts_export_specifier {
+  when parent.from == null {
+    when kind != "type" && parent.kind != "type" {
+      exports value, type, query local.node as ts_module_name(exported.node ?? local.node)
+    }
+    when kind == "type" || parent.kind == "type" {
+      exports type, query local.node as ts_module_name(exported.node ?? local.node) asking all
+    }
+  }
+  when parent.from != null {
+    when kind != "type" && parent.kind != "type" {
+      exports value, type, query ts_module_name(local.node) from module js_string(parent.from.text) as ts_module_name(exported.node ?? local.node)
+    }
+    when kind == "type" || parent.kind == "type" {
+      exports type, query ts_module_name(local.node) from module js_string(parent.from.text) as ts_module_name(exported.node ?? local.node) asking all
+    }
+  }
+}
+in ts_export {
+  when operator == "*" && namespace == null {
+    when kind != "type" { exports all value, type, query from module js_string(from.text) }
+    when kind == "type" { exports all type, query from module js_string(from.text) asking all }
+  }
+  when operator == "*" && namespace != null {
+    when kind != "type" { exports value, type, query "*" from module js_string(from.text) as ts_module_name(namespace.node) }
+    when kind == "type" { exports type, query "*" from module js_string(from.text) as ts_module_name(namespace.node) asking all }
+  }
+  when kind == "default" {
+    when declaration.node is ts_class { exports value, type, query declaration.node as "default" }
+    when declaration.node is ts_function { exports value, query declaration.node as "default" }
+    when declaration.node is ts_interface { exports type declaration.node as "default" }
+    when declaration == null { exports value, query expression.node as "default" }
+  }
+}
+in ts_export_assignment { exports value, type, query expression.node as "=" }
+
+in ts_variable_declaration {
+  when ts_module_public(node) { exports value, query declaration.nodes }
+  when ts_module_global(node) { globals value, query declaration.nodes }
+}
+in ts_function {
+  merges value, query
+  when ts_module_public(node) { exports value, query name.node }
+  when ts_module_global(node) { globals value, query name.node }
+}
+in ts_class, ts_enum {
+  merges value, type, query
+  when ts_module_public(node) { exports value, type, query name.node }
+  when ts_module_global(node) { globals value, type, query name.node }
+}
+in ts_interface, ts_type_alias {
+  when ts_module_public(node) { exports type name.node }
+  when ts_module_global(node) { globals type name.node }
+}
+in ts_interface { merges type }
+in ts_namespace {
+  merges value, type, query
+  when name.node is ts_string {
+    when !ts_module_external_file(node) { scope ambient_module named js_string(name.text) }
+    when ts_module_external_file(node) {
+      uses module_resolution ts_augmentation
+      scope ambient_module named js_string(name.text) from module js_string(name.text)
+    }
+  }
+  when name != null && !(name.node is ts_string) {
+    scope namespace named ts_module_names(node)
+    when ts_module_public(node) {
+      exports type ts_module_first_name(node)
+      when ts_namespace_runtime(node) { exports value, query ts_module_first_name(node) }
+    }
+    when ts_module_global(node) {
+      globals type ts_module_first_name(node)
+      when ts_namespace_runtime(node) { globals value, query ts_module_first_name(node) }
+    }
+  }
+}
+
+define {
+  in ts_line_comment match ts_reference_path /^\/\/\/\s*<reference\s+path\s*=\s*["'][^"']+["'][^>]*\/>/
+  in ts_line_comment match ts_reference_types /^\/\/\/\s*<reference\s+types\s*=\s*["'][^"']+["'][^>]*\/>/
+  in ts_line_comment match ts_reference_lib /^\/\/\/\s*<reference\s+lib\s*=\s*["'][^"']+["'][^>]*\/>/
+}
+fn ts_module_reference(n) = re_replace(n.text, /^\/\/\/\s*<reference\s+(?:path|types|lib)\s*=\s*["']([^"']+)["'][\s\S]*$/, "$1")
+fn ts_module_path_reference(n) = {
+  value path: re_replace(ts_module_reference(n), /\\/, "/")
+  value if starts_with(path, "./") || starts_with(path, "../") || starts_with(path, "/")
+    || re_test(path, /^[A-Za-z]:\//) then path else "./{path}"
+}
+fn ts_module_leading_reference(n) = {
+  value n.source
+  byte_slice 0 n.offset
+  re_test /^(?:\s|\/\/[^\r\n]*(?:\r?\n|$)|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/)*$/
+}
+fn ts_module_types_reference(n) = "@types/{ts_module_reference(n)}"
+fn ts_module_lib_reference(n) = "typescript/lib/lib.{ts_module_reference(n)}.d.ts"
+in ts_reference_path {
+  when ts_module_leading_reference(node) {
+    globals all value, type, query from module ts_module_path_reference(node)
+  }
+}
+in ts_reference_types {
+  when ts_module_leading_reference(node) {
+    globals all value, type, query from module ts_module_types_reference(node)
+  }
+}
+in ts_reference_lib {
+  when ts_module_leading_reference(node) {
+    globals all value, type, query from module ts_module_lib_reference(node)
+  }
+}

@@ -14,6 +14,7 @@ pub struct DiscoveryRequest {
 }
 
 pub trait Host {
+    fn program(&self) -> Known<u32>;
     fn path(&self, file: u32) -> Known<PathBuf>;
     fn text(&self, path: &Path, question: &QueryContext) -> Known<Option<String>>;
     fn is_file(&self, path: &Path, question: &QueryContext) -> Known<bool>;
@@ -90,6 +91,12 @@ pub struct Resolver<'a, H: ?Sized> {
 }
 
 impl<H: Host + ?Sized> Resolver<'_, H> {
+    pub(super) fn program_directory(&self) -> Result<PathBuf, ()> {
+        let program = self.host.program().known().ok_or(())?;
+        let path = self.host.path(program).known().ok_or(())?;
+        path.parent().map(Path::to_path_buf).ok_or(())
+    }
+
     pub fn context(&self, importer: u32, question: &QueryContext) -> Known<crate::expr::Value<'static>> {
         super::context::context(self, importer, question)
     }
@@ -111,7 +118,7 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
             let result = match search {
                 Search::Relative if relative => self.candidates(dir, specifier, question)?,
                 Search::Paths | Search::Base if !relative => {
-                    if config.is_none() { config = Some(Configuration::load(self, dir, question)?); }
+                    if config.is_none() { config = Some(Configuration::load(self, &self.program_directory()?, question)?); }
                     let config = config.as_ref().ok_or(())?;
                     let base = config.base(&self.settings.config.base)?;
                     match search {
@@ -133,6 +140,10 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     }
 
     fn candidates(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<ScopeRef>, ()> {
+        self.candidate_path(dir, name, question)?.map(|path| self.host.scope(&path, question).known().ok_or(())).transpose().map(Option::flatten)
+    }
+
+    fn candidate_path(&self, dir: &Path, name: &str, question: &QueryContext) -> Result<Option<PathBuf>, ()> {
         let substitution = self.settings.substitutions.iter().find(|(suffix, _)| name.ends_with(&**suffix));
         let (base, mut extensions): (&str, Vec<&str>) = match substitution {
             Some((suffix, replacements)) => (&name[..name.len() - suffix.len()], replacements.iter().map(|value| &**value).chain(std::iter::once(&**suffix)).collect()),
@@ -145,7 +156,7 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
                 let candidate = expand(template, &[("dir", &dir.to_string_lossy()), ("name", base), ("ext", extension)])?;
                 let candidate = clean(Path::new(&candidate));
                 if self.host.is_file(&candidate, question).known().ok_or(())? {
-                    return self.host.scope(&candidate, question).known().ok_or(());
+                    return Ok(Some(candidate));
                 }
             }
         }
@@ -189,6 +200,14 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     }
 
     fn package(&self, root: &Path, subpath: &str, conditions: &[&str], question: &QueryContext) -> Result<Probe, ()> {
+        Ok(match self.package_path(root, subpath, conditions, question)? {
+            Probe::Found(path) => self.host.scope(&path, question).known().ok_or(())?.map_or(Probe::Missing, Probe::Found),
+            Probe::Blocked => Probe::Blocked,
+            Probe::Missing => Probe::Missing,
+        })
+    }
+
+    pub(super) fn package_path(&self, root: &Path, subpath: &str, conditions: &[&str], question: &QueryContext) -> Result<Probe<PathBuf>, ()> {
         if let Some(metadata) = self.metadata(&root.join(&*self.settings.packages.metadata), question)? {
             if let Some(exports) = metadata.get(&self.settings.packages.exports) {
                 let choice = match exports {
@@ -203,20 +222,20 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
                 for target in targets {
                     let path = Path::new(&target);
                     if path.is_absolute() || path.components().any(|part| part == std::path::Component::ParentDir) { continue }
-                    if let Some(scope) = self.candidates(root, &target, question)? { return Ok(Probe::Found(scope)) }
+                    if let Some(path) = self.candidate_path(root, &target, question)? { return Ok(Probe::Found(path)) }
                 }
                 return Ok(Probe::Blocked);
             }
             if subpath == "." {
                 for entry in &self.settings.packages.entries {
                     if let Some(target) = metadata.get(entry).and_then(Json::text) {
-                        if let Some(scope) = self.candidates(root, target, question)? { return Ok(Probe::Found(scope)) }
+                        if let Some(path) = self.candidate_path(root, target, question)? { return Ok(Probe::Found(path)) }
                     }
                 }
             }
         }
         let name = subpath.strip_prefix("./").unwrap_or("");
-        Ok(self.candidates(root, name, question)?.map_or(Probe::Missing, Probe::Found))
+        Ok(self.candidate_path(root, name, question)?.map_or(Probe::Missing, Probe::Found))
     }
 
     fn export_targets(&self, value: &Json, conditions: &[&str], capture: &str, question: &QueryContext) -> Result<Vec<String>, ()> {
@@ -242,11 +261,10 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Probe {
+pub(super) enum Probe<T = ScopeRef> {
     Missing,
     Blocked,
-    Found(ScopeRef),
+    Found(T),
 }
 
 pub(super) fn spend(question: &QueryContext) -> Result<(), ()> {
@@ -265,14 +283,33 @@ pub(super) fn clean(path: &Path) -> PathBuf {
     result
 }
 
+pub(super) enum TemplateTransform {
+    Identity,
+    Lower,
+}
+
+impl TemplateTransform {
+    pub(super) fn parse(placeholder: &str) -> Result<(&str, Self), ()> {
+        match placeholder.split_once(':') {
+            None => Ok((placeholder, Self::Identity)),
+            Some((name, "lower")) => Ok((name, Self::Lower)),
+            Some(_) => Err(()),
+        }
+    }
+}
+
 pub(super) fn expand(template: &str, values: &[(&str, &str)]) -> Result<String, ()> {
     let mut output = String::new();
     let mut rest = template;
     while let Some(open) = rest.find('{') {
         output.push_str(&rest[..open]);
         let close = rest[open + 1..].find('}').ok_or(())? + open + 1;
-        let key = &rest[open + 1..close];
-        output.push_str(values.iter().find(|(name, _)| *name == key).ok_or(())?.1);
+        let (key, transform) = TemplateTransform::parse(&rest[open + 1..close])?;
+        let value = values.iter().find(|(name, _)| *name == key).ok_or(())?.1;
+        match transform {
+            TemplateTransform::Identity => output.push_str(value),
+            TemplateTransform::Lower => output.push_str(&value.to_lowercase()),
+        }
         rest = &rest[close + 1..];
     }
     if rest.contains('}') { return Err(()) }
@@ -309,6 +346,7 @@ mod tests {
     }
 
     impl Host for Files {
+        fn program(&self) -> Known<u32> { Known::Yes(0) }
         fn path(&self, file: u32) -> Known<PathBuf> {
             self.paths.iter().find_map(|(path, (id, _))| (*id == file).then(|| Known::Yes(path.clone()))).unwrap_or(Known::Unknown)
         }
@@ -425,5 +463,25 @@ mod tests {
         files.add("/base/src/leaf.ts", "");
         let settings = configured();
         assert_eq!(Resolver { host: &files, settings: &settings }.resolve(importer.file, "x", &[], &QueryContext::default()), Known::Yes(Some(preferred)));
+    }
+
+    #[test]
+    fn foreign_imports_keep_program_config_but_resolve_relative_to_their_source() {
+        let mut files = Files::default();
+        files.add("/app/main.ts", "");
+        files.add("/app/tsconfig.json", r#"{"compilerOptions":{"baseUrl":"./src","paths":{"alias":["leaf"]}}}"#);
+        let target = files.add("/app/src/leaf.ts", "");
+        let importer = files.add("/foreign/main.ts", "");
+        files.add("/foreign/tsconfig.json", r#"{"compilerOptions":{"baseUrl":"./wrong","paths":{"alias":["leaf"]}}}"#);
+        files.add("/foreign/wrong/leaf.ts", "");
+        let relative = files.add("/foreign/leaf.ts", "");
+        let package = files.add("/foreign/node_modules/pkg/index.ts", "");
+        let settings = configured();
+        let resolver = Resolver { host: &files, settings: &settings };
+        let question = QueryContext::default();
+        assert_eq!(resolver.resolve(importer.file, "./leaf", &[], &question), Known::Yes(Some(relative)));
+        assert_eq!(resolver.resolve(importer.file, "pkg", &[], &question), Known::Yes(Some(package)));
+        assert_eq!(resolver.resolve(importer.file, "alias", &[], &question), Known::Yes(Some(target)));
+        assert_eq!(resolver.resolve(importer.file, "leaf", &[], &question), Known::Yes(Some(target)));
     }
 }

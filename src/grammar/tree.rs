@@ -22,6 +22,7 @@ pub struct Tree {
     parent: Vec<u32>,
     label: Vec<u16>,
     field_indices: OnceLock<Vec<usize>>,
+    module_index: OnceLock<super::names::modules::index::Index>,
     /// Reachable nodes in document order (pre-order).
     pub order: Vec<u32>,
     pub root: u32,
@@ -132,7 +133,76 @@ impl Tree {
             }
         }
         parent[root as usize] = NONE;
-        Tree { nodes, parent, label, field_indices: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+        Tree { nodes, parent, label, field_indices: OnceLock::new(), module_index: OnceLock::new(), order, root, holes, too_deep, layer_roots: Vec::new(), overlapping }
+    }
+
+    pub fn module_index(&self, tables: &super::names::Names, text: &str, key: &super::names::NameKey<'_>, profile: Option<&crate::engine::Profile>) -> &super::names::modules::index::Index {
+        self.module_index.get_or_init(|| {
+            let build = || super::names::modules::index::Index::build(tables, self, text, key);
+            match profile {
+                Some(profile) => profile.time_module_index(build),
+                None => build(),
+            }
+        })
+    }
+
+    pub fn semantic_node(&self, node: u32) -> Option<u32> {
+        self.semantic_node_with(node, &mut || true)
+    }
+
+    pub(crate) fn semantic_node_with(&self, mut node: u32, step: &mut impl FnMut() -> bool) -> Option<u32> {
+        for _ in 0..=self.nodes.len() {
+            self.nodes.get(node as usize)?;
+            let Some(child) = self.capture_child(node) else { return Some(node) };
+            if !step() { return None }
+            node = child;
+        }
+        None
+    }
+
+    pub(crate) fn capture_child(&self, node: u32) -> Option<u32> {
+        let syntax = self.nodes.get(node as usize)?;
+        match syntax.children.as_slice() {
+            [child] if syntax.matcher == TEXT && child.label == NO_LABEL => Some(child.node),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn capture_owner_with(&self, node: u32, step: &mut impl FnMut() -> bool) -> Option<u32> {
+        let mut node = self.semantic_node_with(node, step)?;
+        for _ in 0..=self.nodes.len() {
+            let Some(parent) = self.parent(node) else { return Some(node) };
+            if self.capture_child(parent) != Some(node) { return Some(node) }
+            if !step() { return None }
+            node = parent;
+        }
+        None
+    }
+
+    pub fn semantic_follow(&self, node: u32, path: &[u16]) -> Option<Vec<u32>> {
+        self.semantic_follow_with(node, path, &mut || true)
+    }
+
+    pub(crate) fn semantic_follow_with(&self, node: u32, path: &[u16], step: &mut impl FnMut() -> bool) -> Option<Vec<u32>> {
+        let mut nodes = vec![self.semantic_node_with(node, step)?];
+        for &label in path {
+            if label == super::names::IT { continue }
+            let mut next = Vec::new();
+            for node in nodes {
+                if label == super::names::PARENT {
+                    let owner = self.capture_owner_with(node, step)?;
+                    if let Some(parent) = self.parent(owner) {
+                        next.push(self.semantic_node_with(parent, step)?);
+                    }
+                } else if label < super::names::ATTR_STEP {
+                    for child in self.fields(node, label) {
+                        next.push(self.semantic_node_with(child, step)?);
+                    }
+                }
+            }
+            nodes = next;
+        }
+        Some(nodes)
     }
 
     /// Where a node's inside (its `*`) starts and ends, if its pattern has one.

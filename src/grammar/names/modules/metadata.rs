@@ -1,6 +1,14 @@
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use std::fmt;
 
+pub fn projection(text: &str) -> Result<Vec<(&str, bool)>, ()> {
+    if text.is_empty() { return Ok(Vec::new()) }
+    text.split('.').map(|part| {
+        let (key, array) = part.strip_suffix("[]").map_or((part, false), |key| (key, true));
+        if key.is_empty() || key.contains(['[', ']']) { Err(()) } else { Ok((key, array)) }
+    }).collect()
+}
+
 #[derive(Clone, Debug)]
 pub enum Json {
     Null,
@@ -15,12 +23,11 @@ impl Json {
     pub fn project(&self, projection: &str, question: &super::super::question::QueryContext) -> Result<Vec<&Self>, ()> {
         let mut values = vec![self];
         if projection.is_empty() { return Ok(Vec::new()) }
-        for part in projection.split('.') {
-            let (key, array) = part.strip_suffix("[]").map_or((part, false), |key| (key, true));
-            if key.is_empty() || key.contains(['[', ']']) { return Err(()) }
+        for (key, array) in self::projection(projection)? {
             let mut next = Vec::new();
             for value in values {
                 super::resolution::spend(question)?;
+                if !matches!(value, Self::Object(_)) { return Err(()) }
                 if let Some(value) = value.get(key) {
                     if array { next.extend(value.array().ok_or(())?); } else { next.push(value); }
                 }

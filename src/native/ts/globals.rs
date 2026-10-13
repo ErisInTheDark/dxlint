@@ -37,9 +37,6 @@ pub struct Globals {
     configured: HashMap<String, &'static str>,
     /// From `/* global */` comments (the last setting of a name wins).
     declared: HashMap<String, &'static str>,
-    /// Comment-declared names with the offset of their first mention, in
-    /// order.
-    pub mentions: Vec<(String, u32)>,
 }
 
 impl Globals {
@@ -55,10 +52,8 @@ impl Globals {
             }
         }
         let mut declared = HashMap::new();
-        let mut mentions: Vec<(String, u32)> = Vec::new();
         for c in comments.iter().filter(|c| c.block) {
             let body = c.body(src).trim_start();
-            let body_at = body.as_ptr() as usize - src.as_ptr() as usize;
             let Some(rest): Option<&str> = body.strip_prefix("globals").or_else(|| body.strip_prefix("global")) else { continue };
             if !rest.starts_with(char::is_whitespace) {
                 continue;
@@ -82,15 +77,10 @@ impl Globals {
                 };
                 if !name.is_empty() {
                     declared.insert(name.to_string(), setting);
-                    if !mentions.iter().any(|(n, _)| n == name) {
-                        let rest_at = body_at + body.len() - rest.len();
-                        let at = name_offset(rest, name).map_or(c.start, |i| (rest_at + i) as u32);
-                        mentions.push((name.to_string(), at));
-                    }
                 }
             }
         }
-        Globals { declared, mentions, configured, ecma_version: environment.ecma_version, commonjs: source_type == "commonjs" }
+        Globals { declared, configured, ecma_version: environment.ecma_version, commonjs: source_type == "commonjs" }
     }
 
     /// The setting of global `name`, or `None` when nothing declares it.
@@ -114,40 +104,6 @@ impl Globals {
             .map(|(edition, _)| if *edition <= self.ecma_version { "readonly" } else { "off" })
     }
 
-    pub fn is_builtin(&self, name: &str) -> bool {
-        BUILTINS.iter().any(|(edition, names)| *edition <= self.ecma_version && names.contains(&name))
-    }
-
-    /// A global supplied by the environment rather than source declarations.
-    pub fn is_implicit(&self, name: &str) -> bool {
-        matches!(self.implicit_setting(name), Some("readonly" | "writable"))
-    }
-
-    pub fn origin(&self, name: &str) -> Option<&'static str> {
-        if self.declared.contains_key(name) { Some("comment") }
-        else if self.configured.contains_key(name) { Some("configuration") }
-        else if self.commonjs && COMMONJS.iter().any(|(global, _)| *global == name) { Some("commonjs") }
-        else if self.is_builtin(name) { Some("builtin") }
-        else { None }
-    }
-
-    /// Whether a `/* global */` comment names it (rather than the
-    /// built-ins).
-    pub fn in_comment(&self, name: &str) -> bool {
-        self.declared.contains_key(name)
-    }
-}
-
-/// Where `name` stands as a whole item in a directive's text (between
-/// spaces, commas and a `:value`).
-fn name_offset(body: &str, name: &str) -> Option<usize> {
-    let sep = |c: Option<char>| c.is_none_or(|c| c.is_whitespace() || c == ',');
-    body.match_indices(name).map(|(i, _)| i).find(|&i| {
-        sep(body[..i].chars().next_back()) && {
-            let after = body[i + name.len()..].chars().next();
-            sep(after) || after == Some(':')
-        }
-    })
 }
 
 #[cfg(test)]

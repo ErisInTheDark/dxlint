@@ -33,6 +33,7 @@ pub fn compile(config: &Config, grammar: &Grammar, vocabulary: &Vocabulary, erro
 
 enum Field {
     Text(fn(&mut Settings) -> &mut Box<str>, Option<&'static [&'static str]>),
+    Projection(fn(&mut Settings) -> &mut Box<str>),
     Strings(fn(&mut Settings) -> &mut Vec<Box<str>>, Option<&'static [&'static str]>),
     Bool(fn(&mut Settings) -> &mut bool),
     Block(&'static [Control]),
@@ -63,7 +64,7 @@ const CONFIG: &[Control] = &[
     Control { name: "include", field: Field::Text(|s| &mut s.config.include, None) },
     Control { name: "exclude", field: Field::Text(|s| &mut s.config.exclude, None) },
     Control { name: "extends", field: Field::Text(|s| &mut s.config.extends, None) },
-    Control { name: "references", field: Field::Text(|s| &mut s.config.references, None) },
+    Control { name: "references", field: Field::Projection(|s| &mut s.config.references) },
     Control { name: "options", field: Field::Text(|s| &mut s.config.options, None) },
     Control { name: "paths", field: Field::Text(|s| &mut s.config.paths, None) },
     Control { name: "base", field: Field::Text(|s| &mut s.config.base, None) },
@@ -144,6 +145,11 @@ impl Compiler<'_> {
                 if let Some(variables) = variables { template(&text, variables, span)?; }
                 *target(settings) = text.to_string().into();
             }
+            Field::Projection(target) => {
+                let Value::Str(text) = value else { return Err(ConfigError::new(span, "expected a metadata projection")) };
+                super::metadata::projection(&text).map_err(|()| ConfigError::new(span, "invalid metadata projection"))?;
+                *target(settings) = text.to_string().into();
+            }
             Field::Strings(target, variables) => {
                 let values = strings(&value, span)?;
                 if let Some(variables) = variables { for value in &values { template(value, variables, span)?; } }
@@ -208,7 +214,9 @@ fn template(value: &str, variables: &[&str], span: Span) -> Result<(), ConfigErr
         if rest[..start].contains('}') { return Err(ConfigError::new(span, "unmatched template brace")) }
         rest = &rest[start + 1..];
         let Some(end) = rest.find('}') else { return Err(ConfigError::new(span, "unclosed template placeholder")) };
-        let name = &rest[..end];
+        let placeholder = &rest[..end];
+        let (name, _) = super::resolution::TemplateTransform::parse(placeholder)
+            .map_err(|_| ConfigError::new(span, format!("unknown template transform in `{placeholder}`")))?;
         if !variables.contains(&name) { return Err(ConfigError::new(span, format!("unknown template placeholder `{name}`"))) }
         rest = &rest[end + 1..];
     }
@@ -240,6 +248,7 @@ mod tests {
         for settings in [
             vec![setting("unexpected_search", string("relative"))],
             vec![setting("candidates", list(&["{missing}/{name}"]))],
+            vec![Setting { key: name("config"), value: SettingValue::Block(vec![setting("references", string("references[invalid].path"))]) }],
         ] {
             let config = config(settings, Vec::new());
             let grammar = Grammar::build(&config, &mut Vec::new());
@@ -251,6 +260,7 @@ mod tests {
 
     struct Files;
     impl Host for Files {
+        fn program(&self) -> Known<u32> { Known::Yes(0) }
         fn path(&self, _: u32) -> Known<PathBuf> { Known::Yes("/root/main.ts".into()) }
         fn text(&self, _: &Path, _: &QueryContext) -> Known<Option<String>> { Known::Yes(None) }
         fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> { Known::Yes(path == Path::new("/root/dep.ts")) }

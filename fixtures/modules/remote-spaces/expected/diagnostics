@@ -1,0 +1,4 @@
+input.ts:1:21-1:33 remote-value#0 remote value
+input.ts:1:51-1:60 remote-type#0 remote type
+input.ts:2:1-2:13 remote-value#0 remote value
+input.ts:3:15-3:24 remote-type#0 remote type

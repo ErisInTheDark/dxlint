@@ -11,7 +11,7 @@ pub fn context<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, ques
 fn context_inner<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, question: &QueryContext) -> Result<Value<'static>, ()> {
     let path = resolver.host.path(importer).known().ok_or(())?;
     let directory = path.parent().ok_or(())?;
-    let config = Configuration::load(resolver, directory, question)?;
+    let config = Configuration::load(resolver, &resolver.program_directory()?, question)?;
     let config = Json::Object(config.options.into_iter().map(|(key, value)| (key, value.value)).collect()).into_value(question)?;
     let mut package = Value::Null;
     if !resolver.settings.packages.metadata.is_empty() {
@@ -38,7 +38,10 @@ mod tests {
     struct Files(BTreeMap<PathBuf, String>);
 
     impl Host for Files {
-        fn path(&self, _: u32) -> Known<PathBuf> { Known::Yes("/project/src/main.ts".into()) }
+        fn program(&self) -> Known<u32> { Known::Yes(0) }
+        fn path(&self, file: u32) -> Known<PathBuf> {
+            Known::Yes(if file == 0 { "/project/src/main.ts".into() } else { "/foreign/module.ts".into() })
+        }
         fn text(&self, path: &Path, _: &QueryContext) -> Known<Option<String>> { Known::Yes(self.0.get(path).cloned()) }
         fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> { Known::Yes(self.0.contains_key(path)) }
         fn scope(&self, _: &Path, _: &QueryContext) -> Known<Option<ScopeRef>> { Known::Yes(None) }
@@ -76,6 +79,24 @@ mod tests {
         let Value::Record(package) = field("package") else { panic!("nearest package must be available") };
         assert!(package.iter().any(|(key, value)| &**key == "type" && value == &Value::from("near")));
         assert_eq!(field("conditions"), &Value::list(vec![Value::from("custom")]));
+    }
+
+    #[test]
+    fn foreign_context_keeps_program_options_and_its_own_package() {
+        let files = Files(BTreeMap::from([
+            (PathBuf::from("/project/tsconfig.json"), r#"{"compilerOptions":{"level":2025}}"#.into()),
+            (PathBuf::from("/foreign/tsconfig.json"), r#"{"compilerOptions":{"level":1999}}"#.into()),
+            (PathBuf::from("/foreign/package.json"), r#"{"type":"module"}"#.into()),
+        ]));
+        let settings = settings();
+        let Known::Yes(Value::Record(context)) = Resolver { host: &files, settings: &settings }.context(1, &QueryContext::default()) else {
+            panic!("foreign context must be known");
+        };
+        let field = |name: &str| context.iter().find(|(key, _)| &**key == name).map(|(_, value)| value).unwrap();
+        let Value::Record(config) = field("config") else { panic!("program options must be available") };
+        assert!(config.iter().any(|(key, value)| &**key == "level" && value == &Value::Num(2025.0)));
+        let Value::Record(package) = field("package") else { panic!("source package must be available") };
+        assert!(package.iter().any(|(key, value)| &**key == "type" && value == &Value::from("module")));
     }
 
     #[test]
