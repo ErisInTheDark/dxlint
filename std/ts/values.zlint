@@ -1,0 +1,614 @@
+import .ts/values/enums
+
+define {
+
+exclusive null, undefined, string, number, boolean, bigint, symbol, object
+exclusive falsy, truthy
+top unknown
+dynamic any
+keys text string
+keys ordinal number
+keys symbol symbol
+
+in ts_program { fits object, truthy in module }
+in ts_namespace {
+  let ts_value_namespace_runtime ts_namespace_runtime(node)
+  when ts_value_namespace_runtime {
+    unwraps scope namespace from it
+    fits object, truthy in namespace
+  }
+  when !ts_value_namespace_runtime { unwraps unknown }
+}
+
+fn ts_value_key(key) = if key is ts_computed_key then {
+    value inner: key.expression.node
+    value if inner is (ts_string, ts_number, ts_bigint, ts_boolean, ts_null)
+      || inner is ts_template && count(inner.expression.nodes) == 0 then ts_value_key(inner) else null
+  }
+  else if key is ts_string then js_string(key.text)
+  else if key is ts_template && count(key.expression.nodes) == 0 then js_string(key.text)
+  else if key is ts_number then "" key.ts_value_number
+  else if key is ts_bigint then js_bigint(key.text)
+  else { value "\"" key.text "\""; js_string }
+fn ts_value_static(modifiers) = any(modifiers, modifier => modifier.text == "static")
+fn ts_value_this_context(n) = {
+  value chain: walk(n, item => item.parent.node)
+  value owner: find(chain, item => item is (ts_function, ts_method, ts_class_property, ts_static_block, ts_class))
+  value parameters: filter(owner.parameter.nodes, parameter => parameter.name is ts_this || parameter.name == "this")
+  value container: if owner is ts_class then owner
+    else if owner is ts_function && owner.parent is ts_property then owner.parent.parent.node else owner.parent.node
+  value { owner: owner, explicit: first(parameters).type.node, container: container,
+    static: owner is ts_static_block || ts_value_static(owner.modifier.nodes) }
+}
+fn ts_value_missing_name(n, class) = {
+  value classes: name_classes(n, n.text, null)
+  value setting: if class == "value" then ts_global_setting(n, n.text) else null
+  value classes != null && get(classes, class) == false
+    && (class != "value" || setting != "readonly" && setting != "writable")
+}
+fn ts_value_global_declaration(n, name) = {
+  value identity: declaration_identity(n)
+  value targets: global_declarations(n, name, "type")
+  value identity != null && targets != null
+    && any(targets, target => target.file == identity.file && target.node == identity.node)
+}
+fn ts_value_array_part(part, n) = {
+  value carrier: part.carrier
+  value name: carrier.description.name
+  value tuple: part.carrier_known && carrier.description.kind == "tuple"
+  value named: part.carrier_known && carrier.description.kind == "named"
+    && (name == "Array" || name == "ReadonlyArray")
+  value declarations: if named then global_declarations(n, name, "type") else null
+  value array: named && declarations != null
+    && any(declarations, declaration => declaration.file == carrier.file && declaration.node == carrier.node)
+  value scalar: any(["null", "undefined", "string", "number", "boolean", "bigint", "symbol"],
+    trait => contains(part.traits, trait))
+  value known: tuple || scalar || part.carrier_known && !named && len(part.uncertain_traits) == 0
+    || named && declarations != null
+  value { array: array, tuple: tuple, known: known }
+}
+fn ts_value_array_parts(parts, n) = if parts == null then { array: false, tuple: false, known: false } else {
+  value arms: map(parts, arm => {
+    value shapes: map(arm, part => ts_value_array_part(part, n))
+    value array: any(shapes, shape => shape.known && shape.array)
+    value tuple: any(shapes, shape => shape.known && shape.tuple)
+    value { array: array, tuple: tuple, known: array || tuple || all(shapes, shape => shape.known) }
+  })
+  value array: len(arms) > 0 && all(arms, arm => arm.known && arm.array && !arm.tuple)
+  value tuple: len(arms) > 0 && all(arms, arm => arm.known && arm.tuple && !arm.array)
+  value neither: all(arms, arm => arm.known && !arm.array && !arm.tuple)
+  value { array: array, tuple: tuple, known: array || tuple || neither }
+}
+fn ts_value_array_shape(n) = {
+  value parts: value_constituents(n)
+  value ts_value_array_parts(parts, n)
+}
+fn ts_value_const_context(n) = {
+  value chain: walk(n, item => if item.parent is (ts_parenthesized, ts_array, ts_object, ts_spread, ts_property) then item.parent.node else null)
+  value outer: last(chain).parent.node
+  value outer is (ts_as, ts_type_assertion) && outer.type.text == "const"
+}
+fn ts_value_destructuring_receiver(n) = if n is ts_parenthesized.expression then ts_value_destructuring_receiver(n.parent.node)
+  else if n is (ts_declarator.init, ts_parameter.init) then n.parent.name.node
+  else if n is (ts_assignment.right, ts_assignment_pattern.right) then n.parent.left.node
+  else if n is ts_array.element then {
+    value receiver: ts_value_destructuring_receiver(n.parent.node)
+    value items: n.parent.element.nodes
+    value position: index_of(items, n)
+    value end: position + 1
+    value { value receiver.element.nodes; slice position end; first }
+  } else null
+fn ts_value_tuple_context(n) = {
+  value receiver: ts_value_destructuring_receiver(n)
+  value expected: value_expected(n)
+  value tuple: expected != null && expected.present
+    && any(expected.value, arm => any(arm, part => part.carrier_known && part.carrier.description.kind == "tuple"))
+  value n.flow_destructuring_target || receiver is (ts_array, ts_array_pattern)
+    || !any(n.element.nodes, item => item is ts_spread) && (ts_value_const_context(n) || tuple)
+}
+fn ts_value_scalar_part(n) = {
+  value parts: value_constituents(n)
+  value arm: first(parts)
+  value if parts != null && len(parts) == 1 && len(arm) == 1 then first(arm) else null
+}
+fn ts_value_literal_branch(n, part) = {
+  value branch: ts_value_scalar_part(n)
+  value part != null && branch != null && part.identity_known && branch.identity_known
+    && part.identity != null && part.identity == branch.identity
+}
+fn ts_value_fresh_literal(n, part) = {
+  value bare: unparenthesised_node(n)
+  value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then true
+  else if bare is ts_unary && (bare.operator == "-" || bare.operator == "+") then ts_value_fresh_literal(bare.argument.node, part)
+  else if bare is ts_identifier then {
+    value declaration: bare.scope_declaration.parent.node
+    value declaration is ts_declarator && declaration.type == null && declaration.parent.kind == "const"
+      && ts_value_fresh_literal(declaration.init.node, part)
+  } else if bare is ts_conditional then {
+    value branches: filter([bare.consequent.node, bare.alternate.node], branch => ts_value_literal_branch(branch, part))
+    value len(branches) > 0 && all(branches, branch => ts_value_fresh_literal(branch, part))
+  } else if bare is ts_logical then {
+    value chosen: if bare.operator == "||" && bare.left always falsy then bare.right.node
+      else if bare.operator == "||" && bare.left always truthy then bare.left.node
+      else if bare.operator == "&&" && bare.left always falsy then bare.left.node
+      else if bare.operator == "&&" && bare.left always truthy then bare.right.node
+      else if bare.operator == "??" && bare.left always nullable then bare.right.node
+      else if bare.operator == "??" && !(bare.left could nullable) then bare.left.node else null
+    value if chosen != null then ts_value_fresh_literal(chosen, part) else {
+      value branches: filter([bare.left.node, bare.right.node], branch => ts_value_literal_branch(branch, part))
+      value len(branches) > 0 && all(branches, branch => ts_value_fresh_literal(branch, part))
+    }
+  } else if bare is ts_sequence then {
+    value tail: last(bare.expression.nodes)
+    value ts_value_fresh_literal(tail, part)
+  } else if bare is ts_satisfies then ts_value_fresh_literal(bare.expression.node, part) else false
+}
+fn ts_value_contextual_literal(n, part) = {
+  value context: value_expected(n)
+  value category: find(["string", "number", "boolean", "bigint"], trait => contains(part.traits, trait))
+  value context != null && context.present && category != null
+    && any(context.value, arm => any(arm, expected => contains(expected.traits, category)
+      && (category == "boolean" || expected.identity_known && expected.identity.kind == "value")))
+}
+in ts_node let ts_value_preserved_element {
+  value bare: unparenthesised_node(node)
+  value if ts_value_const_context(node) || bare not (ts_null, ts_boolean, ts_number, ts_bigint, ts_string,
+    ts_template, ts_unary, ts_identifier, ts_conditional, ts_logical, ts_sequence, ts_satisfies) then node else {
+    value part: ts_value_scalar_part(node)
+    value if !ts_value_fresh_literal(node, part) || ts_value_contextual_literal(node, part) then node else null
+  }
+}
+fn ts_value_closed_type_members(items) = all(items, member => member is ts_call_signature
+  || member not ts_index_signature && ts_value_key(member.key.node) != null)
+fn ts_value_then_headers(signatures) = {
+  value headers: { value signatures ?? []; flat_map (arm) arm }
+  value callbacks: { value headers; flat_map (header) first(header.parameters) ?? []; flat_map (arm) arm }
+  value thenable: any(callbacks, part => contains(part.traits, "callable"))
+  value {
+    known: signatures != null && all(headers, header => header.parameters_known)
+      && !any(callbacks, part => contains(part.uncertain_traits, "callable")),
+    thenable: thenable
+  }
+}
+fn ts_value_then_contract(member) = if member == null then { known: true, thenable: false }
+  else { value signatures: call_parameters(member); value ts_value_then_headers(signatures) }
+fn ts_value_intersection_parts(types) = {
+  value never: filter(types, item => { value parts: value_constituents(item); value parts != null && len(parts) == 0 })
+  value dynamic: filter(types, item => {
+    value parts: value_constituents(item)
+    value parts != null && len(parts) > 0
+      && all(parts, arm => any(arm, part => contains(part.traits, "any")))
+  })
+  value if len(never) > 0 then never else if len(dynamic) > 0 then dynamic else types
+}
+
+in ts_null {
+  fits null, nullable, falsy
+  identity null
+}
+in ts_null, ts_boolean, ts_number, ts_bigint, ts_string { fits nonthenable }
+in ts_boolean {
+  fits boolean
+  widens (trait boolean, truthy, nonthenable) | (trait boolean, falsy, nonthenable)
+  fits falsy when text == "false"
+  fits truthy when text == "true"
+  identity text == "true"
+}
+in ts_number {
+  let ts_value_number_raw replace(text, "_", "")
+  let ts_value_number js_number(ts_value_number_raw)
+  fits number
+  widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+  fits falsy when ts_value_number == 0
+  fits truthy when ts_value_number != 0
+  identity ts_value_number
+}
+in ts_bigint {
+  fits bigint
+  widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+  fits falsy when js_bigint(text) == "0"
+  fits truthy when js_bigint(text) != "0"
+  identity { type: "bigint", value: js_bigint(text) }
+}
+in ts_string {
+  fits string
+  widens (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable)
+  fits falsy when js_string(text) == ""
+  fits truthy when js_string(text) != ""
+  identity js_string(text)
+}
+in ts_template {
+  when !(is ts_tagged_template.quasi) {
+    fits string, nonthenable
+    widens (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable)
+    fits falsy when count(expression.nodes) == 0 && text == "``"
+    fits truthy when count(expression.nodes) == 0 && text != "``"
+  }
+  when is ts_tagged_template.quasi { unwraps instance "TemplateStringsArray" }
+}
+in ts_regex { unwraps instance "RegExp" }
+
+in ts_identifier {
+  let ts_value_undefined text == "undefined" && contains(["readonly", "writable"], global)
+  let ts_value_unresolved_value ts_value_missing_name(node, "value")
+  when ts_value_undefined {
+    fits undefined, nullable, falsy, nonthenable
+    identity { type: "undefined" }
+  }
+  when ts_value_unresolved_value { fits any, error open }
+  when !ts_value_unresolved_value && !ts_value_undefined {
+    unwraps definition
+    widens definition.widened
+  }
+}
+in ts_variable_declaration {
+  when count(declaration.nodes) == 1 { unwraps declaration }
+  when count(declaration.nodes) != 1 { unwraps instance "unknown" }
+}
+in ts_declarator {
+  widens type ?? init.widened
+  when name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
+  when name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
+  when !(name is ts_identifier) { unwraps instance "unknown" }
+}
+in ts_parameter, ts_rest {
+  when optional != null { unwraps (type ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
+  when optional == null { unwraps type ?? instance "unknown" }
+}
+in ts_assignment_pattern { unwraps left ?? right }
+in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
+    ts_import_equals, ts_super, ts_meta_property, ts_import_call {
+  unwraps instance "unknown"
+}
+in ts_this {
+  let ts_value_this ts_value_this_context(node)
+  let ts_value_this_explicit ts_value_this.explicit
+  let ts_value_this_owner ts_value_this.owner
+  let ts_value_this_container ts_value_this.container
+  when ts_value_this.owner is ts_function && ts_value_this.container not ts_object {
+    fits any open
+    unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? self
+  }
+  when ts_value_this.container is ts_class {
+    when ts_value_this.static {
+      unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? (scope statics from ts_value_this_container)
+    }
+    when !ts_value_this.static {
+      unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? (scope members from ts_value_this_container)
+    }
+  }
+  when ts_value_this.container is ts_object {
+    unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? (scope members from ts_value_this_container)
+  }
+  when ts_value_this.owner not ts_function && ts_value_this.container not (ts_class, ts_object) {
+    unwraps instance "unknown"
+  }
+}
+
+in ts_parenthesized, ts_satisfies, ts_instantiation { unwraps expression }
+in ts_as, ts_type_assertion {
+  when type.text == "const" { unwraps expression }
+  when type.text != "const" { unwraps type }
+}
+in ts_non_null { unwraps excludes nullable from expression }
+in ts_computed_key { unwraps expression }
+in ts_spread { unwraps argument }
+in ts_assignment { unwraps right }
+in ts_conditional { unwraps consequent | alternate }
+in ts_logical {
+  when operator == "&&" { unwraps (excludes truthy from left) | right }
+  when operator == "||" { unwraps (excludes falsy from left) | right }
+  when operator == "??" { unwraps (excludes nullable from left) | right }
+}
+in ts_sequence {
+  let ts_value_last_expression last(expression.nodes)
+  unwraps ts_value_last_expression
+}
+
+in ts_call, ts_new, ts_tagged_template { unwraps it.result }
+in ts_call, ts_new { arguments type_argument }
+in ts_await { unwraps instance "Awaited" of argument }
+in ts_yield { unwraps instance "unknown" }
+in ts_unary {
+  when operator == "void" || operator == "typeof" || operator == "delete" || operator == "!"
+      || operator == "+" || operator == "~" { fits nonthenable }
+  when operator == "void" {
+    fits undefined, nullable, falsy
+    identity { type: "undefined" }
+  }
+  when operator == "typeof" { fits string, truthy }
+  when operator == "delete" { fits boolean }
+  when operator == "!" {
+    fits boolean
+    fits falsy when argument always truthy
+    fits truthy when argument always falsy
+    when argument always truthy { identity false }
+    when argument always falsy { identity true }
+  }
+  when operator == "+" || operator == "~" { fits number }
+  when operator == "-" && argument is ts_number {
+    fits number, nonthenable
+    widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
+    fits falsy when argument always falsy
+    fits truthy when argument always truthy
+    identity -argument.ts_value_number
+  }
+  when operator == "-" && argument is ts_bigint {
+    fits bigint, nonthenable
+    widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
+    fits falsy when argument always falsy
+    fits truthy when argument always truthy
+    identity { type: "bigint", value: js_bigint("-" argument.text) }
+  }
+  when operator == "-" && !(argument is (ts_number, ts_bigint)) { unwraps instance "unknown" }
+}
+in ts_update { unwraps argument.widened }
+in ts_binary {
+  when operator == "===" || operator == "!==" || operator == "==" || operator == "!="
+      || operator == "<" || operator == "<=" || operator == ">" || operator == ">="
+      || operator == "in" || operator == "instanceof" { fits boolean, nonthenable }
+  when operator == "+" { unwraps left.widened | right.widened }
+  when operator == "-" || operator == "*" || operator == "/" || operator == "%"
+      || operator == "**" || operator == "&" || operator == "|" || operator == "^"
+      || operator == "<<" || operator == ">>" || operator == ">>>" {
+    unwraps left.widened | right.widened
+  }
+}
+
+in ts_hole { unwraps trait undefined, nullable, falsy, nonthenable }
+in ts_array {
+  let ts_value_literal_tuple_signature { value element.nodes; map (item) "n"; join "" }
+  when !ts_value_tuple_context(node) {
+    unwraps instance "Array" of ...element using (ts_value_preserved_element ?? it.widened)
+  }
+  when ts_value_tuple_context(node) {
+    fits object, truthy
+    indexed element strings using (ts_value_preserved_element ?? it.widened)
+    carries element using (ts_value_preserved_element ?? it.widened) as {
+      kind: "tuple", signature: ts_value_literal_tuple_signature, readonly: ts_value_const_context(node)
+    }
+    members members inherits instance "Array" of ...element using (ts_value_preserved_element ?? it.widened)
+  }
+}
+in ts_object, ts_interface, ts_type_literal {
+  scope members
+  members members
+  fits structural in members
+}
+in ts_interface, ts_type_literal { unwraps scope members from it }
+in ts_object {
+  let ts_value_any_spreads filter(property.nodes, item => item is ts_spread && item.argument always any)
+  when len(ts_value_any_spreads) > 0 { unwraps ...ts_value_any_spreads.argument }
+  when len(ts_value_any_spreads) == 0 { unwraps scope members from it }
+}
+in ts_object { fits object, truthy in members }
+in ts_interface {
+  when extends != null { members members inherits &...extends }
+}
+in ts_interface, ts_type_literal {
+  when ts_value_closed_type_members(member.nodes) { members members closed }
+}
+in ts_interface, ts_type_literal, ts_class {
+  let ts_value_computed_members filter(member.nodes, item => item.key is ts_computed_key && ts_value_key(item.key.node) == null
+    && !ts_value_static(item.modifier.nodes))
+  let ts_value_text_indexers filter(member.nodes, item => item is ts_index_signature && item.parameter.type always string)
+  let ts_value_ordinal_indexers filter(member.nodes, item => item is ts_index_signature && item.parameter.type always number)
+  let ts_value_symbol_indexers filter(member.nodes, item => item is ts_index_signature && item.parameter.type always symbol)
+  indexed keyed ts_value_computed_members by key.expression using it in members
+  indexed text ts_value_text_indexers using it.type in members
+  indexed ordinal ts_value_ordinal_indexers using it.type in members
+  indexed symbol ts_value_symbol_indexers using it.type in members
+}
+in ts_class {
+  let ts_value_computed_statics filter(member.nodes, item => item.key is ts_computed_key && ts_value_key(item.key.node) == null
+    && ts_value_static(item.modifier.nodes))
+  indexed keyed ts_value_computed_statics by key.expression using it in statics
+}
+in ts_object {
+  let ts_value_computed_properties filter(property.nodes, item => item.key is ts_computed_key && ts_value_key(item.key.node) == null)
+  indexed keyed ts_value_computed_properties by key.expression using it in members
+}
+in ts_object {
+  let ts_value_then_member find(property.nodes, member => ts_value_key(member.key.node) == "then")
+  let ts_value_closed_object_members all(property.nodes, member => member not ts_spread
+    && ts_value_key(member.key.node) != null)
+  let ts_value_then_shape ts_value_then_contract(ts_value_then_member)
+  fits thenable in members when ts_value_then_shape.thenable
+  fits nonthenable in members when ts_value_closed_object_members
+    && ts_value_then_shape.known && !ts_value_then_shape.thenable
+}
+in ts_interface, ts_type_literal, ts_class {
+  let ts_value_then_shape {
+    value signatures: member_call_parameters(node, "then")
+    value ts_value_then_headers(signatures)
+  }
+  fits thenable in members when ts_value_then_shape.thenable
+}
+in ts_property {
+  declares member key keyed ts_value_key(it) in nearest members hoisted
+  unwraps value ?? key
+}
+in ts_property_signature {
+  declares member key keyed ts_value_key(it) in nearest members hoisted
+  optional when optional != null
+  when optional == null { unwraps type ?? instance "unknown" }
+  when optional != null { unwraps (type ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
+}
+in ts_method_signature {
+  declares member key keyed ts_value_key(it) in nearest members hoisted
+  optional when optional != null
+}
+in ts_member {
+  let ts_value_member_key ts_value_key(property.node)
+  when object always any { unwraps object }
+  when !(object always any) {
+    when optional == null { unwraps from object at ts_value_member_key }
+    when optional != null { unwraps (from object at ts_value_member_key) | trait undefined, nullable, falsy, nonthenable }
+  }
+}
+in ts_index {
+  when object always any { unwraps object }
+  when !(object always any) {
+    when optional == null { unwraps from object at index }
+    when optional != null { unwraps (from object at index) | trait undefined, nullable, falsy, nonthenable }
+  }
+}
+in ts_function, ts_arrow, ts_function_type, ts_method_signature, ts_call_signature {
+  fits callable, object, truthy
+}
+in ts_function { fits constructible when !any(modifier.nodes, modifier => modifier.text == "async") }
+in ts_method {
+  when kind != "get" && kind != "set" { fits callable, object, truthy }
+  when kind == "get" { unwraps it.result }
+  when kind == "set" { unwraps parameter.type }
+}
+in ts_class {
+  scope statics
+  scope members
+  members statics
+  fits constructible, object, truthy in statics
+  fits structural, object, truthy in members
+  unwraps scope statics from it
+  member statics "prototype" unwraps scope members from it
+  when ts_value_closed_type_members(member.nodes) { members members closed }
+  when extends != null {
+    members statics inherits extends
+    members members inherits (from extends at "prototype")
+  }
+}
+in ts_method, ts_class_property {
+  when ts_value_static(modifier.nodes) { declares member key keyed ts_value_key(it) in nearest statics hoisted }
+  when !ts_value_static(modifier.nodes) { declares member key keyed ts_value_key(it) in nearest members hoisted }
+}
+in ts_class_property {
+  optional when optional != null
+  when optional == null { unwraps type ?? init.widened ?? instance "unknown" }
+  when optional != null { unwraps (type ?? init.widened ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
+}
+
+in ts_type_alias { unwraps type }
+in ts_class, ts_interface, ts_type_alias { generics type_parameter }
+in ts_class, ts_interface {
+  carries type_parameter as { kind: "named", name: name.text }
+  when (name.text == "Array" || name.text == "ReadonlyArray") && ts_value_global_declaration(node, name.text) {
+    indexed repeated type_parameter strings
+    fits object, truthy in members
+  }
+}
+in ts_type_reference {
+  let ts_value_unresolved_type name is ts_identifier && ts_value_missing_name(name.node, "type")
+  arguments type_argument
+  when ts_value_unresolved_type { fits any, error open }
+  when name is ts_qualified_name { unwraps name }
+  when !ts_value_unresolved_type && name not ts_qualified_name { unwraps &...name.definition }
+}
+in ts_type_query {
+  when name is ts_qualified_name { unwraps name }
+  when name not ts_qualified_name { unwraps name.definition }
+}
+in ts_type_predicate {
+  when modifier == null { fits boolean, nonthenable }
+  when modifier != null {
+    fits void, undefined, nullable, falsy, nonthenable
+    identity { type: "undefined" }
+  }
+}
+in ts_type_parameter {
+  fits parameter open
+  when constraint != null { constrains constraint }
+  unwraps it.inferred ?? (self & (default ?? constraint ?? trait unknown))
+}
+in ts_union { unwraps ...type }
+in ts_intersection {
+  let ts_value_intersection ts_value_intersection_parts(type.nodes)
+  let ts_value_dynamic_intersection any(ts_value_intersection, item => item always any)
+  when ts_value_dynamic_intersection { unwraps &...ts_value_intersection }
+  when !ts_value_dynamic_intersection {
+    fits intersection open
+    unwraps self & (&...ts_value_intersection)
+  }
+}
+in ts_literal_type { unwraps value }
+in ts_parenthesized_type { unwraps type }
+in ts_array_type {
+  when parent is ts_type_operator && parent.operator == "readonly" { unwraps instance "ReadonlyArray" of type }
+  when !(parent is ts_type_operator && parent.operator == "readonly") { unwraps instance "Array" of type }
+}
+in ts_tuple_type {
+  let ts_value_tuple_signature { value element.nodes; map (item) if item is ts_rest then "r" else if item.optional != null then "o" else "n"; join "" }
+  fits object, truthy
+  indexed element strings
+  carries element as { kind: "tuple", signature: ts_value_tuple_signature,
+    readonly: parent is ts_type_operator && parent.operator == "readonly" }
+  members members inherits instance "Array" of ...element
+}
+in ts_tuple_member {
+  optional when optional != null
+  when optional == null { unwraps type }
+  when optional != null { unwraps type | trait undefined, nullable, falsy, nonthenable }
+}
+in ts_indexed_access { unwraps from object at index }
+fn ts_value_conditional_owner(n) = find(walk(n, item => item.parent.node), item => item is ts_conditional_type)
+in ts_conditional_type {
+  let ts_value_conditional_infers {
+    value descendants(ts_infer)
+    filter (item) item.offset >= extends.offset && item.end_offset <= extends.end_offset
+      && ts_value_conditional_owner(item) == node
+    map (item) item.type_parameter.node
+  }
+  generics ts_value_conditional_infers
+  let ts_value_conditional_formal {
+    value bare: last(walk(check.node, item => if item is ts_parenthesized_type then item.type.node else null))
+    value if bare is ts_type_reference && count(bare.type_argument.nodes) == 0 && bare.name is ts_identifier
+      then find(bare.name.definition.nodes, item => item is ts_type_parameter) else null
+  }
+  let ts_value_conditional_dynamic check always any
+  when ts_value_conditional_formal != null {
+    when ts_value_conditional_dynamic { unwraps select check against extends then consequent else alternate distribute ts_value_conditional_formal dynamic both }
+    when !ts_value_conditional_dynamic { unwraps select check against extends then consequent else alternate distribute ts_value_conditional_formal }
+  }
+  when ts_value_conditional_formal == null {
+    when ts_value_conditional_dynamic { unwraps select check against extends then consequent else alternate dynamic both }
+    when !ts_value_conditional_dynamic { unwraps select check against extends then consequent else alternate }
+  }
+}
+in ts_type_operator {
+  when operator == "readonly" { unwraps type }
+  when operator == "unique" && type.text == "symbol" {
+    fits symbol, truthy, nonthenable
+    widens trait symbol, truthy, nonthenable
+    identity node
+  }
+  when operator != "readonly" && !(operator == "unique" && type.text == "symbol") { unwraps instance "unknown" }
+}
+in ts_template_type { fits string }
+in ts_infer { unwraps type_parameter }
+in ts_import_type, ts_mapped_type { unwraps instance "unknown" }
+in ts_type_keyword {
+  let ts_value_never []
+  when text == "string" { unwraps (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable) }
+  when text == "number" { unwraps (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable) }
+  when text == "boolean" { unwraps (trait boolean, truthy, nonthenable) | (trait boolean, falsy, nonthenable) }
+  when text == "bigint" { unwraps (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable) }
+  fits string when text == "string"
+  fits number when text == "number"
+  fits boolean when text == "boolean"
+  fits bigint when text == "bigint"
+  fits symbol when text == "symbol"
+  fits truthy when text == "symbol"
+  fits object, truthy when text == "object"
+  fits nonthenable when text == "string" || text == "number" || text == "boolean" || text == "bigint"
+      || text == "symbol" || text == "null" || text == "undefined" || text == "void"
+  fits null, nullable, falsy when text == "null"
+  fits undefined, nullable, falsy when text == "undefined" || text == "void"
+  fits void when text == "void"
+  when text == "null" { identity null }
+  when text == "undefined" || text == "void" { identity { type: "undefined" } }
+  fits any open when text == "any"
+  fits unknown open when text == "unknown"
+  when text == "never" {
+    unwraps ...ts_value_never
+  }
+}
+
+}
