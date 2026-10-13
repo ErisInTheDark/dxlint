@@ -426,6 +426,10 @@ impl<'a> Files<'a> {
                 self.0.linter.holds(dep)
             }, || match self.0.complete_attribute(|| {
                 let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
+                // Only files with a node that can open a module scope of these
+                // classes contribute, so the others never resolve their names.
+                let opens: Vec<bool> = self.0.ctx.grammar.names.kinds.iter().map(|kind| kind.modules.items.iter()
+                    .any(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))).collect();
                 let mut declarations = Vec::new();
                 let mut texts = crate::fx_hash::FxHashMap::default();
                 for path in paths.iter().chain(key.outside.iter()) {
@@ -434,6 +438,8 @@ impl<'a> Files<'a> {
                     let hash = super::reads::hash_bytes(text.as_bytes());
                     texts.insert(path.clone(), hash);
                     super::reads::note(super::reads::Dep::Text(path.clone(), hash));
+                    let Some(tree) = World::tree(&self, file) else { return Known::Unknown };
+                    if !tree.order.iter().any(|&node| opens.get(tree.node(node).matcher as usize).copied().unwrap_or(false)) { continue }
                     let Some(names) = World::names(&self, file) else { return Known::Unknown };
                     for (scope, info) in names.scopes.iter().enumerate() {
                         if classes & info.classes == 0 { continue }
