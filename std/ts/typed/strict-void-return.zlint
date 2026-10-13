@@ -4,15 +4,21 @@ define {
 
 in ts_node let strict_void_kind type_structure([], ["kind"]).kind
 fn strict_void_allowed(kind, any) = contains(["void", "undefined", "never"], kind) || any && kind == "any"
-fn strict_void_signature_allowed(signature) = all(signature.result, arm =>
-  any(arm, part => contains(part.traits, "undefined")))
+fn strict_void_signature_allowed(signature, allow_any) = all(signature.result, arm =>
+  any(arm, part => contains(part.traits, "undefined") || allow_any && contains(part.traits, "any")))
 fn strict_void_signatures_known(signatures) = count(signatures) > 0
-  && all(signatures, signature => signature.result_known
-    && all(signature.result, arm => all(arm, part => !contains(part.uncertain_traits, "undefined"))))
+  && all(signatures, signature => signature.result_known)
 fn strict_void_source_allowed(signatures, source, allow_any) =
   if strict_void_signatures_known(signatures)
-  then all(signatures, signature => strict_void_signature_allowed(signature))
+  then all(signatures, signature => strict_void_signature_allowed(signature, allow_any))
   else all(source, result => strict_void_allowed(result.kind, allow_any))
+fn strict_void_expected_transfer(signatures, argument) =
+  if argument then any(signatures, signature => any(signature.result, arm =>
+    any(arm, part => contains(part.traits, "void"))))
+    && all(signatures, signature => all(signature.result, arm => any(arm, part =>
+      any(["void", "undefined", "null", "any"], trait => contains(part.traits, trait)))))
+  else count(signatures) > 0 && all(signatures, signature => count(signature.result) > 0
+    && all(signature.result, arm => any(arm, part => contains(part.traits, "void"))))
 fn strict_void_only_void(returns) = count(returns ?? []) > 0 && all(returns, result => result.kind == "void")
 fn strict_void_permissive(returns) = any(returns ?? [], result => result.kind == "void")
   && all(returns, result => contains(["void", "undefined", "null", "any", "never"], result.kind))
@@ -75,14 +81,18 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   let actual strict_void_source(node)
   when actual could callable
   let signatures { value call_signatures(actual) ?? []; flat_map (arm) arm }
+  let expected expected_call_signatures(actual)
+  let expected_signatures { value expected ?? []; flat_map (arm) arm }
+  let expected_known expected != null && all(expected_signatures, signature => signature.result_known)
   let site strict_void_site(node)
   let fields strict_void_fields(actual)
-  let contracts callable_contracts(site, actual, [], fields) strict_void_static_contracts(actual)
-  when any(contracts, contract => strict_void_transfer(contract)
-    && !strict_void_source_allowed(signatures, contract.source, allowReturnAny))
-    || value_has_expected(actual) && actual.expected could callable
-      && actual.expected.result always void && strict_void_signatures_known(signatures)
-      && !all(signatures, signature => strict_void_signature_allowed(signature))
+  let contracts if !expected_known || !strict_void_signatures_known(signatures)
+    then callable_contracts(site, actual, [], fields) strict_void_static_contracts(actual) else []
+  when if expected_known
+    then strict_void_expected_transfer(expected_signatures, strict_void_outer(actual).parent is (ts_call, ts_new))
+      && !strict_void_source_allowed(signatures, { value contracts; filter (contract) contract.complete; flat_map (contract) contract.source }, allowReturnAny)
+    else any(contracts, contract => strict_void_transfer(contract)
+      && !strict_void_source_allowed(signatures, contract.source, allowReturnAny))
   let unwrapped unparenthesised_node(actual)
   each report in strict_void_reports(unwrapped, allowReturnAny)
   report at report.site
