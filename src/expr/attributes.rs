@@ -2,6 +2,7 @@
 
 use super::{AttrMemo, CExpr, Ctx, Value};
 use crate::grammar::{Grammar, ROOT, TEXT};
+use crate::grammar::names::question::Known;
 use crate::vm::{self, Begin, KindSet, VExpr, V};
 
 /// A `let` attribute: its expression on each layer that defines it.
@@ -32,6 +33,7 @@ struct CompiledAttr {
 enum Lowered {
     /// Small bodies: evaluated on each read.
     Direct(VExpr),
+    Semantic(VExpr),
     /// Cached in the node's VM record (or evaluated when it has no field).
     Cached(VExpr),
 }
@@ -68,7 +70,8 @@ impl Attributes {
         for (index, &(matcher, attr, label)) in forwards.iter().enumerate() {
             by_attr[attr as usize].push((matcher, index, label));
         }
-        let attrs = attrs.into_iter().zip(by_attr).map(|(mut attr, forwards)| {
+        let semantic = semantic_attributes(&attrs, &grammar.functions);
+        let attrs = attrs.into_iter().zip(by_attr).enumerate().map(|(index, (mut attr, forwards))| {
             let mut lowered = Vec::new();
             attr.defs.retain(|(_, expr)| {
                 let body = vm::lower(expr, &grammar.functions, &mut values);
@@ -77,7 +80,8 @@ impl Attributes {
                     lowering_errors.extend(errors.into_iter().map(|error| (attr.name.clone(), error)));
                     return false;
                 }
-                lowered.push(if body.is_direct() { Lowered::Direct(body) } else { Lowered::Cached(body) });
+                lowered.push(if semantic[index] { Lowered::Semantic(body) }
+                    else if body.is_direct() { Lowered::Direct(body) } else { Lowered::Cached(body) });
                 true
             });
             let mut routes = Vec::new();
@@ -162,6 +166,37 @@ impl Attributes {
     fn route(&self, matcher: u32, attr: u16) -> Route {
         if matcher == ROOT || matcher == TEXT { return Route::Missing; }
         self.attrs[attr as usize].routes.get(matcher as usize).copied().unwrap_or(Route::Missing)
+    }
+}
+
+fn semantic_attributes(attrs: &[Attr], functions: &[crate::grammar::UserFn]) -> Vec<bool> {
+    fn asks(expr: &CExpr, attrs: &[bool], functions: &[bool]) -> bool {
+        let mut found = match expr {
+            CExpr::Trait(..) | CExpr::QueryCall(..) => true,
+            CExpr::Attr(id) | CExpr::FieldAttr(_, id) | CExpr::ParentAttr(id) => attrs[*id as usize],
+            CExpr::UserCall(id, _) => functions[*id as usize],
+            _ => false,
+        };
+        expr.for_each_child(&mut |child| found |= asks(child, attrs, functions));
+        found
+    }
+    let mut attr_queries = vec![false; attrs.len()];
+    let mut function_queries = vec![false; functions.len()];
+    loop {
+        let mut changed = false;
+        for (index, function) in functions.iter().enumerate() {
+            if !function_queries[index] && function.body.get().is_some_and(|body| asks(body, &attr_queries, &function_queries)) {
+                function_queries[index] = true;
+                changed = true;
+            }
+        }
+        for (index, attr) in attrs.iter().enumerate() {
+            if !attr_queries[index] && attr.defs.iter().any(|(_, body)| asks(body, &attr_queries, &function_queries)) {
+                attr_queries[index] = true;
+                changed = true;
+            }
+        }
+        if !changed { return attr_queries; }
     }
 }
 
@@ -269,7 +304,7 @@ impl<'e> Needs<'e> {
             }
             match compiled.routes.get(k as usize) {
                 Some(Route::Defined(def, _)) => {
-                    if matches!(compiled.lowered[*def as usize], Lowered::Cached(_)) {
+                    if matches!(compiled.lowered[*def as usize], Lowered::Cached(_) | Lowered::Semantic(_)) {
                         self.order[k as usize].push(attr);
                     }
                     match by_def.iter_mut().find(|(d, _)| d == def) {
@@ -353,6 +388,14 @@ impl<'e> Needs<'e> {
 }
 
 impl vm::Host for Ctx<'_> {
+    fn query(&self, node: u32, subject: &crate::grammar::names::Value, query: &super::queries::Query, mask: u64) -> Option<bool> {
+        Some(self.world?.query(self.file_id, node, subject, query, mask))
+    }
+
+    fn query_function(&self, node: u32, query: &super::queries::QueryFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
+        Some(self.world?.query_function(self.file_id, node, query, args))
+    }
+
     fn values(&self) -> &vm::Values {
         &self.attrs.values
     }
@@ -491,19 +534,37 @@ impl<'a> Ctx<'a> {
     /// An attribute through the VM, from the node's record when it has a
     /// field there (computed on first read); `None` on an error or a cycle.
     fn vm_attr(&self, node: u32, attr: u16, index: u32, slot: u16) -> Option<V> {
-        let lowered = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
+        let (lowered, world) = match &self.attrs.attrs[attr as usize].lowered[index as usize] {
             Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
-            Lowered::Cached(body) if slot != NO_SLOT => body,
-            // No record field on this kind: memoised beside the records.
-            Lowered::Cached(body) => {
-                let value = self.memo.vm.memo(node, attr, || vm::eval(self, node, body).and_then(|v| v.persist(&self.memo.vm)));
-                if value.is_none() {
-                    self.memo.vm.attr_failure(node, attr, &self.attrs.attrs[attr as usize].name);
-                    self.memo.vm.remember_attr_failure(node, attr);
-                }
-                return value;
-            }
+            Lowered::Semantic(body) => match self.world.filter(|world| world.cache_attribute(&self.memo.vm)) {
+                Some(world) => (body, Some(world)),
+                None => return vm::eval(self, node, body)?.persist(&self.memo.vm),
+            },
+            Lowered::Cached(body) => (body, self.world),
         };
+        let mut evaluated = None;
+        let mut complete = true;
+        let mut compute = || {
+            let mut run = || {
+                evaluated = vm::eval(self, node, lowered).and_then(|v| v.persist(&self.memo.vm));
+                evaluated
+            };
+            let answer = match world {
+                Some(world) => world.complete_attribute(run),
+                None => Known::Yes(run()),
+            };
+            complete = matches!(answer, Known::Yes(_));
+            answer
+        };
+        if slot == NO_SLOT {
+            let kept = self.memo.vm.memo(node, attr, compute);
+            let value = kept.or(evaluated);
+            if value.is_none() && complete {
+                self.memo.vm.attr_failure(node, attr, &self.attrs.attrs[attr as usize].name);
+                self.memo.vm.remember_attr_failure(node, attr);
+            }
+            return value;
+        }
         match self.memo.vm.begin(self.tree, &self.attrs.layout, node, slot) {
             Begin::Ready(v) => Some(v),
             Begin::GiveUp => {
@@ -511,10 +572,10 @@ impl<'a> Ctx<'a> {
                 None
             }
             Begin::Compute(at) => {
-                let v = vm::eval(self, node, lowered).and_then(|v| v.persist(&self.memo.vm));
-                self.memo.vm.finish(at, v);
-                if v.is_none() { self.memo.vm.remember_attr_failure(node, attr); }
-                v
+                let answer = compute();
+                self.memo.vm.finish(at, answer);
+                if evaluated.is_none() && complete { self.memo.vm.remember_attr_failure(node, attr); }
+                evaluated
             }
         }
     }
@@ -593,22 +654,20 @@ mod tests {
 
     #[test]
     fn native_fact_text_records_and_lists_cross_the_vm_bridge() {
-        use crate::engine::tests::native_linter;
+        use crate::engine::tests::native_linter_parts;
         use crate::native::ts::{facts::NativeFile, modules::Project, syntax::Syntax};
-        let lint = native_linter("in ts_member, ts_identifier, ts_call rule probe info \"probe\"");
-        let g = &lint.grammar;
+        let (grammar, mut attrs) = native_linter_parts("in ts_member, ts_identifier, ts_call rule probe info \"probe\"");
+        let g = &grammar;
         let source = "const unused = 1; object.value; (object?.child).value; run(first, second);";
         let parsed = crate::native::ts::parse(source, false).unwrap();
         let front = &g.natives[0];
         let tree = crate::grammar::Tree::from_native(front.remap(parsed.nodes), parsed.root);
         let project = Project::default();
         let native = NativeFile::new(Syntax::new(&tree, source, front), std::path::Path::new("/root/test.ts"), &project);
-        let mut attrs = Attributes::new(vec![], &[], g);
         let reads: Vec<_> = [
             ("static_name", "ts_member"),
             ("token_neighbours", "ts_member"),
             ("optional_chain_risks", "ts_member"),
-            ("unused_var", "ts_identifier"),
             ("list_layout", "ts_call"),
         ].into_iter().map(|(name, kind)| {
             let fact = super::super::facts::fact(name).unwrap();
@@ -625,7 +684,7 @@ mod tests {
             grammar: g, lang: 0, tree: &tree, node: tree.root, source, lines: &lines,
             file: "/root/test.ts", file_id: 0, options: &[], reindented: &reindented, attrs: &attrs,
             memo: &memo, locals: None, native: Some(&native), indents: &super::super::IndentPlan::EMPTY,
-            indent_reset: None, profile: None, world: None,
+            indent_reset: None, profile: None, world: None, language_options: None,
         };
         for (fact, matcher) in reads {
             let mut represented = 0;

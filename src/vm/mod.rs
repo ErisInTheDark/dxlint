@@ -247,6 +247,8 @@ pub enum VExpr {
     Local(u16),
     /// `value is a, b.field, layer l, .lang`, every test form.
     IsTests(Box<VExpr>, Box<[IsTest]>),
+    Trait(Box<VExpr>, crate::grammar::names::Value, &'static crate::expr::queries::Query, u64),
+    QueryCall(&'static crate::expr::queries::QueryFunction, Box<[VExpr]>),
     /// A native link (`declaration`, `references`): its node(s).
     Link(usize),
     /// A pattern test (`x ~ pattern`): the [`CExpr::Test`] or
@@ -629,6 +631,15 @@ fn lower_in<'a>(e: &'a CExpr, g: &Scope<'a, '_>, args: &[Lowered], bound: u16) -
             }
         }
         CExpr::Is(subject, tests) => VExpr::IsTests(boxed(subject)?, tests.clone().into()),
+        CExpr::Trait(subject, quantifier, mask) => {
+            let (subject, path) = match subject.as_ref() {
+                CExpr::Semantic(subject, path) => (subject.as_ref(), path.clone()),
+                subject => (subject, crate::grammar::names::Value::Path(Vec::new())),
+            };
+            VExpr::Trait(boxed(subject)?, path, crate::expr::queries::query(*quantifier), *mask)
+        }
+        CExpr::Semantic(..) => return Err(e),
+        CExpr::QueryCall(query, call_args) => VExpr::QueryCall(query, all(call_args)),
         CExpr::Link(link) => VExpr::Link(*link),
         CExpr::Test(value, _) | CExpr::TestDfa(value, _) => VExpr::Pattern(boxed(value)?, Box::new(e.clone())),
         CExpr::Ancestor(matcher, field) => VExpr::Ancestor(*matcher, *field),
@@ -768,6 +779,8 @@ pub trait Host {
     fn file_vm(&self) -> Option<&FileVm> { None }
     /// A built-in variable on a node.
     fn builtin(&self, _node: u32, _builtin: Builtin) -> Option<Value<'_>> { None }
+    fn query(&self, _node: u32, _subject: &crate::grammar::names::Value, _query: &crate::expr::queries::Query, _mask: u64) -> Option<bool> { None }
+    fn query_function(&self, _node: u32, _query: &crate::expr::queries::QueryFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
     fn option(&self, _index: usize) -> Option<Value<'_>> { None }
     fn debug(&self, _node: u32, _label: &str, _value: &Value) {}
     /// `position(offset)`.
@@ -832,9 +845,9 @@ impl Evaluated {
     pub fn persist(self, file: &FileVm) -> Option<V> {
         match self.value {
             V::List(handle) | V::Record(_, handle) if handle.is_scratch() => {
-                self.scratch.promote(self.value, &mut file.values.borrow_mut())
+                file.packing(self.scratch.try_promote(self.value, &mut file.values.borrow_mut()))
             }
-            V::Text(handle) if handle & values::SCRATCH_TEXT != 0 => self.scratch.promote(self.value, &mut file.values.borrow_mut()),
+            V::Text(handle) if handle & values::SCRATCH_TEXT != 0 => file.packing(self.scratch.try_promote(self.value, &mut file.values.borrow_mut())),
             value => Some(value),
         }
     }
@@ -919,7 +932,6 @@ impl<'h, H: Host> Session<'h, H> {
         held
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by keyed name operands"))]
     pub fn value_on(&self, node: u32, e: &VExpr, item: Option<u32>) -> Option<Value<'static>> {
         if let Some(vm) = self.runtime.host.file_vm() { vm.clear_error(); }
         let mut frame = self.frame.take();
@@ -937,13 +949,11 @@ impl<'h, H: Host> Session<'h, H> {
         Some(self.runtime.unpack(v))
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by module resolution modes (units layer)"))]
     fn import_item(&self, item: &Value) -> Option<V> {
         if let Some(vm) = self.runtime.host.file_vm() { vm.clear_error(); }
         self.runtime.pack(item)
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by module resolution modes (units layer)"))]
     pub fn holds_with(&self, e: &VExpr, item: &Value) -> Option<bool> {
         self.holds(e, Some(self.import_item(item)?))
     }
@@ -1112,7 +1122,10 @@ impl<'h, H: Host> Runtime<'h, H> {
         }
     }
     fn list(&self, items: &[V]) -> Option<V> {
-        Some(V::List(self.scratch.borrow_mut().allocate(values::Region::Scratch, items)?))
+        Some(V::List(self.allocate(items)?))
+    }
+    fn allocate(&self, items: &[V]) -> Option<values::Handle> {
+        self.result(self.scratch.borrow_mut().try_allocate(values::Region::Scratch, items).map_err(|error| error.to_string()))
     }
     /// A value for shared value functions.
     fn unpack(&self, value: V) -> Value<'_> {
@@ -1123,7 +1136,7 @@ impl<'h, H: Host> Runtime<'h, H> {
     }
     /// Packs a value into evaluation scratch.
     fn pack(&self, value: &Value) -> Option<V> {
-        self.values().scratch_value(value, &mut self.scratch.borrow_mut(), self.source())
+        self.result(self.values().try_value_into(value, &mut self.scratch.borrow_mut(), values::Region::Scratch, self.source()).map_err(|error| error.to_string()))
     }
     fn items(&self, value: V) -> Vec<V> {
         match value {
@@ -1564,7 +1577,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         }
         VExpr::Record(shape, entries) => {
             let items = entries.iter().map(|entry| ev(h, node, entry, f)).collect::<Option<Vec<_>>>()?;
-            V::Record(*shape, h.scratch.borrow_mut().allocate(values::Region::Scratch, &items)?)
+            V::Record(*shape, h.allocate(&items)?)
         }
         VExpr::Collect(sequence) => {
             let mut items = Vec::new();
@@ -1604,7 +1617,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             let mut records = Vec::with_capacity(groups.len());
             for (key, items) in groups {
                 let items = h.list(&items)?;
-                records.push(V::Record(*shape, h.scratch.borrow_mut().allocate(values::Region::Scratch, &[key, items])?));
+                records.push(V::Record(*shape, h.allocate(&[key, items])?));
             }
             h.list(&records)?
         }
@@ -1618,15 +1631,26 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
             }
             let yes = h.list(&yes)?;
             let no = h.list(&no)?;
-            V::Record(*shape, h.scratch.borrow_mut().allocate(values::Region::Scratch, &[yes, no])?)
+            V::Record(*shape, h.allocate(&[yes, no])?)
         }
         VExpr::Key(base, key) => h.key(eval!(node, base)?, key),
         VExpr::Member(base, key, part) => {
             let base = eval!(node, base)?;
-            h.project(base, |value| match value {
-                V::Node(id) => match part { Some(part) => ev(h, id, part, f), None => Some(V::Null) },
-                value => Some(h.key(value, key)),
-            })?
+            if &**key == "nodes" {
+                match base {
+                    V::Node(id) | V::NodeText(id) => h.list(&[V::Node(id)])?,
+                    V::Null => h.list(&[])?,
+                    value => h.project(value, |value| Some(match value {
+                        V::Node(id) | V::NodeText(id) => V::Node(id),
+                        value => h.key(value, key),
+                    }))?,
+                }
+            } else {
+                h.project(base, |value| match value {
+                    V::Node(id) => match part { Some(part) => ev(h, id, part, f), None => Some(V::Null) },
+                    value => Some(h.key(value, key)),
+                })?
+            }
         }
         VExpr::Path(base, keys, parts) => {
             let base = eval!(node, base)?;
@@ -1645,6 +1669,23 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         VExpr::Line => V::Num((h.lines().line_of(tree.node(node).start as usize) + 1) as f64),
         VExpr::Local(local) => {
             h.host.local(node, *local)?
+        }
+        VExpr::Trait(subject, path, query, mask) => match eval!(node, subject)? {
+            V::Node(target) => V::Bool(h.query(target, path, query, *mask)?),
+            _ => V::Null,
+        },
+        VExpr::QueryCall(query, items) => {
+            let Some((subject, items)) = items.split_first() else { return Some(V::Null) };
+            let V::Node(target) = eval!(node, subject)? else { return Some(V::Null) };
+            let mut args = Vec::with_capacity(items.len());
+            for item in items {
+                args.push(h.unpack(eval!(node, item)?).into_owned());
+            }
+            let value = h.query_function(target, query, &args)?;
+            match h.file_vm() {
+                Some(file) => file.shared_query(&value, h.values(), h.source())?,
+                None => h.pack(&value)?,
+            }
         }
         VExpr::IsTests(subject, tests) => {
             let value = eval!(node, subject)?;
@@ -1854,7 +1895,7 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
                 PositionRead::Key(key) => V::Num(at.get(usize::from(*key)) as f64),
                 PositionRead::Whole(shape) => {
                     let items: Vec<V> = (0..Position::KEYS.len()).map(|key| V::Num(at.get(key) as f64)).collect();
-                    V::Record(*shape, h.scratch.borrow_mut().allocate(values::Region::Scratch, &items)?)
+                    V::Record(*shape, h.allocate(&items)?)
                 }
             }
         }
@@ -1955,6 +1996,26 @@ impl KindSet {
 mod tests {
     use super::*;
     use crate::expr::functions;
+
+    #[test]
+    fn compound_call_arguments_keep_values_and_lambda_bindings() {
+        for condition in [
+            r#"upper(lower(text)) == "AB""#,
+            r#"twice(len(lower(text))) == 4"#,
+            r#"join(map([text], item => upper(lower(item))), ",") == "AB""#,
+            r#"upper(if len(text) == 2 then lower(text) else "wrong") == "AB""#,
+            r#"upper("{lower(text)}") == "AB""#,
+            r#"upper({ value text; lower }) == "AB""#,
+            r#"join({ value [text]; concat [lower(text)] }, ",") == "Ab,ab""#,
+            r#"pick({ value: upper(lower(text)) }) == "AB""#,
+        ] {
+            let linter = crate::engine::tests::linter(&format!(
+                "fn twice(value) = value + value\nfn pick(value) = value.value\nin .t match item /[A-Za-z]+/ {{ rule result warn \"result\" {{ when {condition} }} }}",
+            ));
+            assert_eq!(crate::engine::tests::lint(&linter, "Ab").len(), 1, "{condition}");
+            assert_eq!(crate::engine::tests::lint(&linter, "x").len(), 0, "{condition}");
+        }
+    }
 
     #[test]
     fn record_and_list_values_preserve_keys_paths_and_container_semantics() {

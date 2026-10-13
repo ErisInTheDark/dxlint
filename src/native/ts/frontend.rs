@@ -144,7 +144,7 @@ impl Native for NativeFile<'_> {
         super::bind::decoded_name(text)
     }
 
-    fn set_names(&self, names: std::rc::Rc<crate::grammar::names::Resolved>) {
+    fn set_names(&self, names: std::sync::Arc<crate::grammar::names::Resolved>) {
         NativeFile::set_names(self, names);
     }
 }

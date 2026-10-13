@@ -7,6 +7,8 @@ use crate::expr::{value::Key, Value};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Handle(u32);
 
+const CELL_OFFSET_MASK: u32 = (1 << 30) - 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Region {
     Config = 0,
@@ -25,12 +27,45 @@ impl Handle {
             _ => unreachable!("invalid VM value region"),
         }
     }
-    fn offset(self) -> usize { (self.0 & 0x3fff_ffff) as usize }
+    fn offset(self) -> usize { (self.0 & CELL_OFFSET_MASK) as usize }
     pub(super) fn is_scratch(self) -> bool { self.region() == Region::Scratch }
 }
 
 /// The bit marking a [`V::Text`] handle as evaluation scratch, not file.
 pub(super) const SCRATCH_TEXT: u32 = 1 << 31;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PackError {
+    Cells,
+    Text,
+    RuntimeShapes,
+    ConfigShapes,
+}
+
+impl std::fmt::Display for PackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cells => "VM value cell arena limit exceeded",
+            Self::Text => "VM text arena limit exceeded",
+            Self::RuntimeShapes => "VM runtime record shape limit exceeded",
+            Self::ConfigShapes => "VM config record shape limit exceeded",
+        })
+    }
+}
+
+fn cells_end(offset: usize, items: usize) -> Result<usize, PackError> {
+    offset.checked_add(items.checked_add(1).ok_or(PackError::Cells)?)
+        .filter(|&end| end <= CELL_OFFSET_MASK as usize).ok_or(PackError::Cells)
+}
+
+fn text_end(offset: usize, bytes: usize) -> Result<usize, PackError> {
+    offset.checked_add(bytes).filter(|&end| end < SCRATCH_TEXT as usize).ok_or(PackError::Text)
+}
+
+fn runtime_shape_id(count: usize) -> Result<u16, PackError> {
+    RUNTIME_SHAPE.checked_add(u16::try_from(count).map_err(|_| PackError::RuntimeShapes)?)
+        .filter(|&id| id < u16::MAX).ok_or(PackError::RuntimeShapes)
+}
 
 #[derive(Default, Debug)]
 pub(super) struct Arena {
@@ -45,12 +80,12 @@ impl Arena {
         self.texts.clear();
     }
 
-    pub(super) fn allocate(&mut self, region: Region, items: &[V]) -> Option<Handle> {
+    pub(super) fn try_allocate(&mut self, region: Region, items: &[V]) -> Result<Handle, PackError> {
         let offset = self.cells.len();
-        if offset.checked_add(items.len() + 1)? > 0x3fff_ffff { return None; }
+        cells_end(offset, items.len())?;
         self.cells.push(items.len() as u64);
         self.cells.extend(items.iter().copied().map(super::records::encode));
-        Some(Handle(offset as u32 | (region as u32) << 30))
+        Ok(Handle(offset as u32 | (region as u32) << 30))
     }
 
     fn len(&self, handle: Handle) -> usize { self.cells[handle.offset()] as usize }
@@ -63,21 +98,21 @@ impl Arena {
 
     /// Stores `text` (a borrow when it lies in `source`); its offset, below
     /// [`SCRATCH_TEXT`].
-    pub(super) fn text(&mut self, text: &str, source: &str) -> Option<u32> {
-        let len = u32::try_from(text.len()).ok()?;
+    pub(super) fn try_text(&mut self, text: &str, source: &str) -> Result<u32, PackError> {
+        let len = u32::try_from(text.len()).map_err(|_| PackError::Text)?;
         let source_offset = (text.as_ptr() as usize).checked_sub(source.as_ptr() as usize)
             .filter(|&start| start.checked_add(text.len()).is_some_and(|end| end <= source.len()))
             .and_then(|start| u32::try_from(start).ok());
-        let entry_len = 5usize.checked_add(source_offset.map_or(text.len(), |_| 4))?;
-        let offset = u32::try_from(self.texts.len()).ok()?;
-        if self.texts.len().checked_add(entry_len)? >= SCRATCH_TEXT as usize { return None; }
+        let entry_len = 5usize.checked_add(source_offset.map_or(text.len(), |_| 4)).ok_or(PackError::Text)?;
+        let offset = u32::try_from(self.texts.len()).map_err(|_| PackError::Text)?;
+        text_end(self.texts.len(), entry_len)?;
         self.texts.push(u8::from(source_offset.is_none()));
         self.texts.extend_from_slice(&len.to_le_bytes());
         match source_offset {
             Some(start) => self.texts.extend_from_slice(&start.to_le_bytes()),
             None => self.texts.extend_from_slice(text.as_bytes()),
         }
-        Some(offset)
+        Ok(offset)
     }
 
     fn text_range(&self, handle: u32) -> (bool, std::ops::Range<usize>) {
@@ -97,29 +132,29 @@ impl Arena {
     }
 
     /// Copies a text entry as stored (a borrow stays a borrow).
-    fn copy_text(&self, handle: u32, target: &mut Arena) -> Option<u32> {
+    fn copy_text(&self, handle: u32, target: &mut Arena) -> Result<u32, PackError> {
         let (borrowed, range) = self.text_range(handle);
         let at = handle as usize;
         let end = if borrowed { at + 9 } else { range.end };
-        let offset = u32::try_from(target.texts.len()).ok()?;
-        if target.texts.len().checked_add(end - at)? >= SCRATCH_TEXT as usize { return None; }
+        let offset = u32::try_from(target.texts.len()).map_err(|_| PackError::Text)?;
+        text_end(target.texts.len(), end - at)?;
         target.texts.extend_from_slice(&self.texts[at..end]);
-        Some(offset)
+        Ok(offset)
     }
 
     /// Only scratch payloads need copying. Existing config/file handles
     /// remain shared; nested scratch descendants are promoted recursively.
-    pub(super) fn promote(&self, value: V, target: &mut Arena) -> Option<V> {
+    pub(super) fn try_promote(&self, value: V, target: &mut Arena) -> Result<V, PackError> {
         let (shape, handle) = match value {
-            V::Text(handle) if handle & SCRATCH_TEXT != 0 => return Some(V::Text(self.copy_text(handle & !SCRATCH_TEXT, target)?)),
+            V::Text(handle) if handle & SCRATCH_TEXT != 0 => return Ok(V::Text(self.copy_text(handle & !SCRATCH_TEXT, target)?)),
             V::List(handle) => (None, handle),
             V::Record(shape, handle) => (Some(shape), handle),
-            scalar => return Some(scalar),
+            scalar => return Ok(scalar),
         };
-        if handle.region() != Region::Scratch { return Some(value); }
-        let items = (0..self.len(handle)).map(|at| self.promote(self.item(handle, at), target)).collect::<Option<Vec<_>>>()?;
-        let handle = target.allocate(Region::File, &items)?;
-        Some(shape.map_or(V::List(handle), |shape| V::Record(shape, handle)))
+        if handle.region() != Region::Scratch { return Ok(value); }
+        let items = (0..self.len(handle)).map(|at| self.try_promote(self.item(handle, at), target)).collect::<Result<Vec<_>, _>>()?;
+        let handle = target.try_allocate(Region::File, &items)?;
+        Ok(shape.map_or(V::List(handle), |shape| V::Record(shape, handle)))
     }
 }
 
@@ -196,30 +231,32 @@ impl Config {
         Some(())
     }
 
-    pub(super) fn fact_value(&self, value: &Value, fact: usize, projected: bool, listed: bool, arena: &mut Arena, source: &str) -> Option<V> {
-        fn convert(config: &Config, value: &Value, shape: &FactShape, arena: &mut Arena, source: &str) -> Option<V> {
-            Some(match value {
-                Value::Str(text) => V::Text(arena.text(text, source)?),
+    pub(super) fn try_fact_value(&self, value: &Value, fact: usize, projected: bool, listed: bool, arena: &mut Arena, source: &str) -> Result<V, PackError> {
+        fn convert(config: &Config, value: &Value, shape: &FactShape, arena: &mut Arena, source: &str) -> Result<V, PackError> {
+            Ok(match value {
+                Value::Str(text) => V::Text(arena.try_text(text, source)?),
                 Value::Node(node, _) => V::Node(*node),
                 Value::Record(entries) => match shape {
                     FactShape::Record(shape, fields) if {
                         let keys = config.shape_keys(*shape);
                         entries.len() == keys.len() && entries.iter().zip(keys.iter()).all(|((key, _), expected)| key == expected)
                     } => {
-                        let items = entries.iter().zip(fields.iter()).map(|((_, value), field)| convert(config, value, field, arena, source)).collect::<Option<Vec<_>>>()?;
-                        V::Record(*shape, arena.allocate(Region::File, &items)?)
+                        let items = entries.iter().zip(fields.iter()).map(|((_, value), field)| convert(config, value, field, arena, source)).collect::<Result<Vec<_>, _>>()?;
+                        V::Record(*shape, arena.try_allocate(Region::File, &items)?)
                     }
                     // Undeclared or differing: packed as it comes.
-                    _ => config.value_into(value, arena, Region::File, source)?,
+                    _ => config.try_value_into(value, arena, Region::File, source)?,
                 },
                 Value::List(items) => match shape {
                     FactShape::List(shape) => {
-                        let items = items.iter().map(|value| convert(config, value, shape, arena, source)).collect::<Option<Vec<_>>>()?;
-                        V::List(arena.allocate(Region::File, &items)?)
+                        let items = items.iter().map(|value| convert(config, value, shape, arena, source)).collect::<Result<Vec<_>, _>>()?;
+                        V::List(arena.try_allocate(Region::File, &items)?)
                     }
-                    _ => config.value_into(value, arena, Region::File, source)?,
+                    _ => config.try_value_into(value, arena, Region::File, source)?,
                 },
-                scalar => super::constant(scalar)?,
+                Value::Null => V::Null,
+                Value::Bool(value) => V::Bool(*value),
+                Value::Num(value) => V::Num(*value),
             })
         }
         let scalar = FactShape::Scalar;
@@ -227,33 +264,29 @@ impl Config {
         // Multi-field reads wrap results; that list is not the fact's own shape.
         if listed {
             if let Value::List(items) = value {
-                let items = items.iter().map(|value| convert(self, value, shape, arena, source)).collect::<Option<Vec<_>>>()?;
-                return Some(V::List(arena.allocate(Region::File, &items)?));
+                let items = items.iter().map(|value| convert(self, value, shape, arena, source)).collect::<Result<Vec<_>, _>>()?;
+                return Ok(V::List(arena.try_allocate(Region::File, &items)?));
             }
         }
         convert(self, value, shape, arena, source)
     }
-    /// An evaluation result as scratch: text pooled (source substrings as
-    /// borrows), records only with a shape the config registered.
-    pub(super) fn scratch_value(&self, value: &Value, scratch: &mut Arena, source: &str) -> Option<V> {
-        self.value_into(value, scratch, Region::Scratch, source)
-    }
-
     /// A value packed into `arena` (scratch or the file's).
-    pub(super) fn value_into(&self, value: &Value, arena: &mut Arena, region: Region, source: &str) -> Option<V> {
-        Some(match value {
-            Value::Str(text) => V::Text(arena.text(text, source)? | if region == Region::Scratch { SCRATCH_TEXT } else { 0 }),
+    pub(super) fn try_value_into(&self, value: &Value, arena: &mut Arena, region: Region, source: &str) -> Result<V, PackError> {
+        Ok(match value {
+            Value::Str(text) => V::Text(arena.try_text(text, source)? | if region == Region::Scratch { SCRATCH_TEXT } else { 0 }),
             Value::Node(node, _) => V::Node(*node),
             Value::List(items) => {
-                let items = items.iter().map(|item| self.value_into(item, arena, region, source)).collect::<Option<Vec<_>>>()?;
-                V::List(arena.allocate(region, &items)?)
+                let items = items.iter().map(|item| self.try_value_into(item, arena, region, source)).collect::<Result<Vec<_>, _>>()?;
+                V::List(arena.try_allocate(region, &items)?)
             }
             Value::Record(entries) => {
                 let shape = self.record_shape(entries)?;
-                let items = entries.iter().map(|(_, item)| self.value_into(item, arena, region, source)).collect::<Option<Vec<_>>>()?;
-                V::Record(shape, arena.allocate(region, &items)?)
+                let items = entries.iter().map(|(_, item)| self.try_value_into(item, arena, region, source)).collect::<Result<Vec<_>, _>>()?;
+                V::Record(shape, arena.try_allocate(region, &items)?)
             }
-            scalar => super::constant(scalar)?,
+            Value::Null => V::Null,
+            Value::Bool(value) => V::Bool(*value),
+            Value::Num(value) => V::Num(*value),
         })
     }
 
@@ -296,23 +329,26 @@ impl Config {
 
     /// The id of a record's shape, registering it at run time when the
     /// config never named it.
-    fn record_shape(&self, entries: &[(Key, Value)]) -> Option<u16> {
+    fn record_shape(&self, entries: &[(Key, Value)]) -> Result<u16, PackError> {
         let names: Vec<String> = entries.iter().map(|(key, _)| key.to_string()).collect();
-        if let Some(&id) = self.shape_ids.get(&names) { return Some(id); }
-        if let Some(&id) = self.runtime_shapes.read().expect("shape registry").ids.get(&names) { return Some(id); }
+        if let Some(&id) = self.shape_ids.get(&names) { return Ok(id); }
+        if let Some(&id) = self.runtime_shapes.read().expect("shape registry").ids.get(&names) { return Ok(id); }
         let mut shapes = self.runtime_shapes.write().expect("shape registry");
-        if let Some(&id) = shapes.ids.get(&names) { return Some(id); }
-        let id = RUNTIME_SHAPE.checked_add(u16::try_from(shapes.keys.len()).ok()?).filter(|&id| id < u16::MAX)?;
+        if let Some(&id) = shapes.ids.get(&names) { return Ok(id); }
+        let id = runtime_shape_id(shapes.keys.len())?;
         shapes.keys.push(entries.iter().map(|(key, _)| key.clone()).collect());
         shapes.ids.insert(names, id);
-        Some(id)
+        Ok(id)
     }
 
     pub(super) fn shape(&mut self, keys: impl Iterator<Item = Key>) -> Option<u16> {
         let keys: Box<[Key]> = keys.collect();
         let names: Vec<String> = keys.iter().map(ToString::to_string).collect();
         if let Some(&id) = self.shape_ids.get(&names) { return Some(id); }
-        let id = u16::try_from(self.shapes.len()).ok().filter(|&id| id < RUNTIME_SHAPE)?;
+        let Some(id) = u16::try_from(self.shapes.len()).ok().filter(|&id| id < RUNTIME_SHAPE) else {
+            self.lowering_errors.push(PackError::ConfigShapes.to_string());
+            return None;
+        };
         self.shapes.push(keys);
         self.shape_ids.insert(names, id);
         Some(id)
@@ -322,12 +358,12 @@ impl Config {
         Some(match value {
             Value::List(items) => {
                 let items = items.iter().map(|v| self.constant(v)).collect::<Option<Vec<_>>>()?;
-                V::List(self.constants.allocate(Region::Config, &items)?)
+                V::List(self.constants.try_allocate(Region::Config, &items).map_err(|error| self.lowering_errors.push(error.to_string())).ok()?)
             }
             Value::Record(entries) => {
                 let shape = self.shape(entries.iter().map(|(key, _)| key.clone()))?;
                 let items = entries.iter().map(|(_, v)| self.constant(v)).collect::<Option<Vec<_>>>()?;
-                V::Record(shape, self.constants.allocate(Region::Config, &items)?)
+                V::Record(shape, self.constants.try_allocate(Region::Config, &items).map_err(|error| self.lowering_errors.push(error.to_string())).ok()?)
             }
             scalar => super::constant(scalar)?,
         })
@@ -425,16 +461,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn packing_bounds_report_the_limit_without_wrapping_offsets_or_ids() {
+        let cell_limit = CELL_OFFSET_MASK as usize;
+        assert_eq!(cells_end(cell_limit - 1, 0), Ok(cell_limit));
+        assert_eq!(cells_end(cell_limit, 0), Err(PackError::Cells));
+        assert_eq!(cells_end(0, usize::MAX), Err(PackError::Cells));
+        assert_eq!(text_end(SCRATCH_TEXT as usize - 2, 1), Ok(SCRATCH_TEXT as usize - 1));
+        assert_eq!(text_end(SCRATCH_TEXT as usize - 1, 1), Err(PackError::Text));
+        assert_eq!(text_end(usize::MAX, 1), Err(PackError::Text));
+        assert_eq!(runtime_shape_id(usize::from(u16::MAX - RUNTIME_SHAPE - 1)), Ok(u16::MAX - 1));
+        assert_eq!(runtime_shape_id(usize::from(u16::MAX - RUNTIME_SHAPE)), Err(PackError::RuntimeShapes));
+        assert_eq!(runtime_shape_id(usize::MAX), Err(PackError::RuntimeShapes));
+    }
+
+    #[test]
     fn native_text_keeps_source_borrows_and_owned_values_after_pool_growth() {
         let source = "a\u{1f600}42";
         let mut file = Arena::default();
-        let borrowed = file.text(&source[1..5], source).unwrap();
+        let borrowed = file.try_text(&source[1..5], source).unwrap();
         let owned = {
             let text = String::from("5.5");
-            file.text(&text, source).unwrap()
+            file.try_text(&text, source).unwrap()
         };
-        let empty = file.text("", source).unwrap();
-        for _ in 0..1000 { file.text("padding", source).unwrap(); }
+        let empty = file.try_text("", source).unwrap();
+        for _ in 0..1000 { file.try_text("padding", source).unwrap(); }
         let config = Config::default();
         let scratch = Arena::default();
         let tree = crate::grammar::Tree::from_native(vec![crate::grammar::Node {
@@ -457,12 +507,12 @@ mod tests {
         let mut file = Arena::default();
         let escaped = {
             let mut scratch = Arena::default();
-            let list = scratch.allocate(Region::Scratch, &[V::Num(2.0), constant]).unwrap();
-            let record = scratch.allocate(Region::Scratch, &[V::List(list), constant]).unwrap();
-            scratch.promote(V::Record(shape, record), &mut file).unwrap()
+            let list = scratch.try_allocate(Region::Scratch, &[V::Num(2.0), constant]).unwrap();
+            let record = scratch.try_allocate(Region::Scratch, &[V::List(list), constant]).unwrap();
+            scratch.try_promote(V::Record(shape, record), &mut file).unwrap()
         };
         let scratch = Arena::default();
-        for _ in 0..1000 { file.allocate(Region::File, &[V::Null; 7]).unwrap(); }
+        for _ in 0..1000 { file.try_allocate(Region::File, &[V::Null; 7]).unwrap(); }
         let view = View { config: &config, scratch: &scratch, file: &file };
         let V::Record(shape, handle) = escaped else { panic!("record"); };
         let V::List(list) = view.key(shape, handle, "value") else { panic!("nested list"); };

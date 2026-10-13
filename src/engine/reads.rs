@@ -98,8 +98,12 @@ impl<T: Clone> Cached<T> {
     }
 
     pub(crate) fn get(&self) -> T {
+        self.as_ref().clone()
+    }
+
+    pub(crate) fn as_ref(&self) -> &T {
         note_group(&self.reads);
-        self.value.clone()
+        &self.value
     }
 }
 
@@ -355,7 +359,12 @@ fn request_walk(request: &DiscoveryRequest) -> Option<(Vec<PathBuf>, u64)> {
     let mut walker = ignore::WalkBuilder::new(&request.root);
     let mut overrides = ignore::overrides::OverrideBuilder::new(&request.root);
     for glob in &request.include {
-        let prefix = glob.split('/').take_while(|part| !part.contains(['*', '?', '[', '{'])).collect::<Vec<_>>().join("/");
+        let mut prefix = String::new();
+        for part in glob.split('/').take_while(|part| !part.contains(['*', '?', '[', '{'])) {
+            if !prefix.is_empty() { prefix.push('/'); }
+            prefix.push_str(part);
+            overrides.add(&prefix).ok()?;
+        }
         if !prefix.is_empty() {
             overrides.add(&format!("{prefix}/**")).ok()?;
         }
@@ -474,6 +483,43 @@ mod tests {
         set_buffer(&added, "");
         assert!(reads.deps.iter().any(|dep| !dep.holds(|_| 0)));
         for path in [&included, &excluded, &other, &outside, &added] { drop_buffer(path); }
+    }
+
+    #[test]
+    fn exact_requested_files_override_ignores_without_widening_membership() {
+        let dir = std::env::temp_dir().join(format!("zlint-requested-files-{}", std::process::id()));
+        let library = dir.join("node_modules/typescript/lib");
+        std::fs::create_dir_all(&library).unwrap();
+        std::fs::write(dir.join(".ignore"), "node_modules/\n").unwrap();
+        std::fs::write(library.join(".ignore"), "*.d.ts\n").unwrap();
+        let included = library.join("lib.es2023.d.ts");
+        let other = library.join("lib.dom.d.ts");
+        std::fs::write(&included, "").unwrap();
+        std::fs::write(&other, "").unwrap();
+        let requests = [
+            DiscoveryRequest { root: dir.clone(), include: vec!["node_modules/typescript/lib/lib.es2023.d.ts".into()], exclude: vec![], extensions: vec![] },
+            DiscoveryRequest { root: library.clone(), include: vec!["lib.es2023.d.ts".into()], exclude: vec![], extensions: vec![] },
+        ];
+        let (_, reads) = track(|| {
+            for request in &requests { assert_eq!(requested(request), Some(vec![included.clone()])); }
+            let subtree = DiscoveryRequest {
+                root: dir.clone(), include: vec!["node_modules/typescript/lib/**".into()],
+                exclude: vec!["node_modules/typescript/lib/lib.dom.d.ts".into()], extensions: vec![".d.ts".into()],
+            };
+            assert_eq!(requested(&subtree), Some(vec![included.clone()]));
+        });
+        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        std::fs::write(&included, "changed text").unwrap();
+        assert!(reads.deps.iter().all(|dep| dep.holds(|_| 0)));
+        std::fs::remove_file(&included).unwrap();
+        assert!(reads.deps.iter().all(|dep| !dep.holds(|_| 0)));
+        std::fs::remove_file(&other).unwrap();
+        std::fs::remove_file(library.join(".ignore")).unwrap();
+        std::fs::remove_file(dir.join(".ignore")).unwrap();
+        std::fs::remove_dir(&library).unwrap();
+        std::fs::remove_dir(library.parent().unwrap()).unwrap();
+        std::fs::remove_dir(dir.join("node_modules")).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

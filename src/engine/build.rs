@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 
 use super::symbols::Symbols;
-use super::{InertRule, Linter, OptionSlot, Rule, Target};
+use super::{InertRule, Linter, NodeSelection, OptionSlot, Rule, Target};
 use crate::config::ast::{Config, Dropped, Expr, ExprKind, Name, Parent, RuleDef, Severity, Target as AstTarget, Use};
 use crate::config::schema::{Schema, Schemas};
 use crate::config::error::ConfigError;
@@ -144,7 +144,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let mut name_reads = ReadDependencies::default();
     for def in &config.names {
         for name in &def.targets {
-            if let Some((targets, _)) = resolve_target(&AstTarget::Matcher(name.clone()), &grammar, &mut Vec::new()) {
+            if let Some((targets, _)) = resolve_target(&AstTarget::Matcher(name.clone()), &grammar, None, &mut Vec::new()) {
                 name_reads.layers.extend(targets.into_iter().filter_map(|target| match target { Target::Matcher(layer) => Some(layer), _ => None }));
             }
         }
@@ -166,7 +166,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         let Some(source) = config.operand(operand.of, operand.part) else { continue };
         let layers = RefCell::default();
         let before = uses.borrow().len();
-        let params = if matches!(operand.of, crate::config::ast::OperandOf::Mode { .. }) { vec!["resolution".to_owned()] } else { Vec::new() };
+        let params = config.operand_parameter(operand.of).into_iter().map(str::to_owned).collect();
         let scope = Scope { params, uses: Some(&uses), layer_reads: Some(&layers), fields: target_fields(&grammar, Target::Matcher(operand.matcher)), attrs: &attr_names, ..Scope::new(&grammar) };
         if let Some(e) = scope.compile(source, &mut errors) {
             let _ = operand.expr.set(e);
@@ -285,7 +285,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     };
     let mut by_matcher = vec![Vec::new(); grammar.matchers.len()];
     let mut by_field: crate::fx_hash::FxHashMap<(u32, u16), Vec<usize>> = Default::default();
-    let mut by_link: crate::fx_hash::FxHashMap<u32, Vec<(usize, Vec<usize>)>> = Default::default();
+    let mut by_selection: crate::fx_hash::FxHashMap<u32, Vec<(NodeSelection, Vec<usize>)>> = Default::default();
     let mut by_lang = Vec::new();
     for (i, f) in rules.iter().enumerate().filter(|(_, f)| !f.never_reports()) {
         for &target in &f.targets {
@@ -299,14 +299,14 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
                     }
                 }
                 Target::Field(m, l) => by_field.entry((m, l)).or_default().push(i),
-                Target::Link(m, link) => {
+                Target::Nodes(m, selection) => {
                     for x in 0..grammar.matchers.len() {
                         if !grammar.is_a(x as u32, m) { continue; }
-                        let links = by_link.entry(x as u32).or_default();
-                        match links.iter_mut().find(|(l, _)| *l == link) {
+                        let selections = by_selection.entry(x as u32).or_default();
+                        match selections.iter_mut().find(|(s, _)| *s == selection) {
                             Some((_, rules)) if !rules.contains(&i) => rules.push(i),
                             Some(_) => {}
-                            None => links.push((link, vec![i])),
+                            None => selections.push((selection, vec![i])),
                         }
                     }
                 }
@@ -318,6 +318,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let reach = grammar.reach();
     let unit_overlays = reach.iter().map(|reachable| unit_reads.layers.iter().any(|&layer| reachable[layer as usize])).collect();
     let mut linter = Linter {
+        invalidation: Default::default(),
         units: Default::default(),
         discoveries: Default::default(),
         unit_overlays,
@@ -338,7 +339,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         ignores,
         by_matcher,
         by_field,
-        by_link,
+        by_selection,
         by_lang,
         attrs,
         fingerprint,
@@ -562,6 +563,7 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
 /// Labels available on a node of `target`.
 fn target_fields(g: &Grammar, target: Target) -> Vec<(String, u16)> {
     let names = match target {
+        Target::Matcher(crate::grammar::ROOT | crate::grammar::TEXT) => Vec::new(),
         Target::Matcher(m) => g.matchers[m as usize].labels(),
         Target::Field(m, label) => {
             let pat = &g.matchers[m as usize].pat;
@@ -571,7 +573,7 @@ fn target_fields(g: &Grammar, target: Target) -> Vec<(String, u16)> {
                 None => capture_inner_labels(pat, label_name),
             }
         }
-        Target::Link(_, _) | Target::Lang(_) => Vec::new(),
+        Target::Nodes(_, _) | Target::Lang(_) => Vec::new(),
     };
     names.into_iter().filter_map(|n| g.labels.get(&n).map(|id| (n, id))).collect()
 }
@@ -612,7 +614,7 @@ fn attributes(
         }
         let id = usize::from(names.get(&def.name.text).expect("collected"));
         for target in &def.targets {
-            let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, errors) else { continue };
+            let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, None, errors) else { continue };
             // Through a group: a default its members' own definitions refine.
             let through_group = !(resolved.len() == 1 && matches!(resolved[0], Target::Matcher(m) if g.matcher(&target.text) == Some(m)));
             for t in resolved {
@@ -712,7 +714,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
     let mut targets = Vec::new();
     let mut texts = Vec::new();
     for t in &def.targets {
-        let (resolved, text) = resolve_target(t, g, errors)?;
+        let (resolved, text) = resolve_target(t, g, Some(attrs), errors)?;
         targets.extend(resolved);
         texts.push(text);
     }
@@ -872,16 +874,20 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
     let rule_uses = uses.borrow();
     let rule_uses = &rule_uses[uses_before..];
     let (reads_children, reads_siblings) = reads_neighbours(rule_uses);
-    let ReadRequirements { layers: layer_reads, all_tokens: helper_tokens, own_tokens, requires_native } =
-        ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false).resolve(helpers);
+    let mut reads = ReadDependencies::collect(g, attrs, rule_uses, layer_reads.into_inner(), false);
+    reads.helpers.extend(targets.iter().filter_map(|target| match target {
+        Target::Nodes(_, NodeSelection::Attribute(attr)) => Some(usize::from(*attr)),
+        _ => None,
+    }));
+    let ReadRequirements { layers: layer_reads, all_tokens: helper_tokens, own_tokens, requires_native } = reads.resolve(helpers);
     let requires_native = requires_native || targets.iter().any(|target| match target {
-        Target::Matcher(m) | Target::Field(m, _) => is_native_layer(g, *m),
-        Target::Link(_, _) => true,
+        Target::Matcher(m) | Target::Field(m, _) | Target::Nodes(m, NodeSelection::Attribute(_)) => is_native_layer(g, *m),
+        Target::Nodes(_, NodeSelection::Link(_)) => true,
         Target::Lang(_) => false,
     });
     let needs_tokens = |m| is_token_layer(g, m) || g.native_hosts[m as usize].iter().any(|&host| is_token_layer(g, host));
     let on_tokens = layer_reads.iter().any(|&m| needs_tokens(m)) || targets.iter().any(|target| match target {
-        Target::Matcher(m) | Target::Field(m, _) | Target::Link(m, _) => needs_tokens(*m),
+        Target::Matcher(m) | Target::Field(m, _) | Target::Nodes(m, _) => needs_tokens(*m),
         Target::Lang(_) => false,
     });
     let target_layers = targets.iter().map(|t| match t { Target::Matcher(m) => Some(*m), _ => None }).collect::<Option<Vec<u32>>>().unwrap_or_default();
@@ -951,7 +957,7 @@ fn forwards(config: &crate::config::ast::Config, g: &Grammar, attr_names: &AttrN
             }
         }
         for target in &def.targets {
-            let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, errors) else { continue };
+            let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, None, errors) else { continue };
             for t in resolved {
                 let Target::Matcher(m) = t else {
                     errors.push(ConfigError::new(target.span, "`forward` belongs to layers, not languages"));
@@ -980,7 +986,7 @@ fn forwards(config: &crate::config::ast::Config, g: &Grammar, attr_names: &AttrN
 
 /// A rule target as engine targets (a group gives one per member), and how
 /// to show it.
-fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>) -> Option<(Vec<Target>, String)> {
+fn resolve_target(target: &AstTarget, g: &Grammar, attrs: Option<&AttrNames>, errors: &mut Vec<ConfigError>) -> Option<(Vec<Target>, String)> {
     Some(match target {
         AstTarget::Matcher(name) => match g.matcher(&name.text) {
             Some(m) => (vec![Target::Matcher(m)], name.text.clone()),
@@ -1024,13 +1030,15 @@ fn resolve_target(target: &AstTarget, g: &Grammar, errors: &mut Vec<ConfigError>
             };
             let labels = g.matchers[m as usize].labels();
             let label = g.labels.get(&field.text).filter(|_| labels.contains(&field.text));
-            match (label, crate::expr::facts::link(&field.text)) {
-                (Some(label), _) => (vec![Target::Field(m, label)], format!("{}.{}", layer.text, field.text)),
-                (None, Some(link)) => (vec![Target::Link(m, link)], format!("{}.{}", layer.text, field.text)),
-                (None, None) => {
-                    let names = labels.iter().map(String::as_str).chain(crate::expr::facts::LINKS.iter().map(|link| link.name));
+            match (label, attrs.and_then(|attrs| attrs.get(&field.text)), crate::expr::facts::link(&field.text)) {
+                (Some(label), _, _) => (vec![Target::Field(m, label)], format!("{}.{}", layer.text, field.text)),
+                (None, Some(attr), _) => (vec![Target::Nodes(m, NodeSelection::Attribute(attr))], format!("{}.{}", layer.text, field.text)),
+                (None, None, Some(link)) => (vec![Target::Nodes(m, NodeSelection::Link(link))], format!("{}.{}", layer.text, field.text)),
+                (None, None, None) => {
+                    let names = labels.iter().map(String::as_str).chain(crate::expr::facts::LINKS.iter().map(|link| link.name))
+                        .chain(attrs.into_iter().flat_map(|attrs| attrs.iter().map(String::as_str)));
                     errors.push(
-                        ConfigError::new(field.span, format!("matcher `{}` has no field `{}` or link of that name", layer.text, field.text))
+                        ConfigError::new(field.span, format!("matcher `{}` has no field `{}`, attribute or link of that name", layer.text, field.text))
                             .suggest(&field.text, names),
                     );
                     return None;
@@ -1062,6 +1070,21 @@ mod demand_tests {
         let built = build(crate::config::load_text("test.zlint", &source, &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:#?}", built.errors);
         built.linter.expect("valid config")
+    }
+
+    #[test]
+    fn module_modes_compile_without_a_syntax_matcher() {
+        let linter = native(r#"
+            module_resolution probe {
+                search [relative]
+                when resolution.config.enabled == true {
+                    search [packages]
+                }
+            }
+            in ts_program uses module_resolution probe
+        "#);
+        let mode = &linter.grammar.names.module_resolutions[0].modes[0];
+        assert!(linter.grammar.names.operands[mode.when as usize].lowered.get().is_some());
     }
 
     #[test]
@@ -1098,8 +1121,51 @@ mod demand_tests {
     }
 
     #[test]
+    fn attribute_targets_select_nodes_without_a_native_frontend() {
+        let config = r#"
+            lang plain "*.t"
+            in .plain match document /[\s\S]+/
+            in document match item /[a-z]/
+            in item let selected if text == "a" then parent.children.nodes else [node, node]
+            in item.selected, item rule selected info text
+            define {
+                in item let disabled 7
+                in item.disabled rule inactive info text
+            }
+        "#;
+        for runtime in [false, true] {
+            let loaded = crate::config::load_text("selected.zlint", config, &Disk);
+            let built = if runtime { build_for_lint(loaded, PathBuf::from("/root")) }
+                else { build(loaded, PathBuf::from("/root")) };
+            assert!(built.errors.is_empty(), "{:?}", built.errors);
+            let mut linter = built.linter.expect("attribute targets");
+            linter.enable_profile();
+            let diagnostics = linter.lint(Path::new("/root/file.t"), "ab");
+            assert_eq!(diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+            assert_eq!(super::super::Profile::get(&linter.profile.as_ref().expect("profile").rule_evals[0]), 2);
+        }
+    }
+
+    #[test]
+    fn attribute_targets_report_failures_but_allow_absent_nodes() {
+        for (expression, failed) in [("null", false), ("[]", false), ("7", true), ("selected", true)] {
+            let config = format!("lang plain \"*.t\"\nin .plain match item /a/\nin item let selected {expression}\nin item.selected rule selected info text\n");
+            let built = build(crate::config::load_text("selected.zlint", &config, &Disk), PathBuf::from("/root"));
+            assert!(built.errors.is_empty(), "{:?}", built.errors);
+            let diagnostics = built.linter.expect("attribute targets").lint(Path::new("/root/file.t"), "a");
+            if failed {
+                assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+                assert_eq!(diagnostics[0].severity, Severity::Error);
+            } else {
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+            }
+        }
+    }
+
+    #[test]
     fn linked_targets_keep_selected_context_and_run_once_per_node() {
-        let mut linter = native(r#"
+        let built = build(crate::config::load_text("targets.zlint", r#"
+            import .ts
             in ts_identifier let checked text == "value" || text == "later"
             in ts_declarator.name, ts_identifier.declaration, ts_identifier.declarations rule linked info checked {
                 option replacement string = "renamed"
@@ -1107,7 +1173,9 @@ mod demand_tests {
                 report at start
                 fix as replacement
             }
-        "#);
+        "#, &Disk), PathBuf::from("/root"));
+        assert!(built.errors.is_empty(), "{:?}", built.errors);
+        let mut linter = built.linter.expect("attribute target config");
         linter.enable_profile();
         let source = "let value = 1; value; value; missing; let later = 2; later;";
         let diagnostics = linter.lint(Path::new("/root/file.ts"), source);
@@ -1122,7 +1190,8 @@ mod demand_tests {
                 start: diagnostic.start, end: diagnostic.start + name.len(), text: "renamed".into(),
             }][..]));
         }
-        assert_eq!(super::super::Profile::get(&linter.profile.as_ref().expect("profile").rule_evals[0]), starts.len() as u64);
+        let linked = linter.rules.iter().position(|rule| rule.name == "linked").expect("linked rule");
+        assert_eq!(super::super::Profile::get(&linter.profile.as_ref().expect("profile").rule_evals[linked]), starts.len() as u64);
         assert!(linter.lint(Path::new("/root/empty.ts"), "").is_empty());
         assert!(linter.lint(Path::new("/root/file.t"), source).is_empty());
 
@@ -1133,10 +1202,10 @@ mod demand_tests {
         assert_eq!(&source[diagnostics[0].start..diagnostics[0].end], "call");
 
         let built = build(crate::config::load_text("field.zlint",
-            "lang plain \"*.t\"\nin .plain match holder /@/ declaration:/[a-z]+/\nin holder.declaration rule field info text", &Disk), PathBuf::from("/root"));
+            "lang plain \"*.t\"\nin .plain match holder /@/ declaration:/[a-z]+/\nin holder let declaration node\nin holder.declaration rule field info text", &Disk), PathBuf::from("/root"));
         assert!(built.errors.is_empty(), "{:?}", built.errors);
         let diagnostics = built.linter.expect("field config").lint(Path::new("/root/file.t"), "@value");
-        assert_eq!(diagnostics.len(), 1, "real fields win over registered links without a native front end");
+        assert_eq!(diagnostics.len(), 1, "real fields win over node-valued attributes");
         assert_eq!(diagnostics[0].message, "value");
     }
 

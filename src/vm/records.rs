@@ -1,5 +1,6 @@
 use super::{intern, interned, V};
 use crate::grammar::Tree;
+use crate::grammar::names::question::Known;
 use std::cell::RefCell;
 
 /// A node's record cell, as stored.
@@ -77,12 +78,14 @@ pub(super) fn stored(cell: u64) -> V {
 /// first requesting rule root; only read blocks acquire cells.
 #[derive(Default)]
 pub struct FileVm {
+    revision: std::cell::Cell<Option<u64>>,
     error: RefCell<Option<String>>,
     attr_errors: RefCell<crate::fx_hash::FxHashMap<(u32, u16), String>>,
     storage: RefCell<Storage>,
     pub(super) values: RefCell<super::values::Arena>,
     packed_facts: RefCell<crate::fx_hash::FxHashMap<FactPackKey, V>>,
-    /// [`FileVm::keep`]'s packed attributes (`None`: no packed form).
+    /// Retaining the Arc prevents its address being reused for another query result.
+    shared_queries: RefCell<crate::fx_hash::FxHashMap<SharedValueKey, (crate::expr::Value<'static>, V)>>,
     kept: RefCell<crate::fx_hash::FxHashMap<(u32, u16), Option<V>>>,
     /// Buffers of finished rule runs ([`super::Session`]), reused.
     pub(crate) spare: RefCell<Vec<super::Spare>>,
@@ -92,6 +95,12 @@ pub struct FileVm {
 // Whole-node reads use their target node. Projections and multi-field wrappers
 // stay distinct, because their first-read payload sizes need not agree.
 pub(crate) type FactPackKey = (u32, usize, Option<usize>, Option<u16>);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SharedValueKey {
+    List(usize),
+    Record(usize),
+}
 
 #[derive(Default)]
 struct FactPackStats {
@@ -161,6 +170,23 @@ pub enum Begin {
 }
 
 impl FileVm {
+    pub(crate) fn sync_revision(&self, revision: u64, allow_reset: bool) -> bool {
+        match self.revision.get() {
+            Some(current) if current == revision => return true,
+            Some(_) if !allow_reset => return false,
+            Some(_) => {
+                self.storage.replace(Storage::default());
+                self.kept.borrow_mut().clear();
+                self.shared_queries.borrow_mut().clear();
+                self.attr_errors.borrow_mut().clear();
+                self.clear_error();
+            }
+            None => {}
+        }
+        self.revision.set(Some(revision));
+        true
+    }
+
     pub(crate) fn fail(&self, message: String) {
         let mut error = self.error.borrow_mut();
         if error.is_none() { *error = Some(message); }
@@ -185,25 +211,50 @@ impl FileVm {
     }
 
     pub(crate) fn pack(&self, value: &crate::expr::Value, config: &super::Values, source: &str) -> Option<V> {
-        config.value_into(value, &mut self.values.borrow_mut(), super::values::Region::File, source)
+        self.packing(config.try_value_into(value, &mut self.values.borrow_mut(), super::values::Region::File, source))
+    }
+
+    pub(super) fn packing(&self, result: Result<V, super::values::PackError>) -> Option<V> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => { self.fail(error.to_string()); None }
+        }
+    }
+    pub(crate) fn shared_query(&self, value: &crate::expr::Value<'static>, config: &super::Values, source: &str) -> Option<V> {
+        let key = match value {
+            crate::expr::Value::List(items) => SharedValueKey::List(items.as_ptr() as usize),
+            crate::expr::Value::Record(entries) => SharedValueKey::Record(entries.as_ptr() as usize),
+            _ => return self.pack(value, config, source),
+        };
+        if let Some((_, packed)) = self.shared_queries.borrow().get(&key) { return Some(*packed); }
+        let packed = self.pack(value, config, source)?;
+        self.shared_queries.borrow_mut().insert(key, (value.clone(), packed));
+        Some(packed)
     }
     /// An attribute on a node kind without a record field for it: computed
     /// once per (node, attribute) by `compute` (persisted to the file arena).
     /// A read while it is being computed (a cycle) or after it failed is
     /// `None`.
-    pub(crate) fn memo(&self, node: u32, attr: u16, compute: impl FnOnce() -> Option<V>) -> Option<V> {
+    pub(crate) fn memo(&self, node: u32, attr: u16, compute: impl FnOnce() -> Known<Option<V>>) -> Option<V> {
         if let Some(&kept) = self.kept.borrow().get(&(node, attr)) { return kept; }
         self.kept.borrow_mut().insert((node, attr), None);
-        let kept = compute();
-        self.kept.borrow_mut().insert((node, attr), kept);
-        kept
+        match compute() {
+            Known::Yes(kept) => {
+                self.kept.borrow_mut().insert((node, attr), kept);
+                kept
+            }
+            Known::Unknown => {
+                self.kept.borrow_mut().remove(&(node, attr));
+                None
+            }
+        }
     }
 
     pub(crate) fn fact_value(&self, value: &crate::expr::Value, config: &super::Values, source: &str, key: FactPackKey, measure: bool) -> Option<V> {
         if let Some(value) = self.packed_facts.borrow().get(&key) { return Some(*value); }
         let mut arena = self.values.borrow_mut();
         let before = measure.then(|| arena.used_bytes());
-        let result = config.fact_value(value, key.1, key.2.is_some(), key.3.is_some() && key.2.is_none(), &mut arena, source);
+        let result = self.packing(config.try_fact_value(value, key.1, key.2.is_some(), key.3.is_some() && key.2.is_none(), &mut arena, source));
         if let Some(value @ (V::List(_) | V::Record(..) | V::Text(_))) = result {
             self.packed_facts.borrow_mut().insert(key, value);
         }
@@ -313,15 +364,39 @@ impl FileVm {
         }
     }
 
-    /// Publishes a value, or marks the cell given up so later reads go
-    /// return the stored failure.
-    pub fn finish(&self, at: usize, value: Option<V>) {
-        self.storage.borrow_mut().cells.set(at, value.map_or(GAVE_UP, encode));
+    pub fn finish(&self, at: usize, answer: Known<Option<V>>) {
+        let value = match answer {
+            Known::Yes(value) => value.map_or(GAVE_UP, encode),
+            Known::Unknown => UNSET,
+        };
+        self.storage.borrow_mut().cells.set(at, value);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_query_payloads_pack_once_without_merging_distinct_values() {
+        use crate::expr::Value;
+        let config = super::super::Values::default();
+        let vm = super::FileVm::default();
+        for value in [
+            Value::list(vec![Value::Node(1, "".into()), Value::Node(2, "".into())]),
+            Value::record(vec![("references".into(), Value::list(vec![Value::Node(3, "".into())]))]),
+        ] {
+            let first = vm.shared_query(&value, &config, "").unwrap();
+            let bytes = vm.values.borrow().used_bytes();
+            for _ in 0..10 {
+                let alias = value.clone();
+                assert_eq!(vm.shared_query(&alias, &config, ""), Some(first));
+                assert_eq!(vm.values.borrow().used_bytes(), bytes);
+            }
+        }
+        let a = Value::list(vec![Value::Node(4, "".into())]);
+        let b = Value::list(vec![Value::Node(5, "".into())]);
+        assert_ne!(vm.shared_query(&a, &config, ""), vm.shared_query(&b, &config, ""));
+    }
+
     use super::*;
     use crate::grammar::Node;
 
@@ -332,7 +407,7 @@ mod tests {
     #[test]
     fn allocating_fact_queries_share_payload_without_caching_free_results() {
         use crate::expr::{facts, Value};
-        let fact = facts::fact("declaration_kinds").expect("list fact");
+        let fact = facts::fact("token_texts").expect("list fact");
         let mut config = super::super::Values::default();
         config.register_fact(fact).expect("declared shape");
         let vm = FileVm::default();
@@ -370,7 +445,7 @@ mod tests {
         let vm = FileVm::default();
         let width = u16::MAX - 1;
         let Begin::Compute(at) = vm.begin(&tree, &[width], 0, width - 1) else { panic!("first read"); };
-        vm.finish(at, Some(V::Num(7.0)));
+        vm.finish(at, Known::Yes(Some(V::Num(7.0))));
         let storage = vm.storage.borrow();
         let bytes = storage.cells.bytes() + storage.blocks.bytes() + storage.offsets.capacity() * 4
             + storage.cells.pointer_bytes() + storage.blocks.pointer_bytes();
@@ -387,13 +462,13 @@ mod tests {
         let Begin::Compute(pending) = vm.begin(&tree, &layout, 0, 6) else { panic!("first read"); };
         assert!(matches!(vm.begin(&tree, &layout, 0, 6), Begin::GiveUp));
         let Begin::Compute(gave_up) = vm.begin(&tree, &layout, 1, 18) else { panic!("first read"); };
-        vm.finish(gave_up, None);
+        vm.finish(gave_up, Known::Yes(None));
         for node in 2..3000 {
             let slot = layout[node as usize % 2] - 1;
             let Begin::Compute(at) = vm.begin(&tree, &layout, node, slot) else { panic!("first read"); };
-            vm.finish(at, Some(V::Node(node)));
+            vm.finish(at, Known::Yes(Some(V::Node(node))));
         }
-        vm.finish(pending, Some(V::Bool(false)));
+        vm.finish(pending, Known::Yes(Some(V::Bool(false))));
         assert!(matches!(vm.begin(&tree, &layout, 0, 6), Begin::Ready(V::Bool(false))));
         assert!(matches!(vm.begin(&tree, &layout, 1, 18), Begin::GiveUp));
         for node in 2..3000 {
@@ -401,7 +476,7 @@ mod tests {
             assert!(matches!(vm.begin(&tree, &layout, node, slot), Begin::Ready(V::Node(value)) if value == node));
         }
         let Begin::Compute(neighbour) = vm.begin(&tree, &layout, 0, 5) else { panic!("unread neighbour"); };
-        vm.finish(neighbour, Some(V::Null));
+        vm.finish(neighbour, Known::Yes(Some(V::Null)));
         assert!(matches!(vm.begin(&tree, &layout, 0, 5), Begin::Ready(V::Null)));
     }
 

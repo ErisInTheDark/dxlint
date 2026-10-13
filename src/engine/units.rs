@@ -1,6 +1,6 @@
 use std::any::Any;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::grammar::Tree;
 
@@ -26,6 +26,7 @@ pub(super) struct Unit {
     pub lang: usize,
     pub text: Arc<str>,
     pub parsed: ParsedFile,
+    pub names: OnceLock<reads::Cached<Arc<crate::grammar::names::Resolved>>>,
 }
 
 impl Linter {
@@ -66,7 +67,8 @@ impl Linter {
     pub(super) fn unit(&self, path: &Path) -> Option<Arc<Unit>> {
         let text = reads::read(path)?;
         let mut units = self.units.lock().expect("unit cache");
-        if let Some(unit) = units.get(path).filter(|unit| unit.text == text) {
+        if let Some(unit) = units.get(path).filter(|unit| unit.text == text
+            && unit.names.get().is_none_or(|names| !names.reads.any(&mut |dep| !self.holds(dep)))) {
             return Some(unit.clone());
         }
         let rel = self.relative(path);
@@ -77,7 +79,7 @@ impl Linter {
             (0..frontend.kinds().len()).map(|kind| self.unit_tokens && frontend.is_token(kind as u16)).collect::<Vec<_>>()
         }).unwrap_or_default();
         let parsed = self.parse(path, &text, ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens }).ok()?;
-        let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed });
+        let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new() });
         units.insert(path.to_owned(), unit.clone());
         Some(unit)
     }

@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use super::super::ast::{BinOp, Expr, ExprKind, IsName, Name, PipelineStage, PipelineStep, TemplatePart, UnOp};
+use super::super::ast::{BinOp, Expr, ExprKind, IsName, Name, PipelineStage, PipelineStep, Quantifier, TemplatePart, UnOp};
 use super::super::error::ConfigError;
 use super::super::lexer::{decode_escapes, lex, Tk, Token};
 use super::super::source::Span;
@@ -72,6 +72,8 @@ impl Parser<'_> {
                     return crossed
                         && (matches!(kind, Tk::AndAnd | Tk::OrOr | Tk::Nullish | Tk::EqEq | Tk::Ne | Tk::Lt | Tk::Le | Tk::Gt | Tk::Ge | Tk::Tilde)
                             || t.is_ident("is")
+                            || t.is_ident("could")
+                            || t.is_ident("always")
                             || t.is_ident("not"))
                 }
             }
@@ -122,6 +124,24 @@ impl Parser<'_> {
         let next = self.op_peek();
         if next == Some(Tk::Ident) && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("is") || t.is_ident("not")) {
             return self.is_test(lhs);
+        }
+        if next == Some(Tk::Ident) && self.ts.peek_raw(0).is_some_and(|t| t.is_ident("could") || t.is_ident("always")) {
+            let keyword = self.ts.next_raw().expect("peeked");
+            let quantifier = if keyword.is_ident("could") { Quantifier::Could } else { Quantifier::Always };
+            self.skip(true, true);
+            let grouped = self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LParen);
+            if grouped { self.ts.next_raw(); }
+            let mut names = Vec::new();
+            loop {
+                self.skip(true, true);
+                names.push(self.ident("trait name")?);
+                self.skip(grouped, true);
+                if !grouped || !self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Comma) { break; }
+                self.ts.next_raw();
+            }
+            if grouped { self.expect(Tk::RParen, "`)` after trait names")?; }
+            let span = lhs.span.to(self.ts.last_span.unwrap_or(keyword.span));
+            return Some(Expr { kind: ExprKind::Trait(Box::new(lhs), quantifier, names), span });
         }
         let op = match next {
             Some(Tk::EqEq) => BinOp::Eq,
@@ -249,7 +269,7 @@ impl Parser<'_> {
         self.ts.peek_raw(0).is_some_and(|t| match t.kind {
             Tk::Str | Tk::Num | Tk::Regex | Tk::LBrack | Tk::LParen | Tk::InvOpen => true,
             // `set` ends a rule line's message: `rule x error "..." set never`.
-            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "by" | "from" | "class" | "set"),
+            Tk::Ident => !matches!(&*t.text, "then" | "else" | "fix" | "as" | "if" | "is" | "not" | "could" | "always" | "by" | "from" | "in" | "when" | "class" | "set"),
             _ => false,
         })
     }
@@ -481,7 +501,6 @@ impl Parser<'_> {
                         args.push(self.operand()?);
                     }
                 }
-                self.call_arguments(&args);
                 PipelineStage::Call(function, args)
             };
             if steps.is_empty() && !matches!(stage, PipelineStage::Value(_)) {
@@ -656,7 +675,6 @@ impl Parser<'_> {
         if let Some(p) = paren.filter(|p| p.kind == Tk::LParen && last.touches(p)) {
             self.ts.next_raw();
             let args = self.comma_list(Tk::RParen, "`)`")?;
-            self.call_arguments(&args);
             let span = span.to(self.ts.last_span.unwrap_or(p.span));
             let name = path.pop().expect("one");
             if path.is_empty() {
@@ -666,26 +684,6 @@ impl Parser<'_> {
             return Some(Expr { kind: ExprKind::NodeCall(Box::new(receiver), name, args), span });
         }
         Some(Expr { kind: ExprKind::Var(path), span })
-    }
-
-    fn call_arguments(&mut self, args: &[Expr]) {
-        fn simple(expr: &Expr) -> bool {
-            match &expr.kind {
-                ExprKind::Str(_) | ExprKind::Num(_) | ExprKind::Bool(_) | ExprKind::Null
-                | ExprKind::Var(_) | ExprKind::Lambda(..) => true,
-                ExprKind::Template(parts) => parts.iter().all(|part| matches!(part, TemplatePart::Lit(_))),
-                ExprKind::List(items) => items.iter().all(simple),
-                ExprKind::Record(entries) => entries.iter().all(|(_, value)| simple(value)),
-                ExprKind::Key(value, _) | ExprKind::Unary(_, value)
-                | ExprKind::Test(value, _) | ExprKind::Is(value, _) => simple(value),
-                ExprKind::Binary(_, left, right) | ExprKind::Nullish(left, right) => simple(left) && simple(right),
-                ExprKind::Call(..) | ExprKind::NodeCall(..) | ExprKind::If(..) | ExprKind::Pipeline(_) => false,
-            }
-        }
-        for arg in args.iter().filter(|arg| !simple(arg)) {
-            self.errors.push(ConfigError::new(arg.span, "call arguments must be simple values")
-                .note("use a pipeline or an intermediate `let` for calls and other compound values"));
-        }
     }
 
     /// Splits a string literal into literal text and `{expr}` holes.

@@ -32,7 +32,7 @@ pub trait Native {
     }
     /// The engine's resolved names for this file ([`crate::grammar::names`]),
     /// given before the first fact read that needs them.
-    fn set_names(&self, _names: std::rc::Rc<crate::grammar::names::Resolved>) {}
+    fn set_names(&self, _names: Arc<crate::grammar::names::Resolved>) {}
 }
 
 /// Which node kinds may fill a field of one node kind.
