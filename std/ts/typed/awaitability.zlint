@@ -5,15 +5,18 @@ define {
 fn ts_awaitable_result(n) = n != null
   && unparenthesised_node(n) not (ts_null, ts_boolean, ts_number, ts_bigint, ts_string, ts_template)
   && n could thenable
+group ts_await_sites ts_await, ts_for_of, ts_variable_declaration, ts_return, ts_yield
+in ts_node let ts_await_owner parent.ts_await_owner
+in ts_function, ts_arrow, ts_method let ts_await_owner node
+in ts_node let ts_await_descendants descendants(ts_await_sites)
 fn ts_missing_await(n) = {
   value if !contains(n.modifier, "async") || n.body == null
     || n.body.node is ts_block && count(n.body.body.nodes) == 0 then null else {
     value body: n.body.node
     value generator: contains(n.modifier, "*")
     value sites: {
-      value [body]
-      walk (current) if current is (ts_function, ts_arrow, ts_method) then null else current.children.nodes
-      filter (current) current is (ts_await, ts_for_of, ts_variable_declaration, ts_return, ts_yield)
+      value [body] body.ts_await_descendants
+      filter (current) current is ts_await_sites && current.ts_await_owner == n
     }
     value awaited: any(sites, site => site is ts_await
       || site is ts_for_of && contains(site.modifier, "await")

@@ -200,23 +200,25 @@ fn ts_usage_used(binding, sites, references, typed, variable, value_binding, dec
     value !(value_binding && owner is (ts_interface, ts_type_alias)) && owner.parent is ts_export
   })
   value marked: any(sites, site => ts_usage_marked(site, typed, declaration_file))
-  value own: ts_usage_own_nodes(sites, typed)
-  value scope: ts_usage_variable_scope(declaration)
-  value imported_type: all(sites, site => ts_usage_type_import(site))
-  value state: {
-    value references
-    fold ({ used: false, rhs: null }) (state, reference)
-      if state.used then state else {
-        value n: reference.node
-        value self_read: reference.read && ts_usage_self_read(n, state.rhs)
-        value rhs: ts_usage_rhs(n, scope, state.rhs)
-        value type_only: typed && !imported_type && ts_usage_type_only(n, variable)
-        value used: !typed && ts_usage_for_return(n) || reference.read && !self_read && !type_only
-          && !any(own, owner => scoping_within(n, owner))
-        value { used: used, rhs: rhs }
-      }
+  value if marked || jsx || exported_comment || exported then true else {
+    value own: ts_usage_own_nodes(sites, typed)
+    value scope: ts_usage_variable_scope(declaration)
+    value imported_type: all(sites, site => ts_usage_type_import(site))
+    value state: {
+      value references
+      fold ({ used: false, rhs: null }) (state, reference)
+        if state.used then state else {
+          value n: reference.node
+          value self_read: reference.read && ts_usage_self_read(n, state.rhs)
+          value rhs: ts_usage_rhs(n, scope, state.rhs)
+          value type_only: typed && !imported_type && ts_usage_type_only(n, variable)
+          value used: !typed && ts_usage_for_return(n) || reference.read && !self_read && !type_only
+            && !any(own, owner => scoping_within(n, owner))
+          value { used: used, rhs: rhs }
+        }
+    }
+    value state.used
   }
-  value marked || jsx || exported_comment || exported || state.used
 }
 in ts_identifier let ts_usage_binding name_binding(node)
 in ts_program let ts_usage_typed
@@ -229,12 +231,12 @@ fn ts_usage_reference(n) = {
   read: contains(["read", "read_write", "type"], n.access),
   write: contains(["write", "read_write"], n.access)
 }
-fn ts_usage_context(n) = {
+fn ts_usage_context(n) = if !n.scoping_lexical_declaration || n.parent is ts_qualified_name
+  || n is (ts_function.name, ts_class.name) && !ts_declared_statement(n.parent.node) then null else {
   value binding: n.ts_usage_binding
-  value sites: binding.declarations
-  value site: ts_usage_site(n)
-  value expression_name: n is (ts_function.name, ts_class.name) && !ts_declared_statement(n.parent.node)
-  value if !n.scoping_lexical_declaration || binding == null || binding.node != n || expression_name || n.parent is ts_qualified_name then null else {
+  value if binding == null || binding.node != n then null else {
+    value sites: binding.declarations
+    value site: ts_usage_site(n)
     value typed: n.ts_usage_typed
     value declaration_file: n.ts_usage_declaration_file
     value real: map(binding.references, reference => ts_usage_reference(reference))
