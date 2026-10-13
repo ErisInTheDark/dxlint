@@ -1,0 +1,21 @@
+import * as NS from './exports';
+import { E as Alias } from './exports';
+import * as Missing from './missing';
+const present = NS.present;
+const leaf = NS.Nested.leaf;
+const member = NS.E.Zero;
+const privateLeak = NS.privateName;
+const typeLeak = NS.TypeOnly;
+const absent = NS.missing;
+const incomplete = Missing.present;
+declare const key: string;
+const dynamic = NS[key];
+type Whole = NS.E;
+type Selected = NS.E.One;
+type NestedSelected = NS.Nested.Inner.Zero;
+type AliasSelected = Alias.One;
+type MergedText = NS.E.Text;
+type Generic = NS.Box<'box'>;
+type Runtime = typeof NS.E;
+namespace Empty {}
+const empty = Empty;

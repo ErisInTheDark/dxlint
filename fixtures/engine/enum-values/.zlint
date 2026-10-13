@@ -1,0 +1,51 @@
+import .ts
+
+fn enum_parts(n) = { value value_constituents(n) ?? []; flat_map (arm) arm }
+fn enum_expected(name) = get({ Zero: 0, One: 1, Ten: 10, Eleven: 11, Negative: -1, Text: "a", Known: 3 }, name)
+fn enum_member_bad(n, name) = {
+  value parts: enum_parts(n)
+  value origins: filter(parts, part => contains(part.traits, "enum"))
+  value backing: filter(parts, part => contains(part.traits, "number") || contains(part.traits, "string"))
+  value expected: enum_expected(name)
+  value len(origins) == 0 || len(backing) == 0
+    || any(origins, part => !part.carrier_known || part.carrier.description.kind != "enum"
+      || len(part.carrier.arguments) != 0)
+    || expected != null && !all(backing, part => part.identity_known
+      && part.identity.kind == "value" && part.identity.value == expected)
+    || expected == null && any(backing, part => part.identity.kind == "value"
+      || contains(part.traits, "falsy") || contains(part.traits, "truthy"))
+}
+in ts_enum_member rule declaration-origin {
+  let origin declaration_identity(parent.node)
+  let parts enum_parts(node)
+  when enum_member_bad(node, name.text)
+    || !any(parts, part => contains(part.traits, "enum") && part.carrier.file == origin.file
+      && part.carrier.node == origin.node)
+  warn "an enum member lost its declaration origin or primitive backing"
+}
+in ts_type_reference, ts_type_query rule member-type {
+  when name is ts_qualified_name && name.left == "E" && name.right != "Missing"
+  when enum_member_bad(node, name.right.text)
+  warn "a qualified enum type selected the whole enum instead of its member"
+}
+in ts_member rule member-value {
+  when object == "E"
+  when enum_member_bad(node, property.text)
+  warn "an enum value lost the member's identity or backing"
+}
+in ts_type_reference rule absent-member {
+  when name is ts_qualified_name && name.right == "Missing"
+  when any(enum_parts(node), part => contains(part.traits, "enum"))
+  warn "a missing enum member invented an enum value"
+}
+in ts_identifier rule enum-runtime-view {
+  when text == "E" && is ts_unary.argument
+  when !(node always object) || !(node always truthy) || node could enum
+  warn "an enum's runtime object became its type union"
+}
+in ts_type_reference rule enum-type-view {
+  when name == "E"
+  when !(node could number) || !(node could string)
+    || !all(value_constituents(node) ?? [], arm => any(arm, part => contains(part.traits, "enum")))
+  warn "an enum's type view became its runtime object"
+}
