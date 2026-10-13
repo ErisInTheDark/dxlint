@@ -1,0 +1,8 @@
+import .ts
+
+in ts_identifier rule primitive {
+  when text == "probe"
+  when name_classes(node, "number", null, ["type"]).type == true
+    && name_classes(node, "string", null, ["type"]).type == true
+  warn "nested primitives remain global"
+}

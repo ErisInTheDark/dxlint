@@ -215,7 +215,7 @@ impl<'a> Queries<'a> {
             let mut targets = Vec::new();
             for scope in scopes {
                 for PreparedItem { node, item, target: prepared } in self.indexed_items(scope, Some((name, class)), PublicationKind::Globals, true)? {
-                    let Action::Globals { first: true, classes, target: Some(target), module: None, asks } = item.action else { continue };
+                    let Action::Globals { first: true, classes, target: Some(target), module: None, asks, .. } = item.action else { continue };
                     if classes != 0 && classes & class == 0 || !self.holds(node, item.when)? { continue }
                     let value = self.target_value(node, target, prepared)?;
                     let found = self.named_targets(node, &value, None, name, class, asks)?.unwrap_or_default();
@@ -429,7 +429,7 @@ impl Queries<'_> {
                 for PreparedItem { node, item, target: prepared } in self.named_items(current, name, class, publications)? {
                     let (classes, asks, target, module, alias, first) = match (publications, item.action) {
                         (PublicationKind::Exports, Action::Exports { classes, asks, target, module, alias }) => (classes, asks, target, module, alias, false),
-                        (PublicationKind::Globals, Action::Globals { first, classes, asks, target, module }) => (classes, asks, target, module, None, first),
+                        (PublicationKind::Globals, Action::Globals { first, classes, asks, target, module, .. }) => (classes, asks, target, module, None, first),
                         _ => continue,
                     };
                     if classes != 0 && classes & class == 0 || !self.holds(node, item.when)? { continue }
@@ -653,7 +653,7 @@ mod tests {
         kinds[0].modules.items.push(Conditional { action: Action::Uses("test".into()), when: None });
         kinds[1].modules.items.extend([
             Conditional { action: Action::Exports { classes: 1, asks: 0, target: Some(0), module: None, alias: None }, when: None },
-            Conditional { action: Action::Globals { first, classes: 1, asks: 0, target: Some(0), module: None }, when: None },
+            Conditional { action: Action::Globals { first, classes: 1, asks: 0, target: Some(0), module: None, named: None }, when: None },
         ]);
         Names { kinds, ..Names::default() }
     }
@@ -901,7 +901,7 @@ mod tests {
                 let computed = tables.operand(0, 2, 0);
                 tables.operands[computed as usize].expr.set(crate::expr::CExpr::Attr(0)).unwrap();
                 let action = if globals {
-                    Action::Globals { first: false, classes: 1, asks: 0, target: Some(computed), module: None }
+                    Action::Globals { first: false, classes: 1, asks: 0, target: Some(computed), module: None, named: None }
                 } else {
                     Action::Exports { classes: 1, asks: 0, target: Some(computed), module: None, alias: None }
                 };
@@ -1061,13 +1061,13 @@ mod tests {
             let mut tables = tables(false);
             tables.kinds.push(KindNames::default());
             tables.kinds[3].modules.items.push(Conditional {
-                action: Action::Globals { first: false, classes: 2, asks: 1, target: None, module: Some(1) },
+                action: Action::Globals { first: false, classes: 2, asks: 1, target: None, module: Some(1), named: None },
                 when: None,
             });
             if cycle {
                 tables.kinds[1].modules.items.clear();
                 tables.kinds[1].modules.items.push(Conditional {
-                    action: Action::Globals { first: false, classes: 1, asks: 1, target: None, module: Some(1) },
+                    action: Action::Globals { first: false, classes: 1, asks: 1, target: None, module: Some(1), named: None },
                     when: None,
                 });
             }
@@ -1145,7 +1145,7 @@ mod tests {
         tables.operands[computed as usize].expr.set(crate::expr::CExpr::Attr(0)).unwrap();
         let mut ordinary = KindNames::default();
         ordinary.modules.items.push(Conditional {
-            action: Action::Globals { first: false, classes: 1, asks: 0, target: Some(computed), module: None },
+            action: Action::Globals { first: false, classes: 1, asks: 0, target: Some(computed), module: None, named: None },
             when: None,
         });
         tables.kinds.push(ordinary);

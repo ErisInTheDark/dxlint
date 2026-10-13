@@ -90,7 +90,8 @@ fn ts_module_primitives(n) = {
 
 in ts_program {
   uses module_resolution ts
-  globals first type ts_module_primitives(node)
+  globals first type ts_module_primitives(node) named ["any", "unknown", "never", "void", "undefined", "null",
+    "boolean", "number", "bigint", "string", "symbol", "object", "intrinsic"]
 }
 in ts_type_query { resolves query name }
 

@@ -40,6 +40,7 @@ impl Parser<'_> {
             self.error_here(format!("expected `{what} all [classes] from module <source>`"));
             return None;
         }
+        let named = if what == "globals" && self.word("named") { Some(self.module_operand()?) } else { None };
         let alias = if self.word("as") { Some(self.module_operand()?) } else { None };
         let asking = self.module_asking()?;
         if what == "globals" {
@@ -47,7 +48,7 @@ impl Parser<'_> {
                 self.error_here("globals do not take an alias");
                 return None;
             }
-            return Some(Item::Globals { first, classes, target, module, asking });
+            return Some(Item::Globals { first, classes, target, module, named, asking });
         }
         Some(Item::Exports { classes, target, module, alias, asking })
     }

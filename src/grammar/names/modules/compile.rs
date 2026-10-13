@@ -17,7 +17,7 @@ pub struct Mode {
 #[derive(Clone, Debug)]
 pub enum Action {
     Exports { classes: u64, asks: u64, target: Option<u32>, module: Option<u32>, alias: Option<u32> },
-    Globals { first: bool, classes: u64, asks: u64, target: Option<u32>, module: Option<u32> },
+    Globals { first: bool, classes: u64, asks: u64, target: Option<u32>, module: Option<u32>, named: Option<u32> },
     Resolves { classes: u64, asks: u64, binding: u32, module: u32, imported: Option<u32> },
     Scope { classes: u64, name: u32, module: Option<u32> },
     Uses(Box<str>),
@@ -44,12 +44,13 @@ pub fn lower(item: &Item, classes: u64, asks: u64, when: Option<u32>, operand: &
             module: module.as_ref().map(|_| operand(operand::MODULE)),
             alias: alias.as_ref().map(|_| operand(operand::ALIAS)),
         },
-        Item::Globals { first, target, module, .. } => Action::Globals {
+        Item::Globals { first, target, module, named, .. } => Action::Globals {
             first: *first,
             classes,
             asks,
             target: target.as_ref().map(|_| operand(operand::TARGET)),
             module: module.as_ref().map(|_| operand(operand::MODULE)),
+            named: named.as_ref().map(|_| operand(operand::NAMED)),
         },
         Item::Resolves { imported, .. } => Action::Resolves {
             classes,

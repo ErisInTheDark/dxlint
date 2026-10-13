@@ -14,6 +14,8 @@ pub enum Item {
         classes: Vec<Name>,
         target: Option<Expr>,
         module: Option<Expr>,
+        /// The names a computed target can publish, so lookups of other names skip it.
+        named: Option<Expr>,
         asking: Option<Asking>,
     },
     Resolves {
@@ -37,7 +39,7 @@ impl Item {
     pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
         let (a, b, c) = match self {
             Item::Exports { target, module, alias, .. } => (target.as_ref(), module.as_ref(), alias.as_ref()),
-            Item::Globals { target, module, .. } => (target.as_ref(), module.as_ref(), None),
+            Item::Globals { target, module, named, .. } => (target.as_ref(), module.as_ref(), named.as_ref()),
             Item::Resolves { binding, module, imported, .. } => (Some(binding), Some(module), imported.as_ref()),
             Item::Scope { name, module, .. } => (Some(name), module.as_ref(), None),
             Item::Uses(_) | Item::Merges { .. } => (None, None, None),
@@ -64,6 +66,7 @@ impl Item {
             (Item::Exports { target, .. } | Item::Globals { target, .. }, operand::TARGET) => target.as_ref(),
             (Item::Exports { module, .. } | Item::Globals { module, .. }, operand::MODULE) => module.as_ref(),
             (Item::Exports { alias, .. }, operand::ALIAS) => alias.as_ref(),
+            (Item::Globals { named, .. }, operand::NAMED) => named.as_ref(),
             (Item::Resolves { binding, .. }, operand::BINDING) => Some(binding),
             (Item::Resolves { module, .. }, operand::MODULE) => Some(module),
             (Item::Resolves { imported, .. }, operand::IMPORTED) => imported.as_ref(),
@@ -87,6 +90,7 @@ pub mod operand {
     pub const BINDING: u8 = 3;
     pub const IMPORTED: u8 = 4;
     pub const SCOPE_NAME: u8 = 5;
+    pub const NAMED: u8 = 6;
 }
 
 #[derive(Clone, Debug)]

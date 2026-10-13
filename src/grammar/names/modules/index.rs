@@ -68,6 +68,15 @@ impl Index {
         index
     }
 
+    /// Whether any scope of the file could publish `name` in `class`: when
+    /// not, every owner's plans for it are empty, without resolving names.
+    pub fn mentions(&self, name: &str, class: u64, publication: PublicationKind) -> bool {
+        let matching = |classes: &FxHashMap<u64, Vec<usize>>| classes.keys()
+            .any(|mask| class != 0 && (*mask == 0 || *mask & class != 0));
+        self.scopes.iter().filter(|((_, kind), _)| *kind == publication)
+            .any(|(_, scope)| scope.named.get(name).is_some_and(matching) || matching(&scope.computed))
+    }
+
     pub fn plans(&self, owner: u32, name: Option<(&str, u64)>, publication: PublicationKind) -> Vec<&Plan> {
         let Some(scope) = self.scopes.get(&(owner, publication)) else { return Vec::new() };
         let ids = match name {
@@ -88,12 +97,15 @@ impl Index {
 }
 
 fn publication_names(tables: &Names, tree: &Tree, text: &str, key: &NameKey<'_>, node: u32, action: &Action) -> Option<Vec<Box<str>>> {
+    let expression = |id: u32| tables.operands.get(id as usize)?.expr.get();
+    if let Action::Globals { named: Some(named), .. } = *action {
+        return static_names(expression(named)?);
+    }
     let (target, module, alias) = match *action {
         Action::Exports { target, module, alias, .. } => (target?, module, alias),
         Action::Globals { target, module, .. } => (target?, module, None),
         _ => return None,
     };
-    let expression = |id: u32| tables.operands.get(id as usize)?.expr.get();
     if let Some(alias) = alias {
         return match expression(alias)? {
             CExpr::Const(Value::Str(name)) => Some(vec![(&**name).into()]),
@@ -115,6 +127,22 @@ fn publication_names(tables: &Names, tree: &Tree, text: &str, key: &NameKey<'_>,
             names.push(key(text.get(syntax.start as usize..syntax.end as usize)?).into());
         }
     }
+    names.sort_unstable();
+    names.dedup();
+    Some(names)
+}
+
+/// A constant list of text names (`named [...]`); anything else is unknown.
+fn static_names(expression: &CExpr) -> Option<Vec<Box<str>>> {
+    let text = |value: &Value<'_>| match value { Value::Str(name) => Some(Box::<str>::from(&**name)), _ => None };
+    let mut names: Vec<Box<str>> = match expression {
+        CExpr::Const(Value::List(values)) => values.iter().map(text).collect::<Option<_>>()?,
+        CExpr::List(expressions) => expressions.iter().map(|expression| match expression {
+            CExpr::Const(value) => text(value),
+            _ => None,
+        }).collect::<Option<_>>()?,
+        _ => return None,
+    };
     names.sort_unstable();
     names.dedup();
     Some(names)

@@ -206,9 +206,10 @@ impl Queries<'_> {
 
     fn indexed_plans(&self, scope: ScopeRef, name: Option<(&str, u64)>, publication: PublicationKind, first_globals: bool) -> Result<Vec<BatchPlan>, ()> {
         let world = self.semantic.world;
+        let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;
+        if name.is_some_and(|(name, class)| !index.mentions(name, class, publication)) { return Ok(Vec::new()) }
         let names = world.names(scope.file).ok_or(())?;
         let owner = names.scopes.get(scope.scope as usize).ok_or(())?.node;
-        let index = world.module_index(scope.file, self.semantic.tables).ok_or(())?;
         let plans = || index.plans(owner, name, publication).into_iter().filter(|plan| {
             !first_globals || matches!(plan.item.action, Action::Globals { first: true, .. })
         }).map(|plan| BatchPlan { node: plan.node, item: plan.item.clone(), prepared: OnceCell::new() }).collect::<Vec<_>>();
