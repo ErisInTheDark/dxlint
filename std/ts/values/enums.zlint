@@ -54,7 +54,7 @@ in ts_enum_member {
     unwraps (scope enum_origin from parent) & self
     widens ...parent.member
   }
-  when ts_value_enum_kind == null { unwraps instance "unknown" }
+  when ts_value_enum_kind == null { unwraps unknown }
 }
 in ts_qualified_name {
   arguments parent.type_argument

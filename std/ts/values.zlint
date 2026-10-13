@@ -246,19 +246,19 @@ in ts_identifier {
 }
 in ts_variable_declaration {
   when count(declaration.nodes) == 1 { unwraps declaration }
-  when count(declaration.nodes) != 1 { unwraps instance "unknown" }
+  when count(declaration.nodes) != 1 { unwraps unknown }
 }
 in ts_declarator {
   widens type ?? init.widened
   when name is ts_identifier && parent.kind == "const" { unwraps type ?? init }
   when name is ts_identifier && parent.kind != "const" { unwraps type ?? init.widened }
-  when !(name is ts_identifier) { unwraps instance "unknown" }
+  when !(name is ts_identifier) { unwraps unknown }
 }
 in ts_parameter, ts_rest {
   pack ts_tuple
   when parent not ts_tuple_type {
-    when optional != null { unwraps (type ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
-    when optional == null { unwraps type ?? instance "unknown" }
+    when optional != null { unwraps (type ?? unknown) | trait undefined, nullable, falsy, nonthenable }
+    when optional == null { unwraps type ?? unknown }
   }
 }
 in ts_rest { when parent is ts_tuple_type { unwraps type } }
@@ -267,7 +267,7 @@ in ts_rest, ts_spread { let ts_value_tuple_repeated true }
 in ts_assignment_pattern { unwraps left ?? right }
 in ts_pattern_property, ts_object_pattern, ts_array_pattern, ts_import, ts_import_specifier,
     ts_import_equals, ts_super, ts_meta_property, ts_import_call {
-  unwraps instance "unknown"
+  unwraps unknown
 }
 in ts_this {
   let ts_value_this ts_value_this_context(node)
@@ -290,7 +290,7 @@ in ts_this {
     unwraps ts_value_this_explicit ?? ts_value_this_owner.expected.receiver ?? (scope members from ts_value_this_container)
   }
   when ts_value_this.owner not ts_function && ts_value_this.container not (ts_class, ts_object) {
-    unwraps instance "unknown"
+    unwraps unknown
   }
 }
 
@@ -317,7 +317,7 @@ in ts_sequence {
 in ts_call, ts_new, ts_tagged_template { unwraps it.result }
 in ts_call, ts_new { arguments type_argument }
 in ts_await { unwraps instance "Awaited" of argument }
-in ts_yield { unwraps instance "unknown" }
+in ts_yield { unwraps unknown }
 in ts_unary {
   when operator == "void" || operator == "typeof" || operator == "delete" || operator == "!"
       || operator == "+" || operator == "~" { fits nonthenable }
@@ -349,7 +349,7 @@ in ts_unary {
     fits truthy when argument always truthy
     identity { type: "bigint", value: js_bigint("-" argument.text) }
   }
-  when operator == "-" && !(argument is (ts_number, ts_bigint)) { unwraps instance "unknown" }
+  when operator == "-" && !(argument is (ts_number, ts_bigint)) { unwraps unknown }
 }
 in ts_update { unwraps argument.widened }
 in ts_binary {
@@ -440,8 +440,8 @@ in ts_property {
 in ts_property_signature {
   declares member key keyed ts_value_key(it) in nearest members hoisted
   optional when optional != null
-  when optional == null { unwraps type ?? instance "unknown" }
-  when optional != null { unwraps (type ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
+  when optional == null { unwraps type ?? unknown }
+  when optional != null { unwraps (type ?? unknown) | trait undefined, nullable, falsy, nonthenable }
 }
 in ts_method_signature {
   declares member key keyed ts_value_key(it) in nearest members hoisted
@@ -491,8 +491,8 @@ in ts_method, ts_class_property {
 }
 in ts_class_property {
   optional when optional != null
-  when optional == null { unwraps type ?? init.widened ?? instance "unknown" }
-  when optional != null { unwraps (type ?? init.widened ?? instance "unknown") | trait undefined, nullable, falsy, nonthenable }
+  when optional == null { unwraps type ?? init.widened ?? unknown }
+  when optional != null { unwraps (type ?? init.widened ?? unknown) | trait undefined, nullable, falsy, nonthenable }
 }
 
 in ts_type_alias { unwraps type }
@@ -583,11 +583,11 @@ in ts_type_operator {
     widens trait symbol, truthy, nonthenable
     identity node
   }
-  when operator != "readonly" && !(operator == "unique" && type.text == "symbol") { unwraps instance "unknown" }
+  when operator != "readonly" && !(operator == "unique" && type.text == "symbol") { unwraps unknown }
 }
 in ts_template_type { fits string }
 in ts_infer { unwraps type_parameter }
-in ts_import_type, ts_mapped_type { unwraps instance "unknown" }
+in ts_import_type, ts_mapped_type { unwraps unknown }
 in ts_type_keyword {
   let ts_value_never []
   when text == "string" { unwraps (trait string, truthy, nonthenable) | (trait string, falsy, nonthenable) }
