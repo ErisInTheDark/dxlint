@@ -52,6 +52,7 @@ pub struct LintWorld<'a> {
     views: super::arena::Arena<'a>,
     files: RefCell<crate::fx_hash::FxHashMap<PathBuf, u32>>,
     program: ProgramMemo<'a>,
+    snapshot: Option<&'a super::program::Snapshot>,
     /// File 0 outside any rule (no locals, no indents).
     ctx: Ctx<'a>,
     evaluation: Cell<*const ()>,
@@ -66,9 +67,13 @@ impl<'a> LintWorld<'a> {
     pub fn new(linter: &'a super::Linter, path: &'a Path, ctx: Ctx<'a>) -> Self {
         LintWorld {
             linter, path, views: super::arena::Arena::new(linter), files: Default::default(),
-            program: Default::default(), ctx: Ctx { node: ctx.tree.root, ..ctx },
+            program: Default::default(), snapshot: None, ctx: Ctx { node: ctx.tree.root, ..ctx },
             evaluation: Cell::new(std::ptr::null()), semantic: Default::default(),
         }
+    }
+
+    pub(super) fn in_run(linter: &'a super::Linter, path: &'a Path, ctx: Ctx<'a>, snapshot: &'a super::program::Snapshot) -> Self {
+        Self { snapshot: Some(snapshot), ..Self::new(linter, path, ctx) }
     }
 
     fn file(&'a self, path: &Path) -> Option<u32> {
@@ -347,7 +352,8 @@ impl<'a> Files<'a> {
         let key = selected as *const Settings;
         if let Some(cached) = self.0.program.inputs.borrow().get(&key) { return Known::Yes(cached.get()) }
         let cached = super::reads::Cached::compute(|| {
-            self.0.linter.programs.paths(self.program_context(selected), |dep| self.0.linter.holds(dep), || {
+            let context = self.program_context(selected);
+            let load = || self.0.linter.programs.paths(context.clone(), |dep| self.0.linter.holds(dep), || {
                 let question = QueryContext::default();
                 let answer = program_inputs(selected, &self, &question);
                 if question.budget.limited() {
@@ -356,7 +362,11 @@ impl<'a> Files<'a> {
                     }
                 }
                 answer
-            })
+            });
+            match self.0.snapshot {
+                Some(snapshot) => snapshot.paths(self.0.revision(), context.clone(), load),
+                None => load(),
+            }
         });
         let answer = cached.get();
         if let Known::Yes(paths) = &answer {
@@ -406,18 +416,22 @@ impl<'a> Files<'a> {
                 outside: (!paths.iter().any(|path| path == self.0.path)).then(|| self.0.path.to_owned()),
                 classes,
             };
-            self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |dep| {
+            let current_hash = super::reads::hash_bytes(self.0.ctx.source.as_bytes());
+            let load = || self.0.linter.programs.catalog(key.clone(), self.0.ctx.profile, |dep| {
                 if let super::reads::Dep::Text(path, hash) = dep {
-                    if path == self.0.path && *hash != super::reads::hash_bytes(self.0.ctx.source.as_bytes()) { return false }
+                    if path == self.0.path && *hash != current_hash { return false }
                 }
                 self.0.linter.holds(dep)
             }, || match self.0.complete_attribute(|| {
                 let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
                 let mut declarations = Vec::new();
+                let mut texts = crate::fx_hash::FxHashMap::default();
                 for path in paths.iter().chain(key.outside.iter()) {
                     let Some(file) = self.0.file(path) else { return Known::Unknown };
                     let Some(text) = World::text(&self, file) else { return Known::Unknown };
-                    super::reads::note(super::reads::Dep::Text(path.clone(), super::reads::hash_bytes(text.as_bytes())));
+                    let hash = super::reads::hash_bytes(text.as_bytes());
+                    texts.insert(path.clone(), hash);
+                    super::reads::note(super::reads::Dep::Text(path.clone(), hash));
                     let Some(names) = World::names(&self, file) else { return Known::Unknown };
                     for (scope, info) in names.scopes.iter().enumerate() {
                         if classes & info.classes == 0 { continue }
@@ -428,11 +442,15 @@ impl<'a> Files<'a> {
                         }));
                     }
                 }
-                Known::Yes(super::program::Catalog::new(declarations))
+                Known::Yes(super::program::Catalog::new(declarations, texts))
             }) {
                 Known::Yes(answer) => answer,
                 Known::Unknown => Known::Unknown,
-            })
+            });
+            match self.0.snapshot {
+                Some(snapshot) => snapshot.catalog(self.0.revision(), key.clone(), self.0.path, current_hash, load),
+                None => load(),
+            }
         });
         let answer = cached.get();
         if let Known::Yes(catalog) = &answer {
@@ -692,6 +710,10 @@ mod tests {
     }
 
     fn with_source_world<T>(linter: &super::super::Linter, path: &Path, source: &str, f: impl FnOnce(Files<'_>) -> T) -> T {
+        with_snapshot_world(linter, path, source, None, f)
+    }
+
+    fn with_snapshot_world<T>(linter: &super::super::Linter, path: &Path, source: &str, snapshot: Option<&super::super::program::Snapshot>, f: impl FnOnce(Files<'_>) -> T) -> T {
         let tree = Tree::parse_with(&linter.grammar, 0, source, None, None);
         let lines = crate::line_index::LineIndex::new(source);
         let memo = Default::default();
@@ -699,7 +721,10 @@ mod tests {
         let rel = linter.relative(path);
         let file = rel.to_string_lossy();
         let ctx = linter.tree_ctx(0, &tree, (source, &lines, &file), &memo, &reindented, None);
-        let world = LintWorld::new(linter, path, ctx);
+        let world = match snapshot {
+            Some(snapshot) => LintWorld::in_run(linter, path, ctx, snapshot),
+            None => LintWorld::new(linter, path, ctx),
+        };
         f(Files(&world))
     }
 
@@ -762,8 +787,21 @@ mod tests {
             assert_eq!(super::super::Profile::get(&profile.program_catalogue_builds), 1);
             assert_eq!(super::super::Profile::get(&profile.catalogue_read_validations), 1, "a shared catalog is validated once for this world");
         });
+        let snapshot = super::super::program::Snapshot::default();
+        for path in [&main, &next].into_iter().cycle().take(20) {
+            let (_, dependencies) = reads::track(|| with_snapshot_world(&linter, path, "()", Some(&snapshot), |files| {
+                let mut question = QueryContext::default();
+                question.budget = crate::grammar::names::question::Budget::new(0);
+                let semantic = Semantic::new(&files, &linter.grammar.names, &question);
+                let Known::Yes(Some(scope)) = files.ambient_with("shared", classes, &semantic) else { panic!("run snapshot crosses files without rebuilding") };
+                assert_eq!(World::text(&files, scope.file), Some("(library)"));
+            }));
+            assert!(!dependencies.is_empty());
+        }
+        assert_eq!(super::super::Profile::get(&profile.program_catalogue_builds), 1);
+        assert_eq!(super::super::Profile::get(&profile.catalogue_read_validations), 2, "twenty new worlds in one run share one validation");
         for (source, present) in [("(unsaved)", true), ("()", false)] {
-            with_source_world(&linter, &main, source, |files| {
+            with_snapshot_world(&linter, &main, source, Some(&snapshot), |files| {
                 let question = QueryContext::default();
                 let semantic = Semantic::new(&files, &linter.grammar.names, &question);
                 let Known::Yes(answer) = files.ambient_with("local", classes, &semantic) else { panic!("provided file text is known") };
@@ -780,7 +818,8 @@ mod tests {
             });
         }
         reads::set_buffer(&library, "(changed)");
-        with_source_world(&linter, &main, "()", |files| {
+        linter.invalidate(std::slice::from_ref(&library));
+        with_snapshot_world(&linter, &main, "()", Some(&snapshot), |files| {
             let question = QueryContext::default();
             let semantic = Semantic::new(&files, &linter.grammar.names, &question);
             assert_eq!(files.ambient_with("shared", classes, &semantic), Known::Yes(None));

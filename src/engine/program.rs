@@ -35,10 +35,11 @@ pub(super) struct Catalog {
     names: FxHashMap<String, Vec<usize>>,
     wildcards: Vec<usize>,
     sources: Vec<usize>,
+    texts: FxHashMap<PathBuf, u64>,
 }
 
 impl Catalog {
-    pub fn new(declarations: Vec<Declaration>) -> Self {
+    pub fn new(declarations: Vec<Declaration>, texts: FxHashMap<PathBuf, u64>) -> Self {
         let mut names = FxHashMap::<String, Vec<usize>>::default();
         let mut wildcards = Vec::new();
         let mut sources = Vec::new();
@@ -50,7 +51,11 @@ impl Catalog {
                 wildcards.push(index);
             }
         }
-        Self { declarations, names, wildcards, sources }
+        Self { declarations, names, wildcards, sources, texts }
+    }
+
+    fn includes_text(&self, path: &std::path::Path, hash: u64) -> bool {
+        self.texts.get(path).is_some_and(|&stored| stored == hash)
     }
 
     pub fn named<'a>(&'a self, name: &str, classes: u64) -> impl Iterator<Item = &'a Declaration> {
@@ -76,7 +81,7 @@ impl Catalog {
 
 enum Entry<V> {
     Building(ThreadId),
-    Ready(Cached<Arc<V>>),
+    Ready(Cached<V>),
 }
 
 struct Memo<K, V> {
@@ -90,15 +95,15 @@ impl<K, V> Default for Memo<K, V> {
     }
 }
 
-impl<K: Clone + Eq + Hash, V> Memo<K, V> {
-    fn get(&self, key: K, profile: Option<&Profile>, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<V>) -> Known<Arc<V>> {
+impl<K: Clone + Eq + Hash, V: Clone> Memo<K, V> {
+    fn get(&self, key: K, profile: Option<&Profile>, accepts: impl Fn(&Cached<V>) -> bool, build: impl FnOnce() -> Known<V>) -> Known<V> {
         let owner = std::thread::current().id();
         let mut entries = self.entries.lock().expect("program cache");
         loop {
             match entries.get(&key) {
                 Some(Entry::Ready(answer)) => {
                     if let Some(profile) = profile { Profile::add(&profile.catalogue_read_validations, 1); }
-                    if !answer.reads.any(&mut |dep| !holds(dep)) {
+                    if accepts(answer) {
                         return Known::Yes(answer.get());
                     }
                     entries.insert(key.clone(), Entry::Building(owner));
@@ -120,10 +125,7 @@ impl<K: Clone + Eq + Hash, V> Memo<K, V> {
         drop(entries);
         let lease = Build { memo: self, key };
         if let Some(profile) = profile { Profile::add(&profile.program_catalogue_builds, 1); }
-        let answer = Cached::compute(|| match build() {
-            Known::Yes(value) => Known::Yes(Arc::new(value)),
-            Known::Unknown => Known::Unknown,
-        });
+        let answer = Cached::compute(build);
         reads::note_group(&answer.reads);
         match answer.value {
             Known::Yes(value) => {
@@ -145,7 +147,7 @@ struct Build<'a, K: Eq + Hash, V> {
 }
 
 impl<K: Clone + Eq + Hash, V> Build<'_, K, V> {
-    fn publish(self, answer: Cached<Arc<V>>) {
+    fn publish(self, answer: Cached<V>) {
         self.memo.entries.lock().expect("program cache").insert(self.key.clone(), Entry::Ready(answer));
     }
 }
@@ -162,22 +164,44 @@ impl<K: Eq + Hash, V> Drop for Build<'_, K, V> {
 
 #[derive(Default)]
 pub(super) struct Programs {
-    paths: Memo<Context, Vec<PathBuf>>,
-    catalogs: Memo<CatalogKey, Catalog>,
+    paths: Memo<Context, Arc<Vec<PathBuf>>>,
+    catalogs: Memo<CatalogKey, Arc<Catalog>>,
 }
 
 impl Programs {
     pub fn paths(&self, context: Context, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Vec<PathBuf>>) -> Known<Arc<Vec<PathBuf>>> {
-        self.paths.get(context, None, holds, build)
+        self.paths.get(context, None, |answer| !answer.reads.any(&mut |dep| !holds(dep)), || match build() {
+            Known::Yes(paths) => Known::Yes(Arc::new(paths)),
+            Known::Unknown => Known::Unknown,
+        })
     }
 
     pub fn catalog(&self, key: CatalogKey, profile: Option<&Profile>, holds: impl Fn(&Dep) -> bool, build: impl FnOnce() -> Known<Catalog>) -> Known<Arc<Catalog>> {
-        self.catalogs.get(key, profile, holds, build)
+        self.catalogs.get(key, profile, |answer| !answer.reads.any(&mut |dep| !holds(dep)), || match build() {
+            Known::Yes(catalog) => Known::Yes(Arc::new(catalog)),
+            Known::Unknown => Known::Unknown,
+        })
     }
 
     pub fn clear(&mut self) {
         self.paths.clear();
         self.catalogs.clear();
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Snapshot {
+    paths: Memo<(u64, Context), Arc<Vec<PathBuf>>>,
+    catalogs: Memo<(u64, CatalogKey), Arc<Catalog>>,
+}
+
+impl Snapshot {
+    pub fn paths(&self, revision: u64, context: Context, build: impl FnOnce() -> Known<Arc<Vec<PathBuf>>>) -> Known<Arc<Vec<PathBuf>>> {
+        self.paths.get((revision, context), None, |_| true, build)
+    }
+
+    pub fn catalog(&self, revision: u64, key: CatalogKey, path: &std::path::Path, hash: u64, build: impl FnOnce() -> Known<Arc<Catalog>>) -> Known<Arc<Catalog>> {
+        self.catalogs.get((revision, key), None, |answer| answer.value.includes_text(path, hash), build)
     }
 }
 
@@ -199,7 +223,7 @@ mod tests {
             declaration(2, "lib-one", 2, None),
             declaration(3, "lib-one", 1, Some("./target")),
             declaration(4, "lib-one", 1, None),
-        ]);
+        ], Default::default());
         assert_eq!(catalog.ambient("lib-one", 1).map(|declaration| declaration.scope), Some(4));
         assert_eq!(catalog.ambient("lib-other", 1).map(|declaration| declaration.scope), Some(1));
         assert_eq!(catalog.ambient("lib-one", 2).map(|declaration| declaration.scope), Some(2));
@@ -215,24 +239,69 @@ mod tests {
         let memo = Memo::<(), String>::default();
         let builds = Cell::new(0);
         let validations = Cell::new(0);
-        let load = || memo.get((), None, |dep| {
+        let load = || memo.get((), None, |answer| !answer.reads.any(&mut |dep| {
             validations.set(validations.get() + 1);
-            dep.holds(|_| reads::MISSING)
-        }, || {
+            !dep.holds(|_| reads::MISSING)
+        }), || {
             builds.set(builds.get() + 1);
             Known::Yes(reads::read(path).unwrap().to_string())
         });
         for lookup in 0..20 {
             let (answer, dependencies) = reads::track(load);
-            assert_eq!(answer.known().as_deref().map(String::as_str), Some("first"));
+            assert_eq!(answer.known().as_deref(), Some("first"));
             assert!(!dependencies.is_empty());
             assert_eq!(validations.get(), lookup, "newly read input needs no second read before publication");
         }
         assert_eq!(builds.get(), 1);
         reads::set_buffer(path, "second");
-        assert_eq!(load().known().as_deref().map(String::as_str), Some("second"));
+        assert_eq!(load().known().as_deref(), Some("second"));
         assert_eq!(builds.get(), 2);
         reads::drop_buffer(path);
+    }
+
+    #[test]
+    fn run_snapshots_share_validation_and_refresh_after_invalidation_or_a_new_run() {
+        let main = Path::new("/program-snapshot/main");
+        let library = Path::new("/program-snapshot/library");
+        reads::set_buffer(main, "main");
+        reads::set_buffer(library, "one");
+        let programs = Programs::default();
+        let profile = Profile::new(0, 0);
+        let key = CatalogKey {
+            context: Context { directory: main.parent().unwrap().into(), settings: 0 },
+            outside: None, classes: 1,
+        };
+        let snapshot = Snapshot::default();
+        let hash = reads::hash_bytes(b"main");
+        let load = |snapshot: &Snapshot, revision| snapshot.catalog(revision, key.clone(), main, hash, || {
+            programs.catalog(key.clone(), Some(&profile), |dep| dep.holds(|_| reads::MISSING), || {
+                let text = reads::read(library).unwrap();
+                let mut texts = FxHashMap::default();
+                texts.insert(main.into(), reads::hash_bytes(reads::read(main).unwrap().as_bytes()));
+                texts.insert(library.into(), reads::hash_bytes(text.as_bytes()));
+                Known::Yes(Catalog::new(vec![Declaration {
+                    path: library.into(), scope: 1, node: 1, classes: 1,
+                    name: text.to_string(), source: None,
+                }], texts))
+            })
+        });
+        for _ in 0..20 {
+            let (answer, dependencies) = reads::track(|| load(&snapshot, 0));
+            assert!(answer.known().unwrap().ambient("one", 1).is_some());
+            assert!(!dependencies.is_empty());
+        }
+        assert_eq!(Profile::get(&profile.program_catalogue_builds), 1);
+        assert_eq!(Profile::get(&profile.catalogue_read_validations), 0);
+        let next = Snapshot::default();
+        for _ in 0..20 { assert!(load(&next, 0).known().unwrap().ambient("one", 1).is_some()); }
+        assert_eq!(Profile::get(&profile.catalogue_read_validations), 1);
+        reads::set_buffer(library, "two");
+        assert!(load(&snapshot, 1).known().unwrap().ambient("two", 1).is_some());
+        assert_eq!(Profile::get(&profile.program_catalogue_builds), 2);
+        reads::set_buffer(library, "three");
+        assert!(load(&Snapshot::default(), 1).known().unwrap().ambient("three", 1).is_some());
+        assert_eq!(Profile::get(&profile.program_catalogue_builds), 3);
+        for path in [main, library] { reads::drop_buffer(path); }
     }
 
     #[test]
@@ -249,7 +318,7 @@ mod tests {
             builds.set(builds.get() + 1);
             Known::Yes(7)
         });
-        assert_eq!(answer.known().map(|value| *value), Some(7));
+        assert_eq!(answer.known(), Some(7));
         assert_eq!(builds.get(), 2);
     }
 }

@@ -10,7 +10,7 @@ use serde::Serialize;
 use super::{load_for_lint, render, ConfigArg, Format, LintArgs, Output, Project, Sources};
 use crate::config::ast::Severity;
 use crate::engine::cache::{self, Cache};
-use crate::engine::{apply_fixes, Diagnostic, Edit, Linter};
+use crate::engine::{apply_fixes, Diagnostic, Edit, Linter, LintRun};
 use crate::line_index::LineIndex;
 use crate::engine::reads;
 
@@ -103,7 +103,7 @@ pub(super) fn walker(roots: &[PathBuf], jobs: usize, exclude: &'static [&'static
     walker
 }
 
-fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
+fn lint_file(linter: &Linter, run: &LintRun<'_>, cache: Option<&Cache>, path: &Path, fix: bool) -> Msg {
     let text = if let Some(text) = reads::buffer(path) {
         text.to_string()
     } else {
@@ -126,11 +126,11 @@ fn lint_file(linter: &Linter, cache: Option<&Cache>, path: &Path, fix: bool) -> 
     if !fix {
         let diags = match cache {
             Some(cache) => {
-                let (diags, reads) = linter.lint_tracked(path, &text);
+                let (diags, reads) = run.lint_tracked(path, &text);
                 cache.store(&rel, &text, &diags, reads.into());
                 diags
             }
-            None => linter.lint(path, &text),
+            None => run.lint(path, &text),
         };
         return Msg::File(FileResult { path: path.to_path_buf(), text, diags, fixed: 0 });
     }
@@ -226,13 +226,15 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
             linter.set_rule_jobs(jobs / threads);
             linter.set_discovery_jobs(jobs / threads);
             let linter = &*linter;
+            let run = linter.run();
             std::thread::scope(|w| {
                 for _ in 0..threads {
                     let tx = tx.clone();
                     let (queue, next) = (&queue, &next);
+                    let run = &run;
                     w.spawn(move || {
                         while let Some((_, path)) = queue.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-                            if tx.send(lint_file(linter, cache, path, fix)).is_err() {
+                            if tx.send(lint_file(linter, run, cache, path, fix)).is_err() {
                                 return;
                             }
                         }

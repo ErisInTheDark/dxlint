@@ -231,7 +231,27 @@ pub struct Linter {
 
 static NO_INDENTS: crate::expr::IndentPlan = crate::expr::IndentPlan::EMPTY;
 
+/// One read snapshot shared by files in a batch. Start another run after editing inputs.
+pub struct LintRun<'a> {
+    linter: &'a Linter,
+    programs: program::Snapshot,
+}
+
+impl LintRun<'_> {
+    pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
+        self.linter.lint_in(&self.programs, path, text)
+    }
+
+    pub fn lint_tracked(&self, path: &Path, text: &str) -> (Vec<Diagnostic>, Reads) {
+        reads::track(|| self.lint(path, text))
+    }
+}
+
 impl Linter {
+    pub fn run(&self) -> LintRun<'_> {
+        LintRun { linter: self, programs: Default::default() }
+    }
+
     pub(crate) fn reset_runtime(&mut self) {
         self.units.get_mut().expect("unit cache").clear();
         self.discoveries.get_mut().expect("unit discoveries").clear();
@@ -449,6 +469,10 @@ impl Linter {
     }
 
     pub fn lint(&self, path: &Path, text: &str) -> Vec<Diagnostic> {
+        self.run().lint(path, text)
+    }
+
+    fn lint_in(&self, programs: &program::Snapshot, path: &Path, text: &str) -> Vec<Diagnostic> {
         let rel = self.relative(path);
         if self.ignores.matches(&rel) {
             return Vec::new();
@@ -538,7 +562,7 @@ impl Linter {
                     let groups = self.rule_groups(&active, text.len());
                     if groups.len() <= 1 {
                         let facts = self.native_facts(index, &tree, &run, (path, &rel), parsed.state);
-                        self.check_tree(&tree, &run, Some(&*facts), &mut out);
+                        self.check_tree(&tree, &run, programs, Some(&*facts), &mut out);
                     } else {
                         // A big file sets the floor of a whole run: its rules
                         // run in groups on several threads, each with its own
@@ -556,7 +580,7 @@ impl Linter {
                                         reads::track(|| {
                                             let facts = self.native_facts(index, tree, &run, (path, rel), state);
                                             let mut part = Vec::new();
-                                            self.check_tree(tree, &run, Some(&*facts), &mut part);
+                                            self.check_tree(tree, &run, programs, Some(&*facts), &mut part);
                                             part
                                         })
                                     })
@@ -590,7 +614,7 @@ impl Linter {
             let run = Run { active: fallback_active.as_deref().unwrap_or(&active), ..run };
             let tree = self.parse(path, text, units::ParsePlan { lang, front: None, layers: true, overlays: &overlays, tokens: &[] }).expect("pattern parse").tree;
             let rules_started = std::time::Instant::now();
-            self.check_tree(&tree, &run, None, &mut out);
+            self.check_tree(&tree, &run, programs, None, &mut out);
             if tree.too_deep {
                 out.push(engine_warning(0, "nesting is too deep to follow; some structure in this file was skipped".into()));
             }
@@ -657,7 +681,7 @@ impl Linter {
     }
 
     /// Runs every active rule on the nodes of `tree` they target.
-    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>) {
+    fn check_tree<'a>(&'a self, tree: &'a Tree, run: &Run<'a>, programs: &'a program::Snapshot, native: Option<&'a (dyn Native + 'a)>, out: &mut Vec<Diagnostic>) {
         // Nodes run in document order, so a rule's indentation fix of a line
         // is known before it checks the lines below. Per rule: what one rule
         // fixes never changes what another sees, so rules can run apart.
@@ -665,7 +689,7 @@ impl Linter {
         let memo = AttrMemo::default();
         let no_reindent = RefCell::default();
         let tree_ctx = self.tree_ctx(run.lang, tree, (run.text, run.lines, run.file), &memo, &no_reindent, native);
-        let world = world::LintWorld::new(self, run.path, tree_ctx);
+        let world = world::LintWorld::in_run(self, run.path, tree_ctx, programs);
         // Resolve reachability before dispatch: a reference may select a
         // declaration earlier in the tree, and several owners can reach it.
         let mut linked: crate::fx_hash::FxHashMap<u32, Vec<usize>> = Default::default();
