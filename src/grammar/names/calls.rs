@@ -136,6 +136,27 @@ pub(crate) struct State {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ValueQuestion { Result, Expected }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ProfileQuery { Headers, Result, Select, Expected, Accept, Match, Infer }
+
+impl ProfileQuery {
+    pub(crate) const ALL: &[Self] = &[
+        Self::Headers, Self::Result, Self::Select, Self::Expected, Self::Accept, Self::Match, Self::Infer,
+    ];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Headers => "calls.headers",
+            Self::Result => "calls.result",
+            Self::Select => "calls.select",
+            Self::Expected => "calls.expected",
+            Self::Accept => "calls.accept",
+            Self::Match => "calls.match",
+            Self::Infer => "calls.infer",
+        }
+    }
+}
+
 pub struct Calls<'a> {
     pub(crate) semantic: &'a Semantic<'a>,
 }
@@ -149,17 +170,26 @@ impl<'a> std::ops::Deref for Calls<'a> {
 }
 
 impl Calls<'_> {
+    fn profile<T>(&self, query: ProfileQuery, run: impl FnOnce() -> T) -> T {
+        match self.world.profile() {
+            Some(profile) => profile.time_semantic_query(query.name(), run),
+            None => run(),
+        }
+    }
+
     /// One overload set per value alternative; intersections combine headers.
     pub fn headers(&self, value: &NodeValue, kind: InvokeKind) -> Known<Vec<Vec<Header>>> {
-        let key = (value.clone(), kind);
-        if let Some(answer) = self.semantic.calls.headers.borrow().get(&key) {
-            return answer.clone();
-        }
-        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        self.semantic.calls.headers.borrow_mut().insert(key.clone(), Known::Unknown);
-        let answer = headers::headers(value, kind, &self.semantic.values());
-        self.semantic.calls.headers.borrow_mut().insert(key, answer.clone());
-        answer
+        self.profile(ProfileQuery::Headers, || {
+            let key = (value.clone(), kind);
+            if let Some(answer) = self.semantic.calls.headers.borrow().get(&key) {
+                return answer.clone();
+            }
+            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            self.semantic.calls.headers.borrow_mut().insert(key.clone(), Known::Unknown);
+            let answer = headers::headers(value, kind, &self.semantic.values());
+            self.semantic.calls.headers.borrow_mut().insert(key, answer.clone());
+            answer
+        })
     }
 
     pub fn selection(&self, call: Leaf) -> Known<Option<Selection>> {
@@ -174,36 +204,42 @@ impl Calls<'_> {
     }
 
     fn candidates(&self, call: Leaf) -> select::Answer {
-        let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
-        if let Some(answer) = self.semantic.calls.candidates.borrow().get(&call) {
-            return answer.clone();
-        }
-        if !self.question.budget.step() { return Known::Unknown }
-        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        self.semantic.calls.candidates.borrow_mut().insert(call, Known::Unknown);
-        let answer = select::candidates(call, &self.semantic.values());
-        self.semantic.calls.candidates.borrow_mut().insert(call, answer.clone());
-        answer
+        self.profile(ProfileQuery::Select, || {
+            let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
+            if let Some(answer) = self.semantic.calls.candidates.borrow().get(&call) {
+                return answer.clone();
+            }
+            if !self.question.budget.step() { return Known::Unknown }
+            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            self.semantic.calls.candidates.borrow_mut().insert(call, Known::Unknown);
+            let answer = select::candidates(call, &self.semantic.values());
+            self.semantic.calls.candidates.borrow_mut().insert(call, answer.clone());
+            answer
+        })
     }
 
     /// Whether every value `actual` may be is one `expected` allows,
     /// memoised per question; a pending comparison (a cycle) is unknown.
     pub fn accepts(&self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
-        let key = (expected.clone(), actual.clone());
-        if let Some(&known) = self.semantic.calls.acceptance.borrow().get(&key) {
-            return known;
-        }
-        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        self.semantic.calls.acceptance.borrow_mut().insert(key.clone(), Known::Unknown);
-        let answer = accepts::accepts(expected, actual, &self.semantic.values());
-        self.semantic.calls.acceptance.borrow_mut().insert(key, answer);
-        answer
+        self.profile(ProfileQuery::Accept, || {
+            let key = (expected.clone(), actual.clone());
+            if let Some(&known) = self.semantic.calls.acceptance.borrow().get(&key) {
+                return known;
+            }
+            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            self.semantic.calls.acceptance.borrow_mut().insert(key.clone(), Known::Unknown);
+            let answer = accepts::accepts(expected, actual, &self.semantic.values());
+            self.semantic.calls.acceptance.borrow_mut().insert(key, answer);
+            answer
+        })
     }
 
     pub fn match_value(&self, at: Leaf, pattern: &Value, actual: &NodeValue, slots: &[Leaf]) -> Known<Match> {
-        let values = self.semantic.values();
-        let Known::Yes(mut run) = accepts::Run::new(&values, slots, &[]) else { return Known::Unknown };
-        run.match_value(at, pattern, actual, slots)
+        self.profile(ProfileQuery::Match, || {
+            let values = self.semantic.values();
+            let Known::Yes(mut run) = accepts::Run::new(&values, slots, &[]) else { return Known::Unknown };
+            run.match_value(at, pattern, actual, slots)
+        })
     }
 
     pub fn constrained_arguments(&self, owner: Leaf, through: Option<Leaf>, formals: &[Leaf], arguments: Vec<Option<NodeValue>>, locked: &[bool]) -> Known<Option<Vec<Option<NodeValue>>>> {
@@ -211,11 +247,11 @@ impl Calls<'_> {
     }
 
     pub fn result(&self, at: Leaf) -> Known<Option<NodeValue>> {
-        self.value(at, ValueQuestion::Result)
+        self.profile(ProfileQuery::Result, || self.value(at, ValueQuestion::Result))
     }
 
     pub fn expected(&self, at: Leaf) -> Known<Option<NodeValue>> {
-        self.value(at, ValueQuestion::Expected)
+        self.profile(ProfileQuery::Expected, || self.value(at, ValueQuestion::Expected))
     }
 
     pub fn parameters(&self, header: Header) -> Known<Vec<Leaf>> {
@@ -238,8 +274,10 @@ impl Calls<'_> {
     }
 
     pub fn header_result(&self, header: Header) -> Known<NodeValue> {
-        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-        result::header_result(header, &self.semantic.values())
+        self.profile(ProfileQuery::Result, || {
+            let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+            result::header_result(header, &self.semantic.values())
+        })
     }
 
     pub fn header_result_sites(&self, header: Header) -> Known<Vec<Leaf>> {

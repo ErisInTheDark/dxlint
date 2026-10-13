@@ -180,6 +180,7 @@ impl Profile {
             fact_calls: counters(crate::expr::facts::FACTS.len()),
             semantic_queries: crate::expr::queries::QUERY_FUNCTIONS.iter().flat_map(|group| group.iter())
                 .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
+                .chain(crate::grammar::names::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
                 .map(|name| (name, SemanticQueryProfile::default())).collect(),
             ..Profile::default()
         }
