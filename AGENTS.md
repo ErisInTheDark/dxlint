@@ -27,8 +27,8 @@ Rust linter; rules in `.zlint` (docs/language.md). Binary `zlint`.
 
 - Rule behaviour tests: scenario folders under `fixtures/`, each with `.zlint`, input files, `expected/diagnostics` and changed text under `expected/fixed/`; see docs/fixtures.md. Runner writes ignored `actual/`; bless only intentional changes.
 
-- Rust answers questions about code; `.zlint` makes rule decisions. Native facts are properties any rule could ask (syntax, bindings, types, code paths, tokens, static values), read lazily like fields; never named after a rule, never taking rule options, never building messages. Options, what is wrong, positions, messages and fixes live in `.zlint`; shared logic there is a `fn`. Missing expressiveness: extend the DSL, not a rule-specific fact
-- Rust is the engine; languages are `.zlint`. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/design/type-layers.md) and answered by language-neutral engine code. The TS native front end is being migrated out: never add native TS semantics; native TS code only shrinks. Missing expressiveness: extend the engine/DSL generically
+- `.zlint` defines languages and rules; Rust is the language-neutral engine that runs them. Syntax, names, types, calls, modules, effects and narrowing are declared in `std/<lang>/` (docs/design/type-layers.md); rule options, what is wrong, positions, messages and fixes live in rule `.zlint` (shared logic as `fn`)
+- The engine knows no language and no rule: nothing in Rust is named after a rule, takes rule options or builds messages. The TS native front end is being migrated out: never add native TS semantics; native TS code only shrinks. Missing expressiveness: extend the engine/DSL generically
 - One owner per syntax. Regular or textual structure (lines, comments, escapes, whitespace runs, words) is a pattern layer
 - Engine/tree queries (`descendants`, `walk`, `paired_token`...) are language-neutral; they belong to the engine, not a front end
 
