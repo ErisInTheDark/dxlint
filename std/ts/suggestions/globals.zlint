@@ -1,0 +1,183 @@
+import .ts/globals
+import .ts/scoping/bindings
+import .ts/scoping/receivers
+
+define {
+
+in ts_identifier let ts_global_reference {
+  value classes: name_role_classes(node, "reference")
+  value classes != null && contains(classes, "value") && scope_declaration == null
+}
+fn ts_global_enabled_reference(n) = n.ts_global_reference == true && n.global != "off"
+fn ts_global_visible(n, key) = {
+  value scopes: name_scopes(n, "lexical")
+  value if scopes == null then null else any(scopes, scope => {
+    value declarations: name_scope_declarations(n, scope.id, key)
+    value declarations != null && any(declarations, declaration => contains(declaration.classes, "value"))
+  })
+}
+fn ts_global_alias(n) = {
+  value declaration: n.declaration.node
+  value declarator: declaration.parent.node
+  value writes: any([] declaration.references, reference => contains(["write", "read_write"], reference.access))
+  value if n not ts_identifier || declaration not ts_declarator.name || writes then null else declarator.init.node
+}
+fn ts_global_value_compute(n) =
+  if n is (ts_parenthesized, ts_non_null, ts_as, ts_satisfies, ts_type_assertion) then n.expression.global_value
+  else if n is ts_identifier then
+    if contains(["readonly", "writable"], n.global) then n.text
+    else if contains(["const", "let", "var"], n.declaration.parent.parent.kind) then {
+      value alias: ts_global_alias(n)
+      value alias.global_value
+    } else null
+  else if n is ts_conditional then n.consequent.global_value ?? n.alternate.global_value
+  else if n is ts_logical then n.left.global_value ?? n.right.global_value
+  else if n is (ts_member, ts_index) && contains(["globalThis", "global", "self", "window"], n.object.global_value) then n.static_name
+  else null
+in ts_node let global_value ts_global_value_compute(node)
+
+in ts_program let ts_global_written {
+  value descendants(ts_identifier)
+  filter (reference) reference.ts_global_reference && contains(["write", "read_write"], reference.access)
+  map (reference) reference.text
+  unique
+}
+fn ts_global_method_name(n) = if n is ts_index then n.index.static_string else n.static_name
+fn ts_global_method_candidate(n, name) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value callee is ts_identifier || callee is (ts_member, ts_index) && ts_global_method_name(callee) == name
+}
+fn ts_global_method_compute(n) = {
+  value bare: unparenthesised_node(n)
+  value program: ts_module_program(bare)
+  value if bare is (ts_member, ts_index) then {
+    value global: bare.object.global_value
+    value name: ts_global_method_name(bare)
+    value if global == null || name == null || contains(program.ts_global_written, global) then null else global "." name
+  } else if bare is ts_identifier then { value alias: ts_global_alias(bare); value alias.ts_reference_method }
+    else null
+}
+in ts_node let ts_reference_method ts_global_method_compute(node)
+fn ts_global_callee(n) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value if callee is ts_identifier && ts_global_enabled_reference(callee) then callee.text else null
+}
+in ts_call, ts_new let global_callee ts_global_callee(node)
+in ts_call, ts_new let global_method_callee callee.ts_reference_method
+fn ts_global_extended(n) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value object: unparenthesised_node(callee.object.node)
+  value left: unparenthesised_node(n.left.node)
+  value target: if n is ts_assignment && left is (ts_member, ts_index) then left.object.node
+    else if n is ts_call && contains(["defineProperty", "defineProperties"], callee.static_name)
+      && object is ts_identifier && object.text == "Object" then first(n.argument.nodes) else null
+  value prototype: unparenthesised_node(target)
+  value constructor: unparenthesised_node(prototype.object.node)
+  value program: ts_module_program(n)
+  value if prototype.static_name == "prototype" && constructor is ts_identifier
+    && re_test(constructor.text, /^\p{Uppercase}/)
+    && ts_global_builtin_setting(program, constructor.text) == "readonly"
+    && ts_global_enabled_reference(constructor) then constructor.text else null
+}
+in ts_assignment, ts_call let extended_native ts_global_extended(node)
+fn ts_global_own_property(n) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value method: unparenthesised_node(callee.object.node)
+  value object: unparenthesised_node(method.object.node)
+  value empty: object is ts_object && count(object.property.nodes) == 0
+  value constructor: if object is (ts_member, ts_index) && object.static_name == "prototype"
+    then unparenthesised_node(object.object.node) else object
+  value visible: ts_global_visible(n, "Object")
+  value program: ts_module_program(n)
+  value setting: ts_global_setting(program, "Object")
+  value callee is (ts_member, ts_index) && callee.static_name == "call"
+    && method is (ts_member, ts_index) && method.static_name == "hasOwnProperty"
+    && (empty || constructor is ts_identifier && constructor.text == "Object") && visible == false
+    && contains(["readonly", "writable"], setting)
+}
+in ts_call let own_property_call ts_global_own_property(node)
+fn ts_global_label(n) = {
+  value key: n.label.text
+  value program: ts_module_program(n)
+  value visible: ts_global_visible(n, key)
+  value setting: ts_global_setting(program, key)
+  value key != null && (visible == true || contains(["readonly", "writable"], setting))
+}
+in ts_labeled let label_binding ts_global_label(node)
+fn ts_global_function_destination(n) = if n.parent is (ts_parenthesized, ts_logical, ts_conditional)
+  then n.parent.node else null
+fn ts_global_default_receiver(function) = {
+  value anonymous: function.name == null
+  value current: { value function; walk (n) ts_global_function_destination(n); last }
+  value parent: current.parent.node
+  value left: unparenthesised_node(parent.left.node)
+  value callee: unparenthesised_node(parent.callee.node)
+  value object: unparenthesised_node(callee.object.node)
+  value factory: object is ts_identifier && object.text == "Array"
+    && contains(["from", "fromAsync"], callee.static_name)
+  value callback_receiver: scoping_receiver_callback(parent, current, factory)
+  value if scoping_receiver_uppercase(function.name.node)
+      || any([] function.parameter.nodes, parameter => parameter.name == "this") then false
+    else if parent is (ts_property, ts_class_property) then current not (ts_property.value, ts_class_property.init)
+    else if parent is (ts_assignment, ts_assignment_pattern) then
+      left not (ts_member, ts_index) && !(anonymous && scoping_receiver_uppercase(parent.left.node))
+    else if parent is ts_declarator || current is ts_parameter.init then
+      !anonymous || !scoping_receiver_uppercase(parent.name.node)
+    else if parent is (ts_member, ts_index) then {
+      value call: if parent.parent is ts_call && parent.parent.callee.node == parent then parent.parent.node else null
+      value receiver: first([] call.argument.nodes)
+      value !(contains(["bind", "call", "apply"], parent.static_name)
+        && current is (ts_member.object, ts_index.object) && receiver != null && !scoping_receiver_nullish(receiver))
+    } else parent not ts_call || callback_receiver == null || scoping_receiver_nullish(callback_receiver)
+}
+in ts_program let ts_global_this {
+  value source_type: ts_source_type(node)
+  value source_type != "module"
+    && !(source_type == "script" && source_environment.root_function && scoping_strict_code)
+}
+in ts_node let ts_global_this
+  if parent is ts_function then parent.scoping_strict_code != true && ts_global_default_receiver(parent.node)
+  else if parent is ts_method && not ts_method.key || is ts_class_property.init || parent is ts_static_block then false
+  else parent.ts_global_this
+fn ts_global_eval_object(n, key) = {
+  value bare: unparenthesised_node(n)
+  value if bare is ts_identifier then bare.text == key && bare.ts_global_reference
+      && contains(["readonly", "writable"], bare.global)
+    else if bare is (ts_member, ts_index) && bare.static_name == key then ts_global_eval_object(bare.object.node, key)
+    else false
+}
+fn ts_global_eval(n) = {
+  value outer: n.scoping_outer_parens
+  value call: if outer.parent is ts_call && outer.parent.callee.node == outer then outer.parent.node else null
+  value object: unparenthesised_node(n.object.node)
+  value if n is ts_identifier && n.text == "eval" then
+    if call == null && !ts_global_enabled_reference(n) then null
+    else { direct: call != null, optional: call.optional != null, offset: n.offset }
+  else if n is (ts_member, ts_index) && n.static_name == "eval" then {
+    value global: if object is ts_this then object.ts_global_this
+      else any(["global", "window", "globalThis"], key => ts_global_eval_object(object, key))
+    value property: if n is ts_index then n.index.node else n.property.node
+    value if global != true || property == null then null else { direct: false, optional: false, offset: property.offset }
+  } else null
+}
+in ts_identifier, ts_member, ts_index let eval_usage ts_global_eval(node)
+fn ts_global_catch_next(n) = if n is ts_try.handler || n.parent is (ts_function, ts_method, ts_arrow, ts_static_block)
+  then null else n.parent.node
+fn ts_global_caught_throw(n) = {
+  value call: unparenthesised_node(n.argument.node)
+  value callee: unparenthesised_node(call.callee.node)
+  value handler: { value n; walk (current) ts_global_catch_next(current); last }
+  value catch: handler.parent.node
+  value target: if callee is ts_member then callee.property.node else callee
+  value if call not (ts_call, ts_new) || handler not ts_try.handler then null else {
+    name: if target is ts_identifier then target.text else null,
+    global: callee is ts_identifier && ts_global_enabled_reference(callee),
+    parameter: catch.parameter.node,
+    catch_offset: catch.kind.offset ?? n.offset,
+    throw_offset: n.offset,
+    arguments: call.argument.nodes
+  }
+}
+in ts_throw let catch_throw ts_global_caught_throw(node)
+
+}

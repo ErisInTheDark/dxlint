@@ -1,7 +1,6 @@
 //! Shorthand coercion classification and explicit recommendations.
 
 use super::super::super::facts::NativeFile;
-use super::super::super::facts::Facts;
 use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::statics;
 use crate::expr::Value;
@@ -86,7 +85,7 @@ fn classify(file: &NativeFile, node: u32) -> Option<(&'static str, &'static str,
                 let template = s.tree.node(node);
                 let prefix = &s.src[template.start as usize + 1..span.start as usize];
                 let suffix = &s.src[span.end as usize..template.end as usize - 1];
-                let empty_quasi = |text: &str| super::super::super::regex::cook(&format!("`{text}`")).as_deref() == Some("");
+                let empty_quasi = |text: &str| crate::expr::js::strings::decode_literal(&format!("`{text}`")).as_deref() == Some("");
                 if prefix.trim_end().strip_suffix("${").is_some_and(empty_quasi)
                     && suffix.trim_start().strip_prefix('}').is_some_and(empty_quasi) {
                     return Some(("template", "", format!("String({})", operand(file, exprs[0]))));
@@ -104,38 +103,4 @@ pub fn coercion(file: &NativeFile, node: u32) -> Value<'static> {
         ("operator".into(), Value::from(op)),
         ("recommendation".into(), Value::from(recommendation)),
     ]))
-}
-
-fn boolean_call(file: &NativeFile, node: u32) -> bool {
-    let s = &file.syntax;
-    matches!(s.kind(node), Some(K::Call | K::New)) && s.get(node, F::Callee).map(|n| s.unparen(n))
-        .is_some_and(|c| s.is(c, K::Ident) && s.text(c) == "Boolean" && file.resolved(c) == Some("global") && file.global_setting(c) != Some("off"))
-}
-
-pub fn boolean_cast(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let negation = s.is(node, K::Unary) && s.word(node, F::Op) == Some("!") && s.get(node, F::Arg)
-        .map(|n| s.unparen(n)).is_some_and(|n| s.is(n, K::Unary) && s.word(n, F::Op) == Some("!"));
-    if !(negation || s.is(node, K::Call) && boolean_call(file, node)) { return Value::Null }
-    let mut current = node;
-    let mut mode = 0;
-    loop {
-        let Some(parent) = s.parent(current) else { return Value::Null };
-        let field = s.field(current);
-        let direct = matches!(s.kind(parent), Some(K::If | K::While | K::DoWhile | K::For | K::Conditional)) && field == Some(F::Test)
-            || s.is(parent, K::Unary) && s.word(parent, F::Op) == Some("!")
-            || boolean_call(file, parent) && s.all(parent, F::Arg).next() == Some(current);
-        if direct {
-            return Value::record(vec![("negation".into(), Value::Bool(negation)), ("mode".into(), Value::Num(f64::from(mode)))]);
-        }
-        match s.kind(parent) {
-            Some(K::Paren) => {}
-            Some(K::Logical) if matches!(s.word(parent, F::Op), Some("&&" | "||")) => mode = mode.max(1),
-            Some(K::Logical) if s.word(parent, F::Op) == Some("??") && field == Some(F::Right) => mode = 2,
-            Some(K::Conditional) if matches!(field, Some(F::Consequent | F::Alternate)) => mode = 2,
-            Some(K::Sequence) if s.all(parent, F::Expr).last() == Some(current) => mode = 2,
-            _ => return Value::Null,
-        }
-        current = parent;
-    }
 }

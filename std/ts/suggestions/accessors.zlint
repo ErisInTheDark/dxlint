@@ -1,0 +1,130 @@
+define {
+
+fn accessor_display_name(n) = n.function_name ?? {
+  value kind: if n.kind == "get" then "getter" else "setter"
+  value if n.static_name == null then kind else "{kind} '{n.static_name}'"
+}
+fn accessor_static(n) = any([] n.modifier.nodes, modifier => modifier.text == "static")
+fn accessor_key(n) = {
+  value key: n.key.node
+  value unparenthesised_node(key.expression.node ?? key).token_texts
+}
+fn accessor_same_key(left, right) = if left.static_name != null && right.static_name != null
+  then left.static_name == right.static_name
+  else left.static_name == null && right.static_name == null
+    && left.key != null && right.key != null && accessor_key(left) == accessor_key(right)
+fn accessor_pair_info(n) = {
+  value owner: n.parent.node
+  value scope: if owner is ts_object then "object" else if owner is ts_class then "class"
+    else if owner is (ts_interface, ts_type_literal) then "type" else null
+  value if !contains(["get", "set"], n.kind) || scope == null then null else {
+    value members: if scope == "object" then owner.property.nodes else owner.member.nodes
+    value matches: { value members; filter (member) accessor_static(member) == accessor_static(n) && accessor_same_key(n, member) }
+    value getters: { value matches; filter (member) member.kind == "get" }
+    value setters: { value matches; filter (member) member.kind == "set" }
+    value grouping: if count(getters) != 1 || count(setters) != 1 then null else {
+      value getter: first(getters)
+      value setter: first(setters)
+      value gi: index_of(members, getter)
+      value si: index_of(members, setter)
+      value former: if gi < si then getter else setter
+      value latter: if gi < si then setter else getter
+      value if latter != n then null else {
+        former: accessor_display_name(former),
+        gap: if gi < si then si - gi > 1 else gi - si > 1,
+        getter_first: gi < si
+      }
+    }
+    value {
+      kind: n.kind, scope: scope,
+      paired: if n.kind == "get" then count(setters) > 0 else count(getters) > 0,
+      name: accessor_display_name(n), grouping: grouping, offset: n.offset
+    }
+  }
+}
+fn accessor_call_argument(n) = {
+  value call: n.parent.node
+  value if call not ts_call || !contains(call.argument.nodes, n) then null else {
+    value callee: unparenthesised_node(call.callee.node)
+    value if callee not (ts_member, ts_index) then null else {
+      object: callee.object.node, method: callee.static_name, index: index_of(call.argument.nodes, n)
+    }
+  }
+}
+fn accessor_pair_call(n, names, position) = {
+  value outer: outer_parenthesised_node(n)
+  value call: accessor_call_argument(outer)
+  value object: unparenthesised_node(call.object)
+  value call != null && call.index == position && object is ts_identifier
+    && object.ts_global_reference && contains(names, "{object.text}.{call.method}")
+}
+fn accessor_return_call(n, names, position) = {
+  value call: accessor_call_argument(n)
+  value object: call.object
+  value call != null && call.index == position && object is ts_identifier
+    && contains(["readonly", "writable"], object.global) && contains(names, "{object.text}.{call.method}")
+}
+fn accessor_descriptor_container(n) = if n.parent is ts_property && n.parent.value.node == n
+  && n.parent.parent is ts_object then n.parent.parent.node else null
+fn accessor_pair_descriptor(n) = n is ts_object && (
+  accessor_pair_call(n, ["Object.defineProperty", "Reflect.defineProperty"], 2)
+  || {
+    value container: accessor_descriptor_container(n)
+    value container != null && accessor_pair_call(container, ["Object.create", "Object.defineProperties"], 1)
+  })
+fn accessor_return_descriptor(n) = n is ts_object && (
+  accessor_return_call(n, ["Object.defineProperty", "Reflect.defineProperty"], 2)
+  || {
+    value container: accessor_descriptor_container(n)
+    value container != null && accessor_return_call(container, ["Object.create", "Object.defineProperties"], 1)
+  })
+fn accessor_descriptor_info(n) = if !accessor_pair_descriptor(n) then null else {
+  value names: { value n.property.nodes; filter (property) property is ts_property && property.key is ts_identifier; map (property) property.key.text }
+  value { get: contains(names, "get"), set: contains(names, "set") }
+}
+fn accessor_function_kind(n) = if n is ts_method && contains(["get", "set"], n.kind) then n.kind else {
+  value holder: if n is ts_method then n
+    else if n is (ts_function, ts_arrow) && n.parent is ts_property && n.parent.value.node == n then n.parent.node else null
+  value name: holder.static_name
+  value if holder != null && contains(["get", "set"], name) && accessor_return_descriptor(holder.parent.node) then name else null
+}
+
+in ts_method, ts_method_signature let accessor_pair accessor_pair_info(node)
+in ts_object let property_descriptor accessor_descriptor_info(node)
+in ts_function, ts_arrow, ts_method let accessor accessor_function_kind(node)
+in ts_node let enclosing_accessor {
+  value owner: { value walk(parent.node, ancestor => ancestor.parent.node); filter (ancestor) ancestor is (ts_function, ts_arrow, ts_method); first }
+  value accessor_function_kind(owner)
+}
+
+in ts_method, ts_method_signature rule accessor-pairs {
+  option getWithoutSet boolean = false "require a setter for each getter"
+  option setWithoutGet boolean = true "require a getter for each setter"
+  option enforceForClassMembers boolean = true "check class accessors"
+  option enforceForTSTypes boolean = false "check type accessors"
+  when accessor_pair != null && !accessor_pair.paired
+  when accessor_pair.scope == "object" || accessor_pair.scope == "class" && enforceForClassMembers || accessor_pair.scope == "type" && enforceForTSTypes
+  when accessor_pair.kind == "get" && getWithoutSet || accessor_pair.kind == "set" && setWithoutGet
+  report at accessor_pair.offset
+  warn "{if accessor_pair.kind == 'set' then 'Getter' else 'Setter'} is not present for {if accessor_pair.scope == 'class' then 'class ' else if accessor_pair.scope == 'type' then 'type ' else ''}{accessor_pair.name}."
+}
+
+in ts_object rule accessor-pairs:descriptor {
+  option getWithoutSet boolean = false "require a setter for each getter"
+  option setWithoutGet boolean = true "require a getter for each setter"
+  when property_descriptor != null
+  when setWithoutGet && property_descriptor.set && !property_descriptor.get || getWithoutSet && property_descriptor.get && !property_descriptor.set
+  warn "{if property_descriptor.set then 'Getter' else 'Setter'} is not present in property descriptor."
+}
+
+in ts_method, ts_method_signature rule grouped-accessor-pairs {
+  option mode ("anyOrder" | "getBeforeSet" | "setBeforeGet") = "anyOrder" "accessor order"
+  option enforceForTSTypes boolean = false "check type accessors"
+  let group_info accessor_pair.grouping
+  when accessor_pair.scope != "type" || enforceForTSTypes
+  when group_info != null && (group_info.gap || mode == "getBeforeSet" && !group_info.getter_first || mode == "setBeforeGet" && group_info.getter_first)
+  report at accessor_pair.offset
+  warn if group_info.gap then "Accessor pair {group_info.former} and {accessor_pair.name} should be grouped." else "Expected {accessor_pair.name} to be before {group_info.former}."
+}
+
+}

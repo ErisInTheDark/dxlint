@@ -3,6 +3,32 @@ import .ts/expression-fixes
 
 define {
 
+fn boolean_cast_call(n) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value n is (ts_call, ts_new) && callee is ts_identifier && callee.text == "Boolean"
+    && contains(["readonly", "writable"], callee.global)
+}
+fn boolean_cast_direct(n) = n is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test)
+  || n.parent is ts_unary && n.parent.operator == "!"
+  || boolean_cast_call(n.parent.node) && first(n.parent.argument.nodes) == n
+fn boolean_cast_next(n) = if boolean_cast_direct(n) then null
+  else if n.parent is ts_parenthesized
+    || n.parent is ts_logical && contains(["&&", "||"], n.parent.operator)
+    || n.parent is ts_logical && n.parent.operator == "??" && n is ts_logical.right
+    || n is (ts_conditional.consequent, ts_conditional.alternate)
+    || n.parent is ts_sequence && last(n.parent.expression.nodes) == n then n.parent.node else null
+fn boolean_cast_mode(n) = if boolean_cast_direct(n) || n.parent is ts_parenthesized then 0
+  else if n.parent is ts_logical && contains(["&&", "||"], n.parent.operator) then 1 else 2
+fn boolean_cast_info(n) = {
+  value argument: unparenthesised_node(n.argument.node)
+  value negation: n is ts_unary && n.operator == "!" && argument is ts_unary && argument.operator == "!"
+  value chain: walk([n], current => boolean_cast_next(current))
+  value direct: any(chain, current => boolean_cast_direct(current))
+  value modes: map(chain, current => boolean_cast_mode(current))
+  value if (!negation && !(n is ts_call && boolean_cast_call(n))) || !direct then null
+    else {negation: negation, mode: max(modes)}
+}
+
 fn boolean_cast_operand(n, negation) = {
   value if negation
   then unparenthesised_node(n.argument.node).argument.node else first(n.argument.nodes)
@@ -31,7 +57,7 @@ fn boolean_cast_fix(source, n, info) =
 in ts_unary, ts_call rule no-extra-boolean-cast {
   option enforceForInnerExpressions boolean = false "check casts nested inside boolean expressions"
   option enforceForLogicalOperands boolean = false "check casts nested inside logical expressions"
-  let cast_info redundant_boolean_cast
+  let cast_info boolean_cast_info(node)
   when cast_info != null && (cast_info.mode == 0 || cast_info.mode == 1 && enforceForLogicalOperands || enforceForInnerExpressions)
   let cast_fix boolean_cast_fix(source, node, cast_info)
   warn if cast_info.negation then "Redundant double negation." else "Redundant Boolean call."
@@ -86,6 +112,7 @@ fn exponentiation_fix(n) =
   }
 
 in ts_call rule prefer-exponentiation-operator {
+  when ts_global_method_candidate(node, "pow")
   when global_method_callee == "Math.pow"
   let power_text exponentiation_fix(node)
   warn "Use the '**' operator instead of 'Math.pow'."

@@ -1,0 +1,170 @@
+import .ts/globals
+import .ts/expression-fixes
+
+define {
+
+group ts_constant_expression ts_string, ts_number, ts_boolean, ts_null, ts_regex, ts_bigint, ts_arrow, ts_function, ts_class, ts_object, ts_hole, ts_template, ts_array, ts_unary, ts_binary, ts_logical, ts_new, ts_assignment, ts_sequence, ts_spread, ts_call, ts_identifier, ts_parenthesized, ts_update, ts_conditional
+group ts_constant_literal ts_string, ts_number, ts_boolean, ts_null, ts_regex, ts_bigint
+
+fn ts_constant_global(n, key) = n is ts_identifier && n.text == key && contains(["readonly", "writable"], n.global)
+fn ts_constant_call(n, names) = {
+  value callee: unparenthesised_node(n.callee.node)
+  value n is ts_call && callee is ts_identifier && contains(names, callee.text)
+    && ts_constant_global(callee, callee.text)
+}
+fn ts_constant_boolean_call(n) = {
+  value argument: first(n.argument.nodes)
+  value ts_constant_call(n, ["Boolean"]) && (argument == null || argument.constant_truthiness == true)
+}
+fn ts_constant_answer(n, boolean) = if n == null then false
+  else if boolean then n.constant_truthiness == true else n.ts_constant_value == true
+fn ts_constant_quasi(q) = {
+  value body: { value q.text; re_replace /^[`}]+/ ""; re_replace /`+$/ ""; re_replace /\$\{$/ "" }
+  value literal: "`" body "`"
+  value cooked: js_string(literal)
+  value cooked == null || cooked != ""
+}
+fn ts_constant_compute(n, boolean) =
+  if n is (ts_constant_literal, ts_arrow, ts_function, ts_class, ts_object, ts_hole) then true
+  else if n is ts_parenthesized then ts_constant_answer(n.expression.node, boolean)
+  else if n is ts_template then boolean && any(n.quasi.nodes, quasi => ts_constant_quasi(quasi))
+    || all(n.expression.nodes, expression => ts_constant_answer(expression, false))
+  else if n is ts_array then boolean || all(n.element.nodes, element => ts_constant_answer(element, false))
+  else if n is ts_unary then n.operator == "void" || n.operator == "typeof" && boolean
+    || ts_constant_answer(n.argument.node, n.operator == "!")
+  else if n is ts_binary then n.operator != "in" && ts_constant_answer(n.left.node, false) && ts_constant_answer(n.right.node, false)
+  else if n is ts_logical then {
+    value left: ts_constant_answer(n.left.node, boolean)
+    value right: ts_constant_answer(n.right.node, boolean)
+    value left && (right || ts_constant_identity(n.left.node, n.operator))
+      || boolean && right && ts_constant_identity(n.right.node, n.operator)
+  }
+  else if n is ts_new then boolean
+  else if n is ts_assignment then n.operator == "=" && ts_constant_answer(n.right.node, boolean)
+    || boolean && contains(["||=", "&&="], n.operator) && {
+      value operator: slice(n.operator, 0, 2)
+      value ts_constant_identity(n.right.node, operator)
+    }
+  else if n is ts_sequence then { value tail: last(n.expression.nodes); value ts_constant_answer(tail, boolean) }
+  else if n is ts_spread then ts_constant_answer(n.argument.node, boolean)
+  else if n is ts_call then ts_constant_boolean_call(n)
+  else ts_constant_global(n, "undefined")
+
+fn ts_constant_literal_truth(n) =
+  if n is ts_boolean then n.text == "true"
+  else if n is ts_null then false
+  else if n is ts_string then len(n.text) > 2
+  else if n is ts_regex then true
+  else if n is ts_number then { value number: js_number(n.text); value number != null && number != 0 && number == number }
+  else if n is ts_bigint then { value body: re_replace(n.text, /n+$/, ""); value number: js_number(body); value number != null && number != 0 }
+  else null
+fn ts_constant_identity(n, operator) = {
+  value bare: unparenthesised_node(n)
+  value truth: ts_constant_literal_truth(bare)
+  value if bare is ts_constant_literal then operator == "||" && truth == true || operator == "&&" && truth == false
+    else if bare is ts_unary then operator == "&&" && bare.operator == "void"
+    else if bare is ts_logical then bare.operator == operator
+      && (ts_constant_identity(bare.left.node, operator) || ts_constant_identity(bare.right.node, operator))
+    else if bare is ts_assignment then contains(["||=", "&&="], bare.operator) && {
+      value assignment: slice(bare.operator, 0, 2)
+      value assignment == operator && ts_constant_identity(bare.right.node, operator)
+    } else false
+}
+fn ts_constant_null(n) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_null || ts_constant_global(bare, "undefined") || bare is ts_unary && bare.operator == "void"
+}
+fn ts_constant_nullish(n, non_nullish) = {
+  value bare: unparenthesised_node(n)
+  value if bare == null || non_nullish && ts_constant_null(bare) then false
+    else if bare is (ts_constant_literal, ts_object, ts_array, ts_arrow, ts_function, ts_class, ts_new, ts_template, ts_update, ts_binary, ts_unary) then true
+    else if bare is ts_call then ts_constant_call(bare, ["Boolean", "String", "Number", "Symbol", "BigInt"])
+    else if bare is ts_logical then bare.operator == "??" && ts_constant_nullish(bare.right.node, true)
+    else if bare is ts_assignment then if bare.operator == "=" then ts_constant_nullish(bare.right.node, non_nullish)
+      else !contains(["||=", "&&=", "??="], bare.operator)
+    else if bare is ts_sequence then { value tail: last(bare.expression.nodes); value ts_constant_nullish(tail, non_nullish) }
+    else ts_constant_global(bare, "undefined")
+}
+fn ts_constant_static_boolean(n) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_boolean || ts_constant_boolean_call(bare)
+    || bare is ts_unary && bare.operator == "!" && ts_constant_answer(bare.argument.node, true)
+}
+fn ts_constant_boolean_comparison(n, strict) = {
+  value bare: unparenthesised_node(n)
+  value if bare == null then false
+    else if bare is (ts_object, ts_class, ts_arrow, ts_function) then true
+    else if bare is ts_array then strict || count(bare.element.nodes) == 0
+      || { value bare.element.nodes; filter (element) element not (ts_hole, ts_spread); count } > 1
+    else if bare is ts_unary then
+      if bare.operator == "!" then ts_constant_answer(bare.argument.node, true)
+      else if strict then bare.operator != "delete" else contains(["void", "typeof"], bare.operator)
+    else if bare is ts_binary then strict && contains(["+", "-", "*", "/", "%", "|", "^", "&", "**", "<<", ">>", ">>>"], bare.operator)
+    else if bare is (ts_new, ts_update) then strict
+    else if bare is ts_template then strict || count(bare.expression.nodes) == 0
+    else if bare is ts_call then ts_constant_boolean_call(bare)
+      || strict && ts_constant_call(bare, ["String", "Number", "BigInt", "Symbol"])
+    else if bare is ts_assignment then if bare.operator == "=" then ts_constant_boolean_comparison(bare.right.node, strict)
+      else strict && !contains(["||=", "&&=", "??="], bare.operator)
+    else if bare is ts_sequence then { value tail: last(bare.expression.nodes); value ts_constant_boolean_comparison(tail, strict) }
+    else ts_constant_global(bare, "undefined") || bare is ts_constant_literal
+}
+fn ts_constant_new(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is (ts_object, ts_array, ts_arrow, ts_function, ts_class, ts_regex) then true
+    else if bare is ts_new then {
+      value callee: unparenthesised_node(bare.callee.node)
+      value program: ts_module_program(bare)
+      value callee is ts_identifier && ts_global_builtin_setting(program, callee.text) == "readonly"
+        && ts_constant_global(callee, callee.text)
+    }
+    else if bare is ts_assignment then bare.operator == "=" && ts_constant_new(bare.right.node)
+    else if bare is ts_sequence then { value tail: last(bare.expression.nodes); value ts_constant_new(tail) }
+    else if bare is ts_conditional then ts_constant_new(bare.consequent.node) && ts_constant_new(bare.alternate.node)
+    else false
+}
+fn ts_constant_operand(a, b, operator) = contains(["==", "!=", "===", "!=="], operator)
+  && (ts_constant_null(a) && ts_constant_nullish(b, false)
+    || ts_constant_static_boolean(a) && {
+      value strict: contains(["===", "!=="], operator)
+      value ts_constant_boolean_comparison(b, strict)
+    })
+fn ts_constant_static_literal(n) = {
+  value bare: unparenthesised_node(n)
+  value bare is ts_constant_literal || ts_constant_global(bare, "undefined")
+    || bare is ts_template && count(bare.expression.nodes) == 0
+    || bare is ts_unary && contains(["-", "+", "~"], bare.operator) && bare.argument is ts_constant_literal
+}
+fn ts_constant_report(kind, n, detail) = {
+  value bare: unparenthesised_node(n)
+  value {kind: kind, offset: bare.offset, detail: detail}
+}
+fn ts_constant_compare(n) = {
+  value left: n.left.node
+  value right: n.right.node
+  value operator: n.operator
+  value if n is ts_logical then
+    if contains(["&&", "||"], operator) && ts_constant_answer(left, true) then ts_constant_report("constantShortCircuit", left, "truthiness")
+    else if operator == "??" && ts_constant_nullish(left, false) then ts_constant_report("constantShortCircuit", left, "nullishness")
+    else null
+  else if n not ts_binary then null
+  else if ts_constant_operand(left, right, operator) then ts_constant_report("constantBinaryOperand", right, "left")
+  else if ts_constant_operand(right, left, operator) then ts_constant_report("constantBinaryOperand", left, "right")
+  else if contains(["===", "!=="], operator) && ts_constant_new(left) then ts_constant_report("alwaysNew", left, "")
+  else if contains(["===", "!=="], operator) && ts_constant_new(right) then ts_constant_report("alwaysNew", right, "")
+  else if contains(["==", "!="], operator) && ts_constant_new(left) && ts_constant_new(right) then ts_constant_report("bothAlwaysNew", left, "")
+  else null
+}
+fn ts_constant_relational(n) = n is ts_binary && contains(["<", "<=", ">", ">="], n.operator)
+  && ts_constant_static_literal(n.left.node) && ts_constant_static_literal(n.right.node)
+
+in ts_constant_expression {
+  let ts_constant_value ts_constant_compute(node, false)
+  let constant_truthiness ts_constant_compute(node, true)
+}
+in ts_binary, ts_logical {
+  let constant_comparison ts_constant_compare(node)
+  let constant_relation ts_constant_relational(node)
+}
+
+}

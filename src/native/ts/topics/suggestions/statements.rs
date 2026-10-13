@@ -1,52 +1,10 @@
 //! Statement structure preferences.
 
-use std::collections::HashSet;
-
 use super::super::super::facts::NativeFile;
 use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::lexer::Tok;
-use super::super::super::paths::{self, Domain};
-use super::super::super::syntax::Syntax;
 use super::super::super::tokens::lex;
 use crate::expr::Value;
-
-struct SingleIteration(HashSet<u32>);
-
-#[derive(Default)]
-struct LoopPaths {
-    entered: HashSet<u32>,
-    repeated: HashSet<u32>,
-}
-
-impl Domain for LoopPaths {
-    type S = ();
-    fn join(&self, _: &(), _: &()) {}
-    fn loop_back(&mut self, _: &Syntax, node: u32, entered: bool, state: Option<&()>) {
-        if entered { self.entered.insert(node); }
-        if state.is_some() { self.repeated.insert(node); }
-    }
-}
-
-fn single_iterations(file: &NativeFile) -> SingleIteration {
-    let s = &file.syntax;
-    let mut domain = LoopPaths::default();
-    for (_, body) in paths::bodies(s) { paths::walk(s, &mut domain, body, ()); }
-    SingleIteration(domain.entered.difference(&domain.repeated).copied().collect())
-}
-
-pub fn single_iteration(file: &NativeFile, node: u32) -> Value<'static> {
-    Value::Bool(file.cached(single_iterations).0.contains(&node))
-}
-
-pub fn label_binding(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let collision = s.get(node, F::Label).is_some_and(|label| {
-        let name = s.text(label);
-        file.bindings().visible(s, node, name, true).is_some()
-            || matches!(file.globals().setting(name), Some("readonly" | "writable"))
-    });
-    Value::Bool(collision)
-}
 
 fn braces_necessary(file: &NativeFile, block: u32) -> bool {
     let s = &file.syntax;

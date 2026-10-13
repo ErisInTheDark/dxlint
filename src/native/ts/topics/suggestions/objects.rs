@@ -5,26 +5,6 @@ use super::super::super::kinds::{Field as F, Kind as K};
 use super::super::super::statics::property_name;
 use crate::expr::Value;
 
-pub fn own_property_call(file: &NativeFile, node: u32) -> Value<'static> {
-    let s = &file.syntax;
-    let found = (|| {
-        let callee = s.unparen(s.get(node, F::Callee)?);
-        if !matches!(s.kind(callee), Some(K::Member | K::Index)) || property_name(s, callee).as_deref() != Some("call") { return None }
-        let method = s.unparen(s.get(callee, F::Object)?);
-        if !matches!(s.kind(method), Some(K::Member | K::Index)) || property_name(s, method).as_deref() != Some("hasOwnProperty") { return None }
-        let mut object = s.unparen(s.get(method, F::Object)?);
-        let empty = s.is(object, K::Object) && s.all(object, F::Property).next().is_none();
-        if matches!(s.kind(object), Some(K::Member | K::Index)) && property_name(s, object).as_deref() == Some("prototype") {
-            object = s.unparen(s.get(object, F::Object)?);
-        }
-        let builtin = s.is(object, K::Ident) && s.text(object) == "Object";
-        if !(empty || builtin) || file.bindings().visible(s, node, "Object", true).is_some()
-            || !matches!(file.globals().setting("Object"), Some("readonly" | "writable")) { return None }
-        Some(())
-    })();
-    Value::Bool(found.is_some())
-}
-
 struct Member {
     name: Option<String>,
     concise: bool,
@@ -64,7 +44,7 @@ fn lexical_arrow(file: &NativeFile, node: u32) -> bool {
 fn member(file: &NativeFile, node: u32) -> Option<Member> {
     let s = &file.syntax;
     let parent = s.parent(node)?;
-    if !s.is(parent, K::Object) || file.write_site(parent).is_some()
+    if !s.is(parent, K::Object) || file.bindings().write_sites.contains_key(&parent)
         || !matches!(s.kind(node), Some(K::Prop | K::Method))
         || matches!(s.word(node, F::Kind), Some("get" | "set")) {
         return None;
@@ -106,7 +86,7 @@ pub fn shorthand(file: &NativeFile, node: u32) -> Value<'static> {
 
 pub fn consistency(file: &NativeFile, node: u32) -> Value<'static> {
     let s = &file.syntax;
-    if !s.is(node, K::Object) || file.write_site(node).is_some() { return Value::Null }
+    if !s.is(node, K::Object) || file.bindings().write_sites.contains_key(&node) { return Value::Null }
     let members: Vec<_> = s.all(node, F::Property).filter_map(|n| member(file, n)).collect();
     let concise = members.iter().filter(|m| m.concise).count();
     if concise > 0 && concise < members.len() {
