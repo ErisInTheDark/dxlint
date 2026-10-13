@@ -56,13 +56,11 @@ impl Index {
                 for &owner in &scopes {
                     let scope = index.scopes.entry((owner, publication)).or_default();
                     scope.all.push(id);
-                    for class in (0..64).map(|bit| 1u64 << bit).filter(|class| classes == 0 || classes & class != 0) {
-                        match &names {
-                            Some(names) => for name in names {
-                                scope.named.entry(name.clone()).or_default().entry(class).or_default().push(id);
-                            },
-                            None => scope.computed.entry(class).or_default().push(id),
-                        }
+                    match &names {
+                        Some(names) => for name in names {
+                            scope.named.entry(name.clone()).or_default().entry(classes).or_default().push(id);
+                        },
+                        None => scope.computed.entry(classes).or_default().push(id),
                     }
                 }
             }
@@ -76,14 +74,12 @@ impl Index {
             None => return scope.all.iter().map(|&id| &self.plans[id]).collect(),
             Some((name, class)) => {
                 let matching = |classes: &FxHashMap<u64, Vec<usize>>| {
-                    if class.is_power_of_two() { return classes.get(&class).cloned().unwrap_or_default() }
-                    classes.iter().filter(|(bit, _)| **bit & class != 0)
+                    classes.iter().filter(|(mask, _)| class != 0 && (**mask == 0 || **mask & class != 0))
                         .flat_map(|(_, ids)| ids.iter().copied()).collect::<Vec<_>>()
                 };
                 let mut ids = scope.named.get(name).map(matching).unwrap_or_default();
                 ids.extend(matching(&scope.computed));
                 ids.sort_unstable();
-                ids.dedup();
                 ids
             }
         };

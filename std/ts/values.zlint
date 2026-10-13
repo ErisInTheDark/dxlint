@@ -9,7 +9,7 @@ dynamic any
 keys text string
 keys ordinal number
 keys symbol symbol
-product ts_tuple items fits object, truthy as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable
+product ts_tuple items fits object, truthy, tuple as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable
 
 in ts_program { fits object, truthy in module }
 in ts_namespace {
@@ -42,7 +42,7 @@ fn ts_value_this_context(n) = {
     static: owner is ts_static_block || ts_value_static(owner.modifier.nodes) }
 }
 fn ts_value_missing_name(n, class) = {
-  value classes: name_classes(n, n.text, null)
+  value classes: name_classes(n, n.text, null, [class])
   value setting: if class == "value" then ts_global_setting(n, n.text) else null
   value classes != null && get(classes, class) == false
     && (class != "value" || setting != "readonly" && setting != "writable")
@@ -101,11 +101,9 @@ fn ts_value_destructuring_receiver(n) = if n is ts_parenthesized.expression then
   } else null
 fn ts_value_tuple_context(n) = {
   value receiver: ts_value_destructuring_receiver(n)
-  value expected: value_expected(n)
-  value tuple: expected != null && expected.present
-    && any(expected.value, arm => any(arm, part => part.carrier_known && part.carrier.description.kind == "tuple"))
   value n.flow_destructuring_target || receiver is (ts_array, ts_array_pattern)
-    || !any(n.element.nodes, item => item is ts_spread) && (ts_value_const_context(n) || tuple)
+    || !any(n.element.nodes, item => item is ts_spread)
+      && (ts_value_const_context(n) || n.expected could tuple)
 }
 fn ts_value_scalar_part(n) = {
   value parts: value_constituents(n)
@@ -145,11 +143,12 @@ fn ts_value_fresh_literal(n, part) = {
   } else if bare is ts_satisfies then ts_value_fresh_literal(bare.expression.node, part) else false
 }
 fn ts_value_contextual_literal(n, part) = {
-  value context: value_expected(n)
   value category: find(["string", "number", "boolean", "bigint"], trait => contains(part.traits, trait))
-  value context != null && context.present && category != null
-    && any(context.value, arm => any(arm, expected => contains(expected.traits, category)
-      && (category == "boolean" || expected.identity_known && expected.identity.kind == "value")))
+  value if category == "boolean" then n.expected could boolean
+    else if category == "string" then n.expected could (string, literal)
+    else if category == "number" then n.expected could (number, literal)
+    else if category == "bigint" then n.expected could (bigint, literal)
+    else false
 }
 in ts_node let ts_value_preserved_element {
   value bare: unparenthesised_node(node)
@@ -188,6 +187,7 @@ in ts_null {
   identity null
 }
 in ts_null, ts_boolean, ts_number, ts_bigint, ts_string { fits nonthenable }
+in ts_boolean, ts_number, ts_bigint, ts_string { fits literal }
 in ts_boolean {
   fits boolean
   widens (trait boolean, truthy, nonthenable) | (trait boolean, falsy, nonthenable)
@@ -334,14 +334,14 @@ in ts_unary {
   }
   when operator == "+" || operator == "~" { fits number }
   when operator == "-" && argument is ts_number {
-    fits number, nonthenable
+    fits number, nonthenable, literal
     widens (trait number, truthy, nonthenable) | (trait number, falsy, nonthenable)
     fits falsy when argument always falsy
     fits truthy when argument always truthy
     identity -argument.ts_value_number
   }
   when operator == "-" && argument is ts_bigint {
-    fits bigint, nonthenable
+    fits bigint, nonthenable, literal
     widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
     fits falsy when argument always falsy
     fits truthy when argument always truthy
@@ -365,10 +365,11 @@ in ts_binary {
 in ts_hole { unwraps trait undefined, nullable, falsy, nonthenable }
 in ts_array {
   let ts_value_tuple_readonly ts_value_const_context(node)
-  when !ts_value_tuple_context(node) {
+  let ts_value_is_tuple ts_value_tuple_context(node)
+  when !ts_value_is_tuple {
     unwraps instance "Array" of ...element using (ts_value_preserved_element ?? it.widened)
   }
-  when ts_value_tuple_context(node) {
+  when ts_value_is_tuple {
     unwraps product ts_tuple of element using (ts_value_preserved_element ?? it.widened) optional ts_value_tuple_optional repeated ts_value_tuple_repeated readonly ts_value_tuple_readonly
   }
 }

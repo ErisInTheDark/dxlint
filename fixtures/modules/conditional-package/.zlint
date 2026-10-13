@@ -2,7 +2,7 @@ import .ts
 import .ts/modules
 
 in ts_identifier {
-  let package_classes name_classes(node, text, null)
+  let package_classes name_classes(node, text, null, null)
   rule package-type {
     when text == "conditionalProbe" && package_classes.type == true && package_classes.value == false
     warn "conditional type"

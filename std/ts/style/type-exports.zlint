@@ -6,7 +6,7 @@ define {
 in ts_export_specifier {
   let export_key ts_module_name(local.node)
   let export_source js_string(parent.from.text)
-  let export_classes name_classes(local.node, export_key, export_source)
+  let export_classes name_classes(local.node, export_key, export_source, null)
   let export_type kind == null && export_classes.value == false && (export_classes.type == true || export_classes.query == true)
   let export_value kind == null && export_classes.value == true
   let export_name local.literal_value.value ?? local.text

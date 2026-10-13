@@ -2,28 +2,31 @@ import .ts/scoping/usage
 
 define {
 
+fn ts_awaitable_result(n) = n != null
+  && unparenthesised_node(n) not (ts_null, ts_boolean, ts_number, ts_bigint, ts_string, ts_template)
+  && n could thenable
 fn ts_missing_await(n) = {
   value if !contains(n.modifier, "async") || n.body == null
     || n.body.node is ts_block && count(n.body.body.nodes) == 0 then null else {
     value body: n.body.node
     value generator: contains(n.modifier, "*")
-    value typed: n.ts_usage_typed
-    value if !typed && generator then null else {
-      value sites: {
-        value [body]
-        walk (current) if current is (ts_function, ts_arrow, ts_method) then null else current.children.nodes
-        filter (current) current is (ts_await, ts_for_of, ts_variable_declaration, ts_return, ts_yield)
-      }
-      value awaited: any(sites, site => site is ts_await
-        || site is ts_for_of && contains(site.modifier, "await")
-        || site is ts_variable_declaration && site.kind == "await using")
-      value if awaited then null else {
-        value asynchronous: typed && (body not ts_block && body could thenable
-          || any(sites, site => site is ts_return && site.argument.node could thenable
+    value sites: {
+      value [body]
+      walk (current) if current is (ts_function, ts_arrow, ts_method) then null else current.children.nodes
+      filter (current) current is (ts_await, ts_for_of, ts_variable_declaration, ts_return, ts_yield)
+    }
+    value awaited: any(sites, site => site is ts_await
+      || site is ts_for_of && contains(site.modifier, "await")
+      || site is ts_variable_declaration && site.kind == "await using")
+    value if awaited then null else {
+      value typed: n.ts_usage_typed
+      value if !typed && generator then null else {
+        value asynchronous: typed && (body not ts_block && ts_awaitable_result(body)
+          || any(sites, site => site is ts_return && ts_awaitable_result(site.argument.node)
             || generator && site is ts_yield && site.argument != null
               && (if site.operator == "*" then value_has_member(site.argument.node,
                 { global: "Symbol", class: "value", path: ["asyncIterator"] }) == true
-                else site.argument.node could thenable)))
+                else ts_awaitable_result(site.argument.node))))
         value if asynchronous then null else {
           value name: n.function_name ?? "async function"
           value { name: upper(slice(name, 0, 1)) slice(name, 1) }
