@@ -4,7 +4,7 @@ use crate::grammar::names::{KindNames, Names, Resolved};
 use crate::grammar::names::question::{Budget, FrameId, Known, Leaf, NodeRef, NodeValue, QueryContext, ScopeRef, Target, World};
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::values::Values;
-use super::{Conditional, Invoke, InvokeKind, Signature};
+use super::{Conditional, Expected, ExpectedAt, Invoke, InvokeKind, Signature};
 
 struct TestWorld {
     grammar: Grammar,
@@ -29,7 +29,9 @@ impl World for TestWorld {
     fn tree(&self, file: u32) -> Option<&Tree> { (file == 0).then_some(&self.tree) }
     fn text(&self, file: u32) -> Option<&str> { (file == 0).then_some("") }
     fn names(&self, file: u32) -> Option<&Resolved> { (file == 0).then_some(&self.names) }
-    fn index(&self, _: u32) -> Option<&crate::grammar::names::ScopeIndex> { None }
+    fn index(&self, file: u32) -> Option<&crate::grammar::names::ScopeIndex> {
+        (file == 0).then(|| self.names.index(&self.tree, "", &|key| key.into()))
+    }
     fn name_key<'s>(&self, _: u32, text: &'s str) -> std::borrow::Cow<'s, str> { text.into() }
     fn module(&self, _: Leaf, _: &str, _: &Semantic<'_>) -> Known<Option<ScopeRef>> { Known::Yes(None) }
     fn condition(&self, _: Leaf, _: u32, _: &Semantic<'_>) -> Known<bool> { Known::Unknown }
@@ -63,6 +65,29 @@ fn tables() -> Names {
 }
 
 #[test]
+fn expected_recipes_keep_owner_context_or_use_each_real_subject() {
+    let mut world = TestWorld::new();
+    let mut nodes = world.tree.nodes.clone();
+    nodes[3].children = vec![Edge { label: 40, node: 0 }, Edge { label: 40, node: 1 }];
+    world.tree = Tree::from_native(nodes, 3);
+    for at in [ExpectedAt::Owner, ExpectedAt::Subject] {
+        let mut tables = tables();
+        tables.kinds[3].calls.expected.push(Conditional {
+            item: Expected { field: vec![40], value: super::Value::Path(vec![super::super::IT]), at },
+            when: None,
+        });
+        let question = QueryContext::default();
+        let frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(2)]));
+        let semantic = Semantic::new(&world, &tables, &question);
+        for node in [0, 1] {
+            let subject = Leaf { frame, ..leaf(node) };
+            let expected = Leaf { frame, ..leaf(if at == ExpectedAt::Owner { 3 } else { node }) };
+            assert_eq!(semantic.calls().expected(subject), Known::Yes(Some(NodeValue::leaf(expected))));
+        }
+    }
+}
+
+#[test]
 fn categories_accept_matching_values_and_reject_incompatible_union_arms() {
     let world = TestWorld::new();
     let tables = tables();
@@ -90,6 +115,57 @@ fn missing_descriptors_and_unknown_conditions_do_not_become_acceptance_proofs() 
 }
 
 #[test]
+fn structural_members_compare_values_and_required_presence() {
+    use crate::grammar::names::values::{IndexedMode, IndexedRecipe};
+    for (actual_type, expected_optional, actual_optional, absent, closed, expected) in [
+        (0, false, false, false, true, Known::Yes(true)),
+        (1, false, false, false, true, Known::Yes(false)),
+        (0, false, true, false, true, Known::Yes(false)),
+        (0, true, true, false, true, Known::Yes(true)),
+        (0, true, false, true, true, Known::Yes(true)),
+        (0, false, false, true, true, Known::Yes(false)),
+        (0, false, false, true, false, Known::Unknown),
+    ] {
+        let mut world = TestWorld::new();
+        let mut tables = tables();
+        let mut nodes = world.tree.nodes.clone();
+        nodes.extend([4, 5, 6, 7].into_iter().map(|matcher| Node {
+            matcher, start: 0, end: 0, children: Vec::new(),
+        }));
+        nodes[4].children.push(Edge { label: 40, node: 6 });
+        if !absent { nodes[5].children.push(Edge { label: 40, node: 7 }) }
+        nodes[6].children.push(Edge { label: 41, node: 0 });
+        nodes[7].children.push(Edge { label: 41, node: actual_type });
+        world.tree = Tree::from_native(nodes, 4);
+        for _ in 0..2 {
+            tables.kinds.push(KindNames {
+                member_defaults: 1,
+                member_closed: vec![(1, None)],
+                indexed: vec![IndexedRecipe {
+                    path: vec![40], mode: IndexedMode::Keyed(super::Value::Text("x".into())),
+                    views: 1, value: None, when: None,
+                }],
+                ..KindNames::default()
+            });
+        }
+        if !closed { tables.kinds[5].member_closed.clear() }
+        for optional in [expected_optional, actual_optional] {
+            let mut member = KindNames {
+                unwraps: vec![crate::grammar::names::Unwrapping {
+                    value: Some(super::Value::Path(vec![41])), ..Default::default()
+                }],
+                ..KindNames::default()
+            };
+            if optional { member.calls.optional.push(None) }
+            tables.kinds.push(member);
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(accepts(&value(4), &value(5), &semantic.values()), expected);
+    }
+}
+
+#[test]
 fn never_and_budget_exhaustion_keep_their_logical_meanings() {
     let world = TestWorld::new();
     let tables = tables();
@@ -112,7 +188,7 @@ fn overload_sets_preserve_union_alternatives_and_intersection_declarations() {
     for kind in &mut tables.kinds[..2] {
         kind.fits.push((4, 0, None));
         kind.calls.signatures.push(Conditional {
-            item: Signature { parameters: vec![0], result: super::Value::Path(vec![0]) },
+            item: Signature { parameters: vec![0], receiver: None, result: super::Value::Path(vec![0]) },
             when: None,
         });
     }
@@ -150,7 +226,7 @@ fn uncertain_signature_conditions_do_not_publish_complete_overload_sets() {
         vec!["first".into(), "second".into(), "callable".into()];
     tables.kinds[0].fits.push((4, 0, None));
     tables.kinds[0].calls.signatures.push(Conditional {
-        item: Signature { parameters: vec![0], result: super::Value::Path(vec![0]) },
+        item: Signature { parameters: vec![0], receiver: None, result: super::Value::Path(vec![0]) },
         when: Some(0),
     });
     let question = QueryContext::default();
@@ -175,7 +251,7 @@ fn call_fixture() -> (TestWorld, Names) {
     tables.kinds[4].fits.push((4, 0, None));
     for (parameters, result) in [(10, 12), (11, 13)] {
         tables.kinds[4].calls.signatures.push(Conditional {
-            item: Signature { parameters: vec![parameters], result: super::Value::Path(vec![result]) },
+            item: Signature { parameters: vec![parameters], receiver: None, result: super::Value::Path(vec![result]) },
             when: None,
         });
     }
@@ -246,6 +322,544 @@ fn selected_header_through_keeps_caller_generics_separate_from_callee_environmen
         else { panic!("caller type argument declaration") };
     assert_eq!(formals.len(), 1);
     assert_eq!(semantic.values().bound_argument(formals[0]), Known::Yes(Some(value(1))));
+}
+
+fn generic_fixture() -> (TestWorld, Names) {
+    let (mut world, mut tables) = call_fixture();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.extend([6, 7, 3, 3, 5, 0, 0].into_iter().map(|matcher| Node {
+        matcher, start: 0, end: 0, children: Vec::new(),
+    }));
+    nodes[4].children.push(Edge { label: 31, node: 11 });
+    nodes[6].matcher = 8;
+    nodes[6].children.push(Edge { label: 61, node: 12 });
+    nodes[11].children.extend([Edge { label: 42, node: 14 }, Edge { label: 66, node: 17 }]);
+    nodes[12].children.push(Edge { label: 42, node: 13 });
+    nodes[15].children = vec![Edge { label: 14, node: 4 }, Edge { label: 15, node: 16 }];
+    world.tree = Tree::from_native(nodes, 5);
+    world.names.declaration.insert(13, 14);
+    world.names.declared.insert(14, (0, 11, 1, false));
+    tables.kinds[4].generics.push((vec![31], None));
+    tables.kinds[4].calls.signatures.truncate(1);
+    for path in [vec![66], vec![42, crate::grammar::names::DECLARATION], vec![61]] {
+        tables.kinds.push(KindNames {
+            unwraps: vec![crate::grammar::names::Unwrapping {
+                value: Some(if path == [66] {
+                    super::Value::Either(
+                        Box::new(super::Value::Path(vec![crate::grammar::names::INFERRED])),
+                        Box::new(super::Value::Path(path)),
+                    )
+                } else { super::Value::Path(path) }),
+                ..Default::default()
+            }],
+            ..KindNames::default()
+        });
+    }
+    (world, tables)
+}
+
+fn matching_signature_fixture() -> (TestWorld, Names) {
+    let (mut world, mut tables) = call_fixture();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.extend([3, 3].into_iter().map(|matcher| Node {
+        matcher, start: 0, end: 0, children: Vec::new(),
+    }));
+    nodes[5].children = vec![Edge { label: 10, node: 11 }, Edge { label: 12, node: 12 }];
+    world.tree = Tree::from_native(nodes, 5);
+    tables.kinds[4].calls.signatures.truncate(1);
+    tables.kinds[4].calls.signatures[0].item.receiver = Some(vec![99]);
+    tables.kinds[5].fits.push((4, 0, None));
+    tables.kinds[5].calls.signatures = tables.kinds[4].calls.signatures.clone();
+    (world, tables)
+}
+
+#[test]
+fn product_patterns_capture_recipe_holes_without_replacing_them_with_defaults() {
+    use crate::grammar::names::question::ProductShapeId;
+    use crate::grammar::names::values::products::{ProductElement, Shape};
+    let (mut world, mut tables) = matching_signature_fixture();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.extend([11, 12].into_iter().map(|node| Node {
+        matcher: 1, start: 0, end: 0, children: vec![Edge { label: 22, node }],
+    }));
+    nodes[5].children = vec![Edge { label: 10, node: 13 }, Edge { label: 10, node: 14 }];
+    world.tree = Tree::from_native(nodes, 5);
+    tables.kinds[3].unwraps.push(crate::grammar::names::Unwrapping {
+        value: Some(super::Value::Traits(1)), ..Default::default()
+    });
+    tables.products.push(Some(Shape {
+        traits: 0, description: crate::expr::Value::Null,
+        inherits: None, readonly_inherits: None, optional: None,
+    }));
+    let question = QueryContext::default();
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(1)]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    let elements: Vec<_> = [6, 7].into_iter().map(|node| {
+        let site = Leaf { frame, ..leaf(node) };
+        ProductElement { site, value: NodeValue::leaf(site), optional: false, repeated: false }
+    }).collect();
+    let actual = semantic.values().product(ProductShapeId(0), leaf(4), elements.clone(), false);
+    let pattern = super::Value::Product(crate::grammar::names::values::compile::ProductRecipe {
+        shape: ProductShapeId(0), sites: vec![10], value: Some(Box::new(super::Value::Path(vec![22]))),
+        optional: None, repeated: None, readonly: None,
+    });
+    let Known::Yes(result) = semantic.calls().match_value(leaf(5), &pattern, &actual, &[leaf(11), leaf(12)])
+        else { panic!("known product inference") };
+    assert!(result.accepted);
+    assert_eq!(result.arguments, elements.into_iter().map(|element| Some(element.value)).collect::<Vec<_>>());
+}
+
+#[test]
+fn rest_inference_keeps_order_optional_markers_and_source_frames() {
+    use crate::grammar::names::question::ProductShapeId;
+    for length in [0, 2] {
+        let (mut world, mut tables) = matching_signature_fixture();
+        let mut nodes = world.tree.nodes.clone();
+        nodes[4].children.retain(|edge| edge.label != 10);
+        if length != 0 {
+            nodes[4].children.extend([Edge { label: 10, node: 6 }, Edge { label: 10, node: 7 }]);
+        }
+        nodes[5].children = vec![Edge { label: 10, node: 11 }, Edge { label: 12, node: 8 }];
+        world.tree = Tree::from_native(nodes, 5);
+        tables.kinds[3].fits.push((8, 0, None));
+        tables.kinds[3].packs.push((ProductShapeId(0), None));
+        tables.kinds[1].calls.optional.push(None);
+        tables.products.push(Some(crate::grammar::names::values::products::Shape {
+            traits: 0, description: crate::expr::Value::Null,
+            inherits: None, readonly_inherits: None, optional: None,
+        }));
+        let question = QueryContext::default();
+        let frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(1)]));
+        let semantic = Semantic::new(&world, &tables, &question);
+        let actual = NodeValue::leaf(Leaf { frame, ..leaf(4) });
+        let Known::Yes(result) = semantic.calls().match_value(leaf(5), &super::Value::Current, &actual, &[leaf(11)])
+            else { panic!("known ordered parameter inference") };
+        assert!(result.accepted);
+        let NodeValue::Alternatives(arms) = result.arguments[0].as_ref().expect("rest slot") else { panic!("known parameter product") };
+        let Known::Yes(Some(product)) = semantic.values().product_info(arms[0][0]) else { panic!("real product") };
+        assert_eq!(product.elements.len(), length);
+        for (position, element) in product.elements.iter().enumerate() {
+            let site = Leaf { frame, ..leaf(6 + position as u32) };
+            assert_eq!(element.site, site);
+            assert_eq!(element.value, NodeValue::leaf(site));
+            assert_eq!(element.optional, position == 1);
+            assert!(!element.repeated);
+        }
+    }
+}
+
+#[test]
+fn matching_captures_signature_parameters_and_results_in_the_source_frame() {
+    let (mut world, mut tables) = matching_signature_fixture();
+    let mut nodes = world.tree.nodes.clone();
+    nodes[4].children.push(Edge { label: 98, node: 3 });
+    world.tree = Tree::from_native(nodes, 5);
+    tables.kinds[4].generics.push((vec![98], None));
+    let question = QueryContext::default();
+    let source_frame = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(1)]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    let actual = NodeValue::leaf(Leaf { frame: source_frame, ..leaf(4) });
+    let Known::Yes(result) = semantic.calls().match_value(
+        leaf(5), &super::Value::Current, &actual, &[leaf(11), leaf(12)],
+    ) else { panic!("known callback inference") };
+    assert!(result.accepted);
+    assert_eq!(result.arguments, vec![
+        Some(NodeValue::leaf(Leaf { frame: source_frame, ..leaf(6) })),
+        Some(NodeValue::leaf(Leaf { frame: source_frame, ..leaf(8) })),
+    ]);
+}
+
+#[test]
+fn matching_mixed_variance_selects_candidates_before_checking_compatibility() {
+    for result_node in [8, 9] {
+        let (mut world, tables) = matching_signature_fixture();
+        let mut nodes = world.tree.nodes.clone();
+        nodes[4].children.iter_mut().find(|edge| edge.label == 12).unwrap().node = result_node;
+        nodes[5].children.iter_mut().find(|edge| edge.label == 12).unwrap().node = 11;
+        world.tree = Tree::from_native(nodes, 5);
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let Known::Yes(result) = semantic.calls().match_value(leaf(5), &super::Value::Current, &value(4), &[leaf(11)])
+            else { panic!("known mixed inference") };
+        assert_eq!(result.accepted, result_node == 8);
+        assert_eq!(result.arguments, vec![Some(value(if result_node == 8 { 8 } else { 6 }))]);
+    }
+}
+
+#[test]
+fn matching_parameter_variance_uses_intersection_or_bivariant_union() {
+    for bivariant in [false, true] {
+        let (mut world, mut tables) = matching_signature_fixture();
+        let mut nodes = world.tree.nodes.clone();
+        nodes[4].children.push(Edge { label: 10, node: 7 });
+        nodes[5].children = vec![Edge { label: 10, node: 11 }, Edge { label: 10, node: 11 }, Edge { label: 12, node: 8 }];
+        world.tree = Tree::from_native(nodes, 5);
+        if bivariant {
+            tables.kinds[5].calls.variances.push(Conditional {
+                item: crate::config::ast::calls::Variance::Bivariant, when: None,
+            });
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let Known::Yes(result) = semantic.calls().match_value(leaf(5), &super::Value::Current, &value(4), &[leaf(11)])
+            else { panic!("known parameter inference") };
+        assert!(result.accepted);
+        let inferred = result.arguments[0].as_ref().expect("parameter slot");
+        if bivariant {
+            assert_eq!(semantic.values().could(inferred, 1), Known::Yes(true));
+            assert_eq!(semantic.values().could(inferred, 2), Known::Yes(true));
+        } else {
+            assert_eq!(inferred, &NodeValue::never());
+        }
+    }
+}
+
+#[test]
+fn inference_obeys_the_declared_last_overload_without_changing_acceptance() {
+    for infer in [false, true] {
+        let (mut world, mut tables) = matching_signature_fixture();
+        let mut nodes = world.tree.nodes.clone();
+        nodes[5].children = vec![
+            Edge { label: 10, node: 6 }, Edge { label: 12, node: if infer { 12 } else { 8 } },
+        ];
+        world.tree = Tree::from_native(nodes, 5);
+        let mut last = tables.kinds[4].calls.signatures[0].clone();
+        last.item.result = super::Value::Path(vec![13]);
+        tables.kinds[4].calls.signatures.push(last);
+        tables.kinds[4].calls.infer_last.push(None);
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        if infer {
+            let Known::Yes(result) = semantic.calls().match_value(
+                leaf(5), &super::Value::Current, &value(4), &[leaf(12)],
+            ) else { panic!("known overload inference") };
+            assert!(result.accepted);
+            let inferred = result.arguments[0].as_ref().expect("return slot");
+            assert_eq!(semantic.values().could(inferred, 2), Known::Yes(true));
+            assert_eq!(semantic.values().could(inferred, 1), Known::Yes(false));
+        } else {
+            assert_eq!(semantic.calls().accepts(&value(5), &value(4)), Known::Yes(true));
+        }
+    }
+}
+
+#[test]
+fn matching_raw_patterns_uses_the_real_owners_qualified_view() {
+    let mut world = TestWorld::new();
+    let mut tables = tables();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![Edge { label: 40, node: 2 }] });
+    world.tree = Tree::from_native(nodes, 4);
+    tables.kinds.push(KindNames {
+        unwraps: vec![
+            crate::grammar::names::Unwrapping {
+                value: Some(super::Value::Traits(2)), ..Default::default()
+            },
+            crate::grammar::names::Unwrapping {
+                classes: 1, value: Some(super::Value::Path(vec![40])), ..Default::default()
+            },
+        ],
+        ..KindNames::default()
+    });
+    let question = QueryContext::default();
+    let qualified = question.bind_definition(FrameId::ROOT, NodeRef::here(4), None, None, 1);
+    let unrelated = question.bind_definition(FrameId::ROOT, NodeRef::here(3), None, None, 1);
+    let semantic = Semantic::new(&world, &tables, &question);
+    for (frame, accepted) in [(qualified, true), (FrameId::ROOT, false), (unrelated, false)] {
+        let Known::Yes(result) = semantic.calls().match_value(
+            Leaf { frame, ..leaf(4) }, &super::Value::Current, &value(0), &[leaf(2)],
+        ) else { panic!("known declaration view") };
+        assert_eq!(result.accepted, accepted);
+        assert_eq!(result.arguments, vec![accepted.then(|| value(0))]);
+    }
+}
+
+#[test]
+fn captured_arguments_fall_back_to_known_constraints_and_defer_unknown_bounds() {
+    for constraint in [
+        super::Value::Union(Vec::new()), super::Value::Traits(1), super::Value::Path(vec![99]),
+    ] {
+        let mut world = TestWorld::new();
+        let mut tables = tables();
+        let mut nodes = world.tree.nodes.clone();
+        nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![Edge { label: 40, node: 2 }] });
+        world.tree = Tree::from_native(nodes, 4);
+        tables.kinds.push(KindNames { generics: vec![(vec![40], None)], ..KindNames::default() });
+        tables.kinds[2].constraints.push((constraint.clone(), None));
+        tables.dynamic = 4;
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        let actual = if matches!(constraint, super::Value::Union(_)) {
+            NodeValue::leaf(Leaf { target: Target::Traits(4), frame: FrameId::ROOT })
+        } else { value(1) };
+        let result = semantic.calls().match_value(leaf(4), &super::Value::Path(vec![40]), &actual, &[leaf(2)]);
+        if matches!(constraint, super::Value::Path(_)) {
+            assert_eq!(result, Known::Unknown);
+        } else {
+            let Known::Yes(result) = result else { panic!("known constrained candidate") };
+            assert!(!result.accepted);
+            let inferred = result.arguments[0].as_ref().expect("captured slot");
+            if matches!(constraint, super::Value::Union(_)) { assert_eq!(inferred, &NodeValue::never()) }
+            else { assert_eq!(semantic.values().could(inferred, 1), Known::Yes(true)) }
+        }
+    }
+}
+
+#[test]
+fn constrained_validation_does_not_invent_bindings_from_another_alternative() {
+    let mut world = TestWorld::new();
+    let mut tables = tables();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![
+        Edge { label: 40, node: 2 }, Edge { label: 40, node: 3 },
+        Edge { label: 41, node: 2 }, Edge { label: 42, node: 3 },
+    ] });
+    world.tree = Tree::from_native(nodes, 4);
+    tables.kinds.push(KindNames { generics: vec![(vec![40], None)], ..KindNames::default() });
+    tables.kinds[2].constraints.push((super::Value::Union(Vec::new()), None));
+    let question = QueryContext::default();
+    let semantic = Semantic::new(&world, &tables, &question);
+    let pattern = super::Value::Union(vec![super::Value::Path(vec![41]), super::Value::Path(vec![42])]);
+    assert_eq!(semantic.calls().match_value(leaf(4), &pattern, &value(1), &[leaf(2), leaf(3)]), Known::Unknown);
+}
+
+#[test]
+fn dependent_constraints_use_the_complete_frame_and_reject_unstable_replacements() {
+    for (bound, first, locked, expected) in [
+        (2, 0, false, Known::Yes(Some(vec![Some(value(1)), Some(value(1))]))),
+        (1, 0, false, Known::Unknown),
+        (1, 1, true, Known::Yes(None)),
+    ] {
+        let mut world = TestWorld::new();
+        let mut tables = tables();
+        let mut nodes = world.tree.nodes.clone();
+        nodes.push(Node { matcher: 4, start: 0, end: 0, children: vec![
+            Edge { label: 40, node: 2 }, Edge { label: 40, node: 3 }, Edge { label: 42, node: 3 },
+        ] });
+        world.tree = Tree::from_native(nodes, 4);
+        tables.kinds.push(KindNames { generics: vec![(vec![40], None)], ..KindNames::default() });
+        tables.kinds[2].constraints.push((super::Value::Path(vec![crate::grammar::names::PARENT, 42, crate::grammar::names::INFERRED]), None));
+        tables.kinds[3].constraints.push((super::Value::Traits(bound), None));
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(semantic.calls().constrained_arguments(
+            leaf(4), None, &[leaf(2), leaf(3)], vec![Some(value(first)), Some(value(1))], &[locked, false],
+        ), expected);
+    }
+}
+
+#[test]
+fn explicit_arguments_that_violate_constraints_do_not_prove_a_call_result() {
+    let (mut world, mut tables) = generic_fixture();
+    let mut nodes = world.tree.nodes.clone();
+    nodes[5].children.iter_mut().find(|edge| edge.label == 15).unwrap().node = 0;
+    nodes[5].children.push(Edge { label: 70, node: 0 });
+    world.tree = Tree::from_native(nodes, 5);
+    tables.kinds[5].arguments.push((vec![70], None));
+    tables.kinds[6].constraints.push((super::Value::Traits(2), None));
+    let question = QueryContext::default();
+    let semantic = Semantic::new(&world, &tables, &question);
+    assert_eq!(semantic.calls().result(leaf(5)), Known::Unknown);
+}
+
+#[test]
+fn matching_member_holes_keeps_failed_alternatives_out_of_chosen_bindings() {
+    use crate::grammar::names::values::{IndexedMode, IndexedRecipe};
+    let mut world = TestWorld::new();
+    let mut tables = tables();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.extend([4, 5, 6, 7].into_iter().map(|matcher| Node {
+        matcher, start: 0, end: 0, children: Vec::new(),
+    }));
+    nodes[4].children = vec![Edge { label: 40, node: 2 }, Edge { label: 41, node: 1 }];
+    nodes[5].children = vec![Edge { label: 40, node: 0 }, Edge { label: 41, node: 0 }];
+    nodes[6].children = vec![Edge { label: 40, node: 3 }];
+    nodes[7].children = vec![Edge { label: 80, node: 4 }, Edge { label: 81, node: 6 }];
+    world.tree = Tree::from_native(nodes, 7);
+    tables.kinds[2].unwraps.push(crate::grammar::names::Unwrapping {
+        value: Some(super::Value::Traits(2)), ..Default::default()
+    });
+    for keys in [vec![(40, "x"), (41, "y")], vec![(40, "x"), (41, "y")], vec![(40, "x")]] {
+        tables.kinds.push(KindNames {
+            indexed: keys.into_iter().map(|(label, key)| IndexedRecipe {
+                path: vec![label], mode: IndexedMode::Keyed(super::Value::Text(key.into())),
+                views: 0, value: None, when: None,
+            }).collect(),
+            ..KindNames::default()
+        });
+    }
+    tables.kinds.push(KindNames::default());
+    let question = QueryContext::default();
+    let frame = question.bind(FrameId::ROOT, NodeRef::here(7), None, Some(vec![value(1)]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    let actual = NodeValue::leaf(Leaf { frame, ..leaf(5) });
+    let first = super::Value::Path(vec![80]);
+    let Known::Yes(failed) = semantic.calls().match_value(leaf(7), &first, &actual, &[leaf(2), leaf(3)])
+        else { panic!("known mismatch retains inference") };
+    assert!(!failed.accepted);
+    assert_eq!(failed.arguments[0], Some(NodeValue::leaf(Leaf { frame, ..leaf(0) })));
+    let pattern = super::Value::Union(vec![first, super::Value::Path(vec![81])]);
+    let Known::Yes(chosen) = semantic.calls().match_value(leaf(7), &pattern, &actual, &[leaf(2), leaf(3)])
+        else { panic!("known union inference") };
+    assert!(chosen.accepted);
+    assert_eq!(chosen.arguments, vec![None, Some(NodeValue::leaf(Leaf { frame, ..leaf(0) }))]);
+}
+
+#[test]
+fn explicit_type_argument_arity_selects_a_header_that_can_hold_every_slot() {
+    for construct in [false, true] {
+        for optional in [false, true] {
+            for count in 0..=3 {
+                let (mut world, mut tables) = call_fixture();
+                let mut nodes = world.tree.nodes.clone();
+                nodes.extend([6, 7, 3, 8].into_iter().map(|matcher| Node {
+                    matcher, start: 0, end: 0, children: Vec::new(),
+                }));
+                nodes[5].children = vec![Edge { label: 14, node: 11 }];
+                nodes[11].children = vec![Edge { label: 81, node: 4 }, Edge { label: 82, node: 12 }];
+                nodes[4].children = vec![Edge { label: 20, node: 1 }];
+                nodes[12].children = vec![
+                    Edge { label: 20, node: 0 }, Edge { label: 31, node: 13 }, Edge { label: 31, node: 14 },
+                ];
+                for _ in 0..count { nodes[5].children.push(Edge { label: 70, node: 0 }) }
+                world.tree = Tree::from_native(nodes, 5);
+                tables.kinds[4].calls.signatures = vec![Conditional {
+                    item: Signature { parameters: vec![99], receiver: None, result: super::Value::Path(vec![20]) },
+                    when: None,
+                }];
+                tables.kinds[5].calls.invokes[0].item.construct = construct;
+                tables.kinds[5].arguments.push((vec![70], None));
+                tables.kinds.push(KindNames {
+                    unwraps: vec![crate::grammar::names::Unwrapping {
+                        value: Some(super::Value::Intersection(vec![
+                            super::Value::Path(vec![81]), super::Value::Path(vec![82]),
+                        ])),
+                        ..Default::default()
+                    }],
+                    ..KindNames::default()
+                });
+                let mut generic = tables.kinds[4].clone();
+                generic.generics.push((vec![31], None));
+                tables.kinds.push(generic);
+                let mut default = KindNames::default();
+                if optional { default.calls.optional.push(None) }
+                tables.kinds.push(default);
+                std::sync::Arc::get_mut(&mut tables.vocabulary).unwrap().traits.push("constructible".into());
+                for kind in [4, 7] { tables.kinds[kind].fits.push((16, 0, None)) }
+                let question = QueryContext::default();
+                let semantic = Semantic::new(&world, &tables, &question);
+                let result = semantic.calls().result(leaf(5));
+                match count {
+                    0 => assert!(matches!(result, Known::Yes(Some(NodeValue::Alternatives(ref arms))) if arms[0][0].target == leaf(1).target)),
+                    1 if !optional => assert_eq!(result, Known::Unknown),
+                    1 | 2 => assert!(matches!(result, Known::Yes(Some(NodeValue::Alternatives(ref arms))) if arms[0][0].target == leaf(0).target)),
+                    _ => assert_eq!(result, Known::Unknown),
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_call_arguments_win_over_inference_and_keep_unsupplied_defaults() {
+    for construct in [false, true] {
+        for unknown in [false, true] {
+            let (mut world, mut tables) = generic_fixture();
+            let mut nodes = world.tree.nodes.clone();
+            nodes.extend([6, 0, if unknown { 9 } else { 1 }].into_iter().map(|matcher| Node {
+                matcher, start: 0, end: 0, children: Vec::new(),
+            }));
+            nodes[4].children.push(Edge { label: 31, node: 18 });
+            nodes[18].children.push(Edge { label: 66, node: 19 });
+            nodes[5].children.push(Edge { label: 70, node: 20 });
+            world.tree = Tree::from_native(nodes, 5);
+            tables.kinds[5].arguments.push((vec![70], None));
+            tables.kinds[5].calls.invokes[0].item.construct = construct;
+            tables.kinds[4].calls.signatures[0].item.result = super::Value::Path(vec![10, 61]);
+            tables.kinds[6].unwraps[0].value = Some(super::Value::Either(
+                Box::new(super::Value::Path(vec![crate::grammar::names::INFERRED])),
+                Box::new(super::Value::Path(vec![66])),
+            ));
+            tables.kinds[6].calls.optional.push(None);
+            std::sync::Arc::get_mut(&mut tables.vocabulary).unwrap().traits.push("constructible".into());
+            tables.kinds[4].fits.push((16, 0, None));
+            tables.kinds.push(KindNames {
+                unwraps: vec![crate::grammar::names::Unwrapping {
+                    value: Some(super::Value::Path(vec![99])),
+                    ..Default::default()
+                }],
+                ..KindNames::default()
+            });
+            let question = QueryContext::default();
+            let caller = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(2)]));
+            let semantic = Semantic::new(&world, &tables, &question);
+            let call = Leaf { frame: caller, ..leaf(5) };
+            let Known::Yes(Some(selected)) = semantic.calls().selection(call) else { panic!("generic header selected") };
+            let header = selected.choices[0].header;
+            let first = Leaf { frame: header.site.frame, ..leaf(11) };
+            let second = Leaf { frame: header.site.frame, ..leaf(18) };
+            let explicit = if unknown { NodeValue::Unknown } else { NodeValue::leaf(Leaf { frame: caller, ..leaf(20) }) };
+            assert_eq!(semantic.values().bound_argument(first), Known::Yes(Some(explicit.clone())));
+            assert_eq!(semantic.calls().header_result(header), if unknown { Known::Unknown } else { Known::Yes(explicit.clone()) });
+            assert_eq!(semantic.calls().result(call), if unknown { Known::Unknown } else { Known::Yes(Some(explicit)) });
+            let Known::Yes(Some(default)) = semantic.values().bound_argument(second) else { panic!("unsupplied formal uses its default") };
+            assert!(matches!(default, NodeValue::Alternatives(ref arms) if arms.len() == 1 && arms[0].len() == 1 && arms[0][0].target == leaf(19).target));
+        }
+    }
+}
+
+#[test]
+fn generic_inference_matches_raw_formals_before_defaults_and_isolates_callers() {
+    let (world, tables) = generic_fixture();
+    let question = QueryContext::default();
+    let first_caller = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(0)]));
+    let second_caller = question.bind(FrameId::ROOT, NodeRef::here(3), None, Some(vec![value(1)]));
+    let semantic = Semantic::new(&world, &tables, &question);
+    for (call, actual, caller) in [(5, 10, first_caller), (15, 16, second_caller)] {
+        let call = Leaf { frame: caller, ..leaf(call) };
+        let Known::Yes(Some(selected)) = semantic.calls().selection(call) else { panic!("generic candidate retained") };
+        let formal = Leaf { frame: selected.choices[0].header.site.frame, ..leaf(11) };
+        assert_eq!(semantic.calls().inferred(formal),
+            Known::Yes(Some(NodeValue::leaf(Leaf { frame: caller, ..leaf(actual) }))));
+    }
+}
+
+#[test]
+fn generic_contributions_combine_all_inputs_without_skipping_unknowns() {
+    let (mut world, mut tables) = generic_fixture();
+    let mut nodes = world.tree.nodes.clone();
+    nodes.extend([7, 3, 1, 1].into_iter().map(|matcher| Node {
+        matcher, start: 0, end: 0, children: Vec::new(),
+    }));
+    nodes[4].children.push(Edge { label: 10, node: 7 });
+    nodes[7].matcher = 8;
+    nodes[7].children.push(Edge { label: 61, node: 18 });
+    nodes[18].children.push(Edge { label: 42, node: 19 });
+    nodes[5].children.push(Edge { label: 15, node: 20 });
+    nodes[15].children.push(Edge { label: 15, node: 21 });
+    nodes[10].matcher = 9;
+    world.tree = Tree::from_native(nodes, 5);
+    world.names.declaration.insert(19, 14);
+    tables.kinds.push(KindNames {
+        unwraps: vec![crate::grammar::names::Unwrapping {
+            value: Some(super::Value::Path(vec![99])),
+            ..Default::default()
+        }],
+        ..KindNames::default()
+    });
+    let question = QueryContext::default();
+    let semantic = Semantic::new(&world, &tables, &question);
+    for call in [5, 15] {
+        let Known::Yes(Some(selected)) = semantic.calls().selection(leaf(call)) else { panic!("generic candidate retained") };
+        let formal = Leaf { frame: selected.choices[0].header.site.frame, ..leaf(11) };
+        let Known::Yes(Some(inferred)) = semantic.calls().inferred(formal) else { panic!("inferred input") };
+        if call == 5 {
+            assert_eq!(inferred, NodeValue::Unknown);
+        } else {
+            assert_eq!(semantic.values().could(&inferred, 1), Known::Yes(true));
+            assert_eq!(semantic.values().could(&inferred, 2), Known::Yes(true));
+        }
+    }
 }
 
 #[test]
@@ -389,7 +1003,7 @@ fn container_results_follow_declared_header_sources() {
         fits: vec![(4, 0, None)],
         calls: super::KindCalls {
             signatures: vec![Conditional {
-                item: Signature { parameters: vec![10], result: super::Value::Path(vec![21]) },
+                item: Signature { parameters: vec![10], receiver: None, result: super::Value::Path(vec![21]) },
                 when: None,
             }],
             ..super::KindCalls::default()

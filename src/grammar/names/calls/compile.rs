@@ -16,6 +16,7 @@ pub enum Item {
     Identity(u32),
     Optional,
     ParameterVariance(Variance),
+    InferLastOverload,
 }
 
 pub fn lower(
@@ -26,8 +27,9 @@ pub fn lower(
     errors: &mut Vec<ConfigError>,
 ) -> Option<Item> {
     Some(match item {
-        ParsedItem::Signature { parameters, result } => Item::Signature(Signature {
+        ParsedItem::Signature { parameters, receiver, result } => Item::Signature(Signature {
             parameters: path(parameters, errors)?,
+            receiver: match receiver { Some(receiver) => Some(path(receiver, errors)?), None => None },
             result: value(result, errors)?,
         }),
         ParsedItem::Sources(source) => Item::Sources(value(source, errors)?),
@@ -36,14 +38,16 @@ pub fn lower(
             arguments: path(arguments, errors)?,
             construct: *construct,
         }),
-        ParsedItem::Expected { field, value: expected } => Item::Expected(Expected {
+        ParsedItem::Expected { field, value: expected, at } => Item::Expected(Expected {
             field: path(field, errors)?,
             value: value(expected, errors)?,
+            at: *at,
         }),
         ParsedItem::DiscardsResult => Item::DiscardsResult,
         ParsedItem::Identity(_) => Item::Identity(operand(0)),
         ParsedItem::Optional => Item::Optional,
         ParsedItem::ParameterVariance(variance) => Item::ParameterVariance(*variance),
+        ParsedItem::InferLastOverload => Item::InferLastOverload,
     })
 }
 
@@ -58,6 +62,7 @@ impl KindCalls {
             Item::Identity(item) => self.identities.push(Conditional { item, when }),
             Item::Optional => self.optional.push(when),
             Item::ParameterVariance(item) => self.variances.push(Conditional { item, when }),
+            Item::InferLastOverload => self.infer_last.push(when),
         }
     }
 }

@@ -51,9 +51,8 @@ pub(super) fn result(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>> 
 }
 
 pub(super) fn header_result(header: Header, values: &Values<'_>) -> Known<NodeValue> {
-    let Some(kind) = kind(header.site, values) else { return Known::Unknown };
-    let Some(signature) = kind.calls.signatures.get(header.signature as usize) else { return Known::Unknown };
-    match values.evaluate(header.site, &signature.item.result) {
+    let Some((site, signature)) = super::signature(header, values) else { return Known::Unknown };
+    match values.evaluate(site, &signature.result) {
         NodeValue::Unknown => Known::Unknown,
         result => Known::Yes(result),
     }

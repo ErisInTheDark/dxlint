@@ -1,4 +1,4 @@
-use super::{kind, node, Chosen, Header, InvokeKind, Selection};
+use super::{kind, node, rest, Chosen, Header, InvokeKind, Selection};
 use crate::grammar::names::question::{Known, Leaf, NodeRef, NodeValue, Target};
 use crate::grammar::names::values::{Key, Values};
 
@@ -79,7 +79,7 @@ pub(super) fn outputs(call: Leaf, values: &Values<'_>) -> Known<Option<NodeValue
     let mut results = Vec::new();
     for group in groups {
         let result = match proven(&group) {
-            Some(candidate) => output(candidate, values),
+            Some(candidate) => super::result::header_result(candidate.chosen.header, values),
             None => agreement(&group, values),
         };
         let Known::Yes(NodeValue::Alternatives(arms)) = result else { return Known::Unknown };
@@ -103,7 +103,7 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
     for candidate in group {
         let Known::Yes(candidate) = candidate else { return Known::Unknown };
         if candidate.compatible == Known::Yes(false) { continue }
-        let Known::Yes(result) = output(candidate, values) else { return Known::Unknown };
+        let Known::Yes(result) = super::result::header_result(candidate.chosen.header, values) else { return Known::Unknown };
         if let Some(previous) = &agreed {
             if previous != &result && (values.calls().accepts(previous, &result) != Known::Yes(true)
                 || values.calls().accepts(&result, previous) != Known::Yes(true)) {
@@ -116,26 +116,40 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
     agreed.map_or(Known::Unknown, Known::Yes)
 }
 
-fn output(candidate: &Candidate, values: &Values<'_>) -> Known<NodeValue> {
-    let Some(kind) = kind(candidate.chosen.header.site, values) else { return Known::Unknown };
-    if !kind.generics.is_empty() && candidate.chosen.mapping.iter().any(|(_, arguments)| !arguments.is_empty()) {
-        // Until inference binds formal slots, a default is not a call result.
-        return Known::Unknown;
-    }
-    super::result::header_result(candidate.chosen.header, values)
-}
-
 fn candidate(header: Header, call: Leaf, arguments: &[Leaf], values: &Values<'_>) -> Known<Candidate> {
+    let declaration = header;
     let Some(owner) = node(header.site, values) else { return Known::Unknown };
     let Some(kind) = kind(header.site, values) else { return Known::Unknown };
     let Some(signature) = kind.calls.signatures.get(header.signature as usize) else { return Known::Unknown };
-    let frame = values.question.bind(header.site.frame, owner, Some(call), Some(Vec::new()));
+    let Known::Yes(formals) = super::infer::formals(header.site, values) else { return Known::Unknown };
+    let explicit = match values.declared_arguments(call) {
+        Known::Yes(arguments) => arguments.unwrap_or_default(),
+        Known::Unknown => return Known::Unknown,
+    };
+    if !explicit.is_empty() {
+        let mut required = 0;
+        for &formal in &formals {
+            match values.optional(formal) {
+                Known::Yes(false) => required += 1,
+                Known::Yes(true) => {}
+                Known::Unknown => return Known::Unknown,
+            }
+        }
+        if explicit.len() < required || explicit.len() > formals.len() {
+            return Known::Yes(Candidate {
+                chosen: Chosen { header, mapping: Vec::new() },
+                compatible: Known::Yes(false),
+            });
+        }
+    }
+    let Known::Yes(classes) = values.question.owner_classes(header.site.frame, owner) else { return Known::Unknown };
+    let frame = values.question.bind_slots(header.site.frame, owner, Some(call), explicit.iter().cloned().map(Some).collect(), classes);
     let header = Header { site: Leaf { frame, ..header.site }, ..header };
     let Known::Yes(parameters) = values.follow(header.site, &signature.item.parameters) else { return Known::Unknown };
     let mut mapping = Vec::new();
     let mut compatible = Known::Yes(true);
     let mut has_rest = false;
-    let needs_inference = !kind.generics.is_empty() && !arguments.is_empty();
+    let needs_inference = !formals.is_empty() && !arguments.is_empty();
     for (index, parameter) in parameters.iter().copied().enumerate() {
         if !values.question.budget.step() { return Known::Unknown }
         let is_rest = match rest(parameter, values) {
@@ -183,12 +197,18 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], values: &Values<'_>
     if !has_rest && arguments.len() > parameters.len() {
         compatible = Known::Yes(false);
     }
+    let header = if formals.is_empty() {
+        header
+    } else {
+        let header = match super::infer::instantiate(declaration, call, &mapping, &explicit, values) {
+            Known::Yes(Some(header)) => header,
+            Known::Yes(None) => return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false) }),
+            Known::Unknown => return Known::Unknown,
+        };
+        for (parameter, _) in &mut mapping { parameter.frame = header.site.frame }
+        header
+    };
     Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible })
-}
-
-fn rest(at: Leaf, values: &Values<'_>) -> Known<bool> {
-    values.tables.vocabulary.traits.iter().position(|name| name == "rest")
-        .map_or(Known::Yes(false), |id| values.fits(at, id as u16))
 }
 
 pub(super) fn argument_sites(binding: Leaf, values: &Values<'_>) -> Known<Option<Vec<Leaf>>> {
@@ -235,6 +255,7 @@ pub(super) fn argument_sites(binding: Leaf, values: &Values<'_>) -> Known<Option
 }
 
 fn direct_targets(at: Leaf, values: &Values<'_>) -> Known<Vec<Leaf>> {
+    let Known::Yes(at) = values.semantic.leaf(at) else { return Known::Unknown };
     let Some(kind) = kind(at, values) else { return Known::Unknown };
     let mut roots = Vec::new();
     let mut forwards = false;
@@ -257,6 +278,7 @@ fn direct_targets(at: Leaf, values: &Values<'_>) -> Known<Vec<Leaf>> {
 }
 
 fn terminal(at: Leaf, values: &Values<'_>) -> Known<bool> {
+    let Known::Yes(at) = values.semantic.leaf(at) else { return Known::Unknown };
     let Some(kind) = kind(at, values) else { return Known::Unknown };
     for (_, when) in &kind.targets {
         match when.map_or(Known::Yes(true), |when| values.world.condition(at, when, values.semantic)) {

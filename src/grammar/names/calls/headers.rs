@@ -1,4 +1,4 @@
-use super::{expanded, kind, Header, InvokeKind};
+use super::{kind, Header, InvokeKind};
 use crate::fx_hash::FxHashSet;
 use crate::grammar::names::question::{Known, NodeValue};
 use crate::grammar::names::values::Values;
@@ -8,7 +8,7 @@ pub(super) fn headers(value: &NodeValue, invoke: InvokeKind, values: &Values<'_>
     let Some(trait_id) = values.tables.vocabulary.traits.iter().position(|name| name == trait_name) else {
         return Known::Unknown;
     };
-    let NodeValue::Alternatives(arms) = expanded(value, values) else { return Known::Unknown };
+    let NodeValue::Alternatives(arms) = values.expand(value) else { return Known::Unknown };
     let mut sets = Vec::new();
     for arm in arms {
         let mut pending: Vec<_> = arm.into_iter().rev().collect();
@@ -16,6 +16,7 @@ pub(super) fn headers(value: &NodeValue, invoke: InvokeKind, values: &Values<'_>
         let mut seen = FxHashSet::default();
         while let Some(site) = pending.pop() {
             if !values.question.budget.step() { return Known::Unknown }
+            let Known::Yes(site) = values.semantic.leaf(site) else { return Known::Unknown };
             match values.fits(site, trait_id as u16) {
                 Known::Yes(false) => continue,
                 Known::Unknown => return Known::Unknown,

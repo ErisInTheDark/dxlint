@@ -1,0 +1,103 @@
+# .ts/calls: signatures and invocation syntax.
+
+define {
+  in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
+    overloads infer last
+    let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
+    let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
+    let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
+    generics type_parameter
+    when !contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
+      signature calls_parameters receiver calls_receivers returns return_type ?? calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable)
+    }
+    when contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
+      signature calls_parameters receiver calls_receivers returns return_type ?? instance "Promise" of (calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable))
+    }
+    when contains([] node.modifier, "*") {
+      signature calls_parameters receiver calls_receivers returns return_type
+    }
+    discards result when return_type always void
+  }
+
+  in ts_function, ts_arrow { fits callable }
+  in ts_function_type, ts_call_signature {
+    fits callable when kind != "new"
+    fits constructible when kind == "new"
+  }
+
+  in ts_method {
+    let calls_constructor parent is ts_class && kind == null && !contains([] modifier, "static") && (
+      key is ts_identifier && key == "constructor" || key is ts_string && js_string(key.text) == "constructor"
+    )
+    fits callable when kind != "get" && kind != "set" && !calls_constructor
+    fits constructible when calls_constructor
+    variance parameters bivariant
+  }
+  in ts_method_signature {
+    fits callable when kind != "get" && kind != "set"
+    variance parameters bivariant
+  }
+
+  in ts_interface, ts_type_literal {
+    let calls_headers filter(member.nodes, h => h is ts_call_signature)
+    signatures calls_headers
+    fits callable when any(calls_headers, h => h.kind != "new")
+    fits constructible when any(calls_headers, h => h.kind == "new")
+  }
+  in ts_class {
+    let calls_constructor_headers filter(member.nodes, h => h is ts_method && h.calls_constructor)
+    signatures calls_constructor_headers
+  }
+
+  in ts_parameter {
+    optional when optional != null || init != null
+    fits rest when name is ts_rest
+  }
+  in ts_type_parameter { optional when default != null }
+  in ts_rest, ts_spread { fits rest }
+
+  in ts_call { calls callee with argument }
+  in ts_new { constructs callee with argument }
+  in ts_tagged_template {
+    let calls_arguments [] quasi.node quasi.expression.nodes
+    calls tag with calls_arguments
+  }
+
+  in ts_declarator {
+    when type != null { in init expects type }
+  }
+  in ts_class_property { in init expects type ?? it.expected }
+  in ts_assignment { in right expects left }
+  in ts_parenthesized { in expression expects it.expected }
+  in ts_as, ts_type_assertion { in expression expects type }
+  in ts_array { in element expects each from (excludes nullable from parent.expected) at position }
+  in ts_method, ts_class_property, ts_property {
+    let calls_member_key if key is ts_computed_key then key.expression.node else ts_value_key(key.node)
+    when parent is ts_object {
+      in it expects from parent.expected at calls_member_key
+    }
+    when parent is ts_class && parent.extends != null {
+      when !contains([] modifier, "static") {
+        in it expects from (from parent.extends at "prototype") at calls_member_key
+      }
+      when contains([] modifier, "static") {
+        in it expects from parent.extends at calls_member_key
+      }
+    }
+    when parent is ts_class && parent.implements != null && !contains([] modifier, "static") {
+      in it expects from (...parent.implements) at calls_member_key
+    }
+  }
+  in ts_property { in value expects it.expected }
+  in ts_arrow {
+    when body not ts_block { in body expects return_type ?? it.expected.result }
+  }
+  in ts_return {
+    let calls_return_function {
+      value parent.node
+      walk (current) current.parent.node
+      find (current) current is (ts_function, ts_arrow, ts_method)
+    }
+    in argument expects calls_return_function.return_type ?? calls_return_function.expected.result
+  }
+}

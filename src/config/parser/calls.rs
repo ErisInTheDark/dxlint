@@ -1,19 +1,22 @@
 //! Parsing call declarations; conditions stay with the shared name item.
 
 use super::Parser;
-use crate::config::ast::calls::{Item, Path, Variance};
+use crate::config::ast::calls::{ExpectedAt, Item, Path, Variance};
 
 impl Parser<'_> {
     pub(super) fn call_item(&mut self, keyword: &str) -> Option<Item> {
         match keyword {
             "signature" => {
                 let parameters = self.name_path("the signature's parameter field")?;
+                let receiver = if self.word("receiver") {
+                    Some(self.name_path("the signature's receiver field")?)
+                } else { None };
                 if !self.word("returns") {
                     self.error_here("expected `returns`: `signature parameter returns return_type`");
                     return None;
                 }
                 let result = self.unwrap_value()?;
-                Some(Item::Signature { parameters, result })
+                Some(Item::Signature { parameters, receiver, result })
             }
             "signatures" => self.unwrap_value().map(Item::Sources),
             "calls" | "constructs" => {
@@ -34,6 +37,13 @@ impl Parser<'_> {
             }
             "identity" => self.expr().map(Item::Identity),
             "optional" => Some(Item::Optional),
+            "overloads" => {
+                if !self.word("infer") || !self.word("last") {
+                    self.error_here("expected `infer last` after `overloads`");
+                    return None;
+                }
+                Some(Item::InferLastOverload)
+            }
             "variance" => {
                 if !self.word("parameters") {
                     self.error_here("expected `parameters` after `variance`");
@@ -52,7 +62,8 @@ impl Parser<'_> {
     }
 
     pub(super) fn call_expected(&mut self, field: Path) -> Option<Item> {
-        self.unwrap_value().map(|value| Item::Expected { field, value })
+        let at = if self.word("each") { ExpectedAt::Subject } else { ExpectedAt::Owner };
+        self.unwrap_value().map(|value| Item::Expected { field, value, at })
     }
 
     pub(super) fn generics_item(&mut self) -> Option<Path> {

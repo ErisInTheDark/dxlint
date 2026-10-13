@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 
-use crate::config::ast::calls::Variance;
+use crate::config::ast::calls::{ExpectedAt, Variance};
 use crate::fx_hash::FxHashMap;
 
 use super::question::{Known, Leaf, NodeRef, NodeValue, Target};
@@ -13,8 +13,11 @@ use super::{KindNames, Value};
 
 mod accepts;
 mod headers;
+mod expected;
+mod infer;
 mod result;
 mod select;
+mod signature_accepts;
 pub mod compile;
 
 #[cfg(test)]
@@ -28,49 +31,39 @@ pub struct Conditional<T> {
     pub when: Option<u32>,
 }
 
-fn expanded(value: &NodeValue, values: &Values<'_>) -> NodeValue {
-    let NodeValue::Alternatives(arms) = value else { return NodeValue::Unknown };
-    let mut expanded = Vec::new();
-    for arm in arms {
-        let mut products = vec![Vec::new()];
-        for &leaf in arm {
-            let NodeValue::Alternatives(parts) = values.values(leaf) else { return NodeValue::Unknown };
-            let mut next = Vec::new();
-            for product in &products {
-                for part in &parts {
-                    if !values.question.budget.step() { return NodeValue::Unknown }
-                    let mut combined = product.clone();
-                    combined.extend_from_slice(part);
-                    next.push(combined);
-                }
-            }
-            products = next;
-        }
-        expanded.extend(products);
-    }
-    NodeValue::Alternatives(expanded)
-}
-
 fn kind<'a>(leaf: Leaf, values: &'a Values<'_>) -> Option<&'a KindNames> {
     let node = node(leaf, values)?;
     let node = values.world.tree(node.file)?.nodes.get(node.node as usize)?;
     values.tables.kinds.get(node.matcher as usize)
 }
 
+fn rest(at: Leaf, values: &Values<'_>) -> Known<bool> {
+    values.tables.vocabulary.traits.iter().position(|name| name == "rest")
+        .map_or(Known::Yes(false), |id| values.fits(at, id as u16))
+}
+
 fn node(leaf: Leaf, values: &Values<'_>) -> Option<NodeRef> {
+    let Known::Yes(leaf) = values.semantic.leaf(leaf) else { return None };
     Some(match leaf.target {
         Target::Node(node) => node,
         Target::Scope(scope) => {
             let info = values.world.names(scope.file)?.scopes.get(scope.scope as usize)?;
             NodeRef { file: scope.file, node: info.node }
         }
+        _ => return None,
     })
 }
 
 #[derive(Clone, Debug)]
 pub struct Signature {
     pub parameters: Path,
+    pub receiver: Option<Path>,
     pub result: Value,
+}
+
+fn signature<'a>(header: Header, values: &'a Values<'_>) -> Option<(Leaf, &'a Signature)> {
+    let Known::Yes(site) = values.semantic.leaf(header.site) else { return None };
+    Some((site, &kind(site, values)?.calls.signatures.get(header.signature as usize)?.item))
 }
 
 #[derive(Clone, Debug)]
@@ -84,10 +77,17 @@ pub struct Invoke {
 pub struct Expected {
     pub field: Path,
     pub value: Value,
+    pub at: ExpectedAt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InvokeKind { Call, Construct }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub accepted: bool,
+    pub arguments: Vec<Option<NodeValue>>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Header {
@@ -118,6 +118,7 @@ pub struct KindCalls {
     pub identities: Vec<Conditional<u32>>,
     pub optional: Vec<Option<u32>>,
     pub variances: Vec<Conditional<Variance>>,
+    pub infer_last: Vec<Option<u32>>,
 }
 
 /// A value question's answer: `Yes(None)` when there is none to ask about.
@@ -162,15 +163,18 @@ impl Calls<'_> {
     }
 
     pub fn selection(&self, call: Leaf) -> Known<Option<Selection>> {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
         select::selection(call, &self.semantic.values())
     }
 
     pub fn argument_sites(&self, formal_binding: Leaf) -> Known<Option<Vec<Leaf>>> {
         let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let Known::Yes(formal_binding) = self.semantic.leaf(formal_binding) else { return Known::Unknown };
         select::argument_sites(formal_binding, &self.semantic.values())
     }
 
     fn candidates(&self, call: Leaf) -> select::Answer {
+        let Known::Yes(call) = self.semantic.leaf(call) else { return Known::Unknown };
         if let Some(answer) = self.semantic.calls.candidates.borrow().get(&call) {
             return answer.clone();
         }
@@ -196,6 +200,16 @@ impl Calls<'_> {
         answer
     }
 
+    pub fn match_value(&self, at: Leaf, pattern: &Value, actual: &NodeValue, slots: &[Leaf]) -> Known<Match> {
+        let values = self.semantic.values();
+        let Known::Yes(mut run) = accepts::Run::new(&values, slots, &[]) else { return Known::Unknown };
+        run.match_value(at, pattern, actual, slots)
+    }
+
+    pub fn constrained_arguments(&self, owner: Leaf, through: Option<Leaf>, formals: &[Leaf], arguments: Vec<Option<NodeValue>>, locked: &[bool]) -> Known<Option<Vec<Option<NodeValue>>>> {
+        infer::constrained_arguments(owner, through, formals, arguments, locked, &Values { semantic: self.semantic })
+    }
+
     pub fn result(&self, at: Leaf) -> Known<Option<NodeValue>> {
         self.value(at, ValueQuestion::Result)
     }
@@ -204,11 +218,44 @@ impl Calls<'_> {
         self.value(at, ValueQuestion::Expected)
     }
 
+    pub fn parameters(&self, header: Header) -> Known<Vec<Leaf>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let values = self.semantic.values();
+        let Some((site, signature)) = signature(header, &values) else { return Known::Unknown };
+        values.follow(site, &signature.parameters)
+    }
+
+    pub fn receiver(&self, header: Header) -> Known<Option<Leaf>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let values = self.semantic.values();
+        let Some((site, signature)) = signature(header, &values) else { return Known::Unknown };
+        let Some(path) = &signature.receiver else { return Known::Unknown };
+        match values.follow(site, path) {
+            Known::Yes(receivers) if receivers.is_empty() => Known::Yes(None),
+            Known::Yes(receivers) if receivers.len() == 1 => Known::Yes(Some(receivers[0])),
+            _ => Known::Unknown,
+        }
+    }
+
+    pub fn header_result(&self, header: Header) -> Known<NodeValue> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        result::header_result(header, &self.semantic.values())
+    }
+
+    pub fn header_result_sites(&self, header: Header) -> Known<Vec<Leaf>> {
+        let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
+        let values = self.semantic.values();
+        let Some((site, signature)) = signature(header, &values) else { return Known::Unknown };
+        values.sites(site, &signature.result)
+    }
+
     pub fn inferred(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         self.semantic.values().bound_argument(at)
     }
 
     fn value(&self, at: Leaf, question: ValueQuestion) -> Known<Option<NodeValue>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         let key = (at, question);
         if let Some(answer) = self.semantic.calls.values.borrow().get(&key) {
             return answer.clone();
@@ -220,7 +267,7 @@ impl Calls<'_> {
         self.semantic.calls.values.borrow_mut().insert(key, Known::Unknown);
         let answer = match question {
             ValueQuestion::Result => result::result(at, &self.semantic.values()),
-            ValueQuestion::Expected => Known::Unknown,
+            ValueQuestion::Expected => expected::expected(at, &self.semantic.values()),
         };
         self.semantic.calls.values.borrow_mut().insert(key, answer.clone());
         answer

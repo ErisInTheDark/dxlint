@@ -6,14 +6,22 @@ pub type Path = Vec<Name>;
 
 #[derive(Clone, Debug)]
 pub enum Item {
-    Signature { parameters: Path, result: Unwrap },
+    Signature { parameters: Path, receiver: Option<Path>, result: Unwrap },
     Sources(Unwrap),
     Invoke { callee: Unwrap, arguments: Path, construct: bool },
-    Expected { field: Path, value: Unwrap },
+    Expected { field: Path, value: Unwrap, at: ExpectedAt },
     DiscardsResult,
     Identity(Expr),
     Optional,
     ParameterVariance(Variance),
+    InferLastOverload,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExpectedAt {
+    #[default]
+    Owner,
+    Subject,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
