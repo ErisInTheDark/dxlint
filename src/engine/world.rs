@@ -173,7 +173,11 @@ impl<'a> LintWorld<'a> {
     }
 
     pub fn query(&'a self, file: u32, node: u32, subject: &crate::grammar::names::Value, query: &crate::expr::queries::Query, mask: u64) -> bool {
-        let answer = self.semantic_query(file, node, |semantic, at| (query.call)(semantic, at, subject, mask));
+        let run = || self.semantic_query(file, node, |semantic, at| (query.call)(semantic, at, subject, mask));
+        let answer = match self.ctx.profile {
+            Some(profile) => profile.time_semantic_query(query.name, run),
+            None => run(),
+        };
         matches!(answer, Known::Yes(true))
     }
 

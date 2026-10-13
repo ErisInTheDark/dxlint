@@ -15,6 +15,31 @@ thread_local! {
     static FACT_TIME: Cell<(u64, u32)> = const { Cell::new((0, 0)) };
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn trait_queries_are_counted_when_linting() {
+        let source = r#"
+            lang plain "*.t"
+            in .plain match item /[a-z]/
+            in item fits marked
+            in item rule probe info text { when node could marked && node always marked }
+        "#;
+        let built = crate::engine::build(
+            crate::config::load_text("profile.zlint", source, &crate::config::source::Disk),
+            std::path::PathBuf::from("/root"),
+        );
+        assert!(built.errors.is_empty(), "{:?}", built.errors);
+        let mut linter = built.linter.expect("valid grammar");
+        linter.enable_profile();
+        assert_eq!(linter.lint(std::path::Path::new("/root/file.t"), "x").len(), 1);
+        let profile = linter.profile.as_ref().unwrap();
+        for query in crate::expr::queries::QUERIES {
+            assert!(super::Profile::get(&profile.semantic_queries[query.name].calls) > 0, "{}", query.name);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Profile {
     /// Interpreter steps (instructions run) per matcher.
@@ -154,7 +179,8 @@ impl Profile {
             fact_nanos: counters(crate::expr::facts::FACTS.len()),
             fact_calls: counters(crate::expr::facts::FACTS.len()),
             semantic_queries: crate::expr::queries::QUERY_FUNCTIONS.iter().flat_map(|group| group.iter())
-                .map(|query| (query.name, SemanticQueryProfile::default())).collect(),
+                .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
+                .map(|name| (name, SemanticQueryProfile::default())).collect(),
             ..Profile::default()
         }
     }
