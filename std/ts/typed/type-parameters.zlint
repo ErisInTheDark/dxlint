@@ -19,7 +19,7 @@ fn type_parameter_part(part, target, returned, from_class) =
     value uses: type_parameter_usages(map(part.carrier.arguments,
       argument => type_parameter_value(argument, target, returned, from_class)))
     value { known: uses.known, uses: if multiple then uses.uses uses.uses else uses.uses }
-  } else if any(part.traits, trait => contains(["object", "structural", "callable", "constructible", "intersection"], trait))
+  } else if any(part.traits, trait => contains(["structural", "callable", "constructible", "intersection"], trait))
     then { known: false, uses: [] }
   else { known: true, uses: [] }
 fn type_parameter_arm(parts, target, returned, from_class) = type_parameter_usages({
@@ -33,30 +33,48 @@ fn type_parameter_arm(parts, target, returned, from_class) = type_parameter_usag
   map (part) part.usage
 })
 fn type_parameter_value(parts, target, returned, from_class) =
-  if parts == null then { known: false, uses: [] } else {
+  if parts == null then { known: false, uses: [] }
+  else if count(parts) == 0 then { known: true, uses: [] } else {
     value arms: map(parts, arm => type_parameter_arm(arm, target, returned, from_class))
     value largest: max(map(arms, arm => count(arm.uses)))
     value { known: all(arms, arm => arm.known), uses: find(arms, arm => count(arm.uses) == largest).uses ?? [] }
   }
-fn type_parameter_signature(signature, target, from_class, result_type) = {
-  value parameters: map(signature.parameters,
-    parameter => type_parameter_value(parameter, target, false, from_class))
+fn type_parameter_independent_parameter(parameter) =
+  parameter.type is ts_type_keyword && contains(["any", "unknown"], parameter.type.text)
+    || parameter.type == null && parameter.init == null
+fn type_parameter_parameters(signature, target, from_class, declaration) = {
+  value syntax: if declaration == null then null else declaration.calls_parameters
+  value if syntax != null && all(syntax, parameter => type_parameter_independent_parameter(parameter))
+    then { known: true, uses: [] }
+    else if signature.parameters_known != true then { known: false, uses: [] }
+    else type_parameter_usages(if syntax != null && count(signature.parameters) == count(syntax) then {
+      value zip(signature.parameters, syntax)
+      map (pair) if type_parameter_independent_parameter(last(pair)) then { known: true, uses: [] }
+        else type_parameter_value(first(pair), target, false, from_class)
+    } else map(signature.parameters, parameter => type_parameter_value(parameter, target, false, from_class)))
+}
+fn type_parameter_signature(signature, target, from_class, result_type, declaration) = {
+  value parameters: type_parameter_parameters(signature, target, from_class, declaration)
   value receiver: if signature.has_receiver == false then { known: true, uses: [] }
     else type_parameter_value(signature.receiver, target, false, from_class)
   value result: if result_type is ts_type_keyword && result_type.text == "unknown"
-    then { known: true, uses: [] } else type_parameter_value(signature.result, target, true, from_class)
-  value uses: type_parameter_usages(parameters [receiver, result])
+    then { known: true, uses: [] }
+    else if declaration != null && result_type is ts_type_predicate && result_type.type != null
+      then type_parameter_value(value_constituents(result_type.type.node), target, true, from_class)
+    else type_parameter_value(signature.result, target, true, from_class)
+  value uses: type_parameter_usages([parameters, receiver, result])
   value {
-    known: signature.parameters_known && signature.receiver_known && signature.result_known && uses.known,
+    known: signature.receiver_known && signature.result_known && uses.known,
     uses: uses.uses,
   }
 }
 fn type_parameter_callable(n, target, from_class) = {
   value signatures: call_signatures(n)
+  value declaration: if n.body == null && count(signatures) == 1 && count(first(signatures)) == 1 then n else null
   value if signatures == null || count(signatures) == 0 then { known: false, uses: [] }
     else type_parameter_usages({
       value signatures
-      flat_map (arm) map(arm, signature => type_parameter_signature(signature, target, from_class, n.return_type.node))
+      flat_map (arm) map(arm, signature => type_parameter_signature(signature, target, from_class, n.return_type.node, declaration))
     })
 }
 fn type_parameter_class(n, target) = type_parameter_usages(map(n.member.nodes,

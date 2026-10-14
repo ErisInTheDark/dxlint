@@ -1,0 +1,3 @@
+input.ts:1:23-1:24 usage-count#0 1
+input.ts:2:25-2:26 usage-count#0 0
+input.ts:3:27-3:28 usage-count#0 2

@@ -1,0 +1,7 @@
+import .ts
+in ts_type_parameter rule usage-count {
+  when parent is ts_function
+  let usage type_parameter_callable(parent.node, declaration_identity(node), false)
+  when usage.known
+  warn "{count(usage.uses)}"
+}
