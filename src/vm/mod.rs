@@ -1324,11 +1324,17 @@ fn walk_seq<H: Host>(h: &Runtime<'_, H>, node: u32, s: &Seq, f: &mut Vec<V>, eac
         Seq::Walk(roots, next, slot) => {
             let mut queue = std::collections::VecDeque::new();
             walk_seq(h, node, roots, f, &mut |v, _| { queue.push_back(v); Some(true) })?;
-            let mut seen = crate::fx_hash::FxHashSet::default();
+            let mut seen_nodes = crate::fx_hash::FxHashSet::default();
+            let mut seen_values: Vec<V> = Vec::new();
             let mut reached = Vec::new();
             while let Some(v) = queue.pop_front() {
-                let V::Node(id) = v else { continue };
-                if !seen.insert(id) {
+                let fresh = match v {
+                    V::Null => false,
+                    V::Node(id) => seen_nodes.insert(id),
+                    _ if seen_values.iter().any(|&s| h.equal(s, v)) => false,
+                    _ => { seen_values.push(v); true }
+                };
+                if !fresh {
                     continue;
                 }
                 with_bound(f, *slot, &[v], |f| walk_seq(h, node, next, f, &mut |more, _| { queue.push_back(more); Some(true) }))?;

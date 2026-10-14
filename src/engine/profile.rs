@@ -342,7 +342,7 @@ impl Profile {
                 .map(|query| query.name).chain(crate::expr::queries::QUERIES.iter().map(|query| query.name))
                 .chain(crate::grammar::names::calls::ProfileQuery::ALL.iter().map(|query| query.name()))
                 .chain(crate::grammar::names::modules::queries::PROFILE_QUERIES.iter().copied())
-                .chain(["units.native", "units.view", "modules.resolve.search", "modules.resolve.shared", "modules.resolve.catalog", "modules.roots.inputs", "modules.roots.survey", "modules.roots.candidates", "modules.roots.prefetch", "modules.roots.attach"])
+                .chain(["units.native", "units.view", "modules.resolve.search", "modules.resolve.shared", "modules.resolve.shared.key", "modules.resolve.shared.select", "modules.resolve.shared.identity","modules.resolve.shared.lookup", "modules.resolve.shared.targets", "modules.resolve.shared.record", "modules.resolve.shared.publish", "modules.resolve.catalog", "modules.roots.inputs", "modules.roots.survey", "modules.roots.candidates", "modules.roots.prefetch", "modules.roots.attach"])
                 .map(|name| (name, SemanticQueryProfile::default())).collect(),
             ..Profile::default()
         }

@@ -637,10 +637,10 @@ impl<'a> Files<'a> {
         let linted = self.linted_hash();
         // Shared answers see every file as the run reads it; a world whose
         // linted text differs (a fix pass, an unsaved edit) keeps its own.
-        let (true, Some(key)) = (self.shares(snapshot), self.module_key(question)) else { return compute() };
-        if let Some(shared) = snapshot.module_answer(&key) {
-            if let Some(targets) = self.local_targets(&shared.value) {
-                super::reads::note_group(&shared.reads);
+        let (true, Some(key)) = self.timed("modules.resolve.shared.key", || (self.shares(snapshot), self.module_key(question))) else { return compute() };
+        if let Some(shared) = self.timed("modules.resolve.shared.lookup", || snapshot.module_answer(&key)) {
+            if let Some(targets) = self.timed("modules.resolve.shared.targets", || self.local_targets(&shared.value)) {
+                self.timed("modules.resolve.shared.record", || super::reads::note_group(&shared.reads));
                 return Known::Yes(targets);
             }
         }
@@ -648,11 +648,13 @@ impl<'a> Files<'a> {
             super::reads::note(super::reads::Dep::Text(self.0.path.to_owned(), linted));
             compute()
         });
-        super::reads::note_group(&answer.reads);
+        self.timed("modules.resolve.shared.record", || super::reads::note_group(&answer.reads));
         if let Known::Yes(targets) = &answer.value {
-            if let Some(stable) = self.stable_targets(targets) {
-                snapshot.keep_module_answer(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
-            }
+            self.timed("modules.resolve.shared.publish", || {
+                if let Some(stable) = self.stable_targets(targets) {
+                    snapshot.keep_module_answer(key, super::reads::Cached { value: stable, reads: answer.reads.clone() });
+                }
+            });
         }
         answer.value
     }
@@ -660,8 +662,8 @@ impl<'a> Files<'a> {
     /// `question` under this world's program; `None` while the program is
     /// not settled.
     fn module_key(self, question: super::program::StableQuestion) -> Option<super::program::ModuleKey> {
-        let Known::Yes(Some(selected)) = self.program_selected() else { return None };
-        let Known::Yes((program, outside)) = self.program_identity(selected) else { return None };
+        let Known::Yes(Some(selected)) = self.timed("modules.resolve.shared.select", || self.program_selected()) else { return None };
+        let Known::Yes((program, outside)) = self.timed("modules.resolve.shared.identity", || self.program_identity(selected)) else { return None };
         Some(super::program::ModuleKey {
             revision: self.0.revision(),
             settings: selected as *const Settings as usize,
@@ -680,9 +682,10 @@ impl<'a> Files<'a> {
             return Known::Yes(known.clone());
         }
         let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
-        let mut hasher = crate::fx_hash::FxHasher::default();
-        std::hash::Hash::hash(&*paths, &mut hasher);
-        let program = std::hash::Hasher::finish(&hasher);
+        // Worlds of one run share the run's input list (the snapshot holds
+        // it for the run), so its address names the program without hashing
+        // every path again in every world.
+        let program = Arc::as_ptr(&paths) as usize as u64;
         let outside = (!paths.iter().any(|path| path == self.0.path)).then(|| self.0.path.to_owned());
         self.0.program.outside.borrow_mut().insert(selected as *const Settings, (program, outside.clone()));
         Known::Yes((program, outside))
@@ -937,6 +940,11 @@ impl World for Files<'_> {
             Known::Yes(context) => Known::Yes(context.key("config").key(name)),
             Known::Unknown => Known::Unknown,
         }
+    }
+
+    fn origin(&self, file: u32) -> Known<crate::grammar::names::modules::resolution::Origin> {
+        let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
+        World::path(self, file).map_or(Known::Unknown, |path| Known::Yes(selected.origin(path)))
     }
 
     fn global_scopes(&self, _importer: u32, name: &str, _semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {

@@ -324,6 +324,79 @@ pub(super) fn clean(path: &Path) -> PathBuf {
     result
 }
 
+/// Where a program file comes from, by its path alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// A default library file (the `libraries` template, any name).
+    Library,
+    /// A file inside an installed package; the package name.
+    Package(Box<str>),
+    Project,
+}
+
+impl Settings {
+    pub fn origin(&self, path: &Path) -> Origin {
+        let text = clean(path).to_string_lossy().replace('\\', "/");
+        if self.is_library(&text) { return Origin::Library }
+        let parts: Vec<&str> = text.split('/').collect();
+        let directory = parts.iter().rposition(|part| self.packages.directories.iter().any(|name| **name == **part));
+        if let Some(rest) = directory.map(|at| &parts[at + 1..]) {
+            let prefix = &*self.packages.scoped_prefix;
+            let count = if !prefix.is_empty() && rest.first().is_some_and(|part| part.starts_with(prefix)) { 2 } else { 1 };
+            if rest.len() > count { return Origin::Package(rest[..count].join("/").into()) }
+        }
+        Origin::Project
+    }
+
+    /// Whether `path` fits the `libraries` template: `{package_dir}` is any
+    /// prefix ending in a package directory, other placeholders one segment.
+    fn is_library(&self, path: &str) -> bool {
+        let mut reached = vec![false; path.len() + 1];
+        reached[0] = true;
+        let mut rest = &*self.globals.libraries;
+        if rest.is_empty() { return false }
+        while !rest.is_empty() {
+            let piece = match rest.find('{') {
+                Some(0) => {
+                    let Some(close) = rest.find('}') else { return false };
+                    let (name, _) = TemplateTransform::parse(&rest[1..close]).unwrap_or(("", TemplateTransform::Identity));
+                    rest = &rest[close + 1..];
+                    if name == "package_dir" { Piece::PackageDir } else { Piece::Segment }
+                }
+                found => {
+                    let end = found.unwrap_or(rest.len());
+                    let literal = &rest[..end];
+                    rest = &rest[end..];
+                    Piece::Literal(literal)
+                }
+            };
+            let mut next = vec![false; reached.len()];
+            for from in (0..reached.len()).filter(|&at| reached[at]) {
+                for to in from..reached.len() {
+                    if next[to] || !path.is_char_boundary(to) { continue }
+                    next[to] = match piece {
+                        Piece::Literal(literal) => &path[from..to] == literal,
+                        Piece::Segment => to > from && !path[from..to].contains('/'),
+                        Piece::PackageDir => {
+                            let last = path[..to].rsplit('/').next().unwrap_or("");
+                            self.packages.directories.iter().any(|name| **name == *last)
+                        }
+                    };
+                }
+            }
+            if !next.contains(&true) { return false }
+            reached = next;
+        }
+        reached[path.len()]
+    }
+}
+
+enum Piece<'a> {
+    Literal(&'a str),
+    Segment,
+    PackageDir,
+}
+
 pub(super) enum TemplateTransform {
     Identity,
     Lower,
@@ -423,6 +496,18 @@ mod tests {
             },
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn origins_tell_libraries_from_packages_and_project_files() {
+        let mut settings = settings();
+        settings.globals.libraries = "{package_dir}/typescript/lib/lib.{name:lower}.d.ts".into();
+        let origin = |path: &str| settings.origin(Path::new(path));
+        assert_eq!(origin("/app/node_modules/typescript/lib/lib.es2015.promise.d.ts"), Origin::Library);
+        assert_eq!(origin("/app/node_modules/typescript/lib/typescript.d.ts"), Origin::Package("typescript".into()));
+        assert_eq!(origin("/app/node_modules/.pnpm/x@1/node_modules/@types/node/globals.d.ts"), Origin::Package("@types/node".into()));
+        assert_eq!(origin("/app/lib/lib.dom.d.ts"), Origin::Project);
+        assert_eq!(origin("/app/src/promise.ts"), Origin::Project);
     }
 
     #[test]

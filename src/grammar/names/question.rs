@@ -249,6 +249,11 @@ pub trait World {
     fn module_star_excludes(&self, _scope: ScopeRef, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<bool> {
         Known::Unknown
     }
+    /// Where program file `file` comes from (its path under the program's
+    /// resolution profile).
+    fn origin(&self, _file: u32) -> Known<super::modules::resolution::Origin> {
+        Known::Unknown
+    }
     /// The global scopes the program around file `importer` sees (libs,
     /// type roots, script files, global augmentations), in policy order;
     /// a world may leave out files that cannot publish global `name`.

@@ -18,8 +18,11 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_children", arity: 3, call: |semantic, at, args| children(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_signatures", arity: 1, call: |semantic, at, args| signatures(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_constructors", arity: 1, call: |semantic, at, args| constructors(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_bases", arity: 1, call: |semantic, at, args| bases(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "call_selection", arity: 1, call: selection },
     QueryFunction { name: "site_text", arity: 2, call: site_text },
+    QueryFunction { name: "declaration_origin", arity: 2, call: declaration_origin },
+    QueryFunction { name: "declaration_value", arity: 2, call: declaration_value },
 ];
 
 /// A query reading a handle subject instead of a node.
@@ -33,6 +36,7 @@ static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_children", call: children },
     HandleFunction { name: "value_signatures", call: signatures },
     HandleFunction { name: "value_constructors", call: constructors },
+    HandleFunction { name: "value_bases", call: bases },
     HandleFunction { name: "value_constituents", call: |semantic, value, _| project(semantic, value) },
     HandleFunction { name: "value_at", call: project_path },
     HandleFunction { name: "value_lookup", call: |semantic, value, args| match args.first().and_then(member_key) {
@@ -160,14 +164,8 @@ fn children(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) 
             if !semantic.question.budget.step() || member.sources.is_empty() { return Known::Unknown }
             let mut sources = Vec::with_capacity(member.sources.len());
             for source in &member.sources {
-                let flags = match values.flags(source.site) {
-                    Known::Yes(flags) => Value::list(flags.into_iter().map(|flag| Value::from(String::from(flag))).collect()),
-                    Known::Unknown => return Known::Unknown,
-                };
-                let Value::Record(fields) = source_value(source) else { return Known::Unknown };
-                let mut fields = fields.to_vec();
-                fields.push(("flags".into(), flags));
-                sources.push(Value::record(fields));
+                let Known::Yes(source) = source_value(semantic, source) else { return Known::Unknown };
+                sources.push(source);
             }
             let child = values.combine(member.sources.iter().map(|source| {
                 source.value.as_ref().map_or_else(|| values.values(source.site), |recipe| values.evaluate(source.site, recipe))
@@ -215,6 +213,18 @@ fn signatures(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -
     headers_of(semantic, value, crate::grammar::names::calls::InvokeKind::Call)
 }
 
+/// The values one constituent (a part handle, or a value of one leaf)
+/// inherits its members from, as handles in declaration order: declared
+/// bases (`members ... inherits`), a product's base, a primitive's apparent
+/// wrapper. `[]` when it has none; null when unknown or not one constituent.
+fn bases(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Known<Value<'static>> {
+    let NodeValue::Alternatives(rows) = value else { return Known::Unknown };
+    let [row] = rows.as_slice() else { return Known::Unknown };
+    let [leaf] = row.as_slice() else { return Known::Unknown };
+    let Known::Yes(bases) = semantic.values().bases(*leaf) else { return Known::Unknown };
+    Known::Yes(Value::list(bases.into_iter().map(|base| handle(semantic, base)).collect()))
+}
+
 /// [`signatures`] for `new`.
 fn constructors(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Known<Value<'static>> {
     headers_of(semantic, value, crate::grammar::names::calls::InvokeKind::Construct)
@@ -245,12 +255,7 @@ fn selection(semantic: &Semantic<'_>, at: crate::grammar::names::question::Leaf,
 /// leading}` where `leading` is the text between the previous sibling (or
 /// the parent's start) and the node (its comments). Null when unavailable.
 fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
-    let Some(Value::Record(fields)) = args.first() else { return Known::Yes(Value::Null) };
-    let number = |name: &str| fields.iter().find(|(key, _)| &**key == name).and_then(|(_, value)| match value {
-        Value::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
-        _ => None,
-    });
-    let (Some(file), Some(node)) = (number("file"), number("node")) else { return Known::Yes(Value::Null) };
+    let Some((file, node)) = args.first().and_then(site_of) else { return Known::Yes(Value::Null) };
     let (Some(tree), Some(text)) = (semantic.world.tree(file), semantic.world.text(file)) else { return Known::Unknown };
     let Some(data) = tree.nodes.get(node as usize) else { return Known::Yes(Value::Null) };
     let before = tree.parent(node).map_or(0, |parent| {
@@ -263,7 +268,46 @@ fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, 
     Known::Yes(Value::record(vec![("text".into(), Value::from(own)), ("leading".into(), Value::from(leading))]))
 }
 
-fn site_value(site: crate::grammar::names::question::Leaf) -> Value<'static> {
+/// The value a `{file, node}` declaration site unwraps to, as a handle
+/// (read at the root frame, in any program file); null when not a site.
+fn declaration_value(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    use crate::grammar::names::question::{FrameId, Leaf, NodeRef, Target};
+    let Some((file, node)) = args.first().and_then(site_of) else { return Known::Yes(Value::Null) };
+    match semantic.values().values(Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT }) {
+        NodeValue::Unknown => Known::Unknown,
+        value => Known::Yes(handle(semantic, value)),
+    }
+}
+
+/// A `{file, node}` site record's numbers.
+fn site_of(site: &Value<'static>) -> Option<(u32, u32)> {
+    let Value::Record(fields) = site else { return None };
+    let number = |name: &str| fields.iter().find(|(key, _)| &**key == name).and_then(|(_, value)| match value {
+        Value::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
+        _ => None,
+    });
+    Some((number("file")?, number("node")?))
+}
+
+/// Where a `{file, node}` site's file comes from: `{path, kind, package}`
+/// with kind `library`, `package` (package named) or `project`.
+fn declaration_origin(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    use crate::grammar::names::modules::resolution::Origin;
+    let Some((file, _)) = args.first().and_then(site_of) else { return Known::Yes(Value::Null) };
+    let (Some(path), Known::Yes(origin)) = (semantic.world.path(file), semantic.world.origin(file)) else { return Known::Unknown };
+    let (kind, package) = match origin {
+        Origin::Library => ("library", Value::Null),
+        Origin::Package(name) => ("package", Value::from(name.to_string())),
+        Origin::Project => ("project", Value::Null),
+    };
+    Known::Yes(Value::record(vec![
+        ("path".into(), Value::from(path.to_string_lossy().replace('\\', "/"))),
+        ("kind".into(), Value::from(kind.to_string())),
+        ("package".into(), package),
+    ]))
+}
+
+fn site_value(site:crate::grammar::names::question::Leaf) -> Value<'static> {
     match site.target {
         crate::grammar::names::question::Target::Node(node) => Value::record(vec![
             ("file".into(), Value::Num(f64::from(node.file))),

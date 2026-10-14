@@ -193,8 +193,9 @@ fn has_member(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Kno
     }
 }
 
-/// One member source: how the member is keyed and the node declaring it.
-pub(super) fn source_value(source: &crate::grammar::names::values::MemberSource) -> Value<'static> {
+/// One member source: how the member is keyed, the node declaring it and
+/// that declaration's flags.
+pub(super) fn source_value(semantic: &Semantic<'_>, source: &crate::grammar::names::values::MemberSource) -> Known<Value<'static>> {
     let (kind, domain) = origin_parts(source.origin);
     let site = match source.site.target {
         Target::Node(node) => Value::record(vec![
@@ -203,7 +204,9 @@ pub(super) fn source_value(source: &crate::grammar::names::values::MemberSource)
         ]),
         _ => Value::Null,
     };
-    Value::record(vec![("kind".into(), Value::from(kind)), ("domain".into(), domain), ("site".into(), site)])
+    let Known::Yes(flags) = semantic.values().flags(source.site) else { return Known::Unknown };
+    let flags = Value::list(flags.into_iter().map(|flag| Value::from(String::from(flag))).collect());
+    Known::Yes(Value::record(vec![("kind".into(), Value::from(kind)), ("domain".into(), domain), ("site".into(), site), ("flags".into(), flags)]))
 }
 
 fn origin_parts(origin: MemberOrigin) -> (&'static str, Value<'static>) {
@@ -234,7 +237,11 @@ pub(super) fn lookup_in(semantic: &Semantic<'_>, value: NodeValue, key: &Key) ->
         let (matched, required, sources) = match row {
             Some(member) => {
                 let required = member.required.known().map_or(Value::Null, Value::Bool);
-                let sources = member.sources.iter().map(source_value).collect();
+                let mut sources = Vec::with_capacity(member.sources.len());
+                for source in &member.sources {
+                    let Known::Yes(source) = source_value(semantic, source) else { return Known::Unknown };
+                    sources.push(source);
+                }
                 (true, required, sources)
             },
             None => (false, Value::Null, Vec::new()),
