@@ -155,6 +155,13 @@ fn fixed_outputs(root: &Path, path: &Path, files: &mut BTreeMap<PathBuf, String>
     Ok(())
 }
 
+/// Diagnostic lists compare line by line: line endings and trailing blank
+/// lines carry no diagnostics, so they never fail a fixture.
+fn same_lines(expected: &str, actual: &str) -> bool {
+    let lines = |text: &str| text.trim_end_matches(['\r', '\n']).lines().map(str::to_owned).collect::<Vec<_>>();
+    lines(expected) == lines(actual)
+}
+
 fn difference(expected: &str, actual: &str) -> String {
     let expected: Vec<_> = expected.lines().collect();
     let actual: Vec<_> = actual.lines().collect();
@@ -200,11 +207,11 @@ fn scenario(output: &mut Output<'_>, root: &Path, bless: bool) -> Result<Vec<Str
         let diagnostics = fs::read_to_string(expected.join("diagnostics")).map_err(|e| format!("expected/diagnostics: {e}"))?;
         let mut differences = Vec::new();
         let text = diagnostic_text(&actual.diagnostics);
-        if diagnostics != text { differences.push(format!("diagnostics:\n{}", difference(&diagnostics, &text))); }
+        if !same_lines(&diagnostics, &text) { differences.push(format!("diagnostics:\n{}", difference(&diagnostics, &text))); }
         if expected.join("fixed-diagnostics").is_file() {
             let diagnostics = fs::read_to_string(expected.join("fixed-diagnostics")).map_err(|e| e.to_string())?;
             let text = diagnostic_text(&actual.fixed_diagnostics);
-            if diagnostics != text { differences.push(format!("fixed-diagnostics:\n{}", difference(&diagnostics, &text))); }
+            if !same_lines(&diagnostics, &text) { differences.push(format!("fixed-diagnostics:\n{}", difference(&diagnostics, &text))); }
         }
         let fixed_root = expected.join("fixed");
         let mut fixed = BTreeMap::new();
