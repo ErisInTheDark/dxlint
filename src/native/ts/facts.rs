@@ -41,8 +41,6 @@ pub trait Facts {
     fn member_uses(&self, node: u32) -> Option<MemberUses>;
     /// [`super::bind::USES_THIS`] and friends, on a function-like node.
     fn function_flags(&self, node: u32) -> Option<u8>;
-    /// On a member's name: it is never read (`private` / `#` members).
-    fn unused_member(&self, node: u32) -> Option<&'static str>;
     fn function_name_with_kind(&self, node: u32) -> Option<String>;
     fn enclosing_function_name(&self, node: u32) -> Option<String>;
     fn precision_lost(&self, node: u32) -> Option<bool>;
@@ -140,10 +138,6 @@ impl Facts for NativeFile<'_> {
 
     fn function_name_with_kind(&self, node: u32) -> Option<String> {
         NativeFile::function_name_with_kind(self, node)
-    }
-
-    fn unused_member(&self, node: u32) -> Option<&'static str> {
-        super::class_members::unused_member(self, node)
     }
 
     fn enclosing_function_name(&self, node: u32) -> Option<String> {
@@ -526,7 +520,6 @@ impl<'t> NativeFile<'t> {
 #[cfg(test)]
 mod tests {
     use crate::engine::tests::with_native_file;
-    use super::{Facts, Field};
 
     #[test]
     fn escaped_global_references_keep_configured_global_settings() {
@@ -546,30 +539,5 @@ mod tests {
         ] {
             with_native_file(source, |file, _| assert_eq!(file.source_type(), expected, "{source}"));
         }
-    }
-
-    #[test]
-    fn unused_member_queries_do_not_initialise_typed_write_resolution() {
-        for (source, typed) in [
-            ("class A { /*@*/private value = 0; change() { this.value = 1; } }", false),
-            ("class A { /*@*/private value = 0; change(other: A) { other.value = 1; } }", true),
-        ] {
-            with_native_file(source, |file, nodes| {
-                let key = file.syntax.get(nodes[0], Field::Key).expect("member key");
-                assert!(file.typing.get().is_none());
-                for _ in 0..2 {
-                    assert_eq!(file.unused_member(key), Some("private"));
-                    assert!(file.typing.get().is_none(), "{source}");
-                }
-                assert_eq!(file.member_uses(nodes[0]).expect("class property").writes, 1);
-                assert_eq!(file.typing.get().is_some(), typed, "{source}");
-                assert_eq!(file.unused_member(key), Some("private"));
-            });
-        }
-        with_native_file("class A { /*@*/private [Symbol.iterator] = 0; }", |file, nodes| {
-            let key = file.syntax.get(nodes[0], Field::Key).expect("member key");
-            assert_eq!(file.unused_member(key), None);
-            assert!(file.typing.get().is_none());
-        });
     }
 }

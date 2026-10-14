@@ -12,16 +12,11 @@ use super::facts::NativeFile;
 use super::kinds::{Field as F, Kind as K};
 use super::syntax::Syntax;
 
-/// Meaningful reads for unused-member policy; direct writes for type queries.
+/// Meaningful reads and direct writes, for type queries.
 struct Member {
     /// What reports point at: the key, or a parameter property's name.
     name_node: u32,
     key: MemberName,
-    /// `private` (TypeScript), or a `#name`.
-    private: bool,
-    hash: bool,
-    accessor: bool,
-    used: bool,
     reads: u32,
 }
 
@@ -173,10 +168,9 @@ impl Analyzer<'_, '_> {
         *self.scopes.last().expect("root scope")
     }
 
-    fn declare(&mut self, class: usize, name_node: u32, key: MemberName, private: bool, accessor: bool, is_static: bool) {
-        let hash = matches!(&key, MemberName::Text(name) if name.starts_with('#'));
+    fn declare(&mut self, class: usize, name_node: u32, key: MemberName, is_static: bool) {
         let idx = self.members.len();
-        self.members.push(Member { name_node, key: key.clone(), private, hash, accessor, used: false, reads: 0 });
+        self.members.push(Member { name_node, key: key.clone(), reads: 0 });
         let c = &mut self.classes[class];
         let map = if is_static { &mut c.statics } else { &mut c.instance };
         // A later declaration of the name replaces the earlier one.
@@ -187,7 +181,6 @@ impl Analyzer<'_, '_> {
         let s = self.s;
         for m in s.all(class_node, F::Member).collect::<Vec<_>>() {
             let is_static = s.has_word(m, F::Modifier, "static");
-            let private = s.has_word(m, F::Modifier, "private");
             match s.kind(m) {
                 Some(K::Method) => {
                     let Some(key) = s.get(m, F::Key) else { continue };
@@ -195,20 +188,17 @@ impl Analyzer<'_, '_> {
                         for p in s.all(m, F::Param).collect::<Vec<_>>() {
                             let property = s.all(p, F::Modifier).any(|w| matches!(s.text(w), "private" | "protected" | "public" | "readonly" | "override"));
                             let Some(n) = s.get(p, F::Name).filter(|&n| property && s.is(n, K::Ident)) else { continue };
-                            let private = s.has_word(p, F::Modifier, "private");
-                            self.declare(class, n, MemberName::Text(s.text(n).to_string()), private, false, false);
+                            self.declare(class, n, MemberName::Text(s.text(n).to_string()), false);
                         }
                         continue;
                     }
                     let Some(name) = MemberName::declaration(s, m) else { continue };
-                    let accessor = matches!(s.word(m, F::Kind), Some("get" | "set"));
-                    self.declare(class, key, name, private, accessor, is_static);
+                    self.declare(class, key, name, is_static);
                 }
                 Some(K::ClassProp) => {
                     let Some(key) = s.get(m, F::Key) else { continue };
                     let Some(name) = MemberName::declaration(s, m) else { continue };
-                    let accessor = s.has_word(m, F::Modifier, "accessor");
-                    self.declare(class, key, name, private, accessor, is_static);
+                    self.declare(class, key, name, is_static);
                 }
                 _ => {}
             }
@@ -334,7 +324,6 @@ impl Analyzer<'_, '_> {
             let Some(key) = s.get(p, F::Key).filter(|&k| s.is(k, K::Ident)) else { continue };
             let map = if cur.this_static { &self.classes[class].statics } else { &self.classes[class].instance };
             if let Some(&m) = map.get(&MemberName::Text(s.text(key).to_string())) {
-                self.members[m].used = true;
                 self.members[m].reads += 1;
             }
         }
@@ -430,10 +419,7 @@ impl Analyzer<'_, '_> {
             Some((_, Some(K::ArrayPattern | K::Rest))) => true,
             _ => false,
         };
-        if write {
-            self.members[member].used |= self.members[member].accessor;
-        } else {
-            self.members[member].used = true;
+        if !write {
             self.members[member].reads += 1;
         }
     }
@@ -509,18 +495,10 @@ pub fn member_uses(file: &NativeFile, node: u32) -> Option<MemberUses> {
     Some(members.by_node.get(&name).map_or(MemberUses::default(), |&index| members.uses(file)[index]))
 }
 
-pub fn unused_member(file: &NativeFile, node: u32) -> Option<&'static str> {
-    let members = file.cached(analyze);
-    let member = &members.members[*members.by_node.get(&node)?];
-    if member.used || matches!(member.key, MemberName::Computed(_)) { return None }
-    Some(if member.hash { "hash" } else if member.private { "private" } else { "public" })
-}
-
 #[cfg(test)]
 mod tests {
     use crate::engine::tests::with_native_file;
     use crate::native::ts::facts::Facts;
-    use crate::native::ts::kinds::Field;
 
     #[test]
     fn member_writes_track_reassignment_of_the_resolved_receiver() {
@@ -545,16 +523,15 @@ mod tests {
 
     #[test]
     fn meaningful_member_reads_stay_distinct_from_reassignment() {
-        for (source, unused, writes) in [
-            ("class A { /*@*/#value = 0; change() { this.#value = 1; } }", true, 1),
-            ("class A { /*@*/#value = 0; change() { this.#value++; } }", true, 1),
-            ("class A { /*@*/#value = 0; change() { return this.#value++; } }", false, 1),
-            ("class A { /*@*/#value = { inner: 0 }; change() { this.#value.inner = 1; } }", false, 0),
+        for (source, reads, writes) in [
+            ("class A { /*@*/#value = 0; change() { this.#value = 1; } }", 0, 1),
+            ("class A { /*@*/#value = 0; change() { this.#value++; } }", 0, 1),
+            ("class A { /*@*/#value = 0; change() { return this.#value++; } }", 1, 1),
+            ("class A { /*@*/#value = { inner: 0 }; change() { this.#value.inner = 1; } }", 1, 0),
         ] {
             with_native_file(source, |file, nodes| {
-                let key = file.syntax.get(nodes[0], Field::Key).expect("member key");
-                assert_eq!(file.unused_member(key).is_some(), unused, "{source}");
-                assert_eq!(file.member_uses(nodes[0]).expect("class property").writes, writes, "{source}");
+                let uses = file.member_uses(nodes[0]).expect("class property");
+                assert_eq!((uses.reads, uses.writes), (reads, writes), "{source}");
             });
         }
     }

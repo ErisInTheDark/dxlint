@@ -210,12 +210,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "unused_member",
-        doc: "native layers: on a class member's name (a key, or a parameter property's name): nothing reads it, as typescript-eslint's class scope analyzer counts (writes only count for accessors). The member's kind: `hash` (`#x`), `private` (TypeScript `private`) or `public`; null when it is read",
-        get: |f, n| opt(f.unused_member(n), Value::from),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "function_name",
         doc: "native layers: on a function, arrow or method: how eslint names it in messages (`function 'f'`, `arrow function`, `static getter 'x'`, `private method #y`, `constructor`)",
         get: |f, n| opt(f.function_name_with_kind(n), Value::from),

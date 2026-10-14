@@ -28,7 +28,7 @@ class Mixed {
   }
 }
 class Parameters {
-  constructor(private used: number) { consume(this.used); }
+  constructor(private used: number, private unused: number) { consume(this.used); }
 }
 class Contexts {
   private reassigned = 0;
