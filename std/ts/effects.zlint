@@ -1,5 +1,10 @@
 # .ts/effects: evaluation order and separate execution entries.
 
+define {
+  fn ts_effects_function_owner(n) = find(walk(n, current => current.parent.node),
+    current => current is (ts_function, ts_arrow, ts_method))
+}
+
 in ts_program, ts_block, ts_case, ts_namespace { runs body }
 in ts_expression_statement, ts_export_assignment, ts_decorator, ts_computed_key,
   ts_parenthesized, ts_as, ts_satisfies, ts_non_null, ts_type_assertion,
@@ -13,7 +18,20 @@ in ts_parameter { runs decorator then maybe init then name }
 in ts_identifier {
   when contains(["read", "read_write"], access) { unwraps read it }
 }
-in ts_return { runs argument; unwraps returned argument nearest function }
+in ts_return {
+  runs argument
+  let calls_return_owner if argument != null then ts_effects_function_owner(node) else null
+  when argument == null { unwraps returned nearest function }
+  when argument != null {
+    unwraps returned it nearest function
+    when calls_return_owner.calls_inferred_widen {
+      unwraps argument.widened
+    }
+    when !calls_return_owner.calls_inferred_widen {
+      unwraps argument
+    }
+  }
+}
 in ts_throw { runs argument; unwraps thrown argument }
 in ts_break { runs nothing; unwraps broken label nearest breakable }
 in ts_continue { runs nothing; unwraps continued label nearest loop }

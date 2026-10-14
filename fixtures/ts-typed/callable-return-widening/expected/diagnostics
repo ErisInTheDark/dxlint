@@ -1,0 +1,19 @@
+input.ts:10:7-10:40 preserved-return#0 Preserved literal return type.
+input.ts:11:7-11:36 contextual-return#0 Context preserves the unit return.
+input.ts:12:7-12:33 preserved-return#0 Preserved literal return type.
+input.ts:13:7-13:62 preserved-return#0 Preserved literal return type.
+input.ts:14:7-14:41 preserved-return#0 Preserved literal return type.
+input.ts:15:7-15:73 preserved-return#0 Preserved literal return type.
+input.ts:16:7-16:73 widened-return#0 Widened return type.
+input.ts:17:7-17:49 contextual-return#0 Context preserves the unit return.
+input.ts:18:39-18:48 wrapped-return#0 Wrapped return respects its context.
+input.ts:19:38-19:47 wrapped-return#0 Wrapped return respects its context.
+input.ts:20:57-20:66 wrapped-return#0 Wrapped return respects its context.
+input.ts:21:56-21:65 wrapped-return#0 Wrapped return respects its context.
+input.ts:2:7-2:31 widened-return#0 Widened return type.
+input.ts:3:7-3:37 widened-return#0 Widened return type.
+input.ts:4:7-4:35 widened-return#0 Widened return type.
+input.ts:5:7-5:51 widened-return#0 Widened return type.
+input.ts:6:7-6:57 widened-return#0 Widened return type.
+input.ts:8:7-8:37 widened-return#0 Widened return type.
+input.ts:9:7-9:39 preserved-return#0 Preserved literal return type.

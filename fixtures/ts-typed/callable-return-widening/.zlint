@@ -1,0 +1,43 @@
+import .ts
+fn return_parts(n) = { value value_constituents(n); flat_map (arm) arm }
+fn return_trait(n, trait) = {
+  value parts: return_parts(n)
+  value parts != null && count(parts) > 0 && all(parts, part => contains(part.traits, trait))
+}
+in ts_declarator.init rule widened-return {
+  when starts_with(parent.name.text, "wide")
+  when if parent.name.text == "wideString" then return_trait(node, "string")
+    else if parent.name.text == "wideBoolean" then node could truthy && node could falsy
+    else return_trait(node, "number")
+  when parent.name.text == "wideBoolean" || !any(return_parts(node), part => contains(part.traits, "literal"))
+  report at parent
+  warn "Widened return type."
+}
+in ts_declarator.init rule preserved-return {
+  when starts_with(parent.name.text, "kept")
+  when return_trait(node, "number") && return_trait(node, "literal")
+  report at parent
+  warn "Preserved literal return type."
+}
+in ts_arrow rule contextual-return {
+  when parent.name.text == "contextual" || parent.name.text == "booleanContext"
+  let headers { value call_results(node); flat_map (arm) arm }
+  let parts { value headers; flat_map (header) header.result; flat_map (arm) arm }
+  when count(headers) > 0 && all(headers, header => header.result_known)
+  when count(parts) > 0 && all(parts, part => contains(part.traits, "truthy")
+    && !contains(part.traits, "falsy"))
+  when if parent.name.text == "contextual" then all(parts, part => contains(part.traits, "literal")
+    && contains(part.traits, "number"))
+    else all(parts, part => contains(part.traits, "boolean"))
+  report at parent
+  warn "Context preserves the unit return."
+}
+in ts_return rule wrapped-return {
+  let owner ts_effects_function_owner(node)
+  when contains(["asyncWide", "generatorWide", "asyncContext", "generatorContext"], owner.parent.name.text)
+  when return_trait(node, "number")
+  when if ends_with(owner.parent.name.text, "Context") then return_trait(node, "literal")
+    else !any(return_parts(node), part => contains(part.traits, "literal"))
+  report at node
+  warn "Wrapped return respects its context."
+}

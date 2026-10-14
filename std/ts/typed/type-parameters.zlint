@@ -38,12 +38,13 @@ fn type_parameter_value(parts, target, returned, from_class) =
     value largest: max(map(arms, arm => count(arm.uses)))
     value { known: all(arms, arm => arm.known), uses: find(arms, arm => count(arm.uses) == largest).uses ?? [] }
   }
-fn type_parameter_signature(signature, target, from_class) = {
+fn type_parameter_signature(signature, target, from_class, result_type) = {
   value parameters: map(signature.parameters,
     parameter => type_parameter_value(parameter, target, false, from_class))
   value receiver: if signature.has_receiver == false then { known: true, uses: [] }
     else type_parameter_value(signature.receiver, target, false, from_class)
-  value result: type_parameter_value(signature.result, target, true, from_class)
+  value result: if result_type is ts_type_keyword && result_type.text == "unknown"
+    then { known: true, uses: [] } else type_parameter_value(signature.result, target, true, from_class)
   value uses: type_parameter_usages(parameters [receiver, result])
   value {
     known: signature.parameters_known && signature.receiver_known && signature.result_known && uses.known,
@@ -55,7 +56,7 @@ fn type_parameter_callable(n, target, from_class) = {
   value if signatures == null || count(signatures) == 0 then { known: false, uses: [] }
     else type_parameter_usages({
       value signatures
-      flat_map (arm) map(arm, signature => type_parameter_signature(signature, target, from_class))
+      flat_map (arm) map(arm, signature => type_parameter_signature(signature, target, from_class, n.return_type.node))
     })
 }
 fn type_parameter_class(n, target) = type_parameter_usages(map(n.member.nodes,

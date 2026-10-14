@@ -1,17 +1,51 @@
 # .ts/calls: signatures and invocation syntax.
+import .ts/effects
 
 define {
-  fn ts_calls_function_owner(n) = find(walk(n, current => current.parent.node),
-    current => current is (ts_function, ts_arrow, ts_method))
+  fn ts_calls_return_candidate(n) = {
+    value bare: unparenthesised_node(n)
+    value if bare is (ts_number, ts_string, ts_boolean, ts_bigint) then true
+      else if bare is ts_identifier then {
+        value declaration: bare.scope_declaration.parent.node
+        value declaration is ts_declarator && declaration.type == null
+          && declaration.parent.kind == "const"
+      } else bare is (ts_unary, ts_conditional, ts_logical, ts_sequence, ts_satisfies)
+  }
+
+  fn ts_calls_return_arguments(owner) = if owner.body is ts_block then {
+    value flow_declared_effects(owner.body.node, "returned")
+    filter (effect) effect.site is ts_return
+    map (effect) effect.site.argument.node
+  } else [owner.body.node]
+
+  fn ts_calls_widens_return(owner) = {
+    value if (contains([] owner.modifier, "async") || contains([] owner.modifier, "*"))
+      && value_has_expected(owner) != false then false else {
+      value arguments: ts_calls_return_arguments(owner)
+      value if count(arguments) == 0 || !all(arguments, argument => argument != null
+        && ts_calls_return_candidate(argument))
+        || owner.body is ts_block && flow_normal(owner.body.node) != false then false else {
+        value rows: map(arguments, argument => value_constituents(argument))
+        value parts: { value rows; flat_map (row) row; unique }
+        value part: if all(rows, row => row != null) && count(parts) == 1
+          && count(first(parts)) == 1 then first(first(parts)) else null
+        value part != null && contains(part.traits, "literal")
+          && all(arguments, argument => ts_value_fresh_literal(argument, part)
+            && !ts_value_contextual_literal(argument, part))
+      }
+    }
+  }
 
   in ts_function, ts_arrow, ts_method, ts_function_type, ts_method_signature, ts_call_signature {
     overloads infer last
     let calls_receivers filter(parameter.nodes, p => p.name is ts_this || p.name is ts_identifier && p.name == "this")
     let calls_parameters filter(parameter.nodes, p => !(p.name is ts_this || p.name is ts_identifier && p.name == "this"))
     let calls_concise_result if node is ts_arrow && node.body not ts_block then node.body.node else null
+    let calls_inferred_widen if node is (ts_function, ts_arrow, ts_method) && node.body != null && return_type == null
+      then ts_calls_widens_return(node) else false
     let calls_generator_yields {
       value descendants(ts_yield)
-      filter (yielded) ts_calls_function_owner(yielded) == node
+      filter (yielded) ts_effects_function_owner(yielded) == node
     }
     let calls_generator_delegates any(calls_generator_yields, yielded => yielded.operator == "*")
     let calls_discards_result if return_type is ts_type_keyword then return_type.text == "void" else {
@@ -22,10 +56,20 @@ define {
     generics type_parameter
     when !contains([] node.modifier, "async") && !contains([] node.modifier, "*")
       && !(node is ts_method && node.calls_constructor && count(node.parent.type_parameter) == 0) {
-      signature calls_parameters receiver calls_receivers returns return_type ?? calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable)
+      when calls_concise_result != null && calls_inferred_widen {
+        signature calls_parameters receiver calls_receivers returns calls_concise_result.widened
+      }
+      when calls_concise_result == null || !calls_inferred_widen {
+        signature calls_parameters receiver calls_receivers returns return_type ?? calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable)
+      }
     }
     when contains([] node.modifier, "async") && !contains([] node.modifier, "*") {
-      signature calls_parameters receiver calls_receivers returns return_type ?? instance "Promise" of (calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable))
+      when calls_concise_result != null && calls_inferred_widen {
+        signature calls_parameters receiver calls_receivers returns instance "Promise" of calls_concise_result.widened
+      }
+      when calls_concise_result == null || !calls_inferred_widen {
+        signature calls_parameters receiver calls_receivers returns return_type ?? instance "Promise" of (calls_concise_result ?? (returned default trait void, undefined, nullable, falsy, nonthenable))
+      }
     }
     when contains([] node.modifier, "*") {
       when return_type != null {
@@ -129,12 +173,39 @@ define {
     when body not ts_block { in body expects return_type ?? it.expected.result }
   }
   in ts_return {
-    let calls_return_function ts_calls_function_owner(node)
+    let calls_return_function ts_effects_function_owner(node)
     when calls_return_function is ts_method && calls_return_function.kind == "get" {
       in argument expects calls_return_function.return_type
     }
     when !(calls_return_function is ts_method && calls_return_function.kind == "get") {
       in argument expects calls_return_function.return_type ?? calls_return_function.expected.result
+    }
+  }
+  # Wrappers pass their own context to the operand that produces their value.
+  fn ts_calls_context_scalar(n) = {
+    value operand: unparenthesised_node(n)
+    value annotation: if operand is ts_identifier then name_binding(operand).node.parent.type.node else null
+    value operand is (ts_number, ts_string, ts_boolean, ts_bigint, ts_null)
+      || annotation is ts_type_keyword && annotation always nonthenable
+  }
+  in ts_non_null { in expression expects it.expected }
+  in ts_satisfies { in expression expects type }
+  in ts_conditional {
+    in consequent expects it.expected
+    in alternate expects it.expected
+  }
+  in ts_logical {
+    in left expects it.expected
+    in right expects it.expected
+  }
+  in ts_sequence {
+    let calls_sequence_result last(expression.nodes)
+    in calls_sequence_result expects it.expected
+  }
+  in ts_await {
+    when ts_calls_context_scalar(argument.node) { in argument expects it.expected }
+    when !ts_calls_context_scalar(argument.node) {
+      in argument expects it.expected | instance "PromiseLike" of it.expected
     }
   }
 }

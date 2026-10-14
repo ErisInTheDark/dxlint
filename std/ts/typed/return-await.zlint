@@ -75,7 +75,7 @@ in ts_function, ts_arrow, ts_method rule return-await {
   let expressions if body is ts_block then {
     value flow_declared_effects(body.node, "returned")
     filter (effect) effect.site is ts_return && effect.value != null
-    map (effect) effect.value
+    map (effect) effect.site.argument.node
   } else [body.node]
   let results {
     value expressions
