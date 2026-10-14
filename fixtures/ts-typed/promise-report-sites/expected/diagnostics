@@ -1,0 +1,9 @@
+input.tsx:11:41-11:55 no-misused-promises:void-returns#0
+input.tsx:13:33-13:47 no-misused-promises:void-inherited-methods#0
+input.tsx:15:27-15:43 no-misused-promises:void-attributes#0
+input.tsx:2:9-2:23 no-misused-promises:void-arguments#0
+input.tsx:3:28-3:42 no-misused-promises:void-variables#0
+input.tsx:5:19-5:33 no-misused-promises:void-variables#0
+input.tsx:7:3-7:19 no-misused-promises:void-properties#0
+input.tsx:8:20-8:33 no-misused-promises:void-properties#0
+input.tsx:9:3-9:15 no-misused-promises:void-properties#0
