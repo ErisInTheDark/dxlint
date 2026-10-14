@@ -318,6 +318,8 @@ fn last_bytes(pat: &Pat, set: &mut PrevSet) -> bool {
 pub enum Prefilter {
     /// Every char boundary.
     All,
+    /// Only the start of the text (`\A`).
+    TextStart,
     LineStart,
     Byte(u8),
     Byte2(u8, u8),
@@ -348,6 +350,9 @@ impl Prefilter {
     }
 
     fn build_one(pat: &Pat, refs: &dyn Fn(&str) -> ByteSet) -> Prefilter {
+        if starts_with_look(pat) == Some(Look::Bof) {
+            return Prefilter::TextStart;
+        }
         if ends_at_eof(pat) {
             if let Some(max) = max_len(pat) {
                 return Prefilter::Tail(max);
@@ -358,7 +363,7 @@ impl Prefilter {
                 return Prefilter::Literal(Box::new(memmem::Finder::new(lit).into_owned()));
             }
         }
-        if starts_with_bol(pat) {
+        if starts_with_look(pat) == Some(Look::Bol) {
             return Prefilter::LineStart;
         }
         let mut set = ByteSet::default();
@@ -388,6 +393,7 @@ impl Prefilter {
         let hay = &text[from..];
         let rel = match self {
             Prefilter::All => Some(0),
+            Prefilter::TextStart => (from == 0).then_some(0),
             Prefilter::LineStart => {
                 if from == 0 || text[from - 1] == b'\n' {
                     Some(0)
@@ -454,12 +460,14 @@ fn leading_literal(pat: &Pat) -> Option<&[u8]> {
     }
 }
 
-fn starts_with_bol(pat: &Pat) -> bool {
+/// The start-of-text or start-of-line assertion every match of `pat`
+/// begins with, if any.
+fn starts_with_look(pat: &Pat) -> Option<Look> {
     match pat {
-        Pat::Look(Look::Bol) => true,
-        Pat::Capture { inner, .. } => starts_with_bol(inner),
-        Pat::Seq(items) => items.iter().find(|p| !matches!(p, Pat::Empty)).is_some_and(starts_with_bol),
-        _ => false,
+        Pat::Look(look @ (Look::Bol | Look::Bof)) => Some(*look),
+        Pat::Capture { inner, .. } => starts_with_look(inner),
+        Pat::Seq(items) => items.iter().find(|p| !matches!(p, Pat::Empty)).and_then(starts_with_look),
+        _ => None,
     }
 }
 
@@ -545,6 +553,18 @@ mod tests {
             let required = RequiredLiteral::build(&pattern);
             assert!(required.as_ref().is_none_or(|r| r.is_possible(text)));
         }
+    }
+
+    #[test]
+    fn text_start_patterns_are_only_tried_at_the_start() {
+        let opaque = Pat::Ref { name: "unknown".into(), label: None };
+        let anchored = Pat::Seq(vec![parse(r"\A").unwrap(), opaque.clone()]);
+        let pre = Prefilter::build(&anchored, &no_refs);
+        assert_eq!(pre.next(b"abc", 0), Some(0));
+        assert_eq!(pre.next(b"abc", 1), None);
+        // An optional anchor does not restrict where matches start.
+        let optional = Pat::Seq(vec![Pat::Alt(vec![parse(r"\A").unwrap(), Pat::Empty]), Pat::lit("x")]);
+        assert_eq!(Prefilter::build(&optional, &no_refs).next(b"ax", 1), Some(1));
     }
 
     #[test]
