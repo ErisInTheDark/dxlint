@@ -13,7 +13,7 @@ fn switch_literal(arm) = {
     key: { identity: switch_part_identity(part), enum_file: origin.carrier.file, enum_node: origin.carrier.node },
     label: if contains(part.traits, "symbol") then "symbol"
       else if switch_part_identity(part).kind == "nullish" then switch_part_identity(part).value
-      else assignment_print_part(part),
+      else ts_value_print_part(part),
   }
 }
 fn switch_arm_literals(arm) = {

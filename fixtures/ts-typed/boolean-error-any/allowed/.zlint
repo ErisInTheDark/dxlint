@@ -1,0 +1,5 @@
+import .ts
+rule strict-boolean-expressions {
+  set allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing true
+  set allowAny true
+}

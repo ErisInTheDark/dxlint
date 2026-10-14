@@ -1,0 +1,4 @@
+input.ts:11:16-11:16 use-unknown-in-catch-callback-variable#0
+input.ts:13:22-13:22 use-unknown-in-catch-callback-variable#0
+input.ts:14:25-14:25 use-unknown-in-catch-callback-variable#0
+input.ts:9:15-9:15 use-unknown-in-catch-callback-variable#0

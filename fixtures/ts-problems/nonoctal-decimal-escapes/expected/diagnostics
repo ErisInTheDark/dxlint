@@ -1,0 +1,13 @@
+input.cjs:10:1-10:3 no-nonoctal-decimal-escape#0
+input.cjs:14:20-14:22 no-nonoctal-decimal-escape#0
+input.cjs:16:17-16:19 no-nonoctal-decimal-escape#0
+input.cjs:16:23-16:25 no-nonoctal-decimal-escape#0
+input.cjs:17:20-17:22 no-nonoctal-decimal-escape#0
+input.cjs:1:16-1:18 no-nonoctal-decimal-escape#0
+input.cjs:2:15-2:17 no-nonoctal-decimal-escape#0
+input.cjs:4:16-4:18 no-nonoctal-decimal-escape#0
+input.cjs:5:15-5:17 no-nonoctal-decimal-escape#0
+input.cjs:5:17-5:19 no-nonoctal-decimal-escape#0
+input.cjs:5:19-5:21 no-nonoctal-decimal-escape#0
+input.cjs:6:16-6:18 no-nonoctal-decimal-escape#0
+input.cjs:8:19-8:21 no-nonoctal-decimal-escape#0

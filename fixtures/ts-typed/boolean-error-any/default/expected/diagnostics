@@ -1,0 +1,4 @@
+input.ts:1:5-1:12 strict-boolean-expressions#0
+input.ts:3:5-3:10 strict-boolean-expressions#0
+input.ts:5:5-5:11 strict-boolean-expressions#0
+input.ts:8:12-8:25 strict-boolean-expressions:callback#1

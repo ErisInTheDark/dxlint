@@ -673,6 +673,10 @@ the neighbour itself with `is` (`previous is ts_comma`).
 | function | value |
 |---|---|
 | `js_number(value)` | JavaScript Number conversion of primitives or `literal_value` records; NaN for nonnumeric strings, null for unsupported values (including symbols) |
+| `js_to_string(value)` | JavaScript `String(value)` of a primitive or `literal_value` record: numbers as JavaScript prints them (`1e+21`, `0.000001`, `-0` → `0`), bigints without `n`; null for other values |
+| `js_number_binary(operator, left, right)` | a JavaScript numeric binary operator (`+ - * / % ** & \| ^ << >> >>>`) on two numbers with JavaScript's results (NaN, Infinity, ToInt32 for bitwise); null for other operators or non-number operands |
+| `js_number_unary(operator, value)` | a JavaScript numeric unary operator (`- + ~`) on a number; null otherwise |
+| `js_char_at(text, index)` | JavaScript `text[index]`: the UTF-16 unit at `index` as text (lone surrogate → U+FFFD); null when out of range or not a whole number |
 | `json_string(text)` | the text as a JSON string literal, quotes included (`JSON.stringify` of a string), for messages that print strings like JavaScript does |
 | `js_string(text)` | decodes a quoted JavaScript string literal, including escapes and line continuations; null for invalid syntax. Lone surrogates become U+FFFD (distinct lone surrogates can therefore coincide) |
 | `js_bigint(text)` | a JavaScript bigint literal as exact decimal text, including radix prefixes and separators; null for invalid syntax |
@@ -918,9 +922,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `access_resolution` | native member/index lookup: `from_index` signature origin, `optional` declaration and `evaluated` value domains before optional-chain short-circuiting |
 | `callable_return_domains` | domains of every callable return, including local inferred bodies and in-scope parameter bounds |
 | `predicate_call` | asserted argument index and `asserts`, argument/target domains, `to_target`/`from_target` assignability and `target_union`; null without a resolved argument |
-| `type_has_void` | a union or intersection constituent is void, distinct from undefined |
 | `type_iterable` | constrained type supports synchronous iteration; null when unresolved |
-| `could_be_error` | expression syntax permits an Error-valued result through a possible value branch; does not require type analysis |
 | `error_value` | constrained value category (`error`, `any`, `unknown`, `undefined`, `other`), caught-binding provenance (`rethrown`), and unparenthesised byte `offset` |
 | `argument_transfers` | calls, constructions and tagged templates: any/generic argument and spread transfer rows `{offset, mode, error, sender, receiver}`; modes `argument`, `spread`, `array`, `tuple`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
 | `return_transfer` | returns and expression arrow bodies: transfer record `{mode, error, sender, receiver}` or null; modes `value`, `array`, `promise`, `generic`; `error` marks unresolved provenance, sender/receiver are raw printed types or null |
@@ -955,7 +957,10 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `value_parts(node)` | the node's value as union arms `{handle, parts}`: `handle` stands for the whole arm (its intersection constituents together), `parts` are its constituents in the `value_constituents` shape, each with its own `handle`, except that carrier `arguments` are handles (left unread); null when unknown. A handle is an opaque `{value_handle}` record: pass it where these queries take `node` (`value_parts`, `value_children`, `value_constituents`, `value_at`, `value_lookup` with a text or ordinal key) or compare it for equality (same value, same handle, with frames that bind nothing folded so recursive types revisit the same handle). Handles are valid only while linting the file that made them; any other value reads as null |
 | `value_children(node, members, arguments)` | the edges out of one arm (a node whose value has one arm, or an arm handle): with `members` true, every member of the arm as `{handle, member: {key, optional, sources}}` (sources as in `value_lookup`, plus their `flags`), only when the arm's members are all known (closed; constituents declaring no members of their own, such as trait-only parts (open ones too: check a part's `uncertain_traits`) and function types, add none and don't open it; tuple products list their elements (a rest element's handle is its items, marked `repeated`), never inherited methods); with `arguments` a list of indexes, those carrier arguments of each constituent as `{handle, argument, part}` (`part` indexes the arm's constituents). `arguments` null (an unknown selection), a value with several arms or anything unknown gives null. Rules own recursion, pruning and cycles; recursive generics never repeat a handle (each level binds anew), so past a fixed instantiation depth the answer is null |
 | `value_signatures(node)` | the call signatures of each union arm of a node's value or a handle, as `{parameters, receiver, has_receiver, result}` per header: `parameters` a list of handles (null when unreadable), `receiver` and `result` handles (null when absent or unreadable), `has_receiver` false when there is none, null when unknown; null when the callables are unknown. Unlike `call_signatures`, nothing is read until a handle is asked. Each header also has `site`, the declaring `{file, node}` (null when not a node) |
+| `value_bases(node)` | for one constituent (a part handle, or a value with a single leaf): the values it inherits members from, as handles in declaration order (declared bases of its view, a tuple's array base, a primitive's apparent wrapper); `[]` when none, null when unknown or not one constituent. Walk them flatly to find ancestry (`walk([h], h => value_bases(h))`) |
 | `value_constructors(node)` | `value_signatures` for `new`: the construct signatures |
+| `declaration_origin(node, site)` | where a `{file, node}` site's file comes from, by path under the program's resolution profile: `{path, kind, package}` with `kind` `"library"` (fits the profile's `libraries` template), `"package"` (inside a package directory; `package` names it, scope included) or `"project"`; null when unknown. Builtin identity = a global declaration site whose origin is `library` |
+| `declaration_value(node, site)` | the value a `{file, node}` declaration site unwraps to (any program file, root frame) as a value handle; null when unknown or not a site. E.g. a library global's value side, to compare constructor identities |
 | `site_text(node, site)` | the source of a `{file, node}` site in any program file, as `{text, leading}` (`leading`: the text between the previous sibling, or the parent's start, and the site — its comments); null when unavailable. `node` is any node of the linted file |
 | `call_selection(node)` | on a call or `new`: the headers it selects, `{selected: [{file, node}], uncertain}` (several when overloads stay open); null when not an invocation or unknown |
 | `value_origin(node)` | the nearest instantiating reference `{file, node, kind}`; null when absent or unknown |
@@ -964,7 +969,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `member_call_parameters(node, key)` | the resolved member `key`'s call parameters only (like `call_parameters`), without results or receivers; null when unknown |
 | `call_parameters(node)` | the call signatures' parameters only (`{parameters, parameters_known}` per overload), without evaluating results or receivers |
 | `call_results(node)` | the call signatures' results only (`{result, result_known}` per header, `result` as `value_constituents` rows or null), without parameters or receivers; null when the callables are unknown |
-| `value_lookup(node, key)` | the member `key` of `node`'s value: `{value_known, value, alternatives: [{matched, required, sources: [{kind, domain, site}]}]}`; `kind` is `named`, `ordinal`, `repeated` or `indexer` (`domain` on indexers only); `site` is the declaring `{file, node}` (null when not a node). `key` is text, an ordinal, a node (its evaluated key) or a `{global, class, path}` recipe (`{global: "Symbol", class: "value", path: ["asyncIterator"]}`). Named members win over index signatures; looks up the value as given (no optional-chain stripping) |
+| `value_lookup(node, key)` | the member `key` of `node`'s value: `{value_known, value, alternatives: [{matched, required, sources: [{kind, domain, site, flags}]}]}`; `kind` is `named`, `ordinal`, `repeated` or `indexer` (`domain` on indexers only); `site` is the declaring `{file, node}` (null when not a node); `flags` are the declaration's `flag` names. `key` is text, an ordinal, a node (its evaluated key) or a `{global, class, path}` recipe (`{global: "Symbol", class: "value", path: ["asyncIterator"]}`). Named members win over index signatures; looks up the value as given (no optional-chain stripping) |
 | `value_has_member(node, key, source)` | true when any alternative has a named member `key` (optional members count: declared, not guaranteed at runtime); false only when every alternative is closed and lacks it (numeric and symbol indexers don't open a type for named keys); null when unknown, open, indexer-only or the key is unresolved. `source` null asks `node`'s value; `{ global: "Array", class: "type", path: [] }` asks the real global declaration's value, following `path` members |
 | `call_signatures(node)` | the node's call signatures as records with parameter, result and receiver constituents and their knownness (type layers); `null` when unknown |
 | `expected_call_signatures(node)` | `call_signatures` of the node's expected value; alternatives that cannot be called drop out; `null` when nothing is expected or unknown |
@@ -1227,6 +1232,7 @@ and `final-newline`.
 | `.ts/arithmetic` | type-aware addition policy and options, imported by `.ts/typed` |
 | `.ts/expressions` | boolean-cast, exponentiation and logical-assignment policy with precedence-safe fixes, imported by `.ts/suggestions` |
 | `.ts/expression-fixes` | shared precedence, token-boundary and ASI helpers for expression autofixes |
+| `.ts/literal-text` | shared pattern-owned string/template text pieces for escapes and quote fixes |
 | `.ts/layout/blocks` | block braces, spacing, padding and gaps between class members, imported by `.ts/layout` |
 | `.ts/layout/calls` | declaration/call parentheses, optional call spacing and constructor parentheses, imported by `.ts/layout` |
 | `.ts/layout/expressions` | operator, star, rest/spread and property-access spacing, imported by `.ts/layout` |
@@ -1251,6 +1257,11 @@ and `final-newline`.
 | `.ts/typed/void-expressions` | void expressions in statement positions, imported by `.ts/typed` |
 | `.ts/typed/type-constituents` | duplicate union and intersection constituents by type identity, with token-safe removal fixes, imported by `.ts/typed` |
 | `.ts/typed/readonly-members` | readonly private members and parameter properties, with type-preserving annotation fixes, imported by `.ts/typed` |
+| `.ts/typed/readonly-parameters` | deep readonly parameter types and options; `allow` needs alias/provenance metadata; mapped and conditional views pending; imported by `.ts/typed` |
+| `.ts/typed/rejection-handlers` | inline rejection handler `unknown` policy, including branch, sequence and rest-element selection; imported by `.ts/typed` |
+| `.ts/typed/unsafe-members` | no-unsafe-member-access dotted/computed access and key checks, using value-handle traits; imported by `.ts/typed` |
+| `.ts/typed/type-conversions` | primitive conversion policy for calls and operators, including enum and integer proofs, imported by `.ts/typed` |
+| `.ts/typed/redundant-constituents` | redundant union/intersection top, bottom and primitive/literal constituents, imported by `.ts/typed` |
 | `.ts/typed/string-boundaries` | string prefix/suffix tests (`startsWith`/`endsWith`) and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/return-await` | returned-await policy and source-preserving fixes, imported by `.ts/typed` |
 | `.ts/typed/nullish-coalescing` | stable nullish replacements, primitive exclusions and context selection, imported by `.ts/typed`; diagnostic-only |
@@ -1260,6 +1271,8 @@ and `final-newline`.
 | `.ts/names` | JS/TS scopes, declarations and references (`scope`, `declares`, `resolves`, `targets` items); native name facts answer from them; imported by `.ts` |
 | `.ts/effects` | JS/TS evaluation order, separate bodies and control, write and suspension effects; imported by `.ts` |
 | `.ts/values` | JS/TS value and type declarations (`unwraps`, `fits`) and traits for `could` / `always`; imported by `.ts` |
+| `.ts/values/arguments` | implicit `arguments` values; explicit shadows and module-top names unchanged; imported by `.ts/values` |
+| `.ts/values/inspection` | shared value traits, unsafe categories and diagnostic type display; imported by `.ts/values` |
 | `.ts/values/enums` | enum type and runtime views, real declaration origins, member values and widening; imported by `.ts/values` |
 | `.ts/calls` | JS/TS call and construct signatures, invocation arguments, result annotations and parameter contracts; imported by `.ts` |
 | `.ts/modules` | JS/TS publications, import links, namespaces, globals and module-resolution profiles; imported by `.ts` |

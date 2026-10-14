@@ -1,0 +1,3 @@
+import .ts
+rule no-throw-literal
+rule prefer-promise-reject-errors

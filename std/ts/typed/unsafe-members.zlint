@@ -1,0 +1,36 @@
+import .ts/values/inspection
+
+define {
+
+in ts_node let unsafe_member_kind {
+  value arms: value_parts(node)
+  value if arms == null then null else ts_value_category(map(arms, arm => arm.parts))
+}
+in ts_member, ts_index {
+  let any_access_root object.any_access_root == true || object.unsafe_member_kind != null
+  let unsafe_member_access object.unsafe_member_kind != null && object.any_access_root != true
+  let any_access_optional_root optional == null && (object.any_access_optional_root == true || object.unsafe_member_kind != null)
+  let unsafe_optional_member_access optional == null && object.unsafe_member_kind != null && object.any_access_optional_root != true
+  let object_unsafe_type object.unsafe_member_kind
+}
+in ts_index let unsafe_member_site unparenthesised_node(index.node)
+
+in ts_member.property rule no-unsafe-member-access {
+  option allowOptionalChaining boolean = false "Allow optional chaining on any"
+  when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
+  warn if parent.object_unsafe_type == "error" then "Unsafe member access .{text} on a type that cannot be resolved." else "Unsafe member access .{text} on an `any` value."
+}
+in ts_index.index rule no-unsafe-member-access:computed {
+  option allowOptionalChaining boolean = false "Allow optional chaining on any"
+  when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
+  report at parent.unsafe_member_site.offset
+  warn if parent.object_unsafe_type == "error" then "Unsafe member access [{parent.unsafe_member_site.text}] on a type that cannot be resolved." else "Unsafe member access [{parent.unsafe_member_site.text}] on an `any` value."
+}
+in ts_index.index rule no-unsafe-member-access:key {
+  option allowOptionalChaining boolean = false "Allow optional chaining on any"
+  when parent.unsafe_member_site.unsafe_member_kind != null && (!allowOptionalChaining || parent.optional == null)
+  report at parent.unsafe_member_site.offset
+  warn if parent.unsafe_member_site.unsafe_member_kind == "error" then "The type of computed name [{parent.unsafe_member_site.text}] cannot be resolved." else "Computed name [{parent.unsafe_member_site.text}] resolves to an `any` value."
+}
+
+}

@@ -1,0 +1,7 @@
+import .ts
+import .ts/typed/readonly-parameters
+rule prefer-readonly-parameter-types {
+  set checkParameterProperties false
+  set ignoreInferredTypes true
+  set treatMethodsAsReadonly true
+}

@@ -1,0 +1,8 @@
+input.ts:10:3-10:9 no-unnecessary-type-conversion#0
+input.ts:14:1-14:7 no-unnecessary-type-conversion#0
+input.ts:17:1-17:7 no-unnecessary-type-conversion#0
+input.ts:18:1-18:3 no-unnecessary-type-conversion#0
+input.ts:21:1-21:3 no-unnecessary-type-conversion#0
+input.ts:3:1-3:7 no-unnecessary-type-conversion#0
+input.ts:6:3-6:9 no-unnecessary-type-conversion#0
+input.ts:7:9-7:19 no-unnecessary-type-conversion#0

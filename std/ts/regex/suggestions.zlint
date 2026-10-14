@@ -1,9 +1,10 @@
 import .ts/layout/literals
+import .ts/literal-text
 
 define {
 
 in quoted_literals let regexp_literal_escape_parts {
-  value overlapping(layout_quote_piece, offset, end_offset)
+  value overlapping(ts_literal_piece, offset, end_offset)
   filter (piece) piece.offset >= offset && piece.end_offset <= end_offset && starts_with(piece.text, "\\")
   unique_by (piece) { start: piece.offset, end: piece.end_offset }
 }

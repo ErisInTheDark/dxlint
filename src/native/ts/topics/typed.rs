@@ -1,6 +1,5 @@
 //! typescript-eslint's type-aware rules (`std/ts/typed`).
 
-use crate::expr::facts::Shape;
 use crate::expr::Value;
 use crate::native::ts::facts::NativeFile;
 use crate::native::ts::kinds::{Field, Kind};
@@ -18,7 +17,6 @@ mod awaitability;
 mod callables;
 mod assertions;
 mod accessors;
-mod conversions;
 mod constituents;
 mod redundant;
 mod this_return;
@@ -80,27 +78,9 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "type_has_void",
-        doc: "native values and types: a union or intersection constituent is void, distinct from undefined",
-        get: |f, n| f.with_file(|file, node| Value::Bool(type_properties::has_void(&file.type_of(node))), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "type_literal_values",
         doc: "native values and types: literal union/intersection constituents as type/value records; bigint values retain literal text",
         get: |f, n| f.with_file(|file, node| type_properties::literal_values(&file.type_of(node)), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "type_is_string_like",
-        doc: "native values and types: every constrained union arm is provably string-like, excluding any and unresolved intersections",
-        get: |f, n| f.with_file(|file, node| Value::Bool(type_properties::string_like(&file.constrained_type_of(node), &file.typing().checker)), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "type_is_parameter",
-        doc: "native values and types: the type is an open type parameter, before applying its constraint",
-        get: |f, n| f.with_file(|file, node| Value::Bool(matches!(file.type_of(node), Ty::Param(_))), n),
     },
     Fact {
         shape: Fact::SCALAR.shape,
@@ -158,12 +138,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "unsafe_catch_callbacks",
-        doc: "native calls: inline rejection handlers whose first parameter is not unknown",
-        get: |f, n| f.with_file(promises::unsafe_catch, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "function_return_info",
         doc: "native functions: explicit annotation, return-type name clauses, unknown and union kinds, function-head offset",
         get: |f, n| f.with_file(promises::return_info, n),
@@ -209,24 +183,6 @@ pub const FACTS: &[Fact] = &[
         name: "redundant_type_constituents",
         doc: "native unions and intersections: top/bottom overrides and primitive/literal dominance",
         get: |f, n| f.with_file(redundant::findings, n),
-    },
-    Fact {
-        shape: Shape::List(&Shape::Record(&[
-            ("node", Shape::Scalar),
-            ("group", Shape::Scalar),
-            ("previous_syntax", Shape::Scalar),
-            ("previous_identity", Shape::Scalar),
-            ("complete", Shape::Scalar),
-        ])),
-        name: "type_components",
-        doc: "native unions and intersections: same-kind components in source order, their immediate group, prior syntax/type equivalents and whether names resolve",
-        get: |f, n| f.with_file(constituents::components, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unnecessary_type_conversion",
-        doc: "native calls and operators: primitive type, conversion idiom and report offset",
-        get: |f, n| f.with_file(conversions::finding, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

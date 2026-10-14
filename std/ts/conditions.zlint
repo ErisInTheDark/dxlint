@@ -1,5 +1,7 @@
 # .ts/conditions: type-aware conditional policy.
 
+import .ts/values/inspection
+
 define {
 
 in ts_switch let switch_default_comment {
@@ -96,7 +98,7 @@ fn condition_compare(left, right, op) = if contains(["==", "==="], op) then cond
 fn condition_comparable_nullish(value, other, loose) = !contains(["null", "undefined"], value.literal.type) || !condition_known(other.type_domains) || {
   value result: if value.literal.type == "null" then "null" else "undefined"
   value contains(other.type_domains.flags, result)
-} || value.literal.type == "undefined" && other.type_has_void || loose && other.type_domains.nullish
+} || value.literal.type == "undefined" && ts_value_has_void(other) == true || loose && other.type_domains.nullish
 fn condition_structural_truthy(arms) = arms != null && count(arms) > 0 && all(arms, arm =>
   any(arm, part => contains(part.traits, "structural")) && all(arm, part =>
     !any(part.traits, trait => contains(["any", "unknown", "error", "null", "undefined", "falsy"], trait))
@@ -138,7 +140,7 @@ in ts_logical, ts_assignment rule no-unnecessary-condition:nullish {
   let subject unparenthesised_node(left.node)
   let domain subject.type_domains
   when condition_known(domain)
-  when condition_never(domain) || !domain.non_nullish && !subject.type_has_void || !domain.nullish && condition_unchecked_index(subject) == false && condition_array_origin(subject) == false && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true) && !subject.access_resolution.optional
+  when condition_never(domain) || !domain.non_nullish && ts_value_has_void(subject) == false || !domain.nullish && condition_unchecked_index(subject) == false && condition_array_origin(subject) == false && !condition_index_fallback(subject, compiler_options.noUncheckedIndexedAccess == true) && !subject.access_resolution.optional
   report at { start: subject.offset, end: subject.end_offset }
   warn if condition_never(domain) then "Unnecessary conditional, value is `never`." else if !domain.non_nullish then "Unnecessary conditional, left-hand side of `??` operator is always `null` or `undefined`." else "Unnecessary conditional, expected left-hand side of `??` operator to be possibly null or undefined."
 }
@@ -317,7 +319,7 @@ fn strict_boolean_value_primitive(arm) =
     any(part.traits, trait => contains(["object", "symbol", "callable", "constructible", "structural"], trait))) then "any"
   else "object"
 fn strict_boolean_value_complete(arms) = arms != null && all(arms, arm =>
-  !strict_boolean_value_has(arm, "error") && any(arm, part =>
+  (!strict_boolean_value_has(arm, "error") || strict_boolean_value_has(arm, "any")) && any(arm, part =>
     any(part.traits, trait => contains(["any", "unknown", "parameter", "intersection", "null", "undefined", "boolean", "string", "number", "bigint", "object", "symbol", "callable", "constructible", "structural"], trait))))
 fn strict_boolean_value_group(arms, primitive) = filter(arms, arm => strict_boolean_value_primitive(arm) == primitive)
 fn strict_boolean_value_variant(arms, primitive) = {

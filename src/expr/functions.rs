@@ -354,6 +354,60 @@ pub static FUNCTIONS: &[Function] = &[
         },
     },
     Function {
+        name: "js_to_string",
+        signature: "js_to_string(value)",
+        doc: "JavaScript `String(value)` of a primitive or `literal_value` record (numbers as JavaScript prints them, bigints without `n`); null for other values",
+        min: 1,
+        max: 1,
+        call: |a| Ok(match &a[0] {
+            Value::Num(n) => Value::from(super::js::number_to_string(*n)),
+            Value::Bool(b) => Value::from(b.to_string()),
+            Value::Null => Value::from("null"),
+            Value::Str(_) | Value::Node(..) => a[0].clone(),
+            Value::Record(_) => match &*a[0].key("type").text() {
+                "number" => javascript_literal_number("number", &a[0].key("value").text()).map_or(Value::Null, |n| Value::from(super::js::number_to_string(n))),
+                "string" | "bigint" | "boolean" => Value::from(a[0].key("value").text().into_owned()),
+                "null" => Value::from("null"),
+                _ => Value::Null,
+            },
+            _ => Value::Null,
+        }),
+    },
+    Function {
+        name: "js_number_binary",
+        signature: "js_number_binary(operator, left, right)",
+        doc: "A JavaScript numeric binary operator (`+ - * / % ** & | ^ << >> >>>`) on two numbers, with JavaScript's results (NaN, Infinity, ToInt32 for bitwise); null for other operators or non-number operands",
+        min: 3,
+        max: 3,
+        call: |a| Ok(match (&a[1], &a[2]) {
+            (Value::Num(x), Value::Num(y)) => super::js::number_binary(&a[0].text(), *x, *y).map_or(Value::Null, Value::Num),
+            _ => Value::Null,
+        }),
+    },
+    Function {
+        name: "js_number_unary",
+        signature: "js_number_unary(operator, value)",
+        doc: "A JavaScript numeric unary operator (`- + ~`) on a number; null for other operators or a non-number operand",
+        min: 2,
+        max: 2,
+        call: |a| Ok(match &a[1] {
+            Value::Num(x) => super::js::number_unary(&a[0].text(), *x).map_or(Value::Null, Value::Num),
+            _ => Value::Null,
+        }),
+    },
+    Function {
+        name: "js_char_at",
+        signature: "js_char_at(text, index)",
+        doc: "JavaScript `text[index]`: the UTF-16 unit at `index` as text (a lone surrogate becomes U+FFFD, as js_string decodes them); null when out of range or `index` is not a whole number",
+        min: 2,
+        max: 2,
+        call: |a| {
+            let Value::Num(index) = a[1] else { return Ok(Value::Null) };
+            if index < 0.0 || index.fract() != 0.0 { return Ok(Value::Null) }
+            Ok(a[0].text().encode_utf16().nth(index as usize).map_or(Value::Null, |unit| Value::from(String::from_utf16_lossy(&[unit]))))
+        },
+    },
+    Function {
         name: "js_compare",
         signature: "js_compare(a, b)",
         doc: "-1, 0 or 1 as JavaScript's `<` orders two literal values (`literal_value` records or plain values): strings by UTF-16 unit, bigints exactly, otherwise as numbers; null when unordered",

@@ -28,14 +28,6 @@ fn name_groups(ty: &Ty, ck: &Checker<'_>, depth: usize) -> Vec<Vec<String>> {
     }
 }
 
-fn head(file: &NativeFile<'_>, node: u32) -> usize {
-    let s = &file.syntax;
-    let offset = file.function_head(node).unwrap_or(s.tree.node(node).start as usize);
-    let holder = s.parent(node).filter(|&parent| s.is(parent, K::ClassProp)).unwrap_or(node);
-    if s.all(holder, F::Decorator).next().is_none() { return offset }
-    s.kids(holder).filter(|(field, _)| matches!(field, Some(F::Modifier | F::Key | F::Kind))).map(|(_, child)| s.tree.node(child).start as usize).min().unwrap_or(offset)
-}
-
 pub(super) fn return_info(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     let s = &file.syntax;
     if !matches!(s.kind(node), Some(K::Function | K::Arrow | K::Method)) { return Value::Null }
@@ -54,7 +46,6 @@ pub(super) fn return_info(file: &NativeFile<'_>, node: u32) -> Value<'static> {
     }
     Value::record(vec![
         ("explicit".into(), Value::Bool(s.get(node, F::ReturnType).is_some())),
-        ("offset".into(), Value::from(head(file, node))),
         ("returns".into(), Value::list(returns.iter().map(|ty| Value::record(vec![
             ("unknown".into(), Value::Bool(matches!(ty, Ty::Any | Ty::Unknown | Ty::IntrinsicUnknown))),
             ("union".into(), Value::Bool(matches!(ty, Ty::Union(_)))),
@@ -76,48 +67,4 @@ pub(super) fn rejection_handler(file: &NativeFile<'_>, call: u32) -> Option<(u32
     let arguments: Vec<_> = s.all(call, F::Arg).take(index + 1).collect();
     if arguments.len() != index + 1 || arguments.iter().any(|&arg| s.is(arg, K::Spread)) { return None }
     file.typing().checker.is_thenable(&file.type_of(object)).then_some((arguments[index], method))
-}
-
-pub(super) fn unsafe_catch(file: &NativeFile<'_>, node: u32) -> Value<'static> {
-    let Some((handler, method)) = rejection_handler(file, node) else { return Value::list(Vec::new()) };
-    let s = &file.syntax;
-    let mut stack = vec![handler];
-    let mut findings = Vec::new();
-    while let Some(node) = stack.pop() {
-        let node = s.unparen(node);
-        match s.kind(node) {
-            Some(K::Logical) => {
-                stack.extend(s.get(node, F::Right));
-                stack.extend(s.get(node, F::Left));
-            }
-            Some(K::Conditional) => {
-                stack.extend(s.get(node, F::Alternate));
-                stack.extend(s.get(node, F::Consequent));
-            }
-            Some(K::Sequence) => stack.extend(s.all(node, F::Expr).last()),
-            Some(K::Arrow | K::Function) => {
-                let Some(parameter) = s.all(node, F::Param).next() else { continue };
-                let Some(name) = s.get(parameter, F::Name) else { continue };
-                let mut ty = s.get(parameter, F::Type).map_or_else(
-                    || file.typing().checker.contextual_parameter(&file.contextual_type_of(node), 0),
-                    |annotation| file.type_of(annotation),
-                );
-                if s.is(name, K::Rest) {
-                    ty = match ty {
-                        Ty::Array(element) => *element.element,
-                        Ty::Tuple(elements) => elements.first().cloned().unwrap_or(Ty::Never),
-                        _ => Ty::Never,
-                    };
-                }
-                if matches!(ty, Ty::Unknown | Ty::IntrinsicUnknown) { continue }
-                findings.push(Value::record(vec![
-                    ("offset".into(), Value::from(s.tree.node(parameter).start as usize)),
-                    ("method".into(), Value::from(method)),
-                    ("pattern".into(), Value::from(match s.kind(name) { Some(K::ArrayPattern) => "array", Some(K::ObjectPattern) => "object", _ => "" })),
-                ]));
-            }
-            _ => {}
-        }
-    }
-    Value::list(findings)
 }

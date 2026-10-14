@@ -1,5 +1,6 @@
 # Optional-chain selection, guard semantics and atomic edits.
 import .ts/expression-fixes
+import .ts/values/inspection
 
 define {
 
@@ -64,7 +65,7 @@ fn optional_falsy_literal(n) = {
     && any(arm, part => contains(part.traits, "falsy")
       && any(part.traits, trait => contains(["boolean", "number", "string", "bigint"], trait))))
 }
-fn optional_type_allowed(n, opts) = !n.type_has_void && { value n.type_flags.nonempty ?? ["unknown"]; all (flag)
+fn optional_type_allowed(n, opts) = ts_value_has_void(n) == false && { value n.type_flags.nonempty ?? ["unknown"]; all (flag)
   !contains(["any", "unknown", "string", "number", "boolean", "bigint"], flag) || get(opts, flag) }
 fn optional_uncertain(n, flag) = { value n.type_flags.nonempty ?? ["unknown"]; any (part) contains([flag, "any", "unknown"], part) }
 fn optional_span(items, opts) = {

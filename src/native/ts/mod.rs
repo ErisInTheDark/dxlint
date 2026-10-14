@@ -19,7 +19,6 @@ mod parse;
 mod paths;
 pub mod reads;
 mod returns;
-mod roles;
 pub(crate) mod statics;
 mod summary;
 pub mod syntax;

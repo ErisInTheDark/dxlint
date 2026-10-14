@@ -1,4 +1,6 @@
 import .ts/values/enums
+import .ts/values/arguments
+import .ts/values/inspection
 
 define {
 
@@ -10,6 +12,11 @@ dynamic any
 keys text string
 keys ordinal number
 keys symbol symbol
+apparent number inherits instance "Number"
+apparent string inherits instance "String"
+apparent boolean inherits instance "Boolean"
+apparent bigint inherits instance "BigInt"
+apparent symbol inherits instance "Symbol"
 product ts_tuple items fits object, truthy, tuple as { kind: "tuple" } inherits instance "Array" of ...items readonly inherits instance "ReadonlyArray" of ...items optional trait undefined, nullable, falsy, nonthenable
 
 in ts_program { fits object, truthy in module }
@@ -257,7 +264,7 @@ in ts_identifier {
     identity { type: "undefined" }
   }
   when ts_value_unresolved_value { fits any, error open }
-  when !ts_value_unresolved_value && !ts_value_undefined {
+  when !ts_value_unresolved_value && !ts_value_undefined && !ts_value_implicit_arguments {
     unwraps definition
     widens definition.widened
   }
@@ -339,7 +346,10 @@ in ts_as, ts_type_assertion {
   when type.text == "const" { unwraps expression }
   when type.text != "const" { unwraps type }
 }
-in ts_non_null { unwraps excludes nullable from expression }
+in ts_non_null {
+  when expression always any { unwraps expression }
+  when !(expression always any) { unwraps excludes nullable from expression }
+}
 in ts_computed_key { unwraps expression }
 in ts_spread { unwraps argument }
 in ts_assignment { unwraps right }
@@ -356,11 +366,17 @@ in ts_sequence {
 
 in ts_new, ts_tagged_template { unwraps it.result }
 in ts_call {
-  when in_optional_chain == true { unwraps it.result | trait undefined, nullable, falsy, nonthenable }
-  when in_optional_chain != true { unwraps it.result }
+  when callee always any { unwraps callee }
+  when !(callee always any) {
+    when in_optional_chain == true { unwraps it.result | trait undefined, nullable, falsy, nonthenable }
+    when in_optional_chain != true { unwraps it.result }
+  }
 }
 in ts_call, ts_new { arguments type_argument }
-in ts_await { unwraps instance "Awaited" of argument }
+in ts_await {
+  when argument always any { unwraps argument }
+  when !(argument always any) { unwraps instance "Awaited" of argument }
+}
 in ts_yield { unwraps unknown }
 in ts_unary {
   when operator == "void" || operator == "typeof" || operator == "delete" || operator == "!"

@@ -133,18 +133,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "function_name",
-        doc: "native layers: on a function, arrow or method: how eslint names it in messages (`function 'f'`, `arrow function`, `static getter 'x'`, `private method #y`, `constructor`)",
-        get: |f, n| opt(f.function_name_with_kind(n), Value::from),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "enclosing_function_name",
-        doc: "native layers: `function_name` of the nearest function, arrow or method around the node",
-        get: |f, n| opt(f.enclosing_function_name(n), Value::from),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "precision_lost",
         doc: "native layers: on a number literal: its value is not exactly representable as a double",
         get: |f, n| opt(f.precision_lost(n), Value::Bool),

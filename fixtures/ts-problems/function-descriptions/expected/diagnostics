@@ -1,0 +1,33 @@
+input.js:10:10-10:10 function-label#0 method 'arrow'
+input.js:11:3-11:3 function-label#0 async method 'method'
+input.js:12:3-12:3 function-label#0 generator method 'generator'
+input.js:13:17-13:17 enclosing-label#0 getter 'value'
+input.js:13:3-13:3 function-label#0 getter 'value'
+input.js:14:3-14:3 function-label#0 setter 'value'
+input.js:15:14-15:14 function-label#0 method 'fixed'
+input.js:16:14-16:14 function-label#0 method 'own'
+input.js:19:3-19:3 function-label#0 constructor
+input.js:1:1-1:1 function-label#0 function 'plain'
+input.js:20:3-20:3 function-label#0 static method 'constructor'
+input.js:21:17-21:17 enclosing-label#0 getter 'value'
+input.js:21:3-21:3 function-label#0 getter 'value'
+input.js:22:3-22:3 function-label#0 static getter 'constructor'
+input.js:22:30-22:30 enclosing-label#0 static getter 'constructor'
+input.js:23:3-23:3 function-label#0 private method #x
+input.js:24:3-24:3 function-label#0 static async generator method 'method'
+input.js:25:12-25:12 function-label#0 method 'field'
+input.js:26:13-26:13 function-label#0 private method #secret
+input.js:27:15-27:15 function-label#0 method 'own'
+input.js:29:16-29:16 function-label#0 constructor
+input.js:2:1-2:1 function-label#0 function 'foo'
+input.js:30:17-30:17 function-label#0 constructor
+input.js:31:1-31:1 function-label#0 function 'outer'
+input.js:31:20-31:20 function-label#0 function 'inner'
+input.js:31:39-31:39 enclosing-label#0 function 'inner'
+input.js:31:51-31:51 enclosing-label#0 function 'outer'
+input.js:3:1-3:1 function-label#0 async function 'asynchronous'
+input.js:4:1-4:1 function-label#0 generator function 'generator'
+input.js:5:19-5:19 function-label#0 function
+input.js:6:15-6:15 function-label#0 arrow function
+input.js:8:10-8:10 function-label#0 method 'field'
+input.js:9:13-9:13 function-label#0 method 'grouped'

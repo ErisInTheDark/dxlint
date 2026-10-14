@@ -41,8 +41,6 @@ pub trait Facts {
     fn member_uses(&self, node: u32) -> Option<MemberUses>;
     /// [`super::bind::USES_THIS`] and friends, on a function-like node.
     fn function_flags(&self, node: u32) -> Option<u8>;
-    fn function_name_with_kind(&self, node: u32) -> Option<String>;
-    fn enclosing_function_name(&self, node: u32) -> Option<String>;
     fn precision_lost(&self, node: u32) -> Option<bool>;
     /// On a property, member or literal: its statically known name / value
     /// as text.
@@ -113,14 +111,6 @@ impl Facts for NativeFile<'_> {
 
     fn function_flags(&self, node: u32) -> Option<u8> {
         matches!(self.syntax.kind(node), Some(Kind::Function | Kind::Method | Kind::Arrow)).then(|| self.bindings().functions.get(&node).copied().unwrap_or(0))
-    }
-
-    fn function_name_with_kind(&self, node: u32) -> Option<String> {
-        NativeFile::function_name_with_kind(self, node)
-    }
-
-    fn enclosing_function_name(&self, node: u32) -> Option<String> {
-        NativeFile::function_name_with_kind(self, self.enclosing_function(node)?)
     }
 
     fn precision_lost(&self, node: u32) -> Option<bool> {

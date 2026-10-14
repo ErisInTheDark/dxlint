@@ -27,7 +27,32 @@ fn function_warning_site(n) = if n is ts_method then n.key.node
   else if n is ts_arrow then n.operator.node
   else { start: n.first_token.start, end: n.first_token.end }
 
+fn function_description(n) = {
+  value outer: outer_parenthesised_node(n)
+  value member: if n is ts_method then n else if outer is (ts_property.value, ts_class_property.init) then outer.parent.node else null
+  value in_class: member is ts_class_property || member.parent is ts_class
+  value private: member.key is ts_private_name
+  value name: if private then member.key.identifier_name
+    else if member.static_name != null then "'" member.static_name "'"
+    else if n is ts_function && n.name != null then "'" n.name.identifier_name "'"
+    else ""
+  value static: if in_class && contains(member.modifier, "static") then "static " else ""
+  value hidden: if in_class && private then "private " else ""
+  value async: if contains(n.modifier, "async") then "async " else ""
+  value generator: if contains(n.modifier, "*") then "generator " else ""
+  value kind: if member != null then (if member.kind == "get" then "getter" else if member.kind == "set" then "setter" else "method")
+    else if n is ts_arrow then "arrow function" else "function"
+  value description: "{static}{hidden}{async}{generator}{kind}"
+  value if n is ts_method && in_class && !contains(member.modifier, "static") && member.key not ts_computed_key && member.static_name == "constructor" then "constructor"
+    else description (if name != "" then " " name else "")
+}
+
 define {
+  in ts_function, ts_arrow, ts_method let function_name function_description(node)
+  in ts_node let enclosing_function_name {
+    value owner: { value parent.node; walk (current) current.parent.node; find (current) current is (ts_function, ts_arrow, ts_method) }
+    value owner.function_name
+  }
   in ts_import {
     let import_named_open {
       value overlapping(ts_open_brace, first_token.end, from.offset)

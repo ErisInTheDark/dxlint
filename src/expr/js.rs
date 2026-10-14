@@ -25,6 +25,69 @@ pub fn number(text: &str) -> Option<f64> {
     }
 }
 
+/// `String(n)` for a JavaScript number (ECMAScript Number::toString).
+pub fn number_to_string(n: f64) -> String {
+    if n.is_nan() { return "NaN".into() }
+    if n == 0.0 { return "0".into() }
+    if n.is_infinite() { return if n > 0.0 { "Infinity".into() } else { "-Infinity".into() } }
+    let sign = if n < 0.0 { "-" } else { "" };
+    // Shortest round-trip digits and exponent: `d.ddde±x`.
+    let scientific = format!("{:e}", n.abs());
+    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let digits: String = mantissa.chars().filter(|c| c.is_ascii_digit()).collect();
+    let k = digits.len() as i32;
+    let n = exponent.parse::<i32>().unwrap_or(0) + 1;
+    let body = if k <= n && n <= 21 {
+        format!("{digits}{}", "0".repeat((n - k) as usize))
+    } else if 0 < n && n <= 21 {
+        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
+    } else if -6 < n && n <= 0 {
+        format!("0.{}{digits}", "0".repeat((-n) as usize))
+    } else {
+        let e = n - 1;
+        let exponent = if e >= 0 { format!("+{e}") } else { e.to_string() };
+        if k == 1 { format!("{digits}e{exponent}") } else { format!("{}.{}e{exponent}", &digits[..1], &digits[1..]) }
+    };
+    format!("{sign}{body}")
+}
+
+/// JavaScript's numeric binary operators on numbers; `None` for others.
+pub fn number_binary(operator: &str, a: f64, b: f64) -> Option<f64> {
+    Some(match operator {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => a / b,
+        "%" => a % b,
+        // `Math.pow` differs from IEEE pow: `1 ** Infinity` and `NaN ** x` are NaN.
+        "**" if b.is_nan() || (a.abs() == 1.0 && b.is_infinite()) => f64::NAN,
+        "**" => a.powf(b),
+        "&" | "|" | "^" | "<<" | ">>" => {
+            let (x, y) = (to_int32(a), to_int32(b));
+            let shift = (y as u32) & 31;
+            f64::from(match operator { "&" => x & y, "|" => x | y, "^" => x ^ y, "<<" => x.wrapping_shl(shift), _ => x >> shift })
+        }
+        ">>>" => f64::from((to_int32(a) as u32) >> ((to_int32(b) as u32) & 31)),
+        _ => return None,
+    })
+}
+
+/// JavaScript's numeric unary operators on a number; `None` for others.
+pub fn number_unary(operator: &str, a: f64) -> Option<f64> {
+    Some(match operator {
+        "-" => -a,
+        "+" => a,
+        "~" => f64::from(!to_int32(a)),
+        _ => return None,
+    })
+}
+
+/// ECMAScript ToInt32.
+fn to_int32(n: f64) -> i32 {
+    if !n.is_finite() { return 0 }
+    n.trunc().rem_euclid(4_294_967_296.0) as u32 as i32
+}
+
 /// A bigint literal's value in decimal (`0x10n` is `16`), exactly.
 pub fn bigint_literal(text: &str) -> Option<String> {
     let payload = text.strip_suffix('n')?;
@@ -163,6 +226,31 @@ pub fn is_mark(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbers_print_as_javascript_prints_them() {
+        for (n, text) in [
+            (0.0, "0"), (-0.0, "0"), (1.0, "1"), (-1.5, "-1.5"), (0.1 + 0.2, "0.30000000000000004"),
+            (1e21, "1e+21"), (123e18, "123000000000000000000"), (1e-6, "0.000001"), (1e-7, "1e-7"),
+            (1.5e-7, "1.5e-7"), (f64::NAN, "NaN"), (f64::NEG_INFINITY, "-Infinity"), (2f64.powi(53), "9007199254740992"),
+        ] {
+            assert_eq!(number_to_string(n), text, "{n:e}");
+        }
+    }
+
+    #[test]
+    fn numeric_operators_follow_javascript_edge_cases() {
+        let nan = |x: Option<f64>| x.is_some_and(f64::is_nan);
+        assert!(nan(number_binary("**", 1.0, f64::INFINITY)) && nan(number_binary("**", f64::NAN, 0.0).map(|_| f64::NAN)));
+        assert_eq!(number_binary("**", f64::NAN, 0.0), Some(1.0));
+        assert_eq!(number_binary("%", -5.0, 3.0), Some(-2.0));
+        assert_eq!(number_binary("/", 1.0, 0.0), Some(f64::INFINITY));
+        assert_eq!(number_binary(">>>", -1.0, 0.0), Some(4_294_967_295.0));
+        assert_eq!(number_binary("|", 4_294_967_296.0 + 5.0, 0.0), Some(5.0));
+        assert_eq!(number_unary("~", 2_147_483_648.0), Some(2_147_483_647.0));
+        assert_eq!(number_unary("~", f64::NAN), Some(-1.0));
+        assert_eq!(number_binary("&&", 1.0, 1.0), None);
+    }
 
     #[test]
     fn natural_order_preserves_punctuation_and_numeric_semantics() {

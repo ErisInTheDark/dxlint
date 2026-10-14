@@ -1,0 +1,145 @@
+define {
+
+fn redundant_bare(n) = {
+  value n
+  walk (current) if current is ts_parenthesized_type then current.type.node else null
+  last
+}
+fn redundant_part(category, primitive, name) = {
+  category: category, primitive: primitive, name: name
+}
+fn redundant_value_part(part) = {
+  value primitive: find(["string", "number", "boolean", "bigint"], name => contains(part.traits, name))
+  value literal: part.identity_known && part.identity.kind == "value"
+  value if contains(part.traits, "error") then redundant_part("error", null, null)
+    else if contains(part.traits, "any") then redundant_part("any", null, "any")
+    else if contains(part.traits, "unknown") then redundant_part("unknown", null, "unknown")
+    else if part.carrier_known && part.carrier.description.kind == "template" then
+      redundant_part("literal", "string", "template literal type")
+    else if primitive == null || !part.identity_known || !part.carrier_known || part.carrier != null
+      || contains(part.traits, "enum") || contains(part.traits, "parameter") then null
+    else if literal && primitive == "bigint" && part.identity.value.value == null then null
+    else redundant_part(if literal then "literal" else "primitive", primitive,
+      if !literal then primitive else if primitive == "string" then json_string(part.identity.value)
+      else if primitive == "bigint" then part.identity.value.value "n" else "" part.identity.value)
+}
+fn redundant_reflected(n) = {
+  value arms: value_parts(n)
+  value parts: if arms == null then null else map(arms, arm =>
+    if len(arm.parts) == 1 then redundant_value_part(first(arm.parts)) else null)
+  value known: filter(parts ?? [], part => part != null)
+  value distinct: { value known; unique }
+  value boolean: len(distinct) == 2 && all(distinct, part => part.category == "literal" && part.primitive == "boolean")
+    && any(distinct, part => part.name == "true") && any(distinct, part => part.name == "false")
+  value if parts == null then [null]
+    else if len(parts) == 0 then [redundant_part("never", null, "never")]
+    else if boolean && len(known) == len(parts) then [redundant_part("primitive", "boolean", "boolean")]
+    else if len(distinct) == 1 && len(known) == len(parts) then distinct
+    else parts
+}
+fn redundant_parts(n) = {
+  value bare: redundant_bare(n)
+  value if bare is ts_union then { value bare.type.nodes; flat_map (part) redundant_parts(part) }
+    else if bare is ts_type_keyword && contains(["any", "unknown", "never"], bare.text) then
+      [redundant_part(bare.text, null, bare.text)]
+    else if bare is ts_type_keyword && contains(["string", "number", "boolean", "bigint"], bare.text) then
+      [redundant_part("primitive", bare.text, bare.text)]
+    else if bare is ts_template_type then [redundant_part("literal", "string", "template literal type")]
+    else redundant_reflected(bare)
+}
+fn redundant_finding(site, mode, name, primitive, container) = {
+  site: site, mode: mode, name: name, primitive: primitive, container: container
+}
+fn redundant_special(part, union, returned) = if part.category == "error" then "error"
+  else if part.category == "any" then "overrides"
+  else if part.category == "unknown" then if union then "overrides" else "overridden"
+  else if part.category == "never" then if !union then "overrides" else if !returned then "overridden" else null
+  else null
+fn redundant_findings(n) = {
+  value union: n is ts_union
+  value container: if union then "union" else "intersection"
+  value outer: { value n; walk (current) if current.parent is ts_parenthesized_type then current.parent.node else null; last }
+  value returned: outer is (ts_function.return_type, ts_arrow.return_type, ts_method.return_type,
+    ts_function_type.return_type, ts_call_signature.return_type, ts_method_signature.return_type)
+  value entries: map(n.type.nodes, site => {site: redundant_bare(site), parts: redundant_parts(site)})
+  value primitives: {
+    value entries
+    flat_map (entry) filter(entry.parts, part => part.category == "primitive")
+    map (part) part.primitive
+    unique
+  }
+  value special: {
+    value entries
+    flat_map (entry) {
+      value entry.parts
+      filter (part) redundant_special(part, union, returned) != null
+      map (part) redundant_finding(entry.site, redundant_special(part, union, returned),
+        if part.category == "error" then entry.site.text else part.name, null, container)
+    }
+  }
+  value unions: filter(entries, entry => len(entry.parts) >= 2)
+  value dominance: if union then {
+    value entries
+    flat_map (entry) {
+      value ["string", "number", "boolean", "bigint"]
+      flat_map (primitive) {
+        value literals: filter(entry.parts, part => part.category == "literal" && part.primitive == primitive)
+        value if !contains(primitives, primitive) || len(literals) == 0 then [] else
+          [redundant_finding(entry.site, "literal", {value literals; map (part) part.name; join " | "}, primitive, container)]
+      }
+    }
+  } else if len(unions) > 0 then {
+    value unions
+    filter (entry) all(entry.parts, part => part.category == "literal" && contains(primitives, part.primitive))
+    map (entry) redundant_finding(entry.site, "primitive",
+      {value entry.parts; map (part) part.name; join " | "}, last(entry.parts).primitive, container)
+  } else {
+    value entries
+    flat_map (entry) {
+      value entry.parts
+      filter (part) part.category == "primitive"
+      flat_map (part) {
+        value literals: {value entries; flat_map (other) filter(other.parts, literal => literal.category == "literal" && literal.primitive == part.primitive)}
+        value if len(literals) == 0 then [] else
+          [redundant_finding(entry.site, "primitive", {value literals; map (literal) literal.name; join " | "}, part.primitive, container)]
+      }
+    }
+  }
+  value special dominance
+}
+
+in ts_union, ts_intersection {
+  let redundant_findings redundant_findings(node)
+  rule no-redundant-type-constituents {
+    each part in redundant_findings
+    when part.mode == "overrides"
+    report at part.site
+    warn "'{part.name}' overrides all other types in this {part.container} type."
+  }
+  rule no-redundant-type-constituents:overridden {
+    each part in redundant_findings
+    when part.mode == "overridden"
+    report at part.site
+    warn "'{part.name}' is overridden by other types in this {part.container} type."
+  }
+  rule no-redundant-type-constituents:error {
+    each part in redundant_findings
+    when part.mode == "error"
+    report at part.site
+    warn "'{part.name}' is an 'error' type that acts as 'any' and overrides all other types in this {part.container} type."
+  }
+  rule no-redundant-type-constituents:literal {
+    each part in redundant_findings
+    when part.mode == "literal"
+    report at part.site
+    warn "{part.name} is overridden by {part.primitive} in this union type."
+  }
+  rule no-redundant-type-constituents:primitive {
+    each part in redundant_findings
+    when part.mode == "primitive"
+    report at part.site
+    warn "{part.primitive} is overridden by the {part.name} in this intersection type."
+  }
+}
+
+}

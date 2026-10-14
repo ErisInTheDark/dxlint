@@ -10,6 +10,7 @@ import .ts/suggestions/templates
 import .ts/suggestions/object-spread
 import .ts/suggestions/computed-keys
 import .ts/expression-fixes
+import .ts/literal-text
 
 define {
 
@@ -130,8 +131,12 @@ in ts_new rule no-new-wrappers {
 }
 
 in ts_string rule no-nonoctal-decimal-escape {
-  each decimal_escape in nonoctal_decimal_escapes
-  report at decimal_escape.offset
+  each decimal_escape in {
+    value overlapping(ts_literal_piece, offset, end_offset)
+    filter (piece) re_test(piece.text, /^\\[89]$/)
+    unique_by (piece) {start: piece.offset, end: piece.end_offset}
+  }
+  report at decimal_escape.node
   warn "Don't use '{decimal_escape.text}' escape sequence."
 }
 
@@ -149,10 +154,21 @@ in ts_sequence rule no-sequences {
   warn "Unexpected use of comma operator."
 }
 
-in ts_identifier let error_global_undefined text == "undefined" && resolved == "global" && global != "off"
-in ts_parenthesized forward error_global_undefined from expression
+fn suggestion_possible_error(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare is (ts_identifier, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_yield, ts_await) then true
+    else if bare is ts_assignment && contains(["=", "&&="], bare.operator) then suggestion_possible_error(bare.right.node)
+    else if bare is ts_assignment && contains(["||=", "??="], bare.operator) then suggestion_possible_error(bare.left.node) || suggestion_possible_error(bare.right.node)
+    else if bare is ts_logical then suggestion_possible_error(bare.right.node) || bare.operator != "&&" && suggestion_possible_error(bare.left.node)
+    else if bare is ts_conditional then suggestion_possible_error(bare.consequent.node) || suggestion_possible_error(bare.alternate.node)
+    else if bare is ts_sequence then suggestion_possible_error(last(bare.expression.nodes))
+    else false
+}
+in ts_node let could_be_error suggestion_possible_error(node)
+in ts_identifier let error_undefined_identifier identifier_name == "undefined"
+in ts_parenthesized forward error_undefined_identifier from expression
 in ts_throw rule no-throw-literal {
-  when !argument.could_be_error || argument.error_global_undefined == true
+  when !argument.could_be_error || argument.error_undefined_identifier == true
   warn if argument.could_be_error then "Do not throw undefined." else "Expected an error object to be thrown."
 }
 

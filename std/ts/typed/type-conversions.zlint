@@ -1,0 +1,82 @@
+import .ts/values/inspection
+
+define {
+
+fn conversion_primitive(n, primitive, constrained) = {
+  value graph: value_parts(n)
+  value arms: if graph == null then null else map(graph, arm => arm.parts)
+  value arms != null && count(arms) > 0 && all(arms, arm =>
+    any(arm, part => contains(part.traits, primitive))
+    && all(arm, part =>
+      !any(["any", "error", "unknown", "intersection", "structural"], trait => contains(part.traits, trait))
+      && (contains(part.traits, primitive) && part.carrier == null
+        || part.carrier.description.kind == "enum"
+        || constrained && part.carrier.description.kind == "parameter")))
+}
+fn conversion_integers(n) = {
+  value graph: value_parts(n)
+  value arms: if graph == null then null else map(graph, arm => arm.parts)
+  value arms != null && count(arms) > 0 && all(arms, arm =>
+    !any(arm, part => contains(part.traits, "intersection") || contains(part.traits, "parameter"))
+    && any(arm, part => contains(part.traits, "number") && part.identity_known
+      && part.identity.kind == "value" && type_of(part.identity.value) == "num"
+      && part.identity.value % 1 == 0)
+    && all(arm, part => part.carrier == null || part.carrier.description.kind == "enum"))
+}
+fn conversion_empty(n) = n is ts_string && js_string(n.text) == ""
+fn conversion_finding(type, violation, offset) = { type: type, violation: violation, offset: offset }
+fn conversion_global(callee) = {
+  value identity: declaration_identity(callee)
+  value globals: global_declarations(callee, callee.text, "value")
+  value callee.scope_declaration == null || identity != null && globals != null && any(globals, global => global == identity)
+}
+fn conversion_call(n) = {
+  value callee: n.callee.node
+  value primitive: get({ String: "string", Boolean: "boolean", Number: "number", BigInt: "bigint" }, callee.text)
+  value first: first(n.argument.nodes)
+  value if callee is ts_identifier && conversion_global(callee) && primitive != null
+    && first != null && conversion_primitive(first, primitive, true) then
+    conversion_finding(primitive, "Passing a " primitive " to " callee.text "()", callee.offset)
+  else if callee is ts_member && callee.property.text == "toString"
+    && conversion_primitive(callee.object.node, "string", true) && !ts_value_has_enum(callee.object.node) then
+    conversion_finding("string", "Calling a string's .toString() method", callee.property.offset)
+  else null
+}
+fn conversion_operator(n) = if n is (ts_binary, ts_assignment) then {
+  value if (n.operator == "+" || n.operator == "+=") && conversion_empty(n.right.node)
+    && conversion_primitive(n.left.node, "string", false) then
+    conversion_finding("string", "Concatenating a string with ''",
+      if n is ts_assignment then n.offset else n.left.end_offset)
+  else if n is ts_binary && n.operator == "+" && conversion_empty(n.left.node)
+    && conversion_primitive(n.right.node, "string", false) then
+    conversion_finding("string", "Concatenating '' with a string", n.offset)
+  else null
+} else {
+  value inner: unparenthesised_node(n.argument.node)
+  value if n.operator == "+" && conversion_primitive(n.argument.node, "number", false) then
+    conversion_finding("number", "Using the unary + operator on a number", n.offset)
+  else if inner is ts_unary && inner.operator == n.operator then
+    if n.operator == "!" && conversion_primitive(inner.argument.node, "boolean", false) then
+      conversion_finding("boolean", "Using !! on a boolean", n.offset)
+    else if n.operator == "~" && conversion_integers(inner.argument.node) then
+      conversion_finding("number", "Using ~~ on an integer", n.offset)
+    else null
+  else null
+}
+fn type_conversion_site(n, start) = {
+  value end: if n is ts_call then (if n.callee is ts_identifier then n.callee.end_offset else n.end_offset)
+    else if n is ts_assignment then n.end_offset
+    else if n is ts_binary then (if start == n.offset then unparenthesised_node(n.right.node).offset else n.end_offset)
+    else if n.operator == "+" then n.operator.end_offset
+    else unparenthesised_node(n.argument.node).operator.end_offset
+  value { start: start, end: end }
+}
+
+in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversion {
+  let conversion if is ts_call then conversion_call(node) else conversion_operator(node)
+  when conversion != null
+  report at type_conversion_site(node, conversion.offset)
+  warn "{conversion.violation} does not change the type or value of the {conversion.type}."
+}
+
+}

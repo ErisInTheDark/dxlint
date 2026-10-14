@@ -4,7 +4,38 @@ define {
 
 group duplicate_type_constituent ts_union, ts_intersection
 in duplicate_type_constituent let duplicate_type_constituents_checked true
-in ts_node let constituent_type type_structure([], ["kind"])
+fn constituent_arm_key(arm) = {
+  value part: if count(arm.parts) == 1 then first(arm.parts) else null
+  value scalar: find(["void", "null", "undefined", "string", "number", "boolean", "bigint"],
+    trait => contains(part.traits, trait))
+  value if part != null && scalar != null && part.identity_known && part.identity.kind == "value"
+    then {scalar: scalar, identity: part.identity} else arm.handle
+}
+fn constituent_explicit_undefined(arms) = {
+  value part: if count(arms) == 1 && count(first(arms).parts) == 1 then first(first(arms).parts) else null
+  value part != null && part.identity_known && part.identity.kind == "value"
+    && part.identity.value.type == "undefined" && contains(part.traits, "undefined")
+    && !contains(part.traits, "void") && part.carrier.description.kind != "parameter"
+}
+fn constituent_collect(n, group, union, entries) = {
+  value bare: { value n; walk (item) if item is ts_parenthesized_type then item.type.node else null; last }
+  value arms: value_parts(bare)
+  value keys: if arms == null then null else unique(map(arms, arm => constituent_arm_key(arm)))
+  value complete: arms != null && !any(arms, arm => any(arm.parts, part => contains(part.traits, "error")))
+  value tokens: bare.token_texts
+  value previous_syntax: find(entries, entry => entry.complete && entry.tokens == tokens).node
+  value previous_identity: if complete then find(entries, entry => entry.complete
+    && count(entry.keys) == count(keys) && all(keys, key => contains(entry.keys, key))).node else null
+  value next: entries [{
+    node: bare, group: group, previous_syntax: previous_syntax, previous_identity: previous_identity,
+    complete: complete, tokens: tokens, keys: keys, explicit_undefined: constituent_explicit_undefined(arms),
+  }]
+  value if union && bare is ts_union || !union && bare is ts_intersection then
+    fold(bare.type.nodes, next, (state, child) => constituent_collect(child, bare, union, state))
+    else next
+}
+fn constituent_components(n, union) = fold(n.type.nodes, [],
+  (entries, child) => constituent_collect(child, n, union, entries))
 
 fn constituent_wrappers(source, n) = {
   value parent: n.parent
@@ -17,8 +48,7 @@ fn constituent_wrappers(source, n) = {
 }
 fn constituent_equivalent(part) = part.previous_syntax ?? part.previous_identity
 fn constituent_optional(part, optional) = {
-  value flags: if optional then part.node.type_flags.nonempty ?? [] else []
-  value optional && contains(flags, "undefined") && part.node.constituent_type.kind == "undefined"
+  value optional && part.explicit_undefined
 }
 fn constituent_removed(part, optional) =
   part.complete && (constituent_equivalent(part) != null || constituent_optional(part, optional))
@@ -52,7 +82,7 @@ in duplicate_type_constituent {
   let constituent_top if is ts_union then constituent_root.node.parent not ts_union
     else constituent_root.node.parent not ts_intersection
   let constituent_kind if is ts_union then "Union" else "Intersection"
-  let constituent_parts if constituent_top then type_components.nonempty ?? [] else []
+  let constituent_parts if constituent_top then constituent_components(node, is ts_union) else []
   let constituent_optional_parameter is ts_union
     && constituent_root.node.parent is ts_parameter
     && constituent_root.node.parent.optional != null

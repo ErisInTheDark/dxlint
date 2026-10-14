@@ -1,0 +1,66 @@
+import .ts/values/inspection
+
+define {
+
+fn rejection_handler(call) = {
+  value callee: call.callee.node
+  value method: if callee is (ts_member, ts_index) then callee.static_name else null
+  value index: if method == "catch" then 0 else if method == "then" then 1 else null
+  value arguments: call.argument.nodes
+  value preceding: { value arguments; slice 0 (index + 1) }
+  value if index == null || count(preceding) != index + 1
+    || any(preceding, argument => argument is ts_spread) || !(callee.object could thenable) then null
+    else { method: method, handler: last(preceding) }
+}
+fn rejection_inline(handler) = {
+  value walk(handler, current =>
+    if current is ts_parenthesized then current.expression.node
+    else if current is ts_logical then [current.left.node, current.right.node]
+    else if current is ts_conditional then [current.consequent.node, current.alternate.node]
+    else if current is ts_sequence then last(current.expression.nodes)
+    else null)
+  filter (current) current is (ts_arrow, ts_function)
+}
+fn rejection_rest_type(type, source) = if type == null then null else {
+  value shape: ts_value_array_parts(type, source)
+  value carrier: find(first(type), part => part.carrier.description.kind == "tuple"
+    || part.carrier.description.kind == "named" && contains(["Array", "ReadonlyArray"], part.carrier.description.name)).carrier
+  value if ts_value_trait(type, "any") || ts_value_trait(type, "unknown") then []
+    else if count(type) == 1 && shape.known && (shape.array || shape.tuple)
+    then first(carrier.arguments) ?? []
+    else if shape.known then [] else null
+}
+fn rejection_parameter_type(function, parameter) = {
+  value declared: parameter.type.node
+  value signatures: if declared == null then expected_call_signatures(function) else null
+  value header: first(first(signatures))
+  value context: if header.parameters_known == true then first(header.parameters) else null
+  value if declared != null then
+    if parameter.name is ts_rest then value_at(declared, [0]) ?? rejection_rest_type(value_constituents(declared), function)
+      else value_constituents(declared)
+  else if parameter.name is ts_rest then rejection_rest_type(context, function)
+  else context
+}
+fn rejection_findings(call) = {
+  value selection: rejection_handler(call)
+  value if selection == null then [] else {
+    value rejection_inline(selection.handler)
+    flat_map (function) {
+      value parameter: first(function.parameter.nodes)
+      value type: if parameter == null then null else rejection_parameter_type(function, parameter)
+      value if parameter == null || type == null || ts_value_trait(type, "unknown") then [] else [{
+        offset: parameter.offset, method: selection.method,
+        pattern: if parameter.name is ts_array_pattern then "array"
+          else if parameter.name is ts_object_pattern then "object" else "",
+      }]
+    }
+  }
+}
+
+in ts_call rule use-unknown-in-catch-callback-variable {
+  each finding in rejection_findings(node)
+  report at finding.offset
+  warn "Prefer the safe `: unknown` for a `" finding.method "`" (if finding.method == "then" then " rejection" else "") " callback variable." (if finding.pattern == "array" then " The thrown error may not be iterable." else if finding.pattern == "object" then " The thrown error may be nullable, or may not have the expected shape." else "")
+}
+
+}

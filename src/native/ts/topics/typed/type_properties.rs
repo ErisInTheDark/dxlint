@@ -3,14 +3,6 @@
 use crate::expr::Value;
 use crate::native::ts::types::{Checker, Ty};
 
-pub(super) fn has_void(ty: &Ty) -> bool {
-    match ty {
-        Ty::Void => true,
-        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(has_void),
-        _ => false,
-    }
-}
-
 pub(super) fn literal_values(ty: &Ty) -> Value<'static> {
     let mut values = Vec::new();
     collect_literals(ty, &mut values);

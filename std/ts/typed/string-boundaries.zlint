@@ -1,6 +1,7 @@
 # String prefix/suffix tests and safe replacements.
 import .ts/methods
 import .ts/expression-fixes
+import .ts/values/inspection
 
 define {
 
@@ -29,7 +30,7 @@ fn string_boundary_negative_length(n, needle) = {
 fn string_boundary_string_part(t) = if t.kind == "union" then len(t.parts) > 0 && all(t.parts, part => string_boundary_string_part(part))
   else if t.kind == "intersection" then any(t.parts, part => string_boundary_string_part(part)) && !any(t.parts, part => contains(["any", "unknown"], part.kind))
   else contains(["string", "null", "undefined"], t.kind)
-fn string_boundary_receiver(n, optional) = n.type_is_string_like
+fn string_boundary_receiver(n, optional) = ts_value_string_like(n)
   || optional && string_boundary_string_part(n.collection_type) && { value n.type_flags.nonempty ?? []; contains "string" }
 
 fn string_boundary_access(n) = {
@@ -125,7 +126,7 @@ in ts_binary rule prefer-string-starts-ends-with {
   when info != null
   report at if match != null then unparenthesised_node(left.node) else node
   warn if info.kind == "end" then "Use the 'String#endsWith' method instead." else "Use 'String#startsWith' method instead."
-  let safe info.safe && (match != null || len(operator) == 3 || info.needle.type_is_string_like || info.needle.static_string != null || comparison != null && contains(["indexOf", "lastIndexOf"], access.method))
+  let safe info.safe && (match != null || len(operator) == 3 || ts_value_string_like(info.needle) || info.needle.static_string != null || comparison != null && contains(["indexOf", "lastIndexOf"], access.method))
   let negative if match != null then starts_with(operator, "=") else starts_with(operator, "!")
   let replacement if safe then string_boundary_replacement(node, info, negative) else null
   fix at node if replacement != null as replacement

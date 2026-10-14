@@ -1,0 +1,3 @@
+import .ts
+rule no-redundant-type-constituents
+rule no-redundant-type-constituents:*

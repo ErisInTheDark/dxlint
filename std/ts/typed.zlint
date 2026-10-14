@@ -14,9 +14,11 @@ import .ts/typed/floating-promises
 import .ts/typed/unbound-method
 import .ts/typed/template-expressions
 import .ts/typed/readonly-members
+import .ts/typed/readonly-parameters
 import .ts/typed/string-boundaries
 import .ts/typed/includes
 import .ts/typed/type-constituents
+import .ts/typed/redundant-constituents
 import .ts/typed/return-await
 import .ts/typed/type-arguments
 import .ts/typed/nullish-coalescing
@@ -30,6 +32,9 @@ import .ts/typed/enums
 import .ts/typed/qualifiers
 import .ts/typed/regexp-exec
 import .ts/typed/for-in-arrays
+import .ts/typed/type-conversions
+import .ts/typed/rejection-handlers
+import .ts/typed/unsafe-members
 
 define {
 
@@ -47,12 +52,6 @@ in ts_function, ts_arrow, ts_method rule require-await {
   when missing_await != null
   report at ts_await_warning_site(node)
   warn missing_await.name " has no 'await' expression."
-}
-
-in ts_call rule use-unknown-in-catch-callback-variable {
-  each finding in unsafe_catch_callbacks
-  report at finding.offset
-  warn "Prefer the safe `: unknown` for a `" finding.method "`" (if finding.method == "then" then " rejection" else "") " callback variable." (if finding.pattern == "array" then " The thrown error may not be iterable." else if finding.pattern == "object" then " The thrown error may be nullable, or may not have the expected shape." else "")
 }
 
 group promise_function_async_function ts_function, ts_arrow, ts_method
@@ -118,7 +117,7 @@ in ts_identifier let rejection_binding is ts_parameter.name && parent.rejection_
 in ts_call let rejection_call
   callee.rejection_member == true || any(callee.declarations, d => d.rejection_binding == true)
 in ts_node let rejection_reason
-  {possible: could_be_error && error_global_undefined != true, kind: error_value.kind, groups: type_specifier_groups}
+  {possible: could_be_error && error_undefined_identifier != true, kind: error_value.kind, groups: type_specifier_groups}
 in ts_call let prefer_promise_reject_errors_checked true
 in ts_call rule prefer-promise-reject-errors {
   option allowEmptyReject boolean = false "Allow rejection without a reason"
@@ -158,8 +157,8 @@ in ts_call let stringification_subjects
   else if callee is ts_member && callee.property is ts_identifier && contains(["toString", "toLocaleString", "join"], callee.property.text) then [{node: unparenthesised_node(callee.object.node), join: callee.property.text == "join"}]
   else []
 in ts_binary, ts_assignment let stringification_subjects
-  if contains(["+", "+="], operator) && left.type_is_string_like then [{node: unparenthesised_node(right.node), join: false}]
-  else if contains(["+", "+="], operator) && right.type_is_string_like && left not ts_private_name then [{node: unparenthesised_node(left.node), join: false}]
+  if contains(["+", "+="], operator) && ts_value_string_like(left.node) == true then [{node: unparenthesised_node(right.node), join: false}]
+  else if contains(["+", "+="], operator) && ts_value_string_like(right.node) == true && left not ts_private_name then [{node: unparenthesised_node(left.node), join: false}]
   else []
 in ts_template let stringification_subjects if parent is ts_tagged_template then [] else map(expression.nodes, n => {node: unparenthesised_node(n), join: false})
 in ts_call, ts_binary, ts_assignment, ts_template rule no-base-to-string {
@@ -339,39 +338,6 @@ in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
   fix at annotation if annotation != null && expression_fix_clean(annotation) as "this"
 }
 
-in ts_union, ts_intersection {
-  rule no-redundant-type-constituents {
-    each redundant_constituent in redundant_type_constituents.nonempty ?? []
-    when redundant_constituent.mode == "overrides"
-    report at redundant_constituent.offset
-    warn "'{redundant_constituent.name}' overrides all other types in this {redundant_constituent.container} type."
-  }
-  rule no-redundant-type-constituents:overridden {
-    each redundant_constituent in redundant_type_constituents.nonempty ?? []
-    when redundant_constituent.mode == "overridden"
-    report at redundant_constituent.offset
-    warn "'{redundant_constituent.name}' is overridden by other types in this {redundant_constituent.container} type."
-  }
-  rule no-redundant-type-constituents:error {
-    each redundant_constituent in redundant_type_constituents.nonempty ?? []
-    when redundant_constituent.mode == "error"
-    report at redundant_constituent.offset
-    warn "'{redundant_constituent.name}' is an 'error' type that acts as 'any' and overrides all other types in this {redundant_constituent.container} type."
-  }
-  rule no-redundant-type-constituents:literal {
-    each redundant_constituent in redundant_type_constituents.nonempty ?? []
-    when redundant_constituent.mode == "literal"
-    report at redundant_constituent.offset
-    warn "{redundant_constituent.name} is overridden by {redundant_constituent.primitive} in this union type."
-  }
-  rule no-redundant-type-constituents:primitive {
-    each redundant_constituent in redundant_type_constituents.nonempty ?? []
-    when redundant_constituent.mode == "primitive"
-    report at redundant_constituent.offset
-    warn "{redundant_constituent.primitive} is overridden by the {redundant_constituent.name} in this intersection type."
-  }
-}
-
 fn non_null_style_fix(source, n) = {
   value body: assertion_fix_body(source, assertion_fix_trace(n, false))
   value wrapped: body.node is (structure_binary, structure_assertion, ts_sequence, ts_assignment,
@@ -389,12 +355,6 @@ in ts_method.return_type, ts_method_signature.return_type rule related-getter-se
   when accessor_type_mismatch == true
   warn "`get()` type should be assignable to its equivalent `set()` type."
 }
-in ts_call, ts_unary, ts_binary, ts_assignment rule no-unnecessary-type-conversion {
-  when unnecessary_type_conversion != null
-  report at unnecessary_type_conversion.offset
-  warn "{unnecessary_type_conversion.violation} does not change the type or value of the {unnecessary_type_conversion.type}."
-}
-
 # `await` of something that is not a promise; promise aggregators of arrays
 # of non-promises.
 in ts_await rule await-thenable {
@@ -501,32 +461,6 @@ in ts_unary rule no-meaningless-void-operator {
     then expression_fix_asi(statement, token_neighbours.before, expression_fix_before_nodes(node), replacement) else false
   fix if parens != null && semicolon != null && expression_fix_clean({ offset: offset, end_offset: operand.offset }) as
     (if semicolon then ";" else "") expression_fix_edges(node, replacement)
-}
-
-in ts_member, ts_index {
-  let any_access_root object.any_access_root == true || object.unsafe_type != null
-  let unsafe_member_access object.unsafe_type != null && object.any_access_root != true
-  let any_access_optional_root optional == null && (object.any_access_optional_root == true || object.unsafe_type != null)
-  let unsafe_optional_member_access optional == null && object.unsafe_type != null && object.any_access_optional_root != true
-  let object_unsafe_type object.unsafe_type
-  let object_unsafe_this_type object.unsafe_this_type
-}
-in ts_member.property rule no-unsafe-member-access {
-  option allowOptionalChaining boolean = false "Allow optional chaining on any"
-  when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
-  warn if parent.object_unsafe_type == "error" then "Unsafe member access .{text} on a type that cannot be resolved." else "Unsafe member access .{text} on an `any` value."
-}
-in ts_index.index rule no-unsafe-member-access:computed {
-  option allowOptionalChaining boolean = false "Allow optional chaining on any"
-  when if allowOptionalChaining then parent.unsafe_optional_member_access == true else parent.unsafe_member_access == true
-  report at unsafe_member_key.offset
-  warn if parent.object_unsafe_type == "error" then "Unsafe member access [{unsafe_member_key.text}] on a type that cannot be resolved." else "Unsafe member access [{unsafe_member_key.text}] on an `any` value."
-}
-in ts_index.index rule no-unsafe-member-access:key {
-  option allowOptionalChaining boolean = false "Allow optional chaining on any"
-  when unsafe_member_key.kind != null && (!allowOptionalChaining || parent.optional == null)
-  report at unsafe_member_key.offset
-  warn if unsafe_member_key.kind == "error" then "The type of computed name [{unsafe_member_key.text}] cannot be resolved." else "Computed name [{unsafe_member_key.text}] resolves to an `any` value."
 }
 
 }

@@ -1,0 +1,3 @@
+define {
+in ts_string, ts_template layer ts_literal_text match ts_literal_piece /\\(?:\$\{|\r\n?|\n|.)|["'`]|\$\{|\r\n?|\n|[^\\"'`$\r\n]+|\$/
+}

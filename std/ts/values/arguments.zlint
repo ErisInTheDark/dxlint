@@ -1,0 +1,27 @@
+define {
+
+fn ts_arguments_binding(n) =
+  if n.identifier_name != "arguments" then false else {
+    value scopes: name_scopes(n, "reference")
+    value rows: map(scopes, scope => {
+      value declarations: name_scope_declarations(n, scope.id, "arguments")
+      value {
+        known: declarations != null,
+        declarations: filter(declarations, declaration => contains(declaration.classes, "value"))
+      }
+    })
+    value visible: find(rows, row => !row.known || count(row.declarations) > 0)
+    value scopes != null && visible != null && visible.known
+      && all(visible.declarations, declaration => declaration.node == declaration.owner
+        && declaration.node is (ts_function, ts_method, ts_program))
+  }
+
+in ts_identifier {
+  let ts_value_implicit_arguments ts_arguments_binding(node)
+  when ts_value_implicit_arguments {
+    unwraps instance "IArguments"
+    widens instance "IArguments"
+  }
+}
+
+}
