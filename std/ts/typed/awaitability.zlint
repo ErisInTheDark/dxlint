@@ -2,6 +2,18 @@ import .ts/scoping/usage
 
 define {
 
+fn ts_await_warning_site(n) = function_head_site(n)
+fn ts_await_function_name(n) = {
+  value name: n.function_name ?? "async function"
+  value holder: outer_parenthesised_node(n).parent.node
+  value if !n.ts_usage_typed then name
+    else if n.name == null && holder is ts_declarator && holder.name is ts_identifier
+      then name " '" holder.name.text "'"
+    else if n is ts_method && n.key is ts_string && js_string(n.key.text) == ""
+      then re_replace(name, / ''$/, "")
+    else name
+}
+
 fn ts_awaitable_result(n) = n != null
   && unparenthesised_node(n) not (ts_null, ts_boolean, ts_number, ts_bigint, ts_string, ts_template)
   && n could thenable
@@ -31,7 +43,7 @@ fn ts_missing_await(n) = {
                 { global: "Symbol", class: "value", path: ["asyncIterator"] }, null) == true
                 else ts_awaitable_result(site.argument.node))))
         value if asynchronous then null else {
-          value name: n.function_name ?? "async function"
+          value name: ts_await_function_name(n)
           value { name: upper(slice(name, 0, 1)) slice(name, 1) }
         }
       }

@@ -31,28 +31,9 @@ fn strict_void_transfer(contract) = {
 fn strict_void_fields(n) = if n.parent is (ts_call, ts_new) then ["declared_target"] else ["declared_target", "contextual_returns"]
 fn strict_void_source(n) = if n is ts_property then n.value.node ?? n.key.node else n
 fn strict_void_site(n) = if n is (ts_property, ts_method) then n else n.parent.node
-fn strict_void_outer(n) = {
-  value n
-  walk (current) if current.parent is ts_parenthesized then current.parent.node else null
-  last
-}
-fn strict_void_head(n) = {
-  value outer: strict_void_outer(n)
-  value member: if n is ts_method then n else if outer.parent is (ts_property, ts_class_property) then outer.parent.node else null
-  value if member == null && n is ts_arrow then n.operator.node else {
-    value from: last(n.type_parameter.nodes).end_offset ?? n.name.end_offset ?? n.key.end_offset ?? n.offset
-    value until: first(n.parameter.nodes).offset ?? n.return_type.offset ?? n.body.offset ?? n.end_offset
-    value openings: overlapping(ts_open_paren, from, until)
-    value opening: first(openings)
-    value {
-      start: last(member.decorator.nodes).token_neighbours.after.start ?? member.offset ?? n.offset,
-      end: opening.offset ?? first(n.parameter.nodes).offset ?? n.body.offset
-    }
-  }
-}
 fn strict_void_reports(n, any) = if n not (ts_function, ts_arrow, ts_method) then [{site: n, mode: "function"}]
-  else if contains(n.modifier, "*") then [{site: strict_void_head(n), mode: "function"}]
-  else if contains(n.modifier, "async") then [{site: strict_void_head(n), mode: "async"}]
+  else if contains(n.modifier, "*") then [{site: function_head_site(n), mode: "function"}]
+  else if contains(n.modifier, "async") then [{site: function_head_site(n), mode: "async"}]
   else if n.body not ts_block then [{site: unparenthesised_node(n.body.node), mode: "return"}]
   else if n.return_type != null && n.return_type.text != "void" then [{site: n.return_type.node, mode: "function"}]
   else {
@@ -74,6 +55,7 @@ fn strict_void_static_contracts(n) = {
 in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, ts_property, ts_method, ts_class_property.init, ts_return.argument, ts_arrow.body, ts_array.element, ts_jsx_expression.expression rule strict-void-return {
   option allowReturnAny boolean = false "Allow callbacks returning any"
   when not (ts_spread, ts_block)
+  when not ts_property || node.value not ts_assignment_pattern
   when parent not ts_assignment || contains(["=", "&&=", "||=", "??="], parent.operator)
   when parent not ts_jsx_expression || parent.parent is ts_jsx_attribute
   when not ts_method || node.body != null
@@ -89,7 +71,7 @@ in ts_call.argument, ts_new.argument, ts_declarator.init, ts_assignment.right, t
   let contracts if !expected_known || !strict_void_signatures_known(signatures)
     then callable_contracts(site, actual, [], fields) strict_void_static_contracts(actual) else []
   when if expected_known
-    then strict_void_expected_transfer(expected_signatures, strict_void_outer(actual).parent is (ts_call, ts_new))
+    then strict_void_expected_transfer(expected_signatures, outer_parenthesised_node(actual).parent is (ts_call, ts_new))
       && !strict_void_source_allowed(signatures, { value contracts; filter (contract) contract.complete; flat_map (contract) contract.source }, allowReturnAny)
     else any(contracts, contract => strict_void_transfer(contract)
       && !strict_void_source_allowed(signatures, contract.source, allowReturnAny))

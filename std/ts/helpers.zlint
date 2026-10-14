@@ -6,6 +6,20 @@ fn is_identifier(x) = re_test(x, /^[A-Za-z_$][\w$]*$/)
 fn unparenthesised_node(n) = { value n; walk (current) if current is ts_parenthesized then current.expression.node else null; last }
 fn outer_parenthesised_node(n) = { value n; walk (current) if current.parent is ts_parenthesized then current.parent.node else null; last }
 
+fn function_head_site(n) = {
+  value outer: outer_parenthesised_node(n)
+  value member: if n is ts_method then n else if outer.parent is (ts_property, ts_class_property) then outer.parent.node else null
+  value if member == null && n is ts_arrow then n.operator.node else {
+    value from: last(n.type_parameter.nodes).end_offset ?? n.name.end_offset ?? n.key.end_offset ?? n.offset
+    value until: first(n.parameter.nodes).offset ?? n.return_type.offset ?? n.body.offset ?? n.end_offset
+    value opening: first(overlapping(ts_open_paren, from, until))
+    value {
+      start: last(member.decorator.nodes).token_neighbours.after.start ?? member.offset ?? n.offset,
+      end: opening.offset ?? first(n.parameter.nodes).offset ?? n.body.offset
+    }
+  }
+}
+
 # Function-wide warnings identify the callable, not its body.
 fn function_warning_site(n) = if n is ts_method then n.key.node
   else if n.name != null then n.name.node

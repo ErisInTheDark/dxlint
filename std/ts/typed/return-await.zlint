@@ -35,7 +35,6 @@ fn return_await_result(n, owner, resources) = {
   value argument: if awaited then n.argument.node else n
   value {
     expression: n,
-    offset: n.offset,
     awaited: awaited,
     certainty: return_await_certainty(argument),
     handling: return_await_handling(n, owner, resources),
@@ -90,7 +89,7 @@ in ts_function, ts_arrow, ts_method rule return-await {
     }
   }
   each result in results
-  report at result.data.offset
+  report at result.data.expression
   warn if result.data.certainty == "never" then "Returning an awaited value that is not a promise is not allowed." else if result.data.awaited then "Returning an awaited promise is not allowed in this context." else "Returning an awaited promise is required in this context."
   fix at result.data.expression if result.replacement != null as result.replacement
 }

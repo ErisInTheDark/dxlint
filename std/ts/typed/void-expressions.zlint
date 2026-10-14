@@ -8,6 +8,14 @@ in ts_node let void_expression_contextual_returns callable_contracts(node, node,
 fn void_expression_like(n) =
   if n is (ts_call, ts_tagged_template) then n.result could undefined && n.result always undefined
   else n could undefined && n always undefined
+fn void_expression_fixable(n) = {
+  value expression: unparenthesised_node(n)
+  value if expression is ts_conditional then
+    void_expression_fixable(expression.consequent.node) && void_expression_fixable(expression.alternate.node)
+    else if expression is ts_logical then
+      void_expression_fixable(expression.left.node) && void_expression_fixable(expression.right.node)
+    else void_expression_like(expression)
+}
 fn void_expression_contains_void(profile) = profile.kind == "void"
   || profile.kind == "union" && any(profile.parts, part => void_expression_contains_void(part))
 fn void_expression_annotation_void(n) = {
@@ -64,9 +72,9 @@ in ts_await, ts_call, ts_tagged_template rule no-confusing-void-expression {
     else if ignoreVoidOperator then "expression-void" else "expression"
   let target if mode == "arrow" then ancestor.body.node
     else if contains(["last", "return"], mode) then ancestor else node
-  let replacement if mode == "arrow" then if void_expression_like(target) then "{{ " target.structure_unwrapped.text "; }}" else null
-    else if mode == "last" then if void_expression_like(ancestor.argument.node) then void_expression_return_text(ancestor, true) else null
-    else if mode == "return" then void_expression_return_text(ancestor, false)
+  let replacement if mode == "arrow" then if void_expression_fixable(target) then "{{ " target.structure_unwrapped.text "; }}" else null
+    else if mode == "last" then if void_expression_fixable(ancestor.argument.node) then void_expression_return_text(ancestor, true) else null
+    else if mode == "return" then if void_expression_fixable(ancestor.argument.node) then void_expression_return_text(ancestor, false) else null
     else if contains(["arrow-void", "return-void"], mode) then "void " text
     else null
   warn if mode == "expression" then "Placing a void expression inside another expression is forbidden. Move it to its own statement instead."
