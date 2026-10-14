@@ -1,0 +1,2 @@
+input.ts:1:1-1:1 prefer-nullish-coalescing:strict#0
+input.ts:2:22-2:24 prefer-nullish-coalescing#3

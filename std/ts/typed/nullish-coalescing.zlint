@@ -117,6 +117,12 @@ fn nullish_information(n) = {
 }
 
 in nullish_coalescing_expression let nullish_coalescing nullish_information(node)
+in ts_program rule prefer-nullish-coalescing:strict {
+  option allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing boolean = false "Run without strict null checks"
+  when compiler_options.strictNullChecks == false && !allowRuleToRunWithoutStrictNullChecksIKnowWhatIAmDoing
+  report at { start: 0, end: 0 }
+  warn "This rule requires the `strictNullChecks` compiler option to be turned on to function correctly."
+}
 in nullish_coalescing_expression rule prefer-nullish-coalescing {
   option ignoreConditionalTests boolean = true "Ignore truthiness in conditional tests"
   option ignoreBooleanCoercion boolean = false "Ignore truthiness passed to Boolean"
