@@ -17,6 +17,8 @@ pub(super) struct ParsePlan<'a> {
     pub front: Option<usize>,
     pub layers: bool,
     pub overlays: &'a [bool],
+    /// Child layers are built only under nodes where `overlays` wants one.
+    pub child_layers: bool,
     pub tokens: &'a [bool],
 }
 
@@ -51,7 +53,7 @@ impl Linter {
                 let tokens_done = std::time::Instant::now();
                 let nodes = front.remap(parsed.nodes);
                 let tree = if plan.layers {
-                    Tree::graft(&self.grammar, plan.lang, text, nodes, parsed.root, Some(plan.overlays), self.profile.as_ref())
+                    Tree::graft(&self.grammar, plan.lang, text, nodes, parsed.root, Some(plan.overlays), plan.child_layers, self.profile.as_ref())
                 } else {
                     Tree::from_native(nodes, parsed.root)
                 };
@@ -116,11 +118,8 @@ impl Linter {
             let rel = self.relative(path);
             let lang = self.grammar.lang_for(&rel)?;
             let front = self.grammar.natives.iter().position(|front| front.frontend.accepts(path));
-            let tokens = front.map(|index| {
-                let frontend = self.grammar.natives[index].frontend;
-                (0..frontend.kinds().len()).map(|kind| self.unit_tokens && frontend.is_token(kind as u16)).collect::<Vec<_>>()
-            }).unwrap_or_default();
-            let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, tokens: &tokens };
+            let tokens = front.and_then(|index| self.unit_token_kinds.get(index)).map_or(&[][..], Vec::as_slice);
+            let plan = ParsePlan { lang, front, layers: true, overlays: &self.unit_overlays, child_layers: self.unit_child_layers, tokens };
             let parsed = self.parse(path, &text, plan).ok()?;
             let unit = Arc::new(Unit { path: path.to_owned(), rel: rel.to_string_lossy().replace('\\', "/"), lang, text, parsed, names: OnceLock::new(), lines: OnceLock::new() });
             self.units.lock().expect("unit cache").insert(path.to_owned(), unit.clone());

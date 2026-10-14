@@ -255,6 +255,11 @@ pub struct Names {
     pub products: Vec<Option<values::products::Shape>>,
     /// `module_resolution` profiles, compiled.
     pub module_resolutions: Vec<modules::compile::Profile>,
+    /// Every `let` attribute a semantic recipe path steps through: what
+    /// files read only for type questions must still be able to compute.
+    pub recipe_attributes: Vec<u16>,
+    /// Every field label a semantic recipe path steps through.
+    pub recipe_fields: Vec<u16>,
 }
 
 /// One tree's resolved names.
@@ -392,8 +397,17 @@ impl Names {
         let mut opened = 0u64;
         let mut asked: Vec<(&Name, bool)> = Vec::new();
         let mut requested_classes = Vec::new();
+        let recipe_attributes = std::cell::RefCell::new(Vec::new());
+        let recipe_fields = std::cell::RefCell::new(Vec::new());
+        let record = |path: Option<Vec<u16>>| {
+            if let Some(path) = &path {
+                recipe_attributes.borrow_mut().extend(path.iter().filter_map(|&step| attribute_step(step)));
+                recipe_fields.borrow_mut().extend(path.iter().copied().filter(|&step| step < ATTR_STEP));
+            }
+            path
+        };
         names.products = config.products.iter().map(|shape| {
-            values::products::lower_shape(shape, g, &attrs, &mut vocab, errors, &mut requested_classes)
+            values::products::lower_shape(shape, g, &attrs, &record, &mut vocab, errors, &mut requested_classes)
         }).collect();
         for (item, def) in config.names.iter().enumerate() {
             let targets: Vec<u32> = def
@@ -408,7 +422,7 @@ impl Names {
                 })
                 .collect();
             let path = |errors: &mut Vec<ConfigError>, path: &[Name]| -> Option<Vec<u16>> {
-                lower_path(g, &attrs, errors, path)
+                record(lower_path(g, &attrs, errors, path))
             };
             // One condition per target layer: it reads that layer's fields.
             let when: Vec<Option<u32>> = targets
@@ -696,6 +710,14 @@ impl Names {
         names.vocabulary = std::sync::Arc::new(vocab);
         names.effect_roles = effects::compile::effect_roles(&names.vocabulary);
         effects::compile::validate(&names, errors);
+        let mut recipe_attributes = recipe_attributes.into_inner();
+        recipe_attributes.sort_unstable();
+        recipe_attributes.dedup();
+        names.recipe_attributes = recipe_attributes;
+        let mut recipe_fields = recipe_fields.into_inner();
+        recipe_fields.sort_unstable();
+        recipe_fields.dedup();
+        names.recipe_fields = recipe_fields;
         names
     }
 

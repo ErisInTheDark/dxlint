@@ -21,6 +21,7 @@ pub(in crate::grammar::names) fn lower_shape(
     shape: &crate::config::ast::values::ProductShape,
     grammar: &Grammar,
     attrs: &AttrNames,
+    record: &dyn Fn(Option<Vec<u16>>) -> Option<Vec<u16>>,
     vocabulary: &mut Vocabulary,
     errors: &mut Vec<ConfigError>,
     requested_classes: &mut Vec<Name>,
@@ -31,7 +32,7 @@ pub(in crate::grammar::names) fn lower_shape(
             errors.push(ConfigError::new(path[1].span, "product items hold values, not syntax fields"));
             return None;
         }
-        lower_path(grammar, attrs, errors, path)
+        record(lower_path(grammar, attrs, errors, path))
     };
     let traits = class_bits(&mut vocabulary.traits, &shape.traits, errors)?;
     let mut lower = |recipe: &Option<Unwrap>| match recipe {

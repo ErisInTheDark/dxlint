@@ -1,0 +1,21 @@
+import .ts
+language .js {
+  files "disabled.ts"
+  set globals { undefined: "off" }
+}
+in ts_identifier rule undefined-value {
+  when text == "undefined" && is ts_expression_statement.expression
+  when if scope_declaration == null then !(node always undefined) else !(node always boolean)
+  warn "Undefined values follow bindings, not lint globals."
+}
+in ts_identifier rule missing-value {
+  let parts value_constituents(node)
+  when text == "externalName" && is ts_expression_statement.expression
+  when parts == null || !any(parts, arm => any(arm, part => contains(part.traits, "error")))
+  warn "A lint global does not create a typed declaration."
+}
+in ts_identifier rule lint-globals-retained {
+  when ends_with(file, "comment.ts") && is ts_expression_statement.expression
+  when text == "undefined" && global != "off" || text == "externalName" && global != "writable"
+  warn "Lint globals retain their source comment settings."
+}

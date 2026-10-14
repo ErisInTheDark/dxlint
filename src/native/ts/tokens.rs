@@ -695,7 +695,7 @@ mod lexical_tests {
             let mut parsed = super::super::parse(src, jsx).expect("valid syntax");
             attach_selected(src, &mut parsed, &ALL_TOKENS);
             let nodes = front.remap(parsed.nodes);
-            let tree = Tree::graft(&linter.grammar, lang, src, nodes, parsed.root, None, None);
+            let tree = Tree::graft(&linter.grammar, lang, src, nodes, parsed.root, None, false, None);
             let project = Project::default();
             let file = NativeFile::new(Syntax::new(&tree, src, front), Path::new("/root/a.tsx"), &project);
             for token in file.cached(lex).0.iter() {
@@ -833,7 +833,7 @@ mod lexical_tests {
                 let nodes = front.remap(parsed.nodes);
                 let tree = if graft {
                     let lang = linter.grammar.lang_for(Path::new("a.tsx")).expect("ts language");
-                    Tree::graft(&linter.grammar, lang, src, nodes, parsed.root, None, None)
+                    Tree::graft(&linter.grammar, lang, src, nodes, parsed.root, None, false, None)
                 } else {
                     Tree::from_native(nodes, parsed.root)
                 };

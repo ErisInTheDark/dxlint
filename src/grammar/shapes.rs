@@ -287,7 +287,7 @@ in ts_call layer calls match call_text /f/
             let front = &grammar.natives[0];
             let nodes = front.remap(parsed.nodes);
             validate(&grammar, &Tree::from_native(nodes.clone(), parsed.root));
-            validate(&grammar, &Tree::graft(&grammar, grammar.lang("js").unwrap(), source, nodes, parsed.root, None, None));
+            validate(&grammar, &Tree::graft(&grammar, grammar.lang("js").unwrap(), source, nodes, parsed.root, None, false, None));
         }
         let specialised = grammar.matcher("specialised").unwrap();
         let name = grammar.labels.get("name").unwrap();

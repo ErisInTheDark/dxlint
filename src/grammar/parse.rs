@@ -94,6 +94,9 @@ pub struct Parser<'g, 't> {
     g: &'g Grammar,
     /// Overlays to search (by matcher); None searches all of them.
     pub enabled_overlays: Option<&'t [bool]>,
+    /// When grafting: skip a node's child layers when `enabled_overlays`
+    /// wants none of them.
+    pub masked_children: bool,
     /// `zlint --profile` counters, when profiling.
     pub profile: Option<&'t crate::engine::Profile>,
     view: &'g View,
@@ -157,6 +160,7 @@ impl<'g, 't> Parser<'g, 't> {
         Parser {
             g,
             enabled_overlays: None,
+            masked_children: false,
             profile: None,
             view: g.view(lang),
             text: text.as_bytes(),
@@ -242,7 +246,11 @@ impl<'g, 't> Parser<'g, 't> {
             if m == TEXT || m == ROOT {
                 continue;
             }
-            let (kids, overlays) = (&view.children[m as usize], !view.overlays[m as usize].is_empty());
+            let mut kids = &view.children[m as usize][..];
+            if self.masked_children && self.enabled_overlays.is_some_and(|wanted| !kids.iter().any(|&kid| wanted[kid as usize])) {
+                kids = &[];
+            }
+            let overlays = !view.overlays[m as usize].is_empty();
             if kids.is_empty() && !overlays {
                 continue;
             }

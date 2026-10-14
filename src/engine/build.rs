@@ -39,6 +39,9 @@ struct ReadDependencies {
     /// Every token kind, always: reads of nodes' own `token` field.
     own_tokens: bool,
     requires_native: bool,
+    /// Field labels read (`x.name`): semantic-only units must build what
+    /// they can hold.
+    fields: Vec<u16>,
 }
 
 struct ReadRequirements {
@@ -46,6 +49,10 @@ struct ReadRequirements {
     all_tokens: bool,
     own_tokens: bool,
     requires_native: bool,
+    /// Helpers (attribute ids, then function ids after them) whose own
+    /// reads asked for tokens.
+    token_helpers: Vec<usize>,
+    fields: Vec<u16>,
 }
 
 impl ReadDependencies {
@@ -57,6 +64,10 @@ impl ReadDependencies {
             _ => None,
         }).collect();
         let own_tokens = uses.iter().any(|(_, resolved)| matches!(resolved, Resolved::Field(name) if name == "token"));
+        let fields = uses.iter().filter_map(|(_, resolved)| match resolved {
+            Resolved::Field(name) => g.labels.get(name),
+            _ => None,
+        }).collect();
         let requires_native = layers.iter().any(|&m| is_native_layer(g, m))
             || uses.iter().any(|(_, resolved)| match resolved {
                 Resolved::Fact(_) => true,
@@ -67,12 +78,13 @@ impl ReadDependencies {
                 })),
                 _ => false,
             });
-        Self { layers, helpers, all_tokens, own_tokens, requires_native }
+        Self { layers, helpers, all_tokens, own_tokens, requires_native, fields }
     }
 
     fn extend(&mut self, other: Self) {
         self.layers.extend(other.layers);
         self.helpers.extend(other.helpers);
+        self.fields.extend(other.fields);
         self.all_tokens |= other.all_tokens;
         self.own_tokens |= other.own_tokens;
         self.requires_native |= other.requires_native;
@@ -85,6 +97,8 @@ impl ReadDependencies {
         let mut requires_native = self.requires_native;
         let mut pending = self.helpers;
         let mut seen = vec![false; helpers.len()];
+        let mut token_helpers = Vec::new();
+        let mut fields = self.fields;
         // Recursive functions and cross-node attributes can refer back to themselves.
         while let Some(id) = pending.pop() {
             if std::mem::replace(&mut seen[id], true) {
@@ -92,12 +106,16 @@ impl ReadDependencies {
             }
             let dependency = &helpers[id];
             layers.extend(&dependency.layers);
+            fields.extend(&dependency.fields);
             all_tokens |= dependency.all_tokens;
             own_tokens |= dependency.own_tokens;
+            if dependency.all_tokens || dependency.own_tokens { token_helpers.push(id) }
             requires_native |= dependency.requires_native;
             pending.extend(&dependency.helpers);
         }
-        ReadRequirements { layers: unique(layers), all_tokens, own_tokens, requires_native }
+        fields.sort_unstable();
+        fields.dedup();
+        ReadRequirements { layers: unique(layers), all_tokens, own_tokens, requires_native, token_helpers, fields }
     }
 }
 
@@ -143,7 +161,12 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     let mut name_reads = ReadDependencies::default();
     for def in &config.names {
+        // `runs nothing` on a token says only how such a node executes when
+        // it exists: it asks for no node to be built.
+        let inert = def.when.is_none() && matches!(&def.item,
+            crate::config::ast::NameItem::Execution(crate::config::ast::effects::Item::Runs(crate::config::ast::effects::Flow::Nothing)));
         for name in &def.targets {
+            if inert && grammar.matcher(&name.text).and_then(|m| grammar.native_kind(m)).is_some_and(|kind| kind.is_token()) { continue }
             if let Some((targets, _)) = resolve_target(&AstTarget::Matcher(name.clone()), &grammar, None, &mut Vec::new()) {
                 name_reads.layers.extend(targets.into_iter().filter_map(|target| match target { Target::Matcher(layer) => Some(layer), _ => None }));
             }
@@ -182,7 +205,46 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     for &(matcher, attr, _) in &forwards {
         helper_reads[attr as usize].requires_native |= is_native_layer(&grammar, matcher);
     }
-    let unit_reads = name_reads.resolve(&helper_reads);
+    // Recipes reach `let` attributes through path steps; their reads are
+    // semantic reads too.
+    name_reads.helpers.extend(grammar.names.recipe_attributes.iter().map(|&attr| usize::from(attr)));
+    name_reads.fields.extend(&grammar.names.recipe_fields);
+    for &(_, attr, from) in &forwards {
+        helper_reads[attr as usize].fields.push(from);
+    }
+    let direct_tokens = name_reads.all_tokens || name_reads.own_tokens;
+    let mut unit_reads = name_reads.resolve(&helper_reads);
+    // Fields read semantically may lead to layer or token nodes: every kind
+    // a field of that label can hold, from any owner (owners are not
+    // tracked here); an unknown target widens to everything.
+    let mut unit_field_layers = Vec::new();
+    for &label in &unit_reads.fields {
+        unit_reads.own_tokens |= grammar.labels.get("token") == Some(label);
+        let mut pattern = Vec::new();
+        for matcher in 0..grammar.matchers.len() as u32 {
+            let targets = grammar.field_targets(matcher, label);
+            // An unresolved field shape may hold anything, tokens included.
+            unit_reads.own_tokens |= targets.any;
+            unit_reads.layers.extend(&targets.kinds);
+            pattern.extend(targets.kinds.iter().filter(|&&kind| grammar.native_kind(kind).is_none())
+                .map(|&kind| grammar.matchers[kind as usize].name.clone()));
+        }
+        pattern.sort_unstable();
+        pattern.dedup();
+        if !pattern.is_empty() { unit_field_layers.push(format!("{} -> {}", grammar.labels.name(label), pattern.join(" "))) }
+        unit_reads.layers = unique(std::mem::take(&mut unit_reads.layers));
+    }
+    // Why semantic-only units attach tokens (shown by --stats).
+    let unit_token_reasons: Vec<String> = direct_tokens.then(|| "name-item conditions, operands or recipe fields".to_owned()).into_iter()
+        .chain(unit_reads.token_helpers.iter().map(|&id| match <[String]>::get(&attr_names, id) {
+            Some(name) => format!("let {name}"),
+            None => format!("fn {}", grammar.functions.get(id - attr_names.len()).map_or("?", |f| f.name.as_str())),
+        }))
+        .chain(unit_field_layers.into_iter().map(|layers| format!("field {layers}")))
+        .chain(unit_reads.layers.iter().filter(|&&layer| grammar.native_kind(layer).is_some_and(|kind| kind.is_token())
+            || grammar.native_hosts[layer as usize].iter().any(|&host| grammar.native_kind(host).is_some_and(|kind| kind.is_token())))
+            .map(|&layer| format!("layer {}", grammar.matchers[layer as usize].name)))
+        .collect();
     let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &schemas, &mut errors);
 
     let mut rules: Vec<Rule> = Vec::new();
@@ -316,16 +378,43 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     let attrs = Attributes::new(attrs, &forwards, &grammar);
     let reach = grammar.reach();
-    let unit_overlays: Vec<bool> = reach.iter().map(|reachable| unit_reads.layers.iter().any(|&layer| reachable[layer as usize])).collect();
+    // Reads of a layer also select its specialisations (`x like y`).
+    let mut unit_layers: Vec<u32> = (0..grammar.matchers.len() as u32)
+        .filter(|&m| unit_reads.layers.iter().any(|&layer| grammar.is_a(m, layer)))
+        .collect();
+    unit_layers.extend(&unit_reads.layers);
+    let unit_layers = unique(unit_layers);
+    let unit_overlays: Vec<bool> = reach.iter().map(|reachable| unit_layers.iter().any(|&layer| reachable[layer as usize])).collect();
+    // Per front end, the token kinds semantic-only units attach: those the
+    // semantic layers are or live in; every kind when a read could see the
+    // others missing (as for linted files, `Linter::lint`).
+    let unit_token_kinds: Vec<Vec<bool>> = grammar.natives.iter().enumerate().map(|(front, native)| {
+        let count = native.frontend.kinds().len();
+        let mut wanted = vec![false; count];
+        let mut mark = |m: u32| {
+            if let Some(kind) = grammar.native_kind(m).filter(|kind| usize::from(kind.front) == front && kind.is_token()) {
+                wanted[usize::from(kind.kind)] = true;
+            }
+        };
+        for &layer in &unit_layers {
+            mark(layer);
+            for &host in &grammar.native_hosts[layer as usize] { mark(host) }
+        }
+        if wanted.iter().any(|&on| on) && unit_reads.all_tokens || unit_reads.own_tokens {
+            for (kind, on) in wanted.iter_mut().enumerate() { *on |= native.frontend.is_token(kind as u16) }
+        }
+        wanted
+    }).collect();
     let mut linter = Linter {
         invalidation: Default::default(),
         units: Default::default(),
         discoveries: Default::default(),
         programs: Default::default(),
         unit_overlays,
-        unit_tokens: unit_reads.all_tokens || unit_reads.own_tokens || unit_reads.layers.iter().any(|&layer| {
-            grammar.native_kind(layer).is_some_and(|kind| kind.is_token()) || grammar.native_hosts[layer as usize].iter().any(|&host| grammar.native_kind(host).is_some_and(|kind| kind.is_token()))
-        }),
+        unit_token_reasons,
+        unit_token_kinds,
+        unit_child_layers: !unit_reads.all_tokens && !unit_reads.own_tokens,
+        semantic_layers: unit_layers.iter().copied().filter(|&m| grammar.native_kind(m).is_none()).collect(),
         projects: super::frontend::Projects::new(&grammar.natives),
         reach,
         profile: None,
@@ -880,7 +969,7 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
         Target::Nodes(_, NodeSelection::Attribute(attr)) => Some(usize::from(*attr)),
         _ => None,
     }));
-    let ReadRequirements { layers: layer_reads, all_tokens: helper_tokens, own_tokens, requires_native } = reads.resolve(helpers);
+    let ReadRequirements { layers: layer_reads, all_tokens: helper_tokens, own_tokens, requires_native, .. } = reads.resolve(helpers);
     let requires_native = requires_native || targets.iter().any(|target| match target {
         Target::Matcher(m) | Target::Field(m, _) | Target::Nodes(m, NodeSelection::Attribute(_)) => is_native_layer(g, *m),
         Target::Nodes(_, NodeSelection::Link(_)) => true,

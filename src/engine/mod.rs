@@ -198,7 +198,15 @@ pub struct Linter {
     discoveries: std::sync::Mutex<crate::fx_hash::FxHashMap<crate::grammar::names::modules::resolution::DiscoveryRequest, reads::Cached<Option<Vec<PathBuf>>>>>,
     programs: program::Programs,
     unit_overlays: Vec<bool>,
-    unit_tokens: bool,
+    /// Per front end, by native kind: the tokens semantic-only units attach.
+    unit_token_kinds: Vec<Vec<bool>>,
+    /// Whether units build child layers only where the semantic reads need
+    /// one (unless some semantic read sees raw children).
+    unit_child_layers: bool,
+    /// The layers semantic tables read (name items, recipes, their helpers).
+    semantic_layers: Vec<u32>,
+    /// What asks units for tokens: helpers, layers or name items.
+    unit_token_reasons: Vec<String>,
     pub grammar: Grammar,
     language_options: language_options::LanguageOptions,
     pub rules: Vec<Rule>,
@@ -530,6 +538,15 @@ impl Linter {
             all_tokens |= f.all_tokens;
             token_fields |= f.token_fields;
         }
+        // Type questions about this file read what imported files are
+        // parsed with (reference directives). When no rule wants layers,
+        // only those are built, so rules see the tree they saw without them.
+        let rule_layers = lang_layers || targets.iter().any(|&wanted| wanted);
+        if wants_native {
+            for &m in &self.semantic_layers {
+                need(m, &mut targets);
+            }
+        }
         wants_layers |= lang_layers;
         if token_kinds.iter().any(|&k| k) && all_tokens || token_fields {
             if let Some(front) = accepting {
@@ -554,7 +571,7 @@ impl Linter {
         let mut pattern_tree = wants_layers;
         let mut fallback_active = None;
         if let Some((index, _)) = front {
-            let parsed = self.parse(path, text, units::ParsePlan { lang, front: Some(index), layers: wants_layers, overlays: &overlays, tokens: &token_kinds });
+            let parsed = self.parse(path, text, units::ParsePlan { lang, front: Some(index), layers: wants_layers, overlays: &overlays, child_layers: !rule_layers, tokens: &token_kinds });
             match parsed {
                 Ok(parsed) => {
                     let tree = parsed.tree;
@@ -612,7 +629,7 @@ impl Linter {
 
         if pattern_tree {
             let run = Run { active: fallback_active.as_deref().unwrap_or(&active), ..run };
-            let tree = self.parse(path, text, units::ParsePlan { lang, front: None, layers: true, overlays: &overlays, tokens: &[] }).expect("pattern parse").tree;
+            let tree = self.parse(path, text, units::ParsePlan { lang, front: None, layers: true, overlays: &overlays, child_layers: false, tokens: &[] }).expect("pattern parse").tree;
             let rules_started = std::time::Instant::now();
             self.check_tree(&tree, &run, programs, None, &mut out);
             if tree.too_deep {
@@ -647,10 +664,16 @@ impl Linter {
     }
 
     /// The compiled parse plan for units read only for semantic questions:
-    /// whether tokens are attached, and how many matchers of all the
-    /// overlay mask enables (regular layers are always built).
-    pub fn unit_plan(&self) -> (bool, usize, usize) {
-        (self.unit_tokens, self.unit_overlays.iter().filter(|&&on| on).count(), self.unit_overlays.len())
+    /// how many token kinds are attached, how many matchers of all the
+    /// layer mask enables, and whether child layers follow that mask.
+    pub fn unit_plan(&self) -> (usize, usize, usize, bool) {
+        let tokens = self.unit_token_kinds.iter().flatten().filter(|&&on| on).count();
+        (tokens, self.unit_overlays.iter().filter(|&&on| on).count(), self.unit_overlays.len(), self.unit_child_layers)
+    }
+
+    /// Why [`Linter::unit_plan`] attaches tokens.
+    pub fn unit_token_reasons(&self) -> &[String] {
+        &self.unit_token_reasons
     }
 
     /// A context on `tree`'s root outside any rule: for the tree's names,

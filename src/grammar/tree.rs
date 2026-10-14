@@ -65,10 +65,14 @@ impl Tree {
     }
 
     /// A front end's tree (in this grammar's ids) with the pattern layers
-    /// that live inside it: one tree per file.
-    pub fn graft(g: &Grammar, lang: usize, text: &str, mut nodes: Vec<Node>, root: u32, overlays: Option<&[bool]>, profile: Option<&crate::engine::Profile>) -> Tree {
+    /// that live inside it: one tree per file. `layers` (by matcher) limits
+    /// which overlays are searched and, under each node, whether its child
+    /// layers are built at all (all of them when any is wanted, since they
+    /// compete for the same text).
+    pub fn graft(g: &Grammar, lang: usize, text: &str, mut nodes: Vec<Node>, root: u32, layers: Option<&[bool]>, child_layers: bool, profile: Option<&crate::engine::Profile>) -> Tree {
         let mut p = Parser::new(g, lang, text);
-        p.enabled_overlays = overlays;
+        p.enabled_overlays = layers;
+        p.masked_children = child_layers;
         p.profile = profile;
         let holes = p.graft(&mut nodes, root);
         let too_deep = p.too_deep;

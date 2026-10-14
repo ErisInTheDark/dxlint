@@ -1,0 +1,6 @@
+import .ts
+in ts_identifier rule reference-contract {
+  when (text == "marker" || ends_with(text, "Marker")) && is ts_expression_statement.expression
+  when (text == "leadingMarker") != (node always number)
+  warn "Only a leading reference supplies the ambient value."
+}

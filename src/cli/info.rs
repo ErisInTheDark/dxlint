@@ -389,11 +389,14 @@ pub fn profile(output: &mut Output<'_>, linter: &Linter, format: super::Format, 
         Profile::get(&p.unit_parses),
         ms(Profile::get(&p.unit_parse_nanos)),
     ));
-    let (tokens, overlays, matchers) = linter.unit_plan();
+    let (tokens, layers, matchers, masked) = linter.unit_plan();
     output.err(format_args!(
-        "  foreign-unit plan: attached tokens {}; overlay mask {overlays}/{matchers} matchers; regular layers on",
-        if tokens { "on" } else { "off" },
+        "  foreign-unit plan: {tokens} attached token kinds; layer mask {layers}/{matchers} matchers; child layers {}",
+        if masked { "masked" } else { "all (a semantic read sees raw children)" },
     ));
+    if !linter.unit_token_reasons().is_empty() {
+        output.err(format_args!("  foreign-unit demand from: {}", linter.unit_token_reasons().join(", ")));
+    }
     output.err(format_args!(
         "  module work: {} index builds ({:.1} ms), {} plan lookups ({:.1} ms, index builds excluded)",
         Profile::get(&p.module_index_calls),

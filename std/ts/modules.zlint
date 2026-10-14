@@ -202,9 +202,16 @@ in ts_namespace {
 }
 
 define {
-  in ts_line_comment match ts_reference_path /^\/\/\/\s*<reference\s+path\s*=\s*["'][^"']+["'][^>]*\/>/
-  in ts_line_comment match ts_reference_types /^\/\/\/\s*<reference\s+types\s*=\s*["'][^"']+["'][^>]*\/>/
-  in ts_line_comment match ts_reference_lib /^\/\/\/\s*<reference\s+lib\s*=\s*["'][^"']+["'][^>]*\/>/
+  in .js layer ts_module_leading_trivia match ts_module_leading_trivia /\A/ (/[\s\u{FEFF}]+/ or ts_module_leading_line_comment or ts_module_leading_block_comment)+
+  in ts_module_leading_trivia {
+    match ts_module_leading_line_comment @core_line_comment_pattern
+    match ts_module_leading_block_comment @core_block_comment_pattern
+  }
+  in ts_module_leading_line_comment {
+    match ts_reference_path /^\/\/\/\s*<reference\s+path\s*=\s*["'][^"']+["'][^>]*\/>/
+    match ts_reference_types /^\/\/\/\s*<reference\s+types\s*=\s*["'][^"']+["'][^>]*\/>/
+    match ts_reference_lib /^\/\/\/\s*<reference\s+lib\s*=\s*["'][^"']+["'][^>]*\/>/
+  }
 }
 fn ts_module_reference(n) = re_replace(n.text, /^\/\/\/\s*<reference\s+(?:path|types|lib)\s*=\s*["']([^"']+)["'][\s\S]*$/, "$1")
 fn ts_module_path_reference(n) = {
@@ -212,25 +219,14 @@ fn ts_module_path_reference(n) = {
   value if starts_with(path, "./") || starts_with(path, "../") || starts_with(path, "/")
     || re_test(path, /^[A-Za-z]:\//) then path else "./{path}"
 }
-fn ts_module_leading_reference(n) = {
-  value n.source
-  byte_slice 0 n.offset
-  re_test /^(?:\s|\/\/[^\r\n]*(?:\r?\n|$)|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/)*$/
-}
 fn ts_module_types_reference(n) = "@types/{ts_module_reference(n)}"
 fn ts_module_lib_reference(n) = "typescript/lib/lib.{ts_module_reference(n)}.d.ts"
 in ts_reference_path {
-  when ts_module_leading_reference(node) {
-    globals all value, type, query from module ts_module_path_reference(node)
-  }
+  globals all value, type, query from module ts_module_path_reference(node)
 }
 in ts_reference_types {
-  when ts_module_leading_reference(node) {
-    globals all value, type, query from module ts_module_types_reference(node)
-  }
+  globals all value, type, query from module ts_module_types_reference(node)
 }
 in ts_reference_lib {
-  when ts_module_leading_reference(node) {
-    globals all value, type, query from module ts_module_lib_reference(node)
-  }
+  globals all value, type, query from module ts_module_lib_reference(node)
 }
