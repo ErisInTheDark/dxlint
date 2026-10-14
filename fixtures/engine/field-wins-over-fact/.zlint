@@ -17,10 +17,10 @@ in ts_variable_declaration rule declaration-field {
   warn "one syntax declaration"
 }
 fn syntax_annotation(x) = x.type.node
-fn declaration_value(value) = value.declaration
+fn record_declaration(value) = value.declaration
 in ts_type_alias rule type-field {
   when syntax_annotation(node) is ts_type_keyword
-  when declaration_value({ declaration: "record" }) == "record"
+  when record_declaration({ declaration: "record" }) == "record"
   warn "syntax type"
 }
 in ts_declarator rule empty-type {

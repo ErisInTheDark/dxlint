@@ -1,4 +1,6 @@
 # Nullish replacements, stable references and selection policy.
+import .ts/values/inspection
+
 define {
 
 group nullish_coalescing_expression ts_logical, ts_assignment, ts_conditional, ts_if
@@ -23,7 +25,7 @@ fn nullish_same_reference(a, b) = {
 }
 fn nullish_unknown(n) = {
   value domain: n.nullish_type_domains
-  value n.type_opaque || domain.kind == "any" && contains(domain.flags, "any") || domain.kind == "unknown" && n.type_flags == null
+  value ts_value_opaque(n) || domain.kind == "any" && contains(domain.flags, "any") || domain.kind == "unknown" && n.type_flags == null
 }
 fn nullish_comparison(n) = if n is ts_binary && contains(["==", "===", "!=", "!=="], n.operator)
   then { operator: n.operator, operands: [unparenthesised_node(n.left.node), unparenthesised_node(n.right.node)] } else null

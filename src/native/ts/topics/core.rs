@@ -91,18 +91,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "source_type",
-        doc: "native layers: the file's eslint `sourceType`: `commonjs` (`.cjs`, `.cts`), `module` (`.mjs`, `.mts`, or any file that imports or exports) or `script`; the same on every node",
-        get: |f, n| f.with_file(|file, _| Value::from(file.source_type()), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "imported_name",
-        doc: "native layers: the name an identifier's binding imports (`default`, `*` for a namespace, or the export's name); null if not imported",
-        get: |f, n| opt(f.import_of(n), |(_, name)| Value::from(name)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "member_writes",
         doc: "native layers: on a class member: direct reassignments outside its constructor, resolved by receiver type (`=`, `+=`, `++`, `delete`, destructuring)",
         get: |f, n| opt(f.member_uses(n), |u| Value::from(u.writes as usize)),

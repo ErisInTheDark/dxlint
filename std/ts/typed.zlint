@@ -35,6 +35,7 @@ import .ts/typed/for-in-arrays
 import .ts/typed/type-conversions
 import .ts/typed/rejection-handlers
 import .ts/typed/unsafe-members
+import .ts/values/inspection
 
 define {
 
@@ -182,13 +183,13 @@ in ts_identifier {
   let eval_identifier true
   let eval_core_root if contains(["global", "globalThis", "window", "self"], text) && global != null && global != "off" then text else null
   let eval_timer_global resolved == "global" && (re_test(file, /\.[cm]?tsx?$/) || global != null && global != "off")
-  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || type_opaque && reference_kind == null
+  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node) && reference_kind == null
 }
 in ts_member, ts_index {
   let eval_name static_name
   let eval_core_root if object.eval_core_root != null && static_name == object.eval_core_root then object.eval_core_root else null
   let eval_timer_global if re_test(file, /\.[cm]?tsx?$/) then object is ts_identifier && contains(["global", "globalThis", "window"], object) else object.eval_core_root != null
-  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || type_opaque
+  let eval_constructor builtin_type("FunctionConstructor") || { value type_flags.nonempty ?? []; contains "any" } || ts_value_opaque(node)
 }
 in ts_member let eval_bind_member property == "bind"
 in ts_parenthesized {

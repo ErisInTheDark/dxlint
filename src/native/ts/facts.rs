@@ -30,7 +30,6 @@ pub trait Facts {
     /// `f` on the file itself, for links (nodes a node leads to).
     fn nodes_of(&self, f: for<'a, 't> fn(&'a NativeFile<'t>, u32) -> Vec<u32>, node: u32) -> Vec<u32>;
     fn binding(&self, node: u32) -> Option<Binding>;
-    fn import_of(&self, node: u32) -> Option<(String, String)>;
     fn type_text(&self, node: u32) -> Option<String>;
     fn type_members(&self, node: u32) -> Option<Vec<Box<str>>>;
     fn type_defaults(&self, node: u32) -> Option<Vec<Option<String>>>;
@@ -67,10 +66,6 @@ impl Facts for NativeFile<'_> {
 
     fn binding(&self, node: u32) -> Option<Binding> {
         NativeFile::binding(self, node)
-    }
-
-    fn import_of(&self, node: u32) -> Option<(String, String)> {
-        NativeFile::import_of(self, node)
     }
 
     fn type_text(&self, node: u32) -> Option<String> {

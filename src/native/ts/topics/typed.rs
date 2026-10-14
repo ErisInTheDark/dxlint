@@ -90,12 +90,6 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "type_opaque",
-        doc: "native expressions: type computation is unsupported or unresolved, distinct from explicit unknown and open type parameters",
-        get: |f, n| f.with_file(|file, node| Value::Bool(file.type_of(node).is_opaque()), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "builtin_type",
         doc: "native expressions: builtin_type(name) asks whether the type is the named standard-library type or derives from it",
         get: |f, n| f.with_file(|file, node| {

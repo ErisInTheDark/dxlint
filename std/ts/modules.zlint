@@ -216,6 +216,14 @@ define {
     match ts_reference_types /^\/\/\/\s*<reference\s+types\s*=\s*["'][^"']+["'][^>]*\/>/
     match ts_reference_lib /^\/\/\/\s*<reference\s+lib\s*=\s*["'][^"']+["'][^>]*\/>/
   }
+  # The name a binding imports: "default", "*", the decoded specifier name, else null.
+  in ts_node let imported_name {
+    value binding: unparenthesised_node(node).declaration
+    value if binding is ts_import.default_import then "default"
+      else if binding is ts_import.namespace then "*"
+      else if binding.parent is ts_import_specifier then ts_module_name(binding.parent.imported.node)
+      else null
+  }
 }
 fn ts_module_reference(n) = re_replace(n.text, /^\/\/\/\s*<reference\s+(?:path|types|lib)\s*=\s*["']([^"']+)["'][\s\S]*$/, "$1")
 fn ts_module_path_reference(n) = {

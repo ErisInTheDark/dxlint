@@ -1,7 +1,8 @@
 import .ts
+import .ts/values/inspection
 
             in ts_declarator.init rule source-known {
-                when !type_opaque && contains(type_members, "[Symbol.iterator]")
+                when !ts_value_opaque(node) && contains(type_members, "[Symbol.iterator]")
                 warn "resolved source"
             }
             in ts_declarator.init rule member-known {

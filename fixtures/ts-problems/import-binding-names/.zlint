@@ -1,0 +1,9 @@
+import .ts
+rule no-import-assign
+
+in ts_call rule import-label {
+  when callee.text == "probe"
+  each binding in argument.nodes
+  report at binding
+  warn "{binding.imported_name ?? 'none'}"
+}

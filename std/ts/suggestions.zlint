@@ -772,7 +772,7 @@ fn strict_missing(n, scope, mode) =
 in ts_program, ts_function, ts_arrow, ts_method rule strict {
   option mode ("safe" | "never" | "global" | "function") = "safe" "strict directive policy"
   let strict_scope directive_scope
-  let strict_mode if source_type == "module" then "module" else if source_environment.implied_strict then "implied" else if mode == "safe" then if source_environment.root_function then "global" else "function" else mode
+  let strict_mode if ts_source_type(ts_module_program(node)) == "module" then "module" else if source_environment.implied_strict then "implied" else if mode == "safe" then if source_environment.root_function then "global" else "function" else mode
   let strict_findings {
     value initial_findings: strict_missing(node, strict_scope, strict_mode)
     value strict_scope.directives

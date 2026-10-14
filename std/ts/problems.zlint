@@ -280,14 +280,14 @@ in ts_identifier rule no-func-assign {
 }
 in ts_identifier rule no-import-assign {
   when reference_kind == "import" && @is_write
-  report at write_site
+  report at name_write_owner
   warn "'{text}' is read-only."
 }
 # Members of a namespace import: `ns.x = 1`, `ns.x++`, `delete ns.x`.
 in ts_member, ts_index rule no-import-assign:member {
   when write_site != null && object.imported_name == "*"
-  report at write_site
-  warn "The members of '{object}' are read-only."
+  report at name_write_owner
+  warn "The members of '{unparenthesised_node(object.node)}' are read-only."
 }
 # `Object.assign(ns, ...)`, `Reflect.set(ns, ...)` and the like.
 in ts_identifier let is_real_global global == "readonly" || global == "writable"
@@ -301,7 +301,7 @@ in ts_call rule no-import-assign:call {
     re_test /^(?:Object\??\.(?:assign|defineProperty|defineProperties|freeze|setPrototypeOf)|Reflect\??\.(?:defineProperty|deleteProperty|set|setPrototypeOf))$/
   }
   when first([] argument.imported_name) == "*"
-  warn "The members of '{first(argument)}' are read-only."
+  warn "The members of '{unparenthesised_node(first(argument))}' are read-only."
 }
 
 # ---- duplicates ----------------------------------------------------------------

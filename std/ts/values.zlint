@@ -352,7 +352,14 @@ in ts_non_null {
 }
 in ts_computed_key { unwraps expression }
 in ts_spread { unwraps argument }
-in ts_assignment { unwraps right }
+in ts_assignment {
+  when operator == "=" { unwraps right }
+  when operator == "&&=" { unwraps (excludes truthy from left) | right }
+  when operator == "||=" { unwraps (excludes falsy from left) | right }
+  when operator == "??=" { unwraps (excludes nullable from left) | right }
+  when operator == "+=" { unwraps left.widened | right.widened }
+  when !contains(["=", "&&=", "||=", "??=", "+="], operator) { unwraps right.widened }
+}
 in ts_conditional { unwraps consequent | alternate }
 in ts_logical {
   when operator == "&&" { unwraps (excludes truthy from left) | right }

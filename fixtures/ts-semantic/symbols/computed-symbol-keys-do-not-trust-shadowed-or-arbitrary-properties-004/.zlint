@@ -1,6 +1,7 @@
 import .ts
+import .ts/values/inspection
 in ts_declarator.init rule known {
- when is ts_object && !type_opaque
+ when is ts_object && !ts_value_opaque(node)
  warn "resolved"
 }
 
