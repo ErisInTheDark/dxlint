@@ -688,7 +688,7 @@ in ts_method rule class-methods-use-this {
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)
   when !((ignoreClassesWithImplements == "public-fields" || ignoreClassesThatImplementAnInterface == "public-fields") && parent.implements != null && !contains(modifier, "private") && !contains(modifier, "protected") && !starts_with(key, "#"))
-  report at function_warning_site(node)
+  report at function_head_site(node)
   warn "Expected 'this' to be used by class {function_name}."
 }
 in ts_class_property rule class-methods-use-this:field {
@@ -703,7 +703,7 @@ in ts_class_property rule class-methods-use-this:field {
   when !(ignoreOverrideMethods && contains(modifier, "override"))
   when !((ignoreClassesWithImplements == "all" || ignoreClassesThatImplementAnInterface == true) && parent.implements != null)
   when !((ignoreClassesWithImplements == "public-fields" || ignoreClassesThatImplementAnInterface == "public-fields") && parent.implements != null && !contains(modifier, "private") && !contains(modifier, "protected") && !starts_with(key, "#"))
-  report at function_warning_site(init.node)
+  report at if contains(modifier, "accessor") && init is ts_arrow then init.operator.node else function_head_site(init.node)
   warn if contains(modifier, "accessor") then "Expected 'this' to be used by class arrow function." else "Expected 'this' to be used by class {init.function_name}."
 }
 
