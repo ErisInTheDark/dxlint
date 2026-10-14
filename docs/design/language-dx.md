@@ -22,6 +22,7 @@ Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly
 - `@macro` defines, `@name(...)` uses, for expressions as well as items and grammar.
 - Parameters are typed (`node`, `text`, `number`, `bool`, `list`, `record`, `handle`); passing the wrong kind is a config error.
 - No recursion (pasting cannot recurse): a cycle is a config error. Flat forms: `walk` (trees, chains, lockstep pairs as records), `fold`, and a new engine `fold_up(root, n => children, (n, results) => value)` for bottom-up values (iterative, memoised on DAGs, cycles give unknown).
+- Macros may be declared inside an item or rule block; they are visible only there (`@present = ...` then `@present`).
 - Migration: today's `fn` definitions and calls become typed expression macros; the 75 recursive ones are rewritten flat first.
 
 ## Nullability (decided)
@@ -78,6 +79,8 @@ in ts_assignment rule no-self-assign {
 ## Type recipes (decided)
 
 - Trait implications are declared once: `trait undefined implies nullable, falsy, nonthenable`; `trait undefined` then means the whole set everywhere.
+- Operators, tightest first: `a.[k]` member lookup (was `from a at k`), `!a` complement, `a \ b` difference (was `excludes b from a`), `a & b`, `a | b`, `a ?? b` (b when a is unknown). No comparisons, arithmetic or conditional types in recipes: yes/no questions stay in conditions (`could`, `always`, `fits`), branching stays in `when`.
+- `any` absorbs: declared once (`trait any absorbs`); an operation on an absorbing value is that value, so recipes need no `any` passthrough branches.
 - Boolean subject form: `when x is { true then ...; false then ...; unknown then ... }`. In recipes `unknown then unwraps unknown` keeps "can't tell" honest where an `else` would guess.
 
 ## Fields are nodes that read as text (decided)
