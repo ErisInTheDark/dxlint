@@ -948,6 +948,7 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `value_expected(node)` | the contextual value: null when unknown, `{present: false}` when known absent, `{present: true, value}` otherwise |
 | `value_has_expected(node)` | true when contextual type exists, false when known absent, null when unknown; does not expand the value |
 | `value_widened(node)` | the widened value (`widens` recipe), in the `value_constituents` shape |
+| `value_accepts(node, other, allowing, given)` | whether every value `other` may be is one `node` allows (assignability), each side read as its `"value"`, `"expected"` or `"widened"` value; null when either side is unknown or absent |
 | `value_origin(node)` | the nearest instantiating reference `{file, node, kind}`; null when absent or unknown |
 | `global_declarations(node, name, class)` | the global declarations of `name` in `class` as `{file, node}` rows; `[]` known absent, null unknown |
 | `declaration_identity(node)` | the canonical declaration `{file, node}` a name or value comes from; null when unknown |

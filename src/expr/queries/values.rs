@@ -21,6 +21,7 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_expected", arity: 1, call: expected },
     QueryFunction { name: "value_has_expected", arity: 1, call: has_expected },
     QueryFunction { name: "value_widened", arity: 1, call: widened },
+    QueryFunction { name: "value_accepts", arity: 4, call: accepts },
     QueryFunction { name: "value_origin", arity: 1, call: origin },
     QueryFunction { name: "global_declarations", arity: 3, call: globals },
     QueryFunction { name: "declaration_identity", arity: 1, call: declaration },
@@ -302,6 +303,26 @@ fn has_expected(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Know
 fn widened(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
     project(semantic, semantic.values().evaluate(at,
         &crate::grammar::names::Value::Path(vec![crate::grammar::names::WIDENED])))
+}
+
+/// Whether every value the second node may be is one the first allows, each
+/// read as its `"value"`, `"expected"` or `"widened"` value.
+fn accepts(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let [Value::Node(other, _), Value::Str(allowing), Value::Str(given)] = args else { return Known::Unknown };
+    let Target::Node(node) = at.target else { return Known::Unknown };
+    let other = Leaf { target: Target::Node(NodeRef { node: *other, ..node }), ..at };
+    let side = |at: Leaf, mode: &str| match mode {
+        "value" => Known::Yes(Some(semantic.values().values(at))),
+        "expected" => semantic.calls().expected(at),
+        "widened" => Known::Yes(Some(semantic.values().evaluate(at,
+            &crate::grammar::names::Value::Path(vec![crate::grammar::names::WIDENED])))),
+        _ => Known::Unknown,
+    };
+    let (Known::Yes(Some(expected)), Known::Yes(Some(actual))) = (side(at, allowing), side(other, given)) else { return Known::Unknown };
+    match semantic.calls().accepts(&expected, &actual) {
+        Known::Yes(accepted) => Known::Yes(Value::Bool(accepted)),
+        Known::Unknown => Known::Unknown,
+    }
 }
 
 fn origin(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {

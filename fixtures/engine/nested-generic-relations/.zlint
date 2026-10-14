@@ -1,0 +1,8 @@
+import .ts
+in ts_call rule nested-box-contract {
+  let box_parts value_constituents(node)
+  let box_valid box_parts != null && count(box_parts) > 0
+    && all(box_parts, arm => any(arm, part => part.identity_known && part.identity.value == "string"))
+  when !box_valid
+  warn "nested box chose an incompatible overload"
+}

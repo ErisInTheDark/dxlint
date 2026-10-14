@@ -126,7 +126,8 @@ type HeaderAnswer = Known<Vec<Vec<Header>>>;
 #[derive(Default)]
 pub(crate) struct State {
     pub(super) acceptance: Memo<(NodeValue, NodeValue), Known<bool>>,
-    /// Comparisons in progress, outermost first ([`Calls::accepts`]).
+    /// Comparisons in progress, outermost first, without incidental frames
+    /// ([`Calls::accepts`]).
     accepting: std::cell::RefCell<Vec<(NodeValue, NodeValue)>>,
     /// The outermost in-progress comparison assumed to hold so far.
     assumed: std::cell::Cell<Option<usize>>,
@@ -236,7 +237,13 @@ impl Calls<'_> {
         self.profile(ProfileQuery::Accept, || {
             let state = &self.semantic.calls;
             let key = (expected.clone(), actual.clone());
-            if let Some(depth) = state.accepting.borrow().iter().position(|pending| *pending == key) {
+            // Recursion through members rebinds frames each round; frames of
+            // non-generic declarations bind nothing, so the comparison is
+            // recognised without them. Generic instantiations keep their
+            // frames (`Box<Box<number>>` vs `Box<Box<string>>` is compared).
+            let unbound = (self.without_incidental_frames(expected), self.without_incidental_frames(actual));
+            let assumed = state.accepting.borrow().iter().position(|pending| *pending == unbound);
+            if let Some(depth) = assumed {
                 state.assumed.set(Some(state.assumed.get().map_or(depth, |outer| outer.min(depth))));
                 return Known::Yes(true);
             }
@@ -245,7 +252,7 @@ impl Calls<'_> {
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
             let depth = state.accepting.borrow().len();
-            state.accepting.borrow_mut().push(key.clone());
+            state.accepting.borrow_mut().push(unbound);
             let outer = state.assumed.replace(None);
             let answer = accepts::accepts(expected, actual, &self.semantic.values());
             state.accepting.borrow_mut().pop();
@@ -259,6 +266,41 @@ impl Calls<'_> {
             }
             answer
         })
+    }
+
+    /// `value` with the frames of non-generic declarations dropped: they
+    /// bind no arguments, so only their identity differs between rounds.
+    fn without_incidental_frames(&self, value: &NodeValue) -> NodeValue {
+        let NodeValue::Alternatives(rows) = value else { return value.clone() };
+        // Binding unless this frame and every frame it reads through (its
+        // parents, its reference's frame) belongs to a declaration with no
+        // type parameters and binds no evaluated arguments: a non-generic
+        // class inside a generic function still sees the function's.
+        let owner_generic = |owner: super::question::NodeRef| {
+            let Some(node) = self.semantic.world.tree(owner.file).and_then(|tree| tree.nodes.get(owner.node as usize)) else { return true };
+            let Some(kind) = self.semantic.tables.kinds.get(node.matcher as usize) else { return true };
+            kind.generics.iter().any(|(path, _)| match path.as_slice() {
+                [label] => node.children.iter().any(|edge| edge.label == *label),
+                _ => true,
+            })
+        };
+        let generic = |start| {
+            let mut pending = vec![start];
+            let mut seen = Vec::new();
+            while let Some(id) = pending.pop() {
+                if id == super::question::FrameId::ROOT || seen.contains(&id) { continue }
+                if seen.len() >= 32 { return true }
+                seen.push(id);
+                let Some(frame) = self.question.get(id) else { return true };
+                if frame.args.is_some() || owner_generic(frame.owner) { return true }
+                pending.push(frame.parent);
+                if let Some(through) = frame.through { pending.push(through.frame) }
+            }
+            false
+        };
+        NodeValue::Alternatives(rows.iter().map(|row| row.iter().map(|&leaf| {
+            if leaf.frame == super::question::FrameId::ROOT || generic(leaf.frame) { leaf } else { Leaf { frame: super::question::FrameId::ROOT, ..leaf } }
+        }).collect()).collect())
     }
 
     pub fn match_value(&self, at: Leaf, pattern: &Value, actual: &NodeValue, slots: &[Leaf]) -> Known<Match> {

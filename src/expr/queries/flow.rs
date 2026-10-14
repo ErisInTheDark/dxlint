@@ -5,20 +5,29 @@ use crate::grammar::names::effects::{DeclaredEffect, EffectId, EventKind, Execut
 
 use super::QueryFunction;
 
+/// Flow answers are about a function's own syntax, the same in every
+/// instantiation: a query asked inside a binding frame (a recipe evaluated
+/// for one call) is answered for the unbound function.
+macro_rules! syntactic {
+    ($query:ident) => {
+        |semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]| $query(semantic, Leaf { frame: FrameId::ROOT, ..at }, args)
+    };
+}
+
 pub(super) static FUNCTIONS: &[QueryFunction] = &[
-    QueryFunction { name: "flow_normal", arity: 1, call: normal },
-    QueryFunction { name: "flow_declared_effects", arity: 2, call: declared },
-    QueryFunction { name: "reachable", arity: 1, call: reachable },
-    QueryFunction { name: "flow_entry", arity: 1, call: entry },
-    QueryFunction { name: "flow_prior", arity: 2, call: prior },
-    QueryFunction { name: "flow_required", arity: 2, call: required },
-    QueryFunction { name: "flow_complete_without", arity: 3, call: complete_without },
-    QueryFunction { name: "flow_complete_with", arity: 3, call: complete_with },
-    QueryFunction { name: "flow_value_used", arity: 1, call: value_used },
-    QueryFunction { name: "flow_has_reads", arity: 1, call: has_reads },
-    QueryFunction { name: "flow_exits", arity: 2, call: exits },
-    QueryFunction { name: "flow_prior_event", arity: 2, call: prior_event },
-    QueryFunction { name: "flow_crosses", arity: 5, call: crosses },
+    QueryFunction { name: "flow_normal", arity: 1, call: syntactic!(normal) },
+    QueryFunction { name: "flow_declared_effects", arity: 2, call: syntactic!(declared) },
+    QueryFunction { name: "reachable", arity: 1, call: syntactic!(reachable) },
+    QueryFunction { name: "flow_entry", arity: 1, call: syntactic!(entry) },
+    QueryFunction { name: "flow_prior", arity: 2, call: syntactic!(prior) },
+    QueryFunction { name: "flow_required", arity: 2, call: syntactic!(required) },
+    QueryFunction { name: "flow_complete_without", arity: 3, call: syntactic!(complete_without) },
+    QueryFunction { name: "flow_complete_with", arity: 3, call: syntactic!(complete_with) },
+    QueryFunction { name: "flow_value_used", arity: 1, call: syntactic!(value_used) },
+    QueryFunction { name: "flow_has_reads", arity: 1, call: syntactic!(has_reads) },
+    QueryFunction { name: "flow_exits", arity: 2, call: syntactic!(exits) },
+    QueryFunction { name: "flow_prior_event", arity: 2, call: syntactic!(prior_event) },
+    QueryFunction { name: "flow_crosses", arity: 5, call: syntactic!(crosses) },
 ];
 
 fn effect_id(semantic: &Semantic<'_>, value: &Value<'static>) -> Option<EffectId> {
