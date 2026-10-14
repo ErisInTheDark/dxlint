@@ -1,0 +1,11 @@
+declare const arr: number[];
+arr.reduce((a, n) => a + n, 0 as number);
+arr.reduce<number>((a, n) => a + n, 0 as number);
+arr["reduce"]((a, n) => a + n, <number>0);
+arr?.reduce((a, n) => a + n, 0 as number);
+arr.reduce?.((a, n) => a + n, 0 as number);
+arr.reduce((a, n) => a + n, (0 as number));
+const custom = { reduce: (cb: any, initial: any) => initial };
+custom.reduce((a: number, n: number) => a + n, 0 as number);
+arr.reduce((a, n) => a + n, 0 as /* keep */ number);
+arr.reduce((a, n) => a + n, 0 as string);

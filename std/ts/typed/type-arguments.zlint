@@ -1,0 +1,43 @@
+# Type argument removal and reduce assertion relocation.
+import .ts/assertions
+
+define {
+
+fn type_argument_fix(n) = {
+  value owner: n.parent.node
+  value arguments: owner.type_argument.nodes
+  value previous: { value arguments; slice 0 -1; last }
+  value opening: last(overlapping(ts_open_angle, owner.offset, first(arguments).offset))
+  value closing: first(overlapping(ts_close_angle, n.end_offset, owner.end_offset))
+  value span: if count(arguments) == 1 then { start: opening.offset, end: closing.end_offset }
+    else { start: previous.end_offset, end: n.end_offset }
+  value if last(arguments) != n || opening == null || closing == null
+    || count(overlapping(ts_comment, span.start, span.end)) > 0 then null else span
+}
+fn reduce_type_argument_fix(source, n) = {
+  value call: n.parent.node
+  value assertion: assertion_fix(source, n, false)
+  value insertion: if call.optional != null then call.optional.end_offset else call.callee.end_offset
+  value edits: {
+    value if count(call.type_argument.nodes) == 0 then [{ start: insertion, end: insertion, text: "<" n.type.text ">" }] else []
+    concat [{ start: assertion.target.offset, end: assertion.target.end_offset, text: assertion.text }]
+  }
+  value replacement: if assertion == null then null else expression_fix_edits(call.text, call.offset, edits)
+  value if replacement == null || !expression_fix_retains_comments(call, replacement) then null
+    else { target: call, text: replacement }
+}
+
+in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
+  when reduce_type_assertion == true
+  warn "Unnecessary assertion: Array#reduce accepts a type parameter for the default value."
+  let edit reduce_type_argument_fix(source, node)
+  fix at edit.target if edit != null as edit.text
+}
+in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument rule no-unnecessary-type-arguments {
+  when type_argument_redundant != null
+  warn if type_argument_redundant == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
+  let edit type_argument_fix(node)
+  fix at edit if edit != null as ""
+}
+
+}

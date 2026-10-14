@@ -1,0 +1,1 @@
+declare const x: string | null; x as string; x as number; declare const a: number[]; a.reduce<number[]>((x, y) => x, []); a.reduce((x, y) => x, [] as number);

@@ -1,0 +1,6 @@
+input.ts:10:29-10:51 prefer-reduce-type-parameter#0
+input.ts:2:29-2:40 prefer-reduce-type-parameter#0
+input.ts:3:37-3:48 prefer-reduce-type-parameter#0
+input.ts:4:32-4:41 prefer-reduce-type-parameter#0
+input.ts:5:30-5:41 prefer-reduce-type-parameter#0
+input.ts:6:31-6:42 prefer-reduce-type-parameter#0

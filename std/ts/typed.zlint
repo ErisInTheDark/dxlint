@@ -18,6 +18,7 @@ import .ts/typed/string-boundaries
 import .ts/typed/includes
 import .ts/typed/type-constituents
 import .ts/typed/return-await
+import .ts/typed/type-arguments
 import .ts/typed/nullish-coalescing
 import .ts/typed/boolean-comparisons
 import .ts/typed/void-expressions
@@ -367,10 +368,6 @@ in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {
   when non_null_assertion == true
   warn "Use a ! assertion to more succinctly remove null and undefined from the type."
 }
-in ts_as, ts_type_assertion rule prefer-reduce-type-parameter {
-  when reduce_type_assertion == true
-  warn "Unnecessary assertion: Array#reduce accepts a type parameter for the default value."
-}
 in ts_method.return_type, ts_method_signature.return_type rule related-getter-setter-pairs {
   when accessor_type_mismatch == true
   warn "`get()` type should be assignable to its equivalent `set()` type."
@@ -407,13 +404,6 @@ in ts_for_of rule await-thenable:for-of {
 in ts_declarator.init rule await-thenable:using {
   when nonasync_using == true
   warn "Unexpected `await using` of a value that is not async disposable."
-}
-
-# no-unnecessary-type-arguments: the last explicit type argument is the type
-# parameter's default, or what the arguments infer anyway.
-in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument rule no-unnecessary-type-arguments {
-  when type_argument_redundant != null
-  warn if type_argument_redundant == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
 }
 
 # ---- template interpolation ----------------------------------------------------
