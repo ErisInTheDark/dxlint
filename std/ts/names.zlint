@@ -7,12 +7,12 @@ fn ts_identifier_name_valid(name) = re_test(name, /^[\p{ID_Start}_$][\p{ID_Conti
 # Where a function or class is a declaration (else an expression).
 fn ts_declared_statement(node) = node is (ts_program.body, ts_block.body, ts_case.body, ts_export.declaration, ts_labeled.body)
 group ts_namespace_runtime_nodes ts_variable_declaration, ts_function, ts_class, ts_enum, ts_empty, ts_export_assignment, ts_export
+in ts_block let ts_namespace_runtime_entries descendants(ts_namespace_runtime_nodes)
 fn ts_namespace_runtime(n) = {
-  value walk(n.body.node, item => item.children.nodes)
-  filter (item) item is ts_namespace_runtime_nodes
+  value n.body.ts_namespace_runtime_entries ?? []
   any (item) !(item is ts_export)
-    || !any(item.children.nodes, child => child is ts_export.declaration)
-    || any(item.children.nodes, child => child is ts_import_equals)
+    || item.declaration.node == null
+    || item.declaration.node is ts_import_equals
 }
 
 # Scopes; several on one node nest, outermost first. A function's body
