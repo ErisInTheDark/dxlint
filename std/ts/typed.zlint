@@ -364,9 +364,18 @@ in ts_union, ts_intersection {
   }
 }
 
+fn non_null_style_fix(source, n) = {
+  value body: assertion_fix_body(source, assertion_fix_trace(n, false))
+  value wrapped: body.node is (structure_binary, structure_assertion, ts_sequence, ts_assignment,
+    ts_conditional, ts_arrow, ts_yield, ts_unary, ts_await, ts_update)
+  value replacement: expression_fix_wrap(body.text, wrapped) "!"
+  value if !expression_fix_retains_comments(n, replacement) then null else assertion_fix_output(n, replacement)
+}
 in ts_as, ts_type_assertion rule non-nullable-type-assertion-style {
   when non_null_assertion == true
   warn "Use a ! assertion to more succinctly remove null and undefined from the type."
+  let edit non_null_style_fix(source, node)
+  fix at edit.target if edit != null as edit.text
 }
 in ts_method.return_type, ts_method_signature.return_type rule related-getter-setter-pairs {
   when accessor_type_mismatch == true

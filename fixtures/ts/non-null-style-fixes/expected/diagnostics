@@ -1,0 +1,4 @@
+input.ts:2:11-2:26 non-nullable-type-assertion-style#0
+input.ts:3:11-3:24 non-nullable-type-assertion-style#0
+input.ts:4:11-4:41 non-nullable-type-assertion-style#0
+input.ts:7:11-7:37 non-nullable-type-assertion-style#0
