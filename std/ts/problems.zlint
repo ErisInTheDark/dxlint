@@ -2,6 +2,7 @@
 # on the native TypeScript layers. Messages and positions follow ESLint's.
 
 import .ts/helpers
+import .ts/scoping/member-uses
 
 define {
 
@@ -601,14 +602,6 @@ in ts_this rule no-this-before-super {
 in ts_member, ts_index rule no-this-before-super:super {
   when object is ts_super && flow_constructor != null && reachable(node) == true && flow_required(node, "constructed") == false
   warn "'super' is not allowed before 'super()'."
-}
-
-# In TypeScript files, typescript-eslint's version (TS `private` members
-# too, its message); elsewhere eslint's (`#` members).
-@macro ts_file re_test(file, /\.[cm]?tsx?$/)
-in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no-unused-private-class-members {
-  when unused_member == "hash" || unused_member == "private" && @ts_file
-  warn if @ts_file then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
 }
 
 # Disallow variable assignments when the value is not used

@@ -1,0 +1,112 @@
+define {
+
+group member_usage_access ts_member, ts_index, ts_pattern_property, ts_property
+in ts_program let member_usage_accesses descendants(member_usage_access)
+fn member_usage_class(n) = find(walk(n, item => item.parent.node), item => item is ts_class)
+fn member_usage_key(n) = if n is ts_parameter then n.name.node else n.key.node
+fn member_usage_members(owner) = {
+  value owner.member.nodes
+  flat_map (member) if member is ts_method && member.calls_constructor then {
+    value member.parameter.nodes
+    filter (parameter) any(parameter.modifier.nodes,
+      modifier => contains(["private", "protected", "public", "readonly", "override"], modifier.text))
+  } else if member is (ts_method, ts_class_property) then [member] else []
+}
+fn member_usage_last(owner, name, static) = find_last(member_usage_members(owner),
+  member => ts_value_key(member_usage_key(member)) == name && ts_value_static(member.modifier.nodes) == static)
+fn member_usage_declaration(n) = {
+  value owner: n.parent.node
+  value if owner is (ts_method, ts_class_property) && owner.key.node == n
+      || owner is ts_parameter && owner.name.node == n && contains([] owner.modifier, "private")
+    then owner else null
+}
+fn member_usage_pattern_source(n) = {
+  value pattern: n.parent.node
+  value owner: pattern.parent.node
+  value source: if pattern is (ts_object, ts_object_pattern) then
+    if owner is (ts_declarator, ts_parameter) && owner.name.node == pattern then owner.init.node
+    else if owner is (ts_assignment, ts_assignment_pattern) && owner.left.node == pattern then owner.right.node
+    else null
+  else null
+  value if unparenthesised_node(source) is ts_this then source else null
+}
+in ts_member, ts_index {
+  let member_usage_name if is ts_member then ts_value_key(property.node) else ts_value_key(index.node)
+  let member_usage_read {
+    value writer: name_write_owner
+    value if writer == null then true
+      else if writer is (ts_update, ts_assignment) then
+        writer.operator != "=" && writer.problem_expression_value_used == true
+      else writer is ts_unary
+  }
+}
+in ts_pattern_property, ts_property {
+  let member_usage_name if key is ts_identifier && member_usage_pattern_source(node) != null then ts_value_key(key.node) else null
+  let member_usage_read member_usage_name != null
+}
+fn member_usage_named_class(name, access) = {
+  value binding: if name is ts_identifier then name_binding(name) else null
+  value classes: map(binding.declarations ?? [], declaration => declaration.parent.node)
+  value find(walk(access, item => item.parent.node), item => item is ts_class && contains(classes, item))
+}
+fn member_usage_annotation(type, access) =
+  if type is (ts_type_reference, ts_type_query) then {
+    class: member_usage_named_class(type.name.node, access),
+    static: type is ts_type_query,
+  } else null
+fn member_usage_this(access) = {
+  value context: ts_value_this_context(access)
+  value if context.explicit is ts_type_reference then member_usage_annotation(context.explicit, access)
+    else if context.container is ts_class && context.owner not ts_function
+      then { class: context.container, static: context.static }
+    else null
+}
+fn member_usage_receiver(access) = {
+  value object: if access is (ts_member, ts_index) then access.object.node else member_usage_pattern_source(access)
+  value binding: if object is ts_identifier then name_binding(object) else null
+  value declaration: binding.node.parent.node
+  value named: member_usage_named_class(object, access)
+  value if object is ts_this then member_usage_this(access)
+    else if named != null then { class: named, static: true }
+    else if declaration is ts_declarator then
+      if declaration.init is ts_this
+        && all(binding.references, reference => reference.name_write_owner == null || reference.name_write_owner == declaration)
+        then member_usage_this(access) else null
+    else if declaration is ts_parameter then member_usage_annotation(declaration.type.node, access)
+    else null
+}
+fn member_usage_hash_owner(access) = {
+  value owners: walk(access, item => item.parent.node)
+  value find(owners, owner => owner is ts_class
+    && member_usage_last(owner, access.member_usage_name, false) != null
+      || owner is ts_class && member_usage_last(owner, access.member_usage_name, true) != null)
+}
+fn member_usage_used(declaration) = {
+  value name: ts_value_key(member_usage_key(declaration))
+  value class: member_usage_class(declaration)
+  value program: last(walk(class, item => item.parent.node))
+  value accessor: declaration is ts_method && contains(["get", "set"], declaration.kind)
+    || contains([] declaration.modifier, "accessor")
+  value any(program.member_usage_accesses, access =>
+    access.member_usage_name == name && (accessor || access.member_usage_read)
+      && (if access is ts_member && access.property is ts_private_name
+        then member_usage_hash_owner(access) == class
+        else {
+          value receiver: member_usage_receiver(access)
+          value receiver.class == class && receiver.static == ts_value_static(declaration.modifier.nodes)
+        }))
+}
+
+in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no-unused-private-class-members {
+  let declaration member_usage_declaration(node)
+  when declaration != null
+  let typed re_test(file, /\.[cm]?tsx?$/)
+  when is ts_private_name || typed && contains([] declaration.modifier, "private")
+  let name ts_value_key(node)
+  when name != null
+  when member_usage_last(member_usage_class(declaration), name, ts_value_static(declaration.modifier.nodes)) == declaration
+  when !member_usage_used(declaration)
+  warn if typed then "Private class member '{text}' is defined but never used." else "'{text}' is defined but never used."
+}
+
+}
