@@ -15,7 +15,7 @@ fn reference_key(file: &NativeFile, node: u32, strict: bool) -> Option<String> {
     // Length prefixes keep property text and recursive keys unambiguous.
     let atom = |tag: &str, value: &str| format!("{tag}{}:{value}", value.len());
     Some(match s.kind(node)? {
-        K::Ident => atom("id", s.text(node)),
+        K::Ident => atom("id", &statics::identifier_name(s.text(node))),
         K::PrivateName => atom("private", s.text(node)),
         K::This => "this".into(),
         K::Super => "super".into(),
@@ -65,7 +65,6 @@ mod tests {
                     let b = key(file, nodes[1], is_strict);
                     assert!(!matches!(a, Value::Null) && !matches!(b, Value::Null), "{source}");
                     assert_eq!(a == b, expected, "{source}, strict={is_strict}");
-                    assert_eq!(a == b, file.same_reference_keyed(nodes[0], nodes[1], is_strict));
                 }
             });
         }

@@ -91,86 +91,9 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "leaves_finally",
-        doc: "native layers: on `return`, `throw`, `break` or `continue`: it jumps out of a `finally` block (not just out of a loop, switch or label inside it)",
-        get: |f, n| Value::Bool(f.leaves_finally(n)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "contains_yield",
-        doc: "native layers: a `yield` inside the node, outside nested functions (on a `for` loop: outside its initializer)",
-        get: |f, n| Value::Bool(f.contains_yield(n)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "source_type",
         doc: "native layers: the file's eslint `sourceType`: `commonjs` (`.cjs`, `.cts`), `module` (`.mjs`, `.mts`, or any file that imports or exports) or `script`; the same on every node",
         get: |f, n| f.with_file(|file, _| Value::from(file.source_type()), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unparen_offset",
-        doc: "native layers: the offset of the node with the parentheses around it removed (where eslint, which has no parenthesis nodes, reports it), for `report at`",
-        get: |f, n| opt(f.unparen_offset(n), Value::from),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "unexpected_multiline",
-        doc: "native layers: on a call, `a[b]`, tagged template or `a / b / g`: when a line break before its `(`, `[`, template or `/` lets the next line continue the expression (eslint's no-unexpected-multiline): `{ offset, kind }` with kind `function`, `property`, `taggedTemplate` or `division`",
-        get: |f, n| opt(f.unexpected_multiline(n), |(at, kind)| Value::record(vec![("offset".into(), Value::from(at)), ("kind".into(), Value::from(kind))])),
-    },
-    Fact {
-        shape: Shape::List(&Shape::Record(&[("offset", Shape::Scalar), ("arithmetic", Shape::Scalar)])),
-        name: "optional_chain_risks",
-        doc: "native layers: the optional chains whose short-circuit `undefined` this node would trip on (eslint's no-unsafe-optional-chaining: called, destructured, spread, `in`, `extends`, `for of`...; also through `&&`, `||`, `??`, `?:`, `await`), as records `{ offset, arithmetic }` (`arithmetic` for `+`, `-`, `*`, ... that make `NaN`)",
-        get: |f, n| {
-            Value::List(
-                f.optional_chain_risks(n)
-                    .into_iter()
-                    .map(|(at, arith)| Value::record(vec![("offset".into(), Value::from(at)), ("arithmetic".into(), Value::Bool(arith))]))
-                    .collect(),
-            )
-        },
-    },
-    Fact {
-        shape: Shape::List(&Shape::Record(&[("offset", Shape::Scalar), ("name", Shape::Scalar), ("member", Shape::Scalar)])),
-        name: "self_assignments",
-        doc: "native layers: on an assignment (`=`, `&&=`, `||=`, `??=`): what it assigns to itself, also inside destructuring (`[a, b] = [a, b]`), as records `{ offset, name, member }` (`member` for `a.b = a.b`)",
-        get: |f, n| {
-            opt(f.self_assignments(n), |list| {
-                Value::List(
-                    list.into_iter()
-                        .map(|(at, name, member)| {
-                            Value::record(vec![("offset".into(), Value::from(at)), ("name".into(), Value::from(name)), ("member".into(), Value::Bool(member))])
-                        })
-                        .collect(),
-                )
-            })
-        },
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "duplicate_condition",
-        doc: "native layers: on an `if`: an earlier branch of its `else if` chain already covers its test (eslint's no-dupe-else-if: by tokens, `&&`/`||` in any order, `a` covers `a && b`)",
-        get: |f, n| opt(f.duplicate_condition(n), Value::Bool),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "duplicate_case",
-        doc: "native layers: on a `case`: an earlier case of its switch has the same test (by tokens, whatever the spacing and comments)",
-        get: |f, n| opt(f.duplicate_case(n), Value::Bool),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "wrong_direction",
-        doc: "native layers: on a `for`: its update moves the counter away from where its test ends the loop (eslint's for-direction; steps are evaluated statically: `i -= -1`, `i += 1n`)",
-        get: |f, n| opt(f.wrong_direction(n), Value::Bool),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "duplicate_parameters",
-        doc: "native layers: on a function, arrow or method: the names its parameters declare more than once",
-        get: |f, n| opt(f.duplicate_parameters(n), |names| Value::List(names.into_iter().map(Value::from).collect())),
     },
     Fact {
         shape: Fact::SCALAR.shape,

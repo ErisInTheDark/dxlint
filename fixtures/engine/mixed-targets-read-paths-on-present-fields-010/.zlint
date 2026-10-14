@@ -4,7 +4,7 @@ import .ts
                 in ts_identifier let child_start offset
                 in mixed rule present info "present" {
                     when node is ts_parameter
-                    report at name.unparen_offset
+                    report at name.child_start
                 }
                 in mixed rule absent info "absent" {
                     when node is ts_class_property && name.offset == null

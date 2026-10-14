@@ -171,7 +171,7 @@ in ts_unary let delete_literal_key operator == "-" && argument.delete_numeric_ke
 in ts_index, ts_parenthesized let delete_operand if parent is ts_parenthesized then parent.delete_operand else parent is ts_unary && parent.operator == "delete"
 in ts_index rule no-dynamic-delete {
   when delete_operand && index.delete_literal_key != true
-  report at index.unparen_offset
+  report at unparenthesised_node(index.node)
   warn "Do not delete dynamically computed property keys."
 }
 

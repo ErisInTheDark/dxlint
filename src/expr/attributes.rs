@@ -213,6 +213,8 @@ struct Needs<'e> {
     need: Vec<KindSet>,
     called: Vec<KindSet>,
     pending: Vec<(KindSet, &'e CExpr)>,
+    /// Expressions already visited on every kind.
+    everywhere: crate::fx_hash::FxHashSet<*const CExpr>,
     /// First-request order per kind, grouped by the root that first needs
     /// each attribute. Shared dependencies occupy their first root's group.
     order: Vec<Vec<u16>>,
@@ -228,6 +230,7 @@ impl<'e> Needs<'e> {
             need: vec![KindSet::empty(n); attrs.attrs.len()],
             called: vec![KindSet::empty(n); grammar.functions.len()],
             pending: Vec::new(),
+            everywhere: Default::default(),
             order: vec![Vec::new(); n],
         };
         for root in roots {
@@ -296,17 +299,25 @@ impl<'e> Needs<'e> {
         out
     }
 
+    /// `e` read on any kind: once per expression, every later visit is
+    /// covered by the first.
+    fn everywhere(&mut self, e: &'e CExpr) {
+        if self.everywhere.insert(e as *const CExpr) {
+            self.pending.push((self.all.clone(), e));
+        }
+    }
+
     /// `attr` is read on `kinds`: its definitions there are evaluated too.
     fn request(&mut self, attr: u16, kinds: &KindSet) {
         let attrs = self.attrs;
         let Some(compiled) = attrs.attrs.get(attr as usize) else { return };
+        // Each (attribute, kind) is followed once; forwarding kinds too,
+        // since forwards can chain through themselves.
+        let fresh = kinds.without(&self.need[attr as usize]);
+        if fresh.is_empty() { return }
+        self.need[attr as usize].extend(&fresh);
         let mut by_def: Vec<(u32, KindSet)> = Vec::new();
-        for k in kinds.iter() {
-            // Each (attribute, kind) is followed once; forwarding kinds too,
-            // since forwards can chain through themselves.
-            if !self.need[attr as usize].insert(k) {
-                continue;
-            }
+        for k in fresh.iter() {
             match compiled.routes.get(k as usize) {
                 Some(Route::Defined(def, _)) => {
                     if matches!(compiled.lowered[*def as usize], Lowered::Cached(_) | Lowered::Semantic(_)) {
@@ -358,13 +369,13 @@ impl<'e> Needs<'e> {
             CExpr::Member(base, _, part) => {
                 self.visit(kinds, base);
                 if let Some(part) = part {
-                    self.pending.push((self.all.clone(), part));
+                    self.everywhere(part);
                 }
             }
             CExpr::Path(base, _, parts) => {
                 self.visit(kinds, base);
                 for part in parts.iter().flatten() {
-                    self.pending.push((self.all.clone(), part));
+                    self.everywhere(part);
                 }
             }
             CExpr::UserCall(i, args) => {
@@ -676,7 +687,6 @@ mod tests {
         let reads: Vec<_> = [
             ("static_name", "ts_member"),
             ("token_neighbours", "ts_member"),
-            ("optional_chain_risks", "ts_member"),
             ("list_layout", "ts_call"),
         ].into_iter().map(|(name, kind)| {
             let fact = super::super::facts::fact(name).unwrap();
@@ -684,7 +694,7 @@ mod tests {
             (fact, g.matcher(kind).unwrap())
         }).collect();
         let argument = front.labels[crate::native::ts::kinds::Field::Arg as usize];
-        let yield_fact = super::super::facts::fact("contains_yield").unwrap();
+        let yield_fact = super::super::facts::fact("precision_lost").unwrap();
         vm::lower(&CExpr::Fact(yield_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
         let memo = AttrMemo::default();
         let lines = crate::line_index::LineIndex::new(source);
@@ -720,7 +730,7 @@ mod tests {
         }
         let call = tree.order.iter().copied().find(|&node| tree.node(node).matcher == g.matcher("ts_call").unwrap()).unwrap();
         let on = Ctx { node: call, ..ctx };
-        for fact in [yield_fact, super::super::facts::fact("optional_chain_risks").unwrap()] {
+        for fact in [yield_fact, super::super::facts::fact("token_texts").unwrap()] {
             let of = super::super::FactOf::Field(argument);
             let expected = on.fact_value(fact, None, of);
             assert!(matches!(&expected, Value::List(items) if items.len() == 2), "field reads keep one fact result per argument");

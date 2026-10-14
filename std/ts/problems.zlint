@@ -75,7 +75,7 @@ in ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test
   option mode "except-parens" | "always" = "except-parens"
   when mode == "except-parens"
   when is ts_assignment || parent is ts_conditional && is ts_parenthesized && wraps_assignment == true
-  report at unparen_offset
+  report at unparenthesised_node(node)
   warn "Expected a conditional expression and instead saw an assignment."
 }
 in ts_assignment rule no-cond-assign:always {
@@ -123,17 +123,44 @@ in ts_binary.left, ts_binary.right rule valid-typeof {
   when literal_value != null && (literal_value.type != "string" || !contains(@valid_typeof_names, literal_value.value))
     || is_global_undefined
     || requireStringLiterals && literal_value == null && is_typeof != true
-  report at unparen_offset
+  report at unparenthesised_node(node)
   warn if requireStringLiterals && literal_value == null then "Typeof comparisons should be to string literals." else "Invalid typeof comparison value."
 }
 in ts_identifier let is_global_undefined text == "undefined" && global == "readonly"
 in ts_parenthesized let is_global_undefined expression.is_global_undefined == true
 
 # `a = a`, also inside destructuring and members (`a.b = a.b`).
-in ts_assignment let self_assignment_findings self_assignments
+fn problem_self_assignments(a, b) = {
+  value left: unparenthesised_node(a)
+  value right: unparenthesised_node(b)
+  value if left == null || right == null then []
+    else if left is ts_identifier && right is ts_identifier && left.identifier_name == right.identifier_name then [right]
+    else if left is (ts_array, ts_array_pattern) && right is ts_array then {
+      value items: right.element.nodes
+      value last: find(items, item => item is ts_spread).index ?? (count(items) - 1)
+      value left.element.nodes
+      zip items (target, value) { left: target, right: value }
+      take_while (pair, i) i <= last && !(pair.left is (ts_spread, ts_rest) && i < count(items) - 1)
+      flat_map (pair) problem_self_assignments(pair.left, pair.right)
+    }
+    else if left is (ts_spread, ts_rest) && right is ts_spread then problem_self_assignments(left.argument.node, right.argument.node)
+    else if left is (ts_object, ts_object_pattern) && right is ts_object then {
+      value spread: find_last(right.property.nodes, property => property is ts_spread)
+      value items: { value right.property.nodes; slice (if spread == null then 0 else spread.index + 1) }
+      value left.property.nodes
+      flat_map (target) { value items; flat_map (value) problem_self_assignments(target, value) }
+    }
+    else if left is (ts_property, ts_pattern_property) && right is ts_property && (right.kind == null || right.kind == "init")
+      && left.static_name != null && left.static_name == right.static_name then
+        problem_self_assignments(left.value.node ?? left.key.node, right.value.node ?? right.key.node)
+    else if left is (ts_member, ts_index) && right is (ts_member, ts_index)
+      && left.reference_key != null && left.reference_key == right.reference_key then [right]
+    else []
+}
 in ts_assignment rule no-self-assign {
-  each self in self_assignment_findings
-  report at self.offset
+  when contains(["=", "&&=", "||=", "??="], operator)
+  each self in map(problem_self_assignments(left.node, right.node), assigned => { node: assigned, name: re_replace(assigned.text, /\s+/, "") })
+  report at self.node
   warn "'{self.name}' is assigned to itself."
 }
 
@@ -142,10 +169,15 @@ in ts_if.test, ts_conditional.test rule no-constant-condition {
   when constant_truthiness
   warn "Unexpected constant condition."
 }
-# Loops that `yield` (generators) may loop forever on purpose.
+in ts_node let problem_declared_yields flow_declared_effects(node, "yielded")
+fn problem_loop_yields(loop) = {
+  value events: flow_entry(loop).problem_declared_yields
+  value events == null || any(events, event => event.site.offset >= loop.offset && event.site.end_offset <= loop.end_offset
+    && !(loop is ts_for && loop.init != null && event.site.offset >= loop.init.offset && event.site.end_offset <= loop.init.end_offset))
+}
 in ts_while, ts_do_while, ts_for let constant_loop_condition_checked !(is ts_while && re_test(test, /^[(\s]*true[)\s]*$/))
 in ts_while.test, ts_do_while.test, ts_for.test rule no-constant-condition:loop {
-  when constant_truthiness && parent.constant_loop_condition_checked && !parent.contains_yield
+  when constant_truthiness && parent.constant_loop_condition_checked && !problem_loop_yields(parent.node)
   warn "Unexpected constant condition."
 }
 
@@ -167,10 +199,41 @@ in ts_unary rule no-delete-var {
   warn "Variables should not be deleted."
 }
 
-# A condition every one of whose `||` parts an earlier branch already tested.
+fn problem_condition_parts(n, operator) = {
+  value walk(unparenthesised_node(n), part => if part is ts_logical && part.operator == operator
+    then [unparenthesised_node(part.left.node), unparenthesised_node(part.right.node)] else [])
+  filter (part) part not ts_logical || part.operator != operator
+}
+fn problem_condition_equal(a, b) = {
+  value left: unparenthesised_node(a)
+  value right: unparenthesised_node(b)
+  value kind_name(left) == kind_name(right) && (if left is ts_logical
+    && contains(["&&", "||"], left.operator) && left.operator == right.operator then
+      problem_condition_equal(left.left.node, right.left.node) && problem_condition_equal(left.right.node, right.right.node)
+      || problem_condition_equal(left.left.node, right.right.node) && problem_condition_equal(left.right.node, right.left.node)
+    else left.token_texts == right.token_texts)
+}
+fn problem_condition_covered(condition, previous) = {
+  value problem_condition_parts(condition, "||")
+  all (operand) {
+    value terms: problem_condition_parts(operand, "&&")
+    value any(previous, earlier => all(earlier, term => any(terms, current => problem_condition_equal(term, current))))
+  }
+}
+fn problem_duplicate_condition(branch) = {
+  value previous: {
+    value walk(branch, child => if child.parent is ts_if && child.parent.alternate.node == child then child.parent.node else null)
+    drop 1
+    flat_map (earlier) problem_condition_parts(earlier.test.node, "||")
+    map (operand) problem_condition_parts(operand, "&&")
+  }
+  value condition: unparenthesised_node(branch.test.node)
+  value problem_condition_covered(condition, previous) || condition is ts_logical && condition.operator == "&&"
+    && any(problem_condition_parts(condition, "&&"), part => problem_condition_covered(part, previous))
+}
 in ts_if.test rule no-dupe-else-if {
-  when parent.duplicate_condition
-  report at unparen_offset
+  when problem_duplicate_condition(parent.node)
+  report at unparenthesised_node(node)
   warn "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the if-else-if chain."
 }
 
@@ -371,7 +434,7 @@ in ts_non_null rule no-non-null-asserted-optional-chain {
 }
 in ts_non_null.expression rule no-non-null-asserted-optional-chain:paren {
   when is ts_parenthesized && wraps_optional_chain == true
-  report at unparen_offset
+  report at unparenthesised_node(node)
   warn @non_null_chain_message
 }
 
@@ -447,9 +510,17 @@ in ts_hole rule no-sparse-arrays {
   warn "Unexpected comma in middle of array."
 }
 
-# `return`/`throw`/`break`/`continue` that leave a `finally` block.
+fn problem_finally_exit(jump) = {
+  value boundary: find(walk(jump.parent.node, ancestor => ancestor.parent.node), ancestor =>
+    ancestor is ts_try.finalizer
+    || ancestor is (ts_function_like, ts_class, ts_static_block, ts_class_property)
+    || jump is (ts_break, ts_continue) && (ancestor == jump.problem_label_target
+      || jump.label == null && ancestor is (ts_for, ts_for_in, ts_for_of, ts_while, ts_do_while))
+    || jump is ts_break && jump.label == null && ancestor is ts_switch)
+  value boundary is ts_try.finalizer
+}
 in ts_return, ts_throw, ts_break, ts_continue rule no-unsafe-finally {
-  when leaves_finally
+  when problem_finally_exit(node)
   warn "Unsafe usage of {if is ts_return then 'ReturnStatement' else if is ts_throw then 'ThrowStatement' else if is ts_break then 'BreakStatement' else 'ContinueStatement'}."
 }
 
@@ -647,17 +718,38 @@ in ts_identifier rule no-useless-assignment {
 }
 
 # ---- optional chaining where a short circuit throws -----------------------------
-in ts_member, ts_index let in_optional_chain optional != null || object.in_optional_chain == true
-in ts_call let in_optional_chain optional != null || callee.in_optional_chain == true
-in ts_non_null let in_optional_chain expression.in_optional_chain == true
-in ts_parenthesized let wraps_optional_chain expression.in_optional_chain == true || expression.wraps_optional_chain == true
 # Each optional chain whose `undefined` the node would trip on, at the chain.
-group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_with, ts_unary
-in optional_chain_user let optional_chain_findings filter(optional_chain_risks, finding => !finding.arithmetic)
+fn problem_optional_pattern(n) = unparenthesised_node(n) is (ts_array, ts_array_pattern, ts_object, ts_object_pattern)
+fn problem_optional_operand(n) =
+  if n is ts_assignment && n.operator == "=" && problem_optional_pattern(n.left.node)
+    || n is ts_assignment_pattern && problem_optional_pattern(n.left.node) then n.right.node
+  else if n is (ts_declarator, ts_parameter) && problem_optional_pattern(n.name.node) then n.init.node
+  else if n is ts_class then n.extends.node
+  else if n is ts_call && n.optional == null || n is ts_new then n.callee.node
+  else if n is (ts_member, ts_index) && n.optional == null then n.object.node
+  else if n is ts_tagged_template then n.tag.node
+  else if n is ts_for_of || n is ts_binary && contains(["in", "instanceof"], n.operator) then n.right.node
+  else if n is ts_spread && n.parent not ts_object || n is ts_yield && n.operator == "*" then n.argument.node
+  else if n is ts_with then n.object.node
+  else null
+fn problem_optional_short_circuits(n) = {
+  value bare: unparenthesised_node(n)
+  value if bare == null then []
+    else if bare is ts_logical then
+      if bare.operator == "&&" then problem_optional_short_circuits(bare.left.node) problem_optional_short_circuits(bare.right.node)
+      else problem_optional_short_circuits(bare.right.node)
+    else if bare is ts_sequence then problem_optional_short_circuits(last(bare.expression.nodes))
+    else if bare is ts_conditional then problem_optional_short_circuits(bare.consequent.node) problem_optional_short_circuits(bare.alternate.node)
+    else if bare is ts_await then problem_optional_short_circuits(bare.argument.node)
+    else if bare is (ts_member, ts_index, ts_call) && bare.in_optional_chain == true
+      && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression)) then [bare]
+    else []
+}
+group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_parameter, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_with, ts_yield
 in optional_chain_user rule no-unsafe-optional-chaining {
-  each r in optional_chain_findings
-  report at r.offset
-  warn if r.arithmetic then "Unsafe arithmetic operation on optional chaining. It can result in NaN." else "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
+  each chain in problem_optional_short_circuits(problem_optional_operand(node))
+  report at chain
+  warn "Unsafe usage of optional chaining. If it short-circuits with 'undefined' the evaluation will throw TypeError."
 }
 
 in ts_variable_declaration let declares_loop_variable parent is (ts_for_of, ts_for_in)
@@ -738,13 +830,21 @@ in problem_irregular_ws rule no-irregular-whitespace {
 }
 
 # At the `(`, `[`, template or `/` on the new line.
-in ts_call, ts_index, ts_tagged_template, ts_binary rule no-unexpected-multiline {
-  let m unexpected_multiline
-  when m != null
-  report at m.offset
-  warn if m.kind == "function" then "Unexpected newline between function and ( of function call."
-    else if m.kind == "property" then "Unexpected newline between object and [ of property access."
-    else if m.kind == "taggedTemplate" then "Unexpected newline between template tag and template literal."
+in ts_open_paren, ts_open_angle, ts_open_bracket, ts_template, ts_punctuator rule no-unexpected-multiline {
+  let multiline_kind if parent is ts_call && parent.optional == null && count(parent.argument) > 0
+      && (is ts_open_paren && count(parent.type_argument) == 0 || is ts_open_angle && count(parent.type_argument) > 0) then "function"
+    else if is ts_open_bracket && parent is ts_index && parent.optional == null then "property"
+    else if is ts_tagged_template.quasi then "taggedTemplate"
+    else if is ts_punctuator && text == "/" && parent is ts_binary.left && parent.operator == "/" && parent.parent.operator == "/" then {
+      value flags: parent.parent.right.first_token
+      value slash: parent.parent.right.token_neighbours.before
+      value if flags is ts_identifier && flags.text ~ /^[dgimsuvy]+$/ && slash.text == "/" && slash.end == flags.start then "division" else null
+    } else null
+  when multiline_kind != null && token_neighbours.before.line_break == true
+  report at { start: offset, end: offset + 1 }
+  warn if multiline_kind == "function" then "Unexpected newline between function and ( of function call."
+    else if multiline_kind == "property" then "Unexpected newline between object and [ of property access."
+    else if multiline_kind == "taggedTemplate" then "Unexpected newline between template tag and template literal."
     else "Unexpected newline between numerator and division operator."
 }
 

@@ -1,0 +1,15 @@
+input.js:10:1-10:2 no-unexpected-multiline#3
+input.js:16:1-16:2 no-unexpected-multiline#3
+input.js:22:1-22:2 no-unexpected-multiline#0
+input.js:26:11-26:12 no-unexpected-multiline#0
+input.js:28:1-28:2 no-unexpected-multiline#1
+input.js:2:1-2:2 no-unexpected-multiline#0
+input.js:30:11-30:12 no-unexpected-multiline#2
+input.js:32:11-32:12 no-unexpected-multiline#3
+input.js:38:1-38:2 no-unexpected-multiline#0
+input.js:40:1-40:2 no-unexpected-multiline#1
+input.js:42:1-42:2 no-unexpected-multiline#2
+input.js:6:1-6:2 no-unexpected-multiline#1
+input.js:8:1-8:2 no-unexpected-multiline#2
+input.ts:4:1-4:2 no-unexpected-multiline#2
+input.ts:9:1-9:2 no-unexpected-multiline#0

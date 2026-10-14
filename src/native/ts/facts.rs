@@ -47,27 +47,6 @@ pub trait Facts {
     /// On a property, member or literal: its statically known name / value
     /// as text.
     fn static_name(&self, node: u32) -> Option<String>;
-    /// On a function-like node: parameter names declared twice.
-    fn duplicate_parameters(&self, node: u32) -> Option<Vec<String>>;
-    /// A `yield` inside, outside nested functions.
-    fn contains_yield(&self, node: u32) -> bool;
-    /// On `return`/`throw`/`break`/`continue`: it leaves a `finally`.
-    fn leaves_finally(&self, node: u32) -> bool;
-    /// The node's start without the parentheses around it.
-    fn unparen_offset(&self, node: u32) -> Option<usize>;
-    /// no-unexpected-multiline: `(offset, kind)`.
-    fn unexpected_multiline(&self, node: u32) -> Option<(usize, &'static str)>;
-    /// no-unsafe-optional-chaining: `(offset, arithmetic)` of each risky
-    /// optional chain this node uses.
-    fn optional_chain_risks(&self, node: u32) -> Vec<(usize, bool)>;
-    /// On an assignment: what it assigns to itself, `(offset, text, member)`.
-    fn self_assignments(&self, node: u32) -> Option<Vec<(usize, String, bool)>>;
-    /// On an `if`: an earlier branch of its chain covers its test.
-    fn duplicate_condition(&self, node: u32) -> Option<bool>;
-    /// On a `case`: an earlier case of its switch has the same test.
-    fn duplicate_case(&self, node: u32) -> Option<bool>;
-    /// On a `for`: its update counts away from where its test ends it.
-    fn wrong_direction(&self, node: u32) -> Option<bool>;
     /// On a literal-like expression: `(type, value as text)`.
     fn literal_value(&self, node: u32) -> Option<(&'static str, String)>;
 }
@@ -146,53 +125,6 @@ impl Facts for NativeFile<'_> {
 
     fn precision_lost(&self, node: u32) -> Option<bool> {
         self.syntax.is(node, Kind::Number).then(|| precision_lost(self.syntax.text(node)))
-    }
-
-    fn duplicate_parameters(&self, node: u32) -> Option<Vec<String>> {
-        matches!(self.syntax.kind(node), Some(Kind::Function | Kind::Arrow | Kind::Method)).then(|| NativeFile::duplicate_parameters(self, node))
-    }
-
-    fn contains_yield(&self, node: u32) -> bool {
-        NativeFile::contains_yield(self, node)
-    }
-
-    fn leaves_finally(&self, node: u32) -> bool {
-        matches!(self.syntax.kind(node), Some(Kind::Return | Kind::Throw | Kind::Break | Kind::Continue)) && NativeFile::leaves_finally(self, node)
-    }
-
-    fn unparen_offset(&self, node: u32) -> Option<usize> {
-        self.syntax.kind(node)?;
-        Some(self.syntax.tree.node(self.syntax.unparen(node)).start as usize)
-    }
-
-    fn unexpected_multiline(&self, node: u32) -> Option<(usize, &'static str)> {
-        NativeFile::unexpected_multiline(self, node)
-    }
-
-    fn optional_chain_risks(&self, node: u32) -> Vec<(usize, bool)> {
-        NativeFile::optional_chain_risks(self, node).into_iter().map(|(n, a)| (self.syntax.tree.node(n).start as usize, a)).collect()
-    }
-
-    fn self_assignments(&self, node: u32) -> Option<Vec<(usize, String, bool)>> {
-        let s = &self.syntax;
-        s.is(node, Kind::Assign).then(|| {
-            NativeFile::self_assignments(self, node)
-                .into_iter()
-                .map(|(n, member)| (s.tree.node(n).start as usize, s.text(n).split_whitespace().collect::<String>(), member))
-                .collect()
-        })
-    }
-
-    fn duplicate_condition(&self, node: u32) -> Option<bool> {
-        self.syntax.is(node, Kind::If).then(|| self.duplicate_else_if(node))
-    }
-
-    fn duplicate_case(&self, node: u32) -> Option<bool> {
-        self.syntax.is(node, Kind::Case).then(|| NativeFile::duplicate_case(self, node))
-    }
-
-    fn wrong_direction(&self, node: u32) -> Option<bool> {
-        self.syntax.is(node, Kind::For).then(|| self.for_wrong_direction(node))
     }
 
     fn literal_value(&self, node: u32) -> Option<(&'static str, String)> {

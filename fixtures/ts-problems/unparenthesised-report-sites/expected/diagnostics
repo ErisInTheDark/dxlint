@@ -1,0 +1,17 @@
+input.ts:10:2-10:12 no-non-null-asserted-optional-chain:paren#0
+input.ts:11:3-11:13 no-non-null-asserted-optional-chain:paren#0
+input.ts:12:1-12:12 no-non-null-asserted-optional-chain#0
+input.ts:13:12-13:15 no-dynamic-delete#0
+input.ts:14:14-14:17 no-dynamic-delete#0
+input.ts:16:7-16:12 no-extraneous-class:empty#0
+input.ts:17:20-17:34 no-extraneous-class:empty#0
+input.ts:18:19-18:27 no-extraneous-class:empty#0
+input.ts:19:7-19:12 no-extraneous-class:constructor#0
+input.ts:1:5-1:10 no-cond-assign#0
+input.ts:20:7-20:16 no-extraneous-class:static#0
+input.ts:2:8-2:13 no-cond-assign#0
+input.ts:3:8-3:13 no-cond-assign#0
+input.ts:4:20-4:25 no-cond-assign#0
+input.ts:6:18-6:27 valid-typeof#1
+input.ts:7:20-7:29 valid-typeof#1
+input.ts:8:18-8:27 valid-typeof#1

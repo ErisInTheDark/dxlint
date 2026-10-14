@@ -119,7 +119,7 @@ in ts_class let no_extraneous_class_checked true
 @macro extraneous_class_rule(rule-id, shape, message) {
   in ts_class rule rule-id {
     when extends == null && class_shape == shape && no_extraneous_class_checked
-    report at if name != null && parent is (ts_program, ts_export, ts_block, ts_namespace) then name.unparen_offset else offset
+    report at if name != null && parent is (ts_program, ts_export, ts_block, ts_namespace) then name.node else node
     warn message
   }
 }

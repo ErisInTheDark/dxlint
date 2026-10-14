@@ -1,3 +1,0 @@
-import .ts
-override in optional_chain_user let optional_chain_findings optional_chain_risks
-rule no-unsafe-optional-chaining

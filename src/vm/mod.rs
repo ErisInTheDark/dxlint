@@ -2009,8 +2009,21 @@ impl KindSet {
         self.0.iter().all(|&w| w == 0)
     }
 
+    /// The kinds in this set and not in `other`.
+    pub fn without(&self, other: &KindSet) -> KindSet {
+        KindSet(self.0.iter().enumerate().map(|(i, &word)| word & !other.0.get(i).copied().unwrap_or(0)).collect())
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
-        self.0.iter().enumerate().flat_map(|(i, &word)| (0..64).filter(move |b| word >> b & 1 == 1).map(move |b| (i * 64 + b) as u32))
+        self.0.iter().enumerate().flat_map(|(i, &word)| {
+            let mut rest = word;
+            std::iter::from_fn(move || {
+                if rest == 0 { return None }
+                let bit = rest.trailing_zeros();
+                rest &= rest - 1;
+                Some((i * 64) as u32 + bit)
+            })
+        })
     }
 }
 

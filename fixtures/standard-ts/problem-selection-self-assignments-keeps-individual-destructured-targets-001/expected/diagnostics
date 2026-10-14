@@ -1,2 +1,2 @@
-file.js:1:26-1:26 no-self-assign#0
-file.js:1:33-1:33 no-self-assign#0
+file.js:1:26-1:31 no-self-assign#0
+file.js:1:33-1:45 no-self-assign#0

@@ -1,2 +1,2 @@
-file.ts:1:61-1:61 no-extraneous-class:static#0
-file.ts:1:7-1:7 no-extraneous-class:empty#0
+file.ts:1:61-1:67 no-extraneous-class:static#0
+file.ts:1:7-1:12 no-extraneous-class:empty#0

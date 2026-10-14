@@ -1,0 +1,6 @@
+import .ts
+rule no-cond-assign
+rule valid-typeof
+rule no-non-null-asserted-optional-chain
+rule no-extraneous-class
+rule no-dynamic-delete
