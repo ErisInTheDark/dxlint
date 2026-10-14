@@ -1,0 +1,10 @@
+input.js:1:11-1:23 no-unused-vars:globals#0
+input.js:2:23-2:32 no-unused-vars:parameters#1
+input.js:4:3-4:14 no-unused-vars:variables#1
+input.js:5:17-5:28 no-unused-vars:caught-errors#1
+input.js:6:7-6:12 no-unused-vars:variables#0
+input.ts:1:11-1:23 no-unused-vars:globals#0
+input.ts:2:23-2:32 no-unused-vars:parameters#1
+input.ts:4:3-4:14 no-unused-vars:variables#1
+input.ts:5:17-5:28 no-unused-vars:caught-errors#1
+input.ts:7:3-7:8 no-unused-vars:variables#0

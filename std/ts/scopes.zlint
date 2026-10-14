@@ -25,7 +25,7 @@ fn unused_binding_names(context) = if context == "array" then "elements of array
   let used_ignored ignored && reportUsedIgnorePattern && u.used
   when used_ignored || !ignored && !u.used && !u.exported && !u.silent && !(after_used && u.before_used_param)
   let names unused_binding_names(context)
-  report at if used_ignored then u.ignored_offset else u.offset
+  report at if used_ignored then u.ignored_report_site else u.report_site
   warn if used_ignored then "'{text}' is marked as ignored but is used{if pattern != '' then '. Used ' names ' must not match /' pattern '/u' else ''}."
     else "'{text}' is {u.action} but {if u.only_type then 'only used as a type' else 'never used'}{if pattern != '' then '. Allowed unused ' names ' must match /' pattern '/u' else ''}."
 }
@@ -56,7 +56,7 @@ in ts_program rule no-unused-vars:globals {
   option vars "all" | "local" = "all" "`local`: skip the global scope of scripts"
   when vars == "all"
   each g in unused_globals
-  report at g.offset
+  report at { start: g.offset, end: g.offset + byte_len(g.name) }
   warn "'{g.name}' is defined but never used."
 }
 

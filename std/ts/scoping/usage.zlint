@@ -276,7 +276,7 @@ fn ts_usage_context(n) = {
     value only_type: typed && any(own, reference => ts_usage_type_only(reference.node, summary.variable))
     value scope: ts_usage_variable_scope(n)
     value write: find_last(own, reference => reference.write && ts_usage_variable_scope(reference.node) == scope)
-    value offset: write.node.offset ?? n.offset
+    value report_site: write.node ?? n
     value def: if site is ts_parameter then "parameter" else if site is ts_try then "catch" else "variable"
     value {
       used: used,
@@ -294,8 +294,8 @@ fn ts_usage_context(n) = {
       global: ts_usage_global(n.ts_usage_binding, n.scoping_program),
       action: if any(own, reference => reference.write) then "assigned a value" else "defined",
       only_type: only_type,
-      offset: offset,
-      ignored_offset: if typed then offset else n.offset
+      report_site: report_site,
+      ignored_report_site: if typed then report_site else n
     }
   }
 }
