@@ -3,7 +3,14 @@ define {
 fn type_parameter_usages(items) = {
   value { known: all(items, item => item.known), uses: flat_map(items, item => item.uses) }
 }
-fn type_parameter_part(part, target, returned, from_class) =
+fn type_parameter_members(part, target, from_class, seen) = {
+  value children: if part.handle == null || contains(seen, part.handle) then null
+    else value_children(part.handle, true, [])
+  value if children == null then { known: false, uses: [] }
+    else type_parameter_usages(map(children,
+      edge => type_parameter_handle(edge.handle, target, false, from_class, seen [part.handle])))
+}
+fn type_parameter_part(part, target, returned, from_class, seen) =
   if part.carrier.description.kind == "parameter" then {
     known: true,
     uses: if part.carrier.file == target.file && part.carrier.node == target.node then [true] else [],
@@ -17,14 +24,22 @@ fn type_parameter_part(part, target, returned, from_class) =
       else if contains(["Array", "ReadonlyArray"], part.carrier.description.name)
         then returned && part.carrier.description.name == "Array" else true)
     value uses: type_parameter_usages(map(part.carrier.arguments,
-      argument => type_parameter_value(argument, target, returned, from_class)))
+      argument => if argument.value_handle != null
+        then type_parameter_handle(argument, target, returned, from_class, seen)
+        else type_parameter_parts(argument, target, returned, from_class, seen)))
     value { known: uses.known, uses: if multiple then uses.uses uses.uses else uses.uses }
-  } else if any(part.traits, trait => contains(["structural", "callable", "constructible", "intersection"], trait))
+  } else if contains(part.traits, "structural")
+    && !any(part.traits, trait => contains(["callable", "constructible", "intersection"], trait))
+    then type_parameter_members(part, target, from_class, seen)
+  else if any(part.traits, trait => contains(["structural", "callable", "constructible", "intersection"], trait))
     then { known: false, uses: [] }
   else { known: true, uses: [] }
-fn type_parameter_arm(parts, target, returned, from_class) = type_parameter_usages({
+fn type_parameter_arm(parts, target, returned, from_class, seen) =
+  if any(parts, part => part.carrier.description.kind == "parameter")
+    && any(parts, part => contains(part.traits, "structural")) then { known: false, uses: [] }
+  else type_parameter_usages({
   value map(parts, part => {
-    value usage: type_parameter_part(part, target, returned, from_class)
+    value usage: type_parameter_part(part, target, returned, from_class, seen)
     value { key: if part.carrier.description.kind == "named" then {
       description: part.carrier.description, arguments: part.carrier.arguments, usage: usage,
     } else part, usage: usage }
@@ -32,13 +47,22 @@ fn type_parameter_arm(parts, target, returned, from_class) = type_parameter_usag
   unique_by (part) part.key
   map (part) part.usage
 })
-fn type_parameter_value(parts, target, returned, from_class) =
+fn type_parameter_parts(parts, target, returned, from_class, seen) =
   if parts == null then { known: false, uses: [] }
   else if count(parts) == 0 then { known: true, uses: [] } else {
-    value arms: map(parts, arm => type_parameter_arm(arm, target, returned, from_class))
+    value arms: map(parts, arm => type_parameter_arm(arm, target, returned, from_class, seen))
     value largest: max(map(arms, arm => count(arm.uses)))
     value { known: all(arms, arm => arm.known), uses: find(arms, arm => count(arm.uses) == largest).uses ?? [] }
   }
+fn type_parameter_value(parts, target, returned, from_class) = type_parameter_parts(parts, target, returned, from_class, [])
+fn type_parameter_handle(source, target, returned, from_class, seen) = {
+  value arms: value_parts(source)
+  value if arms == null then { known: false, uses: [] }
+    else type_parameter_parts(map(arms, arm => arm.parts), target, returned, from_class, seen)
+}
+fn type_parameter_written(source, parts, target, returned, from_class) =
+  if source is ts_type_literal then type_parameter_handle(source, target, returned, from_class, [])
+    else type_parameter_value(parts, target, returned, from_class)
 fn type_parameter_independent_parameter(parameter) =
   parameter.type is ts_type_keyword && contains(["any", "unknown"], parameter.type.text)
     || parameter.type == null && parameter.init == null
@@ -50,7 +74,7 @@ fn type_parameter_parameters(signature, target, from_class, declaration) = {
     else type_parameter_usages(if syntax != null && count(signature.parameters) == count(syntax) then {
       value zip(signature.parameters, syntax)
       map (pair) if type_parameter_independent_parameter(last(pair)) then { known: true, uses: [] }
-        else type_parameter_value(first(pair), target, false, from_class)
+        else type_parameter_written(last(pair).type.node, first(pair), target, false, from_class)
     } else map(signature.parameters, parameter => type_parameter_value(parameter, target, false, from_class)))
 }
 fn type_parameter_signature(signature, target, from_class, result_type, declaration) = {
@@ -61,7 +85,7 @@ fn type_parameter_signature(signature, target, from_class, result_type, declarat
     then { known: true, uses: [] }
     else if declaration != null && result_type is ts_type_predicate && result_type.type != null
       then type_parameter_value(value_constituents(result_type.type.node), target, true, from_class)
-    else type_parameter_value(signature.result, target, true, from_class)
+    else type_parameter_written(result_type, signature.result, target, true, from_class)
   value uses: type_parameter_usages([parameters, receiver, result])
   value {
     known: signature.receiver_known && signature.result_known && uses.known,

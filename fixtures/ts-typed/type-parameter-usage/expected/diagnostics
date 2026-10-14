@@ -1,5 +1,6 @@
 a.ts:10:11-10:12 no-unnecessary-type-parameters#0
 a.ts:13:13-13:14 no-unnecessary-type-parameters#0
+a.ts:14:14-14:15 no-unnecessary-type-parameters#0
 a.ts:18:27-18:28 no-unnecessary-type-parameters#0
 a.ts:1:17-1:18 no-unnecessary-type-parameters#0
 a.ts:22:33-22:49 no-unnecessary-type-parameters#0
