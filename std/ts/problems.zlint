@@ -151,8 +151,10 @@ in ts_if.test rule no-dupe-else-if {
   warn "This branch can never execute. Its condition is a duplicate or covered by previous conditions in the if-else-if chain."
 }
 
+in ts_case let problem_case_tokens if test != null then unparenthesised_node(test.node).token_texts else null
 in ts_case rule no-duplicate-case {
-  when duplicate_case
+  when problem_case_tokens != null
+  when { value parent.case.problem_case_tokens; slice 0 index; contains problem_case_tokens }
   warn "Duplicate case label."
 }
 

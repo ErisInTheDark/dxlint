@@ -1,0 +1,6 @@
+input.ts:11:3-11:37 no-duplicate-case#0
+input.ts:13:3-13:23 no-duplicate-case#0
+input.ts:23:5-23:23 no-duplicate-case#0
+input.ts:25:3-25:21 no-duplicate-case#0
+input.ts:4:3-4:17 no-duplicate-case#0
+input.ts:5:3-5:19 no-duplicate-case#0
