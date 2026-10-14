@@ -1,0 +1,6 @@
+import .ts
+language .js {
+  files "disabled.ts"
+  set globals { undefined: "off" }
+}
+rule strict-boolean-expressions

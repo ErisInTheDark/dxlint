@@ -1,11 +1,19 @@
 define {
+fn switch_part_identity(part) =
+  if contains(part.traits, "undefined") then { kind: "nullish", value: "undefined" }
+  else if contains(part.traits, "null") then { kind: "nullish", value: "null" }
+  else if part.identity_known then part.identity else null
 fn switch_literal(arm) = {
-  value part: find(arm, part => part.identity_known && part.identity != null
-    && (part.identity.kind == "value" || contains(part.traits, "symbol")))
+  value part: find(arm, part => {
+    value identity: switch_part_identity(part)
+    value identity != null && (contains(["value", "nullish"], identity.kind) || contains(part.traits, "symbol"))
+  })
   value origin: find(arm, part => part.carrier.description.kind == "enum")
   value if part == null then null else {
-    key: { identity: part.identity, enum_file: origin.carrier.file, enum_node: origin.carrier.node },
-    label: if contains(part.traits, "symbol") then "symbol" else assignment_print_part(part),
+    key: { identity: switch_part_identity(part), enum_file: origin.carrier.file, enum_node: origin.carrier.node },
+    label: if contains(part.traits, "symbol") then "symbol"
+      else if switch_part_identity(part).kind == "nullish" then switch_part_identity(part).value
+      else assignment_print_part(part),
   }
 }
 fn switch_arm_literals(arm) = {
@@ -21,7 +29,7 @@ fn switch_case_literal(parts) = {
   value arm: first(parts)
   value literal: switch_literal(arm)
   value if count(parts) != 1 || literal == null || any(arm, part =>
-    part.identity != literal.key.identity && part.carrier.description.kind != "enum") then null else literal
+    switch_part_identity(part) != literal.key.identity && part.carrier.description.kind != "enum") then null else literal
 }
 in ts_switch {
   let switch_parts value_constituents(discriminant.node)

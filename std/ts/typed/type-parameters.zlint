@@ -10,6 +10,7 @@ fn type_parameter_part(part, target, returned, from_class) =
   } else if part.carrier_known != true || part.product_known != true
     || count(part.uncertain_traits) > 0
     || any(part.traits, trait => contains(["any", "error", "unknown"], trait)) then { known: false, uses: [] }
+  else if part.product != null && count(part.product.elements) == 0 then { known: true, uses: [] }
   else if count(part.carrier.arguments) > 0 then {
     value multiple: from_class || (if part.carrier.description.kind == "template" then false
       else if part.product != null then returned && !part.product.readonly
@@ -21,10 +22,19 @@ fn type_parameter_part(part, target, returned, from_class) =
   } else if any(part.traits, trait => contains(["object", "structural", "callable", "constructible", "intersection"], trait))
     then { known: false, uses: [] }
   else { known: true, uses: [] }
+fn type_parameter_arm(parts, target, returned, from_class) = type_parameter_usages({
+  value map(parts, part => {
+    value usage: type_parameter_part(part, target, returned, from_class)
+    value { key: if part.carrier.description.kind == "named" then {
+      description: part.carrier.description, arguments: part.carrier.arguments, usage: usage,
+    } else part, usage: usage }
+  })
+  unique_by (part) part.key
+  map (part) part.usage
+})
 fn type_parameter_value(parts, target, returned, from_class) =
   if parts == null then { known: false, uses: [] } else {
-    value arms: map(parts, arm => type_parameter_usages(
-      map(arm, part => type_parameter_part(part, target, returned, from_class))))
+    value arms: map(parts, arm => type_parameter_arm(arm, target, returned, from_class))
     value largest: max(map(arms, arm => count(arm.uses)))
     value { known: all(arms, arm => arm.known), uses: find(arms, arm => count(arm.uses) == largest).uses ?? [] }
   }

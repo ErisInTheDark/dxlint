@@ -248,7 +248,7 @@ in ts_regex { unwraps instance "RegExp" }
 
 in ts_identifier {
   let ts_value_undefined text == "undefined" && contains(["readonly", "writable"], global)
-  let ts_value_unresolved_value ts_value_missing_name(node, "value")
+  let ts_value_unresolved_value !ts_value_undefined && ts_value_missing_name(node, "value")
   when ts_value_undefined {
     fits undefined, nullable, falsy, nonthenable
     identity { type: "undefined" }

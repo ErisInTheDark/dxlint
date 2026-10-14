@@ -1,0 +1,3 @@
+import .ts
+import .ts/typed/switches
+rule switch-exhaustiveness-check

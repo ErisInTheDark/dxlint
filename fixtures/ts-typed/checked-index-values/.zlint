@@ -1,0 +1,13 @@
+import .ts
+rule switch-exhaustiveness-check
+in ts_index rule index-value-contract {
+  when contains(["arrayRead", "recordRead", "namedRead", "fixedRead", "optionalRead",
+    "dynamicRead", "variadicRead", "dynamicRecordRead", "unionRead"], parent.name.text)
+  let parts value_constituents(node)
+  let actual parts != null && any(parts, arm => any(arm, part => contains(part.traits, "undefined")))
+  let expected parent.name.text == "optionalRead"
+    || compiler_options.noUncheckedIndexedAccess == true
+      && contains(["arrayRead", "recordRead", "dynamicRead", "variadicRead", "dynamicRecordRead"], parent.name.text)
+  when parts == null || actual != expected
+  warn "index value contract failed"
+}
