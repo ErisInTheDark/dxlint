@@ -385,19 +385,42 @@ impl<'a> Queries<'a> {
             let source = world.text(at.file).ok_or(())?.get(syntax.start as usize..syntax.end as usize).ok_or(())?;
             let key = alias.as_ref().and_then(text).map_or_else(|| world.name_key(at.file, source), std::borrow::Cow::Borrowed);
             if key != name { continue }
-            let declaration = names.declaration_in(node, class);
-            let reference = NodeRef { file: at.file, node: declaration };
-            if let Some(&(_, _, classes, _)) = names.declared.get(&declaration) {
-                if classes & class == 0 { continue }
+            let mut declaration = names.declaration_in(node, class);
+            // An import whose target lacks the class leaves it to the next
+            // declaration (`import type { A }` beside `const A`).
+            let mut skipped = Vec::new();
+            loop {
+                let reference = NodeRef { file: at.file, node: declaration };
+                let Some(&(_, _, classes, _)) = names.declared.get(&declaration) else {
+                    matched = true;
+                    targets.push(Target::Node(reference));
+                    break;
+                };
+                if classes & class == 0 { break }
                 matched = true;
                 match self.definition(reference, self.asks(asks, class)) {
-                    Known::Yes(Some(found)) => targets.extend(found),
-                    Known::Yes(None) => targets.push(Target::Node(reference)),
+                    Known::Yes(Some(found)) if found.is_empty() => {
+                        skipped.push(declaration);
+                        let text = world.text(at.file).ok_or(())?;
+                        let local = world.name_key(at.file, source);
+                        match names.visible_except(tree, text, &|t| world.name_key(at.file, t), node, &local, class, &skipped) {
+                            Some(next) => {
+                                self.spend()?;
+                                declaration = next;
+                            }
+                            None => break,
+                        }
+                    }
+                    Known::Yes(Some(found)) => {
+                        targets.extend(found);
+                        break;
+                    }
+                    Known::Yes(None) => {
+                        targets.push(Target::Node(reference));
+                        break;
+                    }
                     Known::Unknown => return Err(()),
                 }
-            } else {
-                matched = true;
-                targets.push(Target::Node(reference));
             }
         }
         targets.sort_unstable();
