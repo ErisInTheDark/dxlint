@@ -1,3 +1,3 @@
-a.ts:1:38-1:38 prefer-nullish-coalescing#3
-a.ts:1:46-1:46 prefer-nullish-coalescing#2
-a.ts:1:53-1:53 prefer-nullish-coalescing#0
+a.ts:1:38-1:40 prefer-nullish-coalescing#3
+a.ts:1:46-1:49 prefer-nullish-coalescing#2
+a.ts:1:53-1:62 prefer-nullish-coalescing#0
