@@ -36,7 +36,7 @@ const RESERVED: &[&str] = &[
 /// Items about names and effects (docs/design/type-layers.md); words only
 /// in item position on a layer.
 const NAME_ITEMS: &[&str] = &["scope", "declares", "resolves", "targets", "unwraps", "widens", "defines", "constrains", "assigned", "fits", "carries", "arguments", "indexed", "members", "member", "runs", "labels", "exports", "globals", "uses", "merges",
-    "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "variance", "generics", "overloads", "pack"];
+    "signature", "signatures", "calls", "constructs", "discards", "identity", "optional", "flag", "variance", "generics", "overloads", "pack"];
 
 /// What the lines of a `{ ... }` block (or one `in ...` line) are about:
 /// their parent layers, or what their rules check.
@@ -585,7 +585,7 @@ impl<'a> Parser<'a> {
                 let Some(path) = self.generics_item() else { return };
                 NameItem::Generics(path)
             }
-            "signature" | "signatures" | "calls" | "constructs" | "discards" | "identity" | "optional" | "variance" | "overloads" => {
+            "signature" | "signatures" | "calls" | "constructs" | "discards" | "identity" | "optional" | "flag" | "variance" | "overloads" => {
                 let Some(item) = self.call_item(&what) else { return };
                 // `optional when <cond>`: conditional like a `when` block.
                 if self.word("when") {

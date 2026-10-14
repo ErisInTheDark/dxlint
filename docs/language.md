@@ -440,8 +440,10 @@ in ts_statement rule padding-line-between-statements {
 
 A rule's `let` can also be read on another node the rule targets:
 `previous.rank`, `parent.depth`. That carries state along siblings or down
-the tree without loops, and the state sees the rule's options. A `let` may
-read itself on other nodes only:
+the tree without loops, and the state sees the rule's options. A node with a
+field of the same name reads the field instead (`x.parameter` stays the
+field whatever the rule's lets are called). A `let` may read itself on other
+nodes only:
 
 ```zlint
 in ts_class_member rule member-order warn "out of order" {
@@ -949,6 +951,9 @@ is wrong, messages) is written in the rule. A fact taking arguments is called (`
 | `value_has_expected(node)` | true when contextual type exists, false when known absent, null when unknown; does not expand the value |
 | `value_widened(node)` | the widened value (`widens` recipe), in the `value_constituents` shape |
 | `value_accepts(node, other, allowing, given)` | whether every value `other` may be is one `node` allows (assignability), each side read as its `"value"`, `"expected"` or `"widened"` value; null when either side is unknown or absent |
+| `value_parts(node)` | the node's value as union arms `{handle, parts}`: `handle` stands for the whole arm (its intersection constituents together), `parts` are its constituents in the `value_constituents` shape, each with its own `handle`, except that carrier `arguments` are handles (left unread); null when unknown. A handle is an opaque `{value_handle}` record: pass it where these queries take `node` (`value_parts`, `value_children`, `value_constituents`, `value_at`, `value_lookup` with a text or ordinal key) or compare it for equality (same value, same handle, with frames that bind nothing folded so recursive types revisit the same handle). Handles are valid only while linting the file that made them; any other value reads as null |
+| `value_children(node, members, arguments)` | the edges out of one arm (a node whose value has one arm, or an arm handle): with `members` true, every member of the arm as `{handle, member: {key, optional, sources}}` (sources as in `value_lookup`, plus their `flags`), only when the arm's members are all known (closed; constituents declaring no members of their own, such as trait-only parts and function types, add none and don't open it); with `arguments` a list of indexes, those carrier arguments of each constituent as `{handle, argument, part}` (`part` indexes the arm's constituents). `arguments` null (an unknown selection), a value with several arms or anything unknown gives null. Rules own recursion, pruning and cycles |
+| `value_signatures(node)` | the call signatures of each union arm of a node's value or a handle, as `{parameters, receiver, has_receiver, result}` per header: `parameters` a list of handles (null when unreadable), `receiver` and `result` handles (null when absent or unreadable), `has_receiver` false when there is none, null when unknown; null when the callables are unknown. Unlike `call_signatures`, nothing is read until a handle is asked |
 | `value_origin(node)` | the nearest instantiating reference `{file, node, kind}`; null when absent or unknown |
 | `global_declarations(node, name, class)` | the global declarations of `name` in `class` as `{file, node}` rows; `[]` known absent, null unknown |
 | `declaration_identity(node)` | the canonical declaration `{file, node}` a name or value comes from; null when unknown |
@@ -1285,7 +1290,8 @@ and `final-newline`.
 | `.ts/typed/type-parameters` | unnecessary formal type parameters in known scalar, array and tuple signature graphs; opaque graphs and inherited classes skipped; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/awaitability` | own async syntax (`await`, `for await`, `await using`) and Values decisions for `require-await`'s missing-await check; imported by `.ts/typed` |
 | `.ts/typed/unbound-method` | receiver-preserving method extraction, including destructuring and ignoreStatic; imported by `.ts/typed`, diagnostic-only |
-| `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; imported by `.ts/typed` |
+| `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; reduce assertions moved to call type parameters (`prefer-reduce-type-parameter`); imported by `.ts/typed` |
+| `.ts/scoping/member-uses` | private-member use policy over lexical names, contextual receivers and declared write targets; imported by `.ts/problems` |
 | `.ts/typed/strict-void-return` | non-void values flowing into void-returning callback contexts, with `allowReturnAny`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`prefer-regexp-exec`); imported by `.ts/typed` |
 | `.ts/typed/for-in-arrays` | array-like `for-in` policy (`no-for-in-array`); imported by `.ts/typed` |

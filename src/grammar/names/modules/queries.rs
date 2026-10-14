@@ -53,11 +53,15 @@ impl<'a> Queries<'a> {
             let source = world.text(at.file).ok_or(())?;
             if !names.failures.is_empty() { return Err(()) }
             let key = world.name_key(at.file, key);
-            if let Some(declaration) = names.visible(tree, source, &|text| world.name_key(at.file, text), at.node, &key, class) {
-                return Ok(match self.definition(NodeRef { file: at.file, node: declaration }, class).known().ok_or(())? {
-                    Some(targets) => !targets.is_empty(),
-                    None => true,
-                });
+            // An import whose target lacks the class leaves it to the next
+            // declaration (`import { T }` of a type beside `const T`).
+            let mut skipped = Vec::new();
+            while let Some(declaration) = names.visible_except(tree, source, &|text| world.name_key(at.file, text), at.node, &key, class, &skipped) {
+                self.spend()?;
+                match self.definition(NodeRef { file: at.file, node: declaration }, class).known().ok_or(())? {
+                    Some(targets) if targets.is_empty() => skipped.push(declaration),
+                    Some(_) | None => return Ok(true),
+                }
             }
             Ok(!self.global(at.file, &key, class).known().ok_or(())?.is_empty())
         };
@@ -242,7 +246,7 @@ impl<'a> Queries<'a> {
 
     fn global_uncounted(&self, importer: u32, name: &str, class: u64) -> Known<Vec<Target>> {
         match self.cached(Request::Global(importer, name.into(), class), || {
-            let scopes = self.global_scopes(importer)?;
+            let scopes = self.global_scopes(importer, name)?;
             let world = self.semantic.world;
             let mut targets = Vec::new();
             for scope in scopes {
@@ -681,7 +685,7 @@ mod tests {
                 answer => answer.clone(),
             }
         }
-        fn global_scopes(&self, _: u32, _: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
+        fn global_scopes(&self, _: u32, _: &str, _: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
             self.global_queries.set(self.global_queries.get() + 1);
             Known::Yes(vec![ScopeRef { file: 0, scope: 0 }, ScopeRef { file: 1, scope: 0 }])
         }

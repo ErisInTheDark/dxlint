@@ -30,6 +30,29 @@ impl Values<'_> {
         if unknown { Known::Unknown } else { Known::Yes(false) }
     }
 
+    /// The `flag` names whose conditions hold on the declaration at `at`,
+    /// in declaration order, each once.
+    pub fn flags(&self, at: Leaf) -> Known<Vec<Box<str>>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        let Target::Node(node) = at.target else { return Known::Yes(Vec::new()) };
+        let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+        let Some(node) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+        let Some(kind) = self.tables.kinds.get(node.matcher as usize) else { return Known::Unknown };
+        let mut flags: Vec<Box<str>> = Vec::new();
+        let mut uncertain: Vec<&str> = Vec::new();
+        for flag in &kind.calls.flags {
+            if flags.contains(&flag.item) { continue }
+            if !self.question.budget.step() { return Known::Unknown }
+            match flag.when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
+                Known::Yes(true) => flags.push(flag.item.clone()),
+                Known::Yes(false) => {}
+                Known::Unknown => uncertain.push(&flag.item),
+            }
+        }
+        if uncertain.iter().any(|name| !flags.iter().any(|flag| &**flag == *name)) { return Known::Unknown }
+        Known::Yes(flags)
+    }
+
     pub fn identity(&self, at: Leaf) -> Known<Option<Identity>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.identities.get(&at) {

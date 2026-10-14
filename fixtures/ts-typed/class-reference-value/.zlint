@@ -1,0 +1,4 @@
+import .ts
+in ts_identifier rule class-reference-contract warn "class value lost" {
+  when text == "instance" && value_constituents(node) == null
+}

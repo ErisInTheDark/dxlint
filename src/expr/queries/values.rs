@@ -31,7 +31,16 @@ fn constituents(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Know
     project(semantic, semantic.values().values(at))
 }
 
-fn project(semantic: &Semantic<'_>, value: NodeValue) -> Known<Value<'static>> {
+pub(super) fn project(semantic: &Semantic<'_>, value: NodeValue) -> Known<Value<'static>> {
+    project_with(semantic, value, &mut |semantic, argument| project(semantic, argument))
+}
+
+/// [`project`], with carrier arguments shown by `argument` (projected in
+/// full, or as handles that leave them unread).
+pub(super) fn project_with(
+    semantic: &Semantic<'_>, value: NodeValue,
+    argument: &mut dyn FnMut(&Semantic<'_>, NodeValue) -> Known<Value<'static>>,
+) -> Known<Value<'static>> {
     let Some(_nested) = semantic.question.budget.nest() else { return Known::Unknown };
     let values = semantic.values();
     let NodeValue::Alternatives(alternatives) = value else { return Known::Unknown };
@@ -67,7 +76,7 @@ fn project(semantic: &Semantic<'_>, value: NodeValue) -> Known<Value<'static>> {
             let (carrier, carrier_known) = match values.carrier(leaf) {
                 Known::Yes(Some(carrier)) => {
                     let Some(arguments) = carrier.arguments.into_iter()
-                        .map(|value| project(semantic, value).known())
+                        .map(|value| argument(semantic, value).known())
                         .collect::<Option<Vec<_>>>() else { return Known::Unknown };
                     (Value::record(vec![
                         ("file".into(), Value::Num(f64::from(carrier.declaration.file))),
@@ -185,7 +194,7 @@ fn has_member(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Kno
 }
 
 /// One member source: how the member is keyed and the node declaring it.
-fn source_value(source: &crate::grammar::names::values::MemberSource) -> Value<'static> {
+pub(super) fn source_value(source: &crate::grammar::names::values::MemberSource) -> Value<'static> {
     let (kind, domain) = origin_parts(source.origin);
     let site = match source.site.target {
         Target::Node(node) => Value::record(vec![
@@ -213,9 +222,12 @@ fn origin_parts(origin: MemberOrigin) -> (&'static str, Value<'static>) {
 fn lookup(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
     let Some(argument) = args.first() else { return Known::Unknown };
     let Known::Yes(key) = query_key(semantic, at, argument) else { return Known::Unknown };
+    lookup_in(semantic, semantic.values().values(at), &key)
+}
+
+pub(super) fn lookup_in(semantic: &Semantic<'_>, value: NodeValue, key: &Key) -> Known<Value<'static>> {
     let values = semantic.values();
-    let value = values.values(at);
-    let Known::Yes(rows) = values.keyed_members(&value, &key) else { return Known::Unknown };
+    let Known::Yes(rows) = values.keyed_members(&value, key) else { return Known::Unknown };
     let mut alternatives = Vec::new();
     for row in rows {
         if !semantic.question.budget.step() { return Known::Unknown }
@@ -232,7 +244,7 @@ fn lookup(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<V
             ("sources".into(), Value::list(sources)),
         ]));
     }
-    let result = project(semantic, values.member(&value, &key)).known();
+    let result = project(semantic, values.member(&value, key)).known();
     if semantic.question.budget.exhausted() { return Known::Unknown }
     Known::Yes(Value::record(vec![
         ("value_known".into(), Value::Bool(result.is_some())),
@@ -241,7 +253,7 @@ fn lookup(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> Known<V
     ]))
 }
 
-fn member_key(value: &Value<'static>) -> Option<Key> {
+pub(super) fn member_key(value: &Value<'static>) -> Option<Key> {
     match value {
         Value::Str(key) => Some(Key::Text((&**key).into())),
         Value::Num(index) if *index >= 0.0 && *index <= f64::from(u32::MAX) && index.fract() == 0.0 => {
@@ -263,7 +275,7 @@ fn expected_path(semantic: &Semantic<'_>, at: Leaf, args: &[Value<'static>]) -> 
     }
 }
 
-fn project_path(semantic: &Semantic<'_>, mut value: NodeValue, args: &[Value<'static>]) -> Known<Value<'static>> {
+pub(super) fn project_path(semantic: &Semantic<'_>, mut value: NodeValue, args: &[Value<'static>]) -> Known<Value<'static>> {
     let Some(Value::List(keys)) = args.first() else { return Known::Unknown };
     let values = semantic.values();
     for key in keys.iter() {

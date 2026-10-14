@@ -1,0 +1,9 @@
+import .ts
+in ts_member rule parameter-member-source {
+  let owner find(walk(node, item => item.parent.node), item => item is ts_class)
+  let source_parameter find(first(owner.member.nodes).parameter.nodes, parameter => parameter.name.text == property.text)
+  let lookup value_lookup(object.node, property.text)
+  when if property.text == "ordinary" then lookup != null && all(lookup.alternatives, alternative => alternative.matched == false)
+    else any(lookup.alternatives, alternative => any(alternative.sources, source => source.site == declaration_identity(source_parameter)))
+  warn "Member provenance is correct."
+}

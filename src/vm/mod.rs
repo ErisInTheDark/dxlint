@@ -781,6 +781,7 @@ pub trait Host {
     fn builtin(&self, _node: u32, _builtin: Builtin) -> Option<Value<'_>> { None }
     fn query(&self, _node: u32, _subject: &crate::grammar::names::Value, _query: &crate::expr::queries::Query, _mask: u64) -> Option<bool> { None }
     fn query_function(&self, _node: u32, _query: &crate::expr::queries::QueryFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
+    fn query_handle(&self, _handle: crate::grammar::names::question::Handle, _query: &crate::expr::queries::HandleFunction, _args: &[Value<'static>]) -> Option<Value<'static>> { None }
     fn option(&self, _index: usize) -> Option<Value<'_>> { None }
     fn debug(&self, _node: u32, _label: &str, _value: &Value) {}
     /// `position(offset)`.
@@ -1676,12 +1677,19 @@ fn ev_rare<H: Host>(h: &Runtime<'_, H>, node: u32, e: &VExpr, f: &mut Vec<V>) ->
         },
         VExpr::QueryCall(query, items) => {
             let Some((subject, items)) = items.split_first() else { return Some(V::Null) };
-            let V::Node(target) = eval!(node, subject)? else { return Some(V::Null) };
+            let subject = eval!(node, subject)?;
             let mut args = Vec::with_capacity(items.len());
             for item in items {
                 args.push(h.unpack(eval!(node, item)?).into_owned());
             }
-            let value = h.query_function(target, query, &args)?;
+            let value = match subject {
+                V::Node(target) => h.query_function(target, query, &args)?,
+                other => {
+                    let Some(function) = crate::expr::queries::handle_function(query.name) else { return Some(V::Null) };
+                    let Some(handle) = crate::expr::queries::handle_of(&h.unpack(other)) else { return Some(V::Null) };
+                    h.query_handle(handle, function, &args)?
+                }
+            };
             match h.file_vm() {
                 Some(file) => file.shared_query(&value, h.values(), h.source())?,
                 None => h.pack(&value)?,

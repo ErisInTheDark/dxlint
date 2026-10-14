@@ -37,6 +37,7 @@ impl Parser<'_> {
             }
             "identity" => self.expr().map(Item::Identity),
             "optional" => Some(Item::Optional),
+            "flag" => self.ident("a declaration flag name").map(Item::Flag),
             "overloads" => {
                 if !self.word("infer") || !self.word("last") {
                     self.error_here("expected `infer last` after `overloads`");

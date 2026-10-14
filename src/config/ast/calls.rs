@@ -13,6 +13,9 @@ pub enum Item {
     DiscardsResult,
     Identity(Expr),
     Optional,
+    /// `flag <name>`: a named fact about the declaration (such as `readonly`),
+    /// reported with member sources.
+    Flag(Name),
     ParameterVariance(Variance),
     InferLastOverload,
 }

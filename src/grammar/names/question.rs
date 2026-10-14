@@ -250,8 +250,9 @@ pub trait World {
         Known::Unknown
     }
     /// The global scopes the program around file `importer` sees (libs,
-    /// type roots, script files, global augmentations), in policy order.
-    fn global_scopes(&self, _importer: u32, _semantic: &super::semantic::Semantic<'_>) -> Known<Vec<ScopeRef>> {
+    /// type roots, script files, global augmentations), in policy order;
+    /// a world may leave out files that cannot publish global `name`.
+    fn global_scopes(&self, _importer: u32, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<Vec<ScopeRef>> {
         Known::Unknown
     }
     /// The answer to `question`, shared with the other worlds that ask it
@@ -290,7 +291,27 @@ pub struct QueryContext {
     frames: std::cell::RefCell<Interner<Frame>>,
     args: std::cell::RefCell<Interner<Args>>,
     products: std::cell::RefCell<Interner<Product>>,
+    handles: std::cell::RefCell<Interner<NodeValue>>,
+    /// This context's handle namespace, assigned with its first handle.
+    owner: std::cell::Cell<u32>,
     pub budget: Budget,
+}
+
+/// A value handed to rules: valid only in the [`QueryContext`] that made
+/// it (as long as that lives), so a handle from another file or thread
+/// reads as nothing rather than as another value. Fits an f64 exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Handle(u64);
+
+impl Handle {
+    const OWNER_BITS: u32 = 21;
+
+    pub fn number(self) -> f64 { self.0 as f64 }
+
+    pub fn from_number(number: f64) -> Option<Self> {
+        let max = ((1u64 << (32 + Self::OWNER_BITS)) - 1) as f64;
+        (number >= 0.0 && number <= max && number.fract() == 0.0).then_some(Handle(number as u64))
+    }
 }
 
 /// Values numbered in arrival order, each once.
@@ -318,6 +339,22 @@ impl<T: Clone + Eq + std::hash::Hash> Interner<T> {
 }
 
 impl QueryContext {
+    /// One handle per distinct value; callers canonicalise frames first.
+    pub fn handle(&self, value: NodeValue) -> Handle {
+        static OWNERS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        if self.owner.get() == 0 {
+            let owner = OWNERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % ((1 << Handle::OWNER_BITS) - 1) + 1;
+            self.owner.set(owner);
+        }
+        let id = self.handles.borrow_mut().intern(value);
+        Handle(u64::from(self.owner.get()) << 32 | u64::from(id))
+    }
+
+    pub fn handle_value(&self, handle: Handle) -> Option<NodeValue> {
+        if self.owner.get() == 0 || handle.0 >> 32 != u64::from(self.owner.get()) { return None }
+        self.handles.borrow().items.get((handle.0 & u64::from(u32::MAX)) as usize).cloned()
+    }
+
     pub(crate) fn intern_product(&self, product: Product) -> ProductId {
         ProductId(self.products.borrow_mut().intern(product))
     }
@@ -376,6 +413,14 @@ impl QueryContext {
         }
     }
 
+    /// Whether evaluated arguments `id` bind nothing at all.
+    pub fn binds_nothing(&self, id: ArgsId) -> bool {
+        match self.args.borrow().items.get(id.0 as usize) {
+            Some(Args::Complete(args) | Args::Overlay(args)) => args.iter().all(Option::is_none),
+            None => false,
+        }
+    }
+
     /// One of a frame's evaluated arguments: `Yes(None)` past the last,
     /// unknown for an id this context never interned.
     pub fn argument(&self, id: ArgsId, position: usize) -> Known<Option<NodeValue>> {
@@ -384,5 +429,22 @@ impl QueryContext {
             Known::Yes(Argument::Unbound | Argument::Inherited) => Known::Yes(None),
             Known::Unknown => Known::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Handle, NodeValue, QueryContext};
+
+    #[test]
+    fn handles_name_one_value_and_only_in_their_own_context() {
+        let first = QueryContext::default();
+        let second = QueryContext::default();
+        let never = first.handle(NodeValue::never());
+        assert_eq!(first.handle(NodeValue::never()), never);
+        assert_eq!(first.handle_value(never), Some(NodeValue::never()));
+        second.handle(NodeValue::Unknown);
+        assert_eq!(second.handle_value(never), None);
+        assert_eq!(Handle::from_number(never.number()), Some(never));
     }
 }

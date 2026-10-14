@@ -287,6 +287,10 @@ pub struct Resolved {
     /// Declared name -> the scope it lands in, the node whose `declares`
     /// item declares it, its classes and whether it is hoisted.
     pub declared: FxHashMap<u32, (u32, u32, u64, bool)>,
+    /// Further scopes the same name also lands in, as in `declared` (a
+    /// constructor parameter property: a parameter and a class member).
+    /// `declared` keeps the first: the name's own lexical binding.
+    pub also_declared: FxHashMap<u32, Vec<(u32, u32, u64, bool)>>,
     /// Semantic descriptors stay separate from declarations' lexical owners.
     pub bindings: FxHashMap<u32, u32>,
     /// Implicit declarations (`declares value "arguments"`): node -> names.
@@ -913,12 +917,22 @@ impl Names {
                         };
                         let entry = Declared { name, start: tree.node(name).start, classes: d.classes, hoisted: d.hoisted, implicit: false };
                         scopes[target].declared.entry(key).or_default().push(entry);
-                        out.declared.entry(name).and_modify(|(scope, owner, classes, hoisted)| {
-                            if *scope == target as u32 && *owner == id {
-                                *classes |= d.classes;
-                                *hoisted |= d.hoisted;
+                        let membership = (target as u32, id, d.classes, d.hoisted);
+                        match out.declared.entry(name) {
+                            std::collections::hash_map::Entry::Vacant(entry) => { entry.insert(membership); }
+                            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                                // Same scope: one membership (a second owner there adds nothing).
+                                let merge = |(scope, owner, classes, hoisted): &mut (u32, u32, u64, bool)| {
+                                    if *scope != membership.0 { return false }
+                                    if *owner == membership.1 { *classes |= membership.2; *hoisted |= membership.3; }
+                                    true
+                                };
+                                if !merge(entry.get_mut()) {
+                                    let others = out.also_declared.entry(name).or_default();
+                                    if !others.iter_mut().any(merge) { others.push(membership) }
+                                }
                             }
-                        }).or_insert((target as u32, id, d.classes, d.hoisted));
+                        }
                         out.bindings.entry(name).or_insert(descriptor);
                     }
                 }
@@ -1164,7 +1178,9 @@ impl Resolved {
                 let i = i as u32;
                 index.opened.entry(scope.node).or_insert((i, i)).1 = i + 1;
             }
-            for (&name, &(scope, ..)) in &self.declared {
+            let memberships = self.declared.iter().map(|(&name, &(scope, ..))| (name, scope))
+                .chain(self.also_declared.iter().flat_map(|(&name, others)| others.iter().map(move |&(scope, ..)| (name, scope))));
+            for (name, scope) in memberships {
                 let Some(names) = index.declared.get_mut(scope as usize) else { continue };
                 match self.implicit.get(&name) {
                     Some(texts) => texts.iter().for_each(|t| names.entry(t.clone()).or_default().push(name)),
@@ -1186,9 +1202,24 @@ impl Resolved {
         })
     }
 
+    /// How `name` is declared in `scope` (`declared` or one of
+    /// `also_declared`); the primary membership when it is in neither.
+    pub fn membership(&self, name: u32, scope: u32) -> (u32, u32, u64, bool) {
+        let primary = self.declared.get(&name).copied().unwrap_or((scope, name, 0, false));
+        if primary.0 == scope { return primary }
+        self.also_declared.get(&name).and_then(|others| others.iter().find(|other| other.0 == scope)).copied().unwrap_or(primary)
+    }
+
     /// The declaration `name` (a name's key) means at `at`, searching the
     /// scopes around it outward for one of `classes`.
     pub fn visible(&self, tree: &Tree, text: &str, key: &NameKey<'_>, at: u32, name: &str, classes: u64) -> Option<u32> {
+        self.visible_except(tree, text, key, at, name, classes, &[])
+    }
+
+    /// [`Self::visible`] as if the `skipped` declarations did not exist
+    /// (an import proven not to carry the class gives way to the next).
+    #[allow(clippy::too_many_arguments)]
+    pub fn visible_except(&self, tree: &Tree, text: &str, key: &NameKey<'_>, at: u32, name: &str, classes: u64, skipped: &[u32]) -> Option<u32> {
         if !self.failures.is_empty() { return None }
         let index = self.index(tree, text, key);
         let start = tree.node(at).start;
@@ -1205,8 +1236,9 @@ impl Resolved {
             let decls: Vec<Declared> = index
                 .declared(s, name)
                 .iter()
+                .filter(|d| !skipped.contains(d))
                 .map(|&d| {
-                    let (_, _, classes, hoisted) = self.declared[&d];
+                    let (_, _, classes, hoisted) = self.membership(d, s);
                     Declared { name: d, start: tree.node(d).start, classes, hoisted, implicit: self.implicit.contains_key(&d) }
                 })
                 .collect();

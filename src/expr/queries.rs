@@ -8,8 +8,10 @@ mod values;
 mod syntax;
 mod modules;
 mod names;
+mod handles;
 
 pub(crate) use names::Memo as NamesMemo;
+pub use handles::{handle_function, handle_of, HandleFunction};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Uncertainty {
@@ -47,11 +49,11 @@ pub struct QueryFunction {
     pub call: fn(&Semantic<'_>, Leaf, &[Value<'static>]) -> Known<Value<'static>>,
 }
 
-pub static QUERY_FUNCTIONS: &[&[QueryFunction]] = &[flow::FUNCTIONS, values::FUNCTIONS, syntax::FUNCTIONS, modules::FUNCTIONS, names::FUNCTIONS];
+pub static QUERY_FUNCTIONS: &[&[QueryFunction]] = &[flow::FUNCTIONS, values::FUNCTIONS, syntax::FUNCTIONS, modules::FUNCTIONS, names::FUNCTIONS, handles::FUNCTIONS];
 
 impl QueryFunction {
     pub fn uncertainty(&self) -> Uncertainty {
-        const EXPLICIT: &[&str] = &["call_signatures", "call_parameters", "call_results", "member_call_parameters", "value_constituents", "value_accepts"];
+        const EXPLICIT: &[&str] = &["call_signatures", "call_parameters", "call_results", "member_call_parameters", "value_constituents", "value_accepts", "value_parts", "value_children", "value_signatures"];
         if EXPLICIT.contains(&self.name) { Uncertainty::Explicit } else { Uncertainty::Strict }
     }
 }

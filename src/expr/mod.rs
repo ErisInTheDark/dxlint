@@ -381,6 +381,11 @@ pub struct NodeSel {
 }
 
 impl NodeSel {
+    /// The matchers selected (specialisations included).
+    pub(crate) fn kinds(&self) -> &[u32] {
+        &self.kinds
+    }
+
     pub(crate) fn new(grammar: &Grammar, kinds: &[u32], field: Option<u16>) -> Self {
         let kinds = (0..grammar.matchers.len() as u32)
             .filter(|&matcher| kinds.iter().any(|&kind| grammar.is_a(matcher, kind))).collect();
@@ -588,20 +593,20 @@ impl<'a> Scope<'a> {
         .ok()
     }
 
-    /// `x` read on some node, when it names something nodes have: the rule's
-    /// own `let` (also the one being defined: `let depth previous.depth + 1`),
-    /// an attribute, a fact, a link, a builtin or a field label (any layer's).
+    /// `x` read on some node, when it names something nodes have: the node's
+    /// field of that label when it has one, else the rule's own `let` (also
+    /// the one being defined: `let depth previous.depth + 1`), an attribute,
+    /// a fact, a link or a builtin.
     fn node_part(&self, part: &crate::config::ast::Name) -> Option<CExpr> {
         let rule = || self.rule.unwrap_or_default().to_string();
-        if let Some(i) = self.locals.iter().position(|l| *l == part.text) {
+        let local = self.locals.iter().position(|l| *l == part.text)
+            .or_else(|| (self.defining.as_deref() == Some(part.text.as_str())).then_some(self.locals.len()));
+        let fallback = if let Some(i) = local {
+            // A node with a field of that name reads the field: the rule's
+            // `let` only stands in on nodes without one.
             self.note(part.span, Resolved::Local(rule(), part.text.clone()));
-            return Some(CExpr::Local(i as u16));
-        }
-        if self.defining.as_deref() == Some(part.text.as_str()) {
-            self.note(part.span, Resolved::Local(rule(), part.text.clone()));
-            return Some(CExpr::Local(self.locals.len() as u16));
-        }
-        let fallback = if let Some(i) = facts::link(&part.text) {
+            CExpr::Local(i as u16)
+        } else if let Some(i) = facts::link(&part.text) {
             self.note(part.span, Resolved::Fact(facts::LINKS[i].name));
             CExpr::Link(i)
         } else if let Some(i) = self.attrs.get(&part.text) {

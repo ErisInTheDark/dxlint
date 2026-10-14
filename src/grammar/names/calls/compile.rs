@@ -15,6 +15,7 @@ pub enum Item {
     DiscardsResult,
     Identity(u32),
     Optional,
+    Flag(Box<str>),
     ParameterVariance(Variance),
     InferLastOverload,
 }
@@ -46,6 +47,7 @@ pub fn lower(
         ParsedItem::DiscardsResult => Item::DiscardsResult,
         ParsedItem::Identity(_) => Item::Identity(operand(0)),
         ParsedItem::Optional => Item::Optional,
+        ParsedItem::Flag(name) => Item::Flag(name.text.as_str().into()),
         ParsedItem::ParameterVariance(variance) => Item::ParameterVariance(*variance),
         ParsedItem::InferLastOverload => Item::InferLastOverload,
     })
@@ -61,6 +63,7 @@ impl KindCalls {
             Item::DiscardsResult => self.discards.push(when),
             Item::Identity(item) => self.identities.push(Conditional { item, when }),
             Item::Optional => self.optional.push(when),
+            Item::Flag(item) => self.flags.push(Conditional { item, when }),
             Item::ParameterVariance(item) => self.variances.push(Conditional { item, when }),
             Item::InferLastOverload => self.infer_last.push(when),
         }

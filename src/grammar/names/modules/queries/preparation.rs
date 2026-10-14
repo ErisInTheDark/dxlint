@@ -40,7 +40,7 @@ pub(super) struct Batch {
     plans: RefCell<BTreeMap<(ScopeRef, Box<str>, PublicationKind, bool), Rc<Vec<BatchPlan>>>>,
     conditions: RefCell<BTreeMap<(NodeRef, u32), bool>>,
     operands: RefCell<BTreeMap<(NodeRef, u32), Value<'static>>>,
-    globals: RefCell<BTreeMap<u32, Vec<ScopeRef>>>,
+    globals: RefCell<BTreeMap<(u32, Box<str>), Vec<ScopeRef>>>,
 }
 
 impl Batch {
@@ -67,40 +67,11 @@ impl Queries<'_> {
             return batch.finish(self, answers);
         }
         let query = Queries { semantic: self.semantic, batch: Some(&batch) };
-        let collect = || -> Result<ClassAnswers, ()> {
-            query.spend()?;
-            let world = query.semantic.world;
-            let names = world.names(at.file).ok_or(())?;
-            let tree = world.tree(at.file).ok_or(())?;
-            let source = world.text(at.file).ok_or(())?;
-            if !names.failures.is_empty() { return Err(()) }
-            let key = world.name_key(at.file, name);
-            let mut remaining = classes;
-            let mut answers = ClassAnswers::default();
-            while let Some(declaration) = names.visible(tree, source, &|text| world.name_key(at.file, text), at.node, &key, remaining) {
-                let (_, _, declared, _) = names.declared.get(&declaration).ok_or(())?;
-                let matched = remaining & declared;
-                if matched == 0 { return Err(()) }
-                for class in (0..64).map(|bit| 1u64 << bit).filter(|class| matched & class != 0) {
-                    let answer = match query.definition(NodeRef { file: at.file, node: declaration }, class) {
-                        Known::Yes(Some(targets)) => Known::Yes(!targets.is_empty()),
-                        Known::Yes(None) => Known::Yes(true),
-                        Known::Unknown => Known::Unknown,
-                    };
-                    answers.insert(class, answer);
-                }
-                remaining &= !matched;
-                if remaining == 0 { break }
-            }
-            for class in (0..64).map(|bit| 1u64 << bit).filter(|class| remaining & class != 0) {
-                answers.insert(class, match query.global(at.file, &key, class) {
-                    Known::Yes(targets) => Known::Yes(!targets.is_empty()),
-                    Known::Unknown => Known::Unknown,
-                });
-            }
-            Ok(answers)
-        };
-        batch.finish(&query, collect().unwrap_or_default())
+        let mut answers = ClassAnswers::default();
+        for class in (0..64).map(|bit| 1u64 << bit).filter(|class| classes & class != 0) {
+            answers.insert(class, query.binding_has_class(at, name, class));
+        }
+        batch.finish(&query, answers)
     }
 
     pub fn export_classes(&self, scope: ScopeRef, name: &str, classes: u64) -> ClassAnswers {
@@ -153,15 +124,16 @@ impl Queries<'_> {
         Ok(value)
     }
 
-    pub(super) fn global_scopes(&self, importer: u32) -> Result<Vec<ScopeRef>, ()> {
+    pub(super) fn global_scopes(&self, importer: u32, name: &str) -> Result<Vec<ScopeRef>, ()> {
+        let key = (importer, Box::<str>::from(name));
         if let Some(batch) = self.batch {
             if batch.revision != self.semantic.world.revision() { return Err(()) }
-            if let Some(scopes) = batch.globals.borrow().get(&importer) { return Ok(scopes.clone()) }
+            if let Some(scopes) = batch.globals.borrow().get(&key) { return Ok(scopes.clone()) }
         }
-        let scopes = self.profiled("modules.roots", || self.semantic.world.global_scopes(importer, self.semantic)).known().ok_or(())?;
+        let scopes = self.profiled("modules.roots", || self.semantic.world.global_scopes(importer, name, self.semantic)).known().ok_or(())?;
         if let Some(batch) = self.batch {
             if batch.revision != self.semantic.world.revision() || self.semantic.question.budget.limited() { return Err(()) }
-            batch.globals.borrow_mut().insert(importer, scopes.clone());
+            batch.globals.borrow_mut().insert(key, scopes.clone());
         }
         Ok(scopes)
     }

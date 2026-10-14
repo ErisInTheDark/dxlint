@@ -35,6 +35,9 @@ impl Values<'_> {
             NodeValue::Unknown => return Known::Unknown,
             _ => {}
         }
+        // A non-empty value overlaps itself (a written value of the declared
+        // type), without a structural comparison of what it contains.
+        if declared == written { return Known::Yes(true) }
         if let (Known::Yes(Some(left)), Known::Yes(Some(right))) = (
             self.row_identity(declared), self.row_identity(written),
         ) {

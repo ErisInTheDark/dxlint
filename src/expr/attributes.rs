@@ -50,6 +50,11 @@ enum Route {
 }
 
 impl Attributes {
+    /// An attribute's name and its definitions' expressions.
+    pub fn definition(&self, id: u16) -> Option<(&str, &[CExpr])> {
+        self.attrs.get(usize::from(id)).map(|attr| (attr.name.as_str(), attr.defs.as_slice()))
+    }
+
     pub fn new(attrs: Vec<Attr>, forwards: &[(u32, u16, u16)], grammar: &Grammar) -> Self {
         let stats = vm::stats();
         if attrs.is_empty() {
@@ -394,6 +399,10 @@ impl vm::Host for Ctx<'_> {
 
     fn query_function(&self, node: u32, query: &super::queries::QueryFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
         Some(self.world?.query_function(self.file_id, node, query, args))
+    }
+
+    fn query_handle(&self, handle: crate::grammar::names::question::Handle, query: &super::queries::HandleFunction, args: &[Value<'static>]) -> Option<Value<'static>> {
+        Some(self.world?.query_handle(self.file_id, handle, query, args))
     }
 
     fn values(&self) -> &vm::Values {

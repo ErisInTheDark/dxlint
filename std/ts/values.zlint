@@ -417,6 +417,7 @@ in ts_object, ts_interface, ts_type_literal {
   fits structural in members
 }
 in ts_interface, ts_type_literal { unwraps scope members from it }
+in ts_type_literal { fits object_literal in members }
 in ts_object {
   let ts_value_any_spreads filter(property.nodes, item => item is ts_spread && item.argument always any)
   when len(ts_value_any_spreads) > 0 { unwraps ...ts_value_any_spreads.argument }
@@ -543,6 +544,24 @@ in ts_method, ts_class_property {
   when ts_value_static(modifier.nodes) { declares member key keyed ts_value_key(it) in nearest statics hoisted }
   when !ts_value_static(modifier.nodes) { declares member key keyed ts_value_key(it) in nearest members hoisted }
 }
+in ts_parameter {
+  when parent is ts_method && parent.calls_constructor
+    && any(modifier.nodes, modifier => contains(["private", "protected", "public", "readonly", "override"], modifier.text)) {
+    declares member name keyed ts_value_key(it) in nearest members hoisted
+  }
+}
+in ts_property { flag readonly when ts_value_const_context(node) }
+in ts_property_signature, ts_index_signature, ts_class_property, ts_parameter {
+  flag readonly when any([] modifier, modifier => modifier == "readonly")
+}
+in ts_method, ts_method_signature {
+  flag method when kind != "get" && kind != "set"
+  flag private when key is ts_private_name
+  flag readonly when kind == "get" && !any(parent.member.nodes, member =>
+    member.kind == "set" && ts_value_key(member.key.node) == ts_value_key(key.node)
+      && ts_value_static(member.modifier.nodes) == ts_value_static(modifier.nodes))
+}
+in ts_class_property { flag private when key is ts_private_name }
 in ts_class_property {
   optional when optional != null
   when optional == null { unwraps type ?? init.widened ?? unknown }

@@ -119,6 +119,7 @@ struct, signature or literal type is the type; nothing is constructed.
 | `indexed keyed <path> by <key value> [using v] [in views]` | computed members with finite keys evaluated per site (Known keys cached per canonical leaf and path, keeping the frame) |
 | `fits T, ... [in views] open` | the listed traits are known; traits not listed are uncertain (not false) for that view (`any`, `unknown`); `when` and scope views apply as for `fits` |
 | `members <views> closed [inherits v]` | the scope's named-member list is complete (presence proofs may drop absent keys); every active base view must be closed too, and unresolved members or heritage never prove closed |
+| `flag <name> [when c]` (per kind) | a named fact about a declaration (`readonly`, `method`, `private`...), reported on member sources by `value_children`; a flag whose condition is unknown makes the site's flags unknown unless another item of the same name holds |
 | `widens v` (per kind) | the recipe `.widened` uses; without one, `.widened` is the normal value, keeping union/intersection structure |
 
 Precedence follows TS: `a | b & c` is `a | (b & c)`.

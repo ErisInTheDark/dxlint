@@ -115,6 +115,7 @@ pub struct KindCalls {
     pub discards: Vec<Option<u32>>,
     pub identities: Vec<Conditional<u32>>,
     pub optional: Vec<Option<u32>>,
+    pub flags: Vec<Conditional<Box<str>>>,
     pub variances: Vec<Conditional<Variance>>,
     pub infer_last: Vec<Option<u32>>,
 }
@@ -241,7 +242,7 @@ impl Calls<'_> {
             // non-generic declarations bind nothing, so the comparison is
             // recognised without them. Generic instantiations keep their
             // frames (`Box<Box<number>>` vs `Box<Box<string>>` is compared).
-            let unbound = (self.without_incidental_frames(expected), self.without_incidental_frames(actual));
+            let unbound = (self.without_incidental_frames(expected, false), self.without_incidental_frames(actual, false));
             let assumed = state.accepting.borrow().iter().position(|pending| *pending == unbound);
             if let Some(depth) = assumed {
                 state.assumed.set(Some(state.assumed.get().map_or(depth, |outer| outer.min(depth))));
@@ -270,7 +271,9 @@ impl Calls<'_> {
 
     /// `value` with the frames of non-generic declarations dropped: they
     /// bind no arguments, so only their identity differs between rounds.
-    fn without_incidental_frames(&self, value: &NodeValue) -> NodeValue {
+    /// `views`: a frame selecting view classes keeps them, re-rooted (a value
+    /// that must keep reading the same view, unlike comparison keys).
+    pub(crate) fn without_incidental_frames(&self, value: &NodeValue, views: bool) -> NodeValue {
         let NodeValue::Alternatives(rows) = value else { return value.clone() };
         // Binding unless this frame and every frame it reads through (its
         // parents, its reference's frame) belongs to a declaration with no
@@ -292,14 +295,18 @@ impl Calls<'_> {
                 if seen.len() >= 32 { return true }
                 seen.push(id);
                 let Some(frame) = self.question.get(id) else { return true };
-                if frame.args.is_some() || owner_generic(frame.owner) { return true }
+                if frame.args.is_some_and(|args| !self.question.binds_nothing(args)) || owner_generic(frame.owner) { return true }
                 pending.push(frame.parent);
                 if let Some(through) = frame.through { pending.push(through.frame) }
             }
             false
         };
+        let rooted = |frame| match self.question.get(frame) {
+            Some(frame) if views && frame.classes != 0 => self.question.bind_definition(super::question::FrameId::ROOT, frame.owner, None, None, frame.classes),
+            _ => super::question::FrameId::ROOT,
+        };
         NodeValue::Alternatives(rows.iter().map(|row| row.iter().map(|&leaf| {
-            if leaf.frame == super::question::FrameId::ROOT || generic(leaf.frame) { leaf } else { Leaf { frame: super::question::FrameId::ROOT, ..leaf } }
+            if leaf.frame == super::question::FrameId::ROOT || generic(leaf.frame) { leaf } else { Leaf { frame: rooted(leaf.frame), ..leaf } }
         }).collect()).collect())
     }
 
