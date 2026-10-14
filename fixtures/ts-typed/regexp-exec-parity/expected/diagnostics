@@ -1,0 +1,7 @@
+input.ts:10:48-10:53 prefer-regexp-exec#0
+input.ts:11:13-11:18 prefer-regexp-exec#0
+input.ts:1:13-1:18 prefer-regexp-exec#0
+input.ts:3:13-3:18 prefer-regexp-exec#0
+input.ts:4:13-4:18 prefer-regexp-exec#0
+input.ts:7:45-7:50 prefer-regexp-exec#0
+input.ts:9:13-9:18 prefer-regexp-exec#0

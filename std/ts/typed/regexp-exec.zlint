@@ -1,7 +1,79 @@
 define {
+
+fn regexp_nonglobal(n) = {
+  value bare: collection_value_node(n)
+  value input: bare.regexp_input
+  value flags_argument: regexp_at(bare.argument.nodes, 1)
+  value if input != null then type_of(input.flags) == "str" && !contains(input.flags, "g")
+    else if type_of(bare.static_string) == "str" then true
+    else if bare is (ts_call, ts_new) && bare.callee is ts_identifier && bare.callee.text == "RegExp" then
+      flags_argument == null || type_of(flags_argument.static_string) == "str" && !contains(flags_argument.static_string, "g")
+      || type_of(flags_argument.static_number) == "num" || flags_argument is ts_identifier && flags_argument.text == "undefined" && flags_argument.declaration == null
+    else false
+}
+fn regexp_exec_argument(n) = {
+  value arms: value_constituents(n)
+  value strings: any(arms, arm => {
+    value part: first(arm)
+    value len(arm) == 1 && contains(part.traits, "string")
+  })
+  value regexes: any(arms, arm => {
+    value part: first(arm)
+    value len(arm) == 1 && part.carrier_known == true
+      && part.carrier.description.kind == "named" && part.carrier.description.name == "RegExp"
+  })
+  value strings != regexes
+}
+fn regexp_match_exec_offset(n) = {
+  value method: unparenthesised_node(n.callee.node)
+  value arguments: n.argument.nodes
+  value argument: first(arguments)
+  value bare: unparenthesised_node(argument)
+  value if n not ts_call || len(arguments) != 1 || !collection_method(method, "match")
+    || !(method.object.node always string) || !regexp_nonglobal(argument) then null
+    else if bare is ts_string then {
+      value input: regexp_string_input(bare, "")
+      value if input != null && regexp_mode_error(n, input, "") == null then method.property.offset ?? method.index.offset else null
+    } else if regexp_exec_argument(argument) then method.property.offset ?? method.index.offset else null
+}
+in ts_call let regexp_match_exec_offset regexp_match_exec_offset(node)
+
+fn regexp_exec_literal(text) = {
+  value characters: split(text, "")
+  value escaped: fold(characters, { text: "", escaped: false }, (state, character) => {
+    text: state.text (if character == "/" && !state.escaped then "\\/"
+      else if character == "\n" then (if state.escaped then "n" else "\\n")
+      else if character == "\r" then (if state.escaped then "r" else "\\r")
+      else if character == "\u{2028}" then (if state.escaped then "u2028" else "\\u2028")
+      else if character == "\u{2029}" then (if state.escaped then "u2029" else "\\u2029")
+      else character),
+    escaped: character == "\\" && !state.escaped
+  })
+  value "/" (if escaped.text == "" then "(?:)" else escaped.text) "/"
+}
+fn regexp_exec_fix(n) = {
+  value method: unparenthesised_node(n.callee.node)
+  value argument: first(n.argument.nodes)
+  value bare: unparenthesised_node(argument)
+  value strings: bare always string
+  value receiver: if bare is ts_string then regexp_exec_literal(regexp_string_input(bare, "").text)
+    else if strings then "RegExp(" argument.text ")"
+    else expression_fix_wrap(argument.text, bare not (ts_identifier, ts_member, ts_index, ts_call, ts_new, ts_regex, ts_parenthesized))
+  value replacement: receiver ".exec(" method.object.text ")"
+  value statement: expression_fix_statement(n)
+  value semicolon: statement != null && statement.offset == n.offset && expression_fix_continuation(replacement)
+    && expression_fix_asi(statement, statement.token_neighbours.before, expression_fix_before_nodes(statement), replacement)
+  value if strings && bare not ts_string && ts_global_visible(n, "RegExp") != false
+    || semicolon == null || !expression_fix_retains_comments(n, replacement) then null
+    else (if semicolon then ";" else "") replacement
+}
+
 in ts_call rule prefer-regexp-exec {
   when regexp_match_exec_offset != null
-  report at regexp_match_exec_offset
+  let method unparenthesised_node(callee.node)
+  report at method.property.node ?? method.index.node
+  let replacement regexp_exec_fix(node)
+  fix at node if replacement != null as expression_fix_edges(node, replacement)
   warn "Use the `RegExp#exec()` method instead."
 }
 }

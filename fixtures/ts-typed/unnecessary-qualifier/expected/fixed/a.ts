@@ -1,7 +1,7 @@
 namespace A {
   export type T = number;
   export const value = 3;
-  const typed: A.T = 3;
+  const typed: T = 3;
   const read = value;
   namespace Nested {
     type T = string;

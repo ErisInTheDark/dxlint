@@ -1,47 +1,70 @@
 define {
+fn qualifier_receiver(n) = if n is ts_qualified_name then n.left.node else n.object.node
+fn qualifier_key(n) = if n is ts_qualified_name then n.right.node else n.property.node
 fn qualifier_entity(n) = n is ts_identifier
-  || (n is ts_member && n.optional == null && qualifier_entity(n.object.node))
-fn qualifier_identity(n) = if n is ts_member then {
-  value lookup: value_lookup(n.object.node, n.property.text)
+  || (n is (ts_member, ts_qualified_name) && n.optional == null && qualifier_entity(qualifier_receiver(n)))
+fn qualifier_owner(n) = {
+  value owners: {
+    value n
+    walk (item) item.parent.node
+    filter (item) item is (ts_namespace, ts_enum)
+  }
+  value if count(owners) == 0 then null else {
+    value identity: qualifier_identity(qualifier_receiver(n))
+    value if identity == null then null
+      else find(owners, owner => declaration_identity(owner.name.node) == identity)
+  }
+}
+fn qualifier_owned_identity(n) = {
+  value owner: qualifier_owner(n)
+  value scopes: if owner == null then [] else name_scopes(owner.body.node ?? owner, "lexical")
+  value declarations: {
+    value scopes
+    filter (scope) scope.owner == owner || scope.owner == owner.body.node
+    flat_map (scope) name_scope_declarations(n, scope.id, qualifier_key(n).text)
+  }
+  value identities: map(declarations, declaration => declaration_identity(declaration.node))
+  value if count(identities) > 0 && all(identities, identity => identity == first(identities))
+    then first(identities) else null
+}
+fn qualifier_identity(n) = if n is (ts_member, ts_qualified_name) then {
+  value lookup: value_lookup(qualifier_receiver(n), qualifier_key(n).text)
   value rows: lookup.alternatives
   value sources: if count(rows) == 1 then first(rows).sources else []
-  value if lookup != null && first(rows).matched && count(sources) == 1 then first(sources).site else null
+  value if lookup != null && first(rows).matched && count(sources) == 1 then first(sources).site
+    else qualifier_owned_identity(n)
 } else declaration_identity(n)
 fn qualifier_local(n, key) = {
   value scopes: name_scopes(n, "lexical")
   value rows: map(scopes, scope => {
     value declarations: name_scope_declarations(n, scope.id, key)
-    value { known: declarations != null, declarations: filter(declarations, declaration => contains(declaration.classes, "value")) }
+    value { known: declarations != null, declarations: filter(declarations, declaration =>
+      if n is ts_qualified_name then contains(declaration.classes, "type")
+      else contains(declaration.classes, "value") || contains(scope.classes, "statics") && contains(declaration.classes, "member")) }
   })
   value row: find(rows, row => !row.known || count(row.declarations) > 0)
   value if scopes == null || row == null || !row.known then null
     else map(row.declarations, declaration => declaration_identity(declaration.node))
 }
 fn qualifier_unnecessary(n) = {
-  value receiver: n.object.node
-  value name: n.property.node
-  value identity: qualifier_identity(receiver)
-  value owners: {
-    value n
-    walk (item) item.parent.node
-    filter (item) item is (ts_namespace, ts_enum)
+  value receiver: qualifier_receiver(n)
+  value if !qualifier_entity(receiver) || n.optional != null || qualifier_owner(n) == null then false else {
+    value accessed: qualifier_identity(n)
+    value local: qualifier_local(n, qualifier_key(n).text)
+    value accessed != null && local != null && count(local) > 0
+      && all(local, declaration => declaration == accessed)
   }
-  value active: identity != null && any(owners, owner => declaration_identity(owner.name.node) == identity)
-  value accessed: qualifier_identity(n)
-  value local: qualifier_local(n, name.text)
-  value qualifier_entity(receiver) && n.optional == null && active && accessed != null && local != null
-    && count(local) > 0 && all(local, declaration => declaration == accessed)
 }
-fn qualifier_outer(n) = if n.parent is ts_member && n.parent.object.node == n then n.parent.node else null
-in ts_member rule no-unnecessary-qualifier {
+fn qualifier_outer(n) = if n.parent is (ts_member, ts_qualified_name) && qualifier_receiver(n.parent.node) == n then n.parent.node else null
+in ts_member, ts_qualified_name rule no-unnecessary-qualifier {
   when qualifier_unnecessary(node)
   when !{
     value qualifier_outer(node)
     walk (item) qualifier_outer(item)
     any (item) qualifier_unnecessary(item)
   }
-  let qualifier_node object.node
-  let qualifier_key property.node
+  let qualifier_node qualifier_receiver(node)
+  let qualifier_key qualifier_key(node)
   let qualifier_comments {
     value descendants(ts_comment)
     filter (comment) comment.offset >= qualifier_node.offset && comment.end_offset <= qualifier_key.offset

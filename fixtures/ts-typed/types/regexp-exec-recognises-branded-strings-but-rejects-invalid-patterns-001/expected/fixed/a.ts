@@ -1,0 +1,1 @@
+type Safe = string & { brand: void }; function f(s: Safe) { /ok/.exec(s); } 'x'.match('['); /g/.exec('x');
