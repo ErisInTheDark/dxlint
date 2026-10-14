@@ -1,0 +1,4 @@
+custom/input.tsx:1:8-1:8 no-unused-vars:variables#1
+default.tsx:2:10-2:10 no-unused-vars:variables#1
+disabled/input.tsx:1:8-1:8 no-unused-vars:variables#1
+dotted/input.tsx:2:10-2:10 no-unused-vars:variables#1

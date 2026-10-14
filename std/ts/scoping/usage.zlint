@@ -8,6 +8,10 @@ define {
 group ts_usage_jsx ts_jsx_element, ts_jsx_fragment
 group ts_usage_iteration ts_for_in, ts_for_of
 in ts_program let ts_usage_jsx_present count(descendants(ts_usage_jsx)) > 0
+in ts_program let ts_usage_jsx_binding {
+  value factory: program_option(node, "jsxFactory") ?? "React"
+  value if type_of(factory) == "str" then first(split(factory, ".")) else null
+}
 in ts_program let ts_usage_return_bindings {
   value descendants(ts_usage_iteration)
   filter (loop) {
@@ -140,10 +144,12 @@ fn ts_usage_ambient(n, declaration_file) = {
 }
 fn ts_usage_marked(n, typed, declaration_file) = typed && {
   value site: ts_usage_site(n)
-  value function: ts_usage_function(n)
-  value signature: function is (ts_function_type, ts_call_signature, ts_method_signature)
-    || function is (ts_function, ts_method) && function.body == null
-  value site is ts_parameter && (signature || count(site.modifier.nodes) > 0 || function.kind == "set")
+  value site is ts_parameter && {
+    value function: ts_usage_function(n)
+    value signature: function is (ts_function_type, ts_call_signature, ts_method_signature)
+      || function is (ts_function, ts_method) && function.body == null
+    value signature || count(site.modifier.nodes) > 0 || function.kind == "set"
+  }
     || site is ts_type_parameter && site.parent is ts_mapped_type
     || site is ts_namespace && n.text == "global"
     || ts_usage_ambient(n, declaration_file)
@@ -194,7 +200,8 @@ fn ts_usage_used(binding, sites, references, typed, variable, value_binding, dec
   value root: last(program.scoping_lexical_scopes)
   value global: ts_usage_global(binding, program)
   value exported_comment: global && contains(ts_exported_names(program), declaration.text)
-  value jsx: typed && declaration.text == "React" && binding.scope.id == root.id && program.ts_usage_jsx_present
+  value jsx: typed && declaration.text == program.ts_usage_jsx_binding
+    && binding.scope.id == root.id && program.ts_usage_jsx_present
   value exported: typed && any(sites, site => {
     value owner: ts_usage_site(site)
     value !(value_binding && owner is (ts_interface, ts_type_alias)) && owner.parent is ts_export
@@ -264,7 +271,7 @@ fn ts_usage_context(n) = if !n.scoping_lexical_declaration || n.parent is ts_qua
       array_element: n.parent is ts_array_pattern,
       array_target: any(own, reference => reference.write && reference.node.parent is ts_array),
       setter: def == "parameter" && ts_usage_function(n).kind == "set",
-      before_used_param: def == "parameter" && ts_usage_before_parameter(n, typed, declaration_file),
+      before_used_param: !used && def == "parameter" && ts_usage_before_parameter(n, typed, declaration_file),
       rest_sibling: any(sites, site => ts_usage_rest_sibling(site))
         || any(own, reference => ts_usage_rest_sibling(reference.node)),
       static_block: any(classes, owner => any(owner.member.nodes, member => member is ts_static_block)),

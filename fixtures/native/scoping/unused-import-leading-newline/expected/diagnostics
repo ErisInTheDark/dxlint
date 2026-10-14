@@ -1,0 +1,7 @@
+input.ts:2:8-2:8 no-unused-vars:variables#1
+input.ts:3:13-3:13 no-unused-vars:variables#1
+input.ts:4:10-4:10 no-unused-vars:variables#1
+input.ts:5:10-5:10 no-unused-vars:variables#1
+input.ts:5:17-5:17 no-unused-vars:variables#1
+input.ts:6:16-6:16 no-unused-vars:variables#1
+input.ts:6:8-6:8 no-unused-vars:variables#1
