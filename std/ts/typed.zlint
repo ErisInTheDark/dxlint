@@ -44,7 +44,7 @@ in ts_type_reference, ts_intersection rule no-generated-empty-object-type {
 
 in ts_function, ts_arrow, ts_method rule require-await {
   when missing_await != null
-  report at function_warning_site(node)
+  report at ts_await_warning_site(node)
   warn missing_await.name " has no 'await' expression."
 }
 
@@ -325,6 +325,9 @@ in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
   when this_return_type_offset != null
   report at this_return_type_offset
   warn "Use `this` type instead."
+  let annotation find(overlapping(ts_type_reference, this_return_type_offset, this_return_type_offset + 1),
+    candidate => candidate.offset == this_return_type_offset)
+  fix at annotation if annotation != null && expression_fix_clean(annotation) as "this"
 }
 
 in ts_union, ts_intersection {
@@ -397,7 +400,7 @@ in ts_call.argument rule await-thenable:iterable {
   warn "Unexpected iterable of non-Promise (non-\"Thenable\") values passed to promise aggregator."
 }
 in ts_for_of rule await-thenable:for-of {
-  report at unparenthesised_node(right.node)
+  report at { start: offset, end: last(overlapping(ts_close_paren, right.end_offset, body.offset)).end_offset }
   when nonasync_for_of == true
   warn "Unexpected `for await...of` of a value that is not async iterable."
 }

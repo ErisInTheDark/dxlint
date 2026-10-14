@@ -1,3 +1,3 @@
-async function
 // zlint-ignore require-await
+async function
 task() { work(); }

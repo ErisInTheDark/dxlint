@@ -1,0 +1,3 @@
+input.ts:2:8-2:8 prefer-return-this-type#0
+input.ts:3:20-3:20 prefer-return-this-type#0
+input.ts:4:11-4:11 prefer-return-this-type#0
