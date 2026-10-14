@@ -250,10 +250,23 @@ in ts_method.key, ts_class_property.key rule no-dupe-class-members {
   warn "Duplicate name '{parent.static_name}'."
 }
 
-# Once per name, at the parameter list.
+fn problem_duplicate_parameters(owner) = {
+  value walk(owner.parameter.name.nodes,
+    child => if child is (ts_function, ts_arrow, ts_method, ts_class) then [] else child.children.nodes)
+  filter (site) site is ts_identifier && site.ts_name_site == owner && site.ts_name_kind == "parameter"
+  map (site) name_binding(site)
+  filter (binding) binding != null
+  unique_by (binding) binding.key
+  filter (binding) count(filter(binding.declarations,
+    site => site.ts_name_site == owner && site.ts_name_kind == "parameter")) >= 2
+  map (binding) binding.key
+}
 in ts_function rule no-dupe-args {
-  each duplicate_param in duplicate_parameters
-  report at offset + { value text; re_find /^[^(]*/; len }
+  when body != null
+  each duplicate_param in problem_duplicate_parameters(node)
+  let duplicate_open node_at(function_head_site(node).end)
+  when duplicate_open is ts_open_paren
+  report at { start: duplicate_open.offset, end: return_type.end_offset ?? duplicate_open.paired_token.end }
   warn "Duplicate param '{duplicate_param}'."
 }
 
