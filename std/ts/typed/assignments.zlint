@@ -72,7 +72,7 @@ fn assignment_print(parts) = if parts == null then "unknown" else if len(parts) 
   value { value arms; unique; join " | " }
 }
 fn assignment_finding(site, mode, parts, receiver) = {
-  site: site.offset, mode: mode, error: assignment_category(parts) == "error",
+  site: site, mode: mode, error: assignment_category(parts) == "error",
   sender: if mode == "generic" then assignment_print(parts) else "any",
   receiver: if mode == "generic" then assignment_print(receiver) else null
 }
@@ -124,7 +124,7 @@ fn assignment_transfers_value(n) = {
   value source: assignment_sender(n)
   value target: assignment_receiver(n)
   value compare: n not (ts_declarator, ts_parameter, ts_class_property) || n.type != null
-  value report: if n is ts_parameter then target
+  value report: if n is ts_parameter then { start: target.offset, end: source.end_offset }
     else if n is ts_jsx_attribute then source else n
   value sender: if source != null then value_constituents(source) else null
   value receiver: if n.type != null then value_constituents(n.type.node)
