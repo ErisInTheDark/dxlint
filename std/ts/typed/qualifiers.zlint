@@ -3,17 +3,25 @@ fn qualifier_receiver(n) = if n is ts_qualified_name then n.left.node else n.obj
 fn qualifier_key(n) = if n is ts_qualified_name then n.right.node else n.property.node
 fn qualifier_entity(n) = n is ts_identifier
   || (n is (ts_member, ts_qualified_name) && n.optional == null && qualifier_entity(qualifier_receiver(n)))
+fn qualifier_owner_path(n, names, index) = {
+  value name: { value names; drop index; first }
+  value if index == 0 then {
+    value identity: declaration_identity(name)
+    value identity != null && qualifier_identity(n) == identity
+  } else n is (ts_member, ts_qualified_name)
+    && qualifier_key(n).identifier_name == name.identifier_name
+    && qualifier_owner_path(qualifier_receiver(n), names, index - 1)
+}
 fn qualifier_owner(n) = {
   value owners: {
     value n
     walk (item) item.parent.node
     filter (item) item is (ts_namespace, ts_enum)
   }
-  value if count(owners) == 0 then null else {
-    value identity: qualifier_identity(qualifier_receiver(n))
-    value if identity == null then null
-      else find(owners, owner => declaration_identity(owner.name.node) == identity)
-  }
+  value find(owners, owner => {
+    value names: if owner is ts_namespace then ts_module_names(owner) else [owner.name.node]
+    value count(names) > 0 && qualifier_owner_path(qualifier_receiver(n), names, count(names) - 1)
+  })
 }
 fn qualifier_owned_identity(n) = {
   value owner: qualifier_owner(n)
