@@ -28,7 +28,9 @@ fn template_interpolation_raw(n) = if n is ts_string then { value slice(n.text, 
   else if n is ts_regex then { value template_regex_text(n); re_replace /\\/ "\\\\"; template_literal_raw (["'", '"']) }
   else n.literal_value.value.nonempty ?? n.text
 fn template_unescaped_dollar(text) = re_test(text, /(^|[^\\])(?:\\\\)*\$$/)
-fn template_interpolation_fix(source, n, interpolation) = if interpolation.string_only then {
+fn template_interpolation_eligible(interpolation, comments, type_syntax) = !any(comments, comment => comment.offset >= interpolation.previous.end_offset && comment.end_offset <= interpolation.following.offset)
+  && (interpolation.string_only || template_expression_literal(interpolation.subject, type_syntax) && !(re_test(interpolation.following.text, /^}[\r\n\u2028\u2029]/) && template_expression_whitespace(interpolation.subject)))
+fn template_interpolation_fix(source, n, interpolation, next_opens) = if interpolation.string_only then {
   value operand: interpolation.expression
   value parens: expression_fix_parens(source, n, operand)
   value wrapped: expression_fix_wrap(operand.text, parens > 0)
@@ -42,8 +44,8 @@ fn template_interpolation_fix(source, n, interpolation) = if interpolation.strin
   value following: slice(interpolation.following.text, 1)
   # A valid string NUL escape must not become a legacy octal escape on joining.
   value raw: if re_test(raw_text, /(^|[^\\])(?:\\\\)*\\0$/) && re_test(following, /^[0-9]/) then slice(raw_text, 0, -2) "\\x00" else raw_text
-  value protect_previous: template_unescaped_dollar(previous) && (starts_with(raw, "{{") || raw == "" && starts_with(following, "{{"))
-  value protect_next: template_unescaped_dollar(raw) && starts_with(following, "{{")
+  value protect_previous: template_unescaped_dollar(previous) && (starts_with(raw, "{{") || raw == "" && next_opens)
+  value protect_next: template_unescaped_dollar(raw) && next_opens
   value {
     target: { start: interpolation.previous.end_offset - 2 - (if protect_previous then 1 else 0), end: interpolation.following.offset + 1 },
     text: (if protect_previous then "\\$" else "") (if protect_next then slice(raw, 0, -1) "\\$" else raw)
@@ -76,14 +78,29 @@ in ts_template, ts_template_type rule no-unnecessary-template-expression {
         template_expression_string single type_syntax
       }
     }
-    map (interpolation) {
-      data: interpolation,
-      fix: template_interpolation_fix(source, node, interpolation)
+    reverse
+    result: fold ({ opens: false, items: [] }) (state, interpolation) {
+      value following: slice(interpolation.following.text, 1, if ends_with(interpolation.following.text, "`") then -1 else -2)
+      value next_opens: if following == "" then state.opens else starts_with(following, "{{")
+      value eligible: template_interpolation_eligible(interpolation, comments, type_syntax)
+      value raw: if eligible then template_interpolation_raw(interpolation.subject) else null
+      value {
+        opens: eligible && (if raw == "" then next_opens else starts_with(raw, "{{")),
+        items: {
+          value state.items
+          concat [{
+            data: interpolation,
+            eligible: eligible,
+            fix: if eligible then template_interpolation_fix(source, node, interpolation, next_opens) else null
+          }]
+        }
+      }
     }
+    value result.items
+    reverse
   }
   each interpolation in interpolation_pairs
-  when !any(comments, comment => comment.offset >= interpolation.data.previous.end_offset && comment.end_offset <= interpolation.data.following.offset)
-  when interpolation.data.string_only || template_expression_literal(interpolation.data.subject, type_syntax) && !(re_test(interpolation.data.following.text, /^}[\r\n\u2028\u2029]/) && template_expression_whitespace(interpolation.data.subject))
+  when interpolation.eligible
   report at if interpolation.data.string_only then {start: interpolation.data.expression.offset - 2, end: interpolation.data.expression.end_offset + 1} else {start: interpolation.data.previous.end_offset - 2, end: interpolation.data.following.offset + 1}
   warn "Template literal expression is unnecessary and can be simplified."
   fix at interpolation.fix.target if interpolation.fix != null as interpolation.fix.text
