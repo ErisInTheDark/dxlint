@@ -154,7 +154,7 @@ impl Values<'_> {
         self.tables.products.get(product.shape.0 as usize)?.as_ref()
     }
 
-    fn product_inherited(&self, at: Leaf, product: &Product) -> Known<Option<NodeValue>> {
+    pub(super) fn product_inherited(&self, at: Leaf, product: &Product) -> Known<Option<NodeValue>> {
         let Some(shape) = self.product_shape(product) else { return Known::Unknown };
         let recipe = if product.readonly { shape.readonly_inherits.as_ref().or(shape.inherits.as_ref()) } else { shape.inherits.as_ref() };
         match recipe {

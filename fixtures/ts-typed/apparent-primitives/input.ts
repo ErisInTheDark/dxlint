@@ -1,0 +1,11 @@
+type Missing<T> = T extends { a: string } ? 1 : 2;
+type NumberMethod<T> = T extends { toFixed(fractionDigits?: number): string } ? 1 : 2;
+type StringMethod<T> = T extends { charAt(pos: number): string } ? 1 : 2;
+declare const missing: Missing<number>;
+declare const numericMethod: NumberMethod<number>;
+declare const stringMethod: StringMethod<string>;
+const fixed = (1).toFixed();
+const char = "x".charAt(0);
+declare const awaited: Awaited<number>;
+const promised = Promise.resolve(1);
+const literal = 1;

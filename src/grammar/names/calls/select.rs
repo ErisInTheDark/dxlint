@@ -176,10 +176,8 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], values: &Values<'_>
                 _ => {}
             }
         }
-        if needs_inference {
-            if compatible != Known::Yes(false) { compatible = Known::Unknown }
-            continue;
-        }
+        // Inferred parameters are checked once instantiated.
+        if needs_inference { continue }
         for (offset, &actual) in actuals.iter().enumerate() {
             let expected = if is_rest {
                 values.member(&values.values(parameter), &Key::Ordinal(offset as u32))
@@ -201,7 +199,10 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], values: &Values<'_>
         header
     } else {
         let header = match super::infer::instantiate(declaration, call, &mapping, &explicit, values) {
-            Known::Yes(Some(header)) => header,
+            Known::Yes(Some((header, fits))) => {
+                if compatible == Known::Yes(true) { compatible = fits }
+                header
+            }
             Known::Yes(None) => return Known::Yes(Candidate { chosen: Chosen { header, mapping }, compatible: Known::Yes(false) }),
             Known::Unknown => return Known::Unknown,
         };

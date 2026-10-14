@@ -56,6 +56,24 @@ impl Parser<'_> {
         });
     }
 
+    pub(super) fn apparent_item(&mut self, context: Option<&Context>) {
+        let keyword = self.bump().expect("peeked");
+        let Some(name) = self.ident("a trait") else { return };
+        if !self.word("inherits") { self.error_here("expected `inherits <value>`"); return }
+        let Some(inherits) = self.unwrap_value() else { return };
+        self.end_of_item();
+        if context.is_some() || !self.conditions.is_empty() {
+            self.errors.push(ConfigError::new(keyword.span, "apparent members belong at top level"));
+            return;
+        }
+        if let Some(previous) = self.config.apparent.iter().find(|apparent| apparent.name.text == name.text) {
+            self.errors.push(ConfigError::new(name.span, format!("apparent members of `{}` are already defined", name.text))
+                .related(previous.name.span, "first defined here"));
+            return;
+        }
+        self.config.apparent.push(crate::config::ast::values::Apparent { name, inherits });
+    }
+
     pub(super) fn select_value(&mut self) -> Option<Unwrap> {
         let check = Box::new(self.unwrap_value()?);
         if !self.word("against") { self.error_here("expected `against <value>`"); return None }

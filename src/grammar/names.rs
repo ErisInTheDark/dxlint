@@ -253,6 +253,9 @@ pub struct Names {
     pub dynamic: u64,
     pub key_domains: Vec<(crate::config::ast::values::KeyDomain, u64)>,
     pub products: Vec<Option<values::products::Shape>>,
+    /// `apparent <trait> inherits <value>`: the trait's bit and the value
+    /// whose members values with it read through.
+    pub apparent: Vec<(u64, values::compile::Value)>,
     /// `module_resolution` profiles, compiled.
     pub module_resolutions: Vec<modules::compile::Profile>,
     /// Every `let` attribute a semantic recipe path steps through: what
@@ -380,7 +383,7 @@ impl Names {
     /// opened is an error, like an unknown matcher.
     pub fn build(config: &Config, g: &Grammar, errors: &mut Vec<ConfigError>) -> Names {
         let mut names = Names { kinds: vec![KindNames::default(); g.matchers.len()], ..Names::default() };
-        if config.names.is_empty() && config.exclusive.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.products.is_empty() {
+        if config.names.is_empty() && config.exclusive.is_empty() && config.top.is_empty() && config.dynamic.is_empty() && config.key_domains.is_empty() && config.products.is_empty() && config.apparent.is_empty() {
             return names;
         }
         let mut vocab = Vocabulary::default();
@@ -413,6 +416,13 @@ impl Names {
         names.products = config.products.iter().map(|shape| {
             values::products::lower_shape(shape, g, &attrs, &record, &mut vocab, errors, &mut requested_classes)
         }).collect();
+        for apparent in &config.apparent {
+            let Some(bits) = class_bits(&mut vocab.traits, std::slice::from_ref(&apparent.name), errors) else { continue };
+            let path = |errors: &mut Vec<ConfigError>, path: &[Name]| record(lower_path(g, &attrs, errors, path));
+            if let Some(value) = values::compile::lower_value(&apparent.inherits, &path, &mut vocab, errors, &mut requested_classes) {
+                names.apparent.push((bits, value));
+            }
+        }
         for (item, def) in config.names.iter().enumerate() {
             let targets: Vec<u32> = def
                 .targets

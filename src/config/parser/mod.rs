@@ -306,6 +306,7 @@ impl<'a> Parser<'a> {
             (Tk::Ident, "top" | "dynamic") => self.algebra_item(ctx),
             (Tk::Ident, "keys") => self.key_domains_item(ctx),
             (Tk::Ident, "product") => self.product_shape_item(ctx),
+            (Tk::Ident, "apparent") => self.apparent_item(ctx),
             (Tk::Ident, "module_resolution") => {
                 self.bump();
                 if let Some(definition) = self.module_resolution() {

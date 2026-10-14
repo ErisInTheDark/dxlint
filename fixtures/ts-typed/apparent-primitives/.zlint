@@ -1,0 +1,35 @@
+import .ts
+
+fn apparent_trait(source, trait) = {
+  value arms: value_constituents(source)
+  value arms != null && count(arms) > 0
+    && all(arms, arm => any(arm, part => contains(part.traits, trait)))
+}
+fn apparent_literal(source, expected) = {
+  value arms: value_constituents(source)
+  value arms != null && count(arms) > 0 && all(arms, arm =>
+    any(arm, part => part.identity_known && part.identity.kind == "value" && part.identity.value == expected))
+}
+fn apparent_promise_number(source) = {
+  value arms: value_parts(source)
+  value children: if arms != null && count(arms) == 1 then value_children(first(arms).handle, false, [0]) else null
+  value children != null && count(children) == 1 && apparent_trait(first(children).handle, "number")
+}
+fn apparent_literal_own_members(source) = {
+  value arms: value_parts(source)
+  value children: if arms != null && count(arms) == 1 then value_children(first(arms).handle, true, []) else null
+  value children != null && count(children) == 0
+}
+in ts_declarator rule apparent-value-contract {
+  let subject type.node ?? init.node
+  let valid if name == "missing" then apparent_literal(subject, 2)
+    else if name == "numericMethod" || name == "stringMethod" then apparent_literal(subject, 1)
+    else if name == "fixed" || name == "char" then apparent_trait(subject, "string")
+    else if name == "awaited" then apparent_trait(subject, "number")
+    else if name == "promised" then apparent_promise_number(subject)
+    else if name == "literal" then apparent_literal(subject, 1) && apparent_literal_own_members(subject)
+      && !(subject always object)
+    else true
+  when !valid
+  warn "Apparent members must preserve the value contract for {name}."
+}

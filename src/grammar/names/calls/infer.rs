@@ -2,7 +2,9 @@ use super::{kind, node, Header, ProfileQuery, Value};
 use crate::grammar::names::question::{Known, Leaf, NodeValue};
 use crate::grammar::names::values::Values;
 
-pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf>)], explicit: &[NodeValue], values: &Values<'_>) -> Known<Option<Header>> {
+/// The header with its formals inferred from the call, and whether every
+/// argument then fits its instantiated parameter; `None` when one cannot.
+pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf>)], explicit: &[NodeValue], values: &Values<'_>) -> Known<Option<(Header, Known<bool>)>> {
     values.calls().profile(ProfileQuery::Infer, || {
         let Known::Yes(site) = values.semantic.leaf(header.site) else { return Known::Unknown };
         let header = Header { site, ..header };
@@ -59,6 +61,7 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
             Known::Unknown => return Known::Unknown,
         };
         let frame = values.question.bind_slots(header.site.frame, owner, Some(call), slots, classes);
+        let mut fits = Known::Yes(true);
         for (parameter, actuals) in mapping {
             let parameter = Leaf { frame, ..*parameter };
             let Known::Yes(is_rest) = super::rest(parameter, values) else { return Known::Unknown };
@@ -68,12 +71,14 @@ pub(super) fn instantiate(header: Header, call: Leaf, mapping: &[(Leaf, Vec<Leaf
                 } else {
                     values.values(parameter)
                 };
-                if values.calls().accepts(&expected, &values.values(actual)) == Known::Yes(false) {
-                    return Known::Yes(None);
+                match values.calls().accepts(&expected, &values.values(actual)) {
+                    Known::Yes(false) => return Known::Yes(None),
+                    Known::Unknown => fits = Known::Unknown,
+                    Known::Yes(true) => {}
                 }
             }
         }
-        Known::Yes(Some(Header { site: Leaf { frame, ..header.site }, ..header }))
+        Known::Yes(Some((Header { site: Leaf { frame, ..header.site }, ..header }, fits)))
     })
 }
 

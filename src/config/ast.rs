@@ -44,6 +44,7 @@ pub struct Config {
     pub dynamic: Vec<Name>,
     pub key_domains: Vec<(values::KeyDomain, Vec<Name>)>,
     pub products: Vec<values::ProductShape>,
+    pub apparent: Vec<values::Apparent>,
     /// `module_resolution name { ... }`: how module specifiers find files.
     pub module_resolutions: Vec<modules::Definition>,
     /// `schema name T`: option schemas rules share.

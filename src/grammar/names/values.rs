@@ -562,7 +562,8 @@ impl Values<'_> {
     fn instance(&self, at: Leaf, name: &str, classes: u64, arguments: &[Value]) -> NodeValue {
         let Some(_nested) = self.question.budget.nest() else { return NodeValue::Unknown };
         let importer = match at.target {
-            Target::Traits(_) => return NodeValue::Unknown,
+            // Trait-only values belong to no file: globals as the linted file sees them.
+            Target::Traits(_) => 0,
             Target::Node(node) => node.file,
             Target::Scope(scope) => scope.file,
             Target::Product(_) => {

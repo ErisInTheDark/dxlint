@@ -93,6 +93,11 @@ impl Values<'_> {
                 Known::Unknown => Known::Unknown,
             };
         }
+        match self.apparent(at) {
+            Known::Yes(Some(inherited)) => return self.closed(&inherited),
+            Known::Yes(None) => {}
+            Known::Unknown => return Known::Unknown,
+        }
         if matches!(at.target, Target::Traits(_)) { return Known::Yes(false) }
         if let Target::Scope(scope) = at.target {
             match self.semantic.modules().publication_names(scope) {
@@ -262,6 +267,76 @@ impl Values<'_> {
         }
     }
 
+    /// The values `at` inherits members from, in declaration order: declared
+    /// bases for its view (`members ... inherits`), a product's base, or the
+    /// apparent wrapper of a primitive.
+    pub fn bases(&self, at: Leaf) -> Known<Vec<NodeValue>> {
+        let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
+        if matches!(at.target, Target::Product(_)) {
+            let Known::Yes(Some(product)) = self.product_info(at) else { return Known::Unknown };
+            return match self.product_inherited(at, &product) {
+                Known::Yes(base) => Known::Yes(base.into_iter().collect()),
+                Known::Unknown => Known::Unknown,
+            };
+        }
+        match self.apparent(at) {
+            Known::Yes(Some(apparent)) => return Known::Yes(vec![apparent]),
+            Known::Yes(None) => {}
+            Known::Unknown => return Known::Unknown,
+        }
+        if matches!(at.target, Target::Traits(_)) { return Known::Yes(Vec::new()) }
+        let Known::Yes((node, view)) = self.member_context(at) else { return Known::Unknown };
+        let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+        let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+        let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Known::Unknown };
+        let classes = view.map_or(kind.member_defaults, |(_, classes)| classes);
+        let mut bases = Vec::new();
+        for (views, base, when) in &kind.member_bases {
+            if *views != 0 && classes & views == 0 { continue }
+            if !self.question.budget.step() { return Known::Unknown }
+            match when.map_or(Known::Yes(true), |condition| self.world.condition(at, condition, self.semantic)) {
+                Known::Yes(false) => continue,
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(true) => {}
+            }
+            let base = self.evaluate(at, base);
+            if base == NodeValue::Unknown { return Known::Unknown }
+            bases.push(base);
+        }
+        Known::Yes(bases)
+    }
+
+    /// The value a leaf without members of its own reads them through
+    /// (`apparent`): a primitive's object wrapper, for trait-only leaves and
+    /// nodes declaring no members (literals) that fit the trait.
+    fn apparent(&self, at: Leaf) -> Known<Option<NodeValue>> {
+        if self.tables.apparent.is_empty() { return Known::Yes(None) }
+        let recipe = match at.target {
+            Target::Traits(bits) => self.tables.apparent.iter().find(|(apparent, _)| bits & apparent != 0).map(|(_, recipe)| recipe),
+            Target::Node(node) => {
+                let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };
+                let Some(data) = tree.nodes.get(node.node as usize) else { return Known::Unknown };
+                let Some(kind) = self.tables.kinds.get(data.matcher as usize) else { return Known::Yes(None) };
+                if kind.member_defaults != 0 || !kind.indexed.is_empty() || !kind.member_bases.is_empty() || !kind.member_links.is_empty() {
+                    return Known::Yes(None);
+                }
+                let mut found = None;
+                for (bits, recipe) in &self.tables.apparent {
+                    match self.fits(at, bits.trailing_zeros() as u16) {
+                        Known::Yes(true) => { found = Some(recipe); break }
+                        Known::Yes(false) => {}
+                        Known::Unknown => return Known::Unknown,
+                    }
+                }
+                found
+            }
+            Target::Scope(_) | Target::Product(_) => None,
+        };
+        let Some(recipe) = recipe else { return Known::Yes(None) };
+        let inherited = self.evaluate(at, recipe);
+        if inherited == NodeValue::Unknown { Known::Unknown } else { Known::Yes(Some(inherited)) }
+    }
+
     fn leaf_members(&self, at: Leaf) -> Known<Vec<Member>> {
         let Known::Yes(at) = self.semantic.leaf(at) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.members.get(&at) { return answer }
@@ -288,7 +363,24 @@ impl Values<'_> {
         let wanted = request.key();
         let Some(_nested) = self.question.budget.nest() else { return Known::Unknown };
         if matches!(at.target, Target::Product(_)) { return self.product_members(at, wanted) }
-        if matches!(at.target, Target::Traits(_)) { return Known::Yes(Vec::new()) }
+        let inherited = match self.apparent(at) {
+            Known::Yes(Some(inherited)) => Some(inherited),
+            Known::Yes(None) => None,
+            Known::Unknown => return Known::Unknown,
+        };
+        if matches!(at.target, Target::Traits(_)) && inherited.is_none() { return Known::Yes(Vec::new()) }
+        if let Some(inherited) = inherited {
+            return match wanted {
+                Some(key) => match self.keyed_members(&inherited, key) {
+                    Known::Yes(rows) => Known::Yes(rows.into_iter().flatten().collect()),
+                    Known::Unknown => Known::Unknown,
+                },
+                None => match self.members(&inherited) {
+                    Known::Yes(rows) => Known::Yes(rows.into_iter().flatten().collect()),
+                    Known::Unknown => Known::Unknown,
+                },
+            };
+        }
         match self.publication_members(at, wanted) {
             Known::Yes(Some(members)) => return Known::Yes(members),
             Known::Unknown => return Known::Unknown,

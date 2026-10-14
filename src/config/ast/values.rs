@@ -40,6 +40,14 @@ pub struct ProductShape {
     pub optional: Option<Unwrap>,
 }
 
+/// `apparent <trait> inherits <value>`: the members values with the trait
+/// read through (a primitive's object wrapper), without becoming their own.
+#[derive(Clone, Debug)]
+pub struct Apparent {
+    pub name: Name,
+    pub inherits: Unwrap,
+}
+
 /// Declarative value expansion, member projection and truth constraints.
 #[derive(Clone, Debug)]
 pub enum Unwrap {
