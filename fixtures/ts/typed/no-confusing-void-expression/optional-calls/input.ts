@@ -1,0 +1,17 @@
+declare function clear(): void;
+declare function numberCall(): number;
+declare function mixed(): void | number;
+declare function unknownCall(): unknown;
+declare const maybeClear: (() => void) | null | undefined;
+declare const owner: { clear(): void; create(): { clear(): void } } | undefined;
+const direct = clear?.();
+const nullable = maybeClear?.();
+const member = owner?.clear();
+const index = owner?.['clear']();
+const continued = owner?.create().clear();
+const continuedIndex = owner?.create()['clear']();
+const broken = (owner?.clear)();
+const number = numberCall?.();
+const plainNumber = numberCall();
+const union = mixed?.();
+const unknown = unknownCall?.();

@@ -431,13 +431,25 @@ impl<'a, 'world> Run<'a, 'world> {
         self.answers.push(answer);
     }
 
+    /// The alternatives having none of `traits` (each trait excludes on its own).
     fn excludes(&self, value: NodeValue, traits: u64) -> NodeValue {
         let NodeValue::Alternatives(alternatives) = value else { return NodeValue::Unknown };
         let mut kept = Vec::new();
         for alternative in alternatives {
-            if !self.values.question.budget.step() { return NodeValue::Unknown }
             let row = NodeValue::Alternatives(vec![alternative]);
-            match self.values.could(&row, traits) {
+            let mut excluded = Known::Yes(false);
+            for bit in (0..u64::BITS).map(|i| 1u64 << i).filter(|bit| traits & bit != 0) {
+                if !self.values.question.budget.step() { return NodeValue::Unknown }
+                match self.values.could(&row, bit) {
+                    Known::Yes(true) => {
+                        excluded = Known::Yes(true);
+                        break;
+                    }
+                    Known::Yes(false) => {}
+                    Known::Unknown => excluded = Known::Unknown,
+                }
+            }
+            match excluded {
                 Known::Yes(true) => {}
                 Known::Yes(false) => {
                     let NodeValue::Alternatives(mut row) = row else { unreachable!() };

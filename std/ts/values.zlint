@@ -28,11 +28,15 @@ fn ts_value_key(key) = if key is ts_computed_key then {
       || inner is ts_template && count(inner.expression.nodes) == 0 then ts_value_key(inner) else null
   }
   else if key is ts_string then js_string(key.text)
-  else if key is ts_template && count(key.expression.nodes) == 0 then js_string(key.text)
+  else if key is ts_template && count(key.expression.nodes) == 0 then js_string_parts(key.text).text
   else if key is ts_number then "" key.ts_value_number
   else if key is ts_bigint then js_bigint(key.text)
   else { value "\"" key.text "\""; js_string }
 fn ts_value_static(modifiers) = any(modifiers, modifier => modifier.text == "static")
+fn ts_value_negated_bigint(text) = {
+  value magnitude: js_bigint(text)
+  value if magnitude == null || magnitude == "0" then magnitude else "-" magnitude
+}
 fn ts_value_this_context(n) = {
   value chain: walk(n, item => item.parent.node)
   value owner: find(chain, item => item is (ts_function, ts_method, ts_class_property, ts_static_block, ts_class))
@@ -350,7 +354,11 @@ in ts_sequence {
   unwraps ts_value_last_expression
 }
 
-in ts_call, ts_new, ts_tagged_template { unwraps it.result }
+in ts_new, ts_tagged_template { unwraps it.result }
+in ts_call {
+  when in_optional_chain == true { unwraps it.result | trait undefined, nullable, falsy, nonthenable }
+  when in_optional_chain != true { unwraps it.result }
+}
 in ts_call, ts_new { arguments type_argument }
 in ts_await { unwraps instance "Awaited" of argument }
 in ts_yield { unwraps unknown }
@@ -383,7 +391,7 @@ in ts_unary {
     widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
     fits falsy when argument always falsy
     fits truthy when argument always truthy
-    identity { type: "bigint", value: js_bigint("-" argument.text) }
+    identity { type: "bigint", value: ts_value_negated_bigint(argument.text) }
   }
   when operator == "-" && !(argument is (ts_number, ts_bigint)) { unwraps unknown }
 }
@@ -494,8 +502,8 @@ in ts_member {
   let ts_value_member_key ts_value_key(property.node)
   when object always any { unwraps object }
   when !(object always any) {
-    when optional == null { unwraps from object at ts_value_member_key }
-    when optional != null { unwraps (from object at ts_value_member_key) | trait undefined, nullable, falsy, nonthenable }
+    when in_optional_chain != true { unwraps from object at ts_value_member_key }
+    when in_optional_chain == true { unwraps (from (excludes nullable, undefined from object) at ts_value_member_key) | trait undefined, nullable, falsy, nonthenable }
   }
 }
 fn ts_value_unchecked_index(n) = {
@@ -512,15 +520,18 @@ in ts_index {
     || (if compiler_options.noUncheckedIndexedAccess == true then ts_value_unchecked_index(node) else false)
   when object always any { unwraps object }
   when !(object always any) {
-    when !ts_value_index_nullish { unwraps from object at index }
-    when ts_value_index_nullish { unwraps (from object at index) | trait undefined, nullable, falsy, nonthenable }
+    when in_optional_chain == true { unwraps (from (excludes nullable, undefined from object) at index) | trait undefined, nullable, falsy, nonthenable }
+    when in_optional_chain != true {
+      when !ts_value_index_nullish { unwraps from object at index }
+      when ts_value_index_nullish { unwraps (from object at index) | trait undefined, nullable, falsy, nonthenable }
+    }
   }
 }
-in ts_function, ts_arrow, ts_function_type, ts_method_signature, ts_call_signature {
+in ts_function, ts_arrow, ts_function_type, ts_call_signature {
   fits callable, object, truthy
 }
 in ts_function { fits constructible when !any(modifier.nodes, modifier => modifier.text == "async") }
-in ts_method {
+in ts_method, ts_method_signature {
   when kind != "get" && kind != "set" { fits callable, object, truthy }
   when kind == "get" { unwraps it.result }
   when kind == "set" { unwraps parameter.type }
@@ -534,7 +545,10 @@ in ts_class {
   unwraps scope statics from it
   unwraps scope members from it for type
   member statics "prototype" unwraps scope members from it
-  when ts_value_closed_type_members(member.nodes) { members members closed }
+  when ts_value_closed_type_members(member.nodes) {
+    members members closed
+    members statics closed
+  }
   when extends != null {
     members statics inherits extends
     members members inherits (from extends at "prototype")
@@ -625,7 +639,7 @@ in ts_literal_type {
     widens (trait bigint, truthy, nonthenable) | (trait bigint, falsy, nonthenable)
     fits falsy when value always falsy
     fits truthy when value always truthy
-    identity { type: "bigint", value: js_bigint("-" value.text) }
+    identity { type: "bigint", value: ts_value_negated_bigint(value.text) }
   }
 }
 in ts_parenthesized_type { unwraps type }

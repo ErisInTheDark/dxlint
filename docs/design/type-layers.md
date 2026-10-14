@@ -98,7 +98,7 @@ struct, signature or literal type is the type; nothing is constructed.
 | `unwraps \| ...types` / `unwraps & ...types` | spread a list with that operator |
 | `unwraps from x at key` | the member `key` of what `x` unwraps to, found in that node's scope; `at 0` for positions |
 | `unwraps !x` | not `x` (truth unwraps only) |
-| `excludes t, ... [from x]` / `includes v [from x]` / `has key [from x]` | under `truthy`: `x`'s alternatives without these traits / that `v` could be (`===`, `instanceof`) / with that member (`in`) |
+| `excludes t, ... [from x]` / `includes v [from x]` / `has key [from x]` | under `truthy`: `x`'s alternatives with none of these traits (each excludes alone) / that `v` could be (`===`, `instanceof`) / with that member (`in`) |
 | `unwraps maybe <effect> ...` | the effect may happen, or the node completes normally (calls that may throw) |
 | `through` | in a node reached by unwrapping a reference, that reference |
 | `trait t, ...` | a closed, nodeless value with exactly the listed traits; no identity, syntax or declaration (`trait void, undefined` implies nothing else) |
