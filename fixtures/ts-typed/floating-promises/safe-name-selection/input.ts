@@ -1,0 +1,16 @@
+type SafePromise = Promise<number> & { brand?: string };
+declare const safe: SafePromise;
+declare const unsafe: Promise<number>;
+declare const mixed: SafePromise | Promise<number>;
+declare const mixedArray: [SafePromise, Promise<number>];
+declare function safeCall(): Promise<number>;
+declare function unsafeCall(): Promise<number>;
+safe;
+safeCall();
+(0, safeCall());
+true && safeCall();
+unsafe;
+mixed;
+mixedArray;
+(safeCall(), unsafeCall());
+unsafe.catch(123);
