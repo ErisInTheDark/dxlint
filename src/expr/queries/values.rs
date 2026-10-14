@@ -365,7 +365,7 @@ fn declaration(semantic: &Semantic<'_>, at: Leaf, _: &[Value<'static>]) -> Known
         }
         Target::Traits(_) | Target::Product(_) => return Known::Unknown,
     };
-    let Known::Yes(node) = semantic.values().declaration_owner(node) else { return Known::Unknown };
+    let Known::Yes(node) = semantic.values().resolved_declaration(node) else { return Known::Unknown };
     Known::Yes(Value::record(vec![
         ("file".into(), Value::Num(f64::from(node.file))),
         ("node".into(), Value::Num(f64::from(node.node))),

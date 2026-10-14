@@ -530,6 +530,24 @@ impl Values<'_> {
         Known::Yes(NodeRef { file: node.file, node: owner })
     }
 
+    /// The declaration a name reference resolves to, across files (imports,
+    /// globals) when nothing in its own file declares it; the first of
+    /// merged declarations.
+    pub fn resolved_declaration(&self, node: NodeRef) -> Known<NodeRef> {
+        let Known::Yes(local) = self.declaration_owner(node) else { return Known::Unknown };
+        if local != node { return Known::Yes(local) }
+        let Some(names) = self.world.names(node.file) else { return Known::Unknown };
+        if !names.asked.contains_key(&node.node) || names.declaration.contains_key(&node.node) { return Known::Yes(local) }
+        let leaf = Leaf { target: Target::Node(node), frame: super::question::FrameId::ROOT };
+        match self.definitions(leaf, leaf) {
+            Known::Yes(definitions) => match definitions.first().map(|definition| definition.target) {
+                Some(Target::Node(definition)) => self.declaration_owner(definition),
+                _ => Known::Yes(local),
+            },
+            Known::Unknown => Known::Unknown,
+        }
+    }
+
     pub fn bound_argument(&self, formal: Leaf) -> Known<Option<NodeValue>> {
         let Known::Yes(formal) = self.semantic.leaf(formal) else { return Known::Unknown };
         if let Some(answer) = self.semantic.values.bound_arguments.get(&formal) {

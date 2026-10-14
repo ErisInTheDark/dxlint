@@ -25,13 +25,20 @@ impl Narrowing<'_> {
         let effects = self.semantic.effects();
         let Known::Yes(entry) = effects.entry_for(at) else { return base };
         let mut contexts = vec![(entry, at)];
-        if subject.path.is_empty() && effects.unwritten(subject.root, &|target| self.writes_binding(target, subject.root)) == Known::Yes(true) {
+        if subject.path.is_empty() {
+            let mut enclosing = Vec::new();
             let mut cursor = entry;
             loop {
                 if !self.semantic.question.budget.step() { return NodeValue::Unknown }
                 let Known::Yes(Some(creation)) = effects.enclosing(cursor) else { break };
-                contexts.push((creation.entry, creation.site));
+                enclosing.push((creation.entry, creation.site));
                 cursor = creation.entry;
+            }
+            // Only a value read inside a closure can use its creators' guards,
+            // and only then is the (whole-file) unwritten proof worth asking.
+            if !enclosing.is_empty()
+                && effects.unwritten(subject.root, &|target| self.writes_binding(target, subject.root)) == Known::Yes(true) {
+                contexts.extend(enclosing);
             }
         }
         for (context_entry, site) in contexts.into_iter().rev() {
