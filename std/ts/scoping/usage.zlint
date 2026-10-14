@@ -200,8 +200,8 @@ fn ts_usage_used(binding, sites, references, typed, variable, value_binding, dec
   value root: last(program.scoping_lexical_scopes)
   value global: ts_usage_global(binding, program)
   value exported_comment: global && contains(ts_exported_names(program), declaration.text)
-  value jsx: typed && declaration.text == program.ts_usage_jsx_binding
-    && binding.scope.id == root.id && program.ts_usage_jsx_present
+  value jsx: typed && binding.scope.id == root.id && program.ts_usage_jsx_present
+    && declaration.text == program.ts_usage_jsx_binding
   value exported: typed && any(sites, site => {
     value owner: ts_usage_site(site)
     value !(value_binding && owner is (ts_interface, ts_type_alias)) && owner.parent is ts_export
@@ -238,7 +238,7 @@ fn ts_usage_reference(n) = {
   read: contains(["read", "read_write", "type"], n.access),
   write: contains(["write", "read_write"], n.access)
 }
-fn ts_usage_context(n) = if !n.scoping_lexical_declaration || n.parent is ts_qualified_name
+fn ts_usage_summary(n) = if !n.scoping_lexical_declaration || n.parent is ts_qualified_name
   || n is (ts_function.name, ts_class.name) && !ts_declared_statement(n.parent.node) then null else {
   value binding: n.ts_usage_binding
   value if binding == null || binding.node != n then null else {
@@ -257,8 +257,23 @@ fn ts_usage_context(n) = if !n.scoping_lexical_declaration || n.parent is ts_qua
     value own: filter(references, reference => !any(classes, owner => scoping_within(reference.node, owner)))
     value variable: any(sites, site => ts_usage_site(site) is ts_variable_declaration)
     value value_binding: any(sites, site => ts_usage_site(site) not (ts_interface, ts_type_alias))
-    value only_type: typed && any(own, reference => ts_usage_type_only(reference.node, variable))
     value used: ts_usage_used(binding, sites, own, typed, variable, value_binding, declaration_file)
+    value { sites: sites, site: site, typed: typed, declaration_file: declaration_file,
+      classes: classes, own: own, variable: variable, used: used }
+  }
+}
+in ts_identifier let ts_usage_summary ts_usage_summary(node)
+fn ts_usage_context(n) = {
+  value summary: n.ts_usage_summary
+  value if summary == null then null else {
+    value sites: summary.sites
+    value site: summary.site
+    value typed: summary.typed
+    value declaration_file: summary.declaration_file
+    value own: summary.own
+    value classes: summary.classes
+    value used: summary.used
+    value only_type: typed && any(own, reference => ts_usage_type_only(reference.node, summary.variable))
     value scope: ts_usage_variable_scope(n)
     value write: find_last(own, reference => reference.write && ts_usage_variable_scope(reference.node) == scope)
     value offset: write.node.offset ?? n.offset
@@ -276,7 +291,7 @@ fn ts_usage_context(n) = if !n.scoping_lexical_declaration || n.parent is ts_qua
         || any(own, reference => ts_usage_rest_sibling(reference.node)),
       static_block: any(classes, owner => any(owner.member.nodes, member => member is ts_static_block)),
       using: any(sites, site => contains(["using", "await using"], site.scoping_site_kind)),
-      global: ts_usage_global(binding, n.scoping_program),
+      global: ts_usage_global(n.ts_usage_binding, n.scoping_program),
       action: if any(own, reference => reference.write) then "assigned a value" else "defined",
       only_type: only_type,
       offset: offset,
