@@ -1,0 +1,4 @@
+import .ts
+rule strict-boolean-expressions {
+  set allowNullableEnum true
+}

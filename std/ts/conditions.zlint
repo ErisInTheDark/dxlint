@@ -328,9 +328,12 @@ fn strict_boolean_value_variant(arms, primitive) = {
 }
 fn strict_boolean_value_variants(arms) = if !strict_boolean_value_complete(arms) then null
   else if count(arms) == 0 then ["never"] else {
-    value ["nullish", "boolean", "string", "number", "object", "any"]
-    map (primitive) strict_boolean_value_variant(arms, primitive)
-    filter (variant) variant != null
+    value variants: {
+      value ["nullish", "boolean", "string", "number", "object", "any"]
+      map (primitive) strict_boolean_value_variant(arms, primitive)
+      filter (variant) variant != null
+    }
+    value variants (if any(arms, arm => strict_boolean_value_has(arm, "enum")) then ["enum"] else [])
   }
 fn strict_boolean_native_metadata(n) = contains(n.type_flags, "enum")
 fn strict_boolean_native_variants(n) = {
