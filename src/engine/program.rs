@@ -217,6 +217,13 @@ pub(super) struct Snapshot {
     /// Directory listings behind those probes (`None`: unreadable).
     listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
+    /// Per program (settings, input hash) and global name: the inputs whose
+    /// text may publish it ([`crate::grammar::names::modules::resolution::Globals::may_publish`]).
+    candidates: RwLock<FxHashMap<(usize, u64, Box<str>), Cached<Arc<[PathBuf]>>>>,
+    /// Per program (settings, input hash): every input's text, read once.
+    surveys: RwLock<FxHashMap<(usize, u64), Cached<Survey>>>,
+    /// Program configurations by revision, settings and program directory.
+    configurations: RwLock<FxHashMap<(u64, usize, PathBuf), Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>>>,
     /// Metadata parsed from those texts, by text hash (`None`: malformed).
     metadata: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<crate::grammar::names::modules::resolution::Json>>)>>,
 }
@@ -245,6 +252,9 @@ pub(super) enum StableQuestion {
     /// Every augmentation of the program's module scopes in `classes`.
     Augmentations { classes: u64 },
 }
+
+/// A program's inputs with their texts (`None`: unreadable).
+pub(super) type Survey = Arc<[(PathBuf, Option<Arc<str>>)]>;
 
 /// Module scope (path, scope) -> the scopes that augment it.
 pub(super) type Augmentations = FxHashMap<(PathBuf, u32), Vec<(PathBuf, u32)>>;
@@ -313,6 +323,36 @@ impl Snapshot {
         let (text, hash) = reads::read_unrecorded(path);
         self.texts.write().expect("run texts").insert(path.to_owned(), (revision, text.clone(), hash));
         (text, hash)
+    }
+
+    /// A program configuration, loaded once per run (`load` records its
+    /// reads; failures are not kept).
+    pub(super) fn configuration(&self, key: (u64, usize, PathBuf),
+        load: impl FnOnce() -> Result<Arc<crate::grammar::names::modules::resolution::Configuration>, ()>)
+        -> Result<Cached<Arc<crate::grammar::names::modules::resolution::Configuration>>, ()> {
+        if let Some(found) = self.configurations.read().expect("run configurations").get(&key) { return Ok(found.clone()) }
+        let answer = Cached::compute(load);
+        let Ok(value) = answer.value else { reads::note_group(&answer.reads); return Err(()) };
+        let found = Cached { value, reads: answer.reads };
+        self.configurations.write().expect("run configurations").insert(key, found.clone());
+        Ok(found)
+    }
+
+    /// A program's input texts, read once per run (`read` records them).
+    pub(super) fn survey(&self, key: (usize, u64), read: impl FnOnce() -> Survey) -> Cached<Survey> {
+        if let Some(found) = self.surveys.read().expect("run surveys").get(&key) { return found.clone() }
+        let answer = Cached::compute(read);
+        self.surveys.write().expect("run surveys").insert(key, answer.clone());
+        answer
+    }
+
+    /// The inputs that may publish a global name, computed once per run
+    /// (`compute` records the text reads it makes).
+    pub(super) fn candidates(&self, key: (usize, u64, Box<str>), compute: impl FnOnce() -> Arc<[PathBuf]>) -> Cached<Arc<[PathBuf]>> {
+        if let Some(found) = self.candidates.read().expect("run candidates").get(&key) { return found.clone() }
+        let answer = Cached::compute(compute);
+        self.candidates.write().expect("run candidates").insert(key, answer.clone());
+        answer
     }
 
     /// `path`'s metadata parsed from the text with `hash`, parsed once per

@@ -16,7 +16,7 @@ use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, T
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
-use crate::grammar::names::modules::resolution::{parse_metadata, program_inputs, DiscoveryRequest, Host, Json, Resolver, Settings};
+use crate::grammar::names::modules::resolution::{parse_metadata, program_inputs, Configuration, DiscoveryRequest, Host, Json, Resolver, Settings};
 use crate::grammar::names::question::QueryContext;
 use crate::grammar::names::{Resolved, ScopeIndex};
 use crate::grammar::{Grammar, Tree};
@@ -41,7 +41,7 @@ type ModuleAnswers = crate::fx_hash::FxHashMap<Box<str>, ModuleAnswer>;
 struct ProgramMemo<'a> {
     selected: RefCell<Selection<'a>>,
     inputs: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Arc<Vec<PathBuf>>>>>,
-    roots: RefCell<crate::fx_hash::FxHashMap<*const Settings, super::reads::Cached<Known<Vec<ScopeRef>>>>>,
+    roots: RefCell<crate::fx_hash::FxHashMap<(*const Settings, Box<str>), super::reads::Cached<Known<Vec<ScopeRef>>>>>,
     catalogs: RefCell<crate::fx_hash::FxHashMap<(*const Settings, u64), super::reads::Cached<Arc<super::program::Catalog>>>>,
     modules: RefCell<crate::fx_hash::FxHashMap<(u32, *const Settings), ModuleAnswers>>,
     /// The linted text's hash: every run-shared answer this world computes
@@ -226,6 +226,18 @@ impl<'a> LintWorld<'a> {
         answer.known().unwrap_or(Value::Null)
     }
 
+    pub fn query_handle(&'a self, file: u32, handle: crate::grammar::names::question::Handle, query: &crate::expr::queries::HandleFunction, args: &[Value<'static>]) -> Value<'static> {
+        let run = || self.semantic_query(file, 0, Uncertainty::Explicit, |semantic, _| match semantic.question.handle_value(handle) {
+            Some(value) => (query.call)(semantic, value, args),
+            None => Known::Unknown,
+        });
+        let answer = match self.ctx.profile {
+            Some(profile) => profile.time_semantic_query(query.name, run),
+            None => run(),
+        };
+        answer.known().unwrap_or(Value::Null)
+    }
+
     fn here(&'a self, at: Leaf) -> Option<Ctx<'a>> {
         match at.target {
             Target::Node(node) => self.on(node.file, node.node),
@@ -394,21 +406,66 @@ impl<'a> Files<'a> {
         answer
     }
 
-    fn roots(self, selected: &Settings) -> Known<Vec<ScopeRef>> {
-        let key = selected as *const Settings;
+    /// `path`'s text, recorded: the linted text for the linted file.
+    fn source_text(self, path: &Path) -> Option<Arc<str>> {
+        if path == self.0.path {
+            super::reads::note(super::reads::Dep::Text(path.to_owned(), self.linted_hash()));
+            return Some(self.0.ctx.source.into());
+        }
+        let (text, hash) = match self.0.snapshot {
+            Some(snapshot) => snapshot.text(self.0.revision(), path),
+            None => super::reads::read_unrecorded(path),
+        };
+        super::reads::note(super::reads::Dep::Text(path.to_owned(), hash));
+        text
+    }
+
+    /// The program's input paths whose text passes `keep` (all when the
+    /// profile gives no hints), read but not parsed.
+    fn candidate_inputs(self, paths: &[PathBuf], hinted: bool, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+        if !hinted { return paths.to_vec() }
+        paths.iter().filter(|path| self.source_text(path).is_none_or(|text| keep(&text))).cloned().collect()
+    }
+
+    fn roots(self, selected: &Settings, name: &str) -> Known<Vec<ScopeRef>> {
+        let hinted = !selected.globals.name_hints.is_empty();
+        let key = (selected as *const Settings, if hinted { Box::from(name) } else { Box::from("") });
         if let Some(cached) = self.0.program.roots.borrow().get(&key) { return cached.get() }
         let cached = super::reads::Cached::compute(|| {
             let question = QueryContext::default();
             let roots = (|| {
-                let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
-                self.prefetch_inputs(selected, &paths);
-                let mut roots = Vec::new();
-                let mut seen = crate::fx_hash::FxHashSet::default();
-                for path in paths.iter() {
-                    if !question.budget.step() { return Known::Unknown }
-                    let Some(file) = self.0.file(&path) else { return Known::Unknown };
-                    if seen.insert(file) { roots.push(ScopeRef { file, scope: 0 }); }
-                }
+                let Known::Yes(paths) = self.timed("modules.roots.inputs", || self.input_paths(selected)) else { return Known::Unknown };
+                let paths: Arc<[PathBuf]> = match self.timed("modules.roots.candidates", || match (self.0.snapshot, hinted) {
+                    (Some(snapshot), true) if self.shares(snapshot) => {
+                        let Known::Yes((program, _)) = self.program_identity(selected) else { return Known::Unknown };
+                        let settings = selected as *const Settings as usize;
+                        let survey = self.timed("modules.roots.survey", || snapshot.survey((settings, program), || paths.iter().map(|path| (path.clone(), self.source_text(path))).collect()));
+                        let shared = snapshot.candidates((settings, program, Box::from(name)), || {
+                            let sources = survey.get();
+                            let finder = memchr::memmem::Finder::new(name.as_bytes());
+                            let hinted = |text: &str| finder.find(text.as_bytes()).is_some()
+                                || selected.globals.name_hints.iter().any(|hint| text.contains(&**hint));
+                            sources.iter().filter(|(_, text)| text.as_deref().is_none_or(hinted)).map(|(path, _)| path.clone()).collect()
+                        });
+                        Known::Yes(shared.get())
+                    }
+                    _ => Known::Yes(self.candidate_inputs(&paths, hinted, |text| selected.globals.may_publish(text, name)).into()),
+                }) {
+                    Known::Yes(paths) => paths,
+                    Known::Unknown => return Known::Unknown,
+                };
+                self.timed("modules.roots.prefetch", || self.prefetch_inputs(selected, &paths));
+                let attached = self.timed("modules.roots.attach", || {
+                    let mut roots = Vec::new();
+                    let mut seen = crate::fx_hash::FxHashSet::default();
+                    for path in paths.iter() {
+                        if !question.budget.step() { return None }
+                        let file = self.0.file(path)?;
+                        if seen.insert(file) { roots.push(ScopeRef { file, scope: 0 }); }
+                    }
+                    Some((roots, seen))
+                });
+                let Some((mut roots, mut seen)) = attached else { return Known::Unknown };
                 let Known::Yes(program) = Host::program(&self) else { return Known::Unknown };
                 if seen.insert(program) { roots.push(ScopeRef { file: program, scope: 0 }); }
                 Known::Yes(roots)
@@ -429,9 +486,11 @@ impl<'a> Files<'a> {
     /// threads otherwise wait on one builder parsing them in sequence; its
     /// sequential pass after this records the reads.
     fn prefetch_inputs(self, selected: &Settings, paths: &[PathBuf]) {
-        let (Some(snapshot), Known::Yes((program, _))) = (self.0.snapshot, self.program_identity(selected)) else { return };
+        let (Some(snapshot), Known::Yes(_)) = (self.0.snapshot, self.program_identity(selected)) else { return };
+        let mut hasher = crate::fx_hash::FxHasher::default();
+        std::hash::Hash::hash(paths, &mut hasher);
         let linter = self.0.linter;
-        snapshot.prefetch(program, || linter.prefetch_units(paths, snapshot, |units| units.for_each(drop)));
+        snapshot.prefetch(std::hash::Hasher::finish(&hasher), || linter.prefetch_units(paths, snapshot, |units| units.for_each(drop)));
     }
 
     fn timed<T>(self, query: &'static str, run: impl FnOnce() -> T) -> T {
@@ -681,13 +740,17 @@ impl<'a> Files<'a> {
                 });
                 let mut declarations = Vec::new();
                 let mut texts = crate::fx_hash::FxHashMap::default();
-                self.prefetch_inputs(selected, &paths);
+                // Files whose text cannot declare an ambient scope are read
+                // (and recorded) but never parsed.
+                let mut candidates = Vec::new();
                 for path in paths.iter().chain(key.outside.iter()) {
+                    let Some(text) = self.source_text(path) else { return Known::Unknown };
+                    texts.insert(path.clone(), super::reads::hash_bytes(text.as_bytes()));
+                    if selected.globals.may_declare_ambient(&text) { candidates.push(path.clone()) }
+                }
+                self.prefetch_inputs(selected, &candidates);
+                for path in &candidates {
                     let Some(file) = self.0.file(path) else { return Known::Unknown };
-                    let Some(text) = World::text(&self, file) else { return Known::Unknown };
-                    let hash = super::reads::hash_bytes(text.as_bytes());
-                    texts.insert(path.clone(), hash);
-                    super::reads::note(super::reads::Dep::Text(path.clone(), hash));
                     let Some(tree) = World::tree(&self, file) else { return Known::Unknown };
                     if !opening(file, tree) { continue }
                     let Some(names) = World::names(&self, file) else { return Known::Unknown };
@@ -761,7 +824,7 @@ impl<'a> Files<'a> {
 
     fn ambient_with(self, name: &str, classes: u64, semantic: &Semantic<'_>) -> Known<Option<ScopeRef>> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
-        let Known::Yes(catalog) = self.catalog(selected, classes, semantic) else { return Known::Unknown };
+        let Known::Yes(catalog) = self.timed("modules.resolve.catalog", || self.catalog(selected, classes, semantic)) else { return Known::Unknown };
         match catalog.ambient(name, classes) {
             Some(declaration) => match self.declaration_scope(declaration) {
                 Known::Yes(scope) => Known::Yes(Some(scope)),
@@ -833,16 +896,16 @@ impl World for Files<'_> {
             }
         }
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
-        let resolve = || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question));
+        let resolve = || self.timed("modules.resolve.search", || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question)));
         // Resolution depends only on the importer's directory (not its tree
         // or name), so imports are shared by directory, the linted file's too.
         let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
             Some(directory) => {
                 let question = super::program::StableQuestion::Resolve { directory: directory.to_owned(), specifier: specifier.into() };
-                let shared = self.shared(question, &mut || match resolve() {
+                let shared = self.timed("modules.resolve.shared", || self.shared(question, &mut || match resolve() {
                     Known::Yes(scope) => Known::Yes(scope.into_iter().map(Target::Scope).collect()),
                     Known::Unknown => Known::Unknown,
-                });
+                }));
                 match shared {
                     Known::Yes(targets) => match targets.as_slice() {
                         [] => Known::Yes(None),
@@ -876,9 +939,9 @@ impl World for Files<'_> {
         }
     }
 
-    fn global_scopes(&self, _importer: u32, _semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
+    fn global_scopes(&self, _importer: u32, name: &str, _semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
-        self.roots(selected)
+        self.roots(selected, name)
     }
 
     /// Shares answers across the run's worlds by file path. Answers about
@@ -976,6 +1039,16 @@ impl Host for Files<'_> {
 
     fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> {
         Known::Yes(path == self.0.path || self.probe_file(path))
+    }
+
+    fn configuration(&self, settings: &Settings, directory: &Path, load: &mut dyn FnMut() -> Result<Arc<Configuration>, ()>) -> Result<Arc<Configuration>, ()> {
+        match self.0.snapshot {
+            Some(snapshot) if self.shares(snapshot) => {
+                let key = (self.0.revision(), settings as *const Settings as usize, directory.to_owned());
+                Ok(snapshot.configuration(key, load)?.get())
+            }
+            _ => load(),
+        }
     }
 
     fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
@@ -1520,7 +1593,7 @@ mod tests {
             let mut question = QueryContext::default();
             question.budget = crate::grammar::names::question::Budget::new(0);
             let semantic = Semantic::new(&files, &linter.grammar.names, &question);
-            assert_eq!(files.global_scopes(0, &semantic), Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]));
+            assert_eq!(files.global_scopes(0, "x", &semantic), Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]));
             let Known::Yes(Some(selected)) = files.program_selected() else { panic!("root selection is not question work") };
             assert_eq!(selected.star_excludes, [Box::<str>::from("chosen")]);
             reads::set_buffer(config, r#"{"compilerOptions":{"variant":"other"}}"#);
@@ -1566,16 +1639,16 @@ mod tests {
             let semantic = Semantic::new(&files, &linter.grammar.names, &bounded);
             let expected = Known::Yes(vec![ScopeRef { file, scope: 0 }, ScopeRef { file: 0, scope: 0 }]);
             let at = files.file_leaf(0).unwrap();
-            assert_eq!(files.0.asking(&semantic, at, || files.roots(selected)), expected);
+            assert_eq!(files.0.asking(&semantic, at, || files.roots(selected, "x")), expected);
             reads::set_buffer(config, r#"{"files":[]}"#);
-            let (answer, dependencies) = reads::track(|| files.0.asking(&semantic, at, || files.roots(selected)));
+            let (answer, dependencies) = reads::track(|| files.0.asking(&semantic, at, || files.roots(selected, "x")));
             assert_eq!(answer, expected);
             assert!(dependencies.any(&mut |dep| !linter.holds(dep)));
         });
         with_world(&linter, |files| {
             let question = QueryContext::default();
             let semantic = Semantic::new(&files, &linter.grammar.names, &question);
-            assert_eq!(files.global_scopes(0, &semantic), Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]));
+            assert_eq!(files.global_scopes(0, "x", &semantic), Known::Yes(vec![ScopeRef { file: 0, scope: 0 }]));
         });
         for path in [config, library] { reads::drop_buffer(path); }
     }
@@ -1619,7 +1692,7 @@ mod tests {
             let at = Leaf { target: Target::Node(NodeRef { file, node }), frame: FrameId::ROOT };
             let question = QueryContext::default();
             let semantic = Semantic::new(&files, &linter.grammar.names, &question);
-            assert_eq!(files.global_scopes(file, &semantic), Known::Yes(vec![ScopeRef { file: library_file, scope: 0 }, ScopeRef { file: 0, scope: 0 }]));
+            assert_eq!(files.global_scopes(file, "x", &semantic), Known::Yes(vec![ScopeRef { file: library_file, scope: 0 }, ScopeRef { file: 0, scope: 0 }]));
             assert_eq!(files.module_star_excludes(ScopeRef { file, scope: 0 }, "program-only", &semantic), Known::Yes(true));
             assert_eq!(files.module(files.file_leaf(0).unwrap(), "./target", &semantic), Known::Yes(None));
             let Known::Yes(Some(relative)) = files.module(at, "./target", &semantic) else { panic!("relative importer is preserved") };

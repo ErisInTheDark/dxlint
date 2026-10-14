@@ -24,6 +24,8 @@ pub struct Built {
     pub sources: std::sync::Arc<SourceMap>,
     /// Every name, its definitions and uses; absent in runtime-only builds.
     pub symbols: Option<std::sync::Arc<Symbols>>,
+    /// Wall time of each build phase, in order (shown by `--stats`).
+    pub phases: Vec<(&'static str, std::time::Duration)>,
 }
 
 /// How expressions resolved their names, collected while compiling.
@@ -130,6 +132,13 @@ pub fn build_for_lint(loaded: Loaded, root: PathBuf) -> Built {
 
 fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     let Loaded { mut config, sources, mut errors, fingerprint } = loaded;
+    let mut phases = Vec::new();
+    let mut clock = std::time::Instant::now();
+    let mut phase = |name: &'static str| {
+        let now = std::time::Instant::now();
+        phases.push((name, now - clock));
+        clock = now;
+    };
     // `rule name ...` lines: which rules are on, and their extra clauses
     // (merged before compiling); option values are set after.
     let option_values = configure(&mut config, &mut errors);
@@ -138,8 +147,10 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     } else {
         super::prune::prune_for_lint(&mut config, &mut errors);
     }
+    phase("prune");
     let schemas = schemas(&config, &mut errors);
     let grammar = Grammar::build(&config, &mut errors);
+    phase("grammar");
     let uses: Uses = RefCell::default();
     let attr_names = AttrNames::new(config.attrs.iter().map(|def| def.name.text.as_str()));
     let mut function_reads: Vec<_> = grammar.functions.iter().map(|_| ReadDependencies::default()).collect();
@@ -199,7 +210,9 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         let (children, siblings) = reads_neighbours(recorded);
         name_reads.extend(ReadDependencies::collect(&grammar, &attr_names, recorded, layers.into_inner(), children || siblings));
     }
+    phase("functions and names");
     let (attrs, mut helper_reads) = attributes(&config, &grammar, &attr_names, &uses, &mut errors);
+    phase("attributes");
     helper_reads.extend(function_reads);
     let forwards = forwards(&config, &grammar, &attr_names, &mut errors);
     for &(matcher, attr, _) in &forwards {
@@ -246,6 +259,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             .map(|&layer| format!("layer {}", grammar.matchers[layer as usize].name)))
         .collect();
     let language_options = super::language_options::LanguageOptions::compile(&config, &grammar, &schemas, &mut errors);
+    phase("unit demand");
 
     let mut rules: Vec<Rule> = Vec::new();
     let mut inert = Vec::new();
@@ -313,6 +327,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         }
     }
 
+    phase("rules");
     let ignores = match PathGlobs::new(config.ignores.iter().map(|(g, _)| g.as_str())) {
         Ok(g) => g,
         Err((glob, e)) => {
@@ -376,6 +391,7 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
             }
         }
     }
+    phase("symbols and dispatch");
     let attrs = Attributes::new(attrs, &forwards, &grammar);
     let reach = grammar.reach();
     // Reads of a layer also select its specialisations (`x like y`).
@@ -434,8 +450,12 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
         attrs,
         fingerprint,
     };
+    phase("attributes and reach");
     errors.extend(linter.lower_conditions(&config));
-    Built { linter: Some(linter), errors, sources, symbols }
+    phase("lowering");
+    linter.shape_records();
+    phase("record shapes");
+    Built { linter: Some(linter), errors, sources, symbols, phases }
 }
 
 pub(super) fn option_value(

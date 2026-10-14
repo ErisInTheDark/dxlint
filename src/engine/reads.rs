@@ -124,7 +124,8 @@ impl Reads {
 
 #[derive(Default)]
 struct Frame {
-    deps: HashSet<Dep>,
+    /// Fx-hashed: deterministic order, so recorded reads need no sort.
+    deps: crate::fx_hash::FxHashSet<Dep>,
     groups: Vec<Arc<Reads>>,
     /// `groups` by address: shared answers are used many times per frame.
     group_set: crate::fx_hash::FxHashSet<*const Reads>,
@@ -151,8 +152,7 @@ pub fn track<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     let r = f();
     unwinding.0 = false;
     let frame = FRAMES.with(|f| f.borrow_mut().pop()).unwrap_or_default();
-    let mut deps: Vec<Dep> = frame.deps.into_iter().collect();
-    deps.sort_unstable();
+    let deps: Vec<Dep> = frame.deps.into_iter().collect();
     (r, Reads { deps, groups: frame.groups })
 }
 

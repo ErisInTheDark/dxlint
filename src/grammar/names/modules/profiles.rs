@@ -92,6 +92,8 @@ const GLOBALS: &[Control] = &[
     Control { name: "type_directories", field: Field::Strings(|s| &mut s.globals.type_directories, None) },
     Control { name: "project_files", field: Field::Strings(|s| &mut s.globals.project_files, None) },
     Control { name: "references", field: Field::Bool(|s| &mut s.globals.references) },
+    Control { name: "name_hints", field: Field::Strings(|s| &mut s.globals.name_hints, None) },
+    Control { name: "ambient_hints", field: Field::Strings(|s| &mut s.globals.ambient_hints, None) },
 ];
 
 struct Compiler<'a> {

@@ -1,4 +1,3 @@
-use super::configuration::Configuration;
 use super::metadata::Json;
 use super::resolution::{spend, Host, Resolver};
 use super::super::question::{Known, QueryContext};
@@ -11,8 +10,8 @@ pub fn context<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, ques
 fn context_inner<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, question: &QueryContext) -> Result<Value<'static>, ()> {
     let path = resolver.host.path(importer).known().ok_or(())?;
     let directory = path.parent().ok_or(())?;
-    let config = Configuration::load(resolver, &resolver.program_directory()?, question)?;
-    let config = Json::Object(config.options.into_iter().map(|(key, value)| (key, value.value)).collect()).into_value(question)?;
+    let config = resolver.configuration(question)?;
+    let config = Json::Object(config.options.iter().map(|(key, value)| (key.clone(), value.value.clone())).collect()).into_value(question)?;
     let mut package = Value::Null;
     if !resolver.settings.packages.metadata.is_empty() {
         for ancestor in directory.ancestors() {

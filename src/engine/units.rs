@@ -78,9 +78,11 @@ impl Linter {
     /// once; later lookups replay its text read without touching the disk.
     pub(super) fn unit(&self, path: &Path, run: Option<&super::program::Snapshot>) -> Option<Arc<Unit>> {
         let revision = self.invalidation.load(std::sync::atomic::Ordering::Acquire);
+        // Inside a run the text comes from the run's read of it, which name
+        // candidate scans may already have made.
         let (hash, unit) = match run {
-            Some(run) => run.unit(revision, path, || self.load_unit(path)),
-            None => self.load_unit(path),
+            Some(run) => run.unit(revision, path, || self.load_unit(path, run.text(revision, path))),
+            None => self.load_unit(path, reads::read_unrecorded(path)),
         };
         reads::note(reads::Dep::Text(path.to_owned(), hash));
         unit
@@ -104,10 +106,9 @@ impl Linter {
         });
     }
 
-    /// Reads `path` (its text hash, [`reads::MISSING`] when unreadable) and
-    /// its unit, reusing the previous run's unit while it still holds.
-    fn load_unit(&self, path: &Path) -> (u64, Option<Arc<Unit>>) {
-        let (text, hash) = reads::read_unrecorded(path);
+    /// `path`'s unit from its read `(text, hash)` ([`reads::MISSING`] when
+    /// unreadable), reusing the previous run's unit while it still holds.
+    fn load_unit(&self, path: &Path, (text, hash): (Option<Arc<str>>, u64)) -> (u64, Option<Arc<Unit>>) {
         let Some(text) = text else { return (hash, None) };
         let cached = self.units.lock().expect("unit cache").get(path).cloned();
         if let Some(unit) = cached.filter(|unit| unit.text == text

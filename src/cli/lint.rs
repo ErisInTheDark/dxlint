@@ -161,7 +161,7 @@ fn lint(output: &mut Output<'_>, args: LintArgs, config: &ConfigArg, sources: Op
 }
 
 pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Project, sources: Option<&Sources>, started: Instant) -> u8 {
-    let Project { linter, config_ok, load_time, build_time, .. } = project;
+    let Project { linter, config_ok, load_time, build_time, build_phases, .. } = project;
     if args.profile {
         linter.enable_profile();
     }
@@ -324,6 +324,8 @@ pub(super) fn prepared(output: &mut Output<'_>, args: LintArgs, project: &mut Pr
             load_time.as_secs_f64() * 1000.0,
             build_time.as_secs_f64() * 1000.0
         ));
+        let phases: Vec<String> = build_phases.iter().map(|(name, time)| format!("{name} {:.1}", time.as_secs_f64() * 1000.0)).collect();
+        output.err(format_args!("  config build phases (ms): {}", phases.join(", ")));
     }
     // A broken config still lints with what built, but never passes.
     if !*config_ok {

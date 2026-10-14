@@ -4,7 +4,7 @@ use std::sync::Arc;
 use super::super::question::{Known, QueryContext, ScopeRef};
 use super::metadata;
 pub use super::metadata::Json;
-use super::configuration::Configuration;
+pub use super::configuration::Configuration;
 pub use super::inputs::program_inputs;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -29,6 +29,11 @@ pub trait Host {
     /// error when unknown or malformed). Hosts may share parses of one text.
     fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
         parse_metadata(self.text(path, question).known().ok_or(())?.as_deref())
+    }
+    /// The configuration `settings` loads for the program in `directory`,
+    /// as `load` builds it. Hosts may share it between resolutions.
+    fn configuration(&self, _settings: &Settings, _directory: &Path, load: &mut dyn FnMut() -> Result<Arc<Configuration>, ()>) -> Result<Arc<Configuration>, ()> {
+        load()
     }
 }
 
@@ -80,6 +85,25 @@ pub struct Globals {
     pub type_directories: Vec<Box<str>>,
     pub project_files: Vec<Box<str>>,
     pub references: bool,
+    /// When set: a program file can publish a global name only if its text
+    /// contains that name or one of these (escapes, re-export syntax...),
+    /// so other files are never parsed for that name.
+    pub name_hints: Vec<Box<str>>,
+    /// When set: a program file can declare an ambient module scope only if
+    /// its text contains one of these.
+    pub ambient_hints: Vec<Box<str>>,
+}
+
+impl Globals {
+    /// Whether a file with `text` may publish global `name`.
+    pub fn may_publish(&self, text: &str, name: &str) -> bool {
+        self.name_hints.is_empty() || text.contains(name) || self.name_hints.iter().any(|hint| text.contains(&**hint))
+    }
+
+    /// Whether a file with `text` may declare an ambient module scope.
+    pub fn may_declare_ambient(&self, text: &str) -> bool {
+        self.ambient_hints.is_empty() || self.ambient_hints.iter().any(|hint| text.contains(&**hint))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -108,6 +132,12 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         path.parent().map(Path::to_path_buf).ok_or(())
     }
 
+    /// The program's configuration, through the host's cache.
+    pub(super) fn configuration(&self, question: &QueryContext) -> Result<Arc<Configuration>, ()> {
+        let directory = self.program_directory()?;
+        self.host.configuration(self.settings, &directory, &mut || Configuration::load(self, &directory, question).map(Arc::new))
+    }
+
     pub fn context(&self, importer: u32, question: &QueryContext) -> Known<crate::expr::Value<'static>> {
         super::context::context(self, importer, question)
     }
@@ -129,7 +159,7 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
             let result = match search {
                 Search::Relative if relative => self.candidates(dir, specifier, question)?,
                 Search::Paths | Search::Base if !relative => {
-                    if config.is_none() { config = Some(Configuration::load(self, &self.program_directory()?, question)?); }
+                    if config.is_none() { config = Some(self.configuration(question)?); }
                     let config = config.as_ref().ok_or(())?;
                     let base = config.base(&self.settings.config.base)?;
                     match search {

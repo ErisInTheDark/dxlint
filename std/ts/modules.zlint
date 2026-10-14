@@ -45,6 +45,10 @@ import .ts/comments
       type_directories ["node_modules/@types"]
       project_files ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"]
       references true
+      # A file publishes a global only by spelling its name (or escaping it,
+      # or forwarding through a reference); ambient modules need a keyword.
+      name_hints ["\\u", "<reference"]
+      ambient_hints ["module", "namespace"]
     }
     when resolution.config.module == "commonjs" || resolution.config.module == 1 {
       conditions ["types", "require", "default"]
