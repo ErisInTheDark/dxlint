@@ -483,6 +483,14 @@ in ts_unary rule no-meaningless-void-operator {
   when operator == "void" && argument != "0" && void_argument_kind != "assignment"
   when if void_argument_kind == "call" then { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "union"]) } || checkNever && { value argument.type_flags.nonempty ?? []; has_only_flags (["undefined", "nullable", "never", "union"]) } else !{ value argument.type_members.nonempty ?? []; contains "then" }
   warn if void_argument_kind == "call" then "void operator shouldn't be used on {argument.type}; it should convey that a return value is being ignored" else "void operator is useless here; it should only discard a call's return value"
+  let operand argument.node
+  let parens expression_fix_parens(source, node, operand)
+  let replacement expression_fix_wrap(operand.text, parens > 0)
+  let statement expression_fix_statement(node)
+  let semicolon if statement != null && expression_fix_continuation(replacement)
+    then expression_fix_asi(statement, token_neighbours.before, expression_fix_before_nodes(node), replacement) else false
+  fix if parens != null && semicolon != null && expression_fix_clean({ offset: offset, end_offset: operand.offset }) as
+    (if semicolon then ";" else "") expression_fix_edges(node, replacement)
 }
 
 in ts_member, ts_index {
