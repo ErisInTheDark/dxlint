@@ -113,7 +113,7 @@ impl Scratch {
 
 impl Drop for Run<'_> {
     fn drop(&mut self) {
-        self.scratch.clear();
+        super::phases::phase("clear", || self.scratch.clear());
         self.caches.scratch = std::mem::take(&mut self.scratch);
     }
 }
@@ -140,9 +140,9 @@ impl<'a> Run<'a> {
         {
             return Err(error(0, "complete node registration"));
         }
-        tokens::prepare(&mut self, context.goal);
+        super::phases::phase("prepare", || tokens::prepare(&mut self, context.goal));
         let root_expression = self.program.productions[self.program.root];
-        let mut matched = self.memoized(root_expression, 0, context, 0)?;
+        let mut matched = super::phases::phase("match", || self.memoized(root_expression, 0, context, 0))?;
         let tail = self.lex(context.goal, matched.end);
         if tail.start as usize != self.text.len() {
             return Err(error(tail.start, "end of file"));
@@ -160,20 +160,23 @@ impl<'a> Run<'a> {
         }
         self.scratch.drafts[root as usize].start = 0;
         self.scratch.drafts[root as usize].end = self.text.len() as u32;
-        let (nodes, root) = materialize::build(&mut self, root, registration)?;
-        let mut tokens = Vec::new();
-        let mut trivia = Vec::new();
-        let mut pending: Vec<_> = matched.receipt.into_iter().collect();
-        while let Some(id) = pending.pop() {
-            match &self.scratch.receipts[id] {
-                Receipt::Token(token, gap) => {
-                    if let Some(gap) = gap { trivia.push(gap.clone()); }
-                    tokens.push(token.clone());
+        let (nodes, root) = super::phases::phase("materialize", || materialize::build(&mut self, root, registration))?;
+        let (tokens, trivia) = super::phases::phase("receipts", || {
+            let mut tokens = Vec::new();
+            let mut trivia = Vec::new();
+            let mut pending: Vec<_> = matched.receipt.into_iter().collect();
+            while let Some(id) = pending.pop() {
+                match &self.scratch.receipts[id] {
+                    Receipt::Token(token, gap) => {
+                        if let Some(gap) = gap { trivia.push(gap.clone()); }
+                        tokens.push(token.clone());
+                    }
+                    Receipt::Trivia(gap) => trivia.push(gap.clone()),
+                    Receipt::Join(left, right) => { pending.push(*right); pending.push(*left); }
                 }
-                Receipt::Trivia(gap) => trivia.push(gap.clone()),
-                Receipt::Join(left, right) => { pending.push(*right); pending.push(*left); }
             }
-        }
+            (tokens, trivia)
+        });
         Ok(Parsed { nodes, root, tokens, trivia })
     }
 
