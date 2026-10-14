@@ -18,7 +18,7 @@ fn context_inner<H: Host + ?Sized>(resolver: &Resolver<'_, H>, importer: u32, qu
         for ancestor in directory.ancestors() {
             spend(question)?;
             if let Some(metadata) = resolver.metadata(&ancestor.join(&*resolver.settings.packages.metadata), question)? {
-                package = metadata.into_value(question)?;
+                package = Json::clone(&metadata).into_value(question)?;
                 break;
             }
         }

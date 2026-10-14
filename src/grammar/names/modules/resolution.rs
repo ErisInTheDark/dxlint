@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::super::question::{Known, QueryContext, ScopeRef};
-use super::metadata::{self, Json};
+use super::metadata;
+pub use super::metadata::Json;
 use super::configuration::Configuration;
 pub use super::inputs::program_inputs;
 
@@ -23,6 +25,15 @@ pub trait Host {
     fn discover(&self, _: &DiscoveryRequest, _: &QueryContext) -> Known<Vec<PathBuf>> {
         Known::Unknown
     }
+    /// `path`'s text as metadata (`None` when there is no such file; an
+    /// error when unknown or malformed). Hosts may share parses of one text.
+    fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
+        parse_metadata(self.text(path, question).known().ok_or(())?.as_deref())
+    }
+}
+
+pub fn parse_metadata(text: Option<&str>) -> Result<Option<Arc<Json>>, ()> {
+    text.map(|text| metadata::parse(text).map(Arc::new).ok_or(())).transpose()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -163,9 +174,9 @@ impl<H: Host + ?Sized> Resolver<'_, H> {
         Ok(None)
     }
 
-    pub(super) fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Json>, ()> {
+    pub(super) fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
         spend(question)?;
-        self.host.text(path, question).known().ok_or(())?.map(|text| metadata::parse(&text).ok_or(())).transpose()
+        self.host.metadata(path, question)
     }
 
     fn paths(&self, config: &Configuration, base: Option<&Path>, specifier: &str, question: &QueryContext) -> Result<Option<ScopeRef>, ()> {

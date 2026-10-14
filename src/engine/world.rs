@@ -16,7 +16,7 @@ use crate::grammar::names::question::{FrameId, Known, Leaf, NodeRef, ScopeRef, T
 use crate::grammar::names::semantic::Semantic;
 use crate::grammar::names::modules::compile::Action;
 use crate::grammar::names::modules::SharedQuestion;
-use crate::grammar::names::modules::resolution::{program_inputs, DiscoveryRequest, Host, Resolver, Settings};
+use crate::grammar::names::modules::resolution::{parse_metadata, program_inputs, DiscoveryRequest, Host, Json, Resolver, Settings};
 use crate::grammar::names::question::QueryContext;
 use crate::grammar::names::{Resolved, ScopeIndex};
 use crate::grammar::{Grammar, Tree};
@@ -69,6 +69,11 @@ pub struct LintWorld<'a> {
     ctx: Ctx<'a>,
     evaluation: Cell<*const ()>,
     semantic: crate::grammar::names::semantic::Session,
+    /// A catalogue builder's helper resolving names ahead of it: it must
+    /// not wait for the catalogue it is helping to build.
+    warming: bool,
+    /// Name-item conditions being decided, by node and condition.
+    conditions: RefCell<Vec<(Target, u32)>>,
 }
 
 impl<'a> LintWorld<'a> {
@@ -80,7 +85,7 @@ impl<'a> LintWorld<'a> {
         LintWorld {
             linter, path, views: super::arena::Arena::new(linter), files: Default::default(),
             program: Default::default(), snapshot: None, ctx: Ctx { node: ctx.tree.root, ..ctx },
-            evaluation: Cell::new(std::ptr::null()), semantic: Default::default(),
+            evaluation: Cell::new(std::ptr::null()), semantic: Default::default(), warming: false, conditions: Default::default(),
         }
     }
 
@@ -399,6 +404,7 @@ impl<'a> Files<'a> {
             let question = QueryContext::default();
             let roots = (|| {
                 let Known::Yes(paths) = self.input_paths(selected) else { return Known::Unknown };
+                self.prefetch_inputs(selected, &paths);
                 let mut roots = Vec::new();
                 let mut seen = crate::fx_hash::FxHashSet::default();
                 for path in paths.iter() {
@@ -420,6 +426,32 @@ impl<'a> Files<'a> {
         let roots = cached.get();
         self.0.program.roots.borrow_mut().insert(key, cached);
         roots
+    }
+
+    /// Loads the program's input units once per run on all threads, and
+    /// resolves the names of those with a node of a kind that can open a
+    /// module scope of the program's ambient classes (the catalogue reads
+    /// their names next). Lint threads otherwise wait on one builder doing
+    /// both in sequence; its sequential pass after this records the reads.
+    fn prefetch_inputs(self, selected: &Settings, paths: &[PathBuf]) {
+        let (Some(snapshot), Known::Yes((program, _))) = (self.0.snapshot, self.program_identity(selected)) else { return };
+        let classes = selected.ambient_scopes;
+        let opens: Vec<bool> = self.0.ctx.grammar.names.kinds.iter().map(|kind| kind.modules.items.iter()
+            .any(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))).collect();
+        let linter = self.0.linter;
+        snapshot.prefetch(program, || linter.prefetch_units(paths, snapshot, |units| {
+            // Helpers see file 0 as the first input, whose names stay the builder's.
+            let Some(anchor) = paths.first().and_then(|path| linter.unit(path, Some(snapshot))) else { return };
+            let memo = crate::expr::AttrMemo::default();
+            let reindented = RefCell::default();
+            let ctx = linter.tree_ctx(anchor.lang, &anchor.parsed.tree, (&anchor.text, anchor.lines(), &anchor.rel), &memo, &reindented, None);
+            let world = LintWorld { warming: true, ..LintWorld::in_run(linter, &anchor.path, ctx, snapshot) };
+            for unit in units {
+                let tree = &unit.parsed.tree;
+                if unit.path == anchor.path || !tree.order.iter().any(|&node| opens.get(tree.node(node).matcher as usize) == Some(&true)) { continue }
+                if let Some(file) = world.file(&unit.path) { World::names(&Files(&world), file); }
+            }
+        }));
     }
 
     fn timed<T>(self, query: &'static str, run: impl FnOnce() -> T) -> T {
@@ -643,6 +675,10 @@ impl<'a> Files<'a> {
     fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
         let key = (selected as *const Settings, classes);
         if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
+        if self.0.warming {
+            self.0.mark_unknown();
+            return Known::Unknown;
+        }
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes((program, outside)) = self.program_identity(selected) else { return Known::Unknown };
             let key = super::program::CatalogKey { settings: selected as *const Settings as usize, program, outside, classes };
@@ -669,9 +705,7 @@ impl<'a> Files<'a> {
                 });
                 let mut declarations = Vec::new();
                 let mut texts = crate::fx_hash::FxHashMap::default();
-                // Every other lint thread waits for this catalogue: parse its
-                // files on all of them first; the pass below records the reads.
-                if let Some(snapshot) = self.0.snapshot { self.0.linter.prefetch_units(&paths, snapshot) }
+                self.prefetch_inputs(selected, &paths);
                 for path in paths.iter().chain(key.outside.iter()) {
                     let Some(file) = self.0.file(path) else { return Known::Unknown };
                     let Some(text) = World::text(&self, file) else { return Known::Unknown };
@@ -856,6 +890,16 @@ impl World for Files<'_> {
         result
     }
 
+    fn program_option(&self, at: Leaf, name: &str, semantic: &Semantic<'_>) -> Known<Value<'static>> {
+        let Some(ctx) = self.0.here(at) else { return Known::Unknown };
+        let Known::Yes(Some(settings)) = self.program_selected() else { return Known::Unknown };
+        let context = self.0.asking(semantic, at, || Resolver { host: self, settings }.context(ctx.file_id, semantic.question));
+        match context {
+            Known::Yes(context) => Known::Yes(context.key("config").key(name)),
+            Known::Unknown => Known::Unknown,
+        }
+    }
+
     fn global_scopes(&self, _importer: u32, _semantic: &Semantic<'_>) -> Known<Vec<ScopeRef>> {
         let Known::Yes(Some(selected)) = self.program_selected() else { return Known::Unknown };
         self.roots(selected)
@@ -904,10 +948,20 @@ impl World for Files<'_> {
         let world = self.0;
         let lowered = world.ctx.grammar.names.conditions.get(condition as usize).and_then(|c| c.lowered.get());
         let (Some(ctx), Some(e)) = (world.here(at), lowered) else { return Known::Unknown };
-        world.asking(semantic, at, || {
+        // A condition asked again while it is being decided on the same
+        // node (in any frame: each round can bind a new one) is a cycle.
+        let key = (at.target, condition);
+        if world.conditions.borrow().contains(&key) {
+            world.mark_unknown();
+            return Known::Unknown;
+        }
+        world.conditions.borrow_mut().push(key);
+        let answer = world.asking(semantic, at, || {
             let held = Session::new(&ctx, ctx.node, &[]).holds_on(ctx.node, e);
             held.map_or(Known::Unknown, Known::Yes)
-        })
+        });
+        world.conditions.borrow_mut().pop();
+        answer
     }
 
     fn operand(&self, at: Leaf, operand: u32, semantic: &Semantic<'_>) -> Known<Value<'static>> {
@@ -946,6 +1000,18 @@ impl Host for Files<'_> {
 
     fn is_file(&self, path: &Path, _: &QueryContext) -> Known<bool> {
         Known::Yes(path == self.0.path || self.probe_file(path))
+    }
+
+    fn metadata(&self, path: &Path, question: &QueryContext) -> Result<Option<Arc<Json>>, ()> {
+        let Some(snapshot) = self.0.snapshot.filter(|_| path != self.0.path) else {
+            return parse_metadata(Host::text(self, path, question).known().ok_or(())?.as_deref());
+        };
+        let (text, hash) = snapshot.text(self.0.revision(), path);
+        super::reads::note(super::reads::Dep::Text(path.to_owned(), hash));
+        match text {
+            Some(text) => snapshot.metadata(path, hash, &text).map(Some).ok_or(()),
+            None => Ok(None),
+        }
     }
 
     fn scope(&self, path: &Path, _: &QueryContext) -> Known<Option<ScopeRef>> {

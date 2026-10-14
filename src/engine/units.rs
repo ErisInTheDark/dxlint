@@ -85,18 +85,19 @@ impl Linter {
     }
 
     /// Loads the run's units for `paths` on several threads, so a following
-    /// sequential pass (which records the reads) finds them ready.
-    pub(super) fn prefetch_units(&self, paths: &[std::path::PathBuf], run: &super::program::Snapshot) {
+    /// sequential pass (which records the reads) finds them ready. Each
+    /// worker drains its share of the loaded units through `worker`.
+    pub(super) fn prefetch_units(&self, paths: &[PathBuf], run: &super::program::Snapshot,
+        worker: impl Fn(&mut dyn Iterator<Item = Arc<Unit>>) + Sync) {
         let workers = self.rule_jobs.min(paths.len());
         if workers <= 1 { return }
         let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|scope| {
             for _ in 0..workers {
-                scope.spawn(|| loop {
-                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(path) = paths.get(index) else { break };
-                    self.unit(path, Some(run));
-                });
+                scope.spawn(|| worker(&mut std::iter::from_fn(|| loop {
+                    let path = paths.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))?;
+                    if let Some(unit) = self.unit(path, Some(run)) { return Some(unit) }
+                })));
             }
         });
     }

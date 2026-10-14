@@ -228,6 +228,49 @@ fn structural_members_compare_values_and_required_presence() {
 }
 
 #[test]
+fn recursive_structures_relate_coinductively_but_still_fail_on_real_mismatches() {
+    use crate::grammar::names::values::{IndexedMode, IndexedRecipe};
+    // Shapes 4 and 5 are `{ x: Self, y: _ }`; y is category 0 on 4 and
+    // `y_actual` on 5, so only x's comparison is recursive.
+    for (y_actual, expected) in [(0, Known::Yes(true)), (1, Known::Yes(false))] {
+        let mut world = TestWorld::new();
+        let mut tables = tables();
+        let mut nodes = world.tree.nodes.clone();
+        nodes.extend((4..10).map(|matcher| Node { matcher, start: 0, end: 0, children: Vec::new() }));
+        nodes[4].children.extend([Edge { label: 40, node: 6 }, Edge { label: 42, node: 8 }]);
+        nodes[5].children.extend([Edge { label: 40, node: 7 }, Edge { label: 42, node: 9 }]);
+        for (member, target) in [(6, 4), (7, 5), (8, 0), (9, y_actual)] {
+            nodes[member].children.push(Edge { label: 41, node: target });
+        }
+        world.tree = Tree::from_native(nodes, 4);
+        for _ in 0..2 {
+            let keyed = |key: &str, path| IndexedRecipe {
+                path: vec![path], mode: IndexedMode::Keyed(super::Value::Text(key.into())),
+                views: 1, value: None, when: None,
+            };
+            tables.kinds.push(KindNames {
+                member_defaults: 1,
+                member_closed: vec![(1, None)],
+                indexed: vec![keyed("x", 40), keyed("y", 42)],
+                ..KindNames::default()
+            });
+        }
+        for _ in 6..10 {
+            tables.kinds.push(KindNames {
+                unwraps: vec![crate::grammar::names::Unwrapping {
+                    value: Some(super::Value::Path(vec![41])), ..Default::default()
+                }],
+                ..KindNames::default()
+            });
+        }
+        let question = QueryContext::default();
+        let semantic = Semantic::new(&world, &tables, &question);
+        assert_eq!(accepts(&value(4), &value(5), &semantic.values()), expected, "y_actual={y_actual}");
+        assert_eq!(accepts(&value(4), &value(5), &semantic.values()), expected, "memoised, y_actual={y_actual}");
+    }
+}
+
+#[test]
 fn never_and_budget_exhaustion_keep_their_logical_meanings() {
     let world = TestWorld::new();
     let tables = tables();

@@ -90,6 +90,8 @@ pub struct FileVm {
     /// Buffers of finished rule runs ([`super::Session`]), reused.
     pub(crate) spare: RefCell<Vec<super::Spare>>,
     fact_packs: RefCell<crate::fx_hash::FxHashMap<FactPackKey, FactPackStats>>,
+    /// Attributes being evaluated without a memo (inside semantic questions).
+    uncached: RefCell<Vec<(u32, u16)>>,
 }
 
 // Whole-node reads use their target node. Projections and multi-field wrappers
@@ -248,6 +250,17 @@ impl FileVm {
                 None
             }
         }
+    }
+
+    /// Evaluates (node, attribute) without a memo, as attributes read inside
+    /// semantic questions are; a read while it is in progress (a cycle) is
+    /// `None`, like [`FileVm::memo`]'s.
+    pub(crate) fn uncached(&self, node: u32, attr: u16, compute: impl FnOnce() -> Option<V>) -> Option<V> {
+        if self.uncached.borrow().contains(&(node, attr)) { return None }
+        self.uncached.borrow_mut().push((node, attr));
+        let value = compute();
+        self.uncached.borrow_mut().pop();
+        value
     }
 
     pub(crate) fn fact_value(&self, value: &crate::expr::Value, config: &super::Values, source: &str, key: FactPackKey, measure: bool) -> Option<V> {

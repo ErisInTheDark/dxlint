@@ -538,7 +538,7 @@ impl<'a> Ctx<'a> {
             Lowered::Direct(body) => return vm::eval(self, node, body)?.persist(&self.memo.vm),
             Lowered::Semantic(body) => match self.world.filter(|world| world.cache_attribute(&self.memo.vm)) {
                 Some(world) => (body, Some(world)),
-                None => return vm::eval(self, node, body)?.persist(&self.memo.vm),
+                None => return self.memo.vm.uncached(node, attr, || vm::eval(self, node, body)?.persist(&self.memo.vm)),
             },
             Lowered::Cached(body) => (body, self.world),
         };

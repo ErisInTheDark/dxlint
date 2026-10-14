@@ -210,9 +210,13 @@ pub(super) struct Snapshot {
     /// Per program and scope classes, the augmentations each module scope
     /// (by path and scope) receives.
     augmentations: RwLock<FxHashMap<ModuleKey, Cached<Arc<Augmentations>>>>,
+    /// Program inputs (by input list hash) whose units were loaded in parallel.
+    prefetched: Mutex<FxHashMap<u64, Arc<std::sync::OnceLock<()>>>>,
     /// Module resolution's file probes and reads, once per path and revision.
     probes: RwLock<FxHashMap<PathBuf, (u64, bool)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
+    /// Metadata parsed from those texts, by text hash (`None`: malformed).
+    metadata: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<crate::grammar::names::modules::resolution::Json>>)>>,
 }
 
 /// A shared module question ([`crate::grammar::names::modules::SharedQuestion`])
@@ -294,6 +298,25 @@ impl Snapshot {
         let (text, hash) = reads::read_unrecorded(path);
         self.texts.write().expect("run texts").insert(path.to_owned(), (revision, text.clone(), hash));
         (text, hash)
+    }
+
+    /// `path`'s metadata parsed from the text with `hash`, parsed once per
+    /// text.
+    pub(super) fn metadata(&self, path: &std::path::Path, hash: u64, text: &str)
+        -> Option<Arc<crate::grammar::names::modules::resolution::Json>> {
+        if let Some((at, parsed)) = self.metadata.read().expect("run metadata").get(path) {
+            if *at == hash { return parsed.clone() }
+        }
+        let parsed = crate::grammar::names::modules::resolution::parse_metadata(Some(text)).ok().flatten();
+        self.metadata.write().expect("run metadata").insert(path.to_owned(), (hash, parsed.clone()));
+        parsed
+    }
+
+    /// Runs `load` once per program for this run; concurrent callers wait
+    /// for it instead of loading the same files in the same order.
+    pub(super) fn prefetch(&self, program: u64, load: impl FnOnce()) {
+        let slot = self.prefetched.lock().expect("run prefetch").entry(program).or_default().clone();
+        slot.get_or_init(load);
     }
 
     pub(super) fn augmentations(&self, key: &ModuleKey) -> Option<Cached<Arc<Augmentations>>> {

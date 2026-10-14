@@ -235,6 +235,11 @@ pub trait World {
     /// resolution profile and modes decide; a file's root scope or an
     /// ambient module); `Yes(None)` when nothing matches.
     fn module(&self, at: Leaf, specifier: &str, semantic: &super::semantic::Semantic<'_>) -> Known<Option<ScopeRef>>;
+    /// Option `name` of the configuration the program around `at` loads
+    /// (its resolution profile's config `options`); null when unset.
+    fn program_option(&self, _at: Leaf, _name: &str, _semantic: &super::semantic::Semantic<'_>) -> Known<crate::expr::Value<'static>> {
+        Known::Unknown
+    }
     /// Every scope merged into module scope `scope`, canonical first:
     /// ambient `declare module "x"` across files and augmentations of a
     /// file module. Just `scope` where nothing merges.

@@ -18,6 +18,20 @@ pub(super) fn expected(at: Leaf, values: &Values<'_>) -> Known<Option<NodeValue>
         answer => return answer,
     }
     if kind.calls.invokes.is_empty() { return Known::Yes(None) }
+    // Only arguments get an expected type from the selected signature; the
+    // callee must not ask for that selection (an IIFE would ask itself).
+    let mut argument = false;
+    for invoke in &kind.calls.invokes {
+        if !values.question.budget.step() { return Known::Unknown }
+        match invoke.when.map_or(Known::Yes(true), |when| values.world.condition(parent, when, values.semantic)) {
+            Known::Yes(false) => continue,
+            Known::Unknown => return Known::Unknown,
+            Known::Yes(true) => {}
+        }
+        let Known::Yes(sites) = values.follow(parent, &invoke.item.arguments) else { return Known::Unknown };
+        argument |= sites.contains(&at);
+    }
+    if !argument { return Known::Yes(None) }
     let selected = match values.calls().selection(parent) {
         Known::Yes(Some(selected)) if !selected.uncertain => selected,
         Known::Yes(None) => return Known::Yes(None),

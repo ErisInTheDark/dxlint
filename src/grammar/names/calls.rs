@@ -126,6 +126,10 @@ type HeaderAnswer = Known<Vec<Vec<Header>>>;
 #[derive(Default)]
 pub(crate) struct State {
     pub(super) acceptance: Memo<(NodeValue, NodeValue), Known<bool>>,
+    /// Comparisons in progress, outermost first ([`Calls::accepts`]).
+    accepting: std::cell::RefCell<Vec<(NodeValue, NodeValue)>>,
+    /// The outermost in-progress comparison assumed to hold so far.
+    assumed: std::cell::Cell<Option<usize>>,
     headers: Memo<(NodeValue, InvokeKind), HeaderAnswer>,
     candidates: Memo<Leaf, select::Answer>,
     values: Memo<(Leaf, ValueQuestion), ValueAnswer>,
@@ -224,17 +228,35 @@ impl Calls<'_> {
     }
 
     /// Whether every value `actual` may be is one `expected` allows,
-    /// memoised per question; a pending comparison (a cycle) is unknown.
+    /// memoised per question. Relations are coinductive (recursive types
+    /// like `class C { next: C }`): a comparison met again while in
+    /// progress is assumed to hold, and answers resting on an outer
+    /// comparison's assumption are kept only once that one is decided.
     pub fn accepts(&self, expected: &NodeValue, actual: &NodeValue) -> Known<bool> {
         self.profile(ProfileQuery::Accept, || {
+            let state = &self.semantic.calls;
             let key = (expected.clone(), actual.clone());
-            if let Some(known) = self.semantic.calls.acceptance.get(&key) {
+            if let Some(depth) = state.accepting.borrow().iter().position(|pending| *pending == key) {
+                state.assumed.set(Some(state.assumed.get().map_or(depth, |outer| outer.min(depth))));
+                return Known::Yes(true);
+            }
+            if let Some(known) = state.acceptance.get(&key) {
                 return known;
             }
             let Some(_nest) = self.question.budget.nest() else { return Known::Unknown };
-            self.semantic.calls.acceptance.insert(self.semantic.epoch, key.clone(), Known::Unknown);
+            let depth = state.accepting.borrow().len();
+            state.accepting.borrow_mut().push(key.clone());
+            let outer = state.assumed.replace(None);
             let answer = accepts::accepts(expected, actual, &self.semantic.values());
-            self.semantic.calls.acceptance.insert(self.semantic.epoch, key, answer);
+            state.accepting.borrow_mut().pop();
+            let rests_on = state.assumed.get().filter(|&at| at < depth);
+            state.assumed.set(match (outer, rests_on) {
+                (Some(outer), Some(inner)) => Some(outer.min(inner)),
+                (outer, inner) => outer.or(inner),
+            });
+            if !(answer == Known::Yes(true) && rests_on.is_some()) {
+                state.acceptance.insert(self.semantic.epoch, key, answer);
+            }
             answer
         })
     }

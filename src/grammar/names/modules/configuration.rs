@@ -26,7 +26,7 @@ impl Configuration {
             for name in &resolver.settings.config.files {
                 let path = clean(&ancestor.join(&**name));
                 if let Some(metadata) = resolver.metadata(&path, question)? {
-                    return Self::inherit(resolver, path, metadata, question);
+                    return Self::inherit(resolver, path, &metadata, question);
                 }
             }
         }
@@ -35,10 +35,10 @@ impl Configuration {
 
     pub fn at<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, question: &QueryContext) -> Result<Self, ()> {
         let metadata = resolver.metadata(&path, question)?.ok_or(())?;
-        Self::inherit(resolver, path, metadata, question)
+        Self::inherit(resolver, path, &metadata, question)
     }
 
-    fn inherit<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
+    fn inherit<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: &Json, question: &QueryContext) -> Result<Self, ()> {
         let mut memo = BTreeMap::<PathBuf, Option<Self>>::new();
         memo.insert(path.clone(), None);
         let root = path.clone();
@@ -57,7 +57,7 @@ impl Configuration {
                         let path = path.clone();
                         let metadata = resolver.metadata(&path, question)?.ok_or(())?;
                         memo.insert(path.clone(), None);
-                        stack.push(Frame::new(resolver, path, metadata, question)?);
+                        stack.push(Frame::new(resolver, path, &metadata, question)?);
                     }
                 }
                 continue;
@@ -90,7 +90,7 @@ struct Frame {
 }
 
 impl Frame {
-    fn new<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: Json, question: &QueryContext) -> Result<Self, ()> {
+    fn new<H: Host + ?Sized>(resolver: &Resolver<'_, H>, path: PathBuf, metadata: &Json, question: &QueryContext) -> Result<Self, ()> {
         if !matches!(metadata, Json::Object(_)) { return Err(()) }
         let directory = path.parent().ok_or(())?;
         let mut parents = Vec::new();

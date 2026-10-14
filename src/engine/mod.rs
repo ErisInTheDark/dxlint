@@ -646,6 +646,13 @@ impl Linter {
         groups
     }
 
+    /// The compiled parse plan for units read only for semantic questions:
+    /// whether tokens are attached, and how many matchers of all the
+    /// overlay mask enables (regular layers are always built).
+    pub fn unit_plan(&self) -> (bool, usize, usize) {
+        (self.unit_tokens, self.unit_overlays.iter().filter(|&&on| on).count(), self.unit_overlays.len())
+    }
+
     /// A context on `tree`'s root outside any rule: for the tree's names,
     /// which native facts answer name questions from.
     pub(super) fn tree_ctx<'a>(
