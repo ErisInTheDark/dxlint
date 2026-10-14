@@ -180,7 +180,13 @@ enum Command {
     /// Check the configuration without linting anything
     Check,
     /// List rules with their severity, options and messages
-    Rules,
+    Rules {
+        /// Instead, one JSON line per enabled rule: its defining file and
+        /// every config file its compiled checks read (`std/...zlint` for
+        /// library files)
+        #[arg(long)]
+        dependencies: bool,
+    },
     /// Explain a name from the configuration: a rule, layer, field,
     /// attribute, macro, group, option, builtin, fact, function or keyword,
     /// with where it is defined and used
@@ -283,7 +289,9 @@ where
             Ok(_) => 2,
             Err(code) => code,
         },
-        Some(Command::Rules) => match load(&mut output, config) {
+        Some(Command::Rules { dependencies }) => match load(&mut output, config) {
+            Ok(Project { config_ok: false, .. }) if dependencies => 2,
+            Ok(p) if dependencies => info::rule_dependencies(&mut output, &p.linter, p.symbols.as_deref().expect("tooling symbols")),
             Ok(p) => info::rules(&mut output, &p.linter),
             Err(code) => code,
         },
@@ -315,6 +323,7 @@ pub struct Project {
     /// Reading the config with its imports, then building the linter.
     pub load_time: std::time::Duration,
     pub build_time: std::time::Duration,
+    pub build_phases: Vec<(&'static str, std::time::Duration)>,
 }
 
 /// Loads and builds the linter, printing any config errors. Uses the
@@ -358,7 +367,7 @@ fn load_from_with(output: &mut Output<'_>, path: &Path, provider: &dyn SourcePro
         render::config_errors(output, &built.errors, &built.sources);
     }
     match built.linter {
-        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok, load_time, build_time }),
+        Some(linter) => Ok(Project { linter, symbols: built.symbols, config_ok, load_time, build_time, build_phases: built.phases }),
         None => Err(2),
     }
 }

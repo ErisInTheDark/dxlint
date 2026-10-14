@@ -136,6 +136,21 @@ impl Rule {
         &self.options
     }
 
+    /// Every compiled expression of the rule's checks, message and fix.
+    pub fn expressions(&self) -> impl Iterator<Item = &CExpr> {
+        self.locals.iter().chain(&self.node_when).chain(&self.when).chain(
+            [&self.message, &self.fix, &self.fix_when, &self.fix_at, &self.report_at, &self.each, &self.indent_reset]
+                .into_iter().flatten())
+    }
+
+    /// The layers the rule targets or reads by name.
+    pub fn layers(&self) -> impl Iterator<Item = u32> + '_ {
+        self.targets.iter().filter_map(|target| match *target {
+            Target::Matcher(m) | Target::Field(m, _) | Target::Nodes(m, _) => Some(m),
+            Target::Lang(_) => None,
+        }).chain(self.layer_reads.iter().copied())
+    }
+
     fn option_values(&self) -> Vec<Value<'static>> {
         self.options.iter().map(|o| o.value.clone()).collect()
     }
@@ -225,7 +240,7 @@ pub struct Linter {
     /// Whole-file rules and the language they want (`None`: any).
     by_lang: Vec<(usize, Option<usize>)>,
     /// `let` attributes, by id.
-    attrs: Attributes,
+    pub(crate) attrs: Attributes,
     /// Each native front end's project state (other files' exports...),
     /// read on demand by native rules.
     projects: frontend::Projects,
@@ -319,16 +334,20 @@ impl Linter {
                 errors.extend(failed.into_iter().map(|error| ConfigError::new(span, error)));
             }
         }
-        let fields = self.shape_records();
-        if self.attrs.vm_stats {
-            eprintln!("zlint vm: {fields} record fields");
-        }
         errors
     }
 
     /// Sizes each node kind's VM record from what the enabled rules read on
-    /// the kinds they target; the number of record fields.
-    fn shape_records(&mut self) -> usize {
+    /// the kinds they target (after [`Linter::lower_conditions`]).
+    pub(crate) fn shape_records(&mut self) {
+        let fields = self.record_fields();
+        if self.attrs.vm_stats {
+            eprintln!("zlint vm: {fields} record fields");
+        }
+    }
+
+    /// [`Linter::shape_records`]; the number of record fields.
+    fn record_fields(&mut self) -> usize {
         use crate::vm::KindSet;
         let g = &self.grammar;
         let n = g.matchers.len();

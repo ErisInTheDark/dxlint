@@ -82,6 +82,7 @@ ignore "vendor" "src/generated/**"
 | `zlint --no-cache` | lint every file, ignoring `.zlintcache` |
 | `zlint check` | validate the config only |
 | `zlint rules` | list every defined rule (off ones too) with severities, options and messages |
+| `zlint rules --dependencies` | one JSON line per enabled rule: `{rule, file, depends}`, the config files (`std/...zlint` for the library) its checks read; rules asking type questions depend on every library file |
 | `zlint describe <name>` | explain any name in the config (rule, layer, group, attribute, macro, fact...) and where it is used |
 | `zlint tree <file>` | print the layer tree (handy while writing matchers) |
 | `zlint functions` | list expression functions and variables |

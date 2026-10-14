@@ -52,6 +52,83 @@ pub fn rules(output: &mut Output<'_>, linter: &Linter) -> u8 {
     0
 }
 
+/// `zlint rules --dependencies`: per enabled rule, one JSON line with the
+/// file defining it and every config file its compiled checks read: the
+/// attributes, functions and layers they reach, and for rules asking type
+/// questions every library file (their declarations answer them).
+pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Symbols) -> u8 {
+    use crate::engine::symbols::Kind;
+    use crate::expr::CExpr;
+    let file_name = |file: crate::config::source::FileId| {
+        let source = linter.sources.get(file);
+        let library = source.name.starts_with("std/") || source.name.starts_with("rules/");
+        if library { format!("{}.zlint", source.name) } else { source.name.clone() }
+    };
+    let library: Vec<String> = linter.sources.files()
+        .filter(|(_, source)| source.name.starts_with("std/"))
+        .map(|(file, _)| file_name(file)).collect();
+    let files_of = |kind: Kind, name: &str, into: &mut std::collections::BTreeSet<String>| {
+        if let Some(id) = symbols.get(kind, name) {
+            into.extend(symbols.symbols[id].defs.iter().map(|span| file_name(span.file)));
+        }
+    };
+    // A layer's nodes depend on every layer that can hold them, every
+    // layer inside them and their specialisations.
+    let grammar = &linter.grammar;
+    let reach_table = grammar.reach();
+    let reach = &reach_table;
+    let related =|layer: u32| (0..grammar.matchers.len() as u32).filter(move |&other| {
+        reach[other as usize][layer as usize] || reach[layer as usize][other as usize] || grammar.is_a(other, layer)
+    });
+    let mut rules: Vec<_> = linter.rules.iter().filter(|rule| rule.severity != Severity::Off).collect();
+    rules.sort_by(|a, b| a.name.cmp(&b.name));
+    for rule in rules {
+        let mut depends = std::collections::BTreeSet::new();
+        let mut semantic = false;
+        let mut attrs = std::collections::BTreeSet::new();
+        let mut functions = std::collections::BTreeSet::new();
+        let mut layers: std::collections::BTreeSet<u32> = rule.layers().collect();
+        let mut pending: Vec<&CExpr> = rule.expressions().collect();
+        while let Some(expr) = pending.pop() {
+            match expr {
+                CExpr::Attr(id) | CExpr::FieldAttr(_, id) | CExpr::ParentAttr(id) if attrs.insert(*id) => {
+                    if let Some((name, defs)) = linter.attrs.definition(*id) {
+                        files_of(Kind::Attr, name, &mut depends);
+                        pending.extend(defs);
+                    }
+                }
+                CExpr::UserCall(id, _) if functions.insert(*id) => {
+                    if let Some(function) = grammar.functions.get(*id as usize) {
+                        files_of(Kind::Function, &function.name, &mut depends);
+                        pending.extend(function.body.get());
+                    }
+                }
+                CExpr::Trait(..) | CExpr::Semantic(..) | CExpr::QueryCall(..) => semantic = true,
+                CExpr::Ancestor(matcher, _) | CExpr::OnAncestor(matcher, _) => { layers.insert(*matcher); }
+                CExpr::OwnChild(_, matchers, _) => layers.extend(matchers),
+                CExpr::Descendants(selection) | CExpr::Overlapping(selection, _) | CExpr::Containing(selection) => layers.extend(selection.kinds()),
+                CExpr::Is(_, tests) => for test in tests {
+                    if let crate::expr::IsTest::Kind(matchers) | crate::expr::IsTest::Field(matchers, _) = test { layers.extend(matchers) }
+                },
+                _ => {}
+            }
+            expr.for_each_child(&mut |child| pending.push(child));
+        }
+        let layers: std::collections::BTreeSet<u32> = layers.into_iter().flat_map(|layer| related(layer)).collect();
+        for layer in layers {
+            if let Some(matcher) = grammar.matchers.get(layer as usize) {
+                files_of(Kind::Layer, &matcher.name, &mut depends);
+            }
+        }
+        if semantic { depends.extend(library.iter().cloned()) }
+        let file = file_name(rule.span.file);
+        depends.remove(&file);
+        let row = serde_json::json!({ "rule": rule.name, "file": file, "depends": depends });
+        output.out(format_args!("{row}"));
+    }
+    0
+}
+
 /// `zlint describe name`: everything of that name, as hover shows it, and
 /// where each is used.
 pub fn describe(output: &mut Output<'_>, symbols: &Symbols, name: &str) -> u8 {
