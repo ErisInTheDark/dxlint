@@ -53,7 +53,7 @@ pub static QUERY_FUNCTIONS: &[&[QueryFunction]] = &[flow::FUNCTIONS, values::FUN
 
 impl QueryFunction {
     pub fn uncertainty(&self) -> Uncertainty {
-        const EXPLICIT: &[&str] = &["call_signatures", "call_parameters", "call_results", "member_call_parameters", "value_constituents", "value_accepts", "value_parts", "value_children", "value_signatures"];
+        const EXPLICIT: &[&str] = &["call_signatures", "call_parameters", "call_results", "member_call_parameters", "value_constituents", "value_accepts", "value_parts", "value_children", "value_signatures", "value_constructors", "call_selection"];
         if EXPLICIT.contains(&self.name) { Uncertainty::Explicit } else { Uncertainty::Strict }
     }
 }

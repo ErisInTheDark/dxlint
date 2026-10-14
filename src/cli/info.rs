@@ -62,7 +62,11 @@ pub fn rule_dependencies(output: &mut Output<'_>, linter: &Linter, symbols: &Sym
     let file_name = |file: crate::config::source::FileId| {
         let source = linter.sources.get(file);
         let library = source.name.starts_with("std/") || source.name.starts_with("rules/");
-        if library { format!("{}.zlint", source.name) } else { source.name.clone() }
+        if library { return format!("{}.zlint", source.name) }
+        // Config files as paths relative to the config's root, `/`-separated.
+        let path = source.path.as_deref().unwrap_or(std::path::Path::new(&source.name));
+        let relative = path.strip_prefix(&linter.root).unwrap_or(path);
+        relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
     };
     let library: Vec<String> = linter.sources.files()
         .filter(|(_, source)| source.name.starts_with("std/"))

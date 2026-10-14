@@ -297,6 +297,14 @@ pub static FUNCTIONS: &[Function] = &[
         call: |a| Ok(super::js::strings::decode(&a[0].text()).map_or(Value::Null, Value::from)),
     },
     Function {
+        name: "json_string",
+        signature: "json_string(text)",
+        doc: "Text as a JSON string literal, quotes included (JavaScript `JSON.stringify` of a string)",
+        min: 1,
+        max: 1,
+        call: |a| Ok(Value::from(serde_json::to_string(&*a[0].text()).unwrap_or_default())),
+    },
+    Function {
         name: "js_string_parts",
         signature: "js_string_parts(text)",
         doc: "Decode a quoted string or substitution-free template to text, UTF-16 units and Unicode-scalar spans. Offsets are bytes within the literal; null for invalid syntax",

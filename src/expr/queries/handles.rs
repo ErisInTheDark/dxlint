@@ -17,6 +17,9 @@ pub(super) static FUNCTIONS: &[QueryFunction] = &[
     QueryFunction { name: "value_parts", arity: 1, call: |semantic, at, args| parts(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_children", arity: 3, call: |semantic, at, args| children(semantic, semantic.values().values(at), args) },
     QueryFunction { name: "value_signatures", arity: 1, call: |semantic, at, args| signatures(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "value_constructors", arity: 1, call: |semantic, at, args| constructors(semantic, semantic.values().values(at), args) },
+    QueryFunction { name: "call_selection", arity: 1, call: selection },
+    QueryFunction { name: "site_text", arity: 2, call: site_text },
 ];
 
 /// A query reading a handle subject instead of a node.
@@ -29,6 +32,7 @@ static HANDLES: &[HandleFunction] = &[
     HandleFunction { name: "value_parts", call: parts },
     HandleFunction { name: "value_children", call: children },
     HandleFunction { name: "value_signatures", call: signatures },
+    HandleFunction { name: "value_constructors", call: constructors },
     HandleFunction { name: "value_constituents", call: |semantic, value, _| project(semantic, value) },
     HandleFunction { name: "value_at", call: project_path },
     HandleFunction { name: "value_lookup", call: |semantic, value, args| match args.first().and_then(member_key) {
@@ -97,6 +101,10 @@ fn children(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) 
     let NodeValue::Alternatives(rows) = &value else { return Known::Unknown };
     let [row] = &rows[..] else { return Known::Unknown };
     if row.is_empty() { return Known::Unknown }
+    // Generic recursion (`Frozen<T>` holding `Frozen<T>`) binds a new frame
+    // per level, so its handles never repeat: past this depth the walk is
+    // unknown instead of endless.
+    if row.iter().any(|leaf| frame_depth(semantic, leaf.frame) > MAX_FRAME_DEPTH) { return Known::Unknown }
     let values = semantic.values();
     let mut edges = Vec::new();
     if *members {
@@ -105,6 +113,33 @@ fn children(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) 
         // the arm's listing complete.
         let mut owning = Vec::with_capacity(row.len());
         for &leaf in row {
+            // Products (tuples) list their own elements, never inherited
+            // methods.
+            match values.product_info(leaf) {
+                Known::Yes(Some(product)) => {
+                    for (index, element) in product.elements.into_iter().enumerate() {
+                        if !semantic.question.budget.step() { return Known::Unknown }
+                        // A rest element (`...string[]`) stands for its items.
+                        let item = if element.repeated {
+                            values.member(&element.value, &Key::Domain(crate::config::ast::values::KeyDomain::Ordinal))
+                        } else { element.value };
+                        edges.push(Value::record(vec![
+                            ("handle".into(), handle(semantic, item)),
+                            ("member".into(), Value::record(vec![
+                                ("key".into(), Value::Num(index as f64)),
+                                ("optional".into(), Value::Bool(element.optional)),
+                                ("repeated".into(), Value::Bool(element.repeated)),
+                                ("sources".into(), Value::list(Vec::new())),
+                            ])),
+                            ("argument".into(), Value::Null),
+                            ("part".into(), Value::Null),
+                        ]));
+                    }
+                    continue;
+                }
+                Known::Unknown => return Known::Unknown,
+                Known::Yes(None) => {}
+            }
             match own_member_free(semantic, leaf) {
                 Known::Yes(true) => {}
                 Known::Yes(false) => owning.push(leaf),
@@ -177,9 +212,71 @@ fn children(semantic: &Semantic<'_>, value: NodeValue, args: &[Value<'static>]) 
 /// list of handles (null when unreadable), `receiver`/`result` handles (null
 /// when absent or unreadable; `has_receiver` false absent, null unknown).
 fn signatures(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Known<Value<'static>> {
+    headers_of(semantic, value, crate::grammar::names::calls::InvokeKind::Call)
+}
+
+/// [`signatures`] for `new`.
+fn constructors(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -> Known<Value<'static>> {
+    headers_of(semantic, value, crate::grammar::names::calls::InvokeKind::Construct)
+}
+
+/// The headers a call or `new` node selects: `{selected: [site], uncertain}`
+/// (several sites when the choice stays open); null when unknown or not an
+/// invocation.
+fn selection(semantic: &Semantic<'_>, at: crate::grammar::names::question::Leaf, _: &[Value<'static>]) -> Known<Value<'static>> {
+    match semantic.calls().selection(at) {
+        Known::Yes(Some(selection)) => {
+            let mut sites = Vec::new();
+            for choice in &selection.choices {
+                let site = site_value(choice.header.site);
+                if !sites.contains(&site) { sites.push(site) }
+            }
+            Known::Yes(Value::record(vec![
+                ("selected".into(), Value::list(sites)),
+                ("uncertain".into(), Value::Bool(selection.uncertain)),
+            ]))
+        }
+        Known::Yes(None) => Known::Yes(Value::Null),
+        Known::Unknown => Known::Unknown,
+    }
+}
+
+/// A `{file, node}` site's source, in any file of the program: `{text,
+/// leading}` where `leading` is the text between the previous sibling (or
+/// the parent's start) and the node (its comments). Null when unavailable.
+fn site_text(semantic: &Semantic<'_>, _: crate::grammar::names::question::Leaf, args: &[Value<'static>]) -> Known<Value<'static>> {
+    let Some(Value::Record(fields)) = args.first() else { return Known::Yes(Value::Null) };
+    let number = |name: &str| fields.iter().find(|(key, _)| &**key == name).and_then(|(_, value)| match value {
+        Value::Num(n) if *n >= 0.0 && n.fract() == 0.0 && *n <= f64::from(u32::MAX) => Some(*n as u32),
+        _ => None,
+    });
+    let (Some(file), Some(node)) = (number("file"), number("node")) else { return Known::Yes(Value::Null) };
+    let (Some(tree), Some(text)) = (semantic.world.tree(file), semantic.world.text(file)) else { return Known::Unknown };
+    let Some(data) = tree.nodes.get(node as usize) else { return Known::Yes(Value::Null) };
+    let before = tree.parent(node).map_or(0, |parent| {
+        let siblings = &tree.node(parent).children;
+        siblings.iter().map(|edge| tree.node(edge.node)).filter(|sibling| sibling.end <= data.start)
+            .map(|sibling| sibling.end).max().unwrap_or(tree.node(parent).start)
+    });
+    let slice = |from: u32, to: u32| text.get(from as usize..to as usize).map(str::to_owned);
+    let (Some(own), Some(leading)) = (slice(data.start, data.end), slice(before.min(data.start), data.start)) else { return Known::Yes(Value::Null) };
+    Known::Yes(Value::record(vec![("text".into(), Value::from(own)), ("leading".into(), Value::from(leading))]))
+}
+
+fn site_value(site: crate::grammar::names::question::Leaf) -> Value<'static> {
+    match site.target {
+        crate::grammar::names::question::Target::Node(node) => Value::record(vec![
+            ("file".into(), Value::Num(f64::from(node.file))),
+            ("node".into(), Value::Num(f64::from(node.node))),
+        ]),
+        _ => Value::Null,
+    }
+}
+
+fn headers_of(semantic: &Semantic<'_>, value: NodeValue, kind: crate::grammar::names::calls::InvokeKind) -> Known<Value<'static>> {
     let values = semantic.values();
     let calls = semantic.calls();
-    let Known::Yes(arms) = calls.headers(&value, crate::grammar::names::calls::InvokeKind::Call) else { return Known::Unknown };
+    let Known::Yes(arms) = calls.headers(&value, kind) else { return Known::Unknown };
     let mut alternatives = Vec::with_capacity(arms.len());
     for arm in arms {
         let mut headers = Vec::with_capacity(arm.len());
@@ -197,6 +294,7 @@ fn signatures(semantic: &Semantic<'_>, value: NodeValue, _: &[Value<'static>]) -
             let result = calls.header_result(header).known().map_or(Value::Null, |result| handle(semantic, result));
             if semantic.question.budget.exhausted() { return Known::Unknown }
             headers.push(Value::record(vec![
+                ("site".into(), site_value(header.site)),
                 ("parameters".into(), parameters),
                 ("receiver".into(), receiver),
                 ("has_receiver".into(), has_receiver),
@@ -216,16 +314,10 @@ fn own_member_free(semantic: &Semantic<'_>, at: crate::grammar::names::question:
     use crate::grammar::names::question::Target;
     let Known::Yes(at) = semantic.leaf(at) else { return Known::Unknown };
     match at.target {
-        // An open trait value (some traits uncertain: `unknown`-like) may
-        // have anything.
-        Target::Traits(_) => {
-            let values = semantic.values();
-            for id in 0..semantic.tables.vocabulary.traits.len() {
-                let Ok(id) = u16::try_from(id) else { return Known::Unknown };
-                if values.fits(at, id) == Known::Unknown { return Known::Unknown }
-            }
-            Known::Yes(true)
-        }
+        // Nodeless: no declarations, so no own members, open or not (the
+        // intersection marker is open). Rules read openness from the
+        // part's `uncertain_traits`.
+        Target::Traits(_) => Known::Yes(true),
         Target::Product(_) | Target::Scope(_) => Known::Yes(false),
         Target::Node(node) => {
             let Some(data) = semantic.world.tree(node.file).and_then(|tree| tree.nodes.get(node.node as usize)) else { return Known::Unknown };
@@ -233,6 +325,26 @@ fn own_member_free(semantic: &Semantic<'_>, at: crate::grammar::names::question:
             Known::Yes(kind.member_defaults == 0 && kind.indexed.is_empty() && kind.member_bases.is_empty() && kind.member_links.is_empty())
         }
     }
+}
+
+const MAX_FRAME_DEPTH: usize = 24;
+
+/// How many frames `frame` reads through (parents and references), counted
+/// up to just past [`MAX_FRAME_DEPTH`].
+fn frame_depth(semantic: &Semantic<'_>, frame: crate::grammar::names::question::FrameId) -> usize {
+    let mut pending = vec![(frame, 0)];
+    let mut reached: crate::fx_hash::FxHashMap<crate::grammar::names::question::FrameId, usize> = Default::default();
+    let mut deepest = 0;
+    while let Some((id, depth)) = pending.pop() {
+        deepest = deepest.max(depth);
+        if deepest > MAX_FRAME_DEPTH { break }
+        if reached.get(&id).is_some_and(|&seen| seen >= depth) { continue }
+        reached.insert(id, depth);
+        let Some(frame) = semantic.question.get(id) else { continue };
+        pending.push((frame.parent, depth + 1));
+        if let Some(through) = frame.through { pending.push((through.frame, depth + 1)) }
+    }
+    deepest
 }
 
 fn key_value(key: &Key) -> Value<'static> {
