@@ -108,7 +108,7 @@ fn scoping_definition_initializes(reference, owner) =
     member is ts_static_block && scoping_within(reference, member)
     || member is ts_class_property && contains([] member.modifier, "static") && scoping_within(reference, member.init.node))
   else false
-fn scoping_definition_context(reference) = {
+fn scoping_definition_context(reference) = if reference.reference_kind == null then null else {
   value declaration: reference.declaration.node
   value scope: first(declaration.scoping_declaration_scopes)
   value separate: scope != null && scoping_definition_separate(reference, scope.owner)
@@ -117,7 +117,7 @@ fn scoping_definition_context(reference) = {
   value decorated: can_initialize && any(owners, owner => owner is ts_class
     && any([] owner.decorator.nodes, decorator => scoping_within(reference, decorator)))
   value initialized: can_initialize && any(owners, owner => scoping_definition_initializes(reference, owner))
-  value if reference.reference_kind == null || declaration == null || scope == null then null
+  value if declaration == null || scope == null then null
     else { kind: reference.reference_kind, before: !decorated && (reference.end_offset < declaration.end_offset || initialized),
       separate: separate, export: reference.parent is ts_export_specifier }
 }

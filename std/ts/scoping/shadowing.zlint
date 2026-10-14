@@ -16,30 +16,36 @@ fn scoping_scope_sites(n, scope) = {
 }
 fn scoping_redeclaration_context(n) = {
   value scope: first(n.scoping_declaration_scopes)
-  value program: n.scoping_program
-  value typed: scoping_typed(program)
-  value sites: {
-    value scoping_scope_sites(n, scope)
-    filter (site) !(typed && site.node.parent is ts_function && site.node.parent.body == null)
-    map (site) site.node
-  }
-  value kinds: map(sites, site => site.scoping_site_kind)
-  value category: if all(kinds, kind => contains(["class", "interface", "namespace"], kind)) then "class"
-    else if all(kinds, kind => contains(["function", "namespace"], kind)) then "function"
-    else if all(kinds, kind => contains(["enum", "namespace"], kind)) then "enum"
-    else null
-  value duplicate: any(sites, site => site.offset < n.offset)
-  value merge_all: all(kinds, kind => kind == "interface") || all(kinds, kind => kind == "namespace")
-  value merge_report: if merge_all then false else if category != null
-    then n.scoping_site_kind == category && any(sites, site => site.offset < n.offset && site.scoping_site_kind == category)
-    else duplicate
-  value script: scoping_script_scope(scope)
-  value setting: if script then ts_global_setting(program, n.identifier_name) else null
-  value builtin: script && ts_global_implicit(program, n.identifier_name)
-    && contains(["readonly", "writable"], setting)
-  value if scope == null || !contains(sites, n) then null else {
-    duplicate: duplicate, safe_merge: typed && !merge_report, builtin: builtin,
-    comment: typed && script && ts_global_commented(program, n.identifier_name) && !builtin
+  value if scope == null then null else {
+    value program: n.scoping_program
+    value typed: scoping_typed(program)
+    value sites: {
+      value scoping_scope_sites(n, scope)
+      filter (site) !(typed && site.node.parent is ts_function && site.node.parent.body == null)
+      map (site) site.node
+    }
+    value if !contains(sites, n) then null else {
+      value duplicate: any(sites, site => site.offset < n.offset)
+      value merge_report: if !typed || !duplicate then false else {
+        value kinds: map(sites, site => site.scoping_site_kind)
+        value category: if all(kinds, kind => contains(["class", "interface", "namespace"], kind)) then "class"
+          else if all(kinds, kind => contains(["function", "namespace"], kind)) then "function"
+          else if all(kinds, kind => contains(["enum", "namespace"], kind)) then "enum"
+          else null
+        value merge_all: all(kinds, kind => kind == "interface") || all(kinds, kind => kind == "namespace")
+        value if merge_all then false else if category != null
+          then n.scoping_site_kind == category && any(sites, site => site.offset < n.offset && site.scoping_site_kind == category)
+          else duplicate
+      }
+      value script: scoping_script_scope(scope)
+      value setting: if script then ts_global_setting(program, n.identifier_name) else null
+      value builtin: script && ts_global_implicit(program, n.identifier_name)
+        && contains(["readonly", "writable"], setting)
+      value {
+        duplicate: duplicate, safe_merge: typed && !merge_report, builtin: builtin,
+        comment: typed && script && ts_global_commented(program, n.identifier_name) && !builtin
+      }
+    }
   }
 }
 fn scoping_shadow_scope_name(n, scope) = {

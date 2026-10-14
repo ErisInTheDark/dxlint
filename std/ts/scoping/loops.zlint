@@ -56,7 +56,7 @@ fn scoping_condition_candidate(reference, independent) = {
   value path: walk(reference, current => scoping_condition_next(current, independent))
   value loop: last(path)
   value group: { value path; filter (current) current is ts_binary || !independent && current is ts_conditional; last }
-  value if reference.declaration == null || loop not (ts_while, ts_do_while, ts_for) then null
+  value if loop not (ts_while, ts_do_while, ts_for) || reference.declaration == null then null
     else { loop: loop, group: group }
 }
 fn scoping_condition_in_loop(n, loop) = scoping_within(n, loop) && !scoping_within(n, loop.init.node)

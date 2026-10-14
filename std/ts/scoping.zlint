@@ -278,29 +278,30 @@ in ts_object let scoping_camelcase_import_options
 fn scoping_camelcase_candidate(n) = {
   value name: if n is ts_private_name then slice(n.text, 1) else n.text
   value body: re_replace(name, /^_+|_+$/, "")
-  value wrapped: n.scoping_outer_parens
-  value property: n is (ts_property.key, ts_method.key, ts_class_property.key)
-    && !(n.parent.parent is ts_object && n.parent.parent.flow_destructuring_target == true)
-    || n is ts_member.property && n.parent.scoping_camelcase_assignment_target == true
-  value own: n.declaration.node == n
-  value kind: n.declaration_kind ?? n.reference_kind
-  value imported: kind == "import"
-  value external: n.resolved == "global"
-  value binding: contains(["var", "let", "const", "using", "parameter", "catch", "function", "function_name", "class", "class_name", "import"], kind) || external
-  value label: n is (ts_labeled.label, ts_break.label, ts_continue.label)
-  value exported: n is (ts_export_specifier.exported, ts_export.namespace)
-  value skipped: !own && (wrapped.parent is (ts_call, ts_new)
-    || wrapped is (ts_assignment_pattern.right, ts_parameter.init))
-  value value_name: if n.parent is ts_assignment_pattern then n.parent.node else n
-  value original: value_name.parent is (ts_property, ts_pattern_property)
-      && value_name.parent.key is ts_identifier && value_name.parent.key.text == name
-    || value_name.parent is ts_import_specifier
-      && re_replace(value_name.parent.imported.text, /^['"]|['"]$/, "") == name
-  value if !contains(body, "_") || upper(body) == body
-    || n is ts_property.key && n.parent.parent.scoping_camelcase_import_options == true
-    || !(property || label || exported) && (skipped || !binding) then null
-    else { name: name, property: property, private: n is ts_private_name,
-      import: imported && own, original: original, global: external && contains(["readonly", "writable"], n.global), binding: binding }
+  value if !contains(body, "_") || upper(body) == body then null else {
+    value wrapped: n.scoping_outer_parens
+    value property: n is (ts_property.key, ts_method.key, ts_class_property.key)
+      && !(n.parent.parent is ts_object && n.parent.parent.flow_destructuring_target == true)
+      || n is ts_member.property && n.parent.scoping_camelcase_assignment_target == true
+    value own: n.declaration.node == n
+    value kind: n.declaration_kind ?? n.reference_kind
+    value imported: kind == "import"
+    value external: n.resolved == "global"
+    value binding: contains(["var", "let", "const", "using", "parameter", "catch", "function", "function_name", "class", "class_name", "import"], kind) || external
+    value label: n is (ts_labeled.label, ts_break.label, ts_continue.label)
+    value exported: n is (ts_export_specifier.exported, ts_export.namespace)
+    value skipped: !own && (wrapped.parent is (ts_call, ts_new)
+      || wrapped is (ts_assignment_pattern.right, ts_parameter.init))
+    value value_name: if n.parent is ts_assignment_pattern then n.parent.node else n
+    value original: value_name.parent is (ts_property, ts_pattern_property)
+        && value_name.parent.key is ts_identifier && value_name.parent.key.text == name
+      || value_name.parent is ts_import_specifier
+        && re_replace(value_name.parent.imported.text, /^['"]|['"]$/, "") == name
+    value if n is ts_property.key && n.parent.parent.scoping_camelcase_import_options == true
+      || !(property || label || exported) && (skipped || !binding) then null
+      else { name: name, property: property, private: n is ts_private_name,
+        import: imported && own, original: original, global: external && contains(["readonly", "writable"], n.global), binding: binding }
+  }
 }
 in ts_identifier, ts_private_name rule camelcase {
   option allow string[] = [] "names or regular expressions allowed"
@@ -355,7 +356,8 @@ in ts_function, ts_arrow, ts_method let scoping_return_void_annotation
     scoping_return_void asynchronous
   }
 in ts_program, ts_function, ts_arrow, ts_method let scoping_return_entry if is ts_program then node else body.node
-in ts_program, ts_function, ts_arrow, ts_method let scoping_own_returns {
+in ts_node let scoping_return_syntax count(descendants(ts_return)) > 0
+in ts_program, ts_function, ts_arrow, ts_method let scoping_own_returns if scoping_return_entry.scoping_return_syntax != true then [] else {
   value flow_declared_effects(scoping_return_entry, "returned")
   filter (effect) effect.site is ts_return
   map (effect) effect.site
