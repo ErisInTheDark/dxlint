@@ -104,21 +104,9 @@ pub const FACTS: &[Fact] = &[
     },
     Fact {
         shape: Fact::SCALAR.shape,
-        name: "type_has_enum",
-        doc: "native values and types: a constrained union or intersection constituent has enum identity",
-        get: |f, n| f.with_file(|file, node| Value::Bool(type_properties::has_enum(&file.constrained_type_of(node), &file.typing().checker)), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
         name: "callable",
         doc: "native expressions: the type supplies call signatures (every union arm, or an intersection arm)",
         get: |f, n| f.with_file(|file, node| Value::Bool(file.typing().checker.callable_type(&file.type_of(node))), n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "type_iterable",
-        doc: "native expressions: constrained type supports synchronous iteration; null when type analysis is unresolved",
-        get: |f, n| f.with_file(|file, node| file.typing().checker.iterable_type(&file.constrained_type_of(node)).map_or(Value::Null, Value::Bool), n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

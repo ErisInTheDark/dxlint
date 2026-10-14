@@ -1,5 +1,6 @@
 define {
 
+fn ts_value_has_enum(n) = any(value_constituents(n) ?? [], arm => any(arm, part => contains(part.traits, "enum")))
 fn ts_value_enum_literal(n) = {
   value bare: unparenthesised_node(n)
   value direct: bare is (ts_number, ts_string) || bare is ts_unary

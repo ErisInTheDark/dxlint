@@ -13,7 +13,7 @@ fn template_expression_whitespace(n) = if n is ts_string then n.literal_value.ty
   re_test /^[\t\v\f \r\n\uFEFF\p{Zs}\u2028\u2029]*$/
 }
 fn template_expression_literal(n, type_syntax) = n is ts_literal || n is (ts_template, ts_template_type) || (if type_syntax then n is ts_type_keyword && contains(["null", "undefined"], n.text) else n is ts_identifier && contains(["undefined", "Infinity", "NaN"], n.text))
-fn template_expression_string(n, single, type_syntax) = single && n.type_is_string_like && (!type_syntax || !n.type_is_parameter && !n.type_has_enum)
+fn template_expression_string(n, single, type_syntax) = single && n.type_is_string_like && (!type_syntax || !n.type_is_parameter && !ts_value_has_enum(n))
 
 fn template_regex_text(n) = {
   value flags: re_find(n.text, /[a-z]*$/)

@@ -66,15 +66,6 @@ fn indeterminate(ty: &Ty) -> bool {
     }
 }
 
-pub(super) fn has_enum(ty: &Ty, checker: &Checker<'_>) -> bool {
-    match ty {
-        Ty::EnumMember(_) => true,
-        Ty::Named(symbol, _) => checker.is_enum(symbol),
-        Ty::Union(parts) | Ty::Inter(parts) => parts.iter().any(|part| has_enum(part, checker)),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

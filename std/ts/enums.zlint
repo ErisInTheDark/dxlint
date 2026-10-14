@@ -41,7 +41,7 @@ in enum_transfer let enum_contexts type_flow(node, enum_value)
 in enum_transfer let enum_heritage filter(enum_contexts, context => context.origin == "heritage")
 in enum_transfer let enum_heritage_bad is ts_class_property && len(enum_heritage) > 0 && all(enum_heritage, context => enum_context_bad(context))
 in enum_transfer let enum_selected_contexts if enum_heritage_bad then enum_heritage else filter(enum_contexts, context => context.origin != "heritage")
-in enum_transfer let enum_reports enum_value != null && (enum_mutation || enum_heritage_bad || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then enum_value.type_has_enum else any(enum_selected_contexts, context => enum_context_bad(context)))
+in enum_transfer let enum_reports enum_value != null && (enum_mutation || enum_heritage_bad || unparenthesised_node(enum_value) not (ts_object, ts_array)) && (if enum_mutation then ts_value_has_enum(enum_value) else any(enum_selected_contexts, context => enum_context_bad(context)))
 in ts_node let enum_checked
   if is ts_property then parent.enum_checked == true
   else if is (ts_object, ts_array, ts_parenthesized, ts_as, ts_type_assertion, ts_non_null, ts_satisfies, ts_spread, ts_conditional, ts_logical)
