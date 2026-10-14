@@ -27,6 +27,8 @@ import .ts/typed/type-parameters
 import .ts/typed/switches
 import .ts/typed/enums
 import .ts/typed/qualifiers
+import .ts/typed/regexp-exec
+import .ts/typed/for-in-arrays
 
 define {
 
@@ -325,12 +327,6 @@ in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
   warn "Use `this` type instead."
 }
 
-in ts_call rule prefer-regexp-exec {
-  when regexp_match_exec_offset != null
-  report at regexp_match_exec_offset
-  warn "Use the `RegExp#exec()` method instead."
-}
-
 in ts_union, ts_intersection {
   rule no-redundant-type-constituents {
     each redundant_constituent in redundant_type_constituents.nonempty ?? []
@@ -415,13 +411,6 @@ in ts_declarator.init rule await-thenable:using {
 in ts_call.type_argument, ts_new.type_argument, ts_type_reference.type_argument, ts_class.type_argument rule no-unnecessary-type-arguments {
   when type_argument_redundant != null
   warn if type_argument_redundant == "default" then "This is the default value for this type parameter, so it can be omitted." else "This value can be trivially inferred for this type parameter, so it can be omitted."
-}
-
-# ---- more type-aware rules (type_flags) ----------------------------------------
-in ts_for_in rule no-for-in-array {
-  report at unparenthesised_node(right.node)
-  when { value right.type_flags.nonempty ?? []; has_only_flags (["array", "tuple", "union", "nullable", "undefined", "null"]) } && contains(right.type_flags, "array")
-  warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
 }
 
 # ---- template interpolation ----------------------------------------------------

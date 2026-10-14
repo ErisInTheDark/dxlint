@@ -1287,6 +1287,8 @@ and `final-newline`.
 | `.ts/typed/unbound-method` | receiver-preserving method extraction, including destructuring and ignoreStatic; imported by `.ts/typed`, diagnostic-only |
 | `.ts/typed/type-arguments` | redundant explicit type arguments (`no-unnecessary-type-arguments`) equal to their defaults, with angle-preserving removal fixes; imported by `.ts/typed` |
 | `.ts/typed/strict-void-return` | non-void values flowing into void-returning callback contexts, with `allowReturnAny`; imported by `.ts/typed`, diagnostic-only |
+| `.ts/typed/regexp-exec` | non-global string matching policy and fixes (`prefer-regexp-exec`); imported by `.ts/typed` |
+| `.ts/typed/for-in-arrays` | array-like `for-in` policy (`no-for-in-array`); imported by `.ts/typed` |
 | `.ts/typed/promises` | `no-misused-promises` variants: `conditionals`, `predicates` (array callbacks), `spreads`, `void-arguments`, `void-attributes`, `void-inherited-methods`, `void-properties`, `void-returns`, `void-variables`; imported by `.ts/typed`, diagnostic-only |
 | `.ts/enums` | enum transfer policy (`no-unsafe-enum-assignment`) over the `type_flow` fact, imported by `.ts` |
 | `.ts/assertions` | assertion syntax, type-aware assertion and non-null policy, imported by `.ts` and `.ts/style` |

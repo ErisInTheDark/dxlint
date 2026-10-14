@@ -1,0 +1,7 @@
+define {
+in ts_call rule prefer-regexp-exec {
+  when regexp_match_exec_offset != null
+  report at regexp_match_exec_offset
+  warn "Use the `RegExp#exec()` method instead."
+}
+}
