@@ -1,0 +1,6 @@
+input.ts:14:1-16:7 prefer-nullish-coalescing#0
+input.ts:3:1-3:21 prefer-nullish-coalescing#0
+input.ts:4:1-4:19 prefer-nullish-coalescing#0
+input.ts:6:7-6:9 prefer-nullish-coalescing#3
+input.ts:7:7-7:10 prefer-nullish-coalescing#2
+input.ts:8:1-8:19 prefer-nullish-coalescing#0

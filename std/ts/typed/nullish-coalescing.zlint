@@ -109,7 +109,9 @@ fn nullish_information(n) = {
     conditional: nullish_context(n, false),
     boolean: nullish_context(n, true),
     mixed: replacement.kind == "logical" && nullish_mixed(n),
-    offset: if contains(["logical", "assignment"], replacement.kind) then n.operator.offset else n.offset
+    report: if contains(["logical", "assignment"], replacement.kind)
+      then { start: n.operator.offset, end: n.operator.end_offset }
+      else { start: n.offset, end: n.end_offset }
     }
   }
 }
@@ -128,11 +130,12 @@ in nullish_coalescing_expression rule prefer-nullish-coalescing {
   option ignoreUnknown boolean = false "Ignore unknown truthiness"
   let replacement nullish_coalescing
   when replacement != null
-  when !replacement.truthiness || replacement.unknown || replacement.subject could nullable
+  let domain replacement.subject.nullish_type_domains
+  when !replacement.truthiness || replacement.unknown || domain.nullish
   when !(ignoreTernaryTests && replacement.kind == "ternary" || ignoreIfStatements && replacement.kind == "if")
   when !replacement.truthiness || !(ignoreConditionalTests && replacement.conditional || ignoreBooleanCoercion && replacement.boolean || ignoreMixedLogicalExpressions && replacement.mixed)
-  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || replacement.subject could bigint && ignoreBigint || replacement.subject could boolean && ignoreBoolean || replacement.subject could number && ignoreNumber || replacement.subject could string && ignoreString)
-  report at replacement.offset
+  when !replacement.truthiness || !(replacement.unknown && ignoreUnknown || contains(domain.flags, "bigint") && ignoreBigint || contains(domain.flags, "boolean") && ignoreBoolean || contains(domain.flags, "number") && ignoreNumber || contains(domain.flags, "string") && ignoreString)
+  report at replacement.report
   warn if replacement.kind == "ternary" then "Prefer using nullish coalescing operator (`??`) instead of a ternary expression, as it is simpler to read." else if replacement.kind == "if" then "Prefer using nullish coalescing operator (`??=`) instead of an assignment expression, as it is simpler to read." else if replacement.kind == "assignment" then "Prefer using nullish coalescing operator (`??=`) instead of a logical assignment (`||=`), as it is a safer operator." else "Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator."
 }
 

@@ -10,3 +10,5 @@ unknownValue || "fallback";
 const enumConditional = numeric ? numeric : 1;
 const objectFallback = nullableObject || {};
 const explicit = numeric != null ? numeric : 0;
+declare let optionalText: { n?: { a?: string } };
+optionalText.n?.a ? optionalText.n.a : "fallback";

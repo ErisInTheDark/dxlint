@@ -1,1 +1,1 @@
-input.ts:8:18-8:18 prefer-nullish-coalescing#3
+input.ts:8:18-8:20 prefer-nullish-coalescing#3
