@@ -1,7 +1,19 @@
 define {
+
+fn for_in_arraylike_value(handle) = {
+  value index: value_lookup(handle, 0)
+  value length: value_lookup(handle, "length")
+  value any(index.alternatives, alternative => alternative.matched && any(alternative.sources, source =>
+      source.kind == "indexer" && source.domain == "ordinal" || source.kind == "repeated" || source.kind == "ordinal"))
+    && length.value_known && count(length.value) > 0
+    && all(length.value, parts => any(parts, part => contains(part.traits, "number")))
+}
+fn for_in_arraylike(arm) = any(arm.parts, part => contains(part.traits, "object") || contains(part.traits, "structural"))
+  && (for_in_arraylike_value(arm.handle) || any(arm.parts, part => for_in_arraylike_value(part.handle)))
+
 in ts_for_in rule no-for-in-array {
-  report at unparenthesised_node(right.node)
-  when { value right.type_flags.nonempty ?? []; has_only_flags (["array", "tuple", "union", "nullable", "undefined", "null"]) } && contains(right.type_flags, "array")
+  when any(value_parts(right.node), arm => for_in_arraylike(arm))
+  report at { start: offset, end: opener.ts_open_paren.paired_token.end }
   warn "For-in loops over arrays skips holes, returns indices as strings, and may visit the prototype chain or other enumerable properties. Use a more robust iteration method such as for-of or array.forEach instead."
 }
 }
