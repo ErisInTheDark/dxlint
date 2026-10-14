@@ -1,0 +1,1 @@
+interface Promise<T> {} declare const p: Promise<number>; const arrow = () => p; const expression = async function () { return p; }; async function declared() { return p; } const methods = { async method() { return p; }, async constructor() { return p; }, get value() { return p; } }; class C { constructor() { return p; } static async constructor() { return p; } }

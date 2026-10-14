@@ -1,0 +1,10 @@
+input.ts:11:3-11:14 promise-function-async#1
+input.ts:13:1-13:23 promise-function-async#1
+input.ts:14:1-14:19 promise-function-async#1
+input.ts:2:16-2:29 promise-function-async#1
+input.ts:3:34-3:36 promise-function-async#1
+input.ts:4:20-4:29 promise-function-async#1
+input.ts:5:18-5:22 promise-function-async#1
+input.ts:7:3-7:14 promise-function-async#1
+input.ts:8:3-8:17 promise-function-async#1
+input.ts:9:3-9:24 promise-function-async#1
