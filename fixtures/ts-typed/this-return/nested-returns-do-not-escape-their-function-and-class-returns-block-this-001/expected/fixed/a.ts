@@ -1,0 +1,1 @@
+class A { a(): this { function nested() { return new A(); } return this; } b(): this { const self = this; return self; } c(): A { if (ok) return new A(); return this; } d(this: A): A { return this; } }
