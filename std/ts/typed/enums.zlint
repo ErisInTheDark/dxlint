@@ -6,27 +6,33 @@ fn enum_comparison_arm(arm) = {
     else if contains(scalar.traits, "string") then "string" else null
   value {
     known: all(arm, part => part.carrier_known && part.identity_known
-      && !contains(part.uncertain_traits, "enum")),
+      && (!contains(part.uncertain_traits, "enum") || contains(part.traits, "intersection"))),
     enum: if origin == null then null else { file: origin.carrier.file, node: origin.carrier.node },
     primitive: primitive,
     identity: scalar.identity,
+    intersection: any(arm, part => contains(part.traits, "intersection")),
+    wide: origin == null && count(arm) == 1 && primitive != null && scalar.identity == null,
   }
 }
 fn enum_comparison_parts(n) = {
   value parts: value_constituents(n)
-  value if parts == null then null else map(parts, arm => enum_comparison_arm(arm))
+  value if parts == null then null else {
+    value arms: map(parts, arm => enum_comparison_arm(arm))
+    value filter(arms, arm => arm.enum == null
+      || !any(arms, other => other.wide && other.primitive == arm.primitive))
+  }
 }
 fn enum_comparison_kind(parts, primitive) =
   count(parts) > 0 && all(parts, part => part.primitive == primitive)
-fn enum_comparison_wide(parts, other) = any(parts, part => part.enum == null
-  && part.primitive != null && part.identity == null && enum_comparison_kind(other, part.primitive))
 fn enum_comparison_unsafe(left, right) = {
   value enums: map(filter(left, part => part.enum != null), part => part.enum)
   value others: map(filter(right, part => part.enum != null), part => part.enum)
   value shared: any(enums, origin => contains(others, origin))
-    || any(left, part => part.primitive != null && contains(right, part))
-    || enum_comparison_wide(left, right) || enum_comparison_wide(right, left)
-  value left != null && right != null && all(left, part => part.known) && all(right, part => part.known)
+    || any(left, part => part.enum == null && !part.intersection && part.identity != null
+      && any(right, other => other.enum == null && !other.intersection
+        && part.primitive == other.primitive && part.identity == other.identity))
+  value if any(left, part => part.intersection) && any(right, part => part.intersection) then null
+    else left != null && right != null && all(left, part => part.known) && all(right, part => part.known)
     && !shared && (
       any(left, part => part.enum != null && part.primitive != null && enum_comparison_kind(right, part.primitive))
       || any(right, part => part.enum != null && part.primitive != null && enum_comparison_kind(left, part.primitive))

@@ -1,0 +1,9 @@
+input.ts:10:1-10:24 no-unsafe-enum-comparison#0
+input.ts:12:1-12:22 no-unsafe-enum-comparison#0
+input.ts:14:1-14:24 no-unsafe-enum-comparison#0
+input.ts:17:1-17:22 no-unsafe-enum-comparison#0
+input.ts:23:1-23:13 no-unsafe-enum-comparison#0
+input.ts:26:1-26:23 no-unsafe-enum-comparison#0
+input.ts:5:1-5:18 no-unsafe-enum-comparison#0
+input.ts:6:1-6:14 no-unsafe-enum-comparison#0
+input.ts:8:1-8:22 no-unsafe-enum-comparison#0
