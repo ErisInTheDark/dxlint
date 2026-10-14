@@ -1,0 +1,14 @@
+input.ts:11:19-11:20 usage-count#0 3
+input.ts:12:22-12:23 usage-count#0 1
+input.ts:12:45-12:46 usage-count#0 2
+input.ts:1:24-1:25 usage-count#0 1
+input.ts:1:39-1:40 usage-count#0 2
+input.ts:2:27-2:28 usage-count#0 2
+input.ts:3:27-3:28 usage-count#0 1
+input.ts:4:28-4:29 usage-count#0 1
+input.ts:4:39-4:40 usage-count#0 2
+input.ts:5:25-5:26 usage-count#0 1
+input.ts:5:36-5:37 usage-count#0 2
+input.ts:6:25-6:26 usage-count#0 1
+input.ts:7:27-7:28 usage-count#0 1
+input.ts:8:32-8:33 usage-count#0 2
