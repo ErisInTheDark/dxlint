@@ -69,9 +69,6 @@ pub struct LintWorld<'a> {
     ctx: Ctx<'a>,
     evaluation: Cell<*const ()>,
     semantic: crate::grammar::names::semantic::Session,
-    /// A catalogue builder's helper resolving names ahead of it: it must
-    /// not wait for the catalogue it is helping to build.
-    warming: bool,
     /// Name-item conditions being decided, by node and condition.
     conditions: RefCell<Vec<(Target, u32)>>,
 }
@@ -85,7 +82,7 @@ impl<'a> LintWorld<'a> {
         LintWorld {
             linter, path, views: super::arena::Arena::new(linter), files: Default::default(),
             program: Default::default(), snapshot: None, ctx: Ctx { node: ctx.tree.root, ..ctx },
-            evaluation: Cell::new(std::ptr::null()), semantic: Default::default(), warming: false, conditions: Default::default(),
+            evaluation: Cell::new(std::ptr::null()), semantic: Default::default(), conditions: Default::default(),
         }
     }
 
@@ -428,30 +425,13 @@ impl<'a> Files<'a> {
         roots
     }
 
-    /// Loads the program's input units once per run on all threads, and
-    /// resolves the names of those with a node of a kind that can open a
-    /// module scope of the program's ambient classes (the catalogue reads
-    /// their names next). Lint threads otherwise wait on one builder doing
-    /// both in sequence; its sequential pass after this records the reads.
+    /// Loads the program's input units once per run on all threads. Lint
+    /// threads otherwise wait on one builder parsing them in sequence; its
+    /// sequential pass after this records the reads.
     fn prefetch_inputs(self, selected: &Settings, paths: &[PathBuf]) {
         let (Some(snapshot), Known::Yes((program, _))) = (self.0.snapshot, self.program_identity(selected)) else { return };
-        let classes = selected.ambient_scopes;
-        let opens: Vec<bool> = self.0.ctx.grammar.names.kinds.iter().map(|kind| kind.modules.items.iter()
-            .any(|item| matches!(item.action, Action::Scope { classes: opened, .. } if opened & classes != 0))).collect();
         let linter = self.0.linter;
-        snapshot.prefetch(program, || linter.prefetch_units(paths, snapshot, |units| {
-            // Helpers see file 0 as the first input, whose names stay the builder's.
-            let Some(anchor) = paths.first().and_then(|path| linter.unit(path, Some(snapshot))) else { return };
-            let memo = crate::expr::AttrMemo::default();
-            let reindented = RefCell::default();
-            let ctx = linter.tree_ctx(anchor.lang, &anchor.parsed.tree, (&anchor.text, anchor.lines(), &anchor.rel), &memo, &reindented, None);
-            let world = LintWorld { warming: true, ..LintWorld::in_run(linter, &anchor.path, ctx, snapshot) };
-            for unit in units {
-                let tree = &unit.parsed.tree;
-                if unit.path == anchor.path || !tree.order.iter().any(|&node| opens.get(tree.node(node).matcher as usize) == Some(&true)) { continue }
-                if let Some(file) = world.file(&unit.path) { World::names(&Files(&world), file); }
-            }
-        }));
+        snapshot.prefetch(program, || linter.prefetch_units(paths, snapshot, |units| units.for_each(drop)));
     }
 
     fn timed<T>(self, query: &'static str, run: impl FnOnce() -> T) -> T {
@@ -675,10 +655,6 @@ impl<'a> Files<'a> {
     fn catalog(self, selected: &Settings, classes: u64, semantic: &Semantic<'_>) -> Known<Arc<super::program::Catalog>> {
         let key = (selected as *const Settings, classes);
         if let Some(cached) = self.0.program.catalogs.borrow().get(&key) { return Known::Yes(cached.get()) }
-        if self.0.warming {
-            self.0.mark_unknown();
-            return Known::Unknown;
-        }
         let cached = super::reads::Cached::compute(|| {
             let Known::Yes((program, outside)) = self.program_identity(selected) else { return Known::Unknown };
             let key = super::program::CatalogKey { settings: selected as *const Settings as usize, program, outside, classes };
@@ -858,11 +834,11 @@ impl World for Files<'_> {
         }
         self.0.program.modules.borrow_mut().entry(key).or_default().insert(specifier.into(), ModuleAnswer::Busy(revision));
         let resolve = || self.0.asking(semantic, at, || Resolver { host: self, settings: selected }.resolve(ctx.file_id, specifier, &[], semantic.question));
-        // Resolution depends on the importer's path, not its tree, so even
-        // the linted file's imports are shared by path.
-        let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id) {
-            Some(path) => {
-                let question = super::program::StableQuestion::Resolve { path: path.to_owned(), specifier: specifier.into() };
+        // Resolution depends only on the importer's directory (not its tree
+        // or name), so imports are shared by directory, the linted file's too.
+        let answer = super::reads::Cached::compute(|| match World::path(self, ctx.file_id).and_then(Path::parent) {
+            Some(directory) => {
+                let question = super::program::StableQuestion::Resolve { directory: directory.to_owned(), specifier: specifier.into() };
                 let shared = self.shared(question, &mut || match resolve() {
                     Known::Yes(scope) => Known::Yes(scope.into_iter().map(Target::Scope).collect()),
                     Known::Unknown => Known::Unknown,

@@ -292,6 +292,49 @@ pub fn is_file_unrecorded(path: &Path) -> bool {
     file_exists(path)
 }
 
+/// One directory's entries by name, read once: plain files, and names
+/// whose answer needs a real probe (links, entries of unknown type).
+#[derive(Default)]
+pub struct Listing {
+    files: std::collections::HashSet<std::ffi::OsString>,
+    unsure: std::collections::HashSet<std::ffi::OsString>,
+    /// Lowercased names, for case-insensitive file systems.
+    folded: std::collections::HashSet<String>,
+}
+
+/// `dir`'s listing, unrecorded (empty when there is no such directory);
+/// `None` when it cannot be read.
+pub fn list_unrecorded(dir: &Path) -> Option<Listing> {
+    let mut listing = Listing::default();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(listing),
+        Err(_) => return None,
+    };
+    for entry in entries {
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        listing.folded.insert(name.to_string_lossy().to_lowercase());
+        match entry.file_type() {
+            Ok(kind) if kind.is_file() => { listing.files.insert(name); }
+            Ok(kind) if kind.is_dir() => {}
+            _ => { listing.unsure.insert(name); }
+        }
+    }
+    Some(listing)
+}
+
+/// Whether `path` is a file, unrecorded, answered from its directory's
+/// `listing` where that is certain (an exact plain-file name, or no entry
+/// of that name even ignoring case); a real probe otherwise.
+pub fn is_file_listed(path: &Path, listing: &Listing) -> bool {
+    if buffer(path).is_some() { return true }
+    let Some(name) = path.file_name() else { return file_exists(path) };
+    if listing.files.contains(name) { return true }
+    if !listing.unsure.contains(name) && !listing.folded.contains(&name.to_string_lossy().to_lowercase()) { return false }
+    file_exists(path)
+}
+
 pub fn is_file(path: &Path) -> bool {
     let found = file_exists(path);
     note(Dep::IsFile(path.to_path_buf(), found));

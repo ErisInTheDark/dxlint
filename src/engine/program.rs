@@ -214,6 +214,8 @@ pub(super) struct Snapshot {
     prefetched: Mutex<FxHashMap<u64, Arc<std::sync::OnceLock<()>>>>,
     /// Module resolution's file probes and reads, once per path and revision.
     probes: RwLock<FxHashMap<PathBuf, (u64, bool)>>,
+    /// Directory listings behind those probes (`None`: unreadable).
+    listings: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<reads::Listing>>)>>,
     texts: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<str>>, u64)>>,
     /// Metadata parsed from those texts, by text hash (`None`: malformed).
     metadata: RwLock<FxHashMap<PathBuf, (u64, Option<Arc<crate::grammar::names::modules::resolution::Json>>)>>,
@@ -238,8 +240,8 @@ pub(super) enum StableQuestion {
     Global { name: Box<str>, class: u64 },
     /// Every scope merged into module scope `scope` of `path`.
     Scopes { path: PathBuf, scope: u32 },
-    /// The module scope `specifier` names, imported from `path`.
-    Resolve { path: PathBuf, specifier: Box<str> },
+    /// The module scope `specifier` names, imported from a file in `directory`.
+    Resolve { directory: PathBuf, specifier: Box<str> },
     /// Every augmentation of the program's module scopes in `classes`.
     Augmentations { classes: u64 },
 }
@@ -284,7 +286,20 @@ impl Snapshot {
         if let Some(&(at, found)) = self.probes.read().expect("run probes").get(path) {
             if at == revision { return found }
         }
-        let found = reads::is_file_unrecorded(path);
+        // Resolution probes many candidate names per directory: list each
+        // directory once instead of asking the file system per name.
+        let listing = path.parent().and_then(|dir| {
+            if let Some((at, listing)) = self.listings.read().expect("run listings").get(dir) {
+                if *at == revision { return listing.clone() }
+            }
+            let listing = reads::list_unrecorded(dir).map(Arc::new);
+            self.listings.write().expect("run listings").insert(dir.to_owned(), (revision, listing.clone()));
+            listing
+        });
+        let found = match &listing {
+            Some(listing) => reads::is_file_listed(path, listing),
+            None => reads::is_file_unrecorded(path),
+        };
         self.probes.write().expect("run probes").insert(path.to_owned(), (revision, found));
         found
     }
