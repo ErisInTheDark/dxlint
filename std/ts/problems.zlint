@@ -480,11 +480,6 @@ in ts_node let problem_expression_value_used
   else if is (ts_logical.right, ts_conditional.consequent, ts_conditional.alternate) then parent.problem_expression_value_used
   else if is ts_unary.argument && parent.operator == "void" then false
   else true
-in ts_node let problem_assignment_expression
-  if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.problem_assignment_expression
-  else if is ts_assignment.left && parent.flow_destructuring_target != true && parent.left.flow_assignment_scalar == true then parent.node
-  else if is ts_update.argument then parent.node
-  else null
 group code_path_statement ts_block, ts_break, ts_class, ts_continue, ts_debugger, ts_do_while, ts_expression_statement, ts_for_in, ts_for_of, ts_for, ts_if, ts_labeled, ts_return, ts_switch, ts_throw, ts_try, ts_while, ts_with, ts_export, ts_variable_declaration, ts_class_property
 fn problem_unreachable_statement(n) = n not ts_class_property
   && (n not ts_variable_declaration || n.kind != "var" || any(n.declaration.nodes, declaration => declaration.init != null))
@@ -609,7 +604,6 @@ in ts_identifier rule no-useless-assignment {
   when declaration != null && declaration.exported != true && !problem_in_try
   when name_write_owner != null || is ts_declarator.name && parent.init != null
   when declaration.scoping_binding_execution_scope.id != null && declaration.scoping_binding_execution_scope.id == scoping_execution_scope.id
-  when problem_assignment_expression == null || problem_assignment_expression.problem_expression_value_used != true
   when !declaration.problem_assignment_export_read && flow_has_reads(declaration.node) == true && flow_value_used(node) == false
   warn "The value assigned to '{text}' is not used in subsequent statements."
 }
