@@ -469,7 +469,9 @@ in ts_method let problem_super_calls {
 in ts_node let problem_in_try
   if is (ts_program, ts_function, ts_arrow, ts_method, ts_static_block) then false
   else if is ts_try.block then true else parent.problem_in_try
-in ts_node let problem_assignment_export_read any(references, reference => reference is ts_export_specifier.local)
+in ts_node let problem_assignment_export_read
+  any(references, reference => reference is ts_export_specifier.local)
+  || ts_usage_global(ts_usage_binding, scoping_program) && contains(ts_exported_names(scoping_program), identifier_name)
 in ts_node let problem_expression_value_used
   if parent == null || is (ts_expression_statement.expression, ts_for.init, ts_for.update) then false
   else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression, ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.problem_expression_value_used
