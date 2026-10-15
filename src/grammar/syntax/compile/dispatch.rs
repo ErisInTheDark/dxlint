@@ -7,13 +7,22 @@ struct Bucket {
     text: FxHashMap<String, Vec<usize>>,
 }
 
+/// An arm in a candidate list. `dispatched`: its FIRST set put it in this
+/// list (plain current-goal tokens), so the head token already proves it can
+/// start; fallback arms still need their start check.
+#[derive(Clone, Copy)]
+pub(crate) struct Candidate {
+    pub index: usize,
+    pub dispatched: bool,
+}
+
 /// Candidate arms per head token. Each distinct candidate list has an id, so
 /// a dispatch that failed one arm resumes in the same list without reading
 /// the head again.
 pub(crate) struct Dispatch {
     buckets: Vec<(u32, FxHashMap<String, u32>)>,
     fallback: u32,
-    lists: Vec<Box<[usize]>>,
+    lists: Vec<Box<[Candidate]>>,
 }
 
 impl Dispatch {
@@ -26,7 +35,7 @@ impl Dispatch {
         texts.get(text).copied().unwrap_or(*any)
     }
 
-    pub fn list(&self, id: u32) -> &[usize] { &self.lists[id as usize] }
+    pub fn list(&self, id: u32) -> &[Candidate] { &self.lists[id as usize] }
 }
 
 pub(super) fn compile(program: &Program, items: &[usize]) -> Dispatch {
@@ -51,8 +60,9 @@ pub(super) fn compile(program: &Program, items: &[usize]) -> Dispatch {
             }
         }
     }
-    let mut lists = vec![fallback.clone().into_boxed_slice()];
-    let mut add = |list: Vec<usize>| { lists.push(list.into_boxed_slice()); (lists.len() - 1) as u32 };
+    let candidate = |index: usize| Candidate { index, dispatched: !fallback.contains(&index) };
+    let mut lists = vec![fallback.iter().map(|&index| candidate(index)).collect::<Box<[_]>>()];
+    let mut add = |list: Vec<usize>| { lists.push(list.into_iter().map(candidate).collect()); (lists.len() - 1) as u32 };
     let buckets = buckets.into_iter().map(|mut bucket| {
         bucket.any.extend(&fallback);
         bucket.any.sort_unstable();

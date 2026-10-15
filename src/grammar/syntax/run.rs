@@ -44,7 +44,7 @@ struct Matched {
     end: u32,
     values: Values,
     fields: Fields,
-    receipt: Option<usize>,
+    receipt: Option<u32>,
     cut: bool,
 }
 
@@ -64,7 +64,7 @@ struct Draft {
 enum Receipt {
     Token(TokenSpan, Option<TriviaSpan>),
     Trivia(TriviaSpan),
-    Join(usize, usize),
+    Join(u32, u32),
 }
 
 #[derive(Clone)]
@@ -226,7 +226,7 @@ impl<'a> Run<'a> {
         if matched.values.len() != 1 {
             return Err(error(matched.end, "one root node"));
         }
-        let root = *matched.values.first().expect("one root value");
+        let root = self.scratch.values.first(matched.values).expect("one root value");
         if self.scratch.drafts[root as usize].kind.is_none() {
             return Err(error(0, "a declared root node"));
         }
@@ -238,7 +238,7 @@ impl<'a> Run<'a> {
             let mut trivia = Vec::new();
             let mut pending: Vec<_> = matched.receipt.into_iter().collect();
             while let Some(id) = pending.pop() {
-                match &self.scratch.receipts[id] {
+                match &self.scratch.receipts[id as usize] {
                     Receipt::Token(token, gap) => {
                         if let Some(gap) = gap { trivia.push(gap.clone()); }
                         tokens.push(token.clone());
@@ -252,13 +252,13 @@ impl<'a> Run<'a> {
         Ok(Parsed { nodes, root, tokens, trivia })
     }
 
-    fn receipt(&mut self, receipt: Receipt) -> usize {
-        let id = self.scratch.receipts.len();
+    fn receipt(&mut self, receipt: Receipt) -> u32 {
+        let id = u32::try_from(self.scratch.receipts.len()).expect("receipts fit u32 ids");
         self.scratch.receipts.push(receipt);
         id
     }
 
-    fn join(&mut self, receipts: impl IntoIterator<Item = Option<usize>>) -> Option<usize> {
+    fn join(&mut self, receipts: impl IntoIterator<Item = Option<u32>>) -> Option<u32> {
         let mut joined = None;
         for next in receipts.into_iter().flatten() {
             joined = Some(match joined {
@@ -467,10 +467,10 @@ impl<'a> Run<'a> {
     fn field_path(&self, fields: Fields, path: &[u16]) -> Option<&Draft> {
         let (first, rest) = path.split_first()?;
         let (_, values) = self.scratch.fields.reversed(fields).find(|(field, _)| field == first)?;
-        let mut draft = self.scratch.drafts.get(*values.first()? as usize)?;
+        let mut draft = self.scratch.drafts.get(self.scratch.values.first(values)? as usize)?;
         for component in rest {
             let (_, values) = self.scratch.fields.reversed(draft.fields).filter(|(field, _)| field == component).last()?;
-            draft = self.scratch.drafts.get(*values.first()? as usize)?;
+            draft = self.scratch.drafts.get(self.scratch.values.first(values)? as usize)?;
         }
         Some(draft)
     }

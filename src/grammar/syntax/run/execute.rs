@@ -82,12 +82,18 @@ impl Cursor {
         Self { head, list, next: 0 }
     }
 
-    /// The next candidate whose arm (`arm(index)`, `None` when ruled out) can start at `pos`.
+    /// The next candidate whose arm (`arm(index)`, `None` when ruled out) can
+    /// start at `pos`. Dispatched arms skip the start check the head token
+    /// already answered, except while diagnosing (failure reports stay as
+    /// they were).
     fn find(&mut self, run: &mut Run<'_>, dispatch: &Dispatch, pos: u32, context: Context, arm: impl Fn(usize) -> Option<usize>) -> Option<usize> {
         let list = dispatch.list(self.list);
-        while let Some(&index) = list.get(self.next) {
+        while let Some(candidate) = list.get(self.next) {
             self.next += 1;
-            if arm(index).is_some_and(|expression| run.starts_at(expression, pos, context, &self.head)) { return Some(index); }
+            let Some(expression) = arm(candidate.index) else { continue };
+            if (candidate.dispatched && !run.diagnose) || run.starts_at(expression, pos, context, &self.head) {
+                return Some(candidate.index);
+            }
         }
         None
     }
@@ -187,8 +193,8 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                     Instruction::Reuse(capture) => {
                         let found = run.scratch.fields.reversed(input.scope).find(|(field, _)| *field == capture);
                         match found {
-                            Some((_, values)) => Next::Return(Ok(Matched { start: values.first()
-                                .map(|value| run.scratch.drafts[*value as usize].start), values, ..Matched::empty(input.pos) })),
+                            Some((_, values)) => Next::Return(Ok(Matched { start: run.scratch.values.first(values)
+                                .map(|value| run.scratch.drafts[value as usize].start), values, ..Matched::empty(input.pos) })),
                             None => Next::Return(Err(run.fail(input.pos, "private capture"))),
                         }
                     }
@@ -243,8 +249,7 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
                     State::Memo(key) => Next::Return(memo::finish(run, key, answer)),
                     State::Sequence { items, next, mut matched, mut scope } => match answer {
                         Ok(child) => {
-                            run.scratch.fields.append(&mut scope, child.fields);
-                            run.append(&mut matched, child);
+                            sequence_step(run, &mut scope, &mut matched, child);
                             if next == items.len { Next::Return(Ok(matched)) }
                             else {
                                 let child = input.child(program.instructions.operands[items.start + next], matched.end, input.power, scope);
@@ -350,6 +355,16 @@ pub(super) fn evaluate(run: &mut Run<'_>, input: Input) -> Answer {
     answer
 }
 
+/// A sequence item's answer added to the sequence's match and to the scope
+/// later items see. While the scope is the match's own fields, both stay one
+/// shared list instead of joining the item twice.
+fn sequence_step(run: &mut Run<'_>, scope: &mut Fields, matched: &mut Matched, child: Matched) {
+    let shared = *scope == matched.fields;
+    let fields = child.fields;
+    run.append(matched, child);
+    if shared { *scope = matched.fields; } else { run.scratch.fields.append(scope, fields); }
+}
+
 /// A leaf's actions applied to its answer, as its `Actions` frame would.
 fn apply_actions(run: &mut Run<'_>, input: Input, actions: Span, mut answer: Answer) -> Answer {
     for action in &run.program.instructions.actions[actions.start..actions.end()] {
@@ -427,10 +442,7 @@ fn inline(run: &mut Run<'_>, outer: Input) -> Answer {
             let mut failed = None;
             for &item in &program.instructions.operands[items.start..items.end()] {
                 match inline(run, input.child(item, matched.end, input.power, scope)) {
-                    Ok(child) => {
-                        run.scratch.fields.append(&mut scope, child.fields);
-                        run.append(&mut matched, child);
-                    }
+                    Ok(child) => sequence_step(run, &mut scope, &mut matched, child),
                     Err(mut failure) => {
                         failure.committed |= matched.cut;
                         failed = Some(failure);

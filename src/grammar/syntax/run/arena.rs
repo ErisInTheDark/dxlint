@@ -1,26 +1,38 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use std::marker::PhantomData;
+
+/// Entry id meaning "none".
+const NONE: u32 = u32::MAX;
+
+/// A list handle: ids into its [`Chain`], copied freely (12 bytes).
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct List<T: Copy> {
-    last: Option<usize>,
-    first: Option<T>,
-    len: usize,
+    last: u32,
+    first: u32,
+    len: u32,
+    marker: PhantomData<T>,
 }
 
+impl<T: Copy> Clone for List<T> {
+    fn clone(&self) -> Self { *self }
+}
+
+impl<T: Copy> Copy for List<T> {}
+
 impl<T: Copy> Default for List<T> {
-    fn default() -> Self { Self { last: None, first: None, len: 0 } }
+    fn default() -> Self { Self { last: NONE, first: NONE, len: 0, marker: PhantomData } }
 }
 
 impl<T: Copy> List<T> {
-    pub fn is_empty(self) -> bool { self.last.is_none() }
-    pub fn len(self) -> usize { self.len }
-    pub fn first(&self) -> Option<&T> { self.first.as_ref() }
+    pub fn is_empty(self) -> bool { self.last == NONE }
+    pub fn len(self) -> usize { self.len as usize }
 }
 
 /// Entries are never changed once written, so lists (memo answers, sibling
 /// branches) share them freely. A join stands for one list followed by
 /// another without copying either.
 enum Entry<T: Copy> {
-    Item { previous: Option<usize>, value: T },
-    Join { left: usize, right: usize },
+    Item { previous: u32, value: T },
+    Join { left: u32, right: u32 },
 }
 
 pub(super) struct Chain<T: Copy> {
@@ -40,10 +52,15 @@ impl<T: Copy> Chain<T> {
 
     pub fn len(&self) -> usize { self.entries.len() }
 
+    fn next_id(&self) -> u32 {
+        u32::try_from(self.entries.len()).ok().filter(|&id| id != NONE).expect("list entries fit u32 ids")
+    }
+
     pub fn push(&mut self, list: &mut List<T>, value: T) {
-        let last = self.entries.len();
+        let id = self.next_id();
         self.entries.push(Entry::Item { previous: list.last, value });
-        *list = List { last: Some(last), first: list.first.or(Some(value)), len: list.len + 1 };
+        let first = if list.is_empty() { id } else { list.first };
+        *list = List { last: id, first, len: list.len + 1, marker: PhantomData };
     }
 
     pub fn single(&mut self, value: T) -> List<T> {
@@ -52,15 +69,21 @@ impl<T: Copy> Chain<T> {
         list
     }
 
+    /// The first value of `list`.
+    pub fn first(&self, list: List<T>) -> Option<T> {
+        match self.entries.get(list.first as usize)? {
+            Entry::Item { value, .. } => Some(*value),
+            Entry::Join { .. } => unreachable!("a list's first entry is an item"),
+        }
+    }
+
     /// `list` followed by `next`, in constant time.
     pub fn append(&mut self, list: &mut List<T>, next: List<T>) {
-        let (Some(left), Some(right)) = (list.last, next.last) else {
-            if list.is_empty() { *list = next; }
-            return;
-        };
-        let join = self.entries.len();
-        self.entries.push(Entry::Join { left, right });
-        *list = List { last: Some(join), first: list.first, len: list.len + next.len };
+        if next.is_empty() { return; }
+        if list.is_empty() { *list = next; return; }
+        let join = self.next_id();
+        self.entries.push(Entry::Join { left: list.last, right: next.last });
+        *list = List { last: join, first: list.first, len: list.len + next.len, marker: PhantomData };
     }
 
     pub fn filter(&mut self, list: List<T>, keep: impl Fn(T) -> bool) -> List<T> {
@@ -97,13 +120,13 @@ impl<T: Copy> Chain<T> {
 /// Pending left halves of joins: a few inline, deeper ones spilled.
 #[derive(Default)]
 struct Stack {
-    inline: [usize; 8],
+    inline: [u32; 8],
     len: usize,
-    spilled: Vec<usize>,
+    spilled: Vec<u32>,
 }
 
 impl Stack {
-    fn push(&mut self, id: usize) {
+    fn push(&mut self, id: u32) {
         if self.len < self.inline.len() && self.spilled.is_empty() {
             self.inline[self.len] = id;
             self.len += 1;
@@ -112,7 +135,7 @@ impl Stack {
         }
     }
 
-    fn pop(&mut self) -> Option<usize> {
+    fn pop(&mut self) -> Option<u32> {
         if let Some(id) = self.spilled.pop() { return Some(id) }
         self.len = self.len.checked_sub(1)?;
         Some(self.inline[self.len])
@@ -121,7 +144,7 @@ impl Stack {
 
 pub(super) struct Reversed<'a, T: Copy> {
     chain: &'a Chain<T>,
-    at: Option<usize>,
+    at: u32,
     stack: Stack,
 }
 
@@ -130,18 +153,18 @@ impl<T: Copy> Iterator for Reversed<'_, T> {
 
     fn next(&mut self) -> Option<T> {
         loop {
-            let id = match self.at.take() {
-                Some(id) => id,
-                None => self.stack.pop()?,
+            let id = match std::mem::replace(&mut self.at, NONE) {
+                NONE => self.stack.pop()?,
+                id => id,
             };
-            match self.chain.entries[id] {
+            match self.chain.entries[id as usize] {
                 Entry::Item { previous, value } => {
                     self.at = previous;
                     return Some(value);
                 }
                 Entry::Join { left, right } => {
                     self.stack.push(left);
-                    self.at = Some(right);
+                    self.at = right;
                 }
             }
         }
@@ -168,6 +191,10 @@ mod tests {
         assert_eq!(chain.ordered(right), [7, 17]);
         assert_eq!(chain.ordered(next), [11, 13]);
         assert_eq!(chain.ordered(filtered), [7, 13]);
+        assert_eq!(chain.first(left), Some(7));
+        assert_eq!(chain.first(next), Some(11));
+        assert_eq!(chain.first(filtered), Some(7));
+        assert_eq!(chain.first(List::default()), None);
     }
 
     #[test]
@@ -185,5 +212,6 @@ mod tests {
         assert_eq!(chain.ordered(whole), (0..100).collect::<Vec<_>>());
         assert_eq!(chain.ordered(pushed), (0..=100).collect::<Vec<_>>());
         assert_eq!(whole.len(), 100);
+        assert_eq!(chain.first(pushed), Some(0));
     }
 }
