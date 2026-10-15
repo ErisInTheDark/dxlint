@@ -8,8 +8,9 @@ use crate::vm::{self, Begin, KindSet, VExpr, V};
 /// A `let` attribute: its expression on each layer that defines it.
 pub struct Attr {
     pub name: String,
-    /// Specificity order, resolved by the config compiler.
-    pub defs: Vec<(u32, CExpr)>,
+    /// `(layer, body, body id)` in specificity order, resolved by the config
+    /// compiler; definitions with one body id hold the same compiled body.
+    pub defs: Vec<(u32, CExpr, u32)>,
 }
 
 pub struct Attributes {
@@ -76,23 +77,35 @@ impl Attributes {
             by_attr[attr as usize].push((matcher, index, label));
         }
         let semantic = semantic_attributes(&attrs, &grammar.functions);
-        let attrs = attrs.into_iter().zip(by_attr).enumerate().map(|(index, (mut attr, forwards))| {
-            let mut lowered = Vec::new();
-            attr.defs.retain(|(_, expr)| {
-                let body = vm::lower(expr, &grammar.functions, &mut values);
-                let errors = values.take_lowering_errors(&format!("attribute `{}`", attr.name));
-                if !errors.is_empty() {
-                    lowering_errors.extend(errors.into_iter().map(|error| (attr.name.clone(), error)));
-                    return false;
-                }
-                lowered.push(if semantic[index] { Lowered::Semantic(body) }
-                    else if body.is_direct() { Lowered::Direct(body) } else { Lowered::Cached(body) });
-                true
-            });
+        let attrs = attrs.into_iter().zip(by_attr).enumerate().map(|(index, (attr, forwards))| {
+            // Each distinct body is lowered once; definitions route to it.
+            let (mut bodies, mut lowered, mut body_ids, mut failed) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            let mut defs: Vec<(u32, u32)> = Vec::new();
+            for (matcher, expr, body) in attr.defs {
+                if failed.contains(&body) { continue }
+                let unique = match body_ids.iter().position(|&known| known == body) {
+                    Some(unique) => unique,
+                    None => {
+                        let lowered_body = vm::lower(&expr, &grammar.functions, &mut values);
+                        let errors = values.take_lowering_errors(&format!("attribute `{}`", attr.name));
+                        if !errors.is_empty() {
+                            lowering_errors.extend(errors.into_iter().map(|error| (attr.name.clone(), error)));
+                            failed.push(body);
+                            continue;
+                        }
+                        lowered.push(if semantic[index] { Lowered::Semantic(lowered_body) }
+                            else if lowered_body.is_direct() { Lowered::Direct(lowered_body) } else { Lowered::Cached(lowered_body) });
+                        bodies.push(expr);
+                        body_ids.push(body);
+                        bodies.len() - 1
+                    }
+                };
+                defs.push((matcher, unique as u32));
+            }
             let mut routes = Vec::new();
-            if !attr.defs.is_empty() || !forwards.is_empty() {
+            if !defs.is_empty() || !forwards.is_empty() {
                 let mut definitions = vec![u32::MAX; grammar.matchers.len()];
-                for (index, (matcher, _)) in attr.defs.iter().enumerate() {
+                for (index, (matcher, _)) in defs.iter().enumerate() {
                     definitions[*matcher as usize] = definitions[*matcher as usize].min(index as u32);
                 }
                 let mut forwarding = vec![None; grammar.matchers.len()];
@@ -101,7 +114,7 @@ impl Attributes {
                 }
                 routes = ancestors.iter().map(|chain| {
                     let definition = chain.iter().map(|&id| definitions[id]).min().unwrap_or(u32::MAX);
-                    if definition != u32::MAX { return Route::Defined(definition, NO_SLOT); }
+                    if definition != u32::MAX { return Route::Defined(defs[definition as usize].1, NO_SLOT); }
                     // Forwards keep declaration order, not nearest-ancestor order.
                     chain.iter().filter_map(|&id| forwarding[id]).min_by_key(|(index, _)| *index)
                         .map_or(Route::Missing, |(_, label)| Route::Forward(label))
@@ -109,7 +122,7 @@ impl Attributes {
             }
             CompiledAttr {
                 name: attr.name,
-                defs: attr.defs.into_iter().map(|(_, expr)| expr).collect(),
+                defs: bodies,
                 lowered,
                 routes,
             }
@@ -174,35 +187,52 @@ impl Attributes {
     }
 }
 
+/// Which attributes ask semantic questions, directly or through the
+/// attributes and `fn`s they read: one walk records each body's direct
+/// questions and reads, then askers spread to their readers.
 fn semantic_attributes(attrs: &[Attr], functions: &[crate::grammar::UserFn]) -> Vec<bool> {
-    fn asks(expr: &CExpr, attrs: &[bool], functions: &[bool]) -> bool {
-        let mut found = match expr {
-            CExpr::Trait(..) | CExpr::QueryCall(..) => true,
-            CExpr::Attr(id) | CExpr::FieldAttr(_, id) | CExpr::ParentAttr(id) => attrs[*id as usize],
-            CExpr::UserCall(id, _) => functions[*id as usize],
-            _ => false,
-        };
-        expr.for_each_child(&mut |child| found |= asks(child, attrs, functions));
-        found
+    struct Graph {
+        attrs: usize,
+        asks: Vec<bool>,
+        readers: Vec<Vec<usize>>,
     }
-    let mut attr_queries = vec![false; attrs.len()];
-    let mut function_queries = vec![false; functions.len()];
-    loop {
-        let mut changed = false;
-        for (index, function) in functions.iter().enumerate() {
-            if !function_queries[index] && function.body.get().is_some_and(|body| asks(body, &attr_queries, &function_queries)) {
-                function_queries[index] = true;
-                changed = true;
+    impl Graph {
+        fn scan(&mut self, expr: &CExpr, reader: usize) {
+            match expr {
+                CExpr::Trait(..) | CExpr::QueryCall(..) => self.asks[reader] = true,
+                CExpr::Attr(id) | CExpr::FieldAttr(_, id) | CExpr::ParentAttr(id) => self.readers[*id as usize].push(reader),
+                CExpr::UserCall(id, _) => self.readers[self.attrs + *id as usize].push(reader),
+                _ => {}
+            }
+            expr.for_each_child(&mut |child| self.scan(child, reader));
+        }
+    }
+    let nodes = attrs.len() + functions.len();
+    let mut graph = Graph { attrs: attrs.len(), asks: vec![false; nodes], readers: vec![Vec::new(); nodes] };
+    for (index, attr) in attrs.iter().enumerate() {
+        let mut scanned = Vec::new();
+        for (_, body, id) in &attr.defs {
+            if !scanned.contains(id) {
+                scanned.push(*id);
+                graph.scan(body, index);
             }
         }
-        for (index, attr) in attrs.iter().enumerate() {
-            if !attr_queries[index] && attr.defs.iter().any(|(_, body)| asks(body, &attr_queries, &function_queries)) {
-                attr_queries[index] = true;
-                changed = true;
+    }
+    for (index, function) in functions.iter().enumerate() {
+        if let Some(body) = function.body.get() { graph.scan(body, attrs.len() + index); }
+    }
+    let Graph { mut asks, readers, .. } = graph;
+    let mut pending: Vec<usize> = (0..nodes).filter(|&node| asks[node]).collect();
+    while let Some(node) = pending.pop() {
+        for &reader in &readers[node] {
+            if !asks[reader] {
+                asks[reader] = true;
+                pending.push(reader);
             }
         }
-        if !changed { return attr_queries; }
     }
+    asks.truncate(attrs.len());
+    asks
 }
 
 /// Which kinds each attribute can be read on ([`Attributes::shape_records`]).
@@ -694,8 +724,8 @@ mod tests {
             (fact, g.matcher(kind).unwrap())
         }).collect();
         let argument = front.labels[crate::native::ts::kinds::Field::Arg as usize];
-        let yield_fact = super::super::facts::fact("precision_lost").unwrap();
-        vm::lower(&CExpr::Fact(yield_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
+        let field_fact = super::super::facts::fact("resolved").unwrap();
+        vm::lower(&CExpr::Fact(field_fact, super::super::FactOf::Field(argument)), &g.functions, &mut attrs.values);
         let memo = AttrMemo::default();
         let lines = crate::line_index::LineIndex::new(source);
         let reindented = std::cell::RefCell::default();
@@ -730,7 +760,7 @@ mod tests {
         }
         let call = tree.order.iter().copied().find(|&node| tree.node(node).matcher == g.matcher("ts_call").unwrap()).unwrap();
         let on = Ctx { node: call, ..ctx };
-        for fact in [yield_fact, super::super::facts::fact("token_texts").unwrap()] {
+        for fact in [field_fact, super::super::facts::fact("token_texts").unwrap()] {
             let of = super::super::FactOf::Field(argument);
             let expected = on.fact_value(fact, None, of);
             assert!(matches!(&expected, Value::List(items) if items.len() == 2), "field reads keep one fact result per argument");
@@ -747,8 +777,8 @@ mod tests {
         let leaf = g.matcher("leaf").unwrap();
         let other = g.matcher("other").unwrap();
         let plan = Attributes::new(vec![
-            Attr { name: "specific".into(), defs: vec![(member, number(2.0)), (base, number(1.0))] },
-            Attr { name: "fallback".into(), defs: vec![(base, number(3.0))] },
+            Attr { name: "specific".into(), defs: vec![(member, number(2.0), 1), (base, number(1.0), 2)] },
+            Attr { name: "fallback".into(), defs: vec![(base, number(3.0), 3)] },
         ], &[(leaf, 0, 0), (leaf, 1, 0)], &g);
         let read = |attr| match plan.route(leaf, attr) {
             Route::Defined(index, _) => match &plan.attrs[attr as usize].defs[index as usize] {
@@ -772,9 +802,9 @@ mod tests {
         let leaf = g.matcher("leaf").unwrap();
         let other = g.matcher("other").unwrap();
         let mut plan = Attributes::new(vec![
-            Attr { name: "read".into(), defs: vec![(base, number(1.0))] },
-            Attr { name: "unread".into(), defs: vec![(base, number(2.0))] },
-            Attr { name: "chained".into(), defs: vec![(base, CExpr::Attr(0))] },
+            Attr { name: "read".into(), defs: vec![(base, number(1.0), 1)] },
+            Attr { name: "unread".into(), defs: vec![(base, number(2.0), 2)] },
+            Attr { name: "chained".into(), defs: vec![(base, CExpr::Attr(0), 3)] },
         ], &[], &g);
         let mut on_leaf = KindSet::empty(g.matchers.len());
         on_leaf.insert(leaf);

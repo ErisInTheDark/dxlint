@@ -1,0 +1,17 @@
+import .ts
+# Lines inside `each ... { }` run per item and see it; `let`s and `when`s
+# outside run once per node. `@many` is local to the rule.
+in ts_call rule long-arguments {
+  let total count(argument.nodes)
+  let size when {
+    total > 2 then "many"
+    else then "few"
+  }
+  @macro many total > 1
+  when @many
+  each item in argument.nodes {
+    let spelled "{item}"
+    when utf16_len(spelled) > 2
+    warn "argument {spelled} of {total} ({size})"
+  }
+}

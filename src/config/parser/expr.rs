@@ -22,6 +22,11 @@ impl Parser<'_> {
             let span = t.span.to(other.span);
             return Some(Expr { kind: ExprKind::If(Box::new(cond), Box::new(then), Box::new(other)), span });
         }
+        if t.is_ident("when") && self.ts.peek_raw(1).is_some_and(|next| next.kind == Tk::LBrace) {
+            self.ts.next_raw();
+            self.ts.next_raw();
+            return self.when_arms(t.span);
+        }
         let lhs = self.e_or()?;
         if self.op_peek() == Some(Tk::Nullish) {
             self.spaced_op();
@@ -30,6 +35,44 @@ impl Parser<'_> {
             return Some(Expr { kind: ExprKind::Nullish(Box::new(lhs), Box::new(rhs)), span });
         }
         Some(lhs)
+    }
+
+    /// `when { a then x; b then y; else then z }` after its `{`: the first
+    /// true arm's value; null when none is true and there is no `else`.
+    fn when_arms(&mut self, start: Span) -> Option<Expr> {
+        let mut arms = Vec::new();
+        let mut otherwise = None;
+        loop {
+            self.skip(true, true);
+            let Some(t) = self.ts.peek_raw(0).cloned() else {
+                self.errors.push(ConfigError::new(start, "unclosed `when { ... }`"));
+                return None;
+            };
+            if t.kind == Tk::RBrace {
+                self.ts.next_raw();
+                break;
+            }
+            if otherwise.is_some() {
+                self.errors.push(ConfigError::new(t.span, "`else then` is the last arm of a `when { ... }`"));
+                return None;
+            }
+            if t.is_ident("else") {
+                self.ts.next_raw();
+                self.expect_kw("then")?;
+                otherwise = Some(self.expr()?);
+                continue;
+            }
+            let condition = self.expr()?;
+            self.expect_kw("then")?;
+            arms.push((condition, self.expr()?));
+        }
+        let end = self.ts.last_span.unwrap_or(start);
+        let mut value = otherwise.unwrap_or(Expr { kind: ExprKind::Null, span: end });
+        for (condition, then) in arms.into_iter().rev() {
+            let span = condition.span.to(value.span);
+            value = Expr { kind: ExprKind::If(Box::new(condition), Box::new(then), Box::new(value)), span };
+        }
+        Some(Expr { span: start.to(end), ..value })
     }
 
     fn expect_kw(&mut self, kw: &str) -> Option<()> {

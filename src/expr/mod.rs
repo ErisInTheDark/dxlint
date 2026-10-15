@@ -488,6 +488,9 @@ pub struct Scope<'a> {
     /// Set when the parameter at this depth is read: which `when`s depend on
     /// a rule's `each` item.
     pub param_read: Option<(u16, &'a std::cell::Cell<bool>)>,
+    /// `let`s of a rule's `each` block: each read means its expression, as
+    /// if written there; the flag says whether it reads the item.
+    pub inlined: Vec<(String, CExpr, bool)>,
 }
 
 /// How the compiler read a name: what hover, go to definition and
@@ -549,7 +552,17 @@ impl<'a> Scope<'a> {
             uses: None,
             layer_reads: None,
             param_read: None,
+            inlined: Vec::new(),
         }
+    }
+
+    /// An `each` block `let` by name, marking the item read when it reads it.
+    fn inlined(&self, name: &str) -> Option<CExpr> {
+        let (_, value, reads_item) = self.inlined.iter().rev().find(|(inlined, ..)| inlined == name)?;
+        if *reads_item {
+            if let Some((_, read)) = self.param_read { read.set(true) }
+        }
+        Some(value.clone())
     }
 
     /// For a `fn`'s body: its parameters and constants only.
@@ -1231,7 +1244,9 @@ impl Scope<'_> {
         // Values holding records: lambda parameters, options and `let`s;
         // `.key` reads into them.
         let rule = || self.rule.unwrap_or_default().to_string();
-        let value = if let Some(i) = self.params.iter().rposition(|p| *p == first.text) {
+        let value = if let Some(inlined) = self.inlined(&first.text) {
+            Some(inlined)
+        } else if let Some(i) = self.params.iter().rposition(|p| *p == first.text) {
             if let Some((_, read)) = self.param_read.filter(|(watched, _)| *watched as usize == i) {
                 read.set(true);
             }
@@ -1319,6 +1334,9 @@ impl Scope<'_> {
         match path {
             [name] => {
                 let rule = || self.rule.unwrap_or_default().to_string();
+                if let Some(inlined) = self.inlined(&name.text) {
+                    return Some(inlined);
+                }
                 if let Some(i) = self.locals.iter().position(|l| *l == name.text) {
                     self.note(name.span, Resolved::Local(rule(), name.text.clone()));
                     return Some(CExpr::Local(i as u16));

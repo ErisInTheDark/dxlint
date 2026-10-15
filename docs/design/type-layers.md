@@ -96,8 +96,9 @@ struct, signature or literal type is the type; nothing is constructed.
 | `unwraps a \| b` | one of them (could be either) |
 | `unwraps a & b` | both at once (TS intersections) |
 | `unwraps \| ...types` / `unwraps & ...types` | spread a list with that operator |
-| `unwraps from x at key` | the member `key` of what `x` unwraps to, found in that node's scope; `at 0` for positions |
+| `unwraps from x at key` / `unwraps x.[key]` | the member `key` of what `x` unwraps to, found in that node's scope; `at 0` / `.[0]` for positions |
 | `unwraps !x` | not `x` (truth unwraps only) |
+| `unwraps x \ t, ...` | `x` without values of these traits (`excludes t, ... from x`); tightest after `.[k]` and `!`, then `&`, `\|`, `??` |
 | `excludes t, ... [from x]` / `includes v [from x]` / `has key [from x]` | under `truthy`: `x`'s alternatives with none of these traits (each excludes alone) / that `v` could be (`===`, `instanceof`) / with that member (`in`) |
 | `unwraps maybe <effect> ...` | the effect may happen, or the node completes normally (calls that may throw) |
 | `through` | in a node reached by unwrapping a reference, that reference |

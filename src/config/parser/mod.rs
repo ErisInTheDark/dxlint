@@ -78,6 +78,10 @@ pub struct Parser<'a> {
     expr_depth: usize,
     /// Set by `override`: the next definition replaces an existing one.
     overriding: Option<Span>,
+    /// Inside a rule's `each ... { }` block: `let`s and `when`s are per item.
+    item_block: bool,
+    /// Macros the current rule block defined, removed when it closes.
+    local_macros: Vec<Rc<str>>,
     /// Inside `define { ... }`: rules are defined but off.
     defining: usize,
     /// Conditions of the `when cond { ... }` blocks around the current item.
@@ -95,6 +99,8 @@ impl<'a> Parser<'a> {
             config: Config::default(),
             expr_depth: 0,
             overriding: None,
+            item_block: false,
+            local_macros: Vec::new(),
             defining: 0,
             conditions: Vec::new(),
         }
@@ -291,7 +297,7 @@ impl<'a> Parser<'a> {
         let before = self.errors.len();
         match (t.kind, &*t.text) {
             (Tk::Ident, "import") => self.import(),
-            (Tk::Ident, "@macro") => self.macro_def(),
+            (Tk::Ident, "@macro") => { self.macro_def(); }
             (Tk::Ident, "macro") => {
                 // Still defines it, so its calls do not cascade.
                 self.errors.push(ConfigError::new(t.span, "macros are defined with `@macro`").note("`@macro name { ... }`, called as `@name`"));
@@ -795,10 +801,10 @@ impl<'a> Parser<'a> {
         if leading {
             self.ts.next_raw();
         }
-        let mut parts = vec![self.unwrap_unary()?];
+        let mut parts = vec![self.unwrap_difference()?];
         while self.on_line(Tk::Amp) {
             self.ts.next_raw();
-            parts.push(self.unwrap_unary()?);
+            parts.push(self.unwrap_difference()?);
         }
         if parts.len() == 1 && !leading {
             return parts.pop();
@@ -811,12 +817,41 @@ impl<'a> Parser<'a> {
         Some(Unwrap::Intersection(parts))
     }
 
+    /// `a \ nullish, falsy`: `a` without values of those traits (as
+    /// `excludes nullish, falsy from a`); binds tighter than `&`.
+    fn unwrap_difference(&mut self) -> Option<Unwrap> {
+        let mut value = self.unwrap_unary()?;
+        while self.on_line(Tk::Backslash) {
+            self.ts.next_raw();
+            let traits = self.name_list("a trait name");
+            if traits.is_empty() {
+                return None;
+            }
+            value = Unwrap::Excludes { traits, from: Some(Box::new(value)) };
+        }
+        Some(value)
+    }
+
     fn unwrap_unary(&mut self) -> Option<Unwrap> {
         if self.on_line(Tk::Bang) {
             self.ts.next_raw();
             return Some(Unwrap::Not(Box::new(self.unwrap_unary()?)));
         }
-        self.unwrap_primary()
+        self.unwrap_lookup()
+    }
+
+    /// `a.[key]`: the member of `a` at `key` (as `from a at key`); binds
+    /// tightest.
+    fn unwrap_lookup(&mut self) -> Option<Unwrap> {
+        let mut value = self.unwrap_primary()?;
+        while self.on_line(Tk::Dot) && self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::LBrack) {
+            self.ts.next_raw();
+            self.ts.next_raw();
+            let key = self.unwrap_value()?;
+            self.expect(Tk::RBrack, "`]`")?;
+            value = Unwrap::From(Box::new(value), Box::new(key), Vec::new());
+        }
+        Some(value)
     }
 
     fn unwrap_primary(&mut self) -> Option<Unwrap> {
@@ -1041,7 +1076,10 @@ impl<'a> Parser<'a> {
     fn name_path(&mut self, what: &str) -> Option<Vec<Name>> {
         self.skip(false, true);
         let mut path = vec![self.ident(what)?];
-        while self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Dot) {
+        // `a.[key]` is a lookup after the path, not part of it.
+        while self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::Dot)
+            && !self.ts.peek_raw(1).is_some_and(|t| t.kind == Tk::LBrack)
+        {
             self.ts.next_raw();
             path.push(self.ident(what)?);
         }
@@ -1267,13 +1305,14 @@ impl<'a> Parser<'a> {
         self.end_of_item();
     }
 
-    fn macro_def(&mut self) {
+    /// `@macro name ...`; returns the name when it was defined.
+    fn macro_def(&mut self) -> Option<Rc<str>> {
         let overriding = self.overriding.take();
         let kw = self.bump().expect("peeked");
-        let Some(name) = self.ident("a macro name") else { return };
+        let name = self.ident("a macro name")?;
         if RESERVED.contains(&name.text.as_str()) {
             self.errors.push(ConfigError::new(name.span, format!("`{}` is a keyword and cannot name a macro", name.text)));
-            return;
+            return None;
         }
         let mut params: Vec<Rc<str>> = Vec::new();
         // Parameters are glued to the name: `macro f(a, b) ...`. A spaced
@@ -1288,11 +1327,11 @@ impl<'a> Parser<'a> {
                     Some(t) => {
                         self.errors.push(ConfigError::new(t.span, "macro parameters must be plain names"));
                         self.recover();
-                        return;
+                        return None;
                     }
                     None => {
                         self.error_here("unclosed macro parameter list");
-                        return;
+                        return None;
                     }
                 }
             }
@@ -1307,7 +1346,7 @@ impl<'a> Parser<'a> {
                 loop {
                     let Some(t) = self.ts.next_raw() else {
                         self.errors.push(ConfigError::new(name.span, format!("unclosed body of macro `{}`", name.text)));
-                        return;
+                        return None;
                     };
                     match t.kind {
                         Tk::LParen | Tk::LBrace | Tk::LBrack | Tk::InvOpen => depth += 1,
@@ -1320,7 +1359,7 @@ impl<'a> Parser<'a> {
             }
             None | Some(Tk::Newline) => {
                 self.errors.push(ConfigError::new(name.span, format!("macro `{}` needs a body after its name", name.text)));
-                return;
+                return None;
             }
             // The rest of the line.
             _ => while let Some(t) = self.ts.peek_raw(0).cloned() {
@@ -1355,7 +1394,7 @@ impl<'a> Parser<'a> {
                         .related(first, "first defined here")
                         .note(format!("`override macro {} ...` replaces it", name.text)),
                 );
-                return;
+                return None;
             }
             (None, Some(_)) => {
                 self.errors.push(
@@ -1365,7 +1404,9 @@ impl<'a> Parser<'a> {
             }
             _ => {}
         }
-        self.ts.macros.insert(def.name.clone(), Rc::new(def));
+        let name = def.name.clone();
+        self.ts.macros.insert(name.clone(), Rc::new(def));
+        Some(name)
     }
 
     fn group(&mut self) {
@@ -1973,7 +2014,16 @@ impl<'a> Parser<'a> {
             && !self.ts.peek_raw(at + 1).is_some_and(|token| token.kind == Tk::Colon)
     }
 
-    fn rule_body(&mut self, def: &mut RuleDef, mut options: Option<&mut Vec<(Name, Expr)>>) {
+    /// A rule's `{ ... }` lines; macros defined there are visible only there.
+    fn rule_body(&mut self, def: &mut RuleDef, options: Option<&mut Vec<(Name, Expr)>>) {
+        let outer = std::mem::take(&mut self.local_macros);
+        self.rule_lines(def, options);
+        for name in std::mem::replace(&mut self.local_macros, outer) {
+            self.ts.macros.remove(&name);
+        }
+    }
+
+    fn rule_lines(&mut self, def: &mut RuleDef, mut options: Option<&mut Vec<(Name, Expr)>>) {
         loop {
             let Some(t) = self.peek() else {
                 self.errors.push(ConfigError::new(def.name.span, format!("unclosed body of rule `{}`", def.name.text)));
@@ -2048,20 +2098,24 @@ impl<'a> Parser<'a> {
                         (def.fix_target, def.fix_at, def.fix_when, def.fix) = self.fix_as();
                     }
                 }
+                (Tk::Ident, "@macro") => {
+                    if let Some(name) = self.macro_def() { self.local_macros.push(name) }
+                }
                 (Tk::Ident, "when") => {
                     self.bump();
                     if let Some(e) = self.expr() {
-                        def.when.push(e);
+                        if self.item_block { def.item_when.push(e) } else { def.when.push(e) }
                     }
                 }
-                // A rule-local value: computed once per node.
+                // A rule-local value: computed once per node, or per item
+                // inside an `each` block.
                 (Tk::Ident, "let") => {
                     self.bump();
                     if let Some(name) = self.ident("a name for the value") {
-                        if def.locals.iter().any(|(n, _)| n.text == name.text) {
+                        if def.locals.iter().chain(&def.item_locals).any(|(n, _)| n.text == name.text) {
                             self.errors.push(ConfigError::new(name.span, format!("`{}` is already a `let` of this rule", name.text)));
                         } else if let Some(e) = self.expr() {
-                            def.locals.push((name, e));
+                            if self.item_block { def.item_locals.push((name, e)) } else { def.locals.push((name, e)) }
                         }
                     }
                 }
@@ -2096,6 +2150,13 @@ impl<'a> Parser<'a> {
                                 self.errors.push(ConfigError::new(name.span, format!("rule `{}` already has an `each`", def.name.text)));
                             } else if let Some(list) = self.expr() {
                                 def.each = Some((name, list));
+                                if self.ts.peek_raw(0).is_some_and(|t| t.kind == Tk::LBrace) {
+                                    self.ts.next_raw();
+                                    def.each_block = true;
+                                    self.item_block = true;
+                                    self.rule_body(def, options.as_deref_mut());
+                                    self.item_block = false;
+                                }
                             }
                         }
                     }

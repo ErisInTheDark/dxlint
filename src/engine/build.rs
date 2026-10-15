@@ -393,7 +393,9 @@ fn compile(loaded: Loaded, root: PathBuf, tooling: bool) -> Built {
     }
     phase("symbols and dispatch");
     let attrs = Attributes::new(attrs, &forwards, &grammar);
+    phase("attribute lowering");
     let reach = grammar.reach();
+    phase("reach");
     // Reads of a layer also select its specialisations (`x like y`).
     let mut unit_layers: Vec<u32> = (0..grammar.matchers.len() as u32)
         .filter(|&m| unit_reads.layers.iter().any(|&layer| grammar.is_a(m, layer)))
@@ -657,6 +659,8 @@ fn configure(config: &mut crate::config::ast::Config, errors: &mut Vec<ConfigErr
             }
             def.when.extend(patch.when.iter().cloned());
             def.locals.extend(patch.locals.iter().cloned());
+            def.item_when.extend(patch.item_when.iter().cloned());
+            def.item_locals.extend(patch.item_locals.iter().cloned());
             def.files.extend(patch.files.iter().cloned());
             def.ignore.extend(patch.ignore.iter().cloned());
             def.indents.extend(patch.indents.iter().cloned());
@@ -717,12 +721,18 @@ fn attributes(
     let mut attrs: Vec<Attr> = names.iter().map(|n| Attr { name: n.clone(), defs: Vec::new() }).collect();
     // Per attribute: layers whose definition came through a group.
     let mut group_defined: Vec<Vec<u32>> = names.iter().map(|_| Vec::new()).collect();
+    let mut native_layers: Vec<Option<bool>> = vec![None; g.matchers.len()];
+    // Identifies each compiled body: definitions sharing one were compiled once.
+    let mut next_body = 0u32;
     for def in &config.attrs {
         if crate::expr::is_builtin(&def.name.text) {
             errors.push(ConfigError::new(def.name.span, format!("`{}` is a built-in variable and cannot name an attribute", def.name.text)));
             continue;
         }
         let id = usize::from(names.get(&def.name.text).expect("collected"));
+        // An expression compiles the same on every layer with the same fields:
+        // compile it once per field set a group target expands to.
+        let mut shared: Vec<(Vec<(String, u16)>, CExpr, u32, Vec<(crate::config::source::Span, crate::expr::Resolved)>, Vec<u32>)> = Vec::new();
         for target in &def.targets {
             let Some((resolved, _)) = resolve_target(&AstTarget::Matcher(target.clone()), g, None, errors) else { continue };
             // Through a group: a default its members' own definitions refine.
@@ -732,7 +742,7 @@ fn attributes(
                     errors.push(ConfigError::new(target.span, "attributes belong to layers, not languages"));
                     continue;
                 };
-                match attrs[id].defs.iter().position(|(d, _)| *d == m) {
+                match attrs[id].defs.iter().position(|(d, ..)| *d == m) {
                     // The member's own definition is already there.
                     Some(_) if through_group && !group_defined[id].contains(&m) => continue,
                     // A group's: the member's own replaces it.
@@ -755,17 +765,31 @@ fn attributes(
                 if through_group {
                     group_defined[id].push(m);
                 }
-                let layer_reads = RefCell::default();
-                let scope = Scope { fields: target_fields(g, t), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g) };
-                let uses_before = uses.borrow().len();
-                if let Some(e) = scope.compile(&def.expr, errors) {
-                    attrs[id].defs.push((m, e));
+                let fields = target_fields(g, t);
+                let (compiled, attribute_uses, reads) = match shared.iter().find(|(known, ..)| *known == fields) {
+                    Some((_, e, body, attribute_uses, reads)) => (Some((e.clone(), *body)), attribute_uses.clone(), reads.clone()),
+                    None => {
+                        let layer_reads = RefCell::default();
+                        let scope = Scope { fields: fields.clone(), attrs: names, uses: Some(uses), layer_reads: Some(&layer_reads), ..Scope::new(g) };
+                        let (uses_before, errors_before) = (uses.borrow().len(), errors.len());
+                        let compiled = scope.compile(&def.expr, errors).map(|e| {
+                            next_body += 1;
+                            (e, next_body)
+                        });
+                        let attribute_uses = uses.borrow()[uses_before..].to_vec();
+                        let reads = layer_reads.into_inner();
+                        if let Some((e, body)) = compiled.as_ref().filter(|_| errors.len() == errors_before) {
+                            shared.push((fields, e.clone(), *body, attribute_uses.clone(), reads.clone()));
+                        }
+                        (compiled, attribute_uses, reads)
+                    }
+                };
+                if let Some((e, body)) = compiled {
+                    attrs[id].defs.push((m, e, body));
                 }
-                let attribute_uses = uses.borrow();
-                let attribute_uses = &attribute_uses[uses_before..];
-                let (children, siblings) = reads_neighbours(attribute_uses);
-                dependencies[id].extend(ReadDependencies::collect(g, names, attribute_uses, layer_reads.into_inner(), children || is_token_layer(g, m) && siblings));
-                dependencies[id].requires_native |= is_native_layer(g, m);
+                let (children, siblings) = reads_neighbours(&attribute_uses);
+                dependencies[id].extend(ReadDependencies::collect(g, names, &attribute_uses, reads, children || is_token_layer(g, m) && siblings));
+                dependencies[id].requires_native |= *native_layers[m as usize].get_or_insert_with(|| is_native_layer(g, m));
             }
         }
     }
@@ -774,9 +798,9 @@ fn attributes(
     // `in ts_node let x ...` gives a default that `in ts_binary let x ...`
     // refines. Otherwise definition order.
     for attr in &mut attrs {
-        let targets: Vec<u32> = attr.defs.iter().map(|(m, _)| *m).collect();
+        let targets: Vec<u32> = attr.defs.iter().map(|(m, ..)| *m).collect();
         let broader = |m: u32| targets.iter().filter(|&&t| t != m && g.is_a(m, t)).count();
-        attr.defs.sort_by_key(|(m, _)| std::cmp::Reverse(broader(*m)));
+        attr.defs.sort_by_key(|(m, ..)| std::cmp::Reverse(broader(*m)));
     }
     (attrs, dependencies)
 }
@@ -901,12 +925,24 @@ fn rule(def: &RuleDef, g: &Grammar, schemas: &Schemas, attrs: &AttrNames, uses: 
         scope.param_read = Some((scope.params.len() as u16, &item_read));
         scope.params.push(name.text.clone());
     }
+    for (name, e) in &def.item_locals {
+        item_read.set(false);
+        if let Some(c) = scope.compile(e, errors) {
+            scope.inlined.push((name.text.clone(), c, item_read.get()));
+        }
+    }
     let (mut node_when, mut when) = (Vec::new(), Vec::new());
     for e in &def.when {
         item_read.set(false);
         if let Some(c) = scope.compile(e, errors) {
-            if def.each.is_none() || item_read.get() { when.push(c) } else { node_when.push(c) }
+            if def.each_block && item_read.get() {
+                errors.push(ConfigError::new(e.span, "this `when` runs once per node, so it cannot read the `each` item")
+                    .note("move it inside the `each ... { }` block"));
+            } else if def.each.is_none() || item_read.get() { when.push(c) } else { node_when.push(c) }
         }
+    }
+    for e in &def.item_when {
+        if let Some(c) = scope.compile(e, errors) { when.push(c) }
     }
     scope.param_read = None;
     let message = def.message.as_ref().and_then(|m| scope.compile(m, errors));

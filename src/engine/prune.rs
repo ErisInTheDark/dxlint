@@ -457,7 +457,7 @@ fn prune_config(config: &mut Config, runtime: bool) {
 /// Names a rule's clauses mention.
 fn rule_names(r: &crate::config::ast::RuleDef, out: &mut HashSet<String>) {
     let indent_levels = r.indents.iter().flat_map(|i| i.by.iter().chain(&i.from));
-    for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(&r.fix_when).chain(&r.fix_at).chain(&r.report_at).chain(r.each.as_ref().map(|(_, e)| e)).chain(r.locals.iter().map(|(_, e)| e)).chain(indent_levels).chain(&r.indent_reset) {
+    for e in r.when.iter().chain(&r.message).chain(&r.fix).chain(&r.fix_when).chain(&r.fix_at).chain(&r.report_at).chain(r.each.as_ref().map(|(_, e)| e)).chain(r.locals.iter().map(|(_, e)| e)).chain(&r.item_when).chain(r.item_locals.iter().map(|(_, e)| e)).chain(indent_levels).chain(&r.indent_reset) {
         expr_names(e, out);
     }
     for i in &r.indents {

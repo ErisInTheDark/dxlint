@@ -429,6 +429,13 @@ pub struct RuleDef {
     pub each: Option<(Name, Expr)>,
     /// `@each`: the list reads only the rule's options.
     pub each_options: bool,
+    /// `each name in list { ... }`: the lines inside run per item; the
+    /// rule's other `let`s and `when`s run per node and cannot read it.
+    pub each_block: bool,
+    /// `let`s inside the `each` block: per item, reading it.
+    pub item_locals: Vec<(Name, Expr)>,
+    /// `when`s inside the `each` block.
+    pub item_when: Vec<Expr>,
     /// Part of the rule failed to parse: running the rest would check
     /// something else than what was written.
     pub broken: bool,
@@ -479,6 +486,9 @@ impl RuleDef {
             report_at: None,
             each: None,
             each_options: false,
+            each_block: false,
+            item_locals: Vec::new(),
+            item_when: Vec::new(),
             broken: false,
         }
     }

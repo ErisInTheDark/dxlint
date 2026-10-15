@@ -15,7 +15,7 @@ Give-ups are a language concept, separate from `null` (absent or empty).
 - Sinks (`when`, `report at`, `fix`, message interpolation, arithmetic): the compiler tracks a maybe-unknown bit; an unhandled maybe-unknown value at a sink is a config error. At runtime a sink that still receives unknown skips and is counted in `--stats` per rule.
 - Query records keep nested uncertainty as explicit fields (`identity_known`, `uncertain_traits`, `value_known`); only top-level results become unknown.
 
-## Macros only (decided)
+## Macros only (rule-local `@macro` implemented; typed parameters, `fn` removal pending)
 
 Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly like token pasting: its body means what it would mean pasted at the call site. The engine is free to compile it however performs best (once and shared when the body reads only its parameters, specialised per site otherwise).
 
@@ -33,7 +33,7 @@ Logic is macros; there is no `fn` keyword. To the author a macro behaves exactly
 - In template strings `{value?}` is sugar for `{value ?? ""}`: the explicit way to let absence print as nothing.
 - Paths: `a?.b` reads through a maybe-null `a` (null stays null); plain `a.b` on a maybe-null `a` is a config error. Today every `.` silently passes null through; the migration rewrites those reads to `?.` where the compiler can't prove presence.
 
-## `when` blocks (decided)
+## `when` blocks (value form implemented; subject and item forms pending)
 
 ````zlint
 when {
@@ -59,7 +59,7 @@ when n is {           # subject form for kind dispatch
 - `value` only starts a new pipeline (the previous one ended); `value name: expr` is a new pipeline whose first result is labelled.
 - No lambdas: call forms taking anonymous functions (`any(xs, x => ...)`, `filter(...)`, `map(...)`, `fold(xs, init, (s, x) => ...)`, `find`, `walk`'s next expression) become pipeline steps.
 
-## `each` blocks (decided)
+## `each` blocks (implemented; old block-less form still accepted)
 
 ````zlint
 in ts_assignment rule no-self-assign {
@@ -76,7 +76,7 @@ in ts_assignment rule no-self-assign {
 - One form for option lists and code lists (`@each` goes); the engine knows which lists are fixed at config load.
 - Prefer a rule on the item's own node kind when one exists; `each` is for derived items (pairs, groups) with no single owning node.
 
-## Type recipes (decided)
+## Type recipes (`\` and `.[k]` implemented; implications, absorbing `any` pending)
 
 - Trait implications are declared once: `trait undefined implies nullable, falsy, nonthenable`; `trait undefined` then means the whole set everywhere.
 - Operators, tightest first: `a.[k]` member lookup (was `from a at k`), `!a` complement, `a \ b` difference (was `excludes b from a`), `a & b`, `a | b`, `a ?? b` (b when a is unknown). No comparisons, arithmetic or conditional types in recipes: yes/no questions stay in conditions (`could`, `always`, `fits`), branching stays in `when`.

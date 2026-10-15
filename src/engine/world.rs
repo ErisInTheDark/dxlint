@@ -1345,9 +1345,9 @@ mod tests {
                     name: "classes".into(),
                     defs: vec![(matcher, crate::expr::CExpr::QueryCall(query, vec![
                         crate::expr::CExpr::Builtin(crate::expr::Builtin::Node), crate::expr::CExpr::Const(Value::from("declaration")),
-                    ]))],
+                    ]), 1)],
                 },
-                crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0))] },
+                crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0), 2)] },
             ], &[], &linter.grammar);
             linter.profile = Some(super::super::Profile::new(linter.grammar.matchers.len(), linter.rules.len()));
             let expression = crate::expr::CExpr::Attr(attr);
@@ -1389,7 +1389,7 @@ mod tests {
                 defs: vec![(matcher, crate::expr::CExpr::Nullish(
                     Box::new(crate::expr::CExpr::QueryCall(&QUERY, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)])),
                     Box::new(crate::expr::CExpr::Const(Value::Bool(true))),
-                ))],
+                ), 1)],
             }], &[], &linter.grammar);
             if shaped {
                 linter.attrs.shape_records(&linter.grammar, vec![(crate::vm::KindSet::all(linter.grammar.matchers.len()), &crate::expr::CExpr::Attr(0))]);
@@ -1735,8 +1735,8 @@ mod tests {
         linter.attrs = crate::expr::Attributes::new(vec![
             crate::expr::Attr { name: "created".into(), defs: vec![(matcher, crate::expr::CExpr::QueryCall(
                 &CREATED, vec![crate::expr::CExpr::Builtin(crate::expr::Builtin::Node)],
-            ))] },
-            crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0))] },
+            ), 1)] },
+            crate::expr::Attr { name: "alias".into(), defs: vec![(matcher, crate::expr::CExpr::Attr(0), 2)] },
         ], &[], &linter.grammar);
         linter.attrs.shape_records(&linter.grammar, vec![(crate::vm::KindSet::all(linter.grammar.matchers.len()), &crate::expr::CExpr::Attr(0))]);
         let path = Path::new("/root/module-unit.t");
