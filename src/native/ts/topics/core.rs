@@ -9,37 +9,7 @@ use super::Fact;
 const TOKEN: Shape = Shape::Record(&[("text", Shape::Scalar), ("kind", Shape::Scalar), ("start", Shape::Scalar), ("end", Shape::Scalar)]);
 
 pub const FACTS: &[Fact] = &[
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "uses",
-        doc: "native layers: how often the name this identifier declares is used (null if it declares nothing)",
-        get: |f, n| opt(f.binding(n), |b| Value::from(b.uses as usize)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "value_uses",
-        doc: "native layers: uses that need the runtime value (not type positions, `typeof x` in types)",
-        get: |f, n| opt(f.binding(n), |b| Value::from(b.value_uses as usize)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "self_uses",
-        doc: "native layers: those uses inside the declaration itself (a function calling itself)",
-        get: |f, n| opt(f.binding(n), |b| Value::from(b.self_uses as usize)),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "writes",
-        doc: "native layers: assignments to the name this identifier declares",
-        get: |f, n| opt(f.binding(n), |b| Value::from(b.writes as usize)),
-    },
     Fact { shape: Fact::SCALAR.shape, name: "exported", doc: "native layers: the declaration is `export`ed", get: |f, n| opt(f.binding(n), |b| Value::Bool(b.exported)) },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "ambient",
-        doc: "native layers: the declaration is inside `declare` (no runtime code)",
-        get: |f, n| opt(f.binding(n), |b| Value::Bool(b.ambient)),
-    },
     Fact {
         shape: Fact::SCALAR.shape,
         name: "type",
@@ -69,24 +39,6 @@ pub const FACTS: &[Fact] = &[
         name: "type_argument_redundant",
         doc: "native layers: on the last type argument of a call, `new`, type reference or class: `default` when it is its parameter's default, `inferred` when the arguments infer it anyway (types that are assignable both ways count as the same); null otherwise",
         get: |f, n| opt(f.type_arg_redundant(n), Value::from),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "resolved",
-        doc: "native layers: what a referencing identifier resolves to: `local`, `import`, or `global` (declared nowhere in the file); null for declarations and type names",
-        get: |f, n| opt(f.resolved(n), Value::from),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "static_name",
-        doc: "native layers: on a property, method, class or enum member, `a.b` or `a[\"b\"]`: its name when known without running anything (`a`, `\"a\"` -> `a`, `0x1` -> `1`, `[`k`]` -> `k`; null for `#private` names), as eslint's `getStaticPropertyName`; on a literal: its value as text (`'\\x41'` -> `A`); null otherwise",
-        get: |f, n| opt(f.static_name(n), Value::from),
-    },
-    Fact {
-        shape: Shape::Record(&[("type", Shape::Scalar), ("value", Shape::Scalar)]),
-        name: "literal_value",
-        doc: "native layers: on a literal (also `-1`, `+1`, parenthesised): `{ type, value }` with the JavaScript type (`string`, `number`, `bigint`, `boolean`, `null`, `regex`) and the value as text (`-0` for negative zero); null otherwise",
-        get: |f, n| opt(f.literal_value(n), |(t, v)| Value::record(vec![("type".into(), Value::from(t)), ("value".into(), Value::from(v))])),
     },
     Fact {
         shape: Fact::SCALAR.shape,

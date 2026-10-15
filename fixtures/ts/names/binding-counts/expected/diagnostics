@@ -1,0 +1,13 @@
+input.ts:10:1-10:7 binding-resolution#0 merged:str:local
+input.ts:11:33-11:39 binding-counts#0 nested:0/0/0/0/true
+input.ts:12:18-12:23 binding-counts#0 mixed:0/0/0/0/false
+input.ts:14:27-14:36 binding-resolution#0 arguments:str:local
+input.ts:15:8-15:13 binding-counts#0 value:1/1/0/0/false
+input.ts:16:1-16:6 binding-resolution#0 value:str:import
+input.ts:17:10-17:16 binding-resolution#0 Absent:null:
+input.ts:18:1-18:14 binding-resolution#0 MissingGlobal:str:global
+input.ts:1:5-1:10 binding-counts#0 count:4/3/0/2/false
+input.ts:6:10-6:15 binding-counts#0 recur:1/1/1/0/false
+input.ts:7:7-7:12 binding-counts#0 arrow:1/1/1/0/false
+input.ts:8:5-8:11 binding-counts#0 merged:1/1/0/0/false
+input.ts:9:5-9:11 binding-resolution#0 merged:null:

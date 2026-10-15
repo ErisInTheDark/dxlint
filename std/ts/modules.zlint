@@ -62,6 +62,15 @@ import .ts/comments
 @ts_module_profile(ts_require, [relative, config_paths, config_base, ambient, packages], "require")
 @ts_module_profile(ts_augmentation, [relative, config_paths, config_base, packages], "import")
 
+fn ts_compiler_option(n, name) = {
+  value setting: program_option(n, name)
+  value if setting == true || setting == false then setting
+    else if contains(["alwaysStrict", "noImplicitAny", "noImplicitThis", "strictBindCallApply",
+      "strictBuiltinIteratorReturn", "strictFunctionTypes", "strictNullChecks",
+      "strictPropertyInitialization", "useUnknownInCatchVariables"], name)
+    then program_option(n, "strict") == true else null
+}
+
 fn ts_module_name(n) = js_string(n.text) ?? js_string('"' n.text '"')
 fn ts_module_program(n) = {
   value walk([n], p => p.parent.node)

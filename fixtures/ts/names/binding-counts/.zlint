@@ -1,0 +1,11 @@
+import .ts
+in ts_identifier rule binding-counts {
+  when uses != null && contains(["count", "recur", "arrow", "merged", "nested", "mixed", "value"], identifier_name)
+  report at node
+  info "{identifier_name}:{uses}/{value_uses}/{self_uses}/{writes}/{ambient}"
+}
+in ts_identifier rule binding-resolution {
+  when uses == null && contains(["arguments", "Absent", "MissingGlobal", "merged", "value"], identifier_name)
+  report at node
+  info "{identifier_name}:{type_of(resolved)}:{resolved}"
+}

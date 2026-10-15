@@ -19,7 +19,6 @@ mod assertions;
 mod accessors;
 mod constituents;
 mod redundant;
-mod this_return;
 mod transfers;
 mod arguments;
 mod enums;
@@ -141,12 +140,6 @@ pub const FACTS: &[Fact] = &[
         name: "return_transfer",
         doc: "native returns and arrow bodies: any carrier, raw types and error provenance",
         get: |f, n| f.with_file(transfers::returned, n),
-    },
-    Fact {
-        shape: Fact::SCALAR.shape,
-        name: "this_return_type_offset",
-        doc: "native class functions: class annotation offset when only this (not the class instance type) is returned",
-        get: |f, n| f.with_file(this_return::offset, n),
     },
     Fact {
         shape: Fact::SCALAR.shape,

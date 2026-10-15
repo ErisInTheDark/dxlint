@@ -1,0 +1,6 @@
+import .ts
+in ts_expression_statement rule literal-value {
+  let literal expression.literal_value
+  report at expression.node
+  info if literal == null then "unknown" else "{literal.type}:{literal.value}"
+}

@@ -1,0 +1,67 @@
+import .ts/calls
+import .ts/constants
+
+define {
+
+fn ts_return_this_target(n, name) = {
+  value walk(n, part => if part is ts_parenthesized_type then part.type.node
+    else if part is ts_union then part.type.nodes else null)
+  filter (part) part is ts_type_reference && part.name.text == name
+  sort_by (part) part.offset
+  first
+}
+
+fn ts_return_this_value(n) = {
+  value chain: walk(unparenthesised_node(n), bare =>
+    if bare not ts_identifier || name_binding(bare).node.parent.type != null then null
+    else unparenthesised_node(ts_runtime_binding_init(bare)))
+  value any(chain, bare => bare is ts_this)
+}
+
+fn ts_return_this_class(n, target) = {
+  value arms: value_parts(n)
+  value if arms == null || any(arms, arm => any(arm.parts, part => !part.carrier_known)) then null
+    else any(arms, arm => count(arm.parts) == 1 && {
+      value part: first(arm.parts)
+      value carrier: part.carrier
+      value carrier.description.kind == "named" && !contains(part.traits, "constructible")
+        && carrier.file == target.file && carrier.node == target.node
+    })
+}
+
+fn ts_return_this_annotation(n) = {
+  value owner: if n is ts_method then n.parent.node
+    else if n.parent is ts_class_property && n.parent.init.node == n then n.parent.parent.node
+    else null
+  value parameter: first(n.parameter.nodes).name.node
+  value if owner not ts_class || owner.name == null || n.return_type == null || n.body == null
+    || parameter is ts_this || parameter.text == "this" then null
+    else {
+      value annotation: ts_return_this_target(n.return_type.node, owner.name.text)
+      value if annotation == null then null
+        else if n.body not ts_block then
+          if ts_return_this_value(n.body.node) then annotation else null
+        else {
+          value arguments: filter(ts_calls_return_arguments(n), argument => argument != null)
+          value returned_this: filter(arguments, argument => ts_return_this_value(argument))
+          value target: declaration_identity(annotation.name.node)
+          value other: filter(arguments, argument => !contains(returned_this, argument))
+          value if count(returned_this) > 0 && target != null
+            && all(other, argument => {
+              value returned_class: ts_return_this_class(argument, target)
+              value type_of(returned_class) == "bool" && !returned_class
+            })
+            then annotation else null
+        }
+    }
+}
+
+in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
+  let annotation ts_return_this_annotation(node)
+  when annotation != null
+  report at annotation.offset
+  warn "Use `this` type instead."
+  fix at annotation if expression_fix_clean(annotation) as "this"
+}
+
+}

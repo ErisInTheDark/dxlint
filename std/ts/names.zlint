@@ -8,6 +8,23 @@ in ts_identifier, ts_private_name let identifier_name
 
 fn ts_identifier_name_valid(name) = re_test(name, /^[\p{ID_Start}_$][\p{ID_Continue}$\u{200c}\u{200d}]*$/)
 
+fn ts_arguments_owner(n) =
+  if n.identifier_name != "arguments" then null else {
+    value scopes: name_scopes(n, "reference")
+    value rows: map(scopes, scope => {
+      value declarations: name_scope_declarations(n, scope.id, "arguments")
+      value {
+        known: declarations != null,
+        declarations: filter(declarations, declaration => contains(declaration.classes, "value"))
+      }
+    })
+    value visible: find(rows, row => !row.known || count(row.declarations) > 0)
+    value if scopes != null && visible != null && visible.known
+      && all(visible.declarations, declaration => declaration.node == declaration.owner
+        && declaration.node is (ts_function, ts_method, ts_program))
+      then first(visible.declarations).owner else null
+  }
+
 # Where a function or class is a declaration (else an expression).
 fn ts_declared_statement(node) = node is (ts_program.body, ts_block.body, ts_case.body, ts_export.declaration, ts_labeled.body)
 group ts_namespace_runtime_nodes ts_variable_declaration, ts_function, ts_class, ts_enum, ts_empty, ts_export_assignment, ts_export
@@ -109,7 +126,11 @@ in ts_import_equals {
 
 # References: identifiers, except where they only name something (member
 # and key names, labels, the far side of a rename).
-in ts_decorator let ts_name_decorator_method if parent is ts_method then parent.node else if parent is ts_parameter && parent.parent is ts_method then parent.parent.node else null
+in ts_decorator let ts_name_decorator_method when {
+  parent is ts_method then parent.node
+  parent is ts_parameter && parent.parent is ts_method then parent.parent.node
+  else then null
+}
 in ts_identifier {
   let ts_name_outside_method containing(ts_decorator).ts_name_decorator_method
   when !(is (ts_member.property, ts_method.key, ts_class_property.key, ts_property_signature.key, ts_method_signature.key,
@@ -147,39 +168,44 @@ group name_type_syntax ts_type_reference, ts_type_keyword, ts_type_parameter, ts
   ts_method_signature, ts_call_signature, ts_index_signature, ts_tuple_type, ts_tuple_member,
   ts_type_query, ts_import_type, ts_literal_type, ts_template_type, ts_type_predicate, ts_mapped_type
 in ts_node let name_type_access is name_type_syntax || parent.name_type_access == true
-in ts_node let name_write_owner
-  if is (ts_for_in.left, ts_for_of.left) then parent.node
-  else if is ts_declarator.name then
-    if parent.init != null then parent.node
-    else if parent.parent is (ts_for_in.left, ts_for_of.left) then parent.parent.parent.node
-    else null
-  else if is ts_assignment.left then
+in ts_node let name_write_owner when {
+  is (ts_for_in.left, ts_for_of.left) then parent.node
+  is ts_declarator.name then when {
+    parent.init != null then parent.node
+    parent.parent is (ts_for_in.left, ts_for_of.left) then parent.parent.parent.node
+    else then null
+  }
+  is ts_assignment.left then
     if parent.flow_destructuring_target == true then parent.name_write_owner else parent.node
-  else if is ts_update.argument || is ts_unary.argument && parent.operator == "delete" && is (ts_member, ts_index)
+  is ts_update.argument || is ts_unary.argument && parent.operator == "delete" && is (ts_member, ts_index)
     then parent.node
-  else if flow_destructuring_target == true then parent.name_write_owner
-  else if is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression,
+  flow_destructuring_target == true then parent.name_write_owner
+  is (ts_parenthesized.expression, ts_as.expression, ts_satisfies.expression,
     ts_non_null.expression, ts_type_assertion.expression, ts_instantiation.expression) then parent.name_write_owner
-  else null
+  else then null
+}
 in ts_identifier, ts_member, ts_index, ts_array, ts_object, ts_array_pattern, ts_object_pattern let write_site name_write_owner.offset
 in ts_identifier let access {
   value classes: name_role_classes(node, "reference")
   value writer: name_write_owner
-  value if classes == null then null
-    else if writer is ts_update || writer is ts_assignment && writer.operator != "=" then "read_write"
-    else if writer != null then "write"
-    else if name_type_access || !contains(classes, "value")
+  value when {
+    classes == null then null
+    writer is ts_update || writer is ts_assignment && writer.operator != "=" then "read_write"
+    writer != null then "write"
+    name_type_access || !contains(classes, "value")
       || is ts_export_specifier.local && (parent.kind == "type" || parent.parent.kind == "type") then "type"
-    else "read"
+    else then "read"
+  }
 }
 
 fn ts_name_lexical(classes) = any(classes, class => contains(["value", "type", "query"], class))
 in ts_identifier let ts_name_declared ts_name_lexical(name_role_classes(node, "declaration"))
 in ts_identifier let ts_name_referenced ts_name_lexical(name_role_classes(node, "reference"))
-in ts_identifier let ts_name_binding
-  if ts_name_declared then name_binding(node)
-  else if ts_name_referenced && scope_declaration != null then name_binding(scope_declaration)
-  else null
+in ts_identifier let ts_name_binding when {
+  ts_name_declared then name_binding(node)
+  ts_name_referenced && scope_declaration != null then name_binding(scope_declaration)
+  else then null
+}
 in ts_identifier let ts_name_site {
   value binding: if ts_name_declared then ts_name_binding else null
   value scope: if binding != null then first(name_scopes(node, "declaration")) else null
@@ -193,20 +219,21 @@ fn ts_name_parameter(n, owner) = {
   walk (current) if current != owner then current.parent.node else null
   any (current) current is ts_parameter
 }
-fn ts_name_site_kind(n, owner) =
-  if owner is ts_variable_declaration then if contains(["var", "let", "const"], owner.kind) then owner.kind else "using"
-  else if owner is (ts_function, ts_arrow, ts_method, ts_function_type, ts_call_signature, ts_method_signature)
+fn ts_name_site_kind(n, owner) = when {
+  owner is ts_variable_declaration then if contains(["var", "let", "const"], owner.kind) then owner.kind else "using"
+  owner is (ts_function, ts_arrow, ts_method, ts_function_type, ts_call_signature, ts_method_signature)
     && ts_name_parameter(n, owner) then "parameter"
-  else if owner is ts_function then if ts_declared_statement(owner) then "function" else "function_name"
-  else if owner is ts_class then if ts_declared_statement(owner) then "class" else "class_name"
-  else if owner is ts_block && owner.parent is ts_try then "catch"
-  else if owner is ts_interface then "interface"
-  else if owner is ts_type_alias then "type"
-  else if owner is ts_enum then "enum"
-  else if owner is ts_namespace then "namespace"
-  else if owner is (ts_type_parameter, ts_infer) then "type_parameter"
-  else if owner is (ts_import, ts_import_equals) then "import"
-  else ""
+  owner is ts_function then if ts_declared_statement(owner) then "function" else "function_name"
+  owner is ts_class then if ts_declared_statement(owner) then "class" else "class_name"
+  owner is ts_block && owner.parent is ts_try then "catch"
+  owner is ts_interface then "interface"
+  owner is ts_type_alias then "type"
+  owner is ts_enum then "enum"
+  owner is ts_namespace then "namespace"
+  owner is (ts_type_parameter, ts_infer) then "type_parameter"
+  owner is (ts_import, ts_import_equals) then "import"
+  else then ""
+}
 in ts_identifier let ts_name_kind if ts_name_site != null then ts_name_site_kind(node, ts_name_site) else null
 
 in ts_node let declaration null
@@ -220,12 +247,14 @@ in ts_identifier let declaration ts_name_binding.node
 in ts_identifier let declarations ts_name_binding.declarations ?? []
 in ts_identifier let references
   if ts_name_declared && ts_name_binding.node == node then ts_name_binding.references else []
-in ts_identifier let scope
-  if ts_name_declared then first(name_scopes(node, "declaration")).owner
-  else if ts_name_referenced then {
+in ts_identifier let scope when {
+  ts_name_declared then first(name_scopes(node, "declaration")).owner
+  ts_name_referenced then {
     value name_scopes(node, "reference")
     find (scope) any(scope.classes, class => contains(["module", "function", "block", "function_name", "class", "catch", "type_parameters", "conditional", "mapped"], class))
-  }.owner else null
+  }.owner
+  else then null
+}
 in ts_identifier let declaration_kind
   if ts_name_declared && ts_name_binding.node == node then ts_name_kind else null
 in ts_identifier let declaration_kinds
@@ -239,6 +268,52 @@ in ts_program let binding_declarations {
   sort_by (site) site.offset
 }
 in ts_node let writer name_write_owner
-in ts_node let conditional_ancestor
-  if is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test) then parent.node
-  else if parent is (ts_function, ts_arrow, ts_method) then null else parent.conditional_ancestor
+in ts_node let conditional_ancestor when {
+  is (ts_if.test, ts_while.test, ts_do_while.test, ts_for.test, ts_conditional.test) then parent.node
+  parent is (ts_function, ts_arrow, ts_method) then null
+  else then parent.conditional_ancestor
+}
+
+in ts_node let ts_name_ambient contains([] node.modifier, "declare") || parent.ts_name_ambient == true
+fn ts_name_self_owner(n) = when {
+  n.ts_name_kind == "function" then n.ts_name_site
+  contains(["var", "let", "const", "using"], n.ts_name_kind)
+    && n.parent is ts_declarator && n.parent.name.node == n
+    && n.parent.init is (ts_function, ts_arrow) then n.parent.init.node
+  else then null
+}
+in ts_identifier let ts_name_usage {
+  value binding: if ts_name_declared then ts_name_binding else null
+  value refs: filter(binding.references, reference => reference is ts_identifier)
+  value self_owner: ts_name_self_owner(node)
+  value if binding == null || binding.node != node || any(refs, reference => reference.access == null) then null else {
+    uses: count(filter(refs, reference => reference.access != "write")),
+    value_uses: count(filter(refs, reference => contains(["read", "read_write"], reference.access))),
+    self_uses: count(filter(refs, reference => reference.access != "write" && self_owner != null
+      && self_owner.offset <= reference.offset && reference.end_offset <= self_owner.end_offset)),
+    writes: count(filter(refs, reference => contains(["write", "read_write"], reference.access)))
+  }
+}
+in ts_node {
+  let uses null
+  let value_uses null
+  let self_uses null
+  let writes null
+  let ambient null
+  let resolved null
+}
+in ts_identifier {
+  let uses ts_name_usage.uses
+  let value_uses ts_name_usage.value_uses
+  let self_uses ts_name_usage.self_uses
+  let writes ts_name_usage.writes
+  let ambient if ts_name_declared && ts_name_binding.node == node
+    then all(ts_name_binding.declarations, declaration => declaration.ts_name_ambient) else null
+  let resolved when {
+    ts_name_declared || !ts_name_referenced then null
+    ts_name_binding != null then if ts_name_binding.node.ts_name_kind == "import" then "import" else "local"
+    contains(name_role_classes(node, "reference"), "value") && ts_arguments_owner(node) != null then "local"
+    contains(["read", "write", "read_write"], access) then "global"
+    else then null
+  }
+}

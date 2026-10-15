@@ -1,0 +1,67 @@
+import .ts/names
+import .ts/import-attributes
+
+define {
+
+fn ts_literal_quoted(text) = {
+  value decoded: js_string_parts(text).text
+  value if type_of(decoded) == "str" then { type: "string", value: decoded } else null
+}
+
+fn ts_literal_unary(n) = {
+  value operand: n.argument.literal_value
+  value operator: n.operator.text
+  value when {
+    !contains(["+", "-"], operator) || operand == null then null
+    operand.type == "bigint" then
+      if operator != "-" then null else {
+        type: "bigint",
+        value: when {
+          operand.value == "0" then "0"
+          starts_with(operand.value, "-") then slice(operand.value, 1)
+          else then "-" operand.value
+        }
+      }
+    !contains(["number", "string"], operand.type) then null
+    else then {
+      value number: js_number_unary(operator, js_number(operand))
+      value { type: "number", value: if number == 0 && js_number_binary("/", 1, number) < 0 then "-0" else js_to_string(number) }
+    }
+  }
+}
+
+in ts_node let literal_value null
+in ts_string, ts_import_attribute_key, ts_import_attribute_string let literal_value ts_literal_quoted(text)
+in ts_template let literal_value if count(expression) == 0 then ts_literal_quoted(text) else null
+in ts_number let literal_value {
+  value number: js_number({ type: "number", value: text })
+  value if number == null then null else { type: "number", value: js_to_string(number) }
+}
+in ts_bigint let literal_value {
+  value number: js_bigint(text)
+  value if number == null then null else { type: "bigint", value: number }
+}
+in ts_boolean let literal_value { type: "boolean", value: text }
+in ts_null let literal_value { type: "null", value: "null" }
+in ts_regex let literal_value { type: "regex", value: text }
+in ts_parenthesized let literal_value expression.literal_value
+in ts_unary let literal_value ts_literal_unary(node)
+
+in ts_node let ts_literal_text null
+in ts_string, ts_template, ts_number, ts_bigint, ts_boolean, ts_null, ts_regex let ts_literal_text literal_value.value
+in ts_parenthesized let ts_literal_text expression.ts_literal_text
+
+fn ts_literal_key(n) = when {
+  n is ts_identifier then n.identifier_name
+  n is ts_computed_key then n.expression.ts_literal_text
+  else then n.ts_literal_text
+}
+
+in ts_node let static_name ts_literal_text
+in ts_property, ts_pattern_property, ts_method, ts_class_property, ts_property_signature, ts_method_signature let static_name ts_literal_key(key.node)
+in ts_enum_member let static_name ts_literal_key(name.node)
+in ts_member let static_name ts_literal_key(property.node)
+in ts_index let static_name index.ts_literal_text
+in ts_parenthesized let static_name expression.static_name
+
+}

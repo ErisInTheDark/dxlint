@@ -41,8 +41,6 @@ pub trait Facts {
     /// On a property, member or literal: its statically known name / value
     /// as text.
     fn static_name(&self, node: u32) -> Option<String>;
-    /// On a literal-like expression: `(type, value as text)`.
-    fn literal_value(&self, node: u32) -> Option<(&'static str, String)>;
 }
 
 
@@ -101,9 +99,6 @@ impl Facts for NativeFile<'_> {
         super::class_members::member_uses(self, node)
     }
 
-    fn literal_value(&self, node: u32) -> Option<(&'static str, String)> {
-        super::statics::literal_value(&self.syntax, node)
-    }
 
     fn static_name(&self, node: u32) -> Option<String> {
         super::statics::property_name(&self.syntax, node).or_else(|| super::statics::literal_text(&self.syntax, node))

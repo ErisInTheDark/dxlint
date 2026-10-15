@@ -440,7 +440,7 @@ mod tests {
         assert!(vm.fact_value(&wrapped, &config, "", wrapper, false).is_some(), "field wrapper retains its own list shape");
         // A value the fact never declared still packs (as it comes), as its
         // own query rather than the first fact's result.
-        let another = (7, facts::fact("literal_value").expect("record fact"), None, None);
+        let another = (7, facts::fact("first_token").expect("record fact"), None, None);
         let bytes = vm.values.borrow().used_bytes();
         assert!(vm.fact_value(&value, &config, "", another, false).is_some(), "an undeclared shape still packs");
         assert!(vm.values.borrow().used_bytes() > bytes, "different fact must not reuse the first result");

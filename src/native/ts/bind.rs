@@ -32,14 +32,6 @@ pub struct Binding {
     pub kind: &'static str,
     /// Declared by an `export`ed statement.
     pub exported: bool,
-    /// Inside `declare` (or a `declare`d namespace): no runtime code.
-    pub ambient: bool,
-    /// References of any kind (reads, type uses, `typeof`), writes aside.
-    pub uses: u32,
-    /// References that need the runtime value.
-    pub value_uses: u32,
-    /// Uses from inside the declaration itself (a function calling itself).
-    pub self_uses: u32,
     pub writes: u32,
 }
 
@@ -101,26 +93,20 @@ impl Bindings {
             names.declared.iter().filter(|(d, (_, _, classes, _))| classes & lexical != 0 && !names.implicit.contains_key(d))
                 .map(|(&d, &(_, site, ..))| (d, site)).collect();
         declared.sort_by_key(|&(d, ..)| s.tree.node(d).start);
-        // Declaring identifier -> the function its uses inside count as self uses.
-        let mut owners: HashMap<u32, u32> = HashMap::default();
         for (d, site) in declared {
             if !s.is(d, K::Ident) {
                 continue;
             }
             let kind = declaration_kind(s, d, site);
-            let (exported, ambient) = statement_flags(s, d, site, kind);
+            let exported = exported(s, d, site, kind);
             if let Some(&first) = names.merged.get(&d) {
                 b.merged.insert(d, first);
                 if let Some(binding) = b.decls.get_mut(&first) {
                     binding.exported |= exported;
-                    binding.ambient &= ambient;
                 }
                 continue;
             }
-            b.decls.insert(d, Binding { kind, exported, ambient, ..Binding::default() });
-            if let Some(owner) = self_use_owner(s, d, site, kind) {
-                owners.insert(d, owner);
-            }
+            b.decls.insert(d, Binding { kind, exported, ..Binding::default() });
         }
         for (&node, &(effect, site)) in &names.effects {
             let effect = Some(effect);
@@ -162,26 +148,9 @@ impl Bindings {
                 continue;
             }
             let decl = b.merged.get(&decl).copied().unwrap_or(decl);
-            let inside = owners.get(&decl).is_some_and(|&o| {
-                let (n, r) = (s.tree.node(o), s.tree.node(r));
-                n.start <= r.start && r.end <= n.end
-            });
             let binding = b.decls.entry(decl).or_default();
-            if inside && use_ != Use::Write {
-                binding.self_uses += 1;
-            }
-            match use_ {
-                Use::Value | Use::Namespace | Use::Export => {
-                    binding.uses += 1;
-                    binding.value_uses += u32::from(use_ != Use::Namespace);
-                }
-                Use::Type | Use::TypeOnly | Use::TypeExport => binding.uses += 1,
-                Use::Write => binding.writes += 1,
-                Use::ReadWrite => {
-                    binding.uses += 1;
-                    binding.value_uses += 1;
-                    binding.writes += 1;
-                }
+            if matches!(use_, Use::Write | Use::ReadWrite) {
+                binding.writes += 1;
             }
             b.refs.insert(r, decl);
         }
@@ -280,9 +249,8 @@ fn is_statement(s: &Syntax, id: u32) -> bool {
         && s.parent(id).and_then(|p| s.kind(p)).is_some_and(|k| matches!(k, K::Program | K::Block | K::Case | K::Export | K::Labeled))
 }
 
-/// Whether the statement declaring `name` is `export`ed, and whether it is
-/// ambient (inside `declare`).
-fn statement_flags(s: &Syntax, name: u32, site: u32, kind: &str) -> (bool, bool) {
+/// Whether the statement declaring `name` is `export`ed.
+fn exported(s: &Syntax, name: u32, site: u32, kind: &str) -> bool {
     // A parameter's statement is the parameter itself.
     let statement = if kind == "parameter" {
         let mut at = name;
@@ -296,28 +264,7 @@ fn statement_flags(s: &Syntax, name: u32, site: u32, kind: &str) -> (bool, bool)
     } else {
         site
     };
-    let exported = s.parent(statement).is_some_and(|p| s.is(p, K::Export));
-    let mut at = Some(statement);
-    while let Some(n) = at {
-        if s.has_word(n, F::Modifier, "declare") {
-            return (exported, true);
-        }
-        at = s.parent(n);
-    }
-    (exported, false)
-}
-
-/// The function whose uses inside count as self uses of `name` (as ESLint
-/// counts them): a function's own body, or a function initializer.
-fn self_use_owner(s: &Syntax, name: u32, site: u32, kind: &str) -> Option<u32> {
-    match kind {
-        "function" => Some(site),
-        "var" | "let" | "const" | "using" => {
-            let declarator = s.parent(name).filter(|&d| s.is(d, K::Declarator) && s.get(d, F::Name) == Some(name))?;
-            s.get(declarator, F::Init).filter(|&i| matches!(s.kind(i), Some(K::Function | K::Arrow)))
-        }
-        _ => None,
-    }
+    s.parent(statement).is_some_and(|p| s.is(p, K::Export))
 }
 
 /// The function whose own `this` a node at `id` sees: the nearest

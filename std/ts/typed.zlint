@@ -20,6 +20,7 @@ import .ts/typed/includes
 import .ts/typed/type-constituents
 import .ts/typed/redundant-constituents
 import .ts/typed/return-await
+import .ts/typed/return-this
 import .ts/typed/type-arguments
 import .ts/typed/nullish-coalescing
 import .ts/typed/boolean-comparisons
@@ -330,15 +331,6 @@ in ts_return, ts_arrow.body rule no-unsafe-return {
 in ts_return, ts_arrow.body rule no-unsafe-return:assignment {
   when return_transfer != null && return_transfer.mode == "generic"
   warn "Unsafe return of type `{return_transfer.sender}` from function with return type `{return_transfer.receiver}`."
-}
-
-in ts_method, ts_function, ts_arrow rule prefer-return-this-type {
-  when this_return_type_offset != null
-  report at this_return_type_offset
-  warn "Use `this` type instead."
-  let annotation find(overlapping(ts_type_reference, this_return_type_offset, this_return_type_offset + 1),
-    candidate => candidate.offset == this_return_type_offset)
-  fix at annotation if annotation != null && expression_fix_clean(annotation) as "this"
 }
 
 fn non_null_style_fix(source, n) = {

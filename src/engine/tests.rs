@@ -549,7 +549,7 @@ fn inspect_names_the_layers_fields_and_facts_at_a_position() {
     let identifier = md.find("`ts_identifier` — `callee` of `ts_call`").expect(&md);
     let call = md.find("`ts_call` — `expression` of `ts_expression_statement`").expect(&md);
     assert!(identifier < call, "{md}");
-    assert!(md.contains("`resolved` = \"global\""), "{md}");
+    assert!(md.contains("`first_token` ="), "{md}");
 }
 
 #[test]

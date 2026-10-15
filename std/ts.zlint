@@ -46,6 +46,7 @@ define {
 }
 import .ts/comments
 import .ts/names
+import .ts/literals
 import .ts/effects
 import .ts/values
 import .ts/calls
