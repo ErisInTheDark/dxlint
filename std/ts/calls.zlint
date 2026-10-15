@@ -153,6 +153,9 @@ define {
     when in_optional_chain != true && !(callee is ts_identifier) { calls callee with argument }
   }
   in ts_new { constructs callee with argument }
+  # Overload resolution tries the subtype relation (where `any` fits only
+  # `any`/`unknown`) before assignability.
+  in ts_call, ts_new { overloads exact first }
   in ts_tagged_template {
     let calls_arguments [] quasi.node quasi.expression.nodes
     calls tag with calls_arguments

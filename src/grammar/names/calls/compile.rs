@@ -18,6 +18,7 @@ pub enum Item {
     Flag(Box<str>),
     ParameterVariance(Variance),
     InferLastOverload,
+    ExactFirstOverload,
 }
 
 pub fn lower(
@@ -51,6 +52,7 @@ pub fn lower(
         ParsedItem::Flag(name) => Item::Flag(name.text.as_str().into()),
         ParsedItem::ParameterVariance(variance) => Item::ParameterVariance(*variance),
         ParsedItem::InferLastOverload => Item::InferLastOverload,
+        ParsedItem::ExactFirstOverload => Item::ExactFirstOverload,
     })
 }
 
@@ -67,6 +69,7 @@ impl KindCalls {
             Item::Flag(item) => self.flags.push(Conditional { item, when }),
             Item::ParameterVariance(item) => self.variances.push(Conditional { item, when }),
             Item::InferLastOverload => self.infer_last.push(when),
+            Item::ExactFirstOverload => self.exact_first.push(when),
         }
     }
 }

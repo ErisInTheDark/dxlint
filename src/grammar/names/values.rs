@@ -687,7 +687,17 @@ impl Values<'_> {
             Known::Unknown => return Known::Unknown,
             Known::Yes(Some(targets)) => targets,
             Known::Yes(None) => match name {
-                Some(name) => vec![Target::Node(NodeRef { file: node.file, node: name })],
+                // Every declaration merged into the name (overloads,
+                // interface merging), as the global publication route gives.
+                Some(name) => {
+                    // Later declarations by their own owners: their names
+                    // resolve to the first.
+                    let mut later: Vec<u32> = names.merged.iter().filter(|&(_, &first)| first == name)
+                        .map(|(&later, _)| names.declared.get(&later).map_or(later, |&(_, owner, ..)| owner)).collect();
+                    later.sort_unstable();
+                    let file = node.file;
+                    std::iter::once(name).chain(later).map(|declared| Target::Node(NodeRef { file, node: declared })).collect()
+                }
                 None => {
                     let Some(classes) = classes else { return Known::Yes(Vec::new()) };
                     let Some(tree) = self.world.tree(node.file) else { return Known::Unknown };

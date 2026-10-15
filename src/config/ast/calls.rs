@@ -20,6 +20,10 @@ pub enum Item {
     Flag(Name),
     ParameterVariance(Variance),
     InferLastOverload,
+    /// `overloads exact first` (on an invocation): pick among overloads
+    /// first with dynamic (`any`) arguments fitting only dynamic or top
+    /// parameters, then with ordinary acceptance.
+    ExactFirstOverload,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

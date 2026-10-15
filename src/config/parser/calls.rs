@@ -40,11 +40,10 @@ impl Parser<'_> {
             "optional" => Some(Item::Optional),
             "flag" => self.ident("a declaration flag name").map(Item::Flag),
             "overloads" => {
-                if !self.word("infer") || !self.word("last") {
-                    self.error_here("expected `infer last` after `overloads`");
-                    return None;
-                }
-                Some(Item::InferLastOverload)
+                if self.word("infer") && self.word("last") { return Some(Item::InferLastOverload) }
+                if self.word("exact") && self.word("first") { return Some(Item::ExactFirstOverload) }
+                self.error_here("expected `infer last` or `exact first` after `overloads`");
+                None
             }
             "variance" => {
                 if !self.word("parameters") {

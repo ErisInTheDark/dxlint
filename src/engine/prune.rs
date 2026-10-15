@@ -213,7 +213,7 @@ fn item_names(item: &NameItem, out: &mut HashSet<String>) {
                 value_names(value, out);
             }
             calls::Item::Identity(expr) => expr_names(expr, out),
-            calls::Item::DiscardsResult | calls::Item::Optional | calls::Item::Flag(_) |calls::Item::ParameterVariance(_) | calls::Item::InferLastOverload => {}
+            calls::Item::DiscardsResult | calls::Item::Optional | calls::Item::Flag(_) |calls::Item::ParameterVariance(_) | calls::Item::InferLastOverload | calls::Item::ExactFirstOverload => {}
         },
         NameItem::Generics(path) | NameItem::Arguments(path) => path_names(path, out),
         NameItem::Widens { value } | NameItem::Defines { value } | NameItem::Constrains { value } => value_names(value, out),

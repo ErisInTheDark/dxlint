@@ -29,21 +29,78 @@ pub(super) fn candidates(call: Leaf, values: &Values<'_>) -> Answer {
         let receiver = invoke.item.receiver.as_ref().map(|receiver| values.evaluate(call, receiver));
         let invoke_kind = if invoke.item.construct { InvokeKind::Construct } else { InvokeKind::Call };
         let Known::Yes(sets) = values.calls().headers(&callee, invoke_kind) else { return Known::Unknown };
+        let Known::Yes(exact_first) = exact_first(kind, call, values) else { return Known::Unknown };
         let mut groups = Vec::new();
         for set in sets {
-            let mut group = Vec::new();
-            for header in set {
-                if !values.question.budget.step() { return Known::Unknown }
-                let candidate = candidate(header, call, &arguments, receiver.as_ref(), values);
-                let proven = matches!(&candidate, Known::Yes(candidate) if candidate.compatible == Known::Yes(true));
-                group.push(candidate);
-                if proven { break }
+            // The first overload proven under exact matching wins; failing
+            // that, under ordinary acceptance.
+            if exact_first && set.len() > 1 {
+                let Known::Yes((group, proven)) = pass(&set, call, &arguments, receiver.as_ref(), true, values) else { return Known::Unknown };
+                if proven {
+                    groups.push(group);
+                    continue;
+                }
             }
+            let Known::Yes((group, _)) = pass(&set, call, &arguments, receiver.as_ref(), false, values) else { return Known::Unknown };
             groups.push(group);
         }
         return Known::Yes(Some(groups));
     }
     Known::Yes(None)
+}
+
+/// The overloads of one set tried in order up to the first proven one, and
+/// whether one was.
+fn pass(set: &[Header], call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, values: &Values<'_>) -> Known<(Vec<Known<Candidate>>, bool)> {
+    let mut group = Vec::new();
+    for &header in set {
+        if !values.question.budget.step() { return Known::Unknown }
+        let candidate = candidate(header, call, arguments, receiver, exact, values);
+        let proven = matches!(&candidate, Known::Yes(candidate) if candidate.compatible == Known::Yes(true));
+        group.push(candidate);
+        if proven { return Known::Yes((group, true)) }
+    }
+    Known::Yes((group, false))
+}
+
+/// Whether the invocation's kind declares `overloads exact first`.
+fn exact_first(kind: &crate::grammar::names::KindNames, call: Leaf, values: &Values<'_>) -> Known<bool> {
+    let mut unknown = false;
+    for &when in &kind.calls.exact_first {
+        match when.map_or(Known::Yes(true), |when| values.world.condition(call, when, values.semantic)) {
+            Known::Yes(true) => return Known::Yes(true),
+            Known::Unknown => unknown = true,
+            Known::Yes(false) => {}
+        }
+    }
+    if unknown { Known::Unknown } else { Known::Yes(false) }
+}
+
+/// Under exact matching a dynamic (`any`) argument fits only a dynamic or
+/// top parameter.
+fn dynamic_mismatch(expected: &NodeValue, actual: &NodeValue, values: &Values<'_>) -> Known<bool> {
+    let (NodeValue::Alternatives(expected), NodeValue::Alternatives(actual)) = (expected, actual) else { return Known::Unknown };
+    let mut dynamic = false;
+    for &leaf in actual.iter().flatten() {
+        match values.dynamic(leaf) {
+            Known::Yes(true) => dynamic = true,
+            Known::Unknown => return Known::Unknown,
+            Known::Yes(false) => {}
+        }
+    }
+    if !dynamic { return Known::Yes(false) }
+    for row in expected {
+        let mut universal = !row.is_empty();
+        for &leaf in row {
+            match values.top(leaf) {
+                Known::Yes(true) => {}
+                Known::Yes(false) => universal = false,
+                Known::Unknown => return Known::Unknown,
+            }
+        }
+        if universal { return Known::Yes(false) }
+    }
+    Known::Yes(true)
 }
 
 pub(super) fn selection(call: Leaf, values: &Values<'_>) -> Known<Option<Selection>> {
@@ -122,7 +179,7 @@ fn agreement(group: &[Known<Candidate>], values: &Values<'_>) -> Known<NodeValue
     agreed.map_or(Known::Unknown, Known::Yes)
 }
 
-fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, values: &Values<'_>) -> Known<Candidate> {
+fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&NodeValue>, exact: bool, values: &Values<'_>) -> Known<Candidate> {
     let declaration = header;
     let Some(owner) = node(header.site, values) else { return Known::Unknown };
     let Some(kind) = kind(header.site, values) else { return Known::Unknown };
@@ -199,7 +256,12 @@ fn candidate(header: Header, call: Leaf, arguments: &[Leaf], receiver: Option<&N
             } else {
                 values.values(parameter)
             };
-            let answer = values.calls().accepts(&expected, &values.values(actual));
+            let actual = values.values(actual);
+            let answer = match exact.then(|| dynamic_mismatch(&expected, &actual, values)) {
+                Some(Known::Yes(true)) => Known::Yes(false),
+                Some(Known::Unknown) => Known::Unknown,
+                _ => values.calls().accepts(&expected, &actual),
+            };
             match answer {
                 Known::Yes(false) => compatible = Known::Yes(false),
                 Known::Unknown if compatible != Known::Yes(false) => compatible = Known::Unknown,

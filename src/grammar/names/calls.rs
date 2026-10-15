@@ -123,6 +123,7 @@ pub struct KindCalls {
     pub flags: Vec<Conditional<Box<str>>>,
     pub variances: Vec<Conditional<Variance>>,
     pub infer_last: Vec<Option<u32>>,
+    pub exact_first: Vec<Option<u32>>,
 }
 
 /// A value question's answer: `Yes(None)` when there is none to ask about.

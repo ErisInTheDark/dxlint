@@ -178,6 +178,9 @@ in ts_declarator { in init expects type }
   `... with <field> this <value>` passes a receiver: a signature with a
   declared receiver applies only when that receiver accepts it (a bare call
   passes `void`); without `this`, receivers are not checked.
+  `overloads exact first` (on the invoking kind): each overload set is
+  tried first with dynamic arguments fitting only dynamic or top
+  parameters, and only when none is proven, with ordinary acceptance.
 - `expected` (path step): the node's contextual value: an `in <field>
   expects <value>` of its parent; an argument's matching parameter of the
   chosen signature; a parameter's counterpart in its function's expected
