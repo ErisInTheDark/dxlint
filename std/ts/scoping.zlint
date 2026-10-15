@@ -176,13 +176,14 @@ fn scoping_const_declaration(n) = {
   walk (current) if current is ts_variable_declaration then null else current.parent.node
   last
 }
-in ts_variable_declaration let scoping_const_fix {
+in ts_variable_declaration let scoping_const_bindings if kind != "let" then [] else {
   value owner: node
-  value bindings: {
-    value declaration.nodes
-    flat_map (item) overlapping(ts_identifier, item.name.offset, item.name.end_offset)
-    filter (item) item.declaration.node == item && item.declaration_kind == "let" && scoping_const_declaration(item) == owner
-  }
+  value declaration.nodes
+  flat_map (item) overlapping(ts_identifier, item.name.offset, item.name.end_offset)
+  filter (item) scoping_const_declaration(item) == owner && item.ts_name_declared
+}
+in ts_variable_declaration let scoping_const_fix {
+  value bindings: filter(scoping_const_bindings, item => item.declaration.node == item && item.declaration_kind == "let")
   value {
     eligible: kind == "let" && count(bindings) > 0
       && (is (ts_for_in.left, ts_for_of.left) || all(declaration.nodes, item => item.init != null))
@@ -190,7 +191,7 @@ in ts_variable_declaration let scoping_const_fix {
     before: any(bindings, item => item.scoping_const_state.before)
   }
 }
-in ts_program.binding_declarations rule prefer-const {
+in ts_variable_declaration.scoping_const_bindings rule prefer-const {
   option destructuring "any" | "all" = "any"
   option ignoreReadBeforeAssign boolean = false
   let binding scoping_const_state

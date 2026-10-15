@@ -14,12 +14,6 @@ fn member_usage_members(owner) = {
 }
 fn member_usage_last(owner, name, static) = find_last(member_usage_members(owner),
   member => ts_value_key(member_usage_key(member)) == name && ts_value_static(member.modifier.nodes) == static)
-fn member_usage_declaration(n) = {
-  value owner: n.parent.node
-  value if owner is (ts_method, ts_class_property) && owner.key.node == n
-      || owner is ts_parameter && owner.name.node == n && contains([] owner.modifier, "private")
-    then owner else null
-}
 fn member_usage_pattern_source(n) = {
   value pattern: n.parent.node
   value owner: pattern.parent.node
@@ -98,10 +92,11 @@ fn member_usage_used(declaration) = {
 }
 
 in ts_private_name, ts_identifier, ts_string, ts_number, ts_computed_key rule no-unused-private-class-members {
-  let declaration member_usage_declaration(node)
-  when declaration != null
+  when is (ts_method.key, ts_class_property.key, ts_parameter.name)
+  when parent not ts_parameter || contains([] parent.modifier, "private")
   let typed re_test(file, /\.[cm]?tsx?$/)
-  when is ts_private_name || typed && contains([] declaration.modifier, "private")
+  when is ts_private_name || typed && contains([] parent.modifier, "private")
+  let declaration parent.node
   let name ts_value_key(node)
   when name != null
   when member_usage_last(member_usage_class(declaration), name, ts_value_static(declaration.modifier.nodes)) == declaration

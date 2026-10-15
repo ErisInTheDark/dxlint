@@ -281,6 +281,7 @@ in ts_static_block.body rule no-empty-static-block {
 # ---- writes to what cannot (or should not) change ------------------------
 @macro is_write (access == "write" || access == "read_write")
 in ts_identifier rule no-ex-assign {
+  when name_write_owner != null
   when reference_kind == "catch" && @is_write
   warn "Do not assign to the exception parameter."
 }
@@ -504,6 +505,7 @@ in ts_declarator rule no-unassigned-vars {
 # Writes to the built-in globals.
 in ts_identifier rule no-global-assign {
   option exceptions string[] = [] "read-only globals that may be modified"
+  when name_write_owner != null
   when global == "readonly" && @is_write && !contains(exceptions, identifier_name)
   warn "Read-only global '{text}' should not be modified."
 }
@@ -750,17 +752,20 @@ fn problem_optional_operand(n) =
   else if n is ts_with then n.object.node
   else null
 fn problem_optional_short_circuits(n) = {
-  value unparenthesised_node(n)
-  walk (bare) {
-    value children: if bare is ts_logical then if bare.operator == "&&" then [bare.left.node, bare.right.node] else [bare.right.node]
-      else if bare is ts_sequence then [last(bare.expression.nodes)]
-      else if bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
-      else if bare is ts_await then [bare.argument.node] else []
-    value map(children, child => unparenthesised_node(child))
+  value root: unparenthesised_node(n)
+  value if root not (ts_logical, ts_sequence, ts_conditional, ts_await) && root.in_optional_chain != true then [] else {
+    value root
+    walk (bare) {
+      value children: if bare is ts_logical then if bare.operator == "&&" then [bare.left.node, bare.right.node] else [bare.right.node]
+        else if bare is ts_sequence then [last(bare.expression.nodes)]
+        else if bare is ts_conditional then [bare.consequent.node, bare.alternate.node]
+        else if bare is ts_await then [bare.argument.node] else []
+      value map(children, child => unparenthesised_node(child))
+    }
+    filter (bare) bare is (ts_member, ts_index, ts_call) && bare.in_optional_chain == true
+      && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression))
+    sort_by (bare) bare.offset
   }
-  filter (bare) bare is (ts_member, ts_index, ts_call) && bare.in_optional_chain == true
-    && !(bare is (ts_member.object, ts_index.object, ts_call.callee, ts_non_null.expression))
-  sort_by (bare) bare.offset
 }
 group optional_chain_user ts_assignment, ts_assignment_pattern, ts_declarator, ts_parameter, ts_class, ts_call, ts_new, ts_member, ts_index, ts_tagged_template, ts_for_of, ts_spread, ts_binary, ts_unary, ts_with, ts_yield
 in optional_chain_user rule no-unsafe-optional-chaining {
@@ -786,6 +791,7 @@ in ts_import rule no-unassigned-import {
 }
 
 in ts_identifier rule no-unused-imports {
+  when is (ts_import.default_import, ts_import.namespace, ts_import_specifier.local, ts_import_specifier.imported, ts_import_equals.name)
   when declaration_kind == "import" && uses == 0
   # TypeScript counts `{@link X}` in JSDoc as a use.
   when !{ value result: "\\x7B@link(?:code|plain)?\\s+" re_escape(text) "\\b"; value re_test(source, result) }
@@ -797,6 +803,7 @@ fn backreference_reason(kind) = (if kind == "nested" then "from within that grou
 fn misleading_message(kind) = (if kind == "surrogatePairWithoutUFlag" then "Unexpected surrogate pair in character class. Use 'u' flag." else if kind == "surrogatePair" then "Unexpected surrogate pair in character class." else if kind == "combiningClass" then "Unexpected combined character in character class." else if kind == "emojiModifier" then "Unexpected modified Emoji in character class." else if kind == "regionalIndicatorSymbol" then "Unexpected national flag in character class." else "Unexpected joined character sequence in character class.")
 
 in ts_regex rule no-empty-character-class {
+  when contains(text, "[")
   each f in regexp_empty_class_findings {
     warn "Empty class."
   }
@@ -804,6 +811,7 @@ in ts_regex rule no-empty-character-class {
 
 # On literals, and on plain string patterns of `RegExp(...)` (at the string).
 in regexp_site rule no-control-regex {
+  when is ts_regex || regexp_candidate
   when is ts_regex || regexp_input.written == "string"
   each f in regexp_control_findings {
     report at regexp_input.offset
@@ -812,6 +820,7 @@ in regexp_site rule no-control-regex {
 }
 
 in regexp_site rule no-useless-backreference {
+  when is ts_regex || regexp_candidate
   each f in regexp_backreference_findings {
     warn "Backreference '{first(f.data)}' will be ignored. It references group '{ { value f.data; slice 1; first } }'{last(f.data)} {backreference_reason(f.kind)}."
   }
@@ -821,6 +830,7 @@ in regexp_site rule no-useless-backreference {
 # computed). With computed flags, nothing is known.
 in regexp_site let misleading_character_class_findings regexp_misleading_findings
 in regexp_site rule no-misleading-character-class {
+  when is ts_regex || regexp_candidate
   when type_of(regexp_input.flags) == "str" || is ts_regex
   each f in misleading_character_class_findings {
     report at { start: f.offset, end: f.end }
@@ -830,6 +840,7 @@ in regexp_site rule no-misleading-character-class {
 
 # Literals, and `RegExp` calls with a string literal pattern and flags.
 in regexp_site rule no-regex-spaces {
+  when is ts_regex || regexp_candidate
   let spaces_argument if is (ts_call, ts_new) then { value argument.nodes; first; unparenthesised_node } else null
   let spaces_fixable is ts_regex || regexp_input.source == slice(spaces_argument.text, 1, -1)
   when is ts_regex || regexp_input.written == "string" && type_of(regexp_flags) == "str"
@@ -842,8 +853,8 @@ in regexp_site rule no-regex-spaces {
 # The flags first (`RegExp` checks them first), then the pattern.
 in ts_call, ts_new rule no-invalid-regexp {
   option allowConstructorFlags string[] = [] "flags beyond the standard ones that are allowed"
-  let flags_problem if regexp_flags == null then null else regex_flags_error(regexp_flags, allowConstructorFlags)
   when callee.global_value == "RegExp"
+  let flags_problem if regexp_flags == null then null else regex_flags_error(regexp_flags, allowConstructorFlags)
   when flags_problem != null || regexp_pattern_error != null
   warn "{ flags_problem.nonempty ?? regexp_pattern_error }."
 }
@@ -862,6 +873,8 @@ in problem_irregular_ws rule no-irregular-whitespace {
 
 # At the `(`, `[`, template or `/` on the new line.
 in ts_open_paren, ts_open_angle, ts_open_bracket, ts_template, ts_punctuator rule no-unexpected-multiline {
+  when is (ts_open_paren, ts_open_angle, ts_open_bracket, ts_template) || text == "/"
+  when token_neighbours.before.line_break == true
   let multiline_kind if parent is ts_call && parent.optional == null && count(parent.argument) > 0
       && (is ts_open_paren && count(parent.type_argument) == 0 || is ts_open_angle && count(parent.type_argument) > 0) then "function"
     else if is ts_open_bracket && parent is ts_index && parent.optional == null then "property"
@@ -871,7 +884,7 @@ in ts_open_paren, ts_open_angle, ts_open_bracket, ts_template, ts_punctuator rul
       value slash: parent.parent.right.token_neighbours.before
       value if flags is ts_identifier && flags.text ~ /^[dgimsuvy]+$/ && slash.text == "/" && slash.end == flags.start then "division" else null
     } else null
-  when multiline_kind != null && token_neighbours.before.line_break == true
+  when multiline_kind != null
   report at { start: offset, end: offset + 1 }
   warn if multiline_kind == "function" then "Unexpected newline between function and ( of function call."
     else if multiline_kind == "property" then "Unexpected newline between object and [ of property access."
